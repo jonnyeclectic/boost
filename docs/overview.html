@@ -1,0 +1,966 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — Homebrew for AI coding skills</title>
+<style>
+  :root {
+    --bg: #0a0a10;
+    --panel: rgba(255,255,255,.035);
+    --panel-solid: #13131c;
+    --line: rgba(255,255,255,.09);
+    --line-soft: rgba(255,255,255,.05);
+    --text: #f0f0f5;
+    --text-2: #9d9dae;
+    --text-3: #6b6b7d;
+    --amber: #fbbf24;
+    --orange: #f59e0b;
+    --pink: #ec4899;
+    --violet: #a78bfa;
+    --blue: #60a5fa;
+    --sky: #7dd3fc;
+    --green: #4ade80;
+    --yellow: #facc15;
+    --term-bg: #1e1e38;
+    --term-bar: #2a2a4a;
+    --grad: linear-gradient(92deg, var(--orange) 0%, var(--pink) 55%, var(--violet) 100%);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { transition: none !important; transform: none !important; opacity: 1 !important; }
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: "";
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+    background-size: 44px 44px;
+    -webkit-mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.35) 60%, rgba(0,0,0,.15) 100%);
+            mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.35) 60%, rgba(0,0,0,.15) 100%);
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+  a { color: inherit; }
+  code { font-family: var(--mono); }
+  :focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 4px; }
+
+  /* ---------- nav ---------- */
+  header {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(10,10,16,.82);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .nav { display: flex; align-items: center; gap: 24px; height: 64px; }
+  .logo { display: flex; align-items: baseline; gap: 10px; text-decoration: none; }
+  .logo b { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--amber); letter-spacing: -.02em; }
+  .logo span { font-size: 10.5px; letter-spacing: .24em; color: var(--text-2); text-transform: uppercase; }
+  .nav ul {
+    display: flex; gap: 4px; list-style: none; margin-left: auto;
+    overflow-x: auto; scrollbar-width: none;
+  }
+  .nav ul::-webkit-scrollbar { display: none; }
+  .nav ul a {
+    display: block; padding: 8px 12px; border-radius: 8px;
+    font-size: 14px; color: var(--text-2); text-decoration: none; white-space: nowrap;
+  }
+  .nav ul a:hover { color: var(--text); background: var(--panel); }
+  .nav ul a.cta { color: var(--text); font-weight: 600; }
+
+  /* ---------- shared section chrome ---------- */
+  section { padding: 110px 0 20px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    letter-spacing: .24em; text-transform: uppercase;
+    background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+    display: block; text-align: center; margin-bottom: 18px;
+  }
+  .sec-title {
+    font-size: clamp(30px, 4.5vw, 50px); font-weight: 800; letter-spacing: -.025em;
+    line-height: 1.1; text-align: center; text-wrap: balance;
+  }
+  .sec-sub {
+    max-width: 640px; margin: 18px auto 0; text-align: center;
+    color: var(--text-2); font-size: 17.5px; text-wrap: balance;
+  }
+  .sec-sub code {
+    color: var(--amber); background: rgba(251,191,36,.09);
+    padding: 1px 7px; border-radius: 6px; font-size: .88em;
+  }
+  .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 96px 0 30px; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12.5px; color: #d8c9f5;
+    border: 1px solid rgba(167,139,250,.45); border-radius: 999px;
+    padding: 7px 16px; margin-bottom: 30px;
+    background: rgba(167,139,250,.07);
+  }
+  .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--grad); }
+  .hero h1 {
+    font-size: clamp(44px, 7.2vw, 86px); font-weight: 800;
+    letter-spacing: -.035em; line-height: 1.02; max-width: 820px; text-wrap: balance;
+  }
+  .hero h1 .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p.lede { max-width: 660px; margin-top: 30px; font-size: 19px; color: var(--text-2); }
+  .hero p.lede b { color: var(--text); font-weight: 650; }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 38px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 15.5px; font-weight: 650; text-decoration: none;
+    padding: 14px 26px; border-radius: 12px; border: 1px solid transparent;
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-grad {
+    color: #17110a;
+    background: linear-gradient(92deg, var(--orange), var(--pink));
+    box-shadow: 0 8px 30px rgba(236,72,153,.28);
+  }
+  .btn-grad:hover { box-shadow: 0 10px 36px rgba(236,72,153,.4); }
+  .btn-ghost { color: var(--text); border-color: var(--line); background: var(--panel); }
+  .btn-ghost:hover { border-color: rgba(255,255,255,.2); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 72px; }
+  .stat {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    padding: 26px 22px; text-align: center;
+  }
+  .stat b {
+    display: block; font-size: clamp(28px, 3.4vw, 42px); font-weight: 800; letter-spacing: -.02em;
+    background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat span {
+    display: block; margin-top: 8px; font-size: 11px; font-weight: 650;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--text-2);
+  }
+
+  /* ---------- concept ---------- */
+  .concept-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; margin-top: 64px; }
+  .concept-copy p { color: var(--text-2); margin-bottom: 22px; font-size: 17.5px; }
+  .concept-copy p b { color: var(--text); font-weight: 650; }
+  .concept-copy .chip-code {
+    font-family: var(--mono); font-size: .86em; color: var(--amber);
+    background: rgba(251,191,36,.09); padding: 1px 7px; border-radius: 6px;
+  }
+  .analogy { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+  .analogy span {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 13.5px; color: var(--text-2);
+    border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px; background: var(--panel);
+  }
+  .analogy b { font-family: var(--mono); font-size: 13px; color: var(--amber); font-weight: 700; }
+  .analogy .arr { color: var(--text-3); }
+
+  /* mac-style window */
+  .window {
+    background: var(--term-bg); border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
+    box-shadow: 0 24px 70px rgba(0,0,0,.5);
+    overflow: hidden;
+  }
+  .window .bar {
+    display: flex; align-items: center; height: 38px; padding: 0 14px;
+    background: var(--term-bar); border-bottom: 1px solid rgba(0,0,0,.25);
+  }
+  .window .dots { display: flex; gap: 7px; }
+  .window .dots i { width: 12px; height: 12px; border-radius: 50%; }
+  .window .dots i:nth-child(1) { background: #ff5f57; }
+  .window .dots i:nth-child(2) { background: #febc2e; }
+  .window .dots i:nth-child(3) { background: #28c840; }
+  .window .bar-title {
+    flex: 1; text-align: center; font-family: var(--mono); font-size: 12.5px; color: #b8b8d0;
+    margin-right: 47px; /* balance the dots */
+  }
+  .window pre {
+    padding: 22px 24px; overflow-x: auto;
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.75; color: #dcdcf0;
+  }
+  .yk  { color: var(--amber); }        /* yaml key */
+  .yv  { color: var(--yellow); }       /* yaml value */
+  .yd  { color: #8888aa; }             /* delimiter/dim */
+  .mh  { color: #f5a9d8; font-weight: 700; }  /* markdown heading */
+  .cm  { color: #9d9dbd; font-style: italic; } /* comment */
+  .tp  { color: #8888aa; }             /* terminal prompt $ */
+  .tv  { color: #7ee787; font-weight: 700; }  /* the word `boost` */
+  .tc  { color: var(--yellow); font-weight: 700; } /* subcommand */
+  .tok { color: var(--green); }        /* ✓ */
+  .tstar { color: var(--amber); }
+  .tdim { color: #9d9dbd; }
+
+  /* ---------- architecture ---------- */
+  .flow { max-width: 860px; margin: 64px auto 0; display: flex; flex-direction: column; align-items: center; }
+  .flow-row { display: grid; gap: 20px; width: 100%; }
+  .flow-row.one { grid-template-columns: minmax(0, 460px); justify-content: center; }
+  .flow-row.two { grid-template-columns: 1fr 1fr; }
+  .flow-row.three { grid-template-columns: 1fr 1fr 1fr; }
+  .node {
+    background: rgba(19,19,28,.85); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px 20px; text-align: center;
+  }
+  .node .tag {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .2em; text-transform: uppercase; color: var(--text-2);
+  }
+  .node h4 { font-size: 18px; font-weight: 750; margin-top: 8px; letter-spacing: -.01em; }
+  .node h4 code { font-size: 15.5px; color: var(--amber); }
+  .node p { font-size: 13.5px; color: var(--text-2); margin-top: 6px; }
+  .node.src   { border-color: rgba(96,165,250,.5);  box-shadow: 0 0 32px rgba(96,165,250,.07); }
+  .node.mid   { border-color: rgba(255,255,255,.14); }
+  .node.store { border-color: rgba(251,191,36,.55); box-shadow: 0 0 32px rgba(251,191,36,.07); }
+  .node.lock  { border-color: rgba(245,158,11,.55); }
+  .node.agent { border-color: rgba(74,222,128,.5);  box-shadow: 0 0 32px rgba(74,222,128,.06); }
+  .node.agent h4 { color: #d9fbe5; }
+  .flow-arrow {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 14px 0; color: var(--amber);
+  }
+  .flow-arrow svg { display: block; }
+  .flow-arrow span {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: .2em; text-transform: uppercase; color: var(--text-2);
+  }
+
+  /* ---------- commands ---------- */
+  .filterbar { max-width: 720px; margin: 48px auto 0; }
+  .filterbar input {
+    width: 100%; padding: 15px 22px; border-radius: 14px;
+    background: #14142a; border: 1px solid rgba(167,139,250,.3);
+    color: var(--text); font-size: 15.5px; font-family: var(--sans);
+  }
+  .filterbar input::placeholder { color: var(--text-3); }
+  .filterbar input:focus { outline: none; border-color: rgba(167,139,250,.7); box-shadow: 0 0 0 3px rgba(167,139,250,.15); }
+  .pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
+  .pill {
+    font-size: 13.5px; font-weight: 600; color: var(--text-2);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: 9px 18px; cursor: pointer; font-family: var(--sans);
+    transition: color .15s, background .15s, border-color .15s;
+  }
+  .pill:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
+  .pill.on { background: var(--amber); border-color: var(--amber); color: #201705; }
+  .cmd-count { text-align: center; margin: 30px 0 6px; font-size: 14.5px; color: var(--text-2); }
+  .group { margin-top: 46px; }
+  .group-head { display: flex; align-items: center; gap: 14px; }
+  .group-icon {
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    padding: 8px 10px; border-radius: 10px; color: #16120a;
+  }
+  .group-head h3 { font-size: 21px; font-weight: 750; letter-spacing: -.01em; }
+  .group-head p { font-size: 14px; color: var(--text-2); margin-top: 1px; }
+  .group-head .n {
+    margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-2);
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 13px; white-space: nowrap;
+  }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 20px; }
+  .cmd {
+    position: relative; background: var(--panel-solid); border: 1px solid var(--line-soft);
+    border-radius: 12px; padding: 16px 18px 15px 20px; overflow: hidden;
+  }
+  .cmd::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--gc, var(--amber)); opacity: .85; border-radius: 3px 0 0 3px;
+  }
+  .cmd:hover { border-color: var(--line); }
+  .cmd .name { font-family: var(--mono); font-size: 14.5px; }
+  .cmd .name .v { color: #85859c; }
+  .cmd .name b { color: var(--amber); font-weight: 700; }
+  .cmd p { font-size: 13.5px; color: var(--text-2); margin-top: 6px; line-height: 1.5; }
+  .cmd mark { background: rgba(251,191,36,.25); color: var(--text); border-radius: 3px; padding: 0 1px; }
+  .no-results { text-align: center; color: var(--text-2); padding: 60px 0 30px; display: none; }
+  .no-results code { color: var(--amber); }
+
+  /* ---------- capabilities ---------- */
+  .caps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 64px; }
+  .cap {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 30px 26px;
+  }
+  .cap .ic {
+    width: 46px; height: 46px; border-radius: 13px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 21px; margin-bottom: 20px;
+    background: var(--ic-bg, rgba(255,255,255,.06)); color: var(--ic-fg, var(--text));
+    border: 1px solid var(--line-soft);
+  }
+  .cap h3 { font-size: 19.5px; font-weight: 750; letter-spacing: -.01em; }
+  .cap p { font-size: 14.5px; color: var(--text-2); margin-top: 10px; }
+  .cap .tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+  .cap .tags code {
+    font-size: 12px; color: #d5d5e2; background: rgba(255,255,255,.06);
+    border: 1px solid var(--line-soft); border-radius: 7px; padding: 3px 9px;
+  }
+
+  /* ---------- registries ---------- */
+  .reg-wrap { margin-top: 56px; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .reg-scroll { overflow-x: auto; }
+  table.reg { width: 100%; border-collapse: collapse; min-width: 720px; }
+  .reg thead th {
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--text-2); text-align: left;
+    padding: 16px 20px; background: rgba(255,255,255,.045);
+    border-bottom: 1px solid var(--line);
+  }
+  .reg tbody td { padding: 15px 20px; border-bottom: 1px solid var(--line-soft); font-size: 14.5px; vertical-align: middle; }
+  .reg tbody tr:last-child td { border-bottom: none; }
+  .reg .tapname {
+    font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--amber);
+    background: rgba(251,191,36,.09); border: 1px solid rgba(251,191,36,.25);
+    border-radius: 8px; padding: 4px 11px; white-space: nowrap;
+  }
+  .reg .repo { font-family: var(--mono); font-size: 13px; color: var(--text-2); }
+  .reg .cnt {
+    font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--amber);
+    border: 1px solid rgba(251,191,36,.35); border-radius: 999px; padding: 4px 12px;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .reg .focus { color: var(--text-2); font-size: 14px; }
+  .reg tr.dim td { color: var(--text-3); }
+  .reg tr.dim .tapname { color: var(--text-2); background: var(--panel); border-color: var(--line); }
+  .reg tr.dim .cnt { color: var(--text-2); border-color: var(--line); }
+  .reg-note { text-align: center; font-size: 13.5px; color: var(--text-3); margin-top: 18px; }
+  .reg-note code { color: var(--amber); font-size: .92em; }
+
+  /* ---------- get started ---------- */
+  .install-box { max-width: 760px; margin: 56px auto 0; }
+  .install-box .bar { justify-content: space-between; }
+  .install-box .bar .label {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12.5px; color: #c9c9e2;
+  }
+  .install-box .bar .label::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--grad); }
+  .copy-btn {
+    font-family: var(--sans); font-size: 12.5px; font-weight: 700; color: #201705;
+    background: var(--amber); border: none; border-radius: 8px; padding: 6px 14px; cursor: pointer;
+  }
+  .copy-btn:hover { filter: brightness(1.08); }
+  .mini { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; max-width: 860px; margin: 40px auto 0; }
+  .mini a {
+    display: block; text-decoration: none;
+    background: var(--panel-solid); border: 1px solid var(--line-soft); border-radius: 12px; padding: 18px 20px;
+  }
+  .mini a:hover { border-color: var(--line); }
+  .mini .name { font-family: var(--mono); font-size: 14px; font-weight: 700; color: var(--amber); }
+  .mini .name .v { color: #85859c; font-weight: 400; }
+  .mini p { font-size: 13px; color: var(--text-2); margin-top: 5px; }
+
+  /* ---------- footer ---------- */
+  footer { margin-top: 130px; border-top: 1px solid var(--line-soft); padding: 44px 0 60px; text-align: center; }
+  footer .brand { font-size: 15px; color: var(--text-2); }
+  footer .brand b { font-family: var(--mono); color: var(--amber); }
+  footer .meta { margin-top: 10px; font-size: 13.5px; color: var(--text-3); }
+  footer .meta code {
+    color: var(--text-2); background: var(--panel); border: 1px solid var(--line-soft);
+    padding: 1px 7px; border-radius: 6px; font-size: .9em;
+  }
+  footer .links { margin-top: 14px; font-size: 13.5px; color: var(--text-3); }
+  footer .links a { color: var(--text-2); text-decoration: none; }
+  footer .links a:hover { color: var(--text); }
+
+  /* ---------- responsive ---------- */
+  @media (max-width: 960px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .concept-grid { grid-template-columns: 1fr; gap: 40px; }
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .caps { grid-template-columns: repeat(2, 1fr); }
+    .mini { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (max-width: 620px) {
+    section { padding: 84px 0 10px; }
+    .cards, .caps, .mini { grid-template-columns: 1fr; }
+    .flow-row.two, .flow-row.three { grid-template-columns: 1fr; }
+    .stats { gap: 10px; }
+    .stat { padding: 18px 10px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="logo" href="#top"><b>boost</b><span>Visual Guide</span></a>
+    <ul>
+      <li><a href="#what">What it is</a></li>
+      <li><a href="#how">How it works</a></li>
+      <li><a href="#workflow">Workflow</a></li>
+      <li><a href="#commands">Commands</a></li>
+      <li><a href="#capabilities">Capabilities</a></li>
+      <li><a href="#registries">Registries</a></li>
+      <li><a class="cta" href="#start">Get started</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ================= HERO ================= -->
+  <div class="wrap hero">
+    <span class="badge">AI Skill Package Manager · v2.3.3</span>
+    <h1><span class="grad">Homebrew</span> for AI coding skills.</h1>
+    <p class="lede">
+      Boost is a command-line package manager that <b>searches, installs, and
+      manages AI coding skills</b> from GitHub-hosted registries — then wires
+      them into <b>Claude Code, Windsurf, and Cursor</b> at once. One command
+      replaces the copy-paste-and-pray dance of setting up AI agent skills by hand.
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-grad" href="#workflow">See how it works →</a>
+      <a class="btn btn-ghost" href="#commands">Explore all 72 commands</a>
+    </div>
+    <div class="stats">
+      <div class="stat reveal"><b>8,400+</b><span>Discoverable skills</span></div>
+      <div class="stat reveal"><b>72</b><span>Commands · 8 groups</span></div>
+      <div class="stat reveal"><b>2</b><span>Pre-tapped registries</span></div>
+      <div class="stat reveal"><b>3</b><span>AI agents supported</span></div>
+    </div>
+  </div>
+
+  <!-- ================= CONCEPT ================= -->
+  <section id="what">
+    <div class="wrap">
+      <span class="eyebrow">The Concept</span>
+      <h2 class="sec-title">What is a “skill” — and why manage them?</h2>
+      <p class="sec-sub">AI coding agents get better when you give them reusable knowledge.
+        Boost makes that knowledge installable.</p>
+
+      <div class="concept-grid">
+        <div class="concept-copy reveal">
+          <p>A <b>skill</b> is a <span class="chip-code">SKILL.md</span> file — Markdown
+            with a little YAML frontmatter — that teaches an AI agent a repeatable
+            capability: a workflow, a set of coding rules, or domain knowledge.
+            Agents like Claude Code load them automatically from
+            <span class="chip-code">~/.claude/skills/</span>.</p>
+          <p>The problem: finding good skills, installing them into every agent,
+            keeping them updated, and sharing them with your team is all manual
+            copy-paste. <b>Boost is the package manager that automates it</b> — the
+            way Homebrew handles Mac apps or npm handles JavaScript. It also manages
+            <b>rules, workflows, and configs</b> under the same roof.</p>
+          <div class="analogy">
+            <span><b>Homebrew</b> <i class="arr">→</i> Mac apps</span>
+            <span><b>npm</b> <i class="arr">→</i> JS packages</span>
+            <span><b>boost</b> <i class="arr">→</i> AI skills</span>
+          </div>
+        </div>
+
+        <div class="window reveal">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+            <div class="bar-title">brainstorming/SKILL.md</div></div>
+          <pre><span class="yd">---</span>
+<span class="yk">name:</span> <span class="yv">brainstorming</span>
+<span class="yk">description:</span> <span class="yv">Structured ideation &amp;</span>
+  <span class="yv">divergent-thinking facilitation</span>
+<span class="yk">version:</span> <span class="yv">1.4.0</span>
+<span class="yd">---</span>
+
+<span class="mh"># Brainstorming</span>
+
+When the user wants to explore ideas,
+facilitate structured divergent thinking:
+
+1. Diverge — generate widely, defer judgment
+2. Cluster — group related concepts
+3. Converge — score &amp; select</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ARCHITECTURE ================= -->
+  <section id="how">
+    <div class="wrap">
+      <span class="eyebrow">Under the Hood</span>
+      <h2 class="sec-title">From GitHub to every agent</h2>
+      <p class="sec-sub">Boost clones registries, builds a searchable cache, installs skills to one
+        canonical store, then symlinks them into each AI agent — all tracked by a lock file.</p>
+
+      <div class="flow">
+        <div class="flow-row one reveal">
+          <div class="node src">
+            <span class="tag">Source</span>
+            <h4>GitHub registries</h4>
+            <p>Pre-tapped public registries + an 8,400-skill discovery index</p>
+          </div>
+        </div>
+        <div class="flow-arrow reveal">
+          <svg width="14" height="26" viewBox="0 0 14 26" fill="none" aria-hidden="true"><path d="M7 0v22m0 0l-5.5-6M7 22l5.5-6" stroke="currentColor" stroke-width="2"/></svg>
+          <span>boost update / index</span>
+        </div>
+        <div class="flow-row two reveal">
+          <div class="node mid">
+            <span class="tag">Local Mirror</span>
+            <h4><code>~/.boost/repos/</code></h4>
+            <p>Shallow git clones</p>
+          </div>
+          <div class="node mid">
+            <span class="tag">Search Cache</span>
+            <h4><code>~/.boost/cache/</code></h4>
+            <p>JSON catalogs from SKILL.md frontmatter</p>
+          </div>
+        </div>
+        <div class="flow-arrow reveal">
+          <svg width="14" height="26" viewBox="0 0 14 26" fill="none" aria-hidden="true"><path d="M7 0v22m0 0l-5.5-6M7 22l5.5-6" stroke="currentColor" stroke-width="2"/></svg>
+          <span>boost install</span>
+        </div>
+        <div class="flow-row two reveal">
+          <div class="node store">
+            <span class="tag">Canonical Store</span>
+            <h4><code>~/.agents/skills/</code></h4>
+            <p>Single source of truth for installed skills</p>
+          </div>
+          <div class="node lock">
+            <span class="tag">Lock File</span>
+            <h4><code>.skill-lock.json</code></h4>
+            <p>v3 schema — pins version, commit &amp; content hash</p>
+          </div>
+        </div>
+        <div class="flow-arrow reveal">
+          <svg width="14" height="26" viewBox="0 0 14 26" fill="none" aria-hidden="true"><path d="M7 0v22m0 0l-5.5-6M7 22l5.5-6" stroke="currentColor" stroke-width="2"/></svg>
+          <span>symlinks</span>
+        </div>
+        <div class="flow-row three reveal">
+          <div class="node agent">
+            <span class="tag">Agent</span>
+            <h4>Claude Code</h4>
+            <p><code>~/.claude/skills/</code></p>
+          </div>
+          <div class="node agent">
+            <span class="tag">Agent</span>
+            <h4>Windsurf</h4>
+            <p><code>~/.windsurf/skills/</code></p>
+          </div>
+          <div class="node agent">
+            <span class="tag">Agent</span>
+            <h4>Cursor</h4>
+            <p><code>~/.cursor/skills/</code></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= WORKFLOW ================= -->
+  <section id="workflow">
+    <div class="wrap">
+      <span class="eyebrow">The Everyday Loop</span>
+      <h2 class="sec-title">Search → install → done</h2>
+      <p class="sec-sub">The thin bash shim finds your Python and runs with zero dependencies.
+        After that, the core loop is three commands.</p>
+
+      <div class="window reveal" style="max-width: 860px; margin: 56px auto 0;">
+        <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+          <div class="bar-title">zsh — boost</div></div>
+        <pre><span class="tp">$</span> <span class="tv">boost</span> <span class="tc">search</span> jira
+  jira-integration   Sync commits and PRs to Jira tickets <span class="tstar">★ curated</span>
+  commit-messages    Conventional, atomic commit message discipline
+  <span class="tdim">2 matches · ranked by Claude Haiku relevance</span>
+
+<span class="tp">$</span> <span class="tv">boost</span> <span class="tc">install</span> jira-integration
+  <span class="tok">✓</span> copied to ~/.agents/skills/jira-integration
+  <span class="tok">✓</span> linked → claude-code · windsurf · cursor
+  <span class="tok">✓</span> lock updated (.skill-lock.json)
+  Installed 1 new skill; quality score 92/100
+
+<span class="tp">$</span> <span class="tv">boost</span> <span class="tc">doctor</span>
+  <span class="tok">✓</span> 14 skills installed · 2 taps synced · 0 broken links
+  <span class="tok">✓</span> lock file integrity OK · log rotation healthy
+
+<span class="cm"># share the whole setup with your team:</span>
+<span class="tp">$</span> <span class="tv">boost</span> <span class="tc">bundle</span> dump &gt; Boostfile   <span class="cm"># teammates run: boost bundle install</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= COMMANDS ================= -->
+  <section id="commands">
+    <div class="wrap">
+      <span class="eyebrow">What It Can Do</span>
+      <h2 class="sec-title">72 commands, 8 groups</h2>
+      <p class="sec-sub">From basic install/update to AI-powered authoring, governance,
+        and team rollouts. Filter live to find what you need.</p>
+
+      <div class="filterbar reveal">
+        <input id="cmd-filter" type="search" autocomplete="off" spellcheck="false"
+               placeholder="Filter commands…  try 'install', 'audit', 'team', 'ai'"
+               aria-label="Filter commands">
+        <div class="pills" id="pills" role="tablist" aria-label="Command groups"></div>
+      </div>
+
+      <p class="cmd-count" id="cmd-count"></p>
+      <div id="cmd-groups"></div>
+      <p class="no-results" id="no-results">No commands match — try <code>install</code>, <code>audit</code>, or clear the filter.</p>
+    </div>
+  </section>
+
+  <!-- ================= CAPABILITIES ================= -->
+  <section id="capabilities">
+    <div class="wrap">
+      <span class="eyebrow">Beyond Install/Uninstall</span>
+      <h2 class="sec-title">The capabilities that set it apart</h2>
+      <p class="sec-sub">Boost treats skills as first-class, governed, shareable artifacts —
+        not just files you copy.</p>
+
+      <div class="caps">
+        <div class="cap reveal" style="--ic-bg: rgba(236,72,153,.12); --ic-fg: #f9a8d4;">
+          <div class="ic">✦</div>
+          <h3>AI-powered authoring</h3>
+          <p>Claude ranks your searches by relevance, summarizes skills, drafts new
+            ones from your codebase or chat history, and previews behavior before
+            you install.</p>
+          <div class="tags"><code>search --smart</code><code>distill</code><code>infer</code><code>absorb</code><code>evolve</code><code>simulate</code><code>explain</code></div>
+        </div>
+        <div class="cap reveal" style="--ic-bg: rgba(74,222,128,.1); --ic-fg: #86efac;">
+          <div class="ic">⛨</div>
+          <h3>Governance &amp; safety</h3>
+          <p>Enforce org policies, detect drift from source, block unsafe skills
+            against a safety list, and verify integrity with content fingerprints
+            and install attestation (TOFU).</p>
+          <div class="tags"><code>policy</code><code>drift</code><code>audit</code><code>verify</code><code>quarantine</code><code>attest</code><code>fingerprint</code></div>
+        </div>
+        <div class="cap reveal" style="--ic-bg: rgba(167,139,250,.12); --ic-fg: #c4b5fd;">
+          <div class="ic">◈</div>
+          <h3>Team &amp; collaboration</h3>
+          <p>Roll skills out to cohorts with A/B testing, switch context with
+            profiles, see a team activity feed, and find who has expertise.
+            Share exact setups via Boostfile bundles.</p>
+          <div class="tags"><code>cohort</code><code>profile</code><code>pulse</code><code>who</code><code>bundle</code><code>snapshot</code></div>
+        </div>
+        <div class="cap reveal" style="--ic-bg: rgba(96,165,250,.12); --ic-fg: #93c5fd;">
+          <div class="ic">⇄</div>
+          <h3>Multi-agent &amp; integration</h3>
+          <p>Install once, land in Claude Code, Windsurf, and Cursor. Run as a
+            native MCP server, register a <code style="color:var(--amber)">boost://</code> one-click
+            protocol, serve a catalog over HTTP, or auto-sync on a schedule.</p>
+          <div class="tags"><code>migrate</code><code>mcp</code><code>protocol</code><code>serve</code><code>schedule</code></div>
+        </div>
+        <div class="cap reveal" style="--ic-bg: rgba(251,191,36,.12); --ic-fg: #fcd34d;">
+          <div class="ic">∿</div>
+          <h3>Reproducible &amp; recoverable</h3>
+          <p>A v3 lock file pins exact state. Preview diffs before syncing,
+            snapshot and restore whole environments, replay history, and pin
+            versions so nothing changes underfoot.</p>
+          <div class="tags"><code>sync --diff</code><code>snapshot</code><code>replay</code><code>pin</code><code>unpin</code><code>outdated</code></div>
+        </div>
+        <div class="cap reveal" style="--ic-bg: rgba(125,211,252,.12); --ic-fg: #bae6fd;">
+          <div class="ic">❄</div>
+          <h3>Self-healing &amp; secure</h3>
+          <p>Auto-repair broken symlinks and stale caches, detect unused or
+            conflicting skills, and stay hardened: sandbox-safe paths,
+            safety-pattern audits, and SHA-verified state.</p>
+          <div class="tags"><code>doctor</code><code>heal</code><code>decay</code><code>conflict</code><code>clean</code><code>self-update</code></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= REGISTRIES ================= -->
+  <section id="registries">
+    <div class="wrap">
+      <span class="eyebrow">Where Skills Come From</span>
+      <h2 class="sec-title">Pre-tapped registries + open discovery</h2>
+      <p class="sec-sub">Boost ships pre-tapped to curated public skills. Beyond that,
+        <code>boost discover</code> indexes 8,400+ skills across GitHub.
+        Tap your own team’s repo anytime.</p>
+
+      <div class="reg-wrap reveal">
+        <div class="reg-scroll">
+          <table class="reg">
+            <thead>
+              <tr><th>Tap</th><th>Repository</th><th>Skills</th><th>Focus</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="tapname">anthropics/skills</span></td>
+                <td class="repo">github.com/anthropics/skills</td>
+                <td><span class="cnt" data-count="anthropic">—</span></td>
+                <td class="focus">Official Anthropic skills — documents, artifacts, MCP builders, agent workflows</td>
+              </tr>
+              <tr>
+                <td><span class="tapname">obra/superpowers</span></td>
+                <td class="repo">github.com/obra/superpowers</td>
+                <td><span class="cnt" data-count="superpowers">—</span></td>
+                <td class="focus">Community powerhouse — TDD, debugging, planning, subagent workflows</td>
+              </tr>
+              <tr class="dim">
+                <td><span class="tapname">your-org/skills</span></td>
+                <td class="repo">any repo with SKILL.md files</td>
+                <td><span class="cnt">∞</span></td>
+                <td class="focus">Your team’s registry — <code style="color:var(--amber);font-size:.92em">boost tap your-org/skills</code> (private repos work over ssh)</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="reg-note">Skill counts measured from the live repositories ·
+        build the GitHub-wide index with <code>boost index</code>, browse it with <code>boost discover</code></p>
+    </div>
+  </section>
+
+  <!-- ================= GET STARTED ================= -->
+  <section id="start">
+    <div class="wrap">
+      <span class="eyebrow">Get Started</span>
+      <h2 class="sec-title">One shim, zero setup</h2>
+      <p class="sec-sub">Copy a single bash shim onto your <code>PATH</code>. It finds Python 3.9+
+        and runs — no PyPI, no Artifactory, no manual setup.</p>
+
+      <div class="window install-box reveal">
+        <div class="bar">
+          <div class="label">install the shim</div>
+          <button class="copy-btn" id="copy-install" type="button">Copy</button>
+        </div>
+        <pre id="install-code"><span class="cm"># clone, link the shim onto your PATH, verify</span>
+git clone https://github.com/your-org/boost ~/.boost-src
+ln -s ~/.boost-src/boost ~/bin/boost
+<span class="tv">boost</span> --version
+
+<span class="cm"># add the recommended registries and go</span>
+<span class="tv">boost</span> <span class="tc">tap</span> --defaults
+<span class="tv">boost</span> <span class="tc">search</span> brainstorming</pre>
+      </div>
+
+      <div class="mini reveal">
+        <a href="#commands"><span class="name"><span class="v">boost</span> search jira</span><p>Find skills across taps</p></a>
+        <a href="#commands"><span class="name"><span class="v">boost</span> install brainstorming</span><p>Install into every agent</p></a>
+        <a href="#commands"><span class="name"><span class="v">boost</span> recommend</span><p>Suggestions for your stack</p></a>
+        <a href="#commands"><span class="name"><span class="v">boost</span> browse</span><p>Interactive TUI explorer</p></a>
+        <a href="#commands"><span class="name"><span class="v">boost</span> discover</span><p>Browse 8,400+ skills</p></a>
+        <a href="#commands"><span class="name"><span class="v">boost</span> doctor</span><p>Health check &amp; repair hints</p></a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p class="brand"><b>boost</b> · AI Skill Package Manager · v2.3.3</p>
+      <p class="meta">Requires Python 3.9+ and <code>git</code>. Supports Claude Code, Windsurf &amp; Cursor.</p>
+      <p class="links"><a href="#commands">CLI Reference</a> · <a href="#top">Home</a></p>
+    </div>
+  </footer>
+
+</main>
+
+<script>
+// ---------- command data (mirrors boost_cli/cli.py exactly) ----------
+const GROUPS = {
+  pkg:  { icon: "pkg",  color: "#fbbf24", title: "Package Management",
+          desc: "Install, remove, update & move skills across agents" },
+  find: { icon: "find", color: "#60a5fa", title: "Discovery & Search",
+          desc: "Find the right skill across taps and all of GitHub" },
+  info: { icon: "info", color: "#7dd3fc", title: "Skill Information",
+          desc: "Inspect, read, and explain what a skill does" },
+  tap:  { icon: "tap",  color: "#c084fc", title: "Registry (Taps)",
+          desc: "Add, remove, and inspect GitHub skill registries" },
+  ai:   { icon: "ai",   color: "#f472b6", title: "Intelligence",
+          desc: "AI-powered authoring, merging & behavior preview" },
+  chk:  { icon: "chk",  color: "#4ade80", title: "Quality & Health",
+          desc: "Validate, audit, and keep your setup healthy" },
+  cfg:  { icon: "cfg",  color: "#facc15", title: "Configuration",
+          desc: "Config, scaffolding, policy & integrations" },
+  team: { icon: "team", color: "#a78bfa", title: "Team & Collaboration",
+          desc: "Roll out, profile & coordinate skills across a team" },
+};
+const COMMANDS = [
+  ["install","pkg","Install a skill from a tap registry"],
+  ["uninstall","pkg","Remove an installed skill, rule, workflow, or config"],
+  ["sync","pkg","Reconcile installed skills & symlinks against the lock file"],
+  ["update","pkg","Sync taps or update installed skills"],
+  ["reinstall","pkg","Reinstall a skill or all skills (force)"],
+  ["bundle","pkg","Export/install skill sets via a Boostfile"],
+  ["import","pkg","Import skills from a GitHub URL or local path"],
+  ["migrate","pkg","Migrate skills between agents or from Skills CLI"],
+  ["pin","pkg","Pin a skill to its current version"],
+  ["unpin","pkg","Allow a pinned skill to update again"],
+  ["snapshot","pkg","Save & restore whole skill environments"],
+  ["export","pkg","Package skills as shareable zip/tar archives"],
+  ["search","find","Search skills across tap registries (AI-ranked)"],
+  ["discover","find","Browse & search the GitHub-wide skill discovery index"],
+  ["recommend","find","Suggest skills based on your project's tech stack"],
+  ["browse","find","Interactive full-screen TUI with fuzzy search"],
+  ["index","find","Build the discovery registry via GitHub Code Search"],
+  ["trending","find","Show trending skills by install count"],
+  ["stats","find","Install statistics & trend for a single skill"],
+  ["count","find","Quick summary of installed / available / taps"],
+  ["list","info","List installed skills"],
+  ["info","info","Show detailed info about a skill"],
+  ["cat","info","Print a skill or rule's contents"],
+  ["edit","info","Open a skill's SKILL.md in your editor"],
+  ["preview","info","Render a SKILL.md with rich formatting"],
+  ["explain","info","Explain what a skill does in plain English"],
+  ["log","info","Git log for a skill, or boost's activity log"],
+  ["home","info","Open a skill's GitHub page in the browser"],
+  ["deps","info","Show dependency & conflict relationships"],
+  ["tag","info","Custom labels for organizing skills"],
+  ["tap","tap","Add a GitHub repo as a skill registry"],
+  ["untap","tap","Remove a registry tap"],
+  ["taps","tap","List all configured registry taps"],
+  ["outdated","tap","Show skills with available updates"],
+  ["distill","ai","Merge multiple skills into one deduplicated skill"],
+  ["simulate","ai","Preview how a skill would change Claude's behavior"],
+  ["infer","ai","Generate a SKILL.md from your codebase patterns"],
+  ["absorb","ai","Turn recurring chat-history patterns into a skill"],
+  ["evolve","ai","Iteratively improve a skill from feedback"],
+  ["context","ai","Branch-aware skill activation"],
+  ["focus","ai","Temporarily prioritize skills for a work session"],
+  ["impact","ai","Measure a skill's influence on code quality"],
+  ["doctor","chk","Check installation health & report issues"],
+  ["lint","chk","Validate SKILL.md frontmatter & quality"],
+  ["audit","chk","Check installed skills against a safety blocklist"],
+  ["verify","chk","Validate skill quality & lock-file integrity"],
+  ["drift","chk","Detect installed skills diverging from source"],
+  ["test","chk","Validate installed skills against quality checks"],
+  ["fingerprint","chk","Deterministic hash of the skill environment"],
+  ["quarantine","chk","Isolate a problematic skill without uninstalling"],
+  ["decay","chk","Flag skills irrelevant to your current stack"],
+  ["heal","chk","Self-diagnose & repair the boost environment"],
+  ["conflict","chk","Detect contradictory rules between skills"],
+  ["changelog","chk","Show a skill's upstream change history"],
+  ["attest","chk","Display/verify the install record for skills"],
+  ["health","chk","Dashboard of skill-environment health"],
+  ["config","cfg","Display or modify boost configuration"],
+  ["clean","cfg","Clear stale caches & broken symlinks"],
+  ["create","cfg","Scaffold a new skill from a template"],
+  ["policy","cfg","Manage & enforce skill governance policies"],
+  ["onboard","cfg","Add skill-tracker telemetry to a repo & open a PR"],
+  ["completions","cfg","Generate shell tab-completion scripts"],
+  ["schedule","cfg","Manage automatic skill-sync scheduling"],
+  ["serve","cfg","Serve the skill catalog over HTTP (port 8787)"],
+  ["mcp","cfg","Register boost as an MCP server for Claude Code"],
+  ["self-update","cfg","Update boost itself to the latest version"],
+  ["cohort","team","Controlled skill rollouts & team A/B testing"],
+  ["profile","team","Named skill profiles for context switching"],
+  ["protocol","team","Manage the boost:// one-click-install handler"],
+  ["pulse","team","Team activity feed of skill-management events"],
+  ["replay","team","View version history & roll back skills"],
+  ["who","team","Discover who on the team has skill expertise"],
+];
+
+// live-measured registry skill counts (updated at build time)
+const REG_COUNTS = { anthropic: "18", superpowers: "14" };
+
+// ---------- render ----------
+const groupsEl = document.getElementById("cmd-groups");
+const pillsEl = document.getElementById("pills");
+const countEl = document.getElementById("cmd-count");
+const noResEl = document.getElementById("no-results");
+const filterEl = document.getElementById("cmd-filter");
+let activeGroup = "all";
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function hi(text, q) {
+  if (!q) return esc(text);
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return esc(text);
+  return esc(text.slice(0, i)) + "<mark>" + esc(text.slice(i, i + q.length)) + "</mark>" + esc(text.slice(i + q.length));
+}
+
+function render() {
+  const q = filterEl.value.trim();
+  const ql = q.toLowerCase();
+  let shown = 0;
+  let html = "";
+  const groupKeys = Object.keys(GROUPS);
+  const shownGroups = new Set();
+
+  for (const g of groupKeys) {
+    if (activeGroup !== "all" && activeGroup !== g) continue;
+    const spec = GROUPS[g];
+    const matches = COMMANDS.filter(([name, grp, desc]) => {
+      if (grp !== g) return false;
+      if (!ql) return true;
+      return (name + " " + desc + " " + spec.title).toLowerCase().includes(ql);
+    });
+    if (!matches.length) continue;
+    shownGroups.add(g);
+    shown += matches.length;
+    html += `<div class="group">
+      <div class="group-head">
+        <span class="group-icon" style="background:${spec.color}">${spec.icon}</span>
+        <div><h3>${spec.title}</h3><p>${spec.desc}</p></div>
+        <span class="n">${matches.length} cmds</span>
+      </div>
+      <div class="cards">` +
+      matches.map(([name, grp, desc]) =>
+        `<div class="cmd" style="--gc:${spec.color}">
+           <div class="name"><span class="v">boost</span> <b>${hi(name, q)}</b></div>
+           <p>${hi(desc, q)}</p>
+         </div>`).join("") +
+      `</div></div>`;
+  }
+  groupsEl.innerHTML = html;
+  noResEl.style.display = shown ? "none" : "block";
+  countEl.textContent = ql || activeGroup !== "all"
+    ? `${shown} command${shown === 1 ? "" : "s"} across ${shownGroups.size} group${shownGroups.size === 1 ? "" : "s"}`
+    : `${COMMANDS.length} commands across ${groupKeys.length} groups`;
+}
+
+function renderPills() {
+  const mk = (key, label) =>
+    `<button class="pill${activeGroup === key ? " on" : ""}" role="tab"
+       aria-selected="${activeGroup === key}" data-g="${key}" type="button">${label}</button>`;
+  pillsEl.innerHTML = mk("all", "All groups") +
+    Object.entries(GROUPS).map(([k, v]) => mk(k, v.title)).join("");
+}
+pillsEl.addEventListener("click", (e) => {
+  const b = e.target.closest(".pill");
+  if (!b) return;
+  activeGroup = b.dataset.g;
+  renderPills();
+  render();
+});
+filterEl.addEventListener("input", render);
+renderPills();
+render();
+
+// registry counts
+document.querySelectorAll("[data-count]").forEach((el) => {
+  const v = REG_COUNTS[el.dataset.count];
+  if (v && v !== "—") el.textContent = v;
+});
+
+// ---------- copy button ----------
+document.getElementById("copy-install").addEventListener("click", async function () {
+  const text = document.getElementById("install-code").innerText;
+  let done = false;
+  try { await navigator.clipboard.writeText(text); done = true; } catch (e) { /* fall through */ }
+  if (!done) {
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { done = document.execCommand("copy"); } catch (e) { /* ignore */ }
+    ta.remove();
+  }
+  this.textContent = done ? "Copied ✓" : "Select & copy";
+  setTimeout(() => { this.textContent = "Copy"; }, 1800);
+});
+
+// ---------- scroll reveal ----------
+const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+if (!reduce && "IntersectionObserver" in window) {
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((en) => {
+      if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
+    });
+  }, { rootMargin: "0px 0px -8% 0px", threshold: 0.05 });
+  document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
+} else {
+  document.querySelectorAll(".reveal").forEach((el) => el.classList.add("in"));
+}
+</script>
+</body>
+</html>

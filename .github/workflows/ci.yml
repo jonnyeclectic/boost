@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ["3.9", "3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install test deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install pytest pytest-cov coverage
+      - name: unit + functional (80% coverage gate)
+        run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=term-missing -q
+      - name: shell smoke suite (152 checks, sandboxed)
+        run: bash tests/smoke.sh
+
+  mutation:
+    # mutmut needs 3.11+; one representative environment keeps CI fast
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install test deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install pytest pytest-cov coverage mutmut
+      - name: mutation strength gate (>=80% killed)
+        run: .venv/bin/python scripts/mutation_gate.py --run --min 80

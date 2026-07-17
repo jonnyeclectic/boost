@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# boost — Homebrew for AI coding skills.
+# Thin shim: finds Python 3.9+, runs the boost_cli package that lives
+# next to this script (resolving symlinks, so `ln -s .../boost ~/bin/boost`
+# just works). No PyPI, no Artifactory — stdlib only.
+set -euo pipefail
+
+SOURCE="${BASH_SOURCE[0]:-$0}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+
+find_python() {
+  for py in python3 python; do
+    if command -v "$py" >/dev/null 2>&1; then
+      if "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+        echo "$py"
+        return 0
+      fi
+    fi
+  done
+  return 1
+}
+
+PY="$(find_python)" || {
+  echo "boost: Python 3.9+ is required but was not found on PATH" >&2
+  echo "  hint: brew install python3" >&2
+  exit 1
+}
+
+exec "$PY" -S -c "
+import sys
+sys.path.insert(0, '$ROOT')
+from boost_cli.cli import main
+sys.exit(main(sys.argv[1:]))
+" "$@"
