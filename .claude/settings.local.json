@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rtk ls *)",
+      "Bash(git --version)",
+      "Bash(chmod +x /Users/cassandragaston/vibe/vibe /Users/cassandragaston/vibe/tests/make_fixture.py)",
+      "Bash(./vibe --version)",
+      "Bash(./vibe --help)",
+      "Bash(python3 -m py_compile vibe_cli/*.py vibe_cli/core/*.py)",
+      "Bash(python3 tests/make_fixture.py /tmp/vibe-fixture-check/fixture-tap)",
+      "Bash(python3 -c ' *)",
+      "Skill(artifact-design)",
+      "Bash(rtk read *)"
+    ]
+  }
+}

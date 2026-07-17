@@ -1,0 +1,138 @@
+"""Small shared utilities: time, hashing, versions, skill quality scoring."""
+from __future__ import annotations
+
+import hashlib
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Tuple
+
+IGNORED = {".git", "__pycache__", ".DS_Store"}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def rel_time(iso: str) -> str:
+    """'2026-07-16T01:00:00Z' -> '3h ago' (best effort)."""
+    try:
+        then = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return iso or "?"
+    secs = (datetime.now(timezone.utc) - then).total_seconds()
+    for limit, size, unit in ((60, 1, "s"), (3600, 60, "m"),
+                              (86400, 3600, "h"), (604800, 86400, "d")):
+        if secs < limit:
+            return "%d%s ago" % (max(1, secs // size), unit)
+    if secs < 604800 * 8:
+        return "%dw ago" % (secs // 604800)
+    return then.strftime("%Y-%m-%d")
+
+
+def human_size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return ("%d%s" if unit == "B" else "%.1f%s") % (n, unit)
+        n /= 1024.0
+    return str(n)
+
+
+def slugify(name: str) -> str:
+    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or "skill"
+
+
+def sha256_dir(path: Path) -> str:
+    """Deterministic content hash of a directory tree (paths + bytes)."""
+    h = hashlib.sha256()
+    root = Path(path)
+    files = sorted(
+        p for p in root.rglob("*")
+        if p.is_file() and not any(part in IGNORED for part in p.parts)
+    )
+    for f in files:
+        h.update(str(f.relative_to(root)).encode())
+        h.update(b"\0")
+        h.update(f.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def dir_size(path: Path) -> int:
+    return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
+
+
+def semver_tuple(v: str):
+    parts = re.findall(r"\d+", str(v or "0"))[:3]
+    return tuple(int(p) for p in parts) + (0,) * (3 - len(parts))
+
+
+def semver_gt(a: str, b: str) -> bool:
+    return semver_tuple(a) > semver_tuple(b)
+
+
+def score_skill(skill_dir: Path) -> Tuple[int, List[str]]:
+    """Heuristic quality score 0-100 for a skill directory, with notes.
+
+    Shared by `boost install` (display), `boost lint`, and `boost test`.
+    """
+    from . import frontmatter
+
+    skill_md = Path(skill_dir) / "SKILL.md"
+    notes: List[str] = []
+    if not skill_md.exists():
+        return 0, ["missing SKILL.md"]
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return 0, ["unreadable SKILL.md: %s" % e]
+    meta, body = frontmatter.parse(text)
+    score = 20  # exists and parses
+
+    if meta.get("name"):
+        score += 10
+    else:
+        notes.append("frontmatter missing `name`")
+    desc = str(meta.get("description") or "")
+    if desc:
+        score += 10
+        if len(desc) >= 40:
+            score += 5
+        else:
+            notes.append("description is thin (<40 chars)")
+    else:
+        notes.append("frontmatter missing `description`")
+    if meta.get("version"):
+        score += 10
+        if not re.match(r"^\d+\.\d+(\.\d+)?", str(meta["version"])):
+            score -= 5
+            notes.append("version is not semver-ish")
+    else:
+        notes.append("frontmatter missing `version`")
+
+    if len(body.strip()) >= 200:
+        score += 15
+    else:
+        notes.append("body is short (<200 chars)")
+    if re.search(r"^#{1,3} ", body, re.M):
+        score += 10
+    else:
+        notes.append("no markdown headings in body")
+    if "```" in body or re.search(r"^\d+\. ", body, re.M) or re.search(r"^- ", body, re.M):
+        score += 10  # concrete steps or examples
+    else:
+        notes.append("no examples, steps, or code blocks")
+    if not re.search(r"\bTODO\b|\bFIXME\b", body):
+        score += 5
+    else:
+        notes.append("contains TODO/FIXME")
+    if meta.get("license") or (Path(skill_dir) / "LICENSE").exists():
+        score += 5
+    extras = [p for p in Path(skill_dir).iterdir()
+              if p.name not in IGNORED and p.name != "SKILL.md"]
+    if extras:
+        score += 5  # ships supporting references/scripts
+    if len(text) > 48_000:
+        score -= 10
+        notes.append("very large SKILL.md (>48KB) — consider splitting")
+    return max(0, min(100, score)), notes

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m http.server 8731)",
+      "Bash(rtk curl *)",
+      "Bash(kill %1)",
+      "Bash(pkill -f \"http.server 8731\")",
+      "Bash(rtk grep *)"
+    ]
+  }
+}

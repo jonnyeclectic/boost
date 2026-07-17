@@ -1,0 +1,649 @@
+"""Discovery & Search commands: search, discover, recommend, browse,
+index, trending, stats, count.
+
+Also exports detect_stack(), shared with the Quality commands.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+from ..core import agents, ai, catalog, gitutil, journal, lockfile, paths, registry, store, util
+from ..core import output as out
+from ..errors import BoostError
+
+_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
+              "dist", "build", "target", "vendor"}
+
+_EXT_LANGS = {".py": "python", ".ts": "typescript", ".tsx": "typescript",
+              ".js": "javascript", ".jsx": "javascript", ".go": "go",
+              ".rs": "rust", ".java": "java", ".rb": "ruby", ".kt": "kotlin",
+              ".swift": "swift", ".php": "php", ".cs": "csharp"}
+
+
+def _positive_int(s: str) -> int:
+    """argparse type for --limit flags: an int that must be >= 1."""
+    try:
+        v = int(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError("invalid int value: %r" % s)
+    if v < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return v
+
+
+def _tilde(p) -> str:
+    """Show a path with $HOME contracted to ~."""
+    s = str(p)
+    for h in (str(paths.home()), str(paths.home().resolve())):
+        if s == h or s.startswith(h + os.sep):
+            return "~" + s[len(h):]
+    return s
+
+
+def _read_text(p: Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _json_array(text):
+    """Best-effort extraction of the first JSON array in an AI reply."""
+    m = re.search(r"\[.*\]", text or "", re.S)
+    if not m:
+        return None
+    try:
+        data = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, list) else None
+
+
+def _discovery_path() -> Path:
+    return paths.cache_dir() / "discovery.json"
+
+
+def detect_stack(path) -> dict:
+    """Detect a project's tech stack from files on disk.
+
+    Walks at most two directory levels (skipping .git/node_modules etc.) and
+    returns {"languages": [...], "frameworks": [...], "keywords": [...]}.
+    Shared with the Quality commands.
+    """
+    root = Path(path)
+    langs, frameworks, extras = set(), set(), set()
+    markers, ext_counts = {}, {}
+    for dirpath, dirnames, filenames in os.walk(str(root)):
+        rel = os.path.relpath(dirpath, str(root))
+        depth = 0 if rel == "." else rel.count(os.sep) + 1
+        dirnames[:] = [] if depth >= 2 else [d for d in dirnames
+                                             if d not in _SKIP_DIRS]
+        for fn in filenames:
+            markers.setdefault(fn.lower(), Path(dirpath) / fn)
+            ext = os.path.splitext(fn)[1].lower()
+            if ext:
+                ext_counts[ext] = ext_counts.get(ext, 0) + 1
+
+    def read(*names) -> str:
+        return "\n".join(_read_text(markers[n]) for n in names
+                         if n in markers).lower()
+
+    if "package.json" in markers:
+        langs.add("javascript")
+        try:
+            pkg = json.loads(_read_text(markers["package.json"]))
+        except json.JSONDecodeError:
+            pkg = {}
+        if not isinstance(pkg, dict):
+            pkg = {}
+        deps = set()
+        for section in ("dependencies", "devDependencies", "peerDependencies"):
+            deps.update(pkg.get(section) or {})
+        for dep in ("react", "vue", "next", "express"):
+            if any(d == dep or d.startswith((dep + "/", "@" + dep + "/"))
+                   for d in deps):
+                frameworks.add(dep)
+        if "typescript" in deps:
+            langs.add("typescript")
+    if "pyproject.toml" in markers or "requirements.txt" in markers:
+        langs.add("python")
+        blob = read("pyproject.toml", "requirements.txt")
+        for fw in ("django", "flask", "fastapi", "pytest"):
+            if fw in blob:
+                frameworks.add(fw)
+    if "go.mod" in markers:
+        langs.add("go")
+    if "cargo.toml" in markers:
+        langs.add("rust")
+    if any(n in markers for n in ("pom.xml", "build.gradle", "build.gradle.kts")):
+        langs.add("java")
+        if "spring" in read("pom.xml", "build.gradle", "build.gradle.kts"):
+            frameworks.add("spring")
+    if "gemfile" in markers:
+        langs.add("ruby")
+        if "rails" in read("gemfile"):
+            frameworks.add("rails")
+    if "tsconfig.json" in markers:
+        langs.add("typescript")
+    if "dockerfile" in markers:
+        extras.add("docker")
+    if (root / ".github" / "workflows").is_dir():
+        extras.add("ci")
+    if ext_counts.get(".tf"):
+        extras.add("terraform")
+    for ext, n in ext_counts.items():
+        if n >= 2 and ext in _EXT_LANGS:
+            langs.add(_EXT_LANGS[ext])
+    return {"languages": sorted(langs), "frameworks": sorted(frameworks),
+            "keywords": sorted(langs | frameworks | extras)}
+
+
+def _ai_rank(query: str, scored):
+    """Ask Claude to reorder the top hits. Returns a new scored list or None."""
+    top = scored[:15]
+    listing = "\n".join("- %s: %s" % (e["name"], e["description"])
+                        for e, _ in top)
+    reply = ai.ask(
+        "Query: %s\n\nSkills:\n%s\n\nOrder these skill names best-match-first "
+        "for the query. Reply with ONLY a JSON array of names."
+        % (query, listing),
+        system="You rank AI coding skills by relevance to a search query.",
+        max_tokens=400)
+    order = _json_array(reply)
+    if not order:
+        return None
+    by_name = {e["name"]: (e, s) for e, s in scored}
+    names = [str(n) for n in order if str(n) in by_name]
+    rest = [t for t in scored if t[0]["name"] not in set(names)]
+    return [by_name[n] for n in names] + rest
+
+
+def cmd_search(argv):
+    """Search the tap catalogs, optionally AI-reranked with --smart."""
+    p = argparse.ArgumentParser(
+        prog="boost search",
+        description="Search skills across tap registries (AI-ranked)")
+    p.add_argument("query", nargs="+", help="search terms")
+    p.add_argument("--smart", action="store_true",
+                   help="rerank the top hits with Claude")
+    p.add_argument("--limit", type=_positive_int, default=15,
+                   help="max results (default 15)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
+    args = p.parse_args(argv)
+    query = " ".join(args.query)
+    if not registry.list_taps():
+        raise BoostError("no taps configured — nothing to search",
+                        hint="add the recommended registries with `boost tap --defaults`")
+    scored = catalog.search(query)
+    if args.as_json:
+        print(json.dumps([dict(e, score=s) for e, s in scored[:args.limit]]))
+        return 0
+    if not scored:
+        out.info("no matches for %r" % query)
+        out.info(out.c("try `boost discover %s` to search all of GitHub" % query,
+                       out.DIM))
+        return 0
+    ranker = "heuristic relevance"
+    if args.smart:
+        if ai.available():
+            reranked = _ai_rank(query, scored)
+            if reranked:
+                scored, ranker = reranked, "Claude Haiku relevance"
+        else:
+            out.warn(ai.fallback_note())
+    shown = scored[:args.limit]
+    width = max(len(e["name"]) for e, _ in shown)
+    for e, _s in shown:
+        line = out.c(e["name"].ljust(width + 3), out.CYAN) + (e["description"] or "")
+        if e.get("curated"):
+            line += " " + out.c("★ curated", out.YELLOW)
+        out.info(line)
+    out.info(out.c("%d match%s · ranked by %s"
+                   % (len(scored), "" if len(scored) == 1 else "es", ranker),
+                   out.DIM))
+    return 0
+
+
+def cmd_index(argv):
+    """Build ~/.boost/cache/discovery.json via `gh api` code search."""
+    p = argparse.ArgumentParser(
+        prog="boost index",
+        description="Build the discovery registry via GitHub Code Search")
+    p.add_argument("--limit", type=_positive_int, default=300,
+                   help="max skill files to index (default 300)")
+    args = p.parse_args(argv)
+    if not shutil.which("gh"):
+        raise BoostError("the GitHub CLI (gh) is required to build the index",
+                        hint="brew install gh && gh auth login")
+    items, total = [], 0
+    pages = min((max(1, args.limit) + 99) // 100, 10)  # code search caps at 1000
+    for page in range(1, pages + 1):
+        if page > 1:
+            time.sleep(1)  # stay under the code-search rate limit
+        try:
+            proc = subprocess.run(
+                ["gh", "api", "-H", "Accept: application/vnd.github+json",
+                 "search/code?q=filename:SKILL.md&per_page=100&page=%d" % page],
+                capture_output=True, text=True, timeout=120)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            raise BoostError("gh api timed out on page %d" % page, hint=str(e))
+        if proc.returncode != 0:
+            tail = "\n".join((proc.stderr or proc.stdout or "").strip()
+                             .splitlines()[-3:])
+            if not items:
+                raise BoostError("GitHub code search failed",
+                                hint=tail or "check `gh auth status`")
+            out.warn("page %d failed — keeping the %d items fetched so far"
+                     % (page, len(items)))
+            break
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            raise BoostError("gh api returned unparseable JSON",
+                            hint="try `boost index` again, or `gh auth status`")
+        if page == 1:
+            total = int(data.get("total_count") or 0)
+        batch = data.get("items") or []
+        for it in batch:
+            repo = it.get("repository") or {}
+            items.append({
+                "repo": repo.get("full_name", "?"),
+                "path": it.get("path", ""),
+                "url": it.get("html_url", ""),
+                "description": repo.get("description") or "",
+            })
+            if len(items) >= args.limit:
+                break
+        if len(items) >= args.limit or len(batch) < 100:
+            break
+    paths.ensure_dirs()
+    _discovery_path().write_text(json.dumps(
+        {"generated": util.now_iso(), "github_total": total, "items": items},
+        indent=1))
+    repos = len({it["repo"] for it in items})
+    out.ok("indexed %d skill files across %d repos (GitHub reports %d total)"
+           % (len(items), repos, total))
+    journal.log("index", "%d skill files" % len(items), total=total)
+    return 0
+
+
+def cmd_discover(argv):
+    """Browse/filter the GitHub-wide index built by `boost index`."""
+    p = argparse.ArgumentParser(
+        prog="boost discover",
+        description="Browse & search the GitHub-wide skill discovery index")
+    p.add_argument("query", nargs="*", help="filter terms (repo/path substring)")
+    p.add_argument("--limit", type=_positive_int, default=25,
+                   help="max rows (default 25)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
+    args = p.parse_args(argv)
+    dpath = _discovery_path()
+    if not dpath.exists():
+        if args.as_json:
+            print(json.dumps([]))
+            return 0
+        out.info("the discovery index has not been built yet")
+        if shutil.which("gh"):
+            out.info("build it with `boost index` (GitHub Code Search)")
+        else:
+            out.info("install the GitHub CLI first (`brew install gh && "
+                     "gh auth login`), then run `boost index`")
+        return 0
+    try:
+        data = json.loads(dpath.read_text())
+    except (json.JSONDecodeError, OSError):
+        raise BoostError("the discovery index is corrupt",
+                        hint="rebuild it with `boost index`")
+    all_items = data.get("items") or []
+    tokens = [t.lower() for t in args.query if t.strip()]
+    items = [it for it in all_items
+             if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
+                                        it.get("description", ""))).lower()
+                    for t in tokens)]
+    shown = items[:args.limit]
+    if args.as_json:
+        print(json.dumps(shown))
+        return 0
+    if not shown:
+        out.info("no indexed skills match %r" % " ".join(args.query))
+        out.info(out.c("the index holds %d entries — rebuild with `boost index`"
+                       % len(all_items), out.DIM))
+        return 0
+    out.table([(it.get("repo", "?"), it.get("path", ""),
+                out.c(it.get("url", ""), out.DIM)) for it in shown],
+              headers=("repo", "path", "url"))
+    out.info(out.c("%d of %d indexed skills · GitHub reports ~%d total"
+                   % (len(shown), len(all_items),
+                      int(data.get("github_total") or 0)), out.DIM))
+    return 0
+
+
+def _ai_picks(stack: dict, cands):
+    """Ask Claude for its top-5 picks with reasons. Returns list or None."""
+    listing = "\n".join("- %s: %s" % (e["name"], e["description"])
+                        for e in cands)
+    reply = ai.ask(
+        "Project stack: %s\n\nCandidate skills:\n%s\n\nPick the 5 best skills "
+        "for this project. Reply with ONLY a JSON array like "
+        '[{"name": "...", "reason": "one short line"}].'
+        % (json.dumps(stack), listing),
+        system="You recommend AI coding skills for a software project.",
+        max_tokens=500)
+    picks = _json_array(reply)
+    if not picks:
+        return None
+    return [pk for pk in picks if isinstance(pk, dict) and pk.get("name")][:5]
+
+
+def cmd_recommend(argv):
+    """Match the detected tech stack against the catalog."""
+    p = argparse.ArgumentParser(
+        prog="boost recommend",
+        description="Suggest skills based on your project's tech stack")
+    p.add_argument("--path", default=".", help="project directory (default: cwd)")
+    p.add_argument("--limit", type=_positive_int, default=8,
+                   help="max suggestions (default 8)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
+    args = p.parse_args(argv)
+    target = paths.expand(args.path).resolve()
+    if not target.is_dir():
+        raise BoostError("no such directory: %s" % args.path)
+    entries = catalog.all_entries()
+    if not entries:
+        raise BoostError("no skills in any tap to recommend from",
+                        hint="add registries with `boost tap --defaults`")
+    stack = detect_stack(target)
+    agg = {}
+    for kw in stack["keywords"]:
+        for e, s in catalog.search(kw, entries):
+            rec = agg.setdefault(e["name"], {"entry": e, "score": 0,
+                                             "because": set()})
+            rec["score"] += s
+            rec["because"].add(kw)
+    for rec in agg.values():
+        if rec["entry"].get("curated"):
+            rec["score"] += 10
+    ranked = sorted(agg.values(),
+                    key=lambda r: (-r["score"], r["entry"]["name"]))
+    if args.as_json:
+        print(json.dumps({"stack": stack, "recommendations": [
+            dict(r["entry"], score=r["score"], because=sorted(r["because"]))
+            for r in ranked[:args.limit]]}))
+        return 0
+    line = "stack: " + (", ".join(stack["languages"]) or "unknown")
+    if stack["frameworks"]:
+        line += " · frameworks: " + ", ".join(stack["frameworks"])
+    out.info(out.c("%s  (%s)" % (line, _tilde(target)), out.DIM))
+    shown = ranked[:args.limit]
+    if not shown:
+        shown = [{"entry": e, "score": 0, "because": {"curated"}}
+                 for e in entries if e.get("curated")][:args.limit]
+        if not shown:
+            out.info("no recommendations for this stack — try `boost search <keyword>`")
+            return 0
+        out.info("no stack-specific matches — curated picks instead:")
+    width = max(len(r["entry"]["name"]) for r in shown)
+    for r in shown:
+        e = r["entry"]
+        out.info(out.c(e["name"].ljust(width + 3), out.CYAN)
+                 + (e["description"] or "") + "  "
+                 + out.c("because: %s" % ", ".join(sorted(r["because"])), out.DIM))
+    if ai.available():
+        picks = _ai_picks(stack, [r["entry"] for r in ranked[:20]])
+        if picks:
+            out.heading("AI picks")
+            for pk in picks:
+                out.info(out.c(str(pk.get("name", "?")), out.CYAN) + "  "
+                         + str(pk.get("reason", "")))
+    return 0
+
+
+def _subseq(needle: str, hay: str) -> bool:
+    """True when needle is a subsequence of hay (fuzzy filter)."""
+    it = iter(hay)
+    return all(ch in it for ch in needle)
+
+
+def _browse_plain(entries, why: str):
+    out.warn(why + " — showing the full catalog")
+    out.table([(e["name"], "v" + e["version"], e["tap"],
+                "★" if e.get("curated") else "") for e in entries],
+              headers=("name", "version", "tap", ""))
+    out.info(out.c("%d skills · install with `boost install <name>`"
+                   % len(entries), out.DIM))
+    return 0
+
+
+def _browse_tui(curses, entries):
+    """Run the curses UI. Returns the entry picked for install, or None."""
+    state = {"pick": None}
+
+    def ui(scr):
+        try:
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        filt, sel, detail = "", 0, False
+        while True:
+            q = filt.lower()
+            matches = [e for e in entries
+                       if _subseq(q, (e["name"] + " " + e["tap"]).lower())]
+            sel = max(0, min(sel, len(matches) - 1))
+            h, w = scr.getmaxyx()
+            pane = 6 if detail and matches else 0
+            try:
+                scr.erase()
+                scr.addnstr(0, 0, "filter: " + filt, w - 1, curses.A_BOLD)
+                scr.addnstr(1, 0, "up/down move · enter detail · i install · "
+                            "q quit · %d/%d" % (len(matches), len(entries)),
+                            w - 1, curses.A_DIM)
+                rows = max(1, h - 3 - pane)
+                top = max(0, sel - rows + 1)
+                for i, e in enumerate(matches[top:top + rows]):
+                    line = "%s %s  v%s  %s" % ("★" if e.get("curated") else " ",
+                                               e["name"], e["version"], e["tap"])
+                    attr = curses.A_REVERSE if top + i == sel else curses.A_NORMAL
+                    scr.addnstr(2 + i, 0, line.ljust(w - 1), w - 1, attr)
+                if pane and matches:
+                    e = matches[sel]
+                    y0 = h - pane
+                    scr.hline(y0, 0, curses.ACS_HLINE, w - 1)
+                    tags = ", ".join(str(t) for t in
+                                     (e.get("meta", {}).get("tags") or []))
+                    for j, ln in enumerate((
+                            "%s  v%s" % (e["name"], e["version"]),
+                            (e["description"] or "")[:w - 3],
+                            "tap: %s   dir: %s" % (e["tap"], e["rel_dir"]),
+                            "tags: %s" % (tags or "-"))):
+                        if y0 + 1 + j < h:
+                            scr.addnstr(y0 + 1 + j, 1, ln, w - 2)
+                scr.refresh()
+            except curses.error:
+                pass  # terminal too small mid-draw; retry on next key
+            key = scr.getch()
+            if key in (ord("q"), 27):                    # q / ESC
+                return
+            if key == ord("i") and matches:
+                state["pick"] = matches[sel]
+                return
+            if key == curses.KEY_UP:
+                sel = max(0, sel - 1)
+            elif key == curses.KEY_DOWN:
+                sel = min(sel + 1, max(0, len(matches) - 1))
+            elif key in (10, 13, curses.KEY_ENTER):
+                detail = not detail
+            elif key in (curses.KEY_BACKSPACE, 127, 8):
+                filt = filt[:-1]
+            elif 32 <= key <= 126:
+                filt += chr(key)
+
+    curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
+    return state["pick"]
+
+
+def cmd_browse(argv):
+    """Full-screen fuzzy browser over every catalog entry."""
+    p = argparse.ArgumentParser(
+        prog="boost browse",
+        description="Interactive full-screen TUI with fuzzy search")
+    p.parse_args(argv)
+    entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+    if not entries:
+        raise BoostError("no skills available to browse",
+                        hint="add registries with `boost tap --defaults`")
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        return _browse_plain(entries, "interactive mode needs a TTY")
+    try:
+        import curses
+    except ImportError:
+        return _browse_plain(entries, "curses is unavailable on this Python")
+    picked = _browse_tui(curses, entries)
+    if picked is None:
+        return 0
+    res = store.install(picked)
+    out.ok("installed %s v%s → %s"
+           % (picked["name"], picked["version"], _tilde(res.dest)))
+    if res.linked:
+        out.info("linked into: "
+                 + ", ".join(agents.display_name(a) for a in res.linked))
+    for conflict in res.conflicts:
+        out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
+    return 0
+
+
+def cmd_trending(argv):
+    """Rank skills by local install events from the journal."""
+    p = argparse.ArgumentParser(
+        prog="boost trending",
+        description="Show trending skills by install count")
+    p.add_argument("--limit", type=_positive_int, default=10,
+                   help="max rows (default 10)")
+    args = p.parse_args(argv)
+    evs = journal.events(action="install")
+    by_name = {e["name"]: e for e in catalog.all_entries()}
+    if not evs:
+        out.heading("curated picks (no local install data yet)")
+        curated = [e for e in by_name.values() if e.get("curated")]
+        if not curated:
+            out.info("no curated skills available — add taps with `boost tap --defaults`")
+            return 0
+        out.table([(e["name"], "v" + e["version"], e["description"])
+                   for e in sorted(curated, key=lambda e: e["name"])[:args.limit]])
+        return 0
+    agg = {}
+    for ev in evs:  # most-recent-first, so first ts per subject is the latest
+        name = ev.get("subject") or "?"
+        rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})
+        rec["count"] += 1
+    ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    out.table([(name, str(rec["count"]), util.rel_time(rec["last"]),
+                by_name.get(name, {}).get("description", ""))
+               for name, rec in ranked[:args.limit]],
+              headers=("name", "installs", "last", "description"))
+    out.info(out.c("based on local install activity", out.DIM))
+    return 0
+
+
+def cmd_stats(argv):
+    """Lock-file, journal, and upstream stats for one skill."""
+    p = argparse.ArgumentParser(
+        prog="boost stats",
+        description="Install statistics & trend for a single skill")
+    p.add_argument("name", help="skill name")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
+    args = p.parse_args(argv)
+    name = args.name
+    lock = lockfile.get_skill(name)
+    matches = catalog.find(name)
+    cat = matches[0] if matches else None
+    if not lock and not cat:
+        raise BoostError("no skill named %r installed or in any tap" % name,
+                        hint="try `boost search %s`" % name)
+    acts = {a: len(journal.events(action=a, subject=name))
+            for a in ("install", "update", "uninstall")}
+    latest = cat["version"] if cat else None
+    upstream = None
+    if cat:
+        try:
+            tap = registry.get(cat["tap"])
+            if tap.is_cloned:
+                lines = gitutil.log_for_path(tap.path, cat["rel_dir"], n=1)
+                upstream = lines[0] if lines else None
+        except BoostError:
+            pass
+    sdir = store.skill_store_dir(name)
+    size = util.dir_size(sdir) if lock and sdir.is_dir() else None
+    if args.as_json:
+        print(json.dumps({
+            "name": name, "installed": bool(lock), "lock": lock, "size": size,
+            "activity": acts,
+            "catalog": ({"latest": latest, "tap": cat["tap"],
+                         "description": cat["description"],
+                         "upstream": upstream} if cat else None)}))
+        return 0
+    out.heading(name)
+    if lock:
+        out.kv("version", lock.get("version", "?"))
+        out.kv("tap", lock.get("tap", "?"))
+        out.kv("installed", util.rel_time(lock.get("installed_at", "")))
+        out.kv("updated", util.rel_time(lock.get("updated_at", "")))
+        out.kv("agents", ", ".join(lock.get("agents") or []) or "none")
+        out.kv("pinned", "yes" if lock.get("pinned") else "no")
+        out.kv("sha256", str(lock.get("sha256", ""))[:12])
+        if size is not None:
+            out.kv("size", util.human_size(size))
+    else:
+        out.kv("version", cat["version"])
+        out.kv("tap", cat["tap"])
+        out.kv("description", cat["description"])
+        out.info(out.c("not installed — `boost install %s`" % name, out.DIM))
+    out.kv("activity", "%d installs · %d updates · %d uninstalls"
+           % (acts["install"], acts["update"], acts["uninstall"]))
+    if lock and latest:
+        if util.semver_gt(latest, lock.get("version", "0")):
+            out.kv("latest", "%s %s" % (latest, out.c("(update available)", out.YELLOW)))
+        else:
+            out.kv("latest", "%s %s" % (latest, out.c("(up to date)", out.DIM)))
+    if upstream:
+        out.kv("upstream", upstream)
+    return 0
+
+
+def cmd_count(argv):
+    """One-line inventory: installed / available / taps / discovery index."""
+    p = argparse.ArgumentParser(
+        prog="boost count",
+        description="Quick summary of installed / available / taps")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
+    args = p.parse_args(argv)
+    installed_n = len(lockfile.installed())
+    taps_n = len(registry.list_taps())
+    available_n = len(catalog.all_entries())
+    discovery = None
+    dpath = _discovery_path()
+    if dpath.exists():
+        try:
+            discovery = len(json.loads(dpath.read_text()).get("items") or [])
+        except (json.JSONDecodeError, OSError):
+            discovery = None
+    if args.as_json:
+        print(json.dumps({"installed": installed_n, "available": available_n,
+                          "taps": taps_n, "discovery": discovery}))
+        return 0
+    out.info("installed %d · available %d (across %d tap%s) · discovery index %s"
+             % (installed_n, available_n, taps_n, "" if taps_n == 1 else "s",
+                discovery if discovery is not None else "not built"))
+    return 0
