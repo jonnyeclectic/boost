@@ -28,11 +28,6 @@ and handing them off to teammates. That's the part boost takes over —
 package-manager mechanics for skills, in the same spirit as Homebrew for
 Mac binaries or npm for JS packages.
 
-This project grew out of patterns I kept running into while building
-internal developer tooling professionally — the actual code here is
-independent, written from scratch, with no proprietary logic or employer
-material carried over.
-
 ## Install
 
 One shim script, nothing to configure beyond that. Needs Python 3.9+ and `git`.
@@ -63,7 +58,7 @@ GitHub registries  ──boost update──▶  ~/.boost/repos/    (shallow clon
 
 ```bash
 boost search jira          # look across every tapped registry (AI-ranked when available)
-boost install c1-jira      # copy, link, lock — with a quality score attached
+boost install my-jira      # copy, link, lock — with a quality score attached
 boost doctor               # sanity check: broken links, lock drift, stale taps
 
 # hand the whole setup to a team:
