@@ -212,7 +212,9 @@ class TestProfile:
 # ---------------------------------------------------------------- protocol
 
 class TestProtocol:
-    def test_status_lists_url_forms(self, boost, sandbox):
+    def test_status_lists_url_forms(self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Darwin")
         r = boost("protocol", "status")
         assert "Darwin" in r.out
         assert "not registered" in r.out
@@ -250,7 +252,9 @@ class TestProtocol:
         r = boost("protocol", "open", "boost://tap/owner/repo", expect=1)
         assert "cancelled" in r.out
 
-    def test_register_unregister_darwin(self, boost, sandbox):
+    def test_register_unregister_darwin(self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.team.platform.system",
+                            lambda: "Darwin")
         r = boost("protocol", "register")
         script = paths.state_dir() / "boost-protocol-handler.sh"
         assert "wrote handler script ~/.boost/state/boost-protocol-handler.sh" in r.out

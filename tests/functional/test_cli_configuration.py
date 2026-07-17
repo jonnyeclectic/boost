@@ -377,6 +377,12 @@ class TestCompletions:
 # ---------------------------------------------------------------- schedule
 
 class TestScheduleDarwin:
+    """Darwin branches, with sys.platform faked (CI also runs on Linux)."""
+
+    @pytest.fixture(autouse=True)
+    def _darwin(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+
     def test_status_fresh(self, boost, sandbox):
         r = boost("schedule")
         assert "darwin (launchd)" in r.out
