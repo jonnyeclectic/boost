@@ -57,7 +57,7 @@ def test_unknown_command_suggests_closest(boost):
 
 
 def test_version_and_help(boost):
-    assert "boost 2.3.3" in boost("--version").out
+    assert "boost 1.0.0" in boost("--version").out
     r = boost("--help")
     assert "72 commands · 8 groups" in r.out
     for group in ("Package Management", "Discovery & Search", "Intelligence",
