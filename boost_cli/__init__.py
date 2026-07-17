@@ -1,5 +1,5 @@
 """boost — Homebrew for AI coding skills."""
 
-__version__ = "2.3.3"
+__version__ = "1.0.0"
 PRODUCT = "boost"
 TAGLINE = "AI Skill Package Manager"
