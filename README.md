@@ -32,8 +32,8 @@ Mac binaries or npm for JS packages.
 
 One shim script, nothing to configure beyond that. Needs Python 3.9+ and `git`.
 
-```bash
-git clone https://github.com/YOUR_ORG/boost ~/.boost-src
+```bash 
+git clone https://github.com/jonnyeclectic/boost ~/.boost-src ~/.boost-src
 ln -s ~/.boost-src/boost ~/bin/boost        # anywhere on PATH works
 boost --version
 boost tap --defaults                       # pull in the starter registries
