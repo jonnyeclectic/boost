@@ -3,6 +3,7 @@ name = "boost-cli"
 version = "1.0.0"
 description = "boost — Homebrew for AI coding skills"
 requires-python = ">=3.9"
+license = {file = "LICENSE"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

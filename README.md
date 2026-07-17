@@ -6,6 +6,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-92%25_(80%25_gated)-brightgreen)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/jonnyeclectic/boost)](LICENSE)
 
 **boost** is a CLI that finds, installs, and keeps track of AI coding skills
 pulled from GitHub-hosted registries, then hooks them straight into
