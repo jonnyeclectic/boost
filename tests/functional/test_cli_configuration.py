@@ -377,6 +377,12 @@ class TestCompletions:
 # ---------------------------------------------------------------- schedule
 
 class TestScheduleDarwin:
+    """Darwin branches, with sys.platform faked (CI also runs on Linux)."""
+
+    @pytest.fixture(autouse=True)
+    def _darwin(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "darwin")
+
     def test_status_fresh(self, boost, sandbox):
         r = boost("schedule")
         assert "darwin (launchd)" in r.out
@@ -529,13 +535,17 @@ class TestServe:
                 captured["server"] = self
 
         monkeypatch.setattr(cfg_mod, "ThreadingHTTPServer", Capturing)
+        # server_bind() calls socket.getfqdn(), whose reverse-DNS lookup can
+        # hang for many seconds on macOS CI runners; stub it out
+        monkeypatch.setattr(socket, "getfqdn", lambda name="": "localhost")
         t = threading.Thread(target=main, args=(["serve", "--port", "0"],),
                              daemon=True)
         t.start()
         try:
-            deadline = time.time() + 5
+            deadline = time.time() + 30
             while "server" not in captured and time.time() < deadline:
                 time.sleep(0.01)
+            assert "server" in captured, "serve thread never bound its socket"
             port = captured["server"].server_address[1]
             base = "http://127.0.0.1:%d" % port
 
@@ -711,7 +721,10 @@ class TestMcp:
 # ---------------------------------------------------------------- self-update
 
 class TestSelfUpdate:
-    def test_non_git_checkout_fails_with_hint(self, boost, sandbox):
+    def test_non_git_checkout_fails_with_hint(self, boost, sandbox, monkeypatch):
+        # repo_root() normally resolves to the real boost checkout (a git
+        # repo, both locally and in CI); point it at the sandbox instead
+        monkeypatch.setattr("boost_cli.core.paths.repo_root", lambda: sandbox)
         r = boost("self-update", expect=1)
         assert "boost is not running from a git checkout" in r.err
         assert "git clone the boost repo" in r.err
