@@ -1,5 +1,12 @@
 # boost — a package manager for AI coding skills
 
+[![CI](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml/badge.svg)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/jonnyeclectic/boost)](https://github.com/jonnyeclectic/boost/releases/latest)
+[![Python 3.9–3.14](https://img.shields.io/badge/python-3.9%E2%80%933.14-blue)](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-92%25_(80%25_gated)-brightgreen)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
+[![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
+
 **boost** is a CLI that finds, installs, and keeps track of AI coding skills
 pulled from GitHub-hosted registries, then hooks them straight into
 **Claude Code, Windsurf, and Cursor** in one pass. Instead of hand-copying
@@ -33,7 +40,7 @@ Mac binaries or npm for JS packages.
 One shim script, nothing to configure beyond that. Needs Python 3.9+ and `git`.
 
 ```bash 
-git clone https://github.com/jonnyeclectic/boost ~/.boost-src ~/.boost-src
+git clone https://github.com/jonnyeclectic/boost ~/.boost-src
 ln -s ~/.boost-src/boost ~/bin/boost        # anywhere on PATH works
 boost --version
 boost tap --defaults                       # pull in the starter registries
