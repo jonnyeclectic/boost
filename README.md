@@ -58,7 +58,7 @@ GitHub registries  ──boost update──▶  ~/.boost/repos/    (shallow clon
 
 ```bash
 boost search jira          # look across every tapped registry (AI-ranked when available)
-boost install c1-jira      # copy, link, lock — with a quality score attached
+boost install my-jira      # copy, link, lock — with a quality score attached
 boost doctor               # sanity check: broken links, lock drift, stale taps
 
 # hand the whole setup to a team:
