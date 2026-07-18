@@ -477,3 +477,37 @@ class TestMetaText:
     def test_curated_entry_with_no_match_is_excluded(self):
         res = catalog.search("xyzzy", entries=[_entry("unrelated", "t", curated=True)])
         assert res == []
+
+
+class TestSearchBlobPrecompute:
+    def test_search_blob_flattens_name_desc_meta_lowercased(self):
+        blob = catalog._search_blob(
+            "Foo-Bar", "Desc Here", {"tags": ["Alpha"], "x": "On"})
+        assert blob == "foo-bar desc here tags alpha x on"
+
+    def test_search_blob_tolerates_empty_description(self):
+        assert catalog._search_blob("name", "", {}) == "name  "
+        assert catalog._search_blob("name", None, {}) == "name  "
+
+    def test_make_entry_precomputes_blob(self, tmp_path):
+        f = tmp_path / "SKILL.md"
+        f.write_text("body")
+        e = catalog._make_entry(
+            tmp_path, f, "skill", "fallback-name", "tap", False,
+            {"tags": ["Kubernetes"]}, "Handles clusters")
+        assert e["search_blob"] == "fallback-name handles clusters tags kubernetes"
+
+    def test_search_reads_precomputed_blob_not_live_meta(self):
+        # Token lives only in search_blob, not in meta -> a match proves search
+        # consumed the precomputed blob rather than re-walking meta.
+        e = _entry("x", "t", meta={})
+        e["search_blob"] = "x  zzsentinel"
+        res = catalog.search("zzsentinel", entries=[e])
+        assert [(m["name"], s) for m, s in res] == [("x", 2)]
+
+    def test_search_falls_back_when_blob_absent(self):
+        # Older caches / raw entries have no blob -> recompute from meta.
+        e = _entry("x", "t", meta={"tags": ["fallbackword"]})
+        assert "search_blob" not in e
+        res = catalog.search("fallbackword", entries=[e])
+        assert [(m["name"], s) for m, s in res] == [("x", 2)]
