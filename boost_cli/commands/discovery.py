@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from ..core import agents, ai, catalog, gitutil, journal, lockfile, paths, registry, store, util
+from ..core import agents, ai, catalog, gitutil, journal, lockfile, paths, rag, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -184,7 +184,14 @@ def cmd_search(argv):
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to search",
                         hint="add the recommended registries with `boost tap --defaults`")
-    scored = catalog.search(query)
+    # Prefer the full-content (RAG) index when it exists; otherwise fall back
+    # to the frontmatter search so nothing regresses before `boost reindex`.
+    use_rag = rag.ready()
+    if use_rag:
+        scored = [(h["entry"], h["score"])
+                  for h in rag.retrieve(query, k=max(60, args.limit * 4))]
+    else:
+        scored = catalog.search(query)
     if args.as_json:
         print(json.dumps([dict(e, score=s) for e, s in scored[:args.limit]]))
         return 0
@@ -193,7 +200,7 @@ def cmd_search(argv):
         out.info(out.c("try `boost discover %s` to search all of GitHub" % query,
                        out.DIM))
         return 0
-    ranker = "heuristic relevance"
+    ranker = "full-content BM25" if use_rag else "heuristic relevance"
     if args.smart:
         if ai.available():
             reranked = _ai_rank(query, scored)
@@ -211,6 +218,37 @@ def cmd_search(argv):
     out.info(out.c("%d match%s · ranked by %s"
                    % (len(scored), "" if len(scored) == 1 else "es", ranker),
                    out.DIM))
+    return 0
+
+
+def cmd_reindex(argv):
+    """Build/refresh the full-content (RAG) search index over tapped items."""
+    p = argparse.ArgumentParser(
+        prog="boost reindex",
+        description="Build or refresh the full-content search index")
+    p.add_argument("--force", action="store_true",
+                   help="reindex every tap, ignoring cached commits")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
+    args = p.parse_args(argv)
+    if not registry.list_taps():
+        raise BoostError("no taps configured — nothing to index",
+                        hint="add the recommended registries with `boost tap --defaults`")
+    stats = rag.build(force=args.force)
+    if args.as_json:
+        print(json.dumps(stats))
+        return 0
+    out.ok("indexed %d passages across %d items from %d tap%s"
+           % (stats["docs"], stats["entries"], stats["taps"],
+              "" if stats["taps"] == 1 else "s"))
+    if stats["reused"]:
+        out.info(out.c("reused %d unchanged tap%s; reindexed: %s"
+                       % (len(stats["reused"]),
+                          "" if len(stats["reused"]) == 1 else "s",
+                          ", ".join(stats["reindexed"]) or "none"),
+                       out.DIM))
+    journal.log("reindex", "%d passages" % stats["docs"],
+                entries=stats["entries"])
     return 0
 
 

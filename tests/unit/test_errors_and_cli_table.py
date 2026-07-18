@@ -29,13 +29,13 @@ class TestBoostError:
             raise BoostError("x")
 
 
-EXPECTED_GROUP_SIZES = {"pkg": 12, "find": 8, "info": 10, "tap": 4,
+EXPECTED_GROUP_SIZES = {"pkg": 12, "find": 9, "info": 10, "tap": 4,
                         "ai": 8, "chk": 14, "cfg": 10, "team": 6}
 
 
 class TestCommandTable:
-    def test_exactly_72_commands(self):
-        assert len(cli.COMMANDS) == 72
+    def test_exactly_73_commands(self):
+        assert len(cli.COMMANDS) == 73
 
     def test_exactly_8_groups(self):
         assert len(cli.GROUPS) == 8
@@ -49,7 +49,7 @@ class TestCommandTable:
         names = [n for n, _g, _m, _s in cli.COMMANDS]
         dupes = [n for n, k in Counter(names).items() if k > 1]
         assert dupes == []
-        assert len(cli._BY_NAME) == 72
+        assert len(cli._BY_NAME) == 73
 
     def test_every_command_group_exists(self):
         for name, group, _module, _summary in cli.COMMANDS:
@@ -125,7 +125,7 @@ class TestMainDispatch:
     def test_no_args_prints_help(self, sandbox, capsys):
         assert cli.main([]) == 0
         out = capsys.readouterr().out
-        assert "72 commands · 8 groups" in out
+        assert "73 commands · 8 groups" in out
         assert "Homebrew for AI coding skills" in out
 
     def test_help_flag_lists_every_command(self, sandbox, capsys):
@@ -138,7 +138,7 @@ class TestMainDispatch:
 
     def test_help_word(self, sandbox, capsys):
         assert cli.main(["help"]) == 0
-        assert "72 commands · 8 groups" in capsys.readouterr().out
+        assert "73 commands · 8 groups" in capsys.readouterr().out
 
     def test_help_for_command(self, sandbox, capsys):
         rc = run_main(["help", "install"])

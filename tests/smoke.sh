@@ -145,6 +145,7 @@ unpin
 snapshot
 export
 search
+reindex
 discover
 recommend
 browse

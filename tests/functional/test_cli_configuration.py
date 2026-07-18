@@ -343,7 +343,7 @@ class TestCompletions:
                     if l.startswith('complete -W "'))
         names = set(line.split('"')[1].split())
         assert names == {n for n, _g, _m, _s in COMMANDS}
-        assert len(names) == 72
+        assert len(names) == 73
         assert "# install: boost completions bash >> ~/.bashrc" in r.out
 
     def test_zsh_compdef_with_summaries(self, boost, sandbox):
@@ -351,14 +351,14 @@ class TestCompletions:
         assert r.out.splitlines()[0] == "#compdef boost"
         assert "'install:Install a skill from a tap registry'" in r.out
         entries = [l for l in r.out.splitlines() if l.startswith("    '")]
-        assert len(entries) == 72
+        assert len(entries) == 73
         assert "_describe -t commands 'boost command' _boost_commands" in r.out
 
     def test_fish_complete_lines(self, boost, sandbox):
         r = boost("completions", "fish")
         lines = [l for l in r.out.splitlines()
                  if l.startswith("complete -c boost -n __fish_use_subcommand -a ")]
-        assert len(lines) == 72
+        assert len(lines) == 73
         assert ("complete -c boost -n __fish_use_subcommand -a install "
                 "-d 'Install a skill from a tap registry'") in lines
 
@@ -683,6 +683,25 @@ class TestMcp:
 
         lock = json.loads(paths.lockfile_path().read_text())
         assert "brainstorming" in lock["skills"]  # id 8 really installed
+
+    def test_boost_search_prefers_full_content_index(self, boost, tapped):
+        from boost_cli.commands import configuration
+        from boost_cli.core import rag
+        boost("reindex")
+        assert rag.ready() is True
+        text, is_err = configuration._mcp_tool(
+            "boost_search", {"query": "brainstorming"})
+        assert is_err is False
+        assert "brainstorming" in text
+        assert "(fixture-tap)" in text
+
+    def test_boost_search_indexed_no_match(self, boost, tapped):
+        from boost_cli.commands import configuration
+        boost("reindex")
+        text, is_err = configuration._mcp_tool(
+            "boost_search", {"query": "zzzznothing"})
+        assert is_err is False
+        assert "no skills match 'zzzznothing'" in text
 
     def test_register_without_claude_prints_manual_command(self, boost, sandbox,
                                                            monkeypatch):

@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .. import __version__
 from ..core import agents, catalog, config, frontmatter, gitutil, journal
-from ..core import lockfile, paths, policy, registry, store, util
+from ..core import lockfile, paths, policy, rag, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -895,11 +895,23 @@ _MCP_TOOLS = [
 def _mcp_tool(tool: str, args: dict):
     """Run one MCP tool -> (text, is_error). (None, _) for unknown tools."""
     if tool == "boost_search":
-        hits = catalog.search(str(args.get("query", "")))[:10]
-        if not hits:
-            return "no skills match %r" % args.get("query", ""), False
+        query = str(args.get("query", ""))
+        rag_result = rag.search(query, limit=10)
+        if rag_result is not None:  # full-content index is built
+            hits, _ranker = rag_result
+            if not hits:
+                return "no skills match %r" % query, False
+            return "\n".join(
+                "%s — %s (%s)" % (h["entry"]["name"],
+                                  h["entry"].get("description", ""),
+                                  h["entry"]["tap"])
+                for h in hits), False
+        # no index yet -> keep today's frontmatter search so nothing regresses
+        scored = catalog.search(query)[:10]
+        if not scored:
+            return "no skills match %r" % query, False
         return "\n".join("%s — %s (%s)" % (e["name"], e["description"], e["tap"])
-                         for e, _score in hits), False
+                         for e, _score in scored), False
     if tool == "boost_list":
         skills = lockfile.installed()
         if not skills:

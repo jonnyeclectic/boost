@@ -60,8 +60,9 @@ COMMANDS = [
     ("unpin",       "pkg", "pkg", "Allow a pinned skill to update again"),
     ("snapshot",    "pkg", "pkg", "Save & restore whole skill environments"),
     ("export",      "pkg", "pkg", "Package skills as shareable zip/tar archives"),
-    # Discovery & Search (8)
+    # Discovery & Search (9)
     ("search",      "find", "discovery", "Search skills across tap registries (AI-ranked)"),
+    ("reindex",     "find", "discovery", "Build/refresh the full-content search index"),
     ("discover",    "find", "discovery", "Browse & search the GitHub-wide skill discovery index"),
     ("recommend",   "find", "discovery", "Suggest skills based on your project's tech stack"),
     ("browse",      "find", "discovery", "Interactive full-screen TUI with fuzzy search"),

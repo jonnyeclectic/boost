@@ -611,3 +611,41 @@ class TestCount:
         r = boost("count", "--json")
         assert json.loads(r.out) == {"installed": 0, "available": 0,
                                      "taps": 0, "discovery": None}
+
+
+# ---------------------------------------------------------------- reindex
+
+class TestReindex:
+    def test_builds_full_content_index(self, boost, tapped):
+        from boost_cli.core import rag
+        r = boost("reindex")
+        assert "indexed" in r.out and "passages" in r.out
+        assert rag.ready() is True
+
+    def test_json_stats(self, boost, tapped):
+        r = boost("reindex", "--json")
+        data = json.loads(r.out)
+        assert data["docs"] >= 1
+        assert data["entries"] >= 1
+        assert data["taps"] == 1
+
+    def test_reuses_unchanged_tap_on_second_run(self, boost, tapped):
+        boost("reindex")
+        data = json.loads(boost("reindex", "--json").out)
+        assert data["reused"]        # the tap commit is unchanged
+        assert data["reindexed"] == []
+
+    def test_force_reindexes_everything(self, boost, tapped):
+        boost("reindex")
+        data = json.loads(boost("reindex", "--force", "--json").out)
+        assert data["reused"] == []
+
+    def test_no_taps_errors(self, boost):
+        r = boost("reindex", expect=1)
+        assert "no taps configured" in r.err
+        assert "boost tap --defaults" in r.err
+
+    def test_search_switches_to_full_content_after_reindex(self, boost, tapped):
+        boost("reindex")
+        r = boost("search", "brainstorming")
+        assert "ranked by full-content BM25" in r.out
