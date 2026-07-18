@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from .. import cliparse
+from .. import cliparse, spin
 from ..core import agents, ai, catalog, dense, embed, gitutil, journal, lockfile, paths, rag, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
@@ -204,7 +204,8 @@ def cmd_search(argv):
     ranker = "full-content BM25" if use_rag else "heuristic relevance"
     if args.smart:
         if ai.available():
-            reranked = _ai_rank(query, scored)
+            with spin.Spinner("ranking %d matches with Claude" % len(scored)):
+                reranked = _ai_rank(query, scored)
             if reranked:
                 scored, ranker = reranked, "Claude Haiku relevance"
         else:
