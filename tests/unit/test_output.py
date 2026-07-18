@@ -343,6 +343,31 @@ class TestPanel:
         assert "\033[1minventory\033[0m" in output.panel("x", title="inventory")
 
 
+class TestTitlebar:
+    def test_plain_dots_and_title(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.titlebar("skill") == "  ● ● ●  skill"
+
+    def test_truecolor_dots_exact(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        # exact bar pins the three traffic-light hexes, single-space separators
+        # between dots, and the bold title
+        assert output.titlebar("x") == (
+            "  \033[38;2;255;95;87m●\033[0m"      # #ff5f57 close
+            " \033[38;2;254;188;46m●\033[0m"      # #febc2e minimise
+            " \033[38;2;40;200;64m●\033[0m"       # #28c840 zoom
+            "  \033[1mx\033[0m")
+
+    def test_basic_dots_use_16color_fallback(self, monkeypatch):
+        # Force the 16-color tier: dots fall back to basic RED/YELLOW/GREEN.
+        monkeypatch.setattr(output, "color_level", lambda: 1)
+        bar = output.titlebar("x")
+        assert output.RED + "●" + output.RESET in bar
+        assert output.YELLOW + "●" + output.RESET in bar
+        assert output.GREEN + "●" + output.RESET in bar
+
+
 class TestMeter:
     def test_full(self):
         assert output.meter(1.0, 4) == "▰▰▰▰"

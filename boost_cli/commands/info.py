@@ -344,9 +344,9 @@ def cmd_preview(argv):
     args = ap.parse_args(argv)
     path, lock, cat = _resolve_skill_md(args.name)
     meta, body = frontmatter.parse(_read(path))
-    print(out.c("%s · v%s · %s" % (meta.get("name") or args.name,
-                                   meta.get("version") or "?",
-                                   (lock or cat or {}).get("tap", "local")), out.DIM))
+    print(out.titlebar("%s · v%s · %s" % (meta.get("name") or args.name,
+                                          meta.get("version") or "?",
+                                          (lock or cat or {}).get("tap", "local"))))
     print()
     _render_markdown(body)
     return 0

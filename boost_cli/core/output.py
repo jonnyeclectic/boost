@@ -217,6 +217,24 @@ def panel(lines, title: str | None = None, hue: str = "cyan") -> str:
     return "\n".join(rows)
 
 
+# macOS-style traffic-light dots (close/minimise/zoom), matching the web
+# .window .bar dots — exact truecolor with a 16-color fallback each.
+_TRAFFIC = ((0xff, 0x5f, 0x57, RED), (0xfe, 0xbc, 0x2e, YELLOW),
+            (0x28, 0xc8, 0x40, GREEN))
+
+
+def titlebar(title: str) -> str:
+    """A terminal window title bar: traffic-light dots + a bold title, the
+    terminal echo of the web .window .bar. Plain dots under NO_COLOR."""
+    level = color_level()
+    if level == 0:
+        dots = "● ● ●"
+    else:
+        dots = " ".join((rgb(r, g, bl) if level == 2 else fb) + "●" + RESET
+                        for r, g, bl, fb in _TRAFFIC)
+    return "  " + dots + "  " + c(title, BOLD)
+
+
 def meter(fraction: float, width: int = 4) -> str:
     """A tiny proportional bar for a 0..1 fraction — filled ▰ vs empty ▱.
 
