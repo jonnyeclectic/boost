@@ -737,6 +737,8 @@ _PAGE_CSS = ("body{background:#111;color:#ddd;font-family:ui-monospace,SFMono-Re
              "th,td{text-align:left;padding:.3rem .8rem .3rem 0;"
              "border-bottom:1px solid #2a2a2a}.dim{color:#777}")
 
+_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
 
 def _serve_page() -> str:
     installed = lockfile.installed()
@@ -761,7 +763,7 @@ def _serve_page() -> str:
 
 def _skill_text(name: str):
     """SKILL.md text for an installed skill, else from a tap. None if unknown."""
-    if not re.match(r"^[A-Za-z0-9._-]+$", name):
+    if not _SKILL_NAME_RE.fullmatch(name):
         return None
     fp = store.skill_store_dir(name) / "SKILL.md"
     if fp.is_file():
@@ -803,6 +805,10 @@ class _CatalogHandler(BaseHTTPRequestHandler):
                            json.dumps(lockfile.read(), indent=2).encode())
             elif path.startswith("/skill/"):
                 name = path[len("/skill/"):].strip("/")
+                if not _SKILL_NAME_RE.fullmatch(name):
+                    self._send(404, "application/json",
+                               json.dumps({"error": "no skill named %r" % name}).encode())
+                    return
                 text = _skill_text(name)
                 if text is None:
                     self._send(404, "application/json",
