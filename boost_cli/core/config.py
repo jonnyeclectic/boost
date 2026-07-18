@@ -32,6 +32,16 @@ DEFAULT_TAPS = [
     {"name": "obra/superpowers", "url": "https://github.com/obra/superpowers",
      "curated": True,
      "focus": "Community powerhouse — TDD, debugging, planning, subagents"},
+    {"name": "trailofbits/skills", "url": "https://github.com/trailofbits/skills",
+     "curated": True,
+     "focus": "Security auditing from Trail of Bits — CodeQL, Semgrep, vuln hunting"},
+    {"name": "expo/skills", "url": "https://github.com/expo/skills",
+     "curated": True,
+     "focus": "Official Expo team skills — EAS builds, app stores, deployments"},
+    {"name": "K-Dense-AI/claude-scientific-skills",
+     "url": "https://github.com/K-Dense-AI/claude-scientific-skills",
+     "curated": True,
+     "focus": "Scientific computing — research libraries, databases, analysis"},
 ]
 
 
