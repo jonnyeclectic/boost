@@ -857,6 +857,23 @@
     <div class="rgrid">
 
       <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">DX · Design system</span></div>
+        <h3>Promote nav / footer into the shared style system</h3>
+        <p>Canonical <code>style/boost.css</code> ships tokens + primitives but
+           <strong>no nav, logo, or footer</strong>, so every page (the guide and
+           both roadmaps) redefines that chrome inline — and the Design Roadmap
+           currently renders its nav <strong>unstyled</strong> because of the gap.
+           Add <code>.site-nav</code>/<code>.logo</code>/<code>footer</code>
+           primitives to the one sheet so the chrome is defined once and can't drift.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m"><code>style/boost.css</code></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">DX · Infra</span></div>
         <h3>Shift-left gate — <code>pre-commit</code> + pre-commit.ci</h3>
         <p>A <code>.pre-commit-config.yaml</code> runs ruff, mypy, codespell and the
@@ -991,6 +1008,22 @@
       <span class="rule"></span>
     </div>
     <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Docs · Discoverability</span></div>
+        <h3>Make the roadmaps discoverable</h3>
+        <p>Neither <code>roadmap.html</code> nor <code>design-roadmap.html</code> is
+           linked from <code>docs/index.html</code> or the README — the living
+           roadmaps are unreachable unless you already know the URL. Add nav entries
+           on the Visual Guide and a "Roadmap" link in the README so the two boards
+           are one click away and the work stays visible.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">2 nav links</span>
+        </div>
+      </article>
 
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Perf</span></div>
