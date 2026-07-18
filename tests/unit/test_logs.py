@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import pathlib
 
 import pytest
 
@@ -149,6 +150,102 @@ def test_console_level_resolution(env, monkeypatch):
     assert logs._console_level(False, False, False) == logging.WARNING
     monkeypatch.setenv("BOOST_LOG_LEVEL", "bogus")
     assert logs._console_level(False, False, False) is None
+
+
+# --- defensive / best-effort error branches --------------------------------
+# logs.py is the black-box recorder: a broken log must never break the CLI, so
+# every filesystem/handler touchpoint swallows its own errors. Those `except`
+# arms are the parts that matter most in a crash, yet are the least exercised —
+# these tests force each failure so the swallow is real, not just declared.
+
+def test_reset_swallows_a_handler_that_fails_to_close(env):
+    logs.configure()
+    logger = logs.get_logger()
+
+    class BadHandler(logging.Handler):
+        def close(self):
+            raise RuntimeError("cannot close")
+
+        def emit(self, record):
+            pass
+
+    bad = BadHandler()
+    logger.addHandler(bad)
+    logs.reset()                       # must not raise despite close() blowing up
+    assert bad not in logger.handlers  # …and still detaches the handler
+    assert not logger.handlers
+
+
+def test_configure_survives_file_handler_oserror(env, monkeypatch):
+    def _boom(*a, **k):
+        raise OSError("read-only filesystem")
+
+    monkeypatch.setattr(logs.logging.handlers, "RotatingFileHandler", _boom)
+    logs.reset()
+    logger = logs.configure()          # the OSError is swallowed, CLI proceeds
+    assert logger is logs.get_logger()
+    # no file handler was attached, and logging still works without raising
+    assert not any(isinstance(h, logging.handlers.RotatingFileHandler)
+                   for h in logger.handlers)
+    logger.info("still-alive")
+
+
+def test_boost_version_falls_back_to_unknown(env, monkeypatch):
+    import boost_cli
+    # simulate a build with no resolvable version (the `from .. import` fails)
+    monkeypatch.delattr(boost_cli, "__version__", raising=False)
+    monkeypatch.setitem(__import__("sys").modules, "boost_cli._version", None)
+    assert logs._boost_version() == "unknown"
+
+
+def test_crash_report_swallows_trail_write_failure(env, monkeypatch):
+    """A broken logger must not stop the on-disk crash file from being written."""
+    real = logs.get_logger()
+
+    class BadLogger:
+        def error(self, *a, **k):
+            raise RuntimeError("logger is wedged")
+
+    monkeypatch.setattr(logs, "get_logger", lambda: BadLogger())
+    report = logs.write_crash_report(ValueError("boom"), ["x"])
+    monkeypatch.setattr(logs, "get_logger", lambda: real)   # restore for teardown
+    assert report is not None and report.exists()
+    assert "boom" in report.read_text()
+
+
+def test_crash_report_returns_none_when_file_write_fails(env, monkeypatch):
+    class BadDir:
+        def mkdir(self, *a, **k):
+            raise OSError("no space left on device")
+
+    monkeypatch.setattr(logs.paths, "logs_dir", lambda: BadDir())
+    assert logs.write_crash_report(ValueError("boom"), ["x"]) is None
+
+
+def test_prune_returns_early_when_glob_fails(env, monkeypatch):
+    class BadDir:
+        def glob(self, pattern):
+            raise OSError("cannot list directory")
+
+    monkeypatch.setattr(logs.paths, "logs_dir", lambda: BadDir())
+    logs._prune_crash_reports()        # must return quietly, not raise
+
+
+def test_prune_swallows_unlink_failure_and_keeps_files(env, monkeypatch):
+    logs.configure()
+    monkeypatch.setattr(logs, "KEEP_CRASH_REPORTS", 1)
+    d = paths.logs_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    for i in range(4):
+        (d / ("crash-t%02d.log" % i)).write_text("x", encoding="utf-8")
+
+    def _locked(self, *a, **k):
+        raise OSError("file is locked")
+
+    monkeypatch.setattr(pathlib.Path, "unlink", _locked)
+    logs._prune_crash_reports()        # unlink raises for each stale file…
+    # …swallowed, so all four files survive (nothing deleted)
+    assert len(sorted(d.glob("crash-*.log"))) == 4
 
 
 # --- CLI integration -------------------------------------------------------
