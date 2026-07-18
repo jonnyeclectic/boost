@@ -116,7 +116,7 @@
       <div class="stat"><b>4</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>40</b><span>Loop finds</span></div>
+      <div class="stat"><b>48</b><span>Loop finds</span></div>
     </div>
   </section>
 
@@ -1004,6 +1004,147 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">local == CI</span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ SKILL-CONTENT TRUST & SAFETY ============ -->
+  <section class="block reveal" id="trust">
+    <div class="block-head">
+      <h2>Skill-content trust &amp; safety</h2>
+      <span class="count">// planned · boost's core threat model — the third-party skills it installs run inside an agent</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Content</span></div>
+        <h3>Prompt-injection scanning of skill Markdown</h3>
+        <p>The highest-signal gap: boost installs Markdown an agent then <em>executes</em>,
+           and nothing inspects that content. Scan skills for injection patterns —
+           <em>"ignore previous instructions"</em>, data-exfiltration prompts,
+           embedded <code>curl … | sh</code> — with free rule engines
+           (<code>semgrep</code> custom rules, <code>garak</code>/<code>llm-guard</code>
+           patterns) at tap and install time.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">the core risk</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Integrity</span></div>
+        <h3>Integrity verification — <code>boost verify</code></h3>
+        <p>The lockfile already records a <code>sha256</code> per install via
+           <code>util.sha256_dir</code>, but nothing ever re-checks it. A
+           <code>verify</code> command (and a <code>doctor</code> gate) that
+           re-hashes installed skills and flags drift turns that stored digest into
+           actual tamper-detection — cheap, and built on machinery that already
+           exists.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">reuses sha256_dir</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Provenance</span></div>
+        <h3>Tap signing &amp; provenance — Sigstore / minisign</h3>
+        <p>A tap records its <code>commit</code> today but offers no cryptographic
+           proof the content came from its claimed publisher, so a hijacked mirror
+           can serve altered skills undetected. Verify a signature (Sigstore
+           keyless or <code>minisign</code>) before trusting a tap — free, and the
+           standard the wider ecosystem is converging on.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">keyless OIDC</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Registry</span></div>
+        <h3>Typosquat &amp; name-confusion detection</h3>
+        <p>The classic package-manager attack: a skill named one edit-distance from
+           a popular one, or a familiar name that quietly resolves to an unexpected
+           <code>owner/repo</code>. Flag near-duplicate names and owner mismatches
+           at search and install time so a user can't fat-finger their way into a
+           malicious skill.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">edit-distance guard</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Supply chain</span></div>
+        <h3>Update-diff before apply</h3>
+        <p><code>boost update</code> overwrites installed skills in place. Show a
+           content diff of what an upstream change alters — and require confirmation
+           for anything that touches executable-looking instructions — so a poisoned
+           update is <em>visible</em> instead of silent. The "review the diff" gate,
+           applied to skills.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">no silent overwrites</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Secrets</span></div>
+        <h3>Secret &amp; PII scanning of installed skills</h3>
+        <p>Point the round-2 secret scanners (<code>gitleaks</code>/<code>trufflehog</code>)
+           at <em>third-party</em> skill content, not just boost's own repo — catching
+           a skill that ships embedded credentials or, worse, one whose prompt
+           coaxes the agent into harvesting the user's. Same free tools, a different
+           and higher-stakes target.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">installed content</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Integrity</span></div>
+        <h3>Lockfile enforcement &amp; commit pinning</h3>
+        <p>Promote the recorded <code>sha256</code> from a note to a rule: refuse to
+           load a skill whose content has drifted from the lockfile, and let users
+           pin a skill to an exact commit. The enforcement layer that makes the
+           <code>verify</code> digest binding rather than advisory.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">pin to commit</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Policy</span></div>
+        <h3>Capability manifest &amp; least-privilege policy</h3>
+        <p>Extend the existing <code>policy.py</code> so a skill declares the
+           capabilities it expects — network, shell, file scope — and the user's
+           policy allows or denies them. Turns install-time governance into
+           least-privilege for the instructions an agent is about to run, the
+           natural next step for a tool that already blocks installs by policy.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">builds on policy.py</span>
         </div>
       </article>
 
