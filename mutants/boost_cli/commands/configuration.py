@@ -771,7 +771,14 @@ def _skill_text(name: str):
     """SKILL.md text for an installed skill, else from a tap. None if unknown."""
     if not re.match(r"^[A-Za-z0-9._-]+$", name):
         return None
-    fp = store.skill_store_dir(name) / "SKILL.md"
+    if name in {".", ".."}:
+        return None
+    base = paths.store_dir().resolve()
+    fp = (store.skill_store_dir(name) / "SKILL.md").resolve()
+    try:
+        fp.relative_to(base)
+    except ValueError:
+        return None
     if fp.is_file():
         return fp.read_text(encoding="utf-8", errors="replace")
     for e in catalog.find(name):
