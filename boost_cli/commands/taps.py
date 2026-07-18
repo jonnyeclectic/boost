@@ -5,7 +5,7 @@ import argparse
 import json
 import os
 
-from .. import cliparse
+from .. import cliparse, spin
 from ..core import catalog, config, gitutil, journal, lockfile, paths, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
@@ -118,8 +118,9 @@ def cmd_tap(argv) -> int:
             out.ok("tapped %s (%d skills) — %s"
                    % (tap.name, len(entries), default.get("focus", "")))
     if args.spec:
-        tap = registry.add(args.spec, curated=args.curated)
-        entries = catalog.rebuild_tap(tap)
+        with spin.Spinner("cloning %s" % args.spec):
+            tap = registry.add(args.spec, curated=args.curated)
+            entries = catalog.rebuild_tap(tap)
         journal.log("tap", tap.name)
         out.ok("Tapped %s (%d skills)" % (tap.name, len(entries)))
     return rc
