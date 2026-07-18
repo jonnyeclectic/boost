@@ -2,14 +2,14 @@
 id: make-the-roadmaps-discoverable
 board: code
 section: docsite
-status: next
+status: inflight
 category: Docs · Discoverability
 complexity: S
 impact: Med
 wow: 3
 note: 2 nav links
 order: 1
-owner:
+owner: loop/roadmaps-discoverable
 pr:
 title: Make the roadmaps discoverable
 ---
