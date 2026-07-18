@@ -110,10 +110,12 @@ class TestOrient:
         # off by default -> silent
         r = boost("bmad", "orient", "--scope", "project")
         assert r.out.strip() == ""
-        # enabled -> prints orientation
+        # enabled -> prints orientation, incl. the quick-dev default bias
         boost("bmad", "startup", "on")
         r = boost("bmad", "orient", "--scope", "project")
         assert "BMAD MODE ACTIVE" in r.out
+        assert "bmad-quick-dev" in r.out
+        assert "Default bias" in r.out
 
 
 class TestDisableEnable:
