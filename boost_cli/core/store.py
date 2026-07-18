@@ -5,6 +5,7 @@ install():  copy skill dir from a tap clone -> store, symlink into every
 """
 from __future__ import annotations
 
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,6 +26,8 @@ class InstallResult:
 
 
 def skill_store_dir(name: str) -> Path:
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", name) or name in {".", ".."}:
+        raise BoostError("invalid skill name %r" % name)
     return paths.store_dir() / name
 
 
