@@ -116,7 +116,7 @@
       <div class="stat"><b>4</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>≥80%</b><span>Mutation gate</span></div>
+      <div class="stat"><b>8</b><span>Code-health finds</span></div>
     </div>
   </section>
 
@@ -305,6 +305,151 @@
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ CODE HEALTH & SECURITY ============ -->
+  <section class="block reveal" id="health">
+    <div class="block-head">
+      <h2>Code health &amp; security</h2>
+      <span class="count">// planned · free tooling to catch vulns, smells &amp; bugs</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Vuln</span></div>
+        <h3>Security linting — <code>bandit</code> via ruff <code>S</code> rules</h3>
+        <p>Turn on the <em>flake8-bandit</em> (<code>S</code>) rule family already
+           bundled in ruff — one line in <code>pyproject.toml</code>, zero new
+           tools. It catches the Python SAST smells the linter is blind to today:
+           <code>subprocess(shell=True)</code>, <code>assert</code> as a runtime
+           check, <code>tempfile.mktemp</code>, unsafe <code>yaml.load</code>,
+           hardcoded secrets and weak hashing. Semgrep Community rules are the
+           heavier alternative when a finding needs real dataflow.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">0 new deps</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Supply chain</span></div>
+        <h3>Dependency CVE gate — <code>pip-audit</code></h3>
+        <p>PyPA's <code>pip-audit</code> fails CI when a resolved dependency
+           matches a known advisory in the OSV / PyPI Advisory database.
+           Dependabot <em>opens</em> update PRs but never blocks a merge on a live
+           CVE; a scheduled&nbsp;+&nbsp;PR <code>pip-audit</code> job closes that
+           gap and covers the dev/test toolchain that ships nothing but can still
+           run malicious code.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">OSV-backed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Posture</span></div>
+        <h3>Supply-chain posture — OpenSSF Scorecard</h3>
+        <p>The Scorecard GitHub Action audits ~18 supply-chain signals weekly —
+           branch protection, token permissions, SHA-pinned actions, dangerous
+           workflows, signed releases — and publishes results to the Security tab
+           plus a README badge. Turns <em>"are we set up safely?"</em> into a
+           tracked, trend-able number for a repo that owns a Trusted-Publisher
+           release path.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">badge-worthy</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Secrets</span></div>
+        <h3>Secret scanning — <code>gitleaks</code> + push protection</h3>
+        <p>Scan the full history and every PR diff for leaked tokens, keys and
+           PyPI credentials with the free <code>gitleaks</code> action, paired
+           with GitHub push-protection (free on public repos) so a secret is
+           blocked <em>before</em> it lands. Cheap insurance for a project whose
+           release automation trades on trusted identity.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">pre-commit-able</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Smell</span></div>
+        <h3>Complexity &amp; dead-code radar — <code>xenon</code> · <code>vulture</code></h3>
+        <p>Gate CI on a maintainability grade with <code>xenon</code> (built on
+           <code>radon</code>) and flag unreachable branches, unused arguments and
+           orphan helpers with <code>vulture</code>. First target: the
+           ~5,000-line <code>commands/</code> layer that has no complexity signal
+           today. Surfaces the structural smells mutation testing can't see.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">commands/ first</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Platform</span></div>
+        <h3>Quality dashboard — SonarCloud (free for OSS)</h3>
+        <p>SonarCloud is free for public repos and layers bugs, code smells,
+           security hotspots, duplication and a coverage overlay into one
+           dashboard, decorating each PR with a pass/fail quality gate. The
+           single highest-signal freemium add — one external surface that unifies
+           everything else in this section.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">PR quality gate</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Bug</span></div>
+        <h3>Property-based tests — <code>hypothesis</code> on the parsers</h3>
+        <p>Generate adversarial inputs against <code>core/frontmatter</code> and
+           <code>core/catalog.scan_dir</code> to surface crashes and round-trip
+           failures the example-based unit tests never think to try — a
+           <code>dump</code>→<code>parse</code> must round-trip; a scan must never
+           raise on arbitrary bytes. Complements the gate: mutmut proves the tests
+           are strict, Hypothesis proves the inputs are wide.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">finds edge cases</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Bug</span></div>
+        <h3>Coverage-guided fuzzing — <code>atheris</code> / OSS-Fuzz</h3>
+        <p>Google's <code>atheris</code> fuzzes the frontmatter and registry
+           parsers under coverage guidance to mine deep crash inputs; OSS-Fuzz
+           runs it continuously for free once boost qualifies as an open-source
+           project. The stretch goal — the highest ceiling for finding the bug
+           nobody thought to write a test for.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">stretch</span>
         </div>
       </article>
 
