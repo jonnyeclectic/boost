@@ -509,13 +509,14 @@
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Performance</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance</span></div>
         <h3>Prune ignored dirs during <code>scan_dir</code> walk</h3>
         <p>Two full <code>rglob</code> passes descend <b>into</b> <code>.git</code>/<code>node_modules</code> and only filter afterward, and the skill-dir membership test is O(files × skill_dirs) (<code>catalog.py:106,119–123</code>). Switch to an <code>os.walk</code> that prunes ignored dirs in place; index skill dirs in a set.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low-Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">single os.walk, prune in place, set membership</span>
         </div>
       </article>
 

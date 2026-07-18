@@ -106,6 +106,34 @@ class TestScanDir:
         entries = catalog.scan_dir(root)
         assert [e["name"] for e in entries] == ["real"]
 
+    def test_rule_and_workflow_files_inside_ignored_dir_pruned(self, tmp_path):
+        # the second-pass file scan must also skip ignored trees, not just
+        # SKILL.md — a rule/command buried in .git/__pycache__ is never indexed
+        root = tmp_path / "tap"
+        write_skill(root / "real")
+        (root / ".git").mkdir(parents=True)
+        (root / ".git" / "hook.mdc").write_text("---\ndescription: x\n---\n")
+        (root / "sub" / "__pycache__" / "commands").mkdir(parents=True)
+        (root / "sub" / "__pycache__" / "commands" / "c.md").write_text(
+            "---\ndescription: y\n---\n")
+        assert [e["name"] for e in catalog.scan_dir(root)] == ["real"]
+
+    def test_deeply_nested_skill_under_ignored_dir_not_descended(self, tmp_path):
+        # pruning stops the walk AT .git — nothing under it is reached at all
+        root = tmp_path / "tap"
+        write_skill(root / ".git" / "a" / "b" / "c" / "deep")
+        write_skill(root / "keep")
+        assert [e["name"] for e in catalog.scan_dir(root)] == ["keep"]
+
+    def test_rule_beside_nested_skill_still_indexed(self, tmp_path):
+        # set-membership must exclude ONLY files under a skill dir, not siblings
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "deep" / "s", "---\nname: s\n---")
+        (root / "rules").mkdir()
+        (root / "rules" / "py.mdc").write_text("---\ndescription: p\n---\n")
+        kinds = {e["name"]: e["kind"] for e in catalog.scan_dir(root)}
+        assert kinds == {"s": "skill", "py": "rule"}
+
     def test_name_with_spaces_slugified(self, tmp_path):
         root = tmp_path / "tap"
         write_skill(root / "s", "---\nname: My Cool Skill\n---")
