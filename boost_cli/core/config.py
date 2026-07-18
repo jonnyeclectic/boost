@@ -5,7 +5,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from . import paths
+from . import paths, util
 
 DEFAULTS = {
     "agents": {
@@ -90,7 +90,8 @@ def load() -> dict:
 
 def save(cfg: dict) -> None:
     paths.ensure_dirs()
-    paths.config_path().write_text(json.dumps(cfg, indent=2, sort_keys=False) + "\n")
+    util.atomic_write_text(
+        paths.config_path(), json.dumps(cfg, indent=2, sort_keys=False) + "\n")
 
 
 def get(dotted: str, default=None):

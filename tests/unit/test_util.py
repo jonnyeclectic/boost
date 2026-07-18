@@ -364,3 +364,47 @@ class TestScoreSkill:
         assert len(text) == 48_000
         d = make_skill(tmp_path, text)
         assert util.score_skill(d) == (95, [])
+
+
+class TestAtomicWriteText:
+    def test_writes_content(self, tmp_path):
+        p = tmp_path / "f.txt"
+        util.atomic_write_text(p, "hello")
+        assert p.read_text() == "hello"
+
+    def test_overwrites_existing(self, tmp_path):
+        p = tmp_path / "f.txt"
+        p.write_text("old")
+        util.atomic_write_text(p, "new")
+        assert p.read_text() == "new"
+
+    def test_creates_missing_parents(self, tmp_path):
+        p = tmp_path / "a" / "b" / "f.txt"
+        util.atomic_write_text(p, "deep")
+        assert p.read_text() == "deep"
+
+    def test_leaves_no_temp_files(self, tmp_path):
+        util.atomic_write_text(tmp_path / "f.txt", "x")
+        leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
+        assert leftovers == []
+
+    def test_honours_encoding(self, tmp_path):
+        p = tmp_path / "f.txt"
+        util.atomic_write_text(p, "café", encoding="utf-8")
+        assert p.read_bytes() == "café".encode("utf-8")
+
+    def test_replace_failure_cleans_temp_and_raises(self, tmp_path, monkeypatch):
+        import os as _os
+        p = tmp_path / "f.txt"
+        p.write_text("original")
+
+        def boom(_src, _dst):
+            raise OSError("replace failed")
+
+        monkeypatch.setattr(_os, "replace", boom)
+        with pytest.raises(OSError, match="replace failed"):
+            util.atomic_write_text(p, "new")
+        # original untouched, and no temp turd left behind
+        assert p.read_text() == "original"
+        leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
+        assert leftovers == []

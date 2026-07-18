@@ -26,14 +26,39 @@ def _skeleton() -> dict:
 def read() -> dict:
     p = paths.lockfile_path()
     if not p.exists():
-        return _skeleton()
+        return _skeleton()          # empty: never installed anything yet
     try:
         lock = json.loads(p.read_text())
     except (json.JSONDecodeError, OSError):
+        # Corrupt (present but unparseable) is NOT the same as empty: returning
+        # a bare skeleton here would let the next write() overwrite the only
+        # record of every prior install. Preserve the bytes for recovery and
+        # surface it loudly before falling back to the skeleton.
+        _preserve_corrupt(p)
         return _skeleton()
     lock.setdefault("version", SCHEMA_VERSION)
     lock.setdefault("skills", {})
     return lock
+
+
+def _preserve_corrupt(p) -> None:
+    """Copy an unparseable lock file aside as ``<lock>.corrupt`` and warn.
+
+    Best effort: a read must still succeed (returning the skeleton) even if the
+    sidecar cannot be written, so failures here are swallowed after logging.
+    """
+    try:
+        backup = p.with_name(p.name + ".corrupt")
+        shutil.copy(p, backup)
+    except OSError:
+        backup = None
+    try:
+        from . import logs
+        logs.get_logger().warning(
+            "lock file %s is corrupt; preserved %s and continuing with an "
+            "empty lock", p, backup or "(backup failed)")
+    except Exception:
+        pass
 
 
 def write(lock: dict) -> None:
@@ -52,7 +77,7 @@ def write(lock: dict) -> None:
         _prune_history()
     lock["version"] = SCHEMA_VERSION
     lock["updated"] = util.now_iso()
-    p.write_text(json.dumps(lock, indent=2, sort_keys=True) + "\n")
+    util.atomic_write_text(p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
 
 
 def _history_files() -> List:
