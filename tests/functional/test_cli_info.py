@@ -83,6 +83,9 @@ class TestInfo:
         assert "claude-code, windsurf, cursor" in r.out
         assert re.search(r"pinned\s+no", r.out)
         assert re.search(r"quarantined\s+no", r.out)
+        # D17: identity-card badges beneath the name
+        assert "[installed]" in r.out
+        assert "[fixture-tap]" in r.out
 
     def test_tap_only_skill(self, boost, tapped):
         r = boost("info", "jira-integration")
@@ -90,6 +93,7 @@ class TestInfo:
         assert re.search(r"tap\s+fixture-tap", r.out)
         assert re.search(r"source\s+skills/jira-integration", r.out)
         assert "~/.agents/skills" not in r.out      # no store line
+        assert "[not installed]" in r.out           # D17 badge for tap-only
         assert re.search(r"quality\s+\d+/100", r.out)
 
     def test_json_pure(self, boost, installed):

@@ -278,6 +278,24 @@ class TestTruncate:
         assert output.truncate("abcdef", 1) == "…"
 
 
+class TestBadge:
+    def test_plain_when_no_color(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.badge("installed", "green") == "[installed]"
+
+    def test_default_hue_is_cyan(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert output.badge("x") == "\033[38;2;34;211;238m[x]\033[0m"
+
+    def test_truecolor_wraps_label_in_brackets(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        # green #4ade80
+        assert output.badge("installed", "green") == (
+            "\033[38;2;74;222;128m[installed]\033[0m")
+
+
 class TestHelpers:
     @pytest.fixture(autouse=True)
     def plain(self, monkeypatch):
