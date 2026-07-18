@@ -114,10 +114,12 @@ def cmd_list(argv):
         print(json.dumps(skills, indent=2, sort_keys=True))
         return 0
     if not skills:
-        out.info("no skills installed" +
-                 (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""))
-        out.info(out.c("hint: boost tap --defaults && boost search <topic>", out.DIM))
+        print(out.empty_state(
+            "no skills installed"
+            + (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""),
+            hint="boost tap --defaults && boost search <topic>"))
         return 0
+    out.heading("installed skills")
     rows = []
     for name in sorted(skills):
         e = skills[name]
@@ -128,7 +130,8 @@ def cmd_list(argv):
                      "·".join(a.split("-")[0] for a in e.get("agents") or []),
                      " ".join(flags)))
     out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"))
-    print(out.c("  %d skill%s" % (len(rows), "" if len(rows) == 1 else "s"), out.DIM))
+    print("  " + out.aurora("%d skill%s installed"
+                            % (len(rows), "" if len(rows) == 1 else "s"), "cyan"))
     return 0
 
 
