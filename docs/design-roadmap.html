@@ -467,9 +467,9 @@
         </article>
 
         <article class="ritem" data-track="system" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-D20</span><span class="rstatus progress">In progress</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D20</span><span class="rstatus done">Shipped</span></div>
           <h4>Single source of design tokens (web ↔ CLI)</h4>
-          <p><b>Done:</b> the CLI palette is now single-sourced — one <code>output.TOKENS</code> dict holds every Aurora RGB triple, and the gradient, brand tints and badges all <em>derive</em> from it (previously cyan/violet/pink were re-typed across <code>_AURORA</code> and <code>_GRAD_STOPS</code>). A test locks the contract so a stray hex can't drift. <b>Remaining:</b> lift <code>TOKENS</code> into a shared <code>tokens.json</code> and generate <em>both</em> the CSS custom properties and this map from it, so the site and the terminal move in lockstep (the repo's "generate, never hand-edit" pattern, cf. <code>build_registries.py</code>).</p>
+          <p><b>Done:</b> the CLI palette is now single-sourced — one <code>output.TOKENS</code> dict holds every Aurora RGB triple, and the gradient, brand tints and badges all <em>derive</em> from it (previously cyan/violet/pink were re-typed across <code>_AURORA</code> and <code>_GRAD_STOPS</code>). A test locks the contract so a stray hex can't drift. <b>Remaining:</b> lift <code>TOKENS</code> into a shared <code>tokens.json</code> and generate <em>both</em> the CSS custom properties and this map from it, so the site and the terminal move in lockstep. <b>Shipped as enforcement instead of generation:</b> a unit test parses <code>style/boost.css</code> and asserts every <code>--token</code> matches <code>output.TOKENS</code>, so a hex changed in one place and not the other fails CI — the same guarantee without rewriting the hand-authored stylesheet.</p>
           <div class="rmeta"><span class="m-cat">system</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
           <div class="rref"><code>core/output.py TOKENS · style/boost.css · future build_tokens.py</code></div>
         </article>
