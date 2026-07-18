@@ -102,6 +102,7 @@ class TestUninstall:
         assert "nope: nope is not installed" in r.out
         assert "unlinked ← claude-code · windsurf · cursor" in r.out
         assert "Uninstalled 2 skills" in r.out
+        assert "╭─ removed" in r.out               # D13: framed summary card
         assert _lock() == {}
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not (paths.store_dir() / "commit-messages").exists()
