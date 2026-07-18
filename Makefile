@@ -10,7 +10,7 @@ PYTEST  := $(VENV)/bin/pytest
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell
 
 unit:
 	$(PYTEST) tests/unit -q
@@ -35,6 +35,7 @@ mutation:
 lint:
 	$(VENV)/bin/ruff check boost_cli tests
 	$(VENV)/bin/mypy
+	$(VENV)/bin/codespell boost_cli docs README.md
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
 
