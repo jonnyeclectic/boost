@@ -6,6 +6,7 @@ asserting exact output shapes, exit codes, and on-disk cache effects.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import subprocess
 import types
@@ -103,6 +104,18 @@ class TestSearch:
         boost("tap", fixture_tap_src, "--curated")
         r = boost("search", "brainstorming")
         assert "★ curated" in r.out
+
+    def test_result_rows_clamp_to_terminal_width(self, boost, tapped,
+                                                 monkeypatch):
+        # D05: every result stays one line within the terminal width; a long
+        # description is clipped instead of blowing up the pane.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("search", "workflow")
+        ansi = re.compile(r"\x1b\[[0-9;]*m")
+        rows = [ln for ln in r.out.splitlines() if ln and "ranked by" not in ln]
+        assert rows
+        for ln in rows:
+            assert len(ansi.sub("", ln)) <= 60
 
     def test_smart_without_ai_warns_and_stays_heuristic(self, boost, tapped):
         r = boost("search", "testing", "--smart")

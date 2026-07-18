@@ -209,12 +209,16 @@ def cmd_search(argv):
         else:
             out.warn(ai.fallback_note())
     shown = scored[:args.limit]
-    width = max(len(e["name"]) for e, _ in shown)
+    # Cap the name column so one long name can't pad every row, and clip each
+    # description to the remaining terminal width so results stay one line each.
+    name_w = min(max(len(e["name"]) for e, _ in shown), 32)
+    cols = out.term_width()
     for e, _s in shown:
-        line = out.c(e["name"].ljust(width + 3), out.CYAN) + (e["description"] or "")
-        if e.get("curated"):
-            line += " " + out.c("★ curated", out.YELLOW)
-        out.info(line)
+        tag = "  " + out.c("★ curated", out.YELLOW) if e.get("curated") else ""
+        tag_w = len("  ★ curated") if e.get("curated") else 0
+        desc_w = max(cols - 2 - name_w - 2 - tag_w, 8)
+        name_cell = out.c(out.truncate(e["name"], name_w).ljust(name_w), out.CYAN)
+        out.info(name_cell + "  " + out.truncate(e["description"] or "", desc_w) + tag)
     out.info(out.c("%d match%s · ranked by %s"
                    % (len(scored), "" if len(scored) == 1 else "es", ranker),
                    out.DIM))
@@ -450,12 +454,15 @@ def cmd_recommend(argv):
             out.info("no recommendations for this stack — try `boost search <keyword>`")
             return 0
         out.info("no stack-specific matches — curated picks instead:")
-    width = max(len(r["entry"]["name"]) for r in shown)
+    width = min(max(len(r["entry"]["name"]) for r in shown), 32)
+    cols = out.term_width()
     for r in shown:
         e = r["entry"]
-        out.info(out.c(e["name"].ljust(width + 3), out.CYAN)
-                 + (e["description"] or "") + "  "
-                 + out.c("because: %s" % ", ".join(sorted(r["because"])), out.DIM))
+        because = "because: %s" % ", ".join(sorted(r["because"]))
+        desc_w = max(cols - 2 - width - 2 - (len(because) + 2), 8)
+        name_cell = out.c(out.truncate(e["name"], width).ljust(width), out.CYAN)
+        out.info(name_cell + "  " + out.truncate(e["description"] or "", desc_w)
+                 + "  " + out.c(because, out.DIM))
     if ai.available():
         picks = _ai_picks(stack, [r["entry"] for r in ranked[:20]])
         if picks:

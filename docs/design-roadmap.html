@@ -278,7 +278,7 @@
       <div class="rcards">
 
         <article class="ritem" data-track="layout" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-D05</span><span class="rstatus next">Next</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D05</span><span class="rstatus done">Shipped</span></div>
           <h4>Fix <code>search</code>: truncate &amp; width-clamp results</h4>
           <p>Today <code>boost search</code> is the worst screen in the app: a single result can dump a <b>2,000-character description with literal, unrendered <code>\\n\\n</code> escapes</b>, while names are padded to a fixed 30 columns that waste half the row. Clamp each row to the live terminal width, collapse whitespace/escape artifacts, and ellipsize. This one fix turns a wall of noise into a scannable list.</p>
           <div class="rmeta"><span class="m-cat">layout</span><span>Complexity M</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★★</span></div>

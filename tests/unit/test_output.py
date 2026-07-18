@@ -1,6 +1,7 @@
 """Unit tests: boost_cli/core/output.py — colors, symbols, tables, confirm."""
 from __future__ import annotations
 
+import os
 import sys
 
 import pytest
@@ -222,6 +223,59 @@ class TestHeadingAndVerdictColor:
         # aurora yellow dot (#facc15) + yellow message text
         assert capsys.readouterr().out == (
             "  \033[38;2;250;204;21m●\033[0m \033[33m1 issue\033[0m\n")
+
+
+class TestTermWidth:
+    def test_honors_columns_env(self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "123")
+        assert output.term_width() == 123
+
+    def test_detected_columns(self, monkeypatch):
+        monkeypatch.setattr(output.shutil, "get_terminal_size",
+                            lambda fb: os.terminal_size((93, 24)))
+        assert output.term_width() == 93
+
+    def test_default_80_when_undetectable(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.shutil, "get_terminal_size",
+                            lambda fb: os.terminal_size(fb))
+        assert output.term_width() == 80
+
+    def test_custom_default_when_undetectable(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.shutil, "get_terminal_size",
+                            lambda fb: os.terminal_size(fb))
+        assert output.term_width(77) == 77
+
+
+class TestTruncate:
+    def test_short_text_unchanged(self):
+        assert output.truncate("hello", 80) == "hello"
+
+    def test_exact_width_not_clipped(self):
+        assert output.truncate("abcd", 4) == "abcd"
+
+    def test_clips_with_ellipsis(self):
+        assert output.truncate("abcdef", 4) == "abc…"
+
+    def test_collapses_real_whitespace(self):
+        assert output.truncate("a\n\n  b\tc", 80) == "a b c"
+
+    def test_collapses_literal_escape_sequences(self):
+        # descriptions in the wild carry literal backslash-n blobs
+        assert output.truncate("a\\n\\nb", 80) == "a b"
+
+    def test_collapses_literal_tab_escape(self):
+        assert output.truncate("a\\tb", 80) == "a b"
+
+    def test_collapses_literal_cr_escape(self):
+        assert output.truncate("a\\rb", 80) == "a b"
+
+    def test_zero_width_is_empty(self):
+        assert output.truncate("abc", 0) == ""
+
+    def test_width_at_or_below_ellipsis_returns_ellipsis(self):
+        assert output.truncate("abcdef", 1) == "…"
 
 
 class TestHelpers:
