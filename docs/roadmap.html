@@ -116,7 +116,7 @@
       <div class="stat"><b>4</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>8</b><span>Code-health finds</span></div>
+      <div class="stat"><b>16</b><span>Loop finds</span></div>
     </div>
   </section>
 
@@ -450,6 +450,146 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">stretch</span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ PIPELINE & SUPPLY-CHAIN INTEGRITY ============ -->
+  <section class="block reveal" id="pipeline">
+    <div class="block-head">
+      <h2>Pipeline &amp; supply-chain integrity</h2>
+      <span class="count">// planned · free tooling to secure the CI/CD path itself</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · CI/CD</span></div>
+        <h3>Workflow SAST — <code>zizmor</code></h3>
+        <p>boost's four workflows embed <code>github-script</code> JavaScript and
+           shell and drive a Trusted-Publisher release — a rich attack surface.
+           <code>zizmor</code> statically flags template injection, unpinned
+           actions, over-broad <code>GITHUB_TOKEN</code> permissions and dangerous
+           triggers. The one tool that audits the automation that ships every
+           other fix.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">pipx-run</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · CI/CD</span></div>
+        <h3>Workflow linting — <code>actionlint</code></h3>
+        <p>Catches GitHub Actions YAML bugs before they fail a live release:
+           malformed <code>${{ }}</code> expressions, deprecated syntax, and
+           shellcheck run over every <code>run:</code> block. Cheap insurance for a
+           repo whose release is fully automated — a broken workflow is a broken
+           publish.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">shellcheck built in</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Supply chain</span></div>
+        <h3>Build provenance — SLSA attestations</h3>
+        <p><code>actions/attest-build-provenance</code> emits a cryptographically
+           signed, verifiable record of <em>which workflow built which wheel from
+           which commit</em>, layered on top of the existing PyPI Trusted
+           Publishing. Consumers can <code>gh attestation verify</code> the
+           artifact they install — provenance without a paid signing service.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">SLSA build L2</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Supply chain</span></div>
+        <h3>SBOM on every release — CycloneDX / Syft</h3>
+        <p>Generate a CycloneDX SBOM with the free <code>anchore/sbom-action</code>
+           and attach it to each GitHub Release, so downstreams can inventory and
+           scan exactly what boost is built from. Modest today (boost is close to
+           stdlib-only) but it grows in value as the optional <code>[rag]</code>
+           extras pull in real dependencies.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">feeds osv-scanner</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Vuln</span></div>
+        <h3>SBOM-aware scanning — <code>osv-scanner</code></h3>
+        <p>Google's <code>osv-scanner</code> cross-checks a lockfile or the SBOM
+           above against the OSV database, with broader ecosystem coverage than a
+           single-language audit. The SBOM-driven complement to <code>pip-audit</code>:
+           one scans the resolved env, the other scans the published manifest.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">OSV-backed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Type</span></div>
+        <h3>Second type checker — <code>pyright</code></h3>
+        <p>Run Microsoft's <code>pyright</code> alongside mypy. Its independent
+           inference catches <code>None</code>-flow and narrowing bugs the current
+           mypy config lets slide, and it's the same engine most editors use — so
+           CI enforces what contributors already see. Two type checkers rarely
+           agree on <em>nothing</em>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">editor-parity</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Smell</span></div>
+        <h3>Widen the ruff rule surface — <code>B·SIM·C4·PERF·RUF</code></h3>
+        <p>Beyond the <code>S</code> security family (round 1), enable
+           flake8-bugbear (<code>B</code>), simplify (<code>SIM</code>),
+           comprehensions (<code>C4</code>), perflint (<code>PERF</code>) and
+           Ruff-native (<code>RUF</code>) rules — bug, readability and performance
+           smells caught at zero new-tool cost since ruff already runs in the lint
+           gate.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">0 new deps</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Gap</span></div>
+        <h3>Patch-coverage gate — <code>diff-cover</code></h3>
+        <p>Enforce coverage on the <em>changed lines</em> of each PR — no external
+           service needed, it reads the same <code>coverage.xml</code> the suite
+           already emits. Pairs with the 80% project gate so new code can't quietly
+           ride in under-tested behind an already-high overall number.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">self-hosted</span>
         </div>
       </article>
 
