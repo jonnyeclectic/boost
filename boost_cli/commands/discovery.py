@@ -80,7 +80,8 @@ def detect_stack(path) -> dict:
     """
     root = Path(path)
     langs, frameworks, extras = set(), set(), set()
-    markers, ext_counts = {}, {}
+    markers: dict = {}
+    ext_counts: dict = {}
     for dirpath, dirnames, filenames in os.walk(str(root)):
         rel = os.path.relpath(dirpath, str(root))
         depth = 0 if rel == "." else rel.count(os.sep) + 1
@@ -104,7 +105,7 @@ def detect_stack(path) -> dict:
             pkg = {}
         if not isinstance(pkg, dict):
             pkg = {}
-        deps = set()
+        deps: set[str] = set()
         for section in ("dependencies", "devDependencies", "peerDependencies"):
             deps.update(pkg.get(section) or {})
         for dep in ("react", "vue", "next", "express"):

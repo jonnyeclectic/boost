@@ -629,7 +629,7 @@ def cmd_schedule(argv) -> int:
                     next_run = nxt
         else:
             lines = _crontab_lines() or []
-            job = next((l for l in lines if l.rstrip().endswith(_CRON_MARK)), None)
+            job = next((ln for ln in lines if ln.rstrip().endswith(_CRON_MARK)), None)
             if job:
                 present = True
                 spec = " ".join(job.split()[:5])
@@ -686,7 +686,7 @@ def cmd_schedule(argv) -> int:
                 out.warn("crontab is not available — add this line yourself:")
                 out.info(entry)
             else:
-                kept = [l for l in lines if not l.rstrip().endswith(_CRON_MARK)]
+                kept = [ln for ln in lines if not ln.rstrip().endswith(_CRON_MARK)]
                 try:
                     proc = subprocess.run(["crontab", "-"],
                                           input="\n".join(kept + [entry]) + "\n",
@@ -716,7 +716,7 @@ def cmd_schedule(argv) -> int:
     else:
         lines = _crontab_lines()
         if lines:
-            kept = [l for l in lines if not l.rstrip().endswith(_CRON_MARK)]
+            kept = [ln for ln in lines if not ln.rstrip().endswith(_CRON_MARK)]
             if len(kept) != len(lines):
                 try:
                     proc = subprocess.run(["crontab", "-"],

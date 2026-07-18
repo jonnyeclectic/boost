@@ -1,0 +1,7 @@
+version: 2
+updates:
+  # the runtime is stdlib-only, so Actions versions are the only dependencies
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

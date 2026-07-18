@@ -44,7 +44,7 @@ def cmd_tap(argv) -> int:
                 out.info(out.c("%s already tapped" % default["name"], out.DIM))
                 continue
             try:
-                tap = registry.add(default["url"], curated=True)
+                tap = registry.add(str(default["url"]), curated=True)
                 entries = catalog.rebuild_tap(tap)
             except BoostError as e:
                 out.warn("could not tap %s: %s" % (default["name"], e.message))

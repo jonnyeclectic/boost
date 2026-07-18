@@ -1,0 +1,23 @@
+name-template: "boost v$RESOLVED_VERSION"
+tag-template: "v$RESOLVED_VERSION"
+categories:
+  - title: Features
+    labels: [feature, enhancement]
+  - title: Fixes
+    labels: [fix, bug]
+  - title: Docs & CI
+    labels: [docs, ci]
+  - title: Other changes
+change-template: "- $TITLE (#$NUMBER)"
+version-resolver:
+  major:
+    labels: [major]
+  minor:
+    labels: [minor, feature, enhancement]
+  patch:
+    labels: [patch, fix, bug, docs, ci]
+  default: patch
+template: |
+  ## What's changed
+
+  $CHANGES

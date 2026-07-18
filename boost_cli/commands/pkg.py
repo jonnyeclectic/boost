@@ -381,8 +381,8 @@ def _bundle_dump(file: Optional[str]) -> int:
     except OSError as e:
         raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                         hint="check the path exists and is writable")
-    n_taps = sum(1 for l in text.splitlines() if l.startswith("tap "))
-    n_skills = sum(1 for l in text.splitlines() if l.startswith("skill "))
+    n_taps = sum(1 for ln in text.splitlines() if ln.startswith("tap "))
+    n_skills = sum(1 for ln in text.splitlines() if ln.startswith("skill "))
     out.ok("wrote %s (%s, %s)" % (_tilde(dest), _plural(n_taps, "tap"),
                                   _plural(n_skills, "skill")))
     return 0
@@ -681,12 +681,13 @@ def _snapshot_save(label: Optional[str]) -> int:
     with tarfile.open(str(tar_path), "w:gz") as tf:
         for child in sorted(paths.store_dir().iterdir()):
             tf.add(str(child), arcname=child.name)
+    skill_count = len(lockfile.installed())
     manifest = {"id": snap_id, "label": label or "", "created": util.now_iso(),
-                "skills": len(lockfile.installed())}
+                "skills": skill_count}
     (paths.snapshots_dir() / (snap_id + ".json")).write_text(
         json.dumps(manifest, indent=2) + "\n")
     journal.log("snapshot", snap_id, label=label)
-    out.ok("saved %s (%s, %s)" % (snap_id, _plural(manifest["skills"], "skill"),
+    out.ok("saved %s (%s, %s)" % (snap_id, _plural(skill_count, "skill"),
                                   util.human_size(tar_path.stat().st_size)))
     out.info("restore with `boost snapshot restore %s`" % snap_id)
     return 0

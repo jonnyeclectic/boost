@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from typing import Any
 
 from . import paths
 
@@ -76,7 +77,7 @@ def set_value(dotted: str, raw: str) -> None:
     except (json.JSONDecodeError, TypeError):
         value = raw
     cfg = load()
-    node = cfg
+    node: Any = cfg
     parts = dotted.split(".")
     for part in parts[:-1]:
         node = node.setdefault(part, {})
@@ -88,7 +89,7 @@ def set_value(dotted: str, raw: str) -> None:
 
 def unset(dotted: str) -> bool:
     cfg = load()
-    node = cfg
+    node: Any = cfg
     parts = dotted.split(".")
     for part in parts[:-1]:
         node = node.get(part)

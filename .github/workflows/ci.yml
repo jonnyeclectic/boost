@@ -6,8 +6,24 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install linters
+        run: python -m pip -q install ruff mypy
+      - name: ruff
+        run: ruff check boost_cli tests
+      - name: mypy
+        run: mypy
+
   tests:
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write  # coverage badge push (main only)
     strategy:
       fail-fast: false
       matrix:
@@ -27,9 +43,18 @@ jobs:
           python -m venv .venv
           .venv/bin/pip -q install pytest pytest-cov coverage
       - name: unit + functional (80% coverage gate)
-        run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=term-missing -q
+        run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=term-missing --cov-report=json -q
       - name: shell smoke suite (152 checks, sandboxed)
         run: bash tests/smoke.sh
+      - name: publish coverage badge
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && github.ref == 'refs/heads/main'
+        run: |
+          PCT=$(.venv/bin/python -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered']))")
+          mkdir /tmp/badges && cd /tmp/badges
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"brightgreen"}\n' "$PCT" > coverage.json
+          git init -q -b badges
+          git add coverage.json && git commit -qm "coverage ${PCT}%"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" badges:badges
 
   mutation:
     # mutmut needs 3.11+; one representative environment keeps CI fast

@@ -6,11 +6,11 @@ VENV    := .venv
 PY      := $(VENV)/bin/python
 PYTEST  := $(VENV)/bin/pytest
 
-.PHONY: venv test unit functional smoke coverage mutation check clean-test
+.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy
 
 unit:
 	$(PYTEST) tests/unit -q
@@ -32,7 +32,15 @@ smoke:
 mutation:
 	$(PY) scripts/mutation_gate.py --run --min 80
 
-check: test smoke mutation
+lint:
+	$(VENV)/bin/ruff check boost_cli tests
+	$(VENV)/bin/mypy
+
+# regenerate docs/demo.gif (brew install vhs)
+demo:
+	vhs docs/demo.tape
+
+check: lint test smoke mutation
 	@echo "== all gates passed =="
 
 clean-test:

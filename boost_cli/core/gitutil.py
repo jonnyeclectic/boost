@@ -62,7 +62,7 @@ def log_for_path(repo: Path, rel_path: str = ".", n: int = 20) -> List[str]:
     """Formatted one-line log entries for a path inside a repo."""
     proc = run(["-C", str(repo), "log", "--date=short", "-n", str(n),
                 "--pretty=format:%h  %ad  %an  %s", "--", rel_path], check=False)
-    return [l for l in proc.stdout.splitlines() if l.strip()]
+    return [ln for ln in proc.stdout.splitlines() if ln.strip()]
 
 
 def is_repo(path: Path) -> bool:
