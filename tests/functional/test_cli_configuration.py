@@ -650,7 +650,7 @@ class TestMcp:
         tools = by_id[2]["result"]["tools"]
         assert [t["name"] for t in tools] == [
             "boost_search", "boost_list", "boost_info", "boost_install",
-            "boost_doctor"]
+            "boost_doctor", "boost_discover_github"]
         assert all(t["inputSchema"]["type"] == "object" for t in tools)
 
         def text(id_):
@@ -702,6 +702,59 @@ class TestMcp:
             "boost_search", {"query": "zzzznothing"})
         assert is_err is False
         assert "no skills match 'zzzznothing'" in text
+
+    def test_registry_dispatches_and_lists_all_tools(self, sandbox):
+        from boost_cli.commands import configuration
+        # tools/list payload and the dispatcher share one registry
+        assert configuration._MCP_TOOLS == configuration.REGISTRY.specs()
+        assert "boost_discover_github" in configuration.REGISTRY.names()
+        assert configuration._mcp_tool("nonexistent_tool", {}) == (None, False)
+
+    def test_discover_github_missing_gh_degrades(self, sandbox, monkeypatch):
+        from boost_cli.commands import configuration
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: None)
+        text, is_err = configuration._mcp_tool("boost_discover_github",
+                                               {"query": "react"})
+        assert is_err is True
+        assert "gh" in text and "brew install gh" in text
+
+    def test_discover_github_lists_repos(self, sandbox, monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            discovery, "github_skill_search",
+            lambda query="", limit=20: [
+                {"repo": "octo/skills", "path": "a/SKILL.md", "url": "u",
+                 "description": "great skills"},
+                {"repo": "acme/pack", "path": "b/SKILL.md", "url": "u",
+                 "description": ""}])
+        text, is_err = configuration._mcp_tool("boost_discover_github",
+                                               {"query": "react", "limit": 5})
+        assert is_err is False
+        assert "octo/skills — great skills" in text
+        assert "acme/pack — b/SKILL.md" in text          # falls back to path
+
+    def test_discover_github_no_results(self, sandbox, monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(discovery, "github_skill_search",
+                            lambda query="", limit=20: [])
+        text, is_err = configuration._mcp_tool("boost_discover_github", {})
+        assert is_err is False
+        assert "no SKILL.md repositories found" in text
+
+    def test_discover_github_search_failure(self, sandbox, monkeypatch):
+        from boost_cli.commands import configuration, discovery
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(discovery, "github_skill_search",
+                            lambda query="", limit=20: None)
+        text, is_err = configuration._mcp_tool("boost_discover_github", {})
+        assert is_err is True
+        assert "GitHub code search failed" in text
 
     def test_register_without_claude_prints_manual_command(self, boost, sandbox,
                                                            monkeypatch):

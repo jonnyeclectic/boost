@@ -194,23 +194,41 @@ dense retrieval.
 
 ---
 
-## 8. Phase 3 — MCP as a hub (GitHub, database, other deps)
+## 8. Phase 3 — MCP as a hub (GitHub, database, other deps) — ✅ shipped
 
-Today the MCP tool layer is a declarative list `_MCP_TOOLS` (`configuration.py:867`) plus a flat
-`if/elif` dispatcher `_mcp_tool` (`configuration.py:895`). To make new capabilities drop-in:
+The flat `if/elif` dispatcher is now an **extensible registry** (`boost_cli/core/mcp.py`):
 
-1. **Registry refactor.** Replace the `if/elif` with a `name -> handler` map; each handler is
-   `fn(args) -> (text, is_error)` and self-registers its `{name, description, inputSchema}`. `tools/list`
-   and `tools/call` (`_mcp_serve_stdio`, `configuration.py:965`) iterate the registry unchanged.
-2. **Reach-out tools, each behind graceful degradation** (the `core/ai.py` pattern — probe, else no-op
-   with a helpful message):
-   - `boost_discover_github` — grow the corpus by wrapping the existing `gh`-based `cmd_index`
-     (`discovery.py:217`) + auto-tap of promising repos.
-   - `boost_semantic_search` capabilities backed by the Phase-2 vector store / a database once present.
-   - a documented **extension contract** so any future dependency (a DB, an external API) becomes one new
-     handler file, no dispatcher edits.
+1. **Registry refactor (done).** `core/mcp.py` defines a `Registry` — an ordered `name -> (spec, handler)`
+   map. Each handler is `fn(args: dict) -> (text, is_error)` and is paired with its
+   `{name, description, inputSchema}` via `REGISTRY.register(...)` (or the `@REGISTRY.tool(...)`
+   decorator). The JSON-RPC server iterates it: `tools/list` returns `REGISTRY.specs()` and `tools/call`
+   dispatches through `REGISTRY.call(name, args)` — an unknown tool returns `(None, False)` in exactly one
+   place, so the server answers a single `-32602 unknown tool` error. `_MCP_TOOLS` and `_mcp_tool` remain
+   as thin back-compat shims over the registry.
+2. **First reach-out tool (done), behind graceful degradation** (the `core/ai.py` pattern — probe, else a
+   helpful message, never raise):
+   - **`boost_discover_github`** — GitHub code-search for `SKILL.md` repos to grow the corpus, via the
+     one-shot `discovery.github_skill_search(query, limit)` helper. No `gh` CLI → returns an install hint
+     with `is_error=True`; a failed search → a retry hint; otherwise a ranked repo list. It never writes a
+     cache and never crashes the server.
+   - Future tools (Phase-2 vector store / a database query, a generic external API) plug in the same way.
 
-Phase 3 is intentionally *after* the retrieval core is proven, so the hub grows on a stable seam.
+**Extension contract** — to add an MCP tool, no dispatcher or server edit is needed:
+
+```python
+def _tool_x(args: dict) -> tuple[str | None, bool]:
+    # probe for any external dependency; degrade to a helpful message if absent
+    return "…result text…", False          # (text, is_error)
+
+REGISTRY.register("boost_x", "one-line description",
+                  {"type": "object", "properties": {…}}, _tool_x)
+```
+
+A handler that reaches out to a dependency **must** degrade (return a short message, not raise) so the
+long-lived stdio server survives a missing `gh`, offline network, or absent `[rag]` extra. Registration
+order is preserved and is the `tools/list` order.
+
+Phase 3 landed *after* the retrieval core was proven, so the hub grew on a stable seam.
 
 ---
 
@@ -235,7 +253,7 @@ and RAG indexing compose automatically.
 |---|---|---|---|---|
 | **1** | Full-content BM25 retrieval + LLM rerank; `boost_search` upgraded in place; `boost reindex` | **none** (stdlib) | ✅ yes | New `core/rag.py` (mutation-gated) + tests; coverage ≥80%; ruff/mypy/smoke unaffected |
 | **2** | Dense embeddings + vector store | `[rag]` extra only | ❌ opt-in | Extra-only; default path unchanged; TF-IDF fallback keeps green |
-| **3** | MCP hub: GitHub/DB reach-out tools, registry refactor | none required (deps per tool, opt-in) | ❌ opt-in | Registry refactor covered by existing `TestMcp`; new handlers add tests |
+| **3** ✅ | MCP hub: extensible `core/mcp.py` registry + `boost_discover_github` reach-out | none required (deps per tool, opt-in) | ❌ opt-in | New `core/mcp.py` (mutation-gated) + `test_mcp.py`; `TestMcp`/`TestGithubSkillSearch` cover the tool; coverage 93% |
 
 **Invariant preserved at every phase:** `pip install boost-skill-cli` remains zero-runtime-dependency and
 `make check` stays green; all heavier machinery is opt-in behind the `[rag]` extra and the

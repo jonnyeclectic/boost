@@ -276,6 +276,101 @@ class TestIndex:
         assert "gh api timed out on page 1" in r.err
 
 
+class TestGithubSkillSearch:
+    """The one-shot reach-out helper behind the boost_discover_github MCP tool."""
+
+    def test_none_without_gh(self, sandbox, monkeypatch):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: None)
+        assert discovery.github_skill_search("react") is None
+
+    def test_returns_mapped_items(self, sandbox, monkeypatch):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append(cmd)
+            return types.SimpleNamespace(returncode=0, stderr="", stdout=_gh_page(
+                [_gh_item("octo/skills", "a/SKILL.md"),
+                 _gh_item("acme/pack", "b/SKILL.md", desc="")]))
+
+        monkeypatch.setattr("boost_cli.commands.discovery.subprocess.run", fake_run)
+        out = discovery.github_skill_search("react hooks", limit=5)
+        assert out == [
+            {"repo": "octo/skills", "path": "a/SKILL.md",
+             "url": "https://github.com/octo/skills/a/SKILL.md",
+             "description": "Skill repo"},
+            {"repo": "acme/pack", "path": "b/SKILL.md",
+             "url": "https://github.com/acme/pack/b/SKILL.md", "description": ""}]
+        # single page, user query appended (url-encoded) to the filename filter
+        assert "per_page=5&page=1" in seen[0][-1]
+        assert "filename:SKILL.md" in seen[0][-1]
+        assert "react" in seen[0][-1] and "hooks" in seen[0][-1]
+
+    def test_no_query_uses_bare_filename_filter(self, sandbox, monkeypatch):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        seen = []
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page([])))
+        assert discovery.github_skill_search() == []
+        assert "q=filename:SKILL.md&per_page=20&page=1" in seen[0][-1]
+
+    def test_limit_capped_and_sliced(self, sandbox, monkeypatch):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        seen = []
+        items = [_gh_item("o/r%d" % i, "s/SKILL.md") for i in range(10)]
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page(items)))
+        out = discovery.github_skill_search("x", limit=3)
+        assert len(out) == 3                       # sliced to per_page
+        assert "per_page=3&page=1" in seen[0][-1]
+        # a limit above the code-search cap is clamped to 100
+        discovery.github_skill_search("x", limit=9999)
+        assert "per_page=100&page=1" in seen[1][-1]
+
+    def test_gh_failure_returns_none(self, sandbox, monkeypatch):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=1, stdout="", stderr="404"))
+        assert discovery.github_skill_search("x") is None
+
+    def test_bad_json_returns_none(self, sandbox, monkeypatch):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=0, stdout="not json", stderr=""))
+        assert discovery.github_skill_search("x") is None
+
+    def test_oserror_returns_none(self, sandbox, monkeypatch):
+        from boost_cli.commands import discovery
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+
+        def boom(cmd, **kw):
+            raise OSError("no exec")
+
+        monkeypatch.setattr("boost_cli.commands.discovery.subprocess.run", boom)
+        assert discovery.github_skill_search("x") is None
+
+
 # ---------------------------------------------------------------- discover
 
 def _write_index(items, total=42):

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 from .. import cliparse, spin
@@ -348,6 +349,47 @@ def cmd_index(argv):
            % (len(items), repos, total))
     journal.log("index", "%d skill files" % len(items), total=total)
     return 0
+
+
+def github_skill_search(query="", limit=20):
+    """One-shot GitHub code search for SKILL.md repos (Phase-3 MCP reach-out).
+
+    Returns a list of ``{repo, path, url, description}`` dicts, or ``None`` when
+    the `gh` CLI is unavailable or the search fails — so callers degrade
+    gracefully instead of raising. Unlike :func:`cmd_index` this fetches a single
+    page and writes no cache: it is sized for an interactive MCP call, not a full
+    corpus build.
+    """
+    if not shutil.which("gh"):
+        return None
+    q = "filename:SKILL.md"
+    if query and query.strip():
+        q += " " + query.strip()
+    per_page = max(1, min(int(limit), 100))
+    try:
+        proc = subprocess.run(
+            ["gh", "api", "-H", "Accept: application/vnd.github+json",
+             "search/code?q=%s&per_page=%d&page=1"
+             % (urllib.parse.quote(q, safe=":"), per_page)],
+            capture_output=True, text=True, timeout=120)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return None
+    items = []
+    for it in (data.get("items") or [])[:per_page]:
+        repo = it.get("repository") or {}
+        items.append({
+            "repo": repo.get("full_name", "?"),
+            "path": it.get("path", ""),
+            "url": it.get("html_url", ""),
+            "description": repo.get("description") or "",
+        })
+    return items
 
 
 def cmd_discover(argv):

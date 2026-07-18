@@ -20,7 +20,7 @@ from pathlib import Path
 from .. import cliparse
 from .. import __version__
 from ..core import agents, catalog, config, frontmatter, gitutil, journal
-from ..core import lockfile, paths, policy, rag, registry, store, util
+from ..core import lockfile, mcp, paths, policy, rag, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -864,105 +864,167 @@ def cmd_serve(argv) -> int:
 
 # ---------------------------------------------------------------- mcp
 
-_MCP_TOOLS = [
-    {"name": "boost_search",
-     "description": "Search AI coding skills across the configured tap registries",
-     "inputSchema": {"type": "object",
-                     "properties": {"query": {"type": "string",
-                                              "description": "search terms"}},
-                     "required": ["query"]}},
-    {"name": "boost_list",
-     "description": "List the skills currently installed by boost",
-     "inputSchema": {"type": "object", "properties": {}}},
-    {"name": "boost_info",
-     "description": "Show detailed information about one skill",
-     "inputSchema": {"type": "object",
-                     "properties": {"name": {"type": "string",
-                                             "description": "skill name"}},
-                     "required": ["name"]}},
-    {"name": "boost_install",
-     "description": "Install a skill from a configured tap registry",
-     "inputSchema": {"type": "object",
-                     "properties": {"name": {"type": "string",
-                                             "description": "skill name"}},
-                     "required": ["name"]}},
-    {"name": "boost_doctor",
-     "description": "Health summary of the boost skill environment",
-     "inputSchema": {"type": "object", "properties": {}}},
-]
+# The MCP tool surface is an extensible registry (core/mcp.py): each handler is
+# a small `fn(args) -> (text, is_error)` that self-registers its JSON spec, so a
+# new capability is one REGISTRY.register(...) call — no dispatcher edits. This
+# is the Phase-3 "MCP as a hub" seam (docs/rag-architecture.md §8).
+
+REGISTRY = mcp.Registry()
+
+
+def _tool_search(args: dict):
+    query = str(args.get("query", ""))
+    rag_result = rag.search(query, limit=10)
+    if rag_result is not None:  # full-content index is built
+        hits, _ranker = rag_result
+        if not hits:
+            return "no skills match %r" % query, False
+        return "\n".join(
+            "%s — %s (%s)" % (h["entry"]["name"],
+                              h["entry"].get("description", ""),
+                              h["entry"]["tap"])
+            for h in hits), False
+    # no index yet -> keep today's frontmatter search so nothing regresses
+    scored = catalog.search(query)[:10]
+    if not scored:
+        return "no skills match %r" % query, False
+    return "\n".join("%s — %s (%s)" % (e["name"], e["description"], e["tap"])
+                     for e, _score in scored), False
+
+
+def _tool_list(args: dict):
+    skills = lockfile.installed()
+    if not skills:
+        return "no skills installed", False
+    return "\n".join("%s v%s (%s)%s"
+                     % (n, e.get("version", "?"), e.get("tap", "?"),
+                        " [pinned]" if e.get("pinned") else "")
+                     for n, e in sorted(skills.items())), False
+
+
+def _tool_info(args: dict):
+    name = str(args.get("name", ""))
+    entry = lockfile.get_skill(name)
+    matches = catalog.find(name)
+    if not entry and not matches:
+        return "no skill named %r (installed or in any tap)" % name, True
+    src = matches[0] if matches else {}
+    lines = ["name: " + name,
+             "version: %s" % (entry or src).get("version", "?"),
+             "tap: %s" % (entry or src).get("tap", "?")]
+    if src.get("description"):
+        lines.append("description: %s" % src["description"])
+    if entry:
+        lines.append("installed: yes (%s)" % entry.get("installed_at", "?"))
+        lines.append("agents: %s" % (", ".join(entry.get("agents") or []) or "none"))
+        if entry.get("pinned"):
+            lines.append("pinned: yes")
+    else:
+        lines.append("installed: no")
+    return "\n".join(lines), False
+
+
+def _tool_install(args: dict):
+    entry = catalog.resolve_one(str(args.get("name", "")))
+    res = store.install(entry)
+    lines = ["installed %s v%s from %s → %s"
+             % (res.name, entry.get("version", "?"), entry["tap"], res.dest),
+             "linked agents: %s" % (", ".join(res.linked) or "none"),
+             "quality score: %d/100" % res.score]
+    if res.conflicts:
+        lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
+    return "\n".join(lines), False
+
+
+def _tool_doctor(args: dict):
+    plan = store.sync_plan()
+    issues = sum(len(v) for v in plan.values())
+    taps = registry.list_taps()
+    lines = ["installed skills: %d" % len(lockfile.installed()),
+             "taps: %d (%d skills available)" % (len(taps), len(catalog.all_entries()))]
+    for key, vals in plan.items():
+        if vals:
+            lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
+    lines.append("healthy — no issues found" if issues == 0
+                 else "%d issue(s) — run `boost sync` to fix" % issues)
+    return "\n".join(lines), issues > 0
+
+
+def _tool_discover_github(args: dict):
+    """Grow the corpus: GitHub code-search for SKILL.md repos (needs `gh`).
+
+    A Phase-3 reach-out tool. Degrades the ``core/ai.py`` way — if `gh` is absent
+    or the search fails, it returns a short helpful message instead of raising,
+    so the MCP server never dies on a missing external dependency.
+    """
+    from . import discovery
+    if not shutil.which("gh"):
+        return ("GitHub discovery needs the `gh` CLI — install it with "
+                "`brew install gh && gh auth login`, then retry."), True
+    query = str(args.get("query", ""))
+    raw = args.get("limit")
+    limit = int(raw) if isinstance(raw, (int, float)) and int(raw) > 0 else 20
+    limit = min(limit, 100)
+    hits = discovery.github_skill_search(query, limit)
+    if hits is None:
+        return ("GitHub code search failed — check `gh auth status` and retry."), True
+    if not hits:
+        return ("no SKILL.md repositories found on GitHub for %r"
+                % (query.strip() or "any query")), False
+    return "\n".join("%s — %s" % (h["repo"], h.get("description") or h.get("path", ""))
+                     for h in hits), False
+
+
+REGISTRY.register(
+    "boost_search",
+    "Search AI coding skills across the configured tap registries",
+    {"type": "object",
+     "properties": {"query": {"type": "string", "description": "search terms"}},
+     "required": ["query"]},
+    _tool_search)
+REGISTRY.register(
+    "boost_list",
+    "List the skills currently installed by boost",
+    {"type": "object", "properties": {}},
+    _tool_list)
+REGISTRY.register(
+    "boost_info",
+    "Show detailed information about one skill",
+    {"type": "object",
+     "properties": {"name": {"type": "string", "description": "skill name"}},
+     "required": ["name"]},
+    _tool_info)
+REGISTRY.register(
+    "boost_install",
+    "Install a skill from a configured tap registry",
+    {"type": "object",
+     "properties": {"name": {"type": "string", "description": "skill name"}},
+     "required": ["name"]},
+    _tool_install)
+REGISTRY.register(
+    "boost_doctor",
+    "Health summary of the boost skill environment",
+    {"type": "object", "properties": {}},
+    _tool_doctor)
+REGISTRY.register(
+    "boost_discover_github",
+    "Discover new SKILL.md repositories on GitHub to grow the corpus (needs the "
+    "`gh` CLI; degrades to a hint when unavailable)",
+    {"type": "object",
+     "properties": {
+         "query": {"type": "string",
+                   "description": "optional extra search terms (topic, language)"},
+         "limit": {"type": "integer",
+                   "description": "max repositories to return (default 20)"}}},
+    _tool_discover_github)
+
+# Back-compat shims: the JSON-RPC server and tests reference these names.
+_MCP_TOOLS = REGISTRY.specs()
 
 
 def _mcp_tool(tool: str, args: dict):
     """Run one MCP tool -> (text, is_error). (None, _) for unknown tools."""
-    if tool == "boost_search":
-        query = str(args.get("query", ""))
-        rag_result = rag.search(query, limit=10)
-        if rag_result is not None:  # full-content index is built
-            hits, _ranker = rag_result
-            if not hits:
-                return "no skills match %r" % query, False
-            return "\n".join(
-                "%s — %s (%s)" % (h["entry"]["name"],
-                                  h["entry"].get("description", ""),
-                                  h["entry"]["tap"])
-                for h in hits), False
-        # no index yet -> keep today's frontmatter search so nothing regresses
-        scored = catalog.search(query)[:10]
-        if not scored:
-            return "no skills match %r" % query, False
-        return "\n".join("%s — %s (%s)" % (e["name"], e["description"], e["tap"])
-                         for e, _score in scored), False
-    if tool == "boost_list":
-        skills = lockfile.installed()
-        if not skills:
-            return "no skills installed", False
-        return "\n".join("%s v%s (%s)%s"
-                         % (n, e.get("version", "?"), e.get("tap", "?"),
-                            " [pinned]" if e.get("pinned") else "")
-                         for n, e in sorted(skills.items())), False
-    if tool == "boost_info":
-        name = str(args.get("name", ""))
-        entry = lockfile.get_skill(name)
-        matches = catalog.find(name)
-        if not entry and not matches:
-            return "no skill named %r (installed or in any tap)" % name, True
-        src = matches[0] if matches else {}
-        lines = ["name: " + name,
-                 "version: %s" % (entry or src).get("version", "?"),
-                 "tap: %s" % (entry or src).get("tap", "?")]
-        if src.get("description"):
-            lines.append("description: %s" % src["description"])
-        if entry:
-            lines.append("installed: yes (%s)" % entry.get("installed_at", "?"))
-            lines.append("agents: %s" % (", ".join(entry.get("agents") or []) or "none"))
-            if entry.get("pinned"):
-                lines.append("pinned: yes")
-        else:
-            lines.append("installed: no")
-        return "\n".join(lines), False
-    if tool == "boost_install":
-        entry = catalog.resolve_one(str(args.get("name", "")))
-        res = store.install(entry)
-        lines = ["installed %s v%s from %s → %s"
-                 % (res.name, entry.get("version", "?"), entry["tap"], res.dest),
-                 "linked agents: %s" % (", ".join(res.linked) or "none"),
-                 "quality score: %d/100" % res.score]
-        if res.conflicts:
-            lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
-        return "\n".join(lines), False
-    if tool == "boost_doctor":
-        plan = store.sync_plan()
-        issues = sum(len(v) for v in plan.values())
-        taps = registry.list_taps()
-        lines = ["installed skills: %d" % len(lockfile.installed()),
-                 "taps: %d (%d skills available)" % (len(taps), len(catalog.all_entries()))]
-        for key, vals in plan.items():
-            if vals:
-                lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
-        lines.append("healthy — no issues found" if issues == 0
-                     else "%d issue(s) — run `boost sync` to fix" % issues)
-        return "\n".join(lines), issues > 0
-    return None, False
+    return REGISTRY.call(tool, args)
 
 
 def _mcp_send(msg: dict) -> bool:
