@@ -114,7 +114,7 @@
   <!-- ================= SNAPSHOT ================= -->
   <section class="block reveal">
     <div class="stats">
-      <div class="stat"><b>5</b><span>Shipped</span></div>
+      <div class="stat"><b>6</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
       <div class="stat"><b>48</b><span>Loop finds</span></div>
@@ -190,6 +190,24 @@
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">42 tests · +71pts coverage</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Resilience</span></div>
+        <h3>Crash-recorder error paths — <code>core/logs.py</code></h3>
+        <p>The black-box diagnostic logger swallows every filesystem/handler
+           failure so a broken log can never break the CLI — but those
+           <code>except</code> arms (the parts that matter most <em>during</em> a
+           crash) were the least exercised. New tests force each failure —
+           handler <code>close()</code> raising, a read-only log dir, an
+           unresolvable version, a wedged logger, <code>unlink</code> denied —
+           taking the module to <strong>100%</strong> coverage.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">7 branches · 88%→100%</span>
         </div>
       </article>
 
