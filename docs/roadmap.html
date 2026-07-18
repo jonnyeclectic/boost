@@ -116,7 +116,7 @@
       <div class="stat"><b>4</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>24</b><span>Loop finds</span></div>
+      <div class="stat"><b>32</b><span>Loop finds</span></div>
     </div>
   </section>
 
@@ -726,6 +726,146 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">runtime + static</span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ DOCS-SITE & CONTENT QUALITY ============ -->
+  <section class="block reveal" id="docsite">
+    <div class="block-head">
+      <h2>Docs-site &amp; content quality</h2>
+      <span class="count">// planned · free tooling for the Pages site, README &amp; prose</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Perf</span></div>
+        <h3>Lighthouse CI on the Pages site</h3>
+        <p><code>treosh/lighthouse-ci-action</code> scores <code>index.html</code>
+           and <code>roadmap.html</code> on performance, accessibility,
+           best-practices and SEO on every deploy, and fails the build against
+           budgets. Turns the marketing surface's quality into a number that can't
+           silently regress as the Aurora theme evolves.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">4 score budgets</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · A11y</span></div>
+        <h3>Accessibility audit — <code>pa11y-ci</code> / axe-core</h3>
+        <p>Run WCAG checks over the rendered pages: colour contrast, focus order,
+           alt text and ARIA. The Aurora palette leans on muted
+           <code>--text-2/--text-3</code> tokens against dark glass — exactly where
+           contrast ratios slip below AA. Catches the a11y regressions a purely
+           visual review misses.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">WCAG AA</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Docs</span></div>
+        <h3>HTML validation — <code>html-validate</code></h3>
+        <p>The guide and roadmap are hand-authored HTML whose tags are balanced by
+           eye today. A CI <code>html-validate</code> pass catches unclosed
+           elements, duplicate <code>id</code>s and invalid nesting before they
+           ship a subtly broken layout — the automated version of the manual
+           tag-count sanity check.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">hand-authored HTML</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Docs</span></div>
+        <h3>Broken-link &amp; anchor checking — <code>lychee</code></h3>
+        <p>Fast, free link checker over the README and <code>docs/*.html</code>:
+           verifies external URLs (GitHub, PyPI), asset paths
+           (<code>../style/boost.css</code>) and in-page anchors
+           (<code>#next</code>, <code>#health</code>) still resolve. A dead link in
+           the landing page is the first broken promise a visitor sees.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">URLs + anchors</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Content</span></div>
+        <h3>Prose &amp; terminology linting — <code>vale</code></h3>
+        <p><code>vale</code> enforces a consistent voice across the README and docs
+           with a small boost vocabulary — canonical spelling of <em>skill</em>,
+           <em>tap</em>, <em>registry</em>; no <code>Boost</code>/<code>boost</code>
+           drift; flagged weasel words. Keeps a docs-heavy project reading like one
+           author wrote it.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">house style</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Docs</span></div>
+        <h3>Markdown consistency — <code>markdownlint-cli2</code></h3>
+        <p>Lint every Markdown surface — README, <code>CLAUDE.md</code>,
+           <code>DEBUGGING.md</code>, <code>rag-architecture.md</code> — for
+           heading order, list style and fenced-code hygiene. Cheap, deterministic,
+           and it keeps the contributor-facing docs as tidy as the code the gates
+           already enforce.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">every .md</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Style</span></div>
+        <h3>Theme-asset linting — <code>stylelint</code> + <code>eslint</code></h3>
+        <p>The shared <code>style/boost.css</code> and <code>boost.js</code> theme
+           the guide, roadmap and demo together, so a bug there recolours or breaks
+           everything at once. <code>stylelint</code> guards the CSS tokens and
+           <code>eslint</code> the reveal/interaction JS — the one place a small
+           mistake has system-wide blast radius.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">shared blast radius</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Docs</span></div>
+        <h3>Post-deploy smoke — headless load check</h3>
+        <p>After each Pages deploy, headless-load the guide and roadmap and assert
+           the essentials: HTTP 200, every asset resolves, and the console is free
+           of errors. Distinct from the planned visual-regression pass — this is a
+           cheap always-on health gate that would have caught the current broken
+           Pages deploy automatically.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">catches red deploys</span>
         </div>
       </article>
 
