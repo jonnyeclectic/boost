@@ -118,7 +118,7 @@
       <div class="stat"><b>7</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>84</b><span>Loop finds</span></div>
+      <div class="stat"><b>83</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -571,17 +571,6 @@
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-        </div>
-      </article>
-
-      <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness</span></div>
-        <h3>Guard <code>output.table</code> against ragged rows</h3>
-        <p>Column-width computation does <code>max(… for r in rows if i &lt; len(r))</code> (<code>core/output.py:300</code>), which raises <code>max() arg is empty</code> when a header column has no matching cell in any row. Add <code>default=0</code>.</p>
-        <div class="meta">
-          <span class="m">Complexity <b>S</b></span>
-          <span class="m">Impact <b>Low</b></span>
-          <span class="m">Wow <b class="wow">★</b></span>
         </div>
       </article>
 
