@@ -42,6 +42,9 @@ version = {attr = "boost_cli.__version__"}
 [tool.setuptools.packages.find]
 include = ["boost_cli*"]
 
+[tool.setuptools.package-data]
+boost_cli = ["data/*.json"]
+
 [tool.ruff]
 target-version = "py39"
 

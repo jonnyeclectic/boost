@@ -63,7 +63,7 @@ class TestTap:
 
     def test_no_args_rc2(self, boost, sandbox):
         r = boost("tap", expect=2)
-        assert "provide a SPEC or --defaults" in r.err
+        assert "provide a SPEC, --defaults, or --catalog" in r.err
 
     def test_defaults_offline_warns_rc1(self, boost, sandbox, monkeypatch):
         from boost_cli.core import registry
@@ -95,6 +95,42 @@ class TestTap:
         r = boost("tap", "--defaults")           # idempotent second run
         assert "anthropics/skills already tapped" in r.out
         assert "obra/superpowers already tapped" in r.out
+
+
+class TestTapCatalog:
+    def test_dry_run_lists_without_tapping(self, boost, sandbox):
+        from boost_cli.core import registry
+        r = boost("tap", "--catalog", "--type", "skill", "--limit", "3", "--dry-run")
+        assert "dry run — nothing tapped" in r.out
+        assert "3 registries" in r.out
+        assert registry.list_taps() == []
+
+    def test_type_filter_restricts_selection(self, boost, sandbox):
+        r = boost("tap", "--catalog", "--type", "rule", "--dry-run")
+        # rule rows present, no skill/workflow rows in the type column
+        assert "rule" in r.out
+        assert "microsoft/skills" not in r.out
+
+    def test_category_filter(self, boost, sandbox):
+        r = boost("tap", "--catalog", "--type", "skill",
+                  "--category", "security", "--dry-run")
+        assert "jthack/ffuf_claude_skill" in r.out
+        assert "microsoft/skills" not in r.out
+
+    def test_empty_selection_rc1(self, boost, sandbox):
+        r = boost("tap", "--catalog", "--category", "no-such-cat", "--dry-run",
+                  expect=1)
+        assert "no catalog registries match" in r.out
+
+    def test_real_tap_from_catalog(self, boost, sandbox, fixture_tap_src,
+                                   monkeypatch):
+        from boost_cli.core import registry
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest: shutil.copytree(fixture_tap_src, dest))
+        r = boost("tap", "--catalog", "--type", "skill", "--limit", "2")
+        assert "tapped " in r.out and "items)" in r.out
+        assert len(registry.list_taps()) == 2
 
 
 # ── untap ────────────────────────────────────────────────────────────────

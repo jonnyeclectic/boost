@@ -36,8 +36,25 @@ Needs Python 3.9+ and `git`.
 ```bash
 pipx install boost-skill-cli        # or: pip install boost-skill-cli
 boost --version
-boost tap --defaults          # pull in the starter registries
+boost tap --defaults          # pull in the 5 starter registries
 ```
+
+Want the whole ecosystem instead of the starter set? boost ships a **curated
+registry catalog** — 90+ classified GitHub registries of skills, Cursor/Windsurf
+**rules**, and Claude Code **workflows** (slash commands & subagents),
+collectively indexing thousands of items:
+
+```bash
+boost tap --catalog --dry-run                 # browse the classified catalog
+boost tap --catalog --type skill --limit 20   # tap the 20 biggest skill packs
+boost tap --catalog --type rule               # every rules registry
+boost tap --catalog --category security       # filter by category
+```
+
+boost indexes three item kinds out of the same registries: `SKILL.md` **skills**,
+`.mdc`/`.cursorrules`/`.windsurfrules` **rules**, and command/agent **workflows**
+(Markdown under `commands/`·`agents/`·`workflows/`, or carrying subagent
+frontmatter). Rules and workflows are searchable today; only skills install.
 
 Or run it straight from a checkout — the runtime is stdlib-only, so there's
 nothing to install beyond the shim:

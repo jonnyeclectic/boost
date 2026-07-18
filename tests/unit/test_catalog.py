@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import pytest
 
@@ -151,6 +152,124 @@ class TestScanDir:
         finally:
             (root / "locked" / "SKILL.md").chmod(0o644)
         assert [e["name"] for e in entries] == ["open"]
+
+
+class TestScanRulesAndWorkflows:
+    def test_skill_entries_carry_skill_kind(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\nname: s\n---")
+        (e,) = catalog.scan_dir(root)
+        assert e["kind"] == "skill"
+
+    def test_mdc_rule_indexed(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / ".cursor" / "rules").mkdir(parents=True)
+        (root / ".cursor" / "rules" / "react.mdc").write_text(
+            "---\ndescription: React best practices\nglobs: '*.tsx'\n---\n\nUse hooks.\n")
+        (e,) = catalog.scan_dir(root)
+        assert e["kind"] == "rule"
+        assert e["name"] == "react"
+        assert e["description"] == "React best practices"
+        assert e["skill_md"] == ".cursor/rules/react.mdc"
+        assert e["rel_dir"] == ".cursor/rules"
+
+    def test_cursorrules_dotfile_named_after_parent_dir(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "nextjs").mkdir(parents=True)
+        (root / "nextjs" / ".cursorrules").write_text("You are a Next.js expert.\n")
+        (e,) = catalog.scan_dir(root)
+        assert e["kind"] == "rule"
+        assert e["name"] == "nextjs"
+        assert e["description"] == "You are a Next.js expert."
+
+    def test_windsurfrules_and_clinerules_indexed(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "a").mkdir(parents=True)
+        (root / "b").mkdir(parents=True)
+        (root / "a" / ".windsurfrules").write_text("windsurf rule\n")
+        (root / "b" / ".clinerules").write_text("cline rule\n")
+        kinds = {e["name"]: e["kind"] for e in catalog.scan_dir(root)}
+        assert kinds == {"a": "rule", "b": "rule"}
+
+    def test_workflow_under_commands_dir(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "commands").mkdir(parents=True)
+        (root / "commands" / "review.md").write_text(
+            "---\ndescription: Review the diff\n---\n\nDo a review.\n")
+        (e,) = catalog.scan_dir(root)
+        assert e["kind"] == "workflow"
+        assert e["name"] == "review"
+
+    def test_workflow_under_claude_agents_dir(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / ".claude" / "agents").mkdir(parents=True)
+        (root / ".claude" / "agents" / "backend.md").write_text(
+            "---\nname: backend-architect\ndescription: Designs APIs\n---\n\nBody.\n")
+        (e,) = catalog.scan_dir(root)
+        assert e["kind"] == "workflow"
+        assert e["name"] == "backend-architect"
+
+    def test_root_subagent_signature_detected(self, tmp_path):
+        root = tmp_path / "tap"
+        root.mkdir(parents=True)
+        (root / "code-reviewer.md").write_text(
+            "---\nname: code-reviewer\ndescription: Reviews code\ntools: Read, Grep\n---\n\nX.\n")
+        (e,) = catalog.scan_dir(root)
+        assert e["kind"] == "workflow"
+        assert e["name"] == "code-reviewer"
+
+    def test_plain_markdown_and_docs_not_indexed(self, tmp_path):
+        root = tmp_path / "tap"
+        root.mkdir(parents=True)
+        (root / "README.md").write_text("# Readme\n\nHello.\n")
+        (root / "notes.md").write_text("# Notes\n\nJust prose, no frontmatter.\n")
+        (root / "commands").mkdir()
+        (root / "commands" / "README.md").write_text("# Commands index\n")
+        assert catalog.scan_dir(root) == []
+
+    def test_reference_files_inside_skill_dir_not_double_counted(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "s", "---\nname: s\n---")
+        # a skill that ships a bundled rule/command as reference material
+        (root / "skills" / "s" / "extra.mdc").write_text("bundled rule\n")
+        (root / "skills" / "s" / "commands").mkdir()
+        (root / "skills" / "s" / "commands" / "helper.md").write_text(
+            "---\ndescription: helper\n---\nx\n")
+        entries = catalog.scan_dir(root)
+        assert [e["name"] for e in entries] == ["s"]
+        assert entries[0]["kind"] == "skill"
+
+    def test_unreadable_rule_file_skipped(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "a").mkdir(parents=True)
+        (root / "b").mkdir(parents=True)
+        (root / "a" / "locked.mdc").write_text("---\ndescription: x\n---\n")
+        (root / "b" / "open.mdc").write_text("---\ndescription: y\n---\n")
+        (root / "a" / "locked.mdc").chmod(0o000)
+        try:
+            entries = catalog.scan_dir(root)
+        finally:
+            (root / "a" / "locked.mdc").chmod(0o644)
+        assert [e["name"] for e in entries] == ["open"]
+
+    def test_classify_workflow_guards(self, tmp_path):
+        # non-markdown and SKILL.md never classify as workflow
+        assert catalog._classify_workflow(Path("commands/x.txt"), {}) is False
+        assert catalog._classify_workflow(Path("agents/SKILL.md"), {}) is False
+        # documentation stems are excluded even under a workflow dir
+        assert catalog._classify_workflow(Path("commands/README.md"), {}) is False
+        # a bare prompt .md with no dir marker and no subagent frontmatter
+        assert catalog._classify_workflow(Path("prompts/idea.md"), {}) is False
+
+    def test_mixed_kinds_all_present(self, tmp_path):
+        root = tmp_path / "tap"
+        write_skill(root / "skills" / "s", "---\nname: s\n---")
+        (root / "rules").mkdir()
+        (root / "rules" / "py.mdc").write_text("---\ndescription: python\n---\nx\n")
+        (root / "commands").mkdir()
+        (root / "commands" / "ship.md").write_text("---\ndescription: ship it\n---\nx\n")
+        kinds = sorted(e["kind"] for e in catalog.scan_dir(root))
+        assert kinds == ["rule", "skill", "workflow"]
 
 
 class TestTapCaches:

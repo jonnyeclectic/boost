@@ -167,3 +167,30 @@ class TestDefaultTaps:
             assert tap["url"].startswith("https://github.com/")
             assert tap["url"].endswith(tap["name"])
             assert tap["focus"]
+
+
+class TestRegistryCatalog:
+    def test_bundled_catalog_loads_and_is_well_formed(self):
+        cat = config.load_registry_catalog()
+        assert len(cat) >= 50
+        names = [e["name"] for e in cat]
+        assert len(names) == len(set(names))  # deduped
+        for e in cat:
+            assert e["type"] in ("skill", "rule", "workflow")
+            assert e["url"] == "https://github.com/" + e["name"]
+            assert e["focus"]
+            assert isinstance(e["est_items"], int)
+            assert isinstance(e["list_only"], bool)
+
+    def test_scannable_estimate_clears_1500(self):
+        cat = config.load_registry_catalog()
+        scannable = sum(e["est_items"] for e in cat if not e["list_only"])
+        assert scannable >= 1500
+
+    def test_covers_all_three_types(self):
+        types = {e["type"] for e in config.load_registry_catalog()}
+        assert types == {"skill", "rule", "workflow"}
+
+    def test_missing_file_returns_empty(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(config, "REGISTRY_CATALOG", tmp_path / "nope.json")
+        assert config.load_registry_catalog() == []

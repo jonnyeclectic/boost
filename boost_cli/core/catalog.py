@@ -1,53 +1,149 @@
-"""Skill catalogs: scan tap repos for SKILL.md files -> JSON caches -> search.
+"""Skill catalogs: scan tap repos for skill/rule/workflow files -> JSON caches.
 
 A catalog entry (plain dict) has:
   name, description, version, tap, curated,
-  rel_dir   -- skill directory relative to the tap repo root
-  skill_md  -- path of the SKILL.md relative to the repo root
+  kind      -- "skill" | "rule" | "workflow" (defaults to "skill")
+  rel_dir   -- item directory relative to the tap repo root
+  skill_md  -- path of the defining file relative to the repo root
+               (SKILL.md for skills, the .mdc/.cursorrules/.md for others)
   meta      -- full parsed frontmatter
+
+Beyond `SKILL.md` skills, boost also indexes two lighter-weight item kinds
+that ship in the same GitHub registries:
+  * rules     -- Cursor `.mdc` / `.cursorrules` and Windsurf `.windsurfrules`
+  * workflows -- Claude Code slash commands / subagents (Markdown + YAML),
+                 recognised by living under a commands/agents/workflows dir
+                 or by carrying a subagent-style frontmatter signature.
 """
 from __future__ import annotations
 
 import json
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from ..errors import BoostError
 from . import frontmatter, gitutil, paths, registry, util
+
+KIND_SKILL = "skill"
+KIND_RULE = "rule"
+KIND_WORKFLOW = "workflow"
+
+# Rule files: Cursor MDC + the legacy single-file rule dotfiles.
+RULE_SUFFIXES = {".mdc"}
+RULE_FILENAMES = {".cursorrules", ".windsurfrules", ".clinerules"}
+# Directory names that mark a Markdown file as a command/agent workflow.
+WORKFLOW_DIRS = {"commands", "agents", "subagents", "workflows"}
+# Frontmatter keys that betray a Claude Code subagent / slash command even
+# when the file sits at a repo root rather than under a workflow dir.
+WORKFLOW_META_KEYS = {"tools", "model", "argument-hint", "allowed-tools"}
+# Markdown filenames that are documentation, never workflow items.
+DOC_STEMS = {"readme", "contributing", "license", "changelog", "security",
+             "code_of_conduct", "index", "_index", "authors", "notice"}
+
+
+def _ignored(path: Path) -> bool:
+    return any(part in util.IGNORED for part in path.parts)
+
+
+def _read(path: Path) -> Optional[Tuple[dict, str]]:
+    try:
+        return frontmatter.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
+        return None
+
+
+def _description(meta: dict, body: str) -> str:
+    desc = str(meta.get("description") or "").strip()
+    if desc:
+        return desc
+    for line in body.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line[:160]
+    return ""
+
+
+def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
+                tap_name: str, curated: bool, meta: dict, body: str) -> dict:
+    name = str(meta.get("name") or "").strip() or default_name
+    item_dir = defining_file.parent
+    return {
+        "name": util.slugify(name) if " " in name else name,
+        "description": _description(meta, body),
+        "version": str(meta.get("version") or "0.0.0"),
+        "tap": tap_name,
+        "curated": curated,
+        "kind": kind,
+        "rel_dir": str(item_dir.relative_to(root)) if item_dir != root else ".",
+        "skill_md": str(defining_file.relative_to(root)),
+        "meta": meta,
+    }
+
+
+def _classify_rule(path: Path) -> bool:
+    return path.name in RULE_FILENAMES or path.suffix.lower() in RULE_SUFFIXES
+
+
+def _classify_workflow(path: Path, meta: dict) -> bool:
+    """A Markdown file is a workflow if it lives under a commands/agents/
+    workflows directory, or carries subagent/slash-command frontmatter."""
+    if path.suffix.lower() != ".md" or path.name == "SKILL.md":
+        return False
+    if path.stem.lower() in DOC_STEMS:
+        return False
+    parent_parts = {p.lower() for p in path.parent.parts}
+    if parent_parts & WORKFLOW_DIRS:
+        return True
+    return bool(meta.get("name") and meta.get("description")
+                and (WORKFLOW_META_KEYS & set(meta)))
 
 
 def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> List[dict]:
     root = Path(root)
     entries: List[dict] = []
+    skill_dirs: List[Path] = []
     for skill_md in sorted(root.rglob("SKILL.md")):
-        if any(part in util.IGNORED for part in skill_md.parts):
+        if _ignored(skill_md):
             continue
-        try:
-            meta, body = frontmatter.parse(
-                skill_md.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
+        parsed = _read(skill_md)
+        if parsed is None:
             continue
+        meta, body = parsed
         skill_dir = skill_md.parent
-        name = str(meta.get("name") or "").strip() or (
-            skill_dir.name if skill_dir != root else root.name)
-        desc = str(meta.get("description") or "").strip()
-        if not desc:
-            for line in body.splitlines():
-                line = line.strip()
-                if line and not line.startswith("#"):
-                    desc = line[:160]
-                    break
-        entries.append({
-            "name": util.slugify(name) if " " in name else name,
-            "description": desc,
-            "version": str(meta.get("version") or "0.0.0"),
-            "tap": tap_name,
-            "curated": curated,
-            "rel_dir": str(skill_dir.relative_to(root)) if skill_dir != root else ".",
-            "skill_md": str(skill_md.relative_to(root)),
-            "meta": meta,
-        })
+        default = skill_dir.name if skill_dir != root else root.name
+        entries.append(_make_entry(root, skill_md, KIND_SKILL, default,
+                                   tap_name, curated, meta, body))
+        skill_dirs.append(skill_dir)
+
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or _ignored(path):
+            continue
+        # never re-index a file that belongs to a scanned skill directory
+        if any(path == d or d in path.parents for d in skill_dirs):
+            continue
+        is_rule = _classify_rule(path)
+        is_md = path.suffix.lower() == ".md" and path.name != "SKILL.md"
+        if not is_rule and not is_md:
+            continue
+        parsed = _read(path)
+        if parsed is None:
+            continue
+        meta, body = parsed
+        if is_rule:
+            kind = KIND_RULE
+        elif _classify_workflow(path, meta):
+            kind = KIND_WORKFLOW
+        else:
+            continue
+        if path.name in RULE_FILENAMES:
+            default = path.parent.name if path.parent != root else root.name
+        else:
+            default = path.stem
+        entries.append(_make_entry(root, path, kind, default,
+                                   tap_name, curated, meta, body))
+
+    entries.sort(key=lambda e: (e["skill_md"], e["name"]))
     return entries
 
 
