@@ -5,8 +5,10 @@ install():  copy skill dir from a tap clone -> store, symlink into every
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -76,10 +78,38 @@ def unlink_agents(name: str) -> List[str]:
 
 
 def _copy_skill(src: Path, dest: Path) -> None:
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(src, dest,
-                    ignore=shutil.ignore_patterns(".git", "__pycache__", ".DS_Store"))
+    """Copy a skill tree into ``dest`` atomically.
+
+    The old rmtree-then-copytree left a window where a crash destroyed the
+    previous good copy before the new one finished — on a reinstall/upgrade the
+    skill would vanish while the lock file still referenced it, so store and
+    lock disagreed. Instead stage the full copy in a temp dir on the same
+    filesystem, then swap it in with directory renames: the existing copy stays
+    untouched until the new one is complete, the failure window shrinks to two
+    fast renames, and a failed swap rolls back to the original.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(dir=str(dest.parent),
+                                   prefix="." + dest.name + ".tmp"))
+    backup = None
+    try:
+        shutil.copytree(
+            src, staged, dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(".git", "__pycache__", ".DS_Store"))
+        if dest.exists():
+            backup = staged.with_name(staged.name + ".old")
+            os.replace(dest, backup)      # move the old copy aside (atomic)
+        os.replace(staged, dest)          # swap the new copy in (atomic)
+    except BaseException:
+        if backup is not None and not dest.exists():
+            os.replace(backup, dest)      # swap-in failed: restore the original
+        shutil.rmtree(staged, ignore_errors=True)
+        if backup is not None and backup.exists():
+            shutil.rmtree(backup, ignore_errors=True)
+        raise
+    if backup is not None:
+        shutil.rmtree(backup, ignore_errors=True)
 
 
 def install(entry: dict, force: bool = False,

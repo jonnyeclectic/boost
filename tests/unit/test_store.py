@@ -423,3 +423,69 @@ class TestSyncApply:
 
     def test_nothing_to_do_no_actions(self, brainstorming):
         assert store.sync_apply(store.sync_plan()) == []
+
+
+class TestCopySkillAtomic:
+    def _mkskill(self, root, name, body="v1"):
+        d = root / name
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(body)
+        return d
+
+    def _leftovers(self, parent, keep):
+        return sorted(p.name for p in parent.iterdir() if p.name != keep)
+
+    def test_fresh_copy(self, tmp_path):
+        src = self._mkskill(tmp_path / "src", "sk")
+        (src / ".git").mkdir()
+        (src / ".git" / "cfg").write_text("junk")
+        dest = tmp_path / "store" / "sk"
+        store._copy_skill(src, dest)
+        assert (dest / "SKILL.md").read_text() == "v1"
+        assert not (dest / ".git").exists()           # ignore patterns honoured
+        assert self._leftovers(dest.parent, "sk") == []   # no temp/backup dirs
+
+    def test_reinstall_replaces_and_cleans_up(self, tmp_path):
+        src1 = self._mkskill(tmp_path / "s1", "sk", body="old")
+        dest = tmp_path / "store" / "sk"
+        store._copy_skill(src1, dest)
+        src2 = self._mkskill(tmp_path / "s2", "sk", body="new")
+        store._copy_skill(src2, dest)
+        assert (dest / "SKILL.md").read_text() == "new"
+        assert self._leftovers(dest.parent, "sk") == []
+
+    def test_swap_in_failure_rolls_back_to_original(self, tmp_path, monkeypatch):
+        src1 = self._mkskill(tmp_path / "s1", "sk", body="original")
+        dest = tmp_path / "store" / "sk"
+        store._copy_skill(src1, dest)          # dest now holds the good copy
+        src2 = self._mkskill(tmp_path / "s2", "sk", body="broken")
+
+        real = store.os.replace
+        calls = {"n": 0}
+
+        def flaky(a, b):
+            calls["n"] += 1
+            if calls["n"] == 2:                # the swap-IN of the new copy
+                raise OSError("swap failed")
+            return real(a, b)
+
+        monkeypatch.setattr(store.os, "replace", flaky)
+        with pytest.raises(OSError, match="swap failed"):
+            store._copy_skill(src2, dest)
+        # original survives intact, nothing half-swapped, no debris
+        assert (dest / "SKILL.md").read_text() == "original"
+        assert self._leftovers(dest.parent, "sk") == []
+
+    def test_copytree_failure_preserves_existing(self, tmp_path, monkeypatch):
+        src1 = self._mkskill(tmp_path / "s1", "sk", body="original")
+        dest = tmp_path / "store" / "sk"
+        store._copy_skill(src1, dest)
+
+        def boom(*a, **k):
+            raise OSError("copy failed")
+
+        monkeypatch.setattr(store.shutil, "copytree", boom)
+        with pytest.raises(OSError, match="copy failed"):
+            store._copy_skill(tmp_path / "s1" / "sk", dest)
+        assert (dest / "SKILL.md").read_text() == "original"
+        assert self._leftovers(dest.parent, "sk") == []
