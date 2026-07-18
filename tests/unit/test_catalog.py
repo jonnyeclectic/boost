@@ -239,6 +239,27 @@ class TestScanRulesAndWorkflows:
         assert [e["name"] for e in entries] == ["s"]
         assert entries[0]["kind"] == "skill"
 
+    def test_rule_entry_carries_tap_and_curated(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / "nextjs").mkdir(parents=True)
+        (root / "nextjs" / ".cursorrules").write_text("Next.js expert.\n")
+        (e,) = catalog.scan_dir(root, "mytap", curated=True)
+        assert e["kind"] == "rule"
+        assert e["tap"] == "mytap"
+        assert e["curated"] is True
+
+    def test_ignored_dirs_pruned_for_loose_rules_and_workflows(self, tmp_path):
+        root = tmp_path / "tap"
+        (root / ".git").mkdir(parents=True)
+        (root / "sub" / "__pycache__").mkdir(parents=True)
+        (root / ".git" / "hook.mdc").write_text("---\ndescription: x\n---\n")
+        (root / "sub" / "__pycache__" / "commands").mkdir()
+        (root / "sub" / "__pycache__" / "commands" / "c.md").write_text(
+            "---\ndescription: y\n---\nx\n")
+        (root / "real").mkdir()
+        (root / "real" / ".cursorrules").write_text("real rule\n")
+        assert [e["name"] for e in catalog.scan_dir(root)] == ["real"]
+
     def test_unreadable_rule_file_skipped(self, tmp_path):
         root = tmp_path / "tap"
         (root / "a").mkdir(parents=True)

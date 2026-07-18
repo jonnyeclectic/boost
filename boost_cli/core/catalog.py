@@ -18,9 +18,10 @@ that ship in the same GitHub registries:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from ..errors import BoostError
 from . import frontmatter, gitutil, paths, registry, util
@@ -40,10 +41,6 @@ WORKFLOW_META_KEYS = {"tools", "model", "argument-hint", "allowed-tools"}
 # Markdown filenames that are documentation, never workflow items.
 DOC_STEMS = {"readme", "contributing", "license", "changelog", "security",
              "code_of_conduct", "index", "_index", "authors", "notice"}
-
-
-def _ignored(path: Path) -> bool:
-    return any(part in util.IGNORED for part in path.parts)
 
 
 def _read(path: Path) -> Optional[Tuple[dict, str]]:
@@ -107,46 +104,51 @@ def _classify_workflow(path: Path, meta: dict) -> bool:
 def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> List[dict]:
     root = Path(root)
     entries: List[dict] = []
-    skill_dirs: List[Path] = []
-    for skill_md in sorted(root.rglob("SKILL.md")):
-        if _ignored(skill_md):
+    skill_dirs: Set[Path] = set()
+    # One top-down walk instead of two rglob passes: prune ignored dirs in place
+    # so we never descend into .git/__pycache__, and test skill-dir membership
+    # against a set via each dir's own ancestor chain rather than O(files × dirs).
+    # Top-down order guarantees a file's governing SKILL.md dir is seen first, and
+    # the final entries.sort() normalizes output order regardless of walk order.
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in util.IGNORED]
+        here = Path(dirpath)
+        # A directory holding a SKILL.md is a skill: index it and remember the
+        # dir so its other files are not re-indexed as loose rules/workflows.
+        if "SKILL.md" in filenames:
+            parsed = _read(here / "SKILL.md")
+            if parsed is not None:
+                meta, body = parsed
+                default = here.name if here != root else root.name
+                entries.append(_make_entry(root, here / "SKILL.md", KIND_SKILL,
+                                           default, tap_name, curated,
+                                           meta, body))
+                skill_dirs.add(here)
+        # Files inside any skill directory belong to that skill, never re-indexed.
+        if here in skill_dirs or any(a in skill_dirs for a in here.parents):
             continue
-        parsed = _read(skill_md)
-        if parsed is None:
-            continue
-        meta, body = parsed
-        skill_dir = skill_md.parent
-        default = skill_dir.name if skill_dir != root else root.name
-        entries.append(_make_entry(root, skill_md, KIND_SKILL, default,
-                                   tap_name, curated, meta, body))
-        skill_dirs.append(skill_dir)
-
-    for path in sorted(root.rglob("*")):
-        if not path.is_file() or _ignored(path):
-            continue
-        # never re-index a file that belongs to a scanned skill directory
-        if any(path == d or d in path.parents for d in skill_dirs):
-            continue
-        is_rule = _classify_rule(path)
-        is_md = path.suffix.lower() == ".md" and path.name != "SKILL.md"
-        if not is_rule and not is_md:
-            continue
-        parsed = _read(path)
-        if parsed is None:
-            continue
-        meta, body = parsed
-        if is_rule:
-            kind = KIND_RULE
-        elif _classify_workflow(path, meta):
-            kind = KIND_WORKFLOW
-        else:
-            continue
-        if path.name in RULE_FILENAMES:
-            default = path.parent.name if path.parent != root else root.name
-        else:
-            default = path.stem
-        entries.append(_make_entry(root, path, kind, default,
-                                   tap_name, curated, meta, body))
+        for name in filenames:
+            path = here / name
+            is_rule = _classify_rule(path)
+            is_md = path.suffix.lower() == ".md" and path.name != "SKILL.md"
+            if not is_rule and not is_md:
+                continue
+            parsed = _read(path)
+            if parsed is None:
+                continue
+            meta, body = parsed
+            if is_rule:
+                kind = KIND_RULE
+            elif _classify_workflow(path, meta):
+                kind = KIND_WORKFLOW
+            else:
+                continue
+            if path.name in RULE_FILENAMES:
+                default = path.parent.name if path.parent != root else root.name
+            else:
+                default = path.stem
+            entries.append(_make_entry(root, path, kind, default,
+                                       tap_name, curated, meta, body))
 
     entries.sort(key=lambda e: (e["skill_md"], e["name"]))
     return entries
