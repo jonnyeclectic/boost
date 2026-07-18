@@ -22,11 +22,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: install linters
-        run: python -m pip -q install ruff mypy
+        run: python -m pip -q install ruff mypy codespell
       - name: ruff
         run: ruff check boost_cli tests
       - name: mypy
         run: mypy
+      - name: codespell (user-facing text)
+        run: codespell boost_cli docs README.md
       - name: registries.json is regenerated
         run: python scripts/build_registries.py --check
       - name: roadmap HTML is regenerated
