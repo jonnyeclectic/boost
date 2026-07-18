@@ -142,7 +142,15 @@ def dim(msg: str) -> None:
 
 
 def heading(msg: str) -> None:
-    print(c("==> ", BLUE, BOLD) + c(msg, BOLD))
+    # Brand the section marker in Aurora cyan (truecolor, 16-color fallback,
+    # plain under NO_COLOR) so every command's headers read as one system.
+    print(aurora("==>", "cyan") + " " + c(msg, BOLD))
+
+
+def verdict(ok: bool, msg: str) -> None:
+    """A dashboard verdict line: a green dot when healthy, amber when not."""
+    dot = aurora("●", "green" if ok else "yellow")
+    print("  " + dot + " " + c(msg, GREEN if ok else YELLOW))
 
 
 def kv(key: str, value: str, width: int = 14) -> None:

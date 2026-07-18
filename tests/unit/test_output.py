@@ -197,6 +197,33 @@ class TestGradient:
             "\033[0m")
 
 
+class TestHeadingAndVerdictColor:
+    def _force_truecolor(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+
+    def test_heading_marker_is_cyan_truecolor(self, monkeypatch, capsys):
+        self._force_truecolor(monkeypatch)
+        output.heading("Section")
+        out = capsys.readouterr().out
+        assert out.startswith("\033[38;2;34;211;238m==>\033[0m ")
+        assert "Section" in out
+
+    def test_verdict_ok_green_dot_and_green_text(self, monkeypatch, capsys):
+        self._force_truecolor(monkeypatch)
+        output.verdict(True, "healthy")
+        # aurora green dot (#4ade80) + green message text
+        assert capsys.readouterr().out == (
+            "  \033[38;2;74;222;128m●\033[0m \033[32mhealthy\033[0m\n")
+
+    def test_verdict_bad_yellow_dot_and_yellow_text(self, monkeypatch, capsys):
+        self._force_truecolor(monkeypatch)
+        output.verdict(False, "1 issue")
+        # aurora yellow dot (#facc15) + yellow message text
+        assert capsys.readouterr().out == (
+            "  \033[38;2;250;204;21m●\033[0m \033[33m1 issue\033[0m\n")
+
+
 class TestHelpers:
     @pytest.fixture(autouse=True)
     def plain(self, monkeypatch):
@@ -235,6 +262,14 @@ class TestHelpers:
     def test_heading(self, capsys):
         output.heading("Section")
         assert capsys.readouterr().out == "==> Section\n"
+
+    def test_verdict_healthy_plain(self, capsys):
+        output.verdict(True, "healthy")
+        assert capsys.readouterr().out == "  ● healthy\n"
+
+    def test_verdict_attention_plain(self, capsys):
+        output.verdict(False, "2 issues need attention")
+        assert capsys.readouterr().out == "  ● 2 issues need attention\n"
 
     def test_kv_default_width(self, capsys):
         output.kv("key", "value")

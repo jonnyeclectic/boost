@@ -128,9 +128,10 @@ class TestForcedColorOutput:
             "\033[2m  hint: try x\033[0m\n")
 
     def test_heading_exact_ansi(self, capsys):
+        # Aurora cyan marker (truecolor under forced color) + bold title.
         out.heading("Section")
         assert capsys.readouterr().out == (
-            "\033[34m\033[1m==> \033[0m\033[1mSection\033[0m\n")
+            "\033[38;2;34;211;238m==>\033[0m \033[1mSection\033[0m\n")
 
     def test_c_multi_style_order(self):
         assert out.c("x", out.RED, out.BOLD) == "\033[31m\033[1mx\033[0m"

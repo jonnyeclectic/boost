@@ -52,12 +52,14 @@ class TestDoctor:
     def test_healthy_exact_summary_rc0(self, boost, tapped):
         boost("install", "brainstorming", "commit-messages")
         r = boost("doctor")
+        assert "boost doctor" in r.out            # branded dashboard header
         assert "git on PATH" in r.out
         assert "1 tap cloned & cached" in r.out
         assert "lock file parses (v3)" in r.out
         assert "2 skills present in store with agent links" in r.out
         assert "2 skills installed · 1 tap synced · 0 broken links" in r.out
         assert "lock file integrity OK · log rotation healthy" in r.out
+        assert "● healthy" in r.out               # dashboard verdict
 
     def test_broken_symlink_rc1(self, boost, installed):
         ghost = paths.home() / ".claude" / "skills" / "ghost"
@@ -65,6 +67,7 @@ class TestDoctor:
         r = boost("doctor", expect=1)
         assert "1 broken symlink in agent dirs — run `boost heal`" in r.out
         assert "1 skill installed · 1 tap synced · 1 broken link" in r.out
+        assert "need attention" in r.out          # verdict flips on issues
 
     def test_missing_store_rc1(self, boost, installed):
         shutil.rmtree(paths.store_dir() / "brainstorming")
