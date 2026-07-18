@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — Design &amp; CLI Experience Roadmap</title>
+<meta name="description" content="boost design roadmap — a designer-engineer backlog for bringing the Aurora living-glass system into the terminal: truecolor palette, gradient headings, glass panels, motion & snappy feedback, each scored by complexity, impact and wow-factor.">
+<!-- Canonical Aurora tokens live in the repo-root style/boost.css (same sheet the
+     Engineering Roadmap links). Recolour everything by editing that one file. -->
+<link rel="stylesheet" href="../style/boost.css">
+<style>
+  /* ---------- roadmap-specific chrome (built on style/boost.css tokens) ---------- */
+  .hero { padding: 88px 0 20px; }
+  .hero h1 { font-size: clamp(40px, 6.4vw, 74px); font-weight: 800; letter-spacing: -.035em; line-height: 1.03; max-width: 860px; text-wrap: balance; }
+  .hero h1 .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p.lede { max-width: 700px; margin-top: 28px; font-size: 19px; color: var(--text-2); }
+  .hero p.lede b { color: var(--text); font-weight: 650; }
+  .hero p.lede code { color: var(--yellow); background: rgba(251,191,36,.09); padding: 1px 7px; border-radius: 6px; font-size: .86em; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 56px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px 20px; text-align: center; }
+  .stat b {
+    display: block; font-size: clamp(26px, 3.2vw, 40px); font-weight: 800; letter-spacing: -.02em;
+    background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat span { display: block; margin-top: 8px; font-size: 11px; font-weight: 650; letter-spacing: .16em; text-transform: uppercase; color: var(--text-2); }
+
+  /* ---------- Aurora → ANSI palette bridge ---------- */
+  .palette { max-width: 940px; margin: 46px auto 0; }
+  .palette h3 { text-align: center; font-size: 12px; font-weight: 700; font-family: var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--text-3); margin-bottom: 20px; }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 12px; }
+  .sw { border: 1px solid var(--line); border-radius: 13px; overflow: hidden; background: var(--panel-solid); }
+  .sw .chip { height: 46px; }
+  .sw .lab { padding: 9px 12px 11px; }
+  .sw .lab b { display: block; font-size: 12.5px; font-weight: 700; }
+  .sw .lab span { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--text-3); margin-top: 3px; }
+
+  /* ---------- legend ---------- */
+  .legend { max-width: 900px; margin: 60px auto 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); padding: 26px 28px; }
+  .legend h3 { font-size: 14px; font-weight: 700; font-family: var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text-2); margin-bottom: 18px; }
+  .legend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px 28px; }
+  .legend-grid dt { font-family: var(--mono); font-size: 12.5px; font-weight: 700; color: var(--yellow); margin-bottom: 5px; }
+  .legend-grid dd { font-size: 13.5px; color: var(--text-2); line-height: 1.5; }
+  .legend-grid dd code { color: var(--text); background: rgba(255,255,255,.06); border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 6px; font-size: .9em; }
+
+  /* ---------- filter bar ---------- */
+  .filterbar { max-width: 940px; margin: 40px auto 0; }
+  .filter-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 9px; margin-top: 14px; }
+  .filter-row .flabel { font-family: var(--mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-3); margin-right: 4px; }
+  .pill {
+    font-size: 13px; font-weight: 600; color: var(--text-2);
+    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
+    padding: 8px 15px; cursor: pointer; font-family: var(--sans);
+    transition: color .15s, background .15s, border-color .15s;
+  }
+  .pill:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
+  .pill.on { background: var(--yellow); border-color: var(--yellow); color: #201705; }
+  .roadmap-count { text-align: center; margin: 34px 0 4px; font-size: 14.5px; color: var(--text-2); }
+  .roadmap-count b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+  /* ---------- track groups ---------- */
+  .track { margin-top: 52px; }
+  .track-head { display: flex; align-items: center; gap: 14px; }
+  .track-icon { width: 12px; height: 34px; border-radius: 5px; background: var(--tk, var(--yellow)); box-shadow: 0 0 22px -2px var(--tk, var(--yellow)); }
+  .track-head h3 { font-size: 22px; font-weight: 780; letter-spacing: -.015em; }
+  .track-head p { font-size: 14px; color: var(--text-2); margin-top: 1px; }
+  .track-head .n { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-2); border: 1px solid var(--line); border-radius: 999px; padding: 5px 13px; white-space: nowrap; }
+
+  .rcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 22px; }
+  .ritem {
+    position: relative; background: var(--panel-solid); border: 1px solid var(--line-soft);
+    border-radius: 14px; padding: 20px 22px 18px; overflow: hidden;
+    transition: border-color .15s, transform .15s;
+  }
+  .ritem::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--tk, var(--yellow)); opacity: .85; }
+  .ritem:hover { border-color: var(--line); transform: translateY(-2px); }
+  .ritem-top { display: flex; align-items: center; gap: 10px; margin-bottom: 11px; }
+  .rid { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: var(--text-3); letter-spacing: .04em; }
+  .rstatus { margin-left: auto; font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; }
+  .rstatus.proposed { color: var(--sky); background: rgba(125,211,252,.1); border: 1px solid rgba(125,211,252,.32); }
+  .rstatus.next     { color: var(--yellow); background: rgba(251,191,36,.1); border: 1px solid rgba(251,191,36,.35); }
+  .rstatus.progress { color: var(--green); background: rgba(74,222,128,.1); border: 1px solid rgba(74,222,128,.35); }
+  .rstatus.done     { color: var(--text-3); background: var(--panel); border: 1px solid var(--line); text-decoration: line-through; }
+
+  .ritem h4 { font-size: 16.5px; font-weight: 720; letter-spacing: -.01em; line-height: 1.28; }
+  .ritem h4 code { font-family: var(--mono); font-size: .82em; color: var(--sky); background: rgba(125,211,252,.07); border-radius: 5px; padding: 1px 6px; }
+  .ritem > p { font-size: 13.5px; color: var(--text-2); margin-top: 8px; line-height: 1.55; }
+  .ritem > p b { color: var(--text); font-weight: 640; }
+  .ritem > p code { font-family: var(--mono); font-size: .86em; color: var(--text); background: rgba(255,255,255,.05); border-radius: 5px; padding: 1px 5px; }
+
+  .rmeta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }
+  .rmeta span { font-family: var(--mono); font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 7px; border: 1px solid var(--line-soft); color: var(--text-2); background: rgba(255,255,255,.03); white-space: nowrap; }
+  .rmeta .m-imp.high { color: #fca5a5; border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.08); }
+  .rmeta .m-imp.med  { color: var(--yellow); border-color: rgba(251,191,36,.35); background: rgba(251,191,36,.07); }
+  .rmeta .m-imp.low  { color: var(--text-2); }
+  .rmeta .m-wow { color: var(--yellow); letter-spacing: 1px; }
+  .rref { margin-top: 13px; font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
+  .rref code { color: var(--sky); background: rgba(125,211,252,.06); border: 1px solid var(--line-soft); border-radius: 6px; padding: 2px 7px; }
+
+  .no-results { text-align: center; color: var(--text-2); padding: 70px 0 30px; display: none; }
+
+  .foot-note { max-width: 780px; margin: 70px auto 0; text-align: center; font-size: 13.5px; color: var(--text-3); line-height: 1.6; }
+  .foot-note code { color: var(--yellow); }
+
+  @media (max-width: 860px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .rcards { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <a class="logo" href="./index.html"><b>boost</b><span>Design Roadmap</span></a>
+    <ul>
+      <li><a href="#color">Color</a></li>
+      <li><a href="#layout">Layout</a></li>
+      <li><a href="#motion">Motion</a></li>
+      <li><a href="#commands">Commands</a></li>
+      <li><a href="#system">System</a></li>
+      <li><a href="./roadmap.html">Engineering →</a></li>
+      <li><a class="cta" href="./index.html">← Visual Guide</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ================= HERO ================= -->
+  <div class="wrap hero">
+    <span class="badge">Designer × engineer backlog · living document</span>
+    <h1><span class="grad">Aurora in the terminal.</span> A CLI as beautiful as the brand.</h1>
+    <p class="lede">
+      boost ships a stunning <b>Aurora living-glass</b> web system — yet the CLI still
+      renders in <b>plain 8-color ANSI</b>: no gradient, no glass, no motion. This roadmap
+      closes that gap. Every item was found by driving the real CLI
+      (<code>boost</code>, <code>doctor</code>, <code>search</code>, <code>list</code>) and
+      grading its output against <code>style/boost.css</code> — then scored by
+      <b>category, complexity, impact and wow-factor</b>. Zero new dependencies;
+      <code>NO_COLOR</code> and non-TTY are always respected.
+    </p>
+    <div class="stats">
+      <div class="stat reveal"><b>22</b><span>Design opportunities</span></div>
+      <div class="stat reveal"><b>5</b><span>Design tracks</span></div>
+      <div class="stat reveal"><b>0</b><span>New dependencies</span></div>
+      <div class="stat reveal"><b>1:1</b><span>Web ↔ CLI parity goal</span></div>
+    </div>
+  </div>
+
+  <!-- ================= PALETTE BRIDGE ================= -->
+  <div class="wrap palette">
+    <h3>The bridge — Aurora web tokens → 24-bit ANSI</h3>
+    <div class="swatches">
+      <div class="sw"><div class="chip" style="background:#22d3ee"></div><div class="lab"><b>Cyan</b><span>#22d3ee · accent</span></div></div>
+      <div class="sw"><div class="chip" style="background:#a855f7"></div><div class="lab"><b>Violet</b><span>#a855f7 · brand</span></div></div>
+      <div class="sw"><div class="chip" style="background:#f472d0"></div><div class="lab"><b>Pink</b><span>#f472d0 · brand</span></div></div>
+      <div class="sw"><div class="chip" style="background:#4ade80"></div><div class="lab"><b>Green</b><span>#4ade80 · success</span></div></div>
+      <div class="sw"><div class="chip" style="background:#facc15"></div><div class="lab"><b>Yellow</b><span>#facc15 · warn</span></div></div>
+      <div class="sw"><div class="chip" style="background:linear-gradient(96deg,#22d3ee,#a855f7 52%,#f472d0)"></div><div class="lab"><b>Gradient</b><span>--grad · headings</span></div></div>
+    </div>
+  </div>
+
+  <!-- ================= LEGEND ================= -->
+  <div class="wrap">
+    <div class="legend reveal">
+      <h3>How to read this roadmap</h3>
+      <dl class="legend-grid">
+        <div>
+          <dt>Status</dt>
+          <dd><code>Proposed</code> logged &amp; triaged · <code>Next</code> queued · <code>In&nbsp;progress</code> being built · <code>Shipped</code> done.</dd>
+        </div>
+        <div>
+          <dt>Category</dt>
+          <dd>The discipline: <code>color</code>, <code>layout</code>, <code>motion</code>, <code>typography</code>, <code>ux</code>, <code>system</code>, <code>tooling</code>.</dd>
+        </div>
+        <div>
+          <dt>Complexity</dt>
+          <dd><code>S</code> a focused change · <code>M</code> a module-sized effort · <code>L</code> a multi-file refactor.</dd>
+        </div>
+        <div>
+          <dt>Impact</dt>
+          <dd>How much it lifts the everyday experience: <code>High</code> every session · <code>Med</code> real polish · <code>Low</code> finishing touch.</dd>
+        </div>
+        <div>
+          <dt>Wow-factor</dt>
+          <dd>★ to ★★★★★ — how much delight the win buys relative to the effort spent.</dd>
+        </div>
+        <div>
+          <dt>Constraints</dt>
+          <dd>Every proposal stays <code>zero-dependency</code>, degrades on <code>NO_COLOR</code> / non-TTY, and targets <code>Python ≥ 3.9</code>.</dd>
+        </div>
+      </dl>
+    </div>
+  </div>
+
+  <!-- ================= FILTERS ================= -->
+  <div class="wrap filterbar">
+    <div class="filter-row">
+      <span class="flabel">Track</span>
+      <button class="pill on" data-filter="track" data-val="all">All</button>
+      <button class="pill" data-filter="track" data-val="color">Color</button>
+      <button class="pill" data-filter="track" data-val="layout">Layout</button>
+      <button class="pill" data-filter="track" data-val="motion">Motion</button>
+      <button class="pill" data-filter="track" data-val="commands">Commands</button>
+      <button class="pill" data-filter="track" data-val="system">System</button>
+    </div>
+    <div class="filter-row">
+      <span class="flabel">Impact</span>
+      <button class="pill on" data-filter="impact" data-val="all">All</button>
+      <button class="pill" data-filter="impact" data-val="high">High</button>
+      <button class="pill" data-filter="impact" data-val="med">Med</button>
+      <button class="pill" data-filter="impact" data-val="low">Low</button>
+    </div>
+    <p class="roadmap-count"><b id="shown">22</b> of <b>22</b> opportunities shown</p>
+  </div>
+
+  <div class="wrap" id="board">
+
+    <!-- ===== COLOR ENGINE ===== -->
+    <section class="track" id="color" style="--tk: var(--cyan); padding-top: 40px;">
+      <div class="track-head">
+        <div class="track-icon"></div>
+        <div>
+          <h3>Aurora Color Engine</h3>
+          <p>Bring the brand palette and gradient into the terminal — with graceful fallbacks.</p>
+        </div>
+        <span class="n">4 items</span>
+      </div>
+      <div class="rcards">
+
+        <article class="ritem" data-track="color" data-impact="high">
+          <div class="ritem-top"><span class="rid">BOOST-D01</span><span class="rstatus next">Next</span></div>
+          <h4>24-bit Aurora palette in <code>output.py</code></h4>
+          <p>The whole CLI runs on eight legacy SGR codes (<code>RED</code>…<code>CYAN</code>) that don't match the brand at all — the front door paints section headers in generic <code>[33m</code> yellow. Add truecolor <code>rgb()</code> helpers mapping the exact web tokens: cyan <b>#22d3ee</b>, violet <b>#a855f7</b>, pink <b>#f472d0</b>, green <b>#4ade80</b>, yellow <b>#facc15</b>, plus <code>--text</code>/<code>--text-3</code> greys. One map recolors everything.</p>
+          <div class="rmeta"><span class="m-cat">color</span><span>Complexity S</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>core/output.py:15–38</code></div>
+        </article>
+
+        <article class="ritem" data-track="color" data-impact="high">
+          <div class="ritem-top"><span class="rid">BOOST-D02</span><span class="rstatus next">Next</span></div>
+          <h4>Terminal capability detection &amp; graceful degradation</h4>
+          <p><code>use_color()</code> is binary — color or nothing. Add a tier ladder: <b>truecolor</b> (<code>COLORTERM=truecolor/24bit</code>) → <b>256</b> → <b>16</b> → <b>none</b>, so the Aurora tokens snap to the nearest available color instead of vanishing. Keep the existing <code>NO_COLOR</code> honor, add a <code>BOOST_COLOR=always/auto/never</code> override, and treat <code>TERM=dumb</code> as none.</p>
+          <div class="rmeta"><span class="m-cat">color</span><span>Complexity M</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★☆☆</span></div>
+          <div class="rref"><code>core/output.py:26–38</code></div>
+        </article>
+
+        <article class="ritem" data-track="color" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D03</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Gradient text renderer — the signature move</h4>
+          <p>The brand <em>is</em> the cyan→violet→pink <code>--grad</code>. Interpolate it per-character across a string so headings, the <code>boost</code> wordmark and hero counts shimmer in the terminal exactly like the web hero. A pure-Python lerp over the three stops; falls back to a single accent color when truecolor is unavailable.</p>
+          <div class="rmeta"><span class="m-cat">color</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★★</span></div>
+          <div class="rref"><code>core/output.py · new gradient()</code></div>
+        </article>
+
+        <article class="ritem" data-track="color" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D04</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Semantic color roles, not raw codes</h4>
+          <p>Commands scatter <code>out.c(x, out.YELLOW)</code> and <code>out.GREEN</code> literally throughout the command layer, so a palette change means a repo-wide sweep. Introduce named roles — <code>accent</code>, <code>brand</code>, <code>success</code>, <code>warn</code>, <code>danger</code>, <code>muted</code> — resolved through the palette. Re-theming becomes a one-file edit, and intent reads clearly at every call site.</p>
+          <div class="rmeta"><span class="m-cat">color</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
+          <div class="rref"><code>core/output.py · commands/*.py</code></div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ===== STRUCTURE & LAYOUT ===== -->
+    <section class="track" id="layout" style="--tk: var(--violet); padding-top: 40px;">
+      <div class="track-head">
+        <div class="track-icon"></div>
+        <div>
+          <h3>Structure &amp; Layout</h3>
+          <p>Width-aware output, glass panels, and results that never blow up the pane.</p>
+        </div>
+        <span class="n">5 items</span>
+      </div>
+      <div class="rcards">
+
+        <article class="ritem" data-track="layout" data-impact="high">
+          <div class="ritem-top"><span class="rid">BOOST-D05</span><span class="rstatus next">Next</span></div>
+          <h4>Fix <code>search</code>: truncate &amp; width-clamp results</h4>
+          <p>Today <code>boost search</code> is the worst screen in the app: a single result can dump a <b>2,000-character description with literal, unrendered <code>\\n\\n</code> escapes</b>, while names are padded to a fixed 30 columns that waste half the row. Clamp each row to the live terminal width, collapse whitespace/escape artifacts, and ellipsize. This one fix turns a wall of noise into a scannable list.</p>
+          <div class="rmeta"><span class="m-cat">layout</span><span>Complexity M</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★★</span></div>
+          <div class="rref"><code>commands/discovery.py · search</code></div>
+        </article>
+
+        <article class="ritem" data-track="layout" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D06</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Glass-panel box primitives</h4>
+          <p>The web system frames everything in rounded glass; the CLI frames nothing. Add rounded box-drawing primitives (<code>╭─╮ │ ╰─╯</code>) with dim <code>--line</code> borders and an optional title, mirroring the web <code>.glass</code>/<code>.window</code> surfaces. Reusable chrome for <code>doctor</code>, <code>info</code>, <code>snapshot</code> and success summaries.</p>
+          <div class="rmeta"><span class="m-cat">layout</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>core/output.py · new panel()</code></div>
+        </article>
+
+        <article class="ritem" data-track="layout" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D07</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Relevance visualization in search</h4>
+          <p>Results are "ranked by heuristic relevance" but the ranking is invisible — every row looks equal. Render a tiny gradient relevance bar or score glyph per hit and visually separate <b>curated</b> from GitHub-wide matches, so the eye lands on the best result first.</p>
+          <div class="rmeta"><span class="m-cat">layout</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>commands/discovery.py · search</code></div>
+        </article>
+
+        <article class="ritem" data-track="layout" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D08</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Width-aware, right-aligned tables</h4>
+          <p><code>table()</code> is a naive <code>ljust</code> that ignores terminal width and left-aligns numeric columns. Make it width-aware (shrink the widest text column to fit), right-align counts with tabular figures, and add dim column separators — matching the web's <code>font-variant-numeric: tabular-nums</code> stat blocks.</p>
+          <div class="rmeta"><span class="m-cat">layout</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
+          <div class="rref"><code>core/output.py:71–83</code></div>
+        </article>
+
+        <article class="ritem" data-track="layout" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D09</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Terminal-window chrome for <code>preview</code> / <code>cat</code></h4>
+          <p>The web guide renders skills inside a titled window with traffic-light dots (<code>.window .dots</code>). Give <code>preview</code>/<code>cat</code> the same treatment: a titled frame with the skill name in the bar, so a rendered <code>SKILL.md</code> in the terminal matches the screenshots on the site.</p>
+          <div class="rmeta"><span class="m-cat">layout</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>commands/info.py · preview/cat</code></div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ===== MOTION & FEEDBACK ===== -->
+    <section class="track" id="motion" style="--tk: var(--green); padding-top: 40px;">
+      <div class="track-head">
+        <div class="track-icon"></div>
+        <div>
+          <h3>Motion &amp; Feedback</h3>
+          <p>Make it feel <em>snappy</em> — spinners, progress, and instant first paint.</p>
+        </div>
+        <span class="n">4 items</span>
+      </div>
+      <div class="rcards">
+
+        <article class="ritem" data-track="motion" data-impact="high">
+          <div class="ritem-top"><span class="rid">BOOST-D10</span><span class="rstatus next">Next</span></div>
+          <h4>Braille spinner for network waits</h4>
+          <p>Network-bound commands — <code>search</code> (AI rank), <code>tap</code> clone, <code>discover</code>, <code>index</code> — currently freeze silently while they work. Add a lightweight braille-dot spinner (<code>⠋⠙⠹⠸…</code>) tinted with the Aurora accent, auto-suppressed on non-TTY and under <code>NO_COLOR</code>. The single biggest "feels fast" upgrade.</p>
+          <div class="rmeta"><span class="m-cat">motion</span><span>Complexity S</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>core/output.py · new spinner()</code></div>
+        </article>
+
+        <article class="ritem" data-track="motion" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D11</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Determinate progress bars for batch ops</h4>
+          <p>Multi-item commands — <code>reindex</code>, <code>update</code>, <code>sync</code>, <code>snapshot</code> restore — give no sense of "how far in." Add a gradient-filled progress bar (<code>N/total</code> + ETA) for anything looping over a known count, so long operations read as intentional rather than hung.</p>
+          <div class="rmeta"><span class="m-cat">motion</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>core/output.py · new progress()</code></div>
+        </article>
+
+        <article class="ritem" data-track="motion" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D12</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Stream search hits as they rank</h4>
+          <p><code>search</code> computes the full ranking, then prints the whole list at once — the terminal sits blank, then floods. Stream the top hits as they're scored so the first result paints almost immediately. Perceived latency drops even when total time is unchanged.</p>
+          <div class="rmeta"><span class="m-cat">motion</span><span>Complexity L</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
+          <div class="rref"><code>commands/discovery.py · search</code></div>
+        </article>
+
+        <article class="ritem" data-track="motion" data-impact="low">
+          <div class="ritem-top"><span class="rid">BOOST-D13</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Framed success summary with next step</h4>
+          <p><code>ok()</code> prints a lone green check, then the command just ends. After <code>install</code>/<code>uninstall</code>, close with a small framed confirmation — what changed, where it landed, and the obvious next step (<code>boost info &lt;skill&gt;</code>) — so a completed action feels finished, not dropped.</p>
+          <div class="rmeta"><span class="m-cat">ux</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★★☆☆</span></div>
+          <div class="rref"><code>core/output.py:41 · commands/pkg.py</code></div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ===== COMMAND-BY-COMMAND POLISH ===== -->
+    <section class="track" id="commands" style="--tk: var(--pink); padding-top: 40px;">
+      <div class="track-head">
+        <div class="track-icon"></div>
+        <div>
+          <h3>Command-by-command Polish</h3>
+          <p>The screens users actually stare at — front door, doctor, list, info.</p>
+        </div>
+        <span class="n">5 items</span>
+      </div>
+      <div class="rcards">
+
+        <article class="ritem" data-track="commands" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D14</span><span class="rstatus next">Next</span></div>
+          <h4>Front door: gradient wordmark + section glyphs</h4>
+          <p>The <code>boost</code> home screen is the first thing everyone sees. Today the wordmark is plain bold and every group header is the same generic yellow. Paint the <code>boost</code> wordmark with the Aurora gradient and give each command group a colored bullet/glyph keyed to a brand hue — turning a flat list into a branded index.</p>
+          <div class="rmeta"><span class="m-cat">commands</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★★</span></div>
+          <div class="rref"><code>commands/info.py · help renderer</code></div>
+        </article>
+
+        <article class="ritem" data-track="commands" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D15</span><span class="rstatus proposed">Proposed</span></div>
+          <h4><code>doctor</code> as a health dashboard</h4>
+          <p><code>doctor</code> is an undifferentiated wall of green checks — no hierarchy, no headline. Reframe it as a panel with a verdict line (<code>● Healthy</code> in green / <code>● Attention</code> in amber), grouped checks, dim sub-detail, and severity color so a problem actually stands out instead of hiding among the ✓s.</p>
+          <div class="rmeta"><span class="m-cat">commands</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>commands/quality.py · doctor</code></div>
+        </article>
+
+        <article class="ritem" data-track="commands" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D16</span><span class="rstatus proposed">Proposed</span></div>
+          <h4><code>info</code> skill identity card</h4>
+          <p><code>info</code> lists <code>kv()</code> pairs as flat dim labels. Promote it to a framed identity card: gradient skill name, status badges (<b>installed</b> / <b>pinned</b> / tap origin) styled like the web <code>.badge</code> pills, then the metadata — a real "detail view," not a key-value dump.</p>
+          <div class="rmeta"><span class="m-cat">commands</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>commands/info.py:177+</code></div>
+        </article>
+
+        <article class="ritem" data-track="commands" data-impact="low">
+          <div class="ritem-top"><span class="rid">BOOST-D17</span><span class="rstatus proposed">Proposed</span></div>
+          <h4><code>list</code> polish — chips &amp; aligned counts</h4>
+          <p><code>list</code> already uses a nice <code>·</code> agent separator; take it further. Color the agent names as small chips, right-align the count footer with tabular figures, and add a dim header rule so the table reads as a designed object rather than raw columns.</p>
+          <div class="rmeta"><span class="m-cat">commands</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★★☆☆</span></div>
+          <div class="rref"><code>commands/info.py:130–131</code></div>
+        </article>
+
+        <article class="ritem" data-track="commands" data-impact="low">
+          <div class="ritem-top"><span class="rid">BOOST-D18</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Consistent empty-states &amp; hint styling</h4>
+          <p>Empty and hint lines are ad-hoc — <code>info</code>'s "no skills installed" hint is a hand-rolled <code>DIM</code> string. Standardize a single empty-state affordance (muted icon + one-line guidance + suggested command) and a single hint style, applied everywhere, so guidance always looks the same.</p>
+          <div class="rmeta"><span class="m-cat">ux</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★☆☆☆</span></div>
+          <div class="rref"><code>commands/info.py:117–119 · core/output.py</code></div>
+        </article>
+
+      </div>
+    </section>
+
+    <!-- ===== DESIGN SYSTEM & TOOLING ===== -->
+    <section class="track" id="system" style="--tk: var(--yellow); padding-top: 40px;">
+      <div class="track-head">
+        <div class="track-icon"></div>
+        <div>
+          <h3>Design System &amp; Tooling</h3>
+          <p>One source of truth for the brand — and the tools to show it off.</p>
+        </div>
+        <span class="n">4 items</span>
+      </div>
+      <div class="rcards">
+
+        <article class="ritem" data-track="system" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D19</span><span class="rstatus next">Next</span></div>
+          <h4>Resolve theme drift: <code>style/</code> vs <code>docs/style/</code></h4>
+          <p>Two copies of <code>boost.css</code> have <b>diverged</b>: the root <code>style/</code> uses a cyan→violet→pink gradient (<code>--violet #a855f7</code>), while <code>docs/style/</code> uses an orange→pink→violet one (<code>--violet #a78bfa</code>). Same brand, two looks. Pick <code>style/</code> as canonical and make <code>docs/style/</code> a generated copy or symlink so the portfolio, roadmaps and CLI can't drift again.</p>
+          <div class="rmeta"><span class="m-cat">system</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
+          <div class="rref"><code>style/boost.css · docs/style/boost.css</code></div>
+        </article>
+
+        <article class="ritem" data-track="system" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D20</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Single source of design tokens (web ↔ CLI)</h4>
+          <p>The palette lives only in CSS; the CLI would hard-code its own copy of the same hexes — guaranteeing drift. Emit both from one <code>tokens.json</code>: generate the CSS custom properties <em>and</em> the Python ANSI map from it, so a brand change updates the site and the terminal in lockstep. Fits the repo's existing "generate, never hand-edit" pattern (cf. <code>build_registries.py</code>).</p>
+          <div class="rmeta"><span class="m-cat">system</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>scripts/ · new build_tokens.py</code></div>
+        </article>
+
+        <article class="ritem" data-track="system" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D21</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Scripted demo recording (VHS / asciinema)</h4>
+          <p>There's a <code>docs/demo.tape</code> + <code>demo.gif</code>, but no repeatable way to re-record once the aesthetic changes — and <code>tmux</code> isn't even installed in the dev box. Add a <code>make demo</code> that drives a scripted session (VHS tape or asciinema, optionally split-pane via tmux) and refreshes the GIF, so the README and portfolio always show the current look.</p>
+          <div class="rmeta"><span class="m-cat">tooling</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>docs/demo.tape · Makefile</code></div>
+        </article>
+
+        <article class="ritem" data-track="system" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D22</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>README / portfolio terminal parity</h4>
+          <p>The web <code>.window</code> mock shows an <em>idealized</em> boost session — gradient prompt, clean checks — that the real CLI doesn't yet produce. Once D01–D15 land, update the mock (and README code blocks) to mirror the true output 1:1, so every screenshot is honest and the brand reads identically across web, README and terminal.</p>
+          <div class="rmeta"><span class="m-cat">system</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>docs/index.html · README.md · style/demo.html</code></div>
+        </article>
+
+      </div>
+    </section>
+
+    <div class="no-results" id="noResults">No opportunities match these filters.</div>
+
+  </div>
+
+  <p class="foot-note">
+    A living document — each loop iteration drives the real CLI, grades it against
+    <code>style/boost.css</code>, and files what it finds here. Sibling to the
+    <a href="./roadmap.html" style="color:var(--sky)">Engineering Roadmap</a>.
+    Everything stays zero-dependency and honors <code>NO_COLOR</code> &amp; non-TTY.
+  </p>
+
+</main>
+
+<script>
+  // Filter board by track + impact (mirrors roadmap.html behavior)
+  var state = { track: "all", impact: "all" };
+  function apply() {
+    var shown = 0;
+    document.querySelectorAll(".ritem").forEach(function (el) {
+      var okTrack = state.track === "all" || el.dataset.track === state.track;
+      var okImpact = state.impact === "all" || el.dataset.impact === state.impact;
+      var vis = okTrack && okImpact;
+      el.style.display = vis ? "" : "none";
+      if (vis) shown++;
+    });
+    document.querySelectorAll(".track").forEach(function (sec) {
+      var any = sec.querySelector('.ritem:not([style*="display: none"])');
+      var visible = Array.prototype.some.call(sec.querySelectorAll(".ritem"), function (el) { return el.style.display !== "none"; });
+      sec.style.display = visible ? "" : "none";
+    });
+    var shownEl = document.getElementById("shown");
+    if (shownEl) shownEl.textContent = shown;
+    var nr = document.getElementById("noResults");
+    if (nr) nr.style.display = shown === 0 ? "block" : "none";
+  }
+  document.querySelectorAll(".pill").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var dim = btn.dataset.filter, val = btn.dataset.val;
+      document.querySelectorAll('.pill[data-filter="' + dim + '"]').forEach(function (b) { b.classList.remove("on"); });
+      btn.classList.add("on");
+      state[dim] = val;
+      apply();
+    });
+  });
+  apply();
+</script>
+
+</body>
+</html>
