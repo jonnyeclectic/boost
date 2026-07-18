@@ -2,7 +2,6 @@
 reinstall, bundle, import, migrate, pin, unpin, snapshot, export."""
 from __future__ import annotations
 
-import argparse
 import io
 import json
 import os
@@ -15,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from .. import cliparse
 from ..core import (agents, catalog, gitutil, journal, lockfile, paths,
                     registry, store, util)
 from ..core import output as out
@@ -83,7 +83,7 @@ def _boostfile_text(skills: Dict[str, dict], via: str = "boost bundle dump") -> 
 # ── install ──────────────────────────────────────────────────────────────
 
 def cmd_install(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(prog="boost install",
+    ap = cliparse.parser(prog="boost install",
                                  description="Install a skill from a tap registry")
     ap.add_argument("names", nargs="+", metavar="NAME",
                     help="skill name, optionally qualified as tap:skill")
@@ -155,7 +155,7 @@ def cmd_install(argv: List[str]) -> int:
 # ── uninstall ────────────────────────────────────────────────────────────
 
 def cmd_uninstall(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost uninstall",
         description="Remove an installed skill, rule, workflow, or config")
     ap.add_argument("names", nargs="+", metavar="NAME")
@@ -194,7 +194,7 @@ _PLAN_LABELS = [
 
 
 def cmd_sync(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost sync",
         description="Reconcile installed skills & symlinks against the lock file")
     ap.add_argument("--diff", action="store_true",
@@ -257,7 +257,7 @@ def cmd_sync(argv: List[str]) -> int:
 # ── update ───────────────────────────────────────────────────────────────
 
 def cmd_update(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(prog="boost update",
+    ap = cliparse.parser(prog="boost update",
                                  description="Sync taps or update installed skills")
     ap.add_argument("tap", nargs="?", metavar="TAP", help="refresh only this tap")
     ap.add_argument("--taps-only", action="store_true",
@@ -317,7 +317,7 @@ def cmd_update(argv: List[str]) -> int:
 # ── reinstall ────────────────────────────────────────────────────────────
 
 def cmd_reinstall(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(prog="boost reinstall",
+    ap = cliparse.parser(prog="boost reinstall",
                                  description="Reinstall a skill or all skills (force)")
     ap.add_argument("names", nargs="*", metavar="NAME")
     ap.add_argument("--all", action="store_true",
@@ -369,7 +369,7 @@ def cmd_reinstall(argv: List[str]) -> int:
 # ── bundle ───────────────────────────────────────────────────────────────
 
 def cmd_bundle(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(prog="boost bundle",
+    ap = cliparse.parser(prog="boost bundle",
                                  description="Export/install skill sets via a Boostfile")
     ap.add_argument("action", choices=("dump", "install"))
     ap.add_argument("file", nargs="?", metavar="FILE",
@@ -481,7 +481,7 @@ def _bundle_install(file: Optional[str]) -> int:
 # ── import ───────────────────────────────────────────────────────────────
 
 def cmd_import(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost import",
         description="Import skills from a GitHub URL or local path")
     ap.add_argument("source", metavar="URL_OR_PATH")
@@ -552,7 +552,7 @@ def _import_root(root: Path, name: Optional[str], do_all: bool,
 # ── migrate ──────────────────────────────────────────────────────────────
 
 def cmd_migrate(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost migrate",
         description="Migrate skills between agents or from Skills CLI")
     ap.add_argument("--from", dest="src", metavar="AGENT",
@@ -625,7 +625,7 @@ def cmd_migrate(argv: List[str]) -> int:
 # ── pin / unpin ──────────────────────────────────────────────────────────
 
 def cmd_pin(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(prog="boost pin",
+    ap = cliparse.parser(prog="boost pin",
                                  description="Pin a skill to its current version")
     ap.add_argument("name", metavar="NAME")
     args = ap.parse_args(argv)
@@ -633,7 +633,7 @@ def cmd_pin(argv: List[str]) -> int:
 
 
 def cmd_unpin(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(prog="boost unpin",
+    ap = cliparse.parser(prog="boost unpin",
                                  description="Allow a pinned skill to update again")
     ap.add_argument("name", metavar="NAME")
     args = ap.parse_args(argv)
@@ -663,7 +663,7 @@ def _set_pin(name: str, pinned: bool) -> int:
 # ── snapshot ─────────────────────────────────────────────────────────────
 
 def cmd_snapshot(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(prog="boost snapshot",
+    ap = cliparse.parser(prog="boost snapshot",
                                  description="Save & restore whole skill environments")
     ap.add_argument("action", choices=("save", "list", "restore"))
     ap.add_argument("arg", nargs="?", metavar="LABEL|ID",
@@ -784,7 +784,7 @@ def _snapshot_restore(snap_id: str) -> int:
 # ── export ───────────────────────────────────────────────────────────────
 
 def cmd_export(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost export",
         description="Package skills as shareable zip/tar archives")
     ap.add_argument("names", nargs="*", metavar="NAME",
