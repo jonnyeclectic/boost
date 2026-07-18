@@ -11,7 +11,7 @@ Set TypingSpeed 35ms
 Set Theme "Dracula"
 
 Hide
-Type "export HOME=$(mktemp -d); python3 tests/make_fixture.py /tmp/boost-demo-tap >/dev/null 2>&1; clear"
+Type "export HOME=$(mktemp -d) COLORTERM=truecolor; python3 tests/make_fixture.py /tmp/boost-demo-tap >/dev/null 2>&1; clear"
 Enter
 Show
 
