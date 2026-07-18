@@ -160,9 +160,14 @@
   .btn-ghost:hover { border-color: rgba(255,255,255,.2); }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 72px; }
   .stat {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    background:
+      radial-gradient(240px circle at var(--mx,-200px) var(--my,-200px), rgba(34,211,238,.14), transparent 45%),
+      var(--panel);
+    border: 1px solid var(--line); border-radius: 16px;
     padding: 26px 22px; text-align: center;
+    transition: border-color .2s ease;
   }
+  .stat:hover { border-color: var(--line-hi); }
   .stat b {
     display: block; font-size: clamp(28px, 3.4vw, 42px); font-weight: 800; letter-spacing: -.02em;
     background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
@@ -192,7 +197,10 @@
 
   /* mac-style window */
   .window {
-    background: var(--term-bg); border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
+    background:
+      radial-gradient(420px circle at var(--mx,-300px) var(--my,-300px), rgba(34,211,238,.09), transparent 50%),
+      var(--term-bg);
+    border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
     box-shadow: 0 24px 70px rgba(0,0,0,.5);
     overflow: hidden;
   }
@@ -234,7 +242,10 @@
   .flow-row.two { grid-template-columns: 1fr 1fr; }
   .flow-row.three { grid-template-columns: 1fr 1fr 1fr; }
   .node {
-    background: rgba(19,19,28,.85); border: 1px solid var(--line); border-radius: 14px;
+    background:
+      radial-gradient(220px circle at var(--mx,-200px) var(--my,-200px), rgba(34,211,238,.12), transparent 45%),
+      rgba(19,19,28,.85);
+    border: 1px solid var(--line); border-radius: 14px;
     padding: 22px 20px; text-align: center;
   }
   .node .tag {
@@ -293,8 +304,13 @@
   }
   .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 20px; }
   .cmd {
-    position: relative; background: var(--panel-solid); border: 1px solid var(--line-soft);
+    position: relative;
+    background:
+      radial-gradient(200px circle at var(--mx,-200px) var(--my,-200px), rgba(34,211,238,.13), transparent 45%),
+      var(--panel-solid);
+    border: 1px solid var(--line-soft);
     border-radius: 12px; padding: 16px 18px 15px 20px; overflow: hidden;
+    transition: border-color .18s ease;
   }
   .cmd::before {
     content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
@@ -312,8 +328,14 @@
   /* ---------- capabilities ---------- */
   .caps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 64px; }
   .cap {
-    background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 30px 26px;
+    position: relative;
+    background:
+      radial-gradient(320px circle at var(--mx,-200px) var(--my,-200px), rgba(34,211,238,.13), transparent 45%),
+      var(--panel);
+    border: 1px solid var(--line); border-radius: 18px; padding: 30px 26px;
+    transition: border-color .2s ease, transform .2s ease;
   }
+  .cap:hover { border-color: var(--line-hi); transform: translateY(-2px); }
   .cap .ic {
     width: 46px; height: 46px; border-radius: 13px;
     display: flex; align-items: center; justify-content: center;
@@ -435,7 +457,7 @@
 
   <!-- ================= HERO ================= -->
   <div class="wrap hero">
-    <span class="badge">AI Skill Package Manager · v2.3.3</span>
+    <span class="badge">AI Skill Package Manager · on PyPI</span>
     <h1><span class="grad">Homebrew</span> for AI coding skills.</h1>
     <p class="lede">
       Boost is a command-line package manager that <b>searches, installs, and
@@ -448,9 +470,9 @@
       <a class="btn btn-ghost" href="#commands">Explore all 73 commands</a>
     </div>
     <div class="stats">
-      <div class="stat reveal"><b>8,400+</b><span>Discoverable skills</span></div>
+      <div class="stat reveal"><b>10,000+</b><span>Discoverable skills</span></div>
       <div class="stat reveal"><b>73</b><span>Commands · 8 groups</span></div>
-      <div class="stat reveal"><b>2</b><span>Pre-tapped registries</span></div>
+      <div class="stat reveal"><b>5</b><span>Pre-tapped registries</span></div>
       <div class="stat reveal"><b>3</b><span>AI agents supported</span></div>
     </div>
   </div>
@@ -518,7 +540,7 @@ facilitate structured divergent thinking:
           <div class="node src">
             <span class="tag">Source</span>
             <h4>GitHub registries</h4>
-            <p>Pre-tapped public registries + an 8,400-skill discovery index</p>
+            <p>5 pre-tapped registries + a 10,000-skill discovery index</p>
           </div>
         </div>
         <div class="flow-arrow reveal">
@@ -583,8 +605,8 @@ facilitate structured divergent thinking:
     <div class="wrap">
       <span class="eyebrow">The Everyday Loop</span>
       <h2 class="sec-title">Search → install → done</h2>
-      <p class="sec-sub">The thin bash shim finds your Python and runs with zero dependencies.
-        After that, the core loop is three commands.</p>
+      <p class="sec-sub">Installed from PyPI, boost runs on Python 3.9+ with zero required
+        dependencies. After that, the core loop is three commands.</p>
 
       <div class="window reveal" style="max-width: 860px; margin: 56px auto 0;">
         <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
@@ -606,7 +628,7 @@ facilitate structured divergent thinking:
 
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">doctor</span>
   <span class="tacc">==&gt;</span> <b>boost doctor</b>
-  <span class="tok">✓</span> 14 skills installed · 2 taps synced · 0 broken links
+  <span class="tok">✓</span> 14 skills installed · 5 taps synced · 0 broken links
   <span class="tok">✓</span> lock file integrity OK · log rotation healthy
   <span class="tok">● healthy</span>
 
@@ -703,9 +725,9 @@ facilitate structured divergent thinking:
     <div class="wrap">
       <span class="eyebrow">Where Skills Come From</span>
       <h2 class="sec-title">Pre-tapped registries + open discovery</h2>
-      <p class="sec-sub">Boost ships pre-tapped to curated public skills. Beyond that,
-        <code>boost discover</code> indexes 8,400+ skills across GitHub.
-        Tap your own team’s repo anytime.</p>
+      <p class="sec-sub">Boost ships pre-tapped to five curated registries. Beyond that,
+        the curated catalog spans 100+ registries and <code>boost discover</code> indexes
+        10,000+ skills across GitHub. Tap your own team’s repo anytime.</p>
 
       <div class="reg-wrap reveal">
         <div class="reg-scroll">
@@ -726,6 +748,24 @@ facilitate structured divergent thinking:
                 <td><span class="cnt" data-count="superpowers">—</span></td>
                 <td class="focus">Community powerhouse — TDD, debugging, planning, subagent workflows</td>
               </tr>
+              <tr>
+                <td><span class="tapname">trailofbits/skills</span></td>
+                <td class="repo">github.com/trailofbits/skills</td>
+                <td><span class="cnt" data-count="trailofbits">—</span></td>
+                <td class="focus">Security auditing from Trail of Bits — CodeQL, Semgrep, vulnerability hunting</td>
+              </tr>
+              <tr>
+                <td><span class="tapname">expo/skills</span></td>
+                <td class="repo">github.com/expo/skills</td>
+                <td><span class="cnt" data-count="expo">—</span></td>
+                <td class="focus">Official Expo team skills — EAS builds, app-store submission, deployments</td>
+              </tr>
+              <tr>
+                <td><span class="tapname">K-Dense-AI/scientific-agent-skills</span></td>
+                <td class="repo">github.com/K-Dense-AI/scientific-agent-skills</td>
+                <td><span class="cnt" data-count="scientific">—</span></td>
+                <td class="focus">Scientific computing — research libraries, databases, data analysis</td>
+              </tr>
               <tr class="dim">
                 <td><span class="tapname">your-org/skills</span></td>
                 <td class="repo">any repo with SKILL.md files</td>
@@ -745,23 +785,25 @@ facilitate structured divergent thinking:
   <section id="start">
     <div class="wrap">
       <span class="eyebrow">Get Started</span>
-      <h2 class="sec-title">One shim, zero setup</h2>
-      <p class="sec-sub">Copy a single bash shim onto your <code>PATH</code>. It finds Python 3.9+
-        and runs — no PyPI, no Artifactory, no manual setup.</p>
+      <h2 class="sec-title">One pip install, zero setup</h2>
+      <p class="sec-sub">Install from PyPI with <code>pipx</code> (or <code>pip</code>) — one command,
+        Python 3.9+, no manual setup.</p>
 
       <div class="window install-box reveal">
         <div class="bar">
-          <div class="label">install the shim</div>
+          <div class="label">install from PyPI</div>
           <button class="copy-btn" id="copy-install" type="button">Copy</button>
         </div>
-        <pre id="install-code"><span class="cm"># clone, link the shim onto your PATH, verify</span>
-git clone https://github.com/your-org/boost ~/.boost-src
-ln -s ~/.boost-src/boost ~/bin/boost
+        <pre id="install-code"><span class="cm"># install from PyPI (pipx keeps it isolated), verify</span>
+pipx install boost-skill-cli        <span class="cm"># or: pip install boost-skill-cli</span>
 <span class="tv">boost</span> --version
 
-<span class="cm"># add the recommended registries and go</span>
+<span class="cm"># add the 5 starter registries and go</span>
 <span class="tv">boost</span> <span class="tc">tap</span> --defaults
-<span class="tv">boost</span> <span class="tc">search</span> brainstorming</pre>
+<span class="tv">boost</span> <span class="tc">search</span> brainstorming
+
+<span class="cm"># optional: local semantic search over your skills</span>
+pip install <span class="yv">"boost-skill-cli[rag]"</span></pre>
       </div>
 
       <div class="mini reveal">
@@ -769,7 +811,7 @@ ln -s ~/.boost-src/boost ~/bin/boost
         <a href="#commands"><span class="name"><span class="v">boost</span> install brainstorming</span><p>Install into every agent</p></a>
         <a href="#commands"><span class="name"><span class="v">boost</span> recommend</span><p>Suggestions for your stack</p></a>
         <a href="#commands"><span class="name"><span class="v">boost</span> browse</span><p>Interactive TUI explorer</p></a>
-        <a href="#commands"><span class="name"><span class="v">boost</span> discover</span><p>Browse 8,400+ skills</p></a>
+        <a href="#commands"><span class="name"><span class="v">boost</span> discover</span><p>Browse 10,000+ skills</p></a>
         <a href="#commands"><span class="name"><span class="v">boost</span> doctor</span><p>Health check &amp; repair hints</p></a>
       </div>
     </div>
@@ -777,7 +819,7 @@ ln -s ~/.boost-src/boost ~/bin/boost
 
   <footer>
     <div class="wrap">
-      <p class="brand"><b>boost</b> · AI Skill Package Manager · v2.3.3</p>
+      <p class="brand"><b>boost</b> · AI Skill Package Manager · <code>pip install boost-skill-cli</code></p>
       <p class="meta">Requires Python 3.9+ and <code>git</code>. Supports Claude Code, Windsurf &amp; Cursor.</p>
       <p class="links"><a href="#commands">CLI Reference</a> · <a href="#top">Home</a></p>
     </div>
@@ -882,7 +924,7 @@ const COMMANDS = [
 ];
 
 // live-measured registry skill counts (updated at build time)
-const REG_COUNTS = { anthropic: "18", superpowers: "14" };
+const REG_COUNTS = { anthropic: "18", superpowers: "14", trailofbits: "75", expo: "22", scientific: "149" };
 
 // ---------- render ----------
 const groupsEl = document.getElementById("cmd-groups");
@@ -891,6 +933,22 @@ const countEl = document.getElementById("cmd-count");
 const noResEl = document.getElementById("no-results");
 const filterEl = document.getElementById("cmd-filter");
 let activeGroup = "all";
+
+// ---------- cursor spotlight (living glass, mirrors style/boost.js) ----------
+// Writes element-local pointer coords into --mx / --my, which the radial-gradient
+// backgrounds on .stat/.cap/.cmd/.node/.window read to follow the cursor.
+const prefersReduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function bindSpot(el) {
+  el.addEventListener("pointermove", (e) => {
+    const r = el.getBoundingClientRect();
+    el.style.setProperty("--mx", (e.clientX - r.left) + "px");
+    el.style.setProperty("--my", (e.clientY - r.top) + "px");
+  });
+  el.addEventListener("pointerleave", () => {
+    el.style.removeProperty("--mx");
+    el.style.removeProperty("--my");
+  });
+}
 
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -936,6 +994,7 @@ function render() {
       `</div></div>`;
   }
   groupsEl.innerHTML = html;
+  if (!prefersReduce) groupsEl.querySelectorAll(".cmd").forEach(bindSpot);
   noResEl.style.display = shown ? "none" : "block";
   countEl.textContent = ql || activeGroup !== "all"
     ? `${shown} command${shown === 1 ? "" : "s"} across ${shownGroups.size} group${shownGroups.size === 1 ? "" : "s"}`
@@ -959,6 +1018,11 @@ pillsEl.addEventListener("click", (e) => {
 filterEl.addEventListener("input", render);
 renderPills();
 render();
+
+// spotlight on the static glass surfaces (command cards are bound inside render)
+if (!prefersReduce) {
+  document.querySelectorAll(".stat, .cap, .node, .window").forEach(bindSpot);
+}
 
 // registry counts
 document.querySelectorAll("[data-count]").forEach((el) => {
