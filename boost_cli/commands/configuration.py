@@ -2,7 +2,6 @@
 completions, schedule, serve, mcp, self-update."""
 from __future__ import annotations
 
-import argparse
 import errno
 import getpass
 import html
@@ -18,6 +17,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .. import cliparse
 from .. import __version__
 from ..core import agents, catalog, config, frontmatter, gitutil, journal
 from ..core import lockfile, paths, policy, rag, registry, store, util
@@ -47,7 +47,7 @@ def _user() -> str:
 
 def cmd_config(argv) -> int:
     """boost config [list|get KEY|set KEY VALUE|unset KEY] [--json]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost config",
         description="Display or modify boost configuration")
     p.add_argument("action", nargs="?", default="list",
@@ -112,7 +112,7 @@ def cmd_config(argv) -> int:
 
 def cmd_clean(argv) -> int:
     """boost clean [--dry-run] [--deep]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost clean",
         description="Clear stale caches & broken symlinks")
     p.add_argument("--dry-run", action="store_true",
@@ -215,7 +215,7 @@ TODO: a concrete input/output example
 
 def cmd_create(argv) -> int:
     """boost create NAME [--description D] [--dir DIR] [--install]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost create",
         description="Scaffold a new skill from a template")
     p.add_argument("name", help="skill name (slugified)")
@@ -271,7 +271,7 @@ def _parse_policy_value(key: str, raw: str):
 
 def cmd_policy(argv) -> int:
     """boost policy [list|set KEY VALUE|unset KEY|check] [--json]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost policy",
         description="Manage & enforce skill governance policies")
     p.add_argument("action", nargs="?", default="list",
@@ -399,7 +399,7 @@ jobs:
 
 def cmd_onboard(argv) -> int:
     """boost onboard [--repo DIR] [--pr] [--dry-run]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost onboard",
         description="Add skill-tracker telemetry to a repo & open a PR")
     p.add_argument("--repo", default=".", help="repository directory (default: .)")
@@ -481,7 +481,7 @@ def _sq(s: str) -> str:
 
 def cmd_completions(argv) -> int:
     """boost completions [bash|zsh|fish]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost completions",
         description="Generate shell tab-completion scripts")
     p.add_argument("shell", nargs="?", choices=("bash", "zsh", "fish"),
@@ -597,7 +597,7 @@ def _interval_label(seconds) -> str:
 
 def cmd_schedule(argv) -> int:
     """boost schedule [status|enable [--interval 6h|12h|daily]|disable]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost schedule",
         description="Manage automatic skill-sync scheduling")
     p.add_argument("action", nargs="?", default="status",
@@ -832,7 +832,7 @@ class _CatalogHandler(BaseHTTPRequestHandler):
 
 def cmd_serve(argv) -> int:
     """boost serve [--port N] [--host H]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost serve",
         description="Serve the skill catalog over HTTP (port 8787)")
     p.add_argument("--port", type=int,
@@ -1029,7 +1029,7 @@ def _mcp_serve_stdio() -> int:
 
 def cmd_mcp(argv) -> int:
     """boost mcp [register|unregister] [--stdio]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost mcp",
         description="Register boost as an MCP server for Claude Code")
     p.add_argument("action", nargs="?", default="register",
@@ -1075,7 +1075,7 @@ def cmd_mcp(argv) -> int:
 
 def cmd_self_update(argv) -> int:
     """boost self-update"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost self-update",
         description="Update boost itself to the latest version")
     p.parse_args(argv)

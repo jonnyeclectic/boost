@@ -7,7 +7,6 @@ qualitatively better. Session state lives in ~/.boost/state/.
 """
 from __future__ import annotations
 
-import argparse
 import difflib
 import fnmatch
 import json
@@ -18,6 +17,7 @@ from collections import Counter
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .. import cliparse
 from ..core import ai, catalog, frontmatter, gitutil, journal, lockfile, paths, store, util
 from ..core import output as out
 from ..errors import BoostError
@@ -109,7 +109,7 @@ def _current_branch(cwd: Optional[Path] = None) -> Optional[str]:
 # ---------------------------------------------------------------- distill
 
 def cmd_distill(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost distill",
         description="Merge multiple skills into one deduplicated skill")
     ap.add_argument("names", nargs="+", metavar="NAME",
@@ -207,7 +207,7 @@ _LIST_RE = re.compile(r"^([-*+]|\d+[.)])\s+")
 
 
 def cmd_simulate(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost simulate",
         description="Preview how a skill would change Claude's behavior")
     ap.add_argument("name", metavar="NAME")
@@ -282,7 +282,7 @@ _CONV_RE = re.compile(
 
 
 def cmd_infer(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost infer",
         description="Generate a SKILL.md from your codebase patterns")
     ap.add_argument("--path", default=".", metavar="DIR",
@@ -510,7 +510,7 @@ _TRIVIAL = {"yes", "no", "ok", "okay", "continue", "go ahead", "sounds good",
 
 
 def cmd_absorb(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost absorb",
         description="Turn recurring chat-history patterns into a skill")
     ap.add_argument("--history", metavar="PATH",
@@ -645,7 +645,7 @@ def _absorb_template(name: str, patterns: List[Tuple[str, int]]) -> str:
 # ---------------------------------------------------------------- evolve
 
 def cmd_evolve(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost evolve",
         description="Iteratively improve a skill from feedback")
     ap.add_argument("name", metavar="NAME")
@@ -747,7 +747,7 @@ _CONTEXT_DEFAULT = {"enabled": False, "rules": []}
 
 
 def cmd_context(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost context", description="Branch-aware skill activation")
     sub = ap.add_subparsers(dest="action",
                             metavar="status|enable|disable|map|unmap|apply")
@@ -890,7 +890,7 @@ _FOCUS_STATE = "focus.json"
 
 
 def cmd_focus(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost focus",
         description="Temporarily prioritize skills for a work session")
     ap.add_argument("skills", nargs="*", metavar="SKILL",
@@ -962,7 +962,7 @@ def cmd_focus(argv: List[str]) -> int:
 # ---------------------------------------------------------------- impact
 
 def cmd_impact(argv: List[str]) -> int:
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost impact",
         description="Measure a skill's influence on code quality")
     ap.add_argument("name", nargs="?", metavar="NAME",

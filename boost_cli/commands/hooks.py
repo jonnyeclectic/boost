@@ -10,8 +10,8 @@ are left untouched. See core/claude_settings.py.
 """
 from __future__ import annotations
 
-import argparse
 
+from .. import cliparse
 from ..core import claude_settings as cs
 from ..core import journal
 from ..core import output as out
@@ -19,7 +19,7 @@ from ..errors import BoostError
 
 
 def cmd_hooks(argv) -> int:
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost hooks",
         description="Manage Claude Code hooks (scope-aware) in settings.json")
     p.add_argument("action", choices=("add", "remove", "list"),

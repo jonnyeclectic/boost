@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 
+from .. import cliparse
 from ..core import catalog, config, gitutil, journal, lockfile, paths, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
@@ -73,7 +74,7 @@ def _catalog_selection(args) -> list:
 
 def cmd_tap(argv) -> int:
     """boost tap [SPEC] [--defaults] [--catalog] [--curated]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost tap",
         description="Add a GitHub repo as a skill registry")
     p.add_argument("spec", nargs="?",
@@ -126,7 +127,7 @@ def cmd_tap(argv) -> int:
 
 def cmd_untap(argv) -> int:
     """boost untap NAME [--force]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost untap",
         description="Remove a registry tap")
     p.add_argument("name", help="tap name (owner/repo or short alias)")
@@ -172,7 +173,7 @@ def _tap_updated(tap: "registry.Tap") -> str:
 
 def cmd_taps(argv) -> int:
     """boost taps [--json]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost taps",
         description="List all configured registry taps")
     p.add_argument("--json", action="store_true",
@@ -205,7 +206,7 @@ def cmd_taps(argv) -> int:
 
 def cmd_outdated(argv) -> int:
     """boost outdated [--json]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost outdated",
         description="Show skills with available updates")
     p.add_argument("--json", action="store_true",
