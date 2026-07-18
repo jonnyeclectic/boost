@@ -116,7 +116,7 @@
       <div class="stat"><b>4</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>32</b><span>Loop finds</span></div>
+      <div class="stat"><b>40</b><span>Loop finds</span></div>
     </div>
   </section>
 
@@ -866,6 +866,144 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">catches red deploys</span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ COMPATIBILITY & INSTALL INTEGRITY ============ -->
+  <section class="block reveal" id="compat">
+    <div class="block-head">
+      <h2>Compatibility &amp; install integrity</h2>
+      <span class="count">// planned · free tooling to prove boost installs &amp; runs everywhere it claims</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Compat · Platform</span></div>
+        <h3>Windows in the CI matrix</h3>
+        <p>The test matrix runs macOS and Ubuntu only, so
+           <code>windows-latest</code> path separators, case-sensitivity and
+           console-encoding bugs ship uncaught to any Windows user. Adding one
+           matrix leg closes the biggest untested surface for a tool that promises
+           to work "everywhere your agent does".</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">untested OS</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Install</span></div>
+        <h3>Clean-env install smoke — pip &amp; <code>pipx</code></h3>
+        <p>Every gate runs against an editable <code>pip install -e .</code>, which
+           hides missing package-data, a broken entry point or an undeclared
+           dependency. A job that <code>pip install</code>s the built wheel into a
+           <em>fresh</em> venv (and <code>pipx install</code>s it) then runs
+           <code>boost --version</code> proves the artifact a user actually gets
+           works.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">tests the real artifact</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Deps</span></div>
+        <h3>Lowest-version resolution — <code>uv --resolution lowest-direct</code></h3>
+        <p>CI always installs the <em>newest</em> compatible dependencies, so the
+           lower bounds declared in <code>pyproject.toml</code> are never actually
+           exercised. Resolving and testing against the minimum versions catches
+           the "works here, breaks on the floor we advertise" class of bug.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">honours declared floors</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Compat · Python</span></div>
+        <h3>Pre-release Python canary — 3.14t free-threaded</h3>
+        <p>An allow-failure matrix leg on Python pre-releases and the free-threaded
+           (no-GIL) build gives early warning of breakage before users on new
+           interpreters hit it. Cheap insurance for a project that already targets
+           3.9&nbsp;→&nbsp;3.14 and can't afford a surprise on release day.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">continue-on-error</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Perf · Startup</span></div>
+        <h3>Startup &amp; import-time budget — <code>-X importtime</code></h3>
+        <p>For a CLI, cold-start latency <em>is</em> the UX — every command pays it.
+           A gate on <code>python -X importtime boost</code> catches the accidental
+           top-level import of a heavy module (the optional <code>[rag]</code> stack
+           is the obvious trap) and keeps common commands feeling instant.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">lazy-import guard</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Packaging</span></div>
+        <h3>Package-metadata validation — <code>twine check</code> + friends</h3>
+        <p>Before every publish, <code>twine check</code> confirms the long
+           description renders on PyPI, <code>check-wheel-contents</code> catches
+           stray or missing files, and <code>pyroma</code> scores the metadata
+           completeness. Stops a broken PyPI page or an empty wheel from reaching
+           users — the release path currently trusts the build blindly.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">pre-publish gate</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Repro</span></div>
+        <h3>Hash-pinned, reproducible toolchain — <code>uv.lock</code></h3>
+        <p>Pin the dev and CI toolchain with a hash-locked <code>uv.lock</code> (or
+           a hashed constraints file) so a yanked or compromised transitive
+           dependency can't silently change a build. The reproducibility layer that
+           complements Dependabot and <code>pip-audit</code> — same inputs, same
+           bytes, every run.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">supply-chain repro</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Infra</span></div>
+        <h3>One command, every env — <code>nox</code></h3>
+        <p>A <code>noxfile.py</code> makes the full lint / test / smoke / mutation
+           gate reproducible across 3.9&nbsp;→&nbsp;3.14 in isolated environments,
+           locally and in CI alike — so "green on my machine" and "green in CI"
+           finally mean the same thing, and a contributor can run the exact gate
+           before pushing.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">local == CI</span>
         </div>
       </article>
 
