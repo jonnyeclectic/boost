@@ -144,17 +144,23 @@ def print_version() -> None:
     print("%s %s" % (PRODUCT, __version__))
 
 
+# Per-group accent hue — mirrors the roadmap's colored track-icons, cycling the
+# Aurora palette so each command group carries its own brand color.
+_GROUP_HUES = ("cyan", "violet", "pink", "green", "yellow")
+
+
 def print_help() -> None:
-    print(out.c(PRODUCT, out.BOLD) + " — Homebrew for AI coding skills"
+    print(out.gradient(PRODUCT) + " — Homebrew for AI coding skills"
           + out.c("  (%s · v%s)" % (TAGLINE, __version__), out.DIM))
     print()
     print(out.c("Usage:", out.BOLD) + "  boost <command> [args]   "
           + out.c("boost help <command> for details", out.DIM))
     width = max(len(n) for n, _, _, _ in COMMANDS)
-    for gkey, (_icon, title, desc) in GROUPS.items():
+    for idx, (gkey, (_icon, title, desc)) in enumerate(GROUPS.items()):
         cmds = [(n, s) for n, g, _m, s in COMMANDS if g == gkey]
+        bullet = out.aurora("●", _GROUP_HUES[idx % len(_GROUP_HUES)])
         print()
-        print(out.c("%s" % title, out.BOLD, out.YELLOW)
+        print(bullet + " " + out.c(title, out.BOLD)
               + out.c("  — %s" % desc, out.DIM))
         for n, s in cmds:
             print("  " + out.c(n.ljust(width + 2), out.CYAN) + s)
