@@ -118,7 +118,7 @@
       <div class="stat"><b>10</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>85</b><span>Loop finds</span></div>
+      <div class="stat"><b>87</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -784,6 +784,27 @@
           <span class="m">avoid macOS _scproxy Obj-C path</span>
         </div>
       </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Observability · Diagnostics</span></div>
+        <h3>Log timestamps are local time mislabeled <code>Z</code></h3>
+        <p><code>core/logs.py</code> builds the <code>logging.Formatter</code> with
+           <code>datefmt="%Y-%m-%dT%H:%M:%SZ"</code> but never sets
+           <code>converter = time.gmtime</code>, so <code>%(asctime)s</code> uses
+           <em>local</em> time while stamping a literal <code>Z</code> (UTC)
+           suffix. Every line in <code>~/.boost/logs/boost.log</code> is therefore
+           off by the machine's UTC offset — which nearly caused a 5-hour
+           mis-correlation when matching the log against an OS crash report. Set
+           the formatter's <code>converter</code> to <code>time.gmtime</code> (or
+           drop the <code>Z</code>) so the trail is honestly UTC, making the
+           pid/ppid crash-correlation breadcrumbs trustworthy.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">converter = time.gmtime</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -1397,6 +1418,28 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">local == CI</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Compatibility · macOS</span></div>
+        <h3>Harden <code>boost mcp</code> launch against macOS Obj-C fork aborts</h3>
+        <p>On macOS, a host that spawns <code>boost mcp --stdio</code> via <code>fork()</code>
+           can abort on the child side pre-<code>exec</code> when Obj-C is touched
+           post-fork (CFPreferences / <code>_scproxy</code> proxy lookup) — the
+           classic <em>"crashed on child side of fork pre-exec"</em>
+           <code>SIGABRT</code>. Not boost's own code (it aborts before boost
+           runs), but boost can make its integration robust: when registering the
+           MCP server (<code>boost mcp register</code> / the emitted client
+           config), set <code>OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES</code> (and
+           <code>no_proxy=*</code>) in the launch environment so the host's fork
+           into boost can't trip the Obj-C fork-safety abort. Document it for
+           hosts that launch boost directly.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">OBJC_DISABLE_INITIALIZE_FORK_SAFETY</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
