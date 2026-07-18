@@ -249,8 +249,12 @@ def cmd_reindex(argv):
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to index",
                         hint="add the recommended registries with `boost tap --defaults`")
-    stats = rag.build(force=args.force)
-    dense_stats = _reindex_dense(args.force) if args.dense else None
+    with spin.Spinner("building full-content index"):
+        stats = rag.build(force=args.force)
+    dense_stats = None
+    if args.dense:
+        with spin.Spinner("embedding chunks into the dense store"):
+            dense_stats = _reindex_dense(args.force)
     if args.as_json:
         print(json.dumps({"bm25": stats, "dense": dense_stats}
                          if args.dense else stats))
