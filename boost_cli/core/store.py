@@ -183,7 +183,7 @@ def sync_plan() -> Dict[str, list]:
       orphaned_store: store dirs not present in the lock file
     """
     lock = lockfile.installed()
-    plan = {"missing_store": [], "missing_links": [],
+    plan: dict[str, list] = {"missing_store": [], "missing_links": [],
             "stale_links": [], "orphaned_store": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)

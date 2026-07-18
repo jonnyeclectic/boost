@@ -31,11 +31,12 @@ def rel_time(iso: str) -> str:
 
 
 def human_size(n: int) -> str:
+    size = float(n)
     for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024 or unit == "GB":
-            return ("%d%s" if unit == "B" else "%.1f%s") % (n, unit)
-        n /= 1024.0
-    return str(n)
+        if size < 1024 or unit == "GB":
+            return ("%d%s" if unit == "B" else "%.1f%s") % (size, unit)
+        size /= 1024.0
+    return str(size)
 
 
 def slugify(name: str) -> str:

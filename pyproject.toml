@@ -42,6 +42,17 @@ version = {attr = "boost_cli.__version__"}
 [tool.setuptools.packages.find]
 include = ["boost_cli*"]
 
+[tool.ruff]
+target-version = "py39"
+
+[tool.ruff.lint.per-file-ignores]
+# short throwaway names and lambda helpers are fine in tests
+"tests/*" = ["E741", "E731"]
+
+[tool.mypy]
+python_version = "3.9"
+files = ["boost_cli"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider"

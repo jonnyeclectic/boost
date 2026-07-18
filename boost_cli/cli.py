@@ -181,7 +181,7 @@ def _dispatch(name: str, argv: List[str], soft: bool = False) -> int:
     return int(rc or 0)
 
 
-def main(argv: List[str] = None) -> int:
+def main(argv: List[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in ("-h", "--help"):
         print_help()

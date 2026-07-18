@@ -46,7 +46,7 @@ def warn(msg: str) -> None:
     print("  " + c("!", YELLOW) + " " + c(msg, YELLOW))
 
 
-def err(msg: str, hint: str = None) -> None:
+def err(msg: str, hint: str | None = None) -> None:
     print(c("Error: ", RED, BOLD) + msg, file=sys.stderr)
     if hint:
         print(c("  hint: " + hint, DIM), file=sys.stderr)

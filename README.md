@@ -3,7 +3,7 @@
 [![CI](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml/badge.svg)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/jonnyeclectic/boost)](https://github.com/jonnyeclectic/boost/releases/latest)
 [![Python 3.9–3.14](https://img.shields.io/badge/python-3.9%E2%80%933.14-blue)](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/ci.yml)
-[![Coverage](https://img.shields.io/badge/coverage-92%25_(80%25_gated)-brightgreen)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fjonnyeclectic%2Fboost%2Fbadges%2Fcoverage.json)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/jonnyeclectic/boost)](LICENSE)
@@ -14,14 +14,7 @@ pulled from GitHub-hosted registries, then hooks them straight into
 skill files into three different agent folders and hoping you remember to
 update all of them, you run one command.
 
-```
-$ boost search jira
-$ boost install jira-integration
-  ✓ copied to ~/.agents/skills/jira-integration
-  ✓ linked → claude-code · windsurf · cursor
-  ✓ lock updated (.skill-lock.json)
-$ boost doctor
-```
+![boost demo](docs/demo.gif)
 
 ## What's a "skill," exactly?
 

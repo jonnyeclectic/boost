@@ -10,7 +10,6 @@ import getpass
 import hashlib
 import json
 import stat
-import subprocess
 
 import pytest
 

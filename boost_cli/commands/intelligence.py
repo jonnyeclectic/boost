@@ -178,7 +178,7 @@ def _distill_merge(new: str, sources: List[dict]) -> str:
                 tags.append(t)
     desc = next((str(s["meta"].get("description") or "").strip()
                  for s in sources if s["meta"].get("description")), "")
-    meta = {"name": new,
+    meta: dict = {"name": new,
             "description": (desc or "Merged skill") + " (distilled)",
             "version": "1.0.0"}
     if tags:
@@ -319,7 +319,7 @@ def cmd_infer(argv: List[str]) -> int:
 
 def _probe_repo(root: Path) -> dict:
     languages, frameworks = _stack_from_discovery(root) or _local_stack(root)
-    facts = {
+    facts: dict = {
         "languages": languages,
         "frameworks": frameworks,
         "test_dirs": [d for d in ("tests", "test", "spec", "__tests__")
@@ -376,7 +376,7 @@ def _local_stack(root: Path) -> Tuple[List[str], List[str]]:
             pkg = json.loads(read(root / "package.json") or "{}")
         except json.JSONDecodeError:
             pkg = {}
-        deps = {}
+        deps: dict = {}
         for key in ("dependencies", "devDependencies"):
             deps.update(pkg.get(key) or {})
         for fw in ("react", "next", "vue", "svelte", "angular", "express"):
@@ -1044,5 +1044,5 @@ def _repo_activity(since: str) -> Tuple[Optional[int], Optional[int]]:
     proc = gitutil.run(["log", "--name-only", "--since=" + since,
                         "--pretty=format:"], cwd=Path.cwd(), check=False)
     if proc.returncode == 0:
-        files = len({l.strip() for l in proc.stdout.splitlines() if l.strip()})
+        files = len({ln.strip() for ln in proc.stdout.splitlines() if ln.strip()})
     return commits, files

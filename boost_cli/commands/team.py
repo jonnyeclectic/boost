@@ -34,7 +34,7 @@ def _user() -> str:
         return "unknown"
 
 
-def _resolve_entry(name: str, prefer_tap: str = None):
+def _resolve_entry(name: str, prefer_tap: str | None = None):
     """Find a catalog entry by name, preferring a specific tap. None if absent."""
     matches = catalog.find(name)
     if not matches:
@@ -538,9 +538,10 @@ def cmd_replay(argv) -> int:
             if prev_skills is None:
                 delta = ""
             else:
-                added, removed = len(skills - prev_skills), len(prev_skills - skills)
-                parts = ([("+%d" % added)] if added else []) + \
-                        ([("-%d" % removed)] if removed else [])
+                n_added, n_removed = (len(skills - prev_skills),
+                                      len(prev_skills - skills))
+                parts = ([("+%d" % n_added)] if n_added else []) + \
+                        ([("-%d" % n_removed)] if n_removed else [])
                 delta = " ".join(parts)
             annotated.append((h, delta))
             prev_skills = skills
@@ -652,7 +653,7 @@ def cmd_who(argv) -> int:
                 "aggregate via `boost onboard`")
         return 0
 
-    users = {}
+    users: dict[str, dict] = {}
     for e in events:
         u = users.setdefault(e.get("user", "?"), {
             "events": 0, "skills": set(), "installs": 0, "last": e.get("ts", "")})
@@ -668,10 +669,10 @@ def cmd_who(argv) -> int:
                               "last_active": d["last"]}
                           for u, d in users.items()}, indent=2))
         return 0
-    rows = [(u, str(d["events"]), str(len(d["skills"])), str(d["installs"]),
-             util.rel_time(d["last"]))
-            for u, d in sorted(users.items(), key=lambda kv: -kv[1]["events"])]
-    out.table(rows, headers=("USER", "EVENTS", "SKILLS", "INSTALLS", "LAST ACTIVE"))
+    board = [(u, str(d["events"]), str(len(d["skills"])), str(d["installs"]),
+              util.rel_time(d["last"]))
+             for u, d in sorted(users.items(), key=lambda kv: -kv[1]["events"])]
+    out.table(board, headers=("USER", "EVENTS", "SKILLS", "INSTALLS", "LAST ACTIVE"))
     print()
     out.dim("based on the local journal — in a team setup, pulse feeds aggregate "
             "via `boost onboard`")

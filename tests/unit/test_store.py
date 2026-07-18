@@ -6,7 +6,7 @@ import shutil
 
 import pytest
 
-from boost_cli.core import (agents, catalog, config, journal, lockfile, paths,
+from boost_cli.core import (catalog, journal, lockfile, paths,
                            policy, registry, store, util)
 from boost_cli.errors import BoostError
 
