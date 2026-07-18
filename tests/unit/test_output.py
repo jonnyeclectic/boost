@@ -139,6 +139,29 @@ class TestAurora:
             output.MAGENTA + "x" + output.RESET)
 
 
+class TestTokens:
+    def test_known_hexes(self):
+        assert output.TOKENS["cyan"] == (0x22, 0xd3, 0xee)
+        assert output.TOKENS["violet"] == (0xa8, 0x55, 0xf7)
+        assert output.TOKENS["pink"] == (0xf4, 0x72, 0xd0)
+        assert output.TOKENS["green"] == (0x4a, 0xde, 0x80)
+        assert output.TOKENS["yellow"] == (0xfa, 0xcc, 0x15)
+
+    def test_aurora_derives_from_tokens(self, monkeypatch):
+        # every brand color resolves to rgb() of its TOKENS triple — proving
+        # TOKENS is the single source, not a re-typed copy.
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        for name, (r, g, b) in output.TOKENS.items():
+            assert output.aurora("x", name) == (
+                output.rgb(r, g, b) + "x" + output.RESET)
+
+    def test_gradient_stops_are_tokens(self):
+        assert output._GRAD_STOPS == (output.TOKENS["cyan"],
+                                      output.TOKENS["violet"],
+                                      output.TOKENS["pink"])
+
+
 class TestGradient:
     def test_plain_when_no_color(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")
