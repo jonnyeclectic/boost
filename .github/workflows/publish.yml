@@ -1,51 +1,73 @@
-name: publish
+name: release
 
-# Publishes boost-skill-cli to PyPI when a GitHub release is published.
+# Fully automated release. When CI passes on main, this:
+#   1. resolves the next version (release-drafter, from PR labels; patch by
+#      default) and publishes a GitHub Release + tag,
+#   2. builds that exact version (setuptools-scm reads the version from the
+#      tag — no constant to bump, no drift), and
+#   3. pushes it to PyPI via Trusted Publishing (OIDC).
+# All three happen in one job, so we never rely on the release event to
+# trigger a second workflow (events created with GITHUB_TOKEN don't do that).
+# No manual "publish release" click.
 #
-# Uses PyPI Trusted Publishing (OIDC) — no API token secret needed, but it
-# requires one-time setup on PyPI by the project owner:
-#   pypi.org → your account → Publishing → add a "pending publisher":
-#     project:     boost-skill-cli
-#     owner:       jonnyeclectic
-#     repository:  boost
-#     workflow:    publish.yml
-#     environment: pypi
+# NOTE: the filename must stay `publish.yml` — PyPI's Trusted Publisher is
+# matched on the workflow filename. The PyPI config (already set up for 1.0.1):
+#   pypi.org -> Publishing -> Trusted Publisher
+#   project boost-skill-cli, owner jonnyeclectic, repo boost,
+#   workflow publish.yml, environment pypi
+
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}   # manual release button, same pipeline
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # create the tag + GitHub Release
+  id-token: write   # OIDC for PyPI Trusted Publishing
 
 jobs:
-  build:
+  release:
+    # gate on CI success; workflow_dispatch carries no workflow_run payload
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    environment: pypi
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0    # full history + tags for setuptools-scm
+
+      - name: publish GitHub release (creates the tag)
+        id: release
+        uses: release-drafter/release-drafter@v7
+        with:
+          publish: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: build sdist + wheel
+
+      - name: build the tagged version
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.release.outputs.resolved_version }}
         run: |
           python -m pip -q install build twine
           python -m build
           twine check dist/*
+
       - name: smoke-test the wheel
         run: |
           python -m venv /tmp/wheel-venv
           /tmp/wheel-venv/bin/pip -q install dist/*.whl
           /tmp/wheel-venv/bin/boost --version
-      - uses: actions/upload-artifact@v7
-        with:
-          name: dist
-          path: dist/
 
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write  # OIDC for PyPI Trusted Publishing
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist/
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - name: publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

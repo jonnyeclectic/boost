@@ -9,6 +9,7 @@ from __future__ import annotations
 import getpass
 import io
 import json
+import re
 import socket
 import subprocess
 import sys
@@ -644,8 +645,9 @@ class TestMcp:
         by_id = {m.get("id"): m for m in resps}
 
         assert by_id[1]["result"]["protocolVersion"] == "2024-11-05"
-        assert by_id[1]["result"]["serverInfo"] == {"name": "boost",
-                                                    "version": "1.0.1"}
+        server_info = by_id[1]["result"]["serverInfo"]
+        assert server_info["name"] == "boost"
+        assert re.match(r"\d+\.\d+", server_info["version"])
         tools = by_id[2]["result"]["tools"]
         assert [t["name"] for t in tools] == [
             "boost_search", "boost_list", "boost_info", "boost_install",
@@ -748,7 +750,8 @@ class TestSelfUpdate:
         r = boost("self-update")
         root = paths.repo_root()
         assert calls == [["-C", str(root), "pull", "--ff-only"]]
-        assert "already up to date (v1.0.1)" in r.out
+        from boost_cli import __version__
+        assert ("already up to date (v%s)" % __version__) in r.out
         ev = journal.events(action="self-update")[0]
-        assert ev["subject"] == "1.0.1"
-        assert ev["previous"] == "1.0.1"
+        assert ev["subject"] == __version__
+        assert ev["previous"] == __version__

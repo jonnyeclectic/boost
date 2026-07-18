@@ -1,0 +1,12 @@
+# Keep source releases lean: the runtime is boost_cli/ (with its bundled
+# data), plus the usual metadata. Everything below is dev-only or generated
+# and should never ship in the sdist.
+include README.md LICENSE pyproject.toml setup.cfg
+recursive-include boost_cli *.py *.json
+prune mutants
+prune dist
+prune .idea
+prune .claude
+prune .github
+exclude .coverage
+global-exclude __pycache__ *.pyc *.pyo .DS_Store

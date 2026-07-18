@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# setuptools-scm generated version file
+boost_cli/_version.py

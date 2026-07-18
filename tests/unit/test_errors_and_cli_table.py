@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 from collections import Counter
 
 import pytest
@@ -101,15 +102,23 @@ def run_main(argv):
         return e.code if isinstance(e.code, int) else 0
 
 
+VERSION_LINE = re.compile(r"^boost \d+\.\d+.*$")
+
+
 class TestMainDispatch:
     def test_version_flag(self, sandbox, capsys):
         assert cli.main(["--version"]) == 0
-        assert capsys.readouterr().out == "boost 1.0.1\n"
+        out = capsys.readouterr().out
+        assert VERSION_LINE.match(out.rstrip("\n"))
+        assert out.endswith("\n")
 
     def test_version_word_and_short_flag(self, sandbox, capsys):
         assert cli.main(["version"]) == 0
         assert cli.main(["-V"]) == 0
-        assert capsys.readouterr().out == "boost 1.0.1\nboost 1.0.1\n"
+        lines = capsys.readouterr().out.splitlines()
+        assert len(lines) == 2
+        assert all(VERSION_LINE.match(line) for line in lines)
+        assert lines[0] == lines[1]
 
     def test_no_args_prints_help(self, sandbox, capsys):
         assert cli.main([]) == 0
