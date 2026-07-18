@@ -119,6 +119,17 @@ available on your PATH (or `ANTHROPIC_API_KEY` is set), and fall back to
 plain heuristics when it isn't — so the tool still works without an API key,
 just less cleverly.
 
+## The boost style
+
+The visual identity behind the docs and demos ships as a small, dependency-free
+design system in [`style/`](style/) — the *Aurora living-glass* look: a
+cyan → violet → pink triad on a near-black ground, an ambient aurora that drifts
+behind the page, and glass cards that light up under the cursor. Drop
+[`style/boost.css`](style/boost.css) (and the optional
+[`style/boost.js`](style/boost.js)) into any static page; see
+[`style/demo.html`](style/demo.html) for the whole system on one page and
+[`style/README.md`](style/README.md) for the tokens and class reference.
+
 ## Working on boost
 
 ```bash

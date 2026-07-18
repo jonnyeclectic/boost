@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost style — Aurora living-glass</title>
+<meta name="description" content="A showcase of the boost design system: tokens, glass cards, cursor glow, and the ambient aurora.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="boost.css">
+<style>
+  /* demo-only layout niceties (not part of the design system) */
+  section { padding: 96px 0 20px; }
+  .hero { padding: 88px 0 20px; }
+  .hero h1 {
+    font-size: clamp(40px, 6.4vw, 76px); font-weight: 800;
+    letter-spacing: -.035em; line-height: 1.04; max-width: 880px; text-wrap: balance;
+    margin-top: 26px;
+  }
+  .hero p.lede { max-width: 660px; margin-top: 26px; font-size: 19px; color: var(--text-2); }
+  .cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 34px; }
+  .stats { margin-top: 64px; }
+  .caps  { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 56px; }
+  .demo-grid { display: grid; grid-template-columns: 1.1fr 1fr; gap: 48px; align-items: center; margin-top: 56px; }
+  .swatches { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 56px; }
+  .swatch { border-radius: 14px; padding: 18px; border: 1px solid var(--line);
+            font-family: var(--mono); font-size: 12px; color: #04121a; min-height: 92px;
+            display: flex; flex-direction: column; justify-content: flex-end; font-weight: 700; }
+  footer { margin-top: 120px; border-top: 1px solid var(--line-soft); padding: 40px 0 60px; text-align: center; }
+  footer p { color: var(--text-3); font-size: 13.5px; }
+  footer b { font-family: var(--mono); color: var(--cyan); }
+  @media (max-width: 960px) {
+    .caps { grid-template-columns: repeat(2, 1fr); }
+    .demo-grid { grid-template-columns: 1fr; gap: 36px; }
+    .swatches { grid-template-columns: repeat(3, 1fr); }
+  }
+  @media (max-width: 620px) { .caps { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<main>
+  <!-- ===== hero ===== -->
+  <div class="wrap hero">
+    <span class="badge">boost style · Aurora living-glass</span>
+    <h1>A design system that feels <span class="grad-text">slightly alive.</span></h1>
+    <p class="lede">A neon-tech, glassmorphic identity — a cyan → violet → pink triad on
+      a near-black ground, an aurora that drifts behind the page, and glass that lights up
+      under your cursor. Move your pointer across the cards below.</p>
+    <div class="cta-row">
+      <a class="btn btn-grad" href="README.md">Read the docs →</a>
+      <a class="btn btn-ghost" href="https://github.com/jonnyeclectic/boost">View on GitHub</a>
+    </div>
+
+    <div class="stats">
+      <div class="stat reveal"><b>3</b><span>Core accent hues</span></div>
+      <div class="stat reveal"><b>1</b><span>CSS + one JS file</span></div>
+      <div class="stat reveal"><b>0</b><span>Build steps</span></div>
+      <div class="stat reveal"><b>A11y</b><span>Reduced-motion aware</span></div>
+    </div>
+  </div>
+
+  <!-- ===== glass cards ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Primitives</span>
+      <h2 class="sec-title">Glass cards that glow</h2>
+      <p class="sec-sub">Add <code>class="glass"</code> — or use the <code>.cap</code> card —
+        to get the cursor-following spotlight, hover lift, and accent bloom.</p>
+
+      <div class="caps">
+        <div class="cap reveal" style="--ic-bg: rgba(34,211,238,.12); --ic-fg: #7dd3fc;">
+          <div class="ic">✦</div>
+          <h3>Living glass</h3>
+          <p>A radial spotlight tracks the cursor across each surface, blended from the
+            cyan-to-violet triad. Purely a hover enhancement.</p>
+          <div class="tags"><code>.glass</code><code>--mx / --my</code></div>
+        </div>
+        <div class="cap reveal" style="--ic-bg: rgba(168,85,247,.14); --ic-fg: #c4b5fd;">
+          <div class="ic">◈</div>
+          <h3>Token-driven</h3>
+          <p>Recolor the entire system by changing three custom properties. Selectors never
+            need to move.</p>
+          <div class="tags"><code>--cyan</code><code>--violet</code><code>--pink</code></div>
+        </div>
+        <div class="cap reveal" style="--ic-bg: rgba(244,114,208,.13); --ic-fg: #f9a8d4;">
+          <div class="ic">◐</div>
+          <h3>Accessible by default</h3>
+          <p>Honors <code>prefers-reduced-motion</code>, prints clean, and stays fully
+            legible with JavaScript disabled.</p>
+          <div class="tags"><code>reduced-motion</code><code>print</code></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== terminal + swatches ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Surfaces</span>
+      <h2 class="sec-title">Terminal window &amp; the palette</h2>
+      <p class="sec-sub">The <code>.window</code> surface for showing off commands, and the
+        triad that names the whole system.</p>
+
+      <div class="demo-grid">
+        <div class="window reveal">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+            <div class="bar-title">zsh — boost</div></div>
+          <pre><span class="tp">$</span> <span class="tv">boost</span> <span class="tc">search</span> brainstorming
+  <span class="tok">✓</span> 12 skills across 5 tapped registries
+  <span class="tok">✓</span> AI-ranked by relevance
+
+<span class="tp">$</span> <span class="tv">boost</span> <span class="tc">install</span> brainstorming
+  <span class="tok">✓</span> linked → claude-code · windsurf · cursor
+  <span class="tok">✓</span> lock updated (.skill-lock.json)
+
+<span class="cm"># the boost style — Aurora living-glass</span></pre>
+        </div>
+
+        <div class="swatches">
+          <div class="swatch reveal" style="background: var(--cyan);">--cyan<br>#22d3ee</div>
+          <div class="swatch reveal" style="background: var(--violet); color:#0a0210;">--violet<br>#a855f7</div>
+          <div class="swatch reveal" style="background: var(--pink); color:#25041c;">--pink<br>#f472d0</div>
+          <div class="swatch reveal" style="background: var(--grad);">--grad<br>triad</div>
+          <div class="swatch reveal" style="background: var(--panel-solid); color: var(--text); border-color: var(--line-hi);">--panel<br>glass</div>
+          <div class="swatch reveal" style="background: var(--bg); color: var(--text); border-color: var(--line-hi);">--bg<br>#07080f</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p><b>boost</b> style — Aurora living-glass · self-contained, stdlib-of-CSS only</p>
+    </div>
+  </footer>
+</main>
+
+<script src="boost.js" defer></script>
+</body>
+</html>
