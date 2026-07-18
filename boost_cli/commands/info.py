@@ -175,6 +175,25 @@ def cmd_info(argv):
         return 0
 
     out.heading(name)
+    # Identity-card badges: a scannable status strip beneath the name, echoing
+    # the web .badge pills. The detailed kv rows below still carry the specifics.
+    badges = []
+    if lock:
+        badges.append(out.badge("installed", "green"))
+        if lock.get("pinned"):
+            badges.append(out.badge("pinned", "yellow"))
+        if lock.get("quarantined"):
+            badges.append(out.badge("quarantined", "pink"))
+        latest = str((cat or {}).get("version") or "")
+        if cat and latest != str(lock.get("version", "?")):
+            badges.append(out.badge("update available", "yellow"))
+    else:
+        badges.append(out.badge("not installed", "cyan"))
+    tapname = (lock or cat or {}).get("tap")
+    if tapname:
+        badges.append(out.badge(str(tapname), "violet"))
+    if badges:
+        out.info(" ".join(badges))
     if desc:
         lines = textwrap.wrap(desc, width=62)
         out.kv("description", lines[0])

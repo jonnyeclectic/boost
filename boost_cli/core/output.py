@@ -177,6 +177,12 @@ def truncate(text: str, width: int, ellipsis: str = "…") -> str:
     return text[:width - len(ellipsis)] + ellipsis
 
 
+def badge(label: str, hue: str = "cyan") -> str:
+    """A compact status pill for identity cards — an Aurora-tinted [label]
+    (plain under NO_COLOR), echoing the web design system's .badge pills."""
+    return aurora("[" + label + "]", hue)
+
+
 def kv(key: str, value: str, width: int = 14) -> None:
     print("  " + c(key.ljust(width), DIM) + str(value))
 
