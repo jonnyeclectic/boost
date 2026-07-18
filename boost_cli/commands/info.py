@@ -591,16 +591,17 @@ def cmd_tag(argv):
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     ap.add_argument("name", nargs="?", help="installed skill")
     ap.add_argument("mods", nargs="*", help="+tag to add, -tag to remove")
-    args, extras = ap.parse_known_args(argv)
-    # '-tag' tokens land in extras; re-order the combined pool to match the
-    # user's original argv so `-x +x` nets differently from `+x -x`.
-    remaining = list(args.mods) + extras
-    mods = []
-    for tok in argv:
-        if tok in remaining:
-            mods.append(tok)
-            remaining.remove(tok)
-    mods += remaining   # anything unmatched keeps parse order (defensive)
+    # A `-tag` removal looks like an option to argparse, which forced the old
+    # parse_known_args + argv re-walk. Instead split the literal option strings
+    # from operands ourselves: the skill name and its +tag/-tag operands keep
+    # their exact argv order with no re-walk, so `-x +x` still nets differently
+    # from `+x -x`.
+    flag_strings = {"--list", "--json", "-h", "--help"}
+    flags = [t for t in argv if t in flag_strings]
+    operands = [t for t in argv if t not in flag_strings]
+    args = ap.parse_args(flags)
+    args.name = operands[0] if operands else None
+    mods = operands[1:]
 
     if args.list_all:
         mapping = {}
