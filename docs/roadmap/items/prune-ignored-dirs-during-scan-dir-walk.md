@@ -2,14 +2,14 @@
 id: prune-ignored-dirs-during-scan-dir-walk
 board: code
 section: internals
-status: planned
+status: inflight
 category: Performance
 complexity: M
 impact: Low-Med
 wow: 2
 note: 
 order: 12
-owner:
+owner: loop/prune-scan-walk
 pr:
 title: Prune ignored dirs during <code>scan_dir</code> walk
 ---
