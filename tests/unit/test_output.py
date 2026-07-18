@@ -501,6 +501,27 @@ class TestHelpers:
         assert capsys.readouterr().out == "  n 42\n"
 
 
+class TestTableColor:
+    def test_pad_uses_visible_width(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        colored = output.aurora("ab", "cyan")   # visible width 2
+        assert output._pad(colored, 5) == colored + "   "   # 3 trailing spaces
+
+    def test_colored_cells_align_by_visible_width(self, capsys, monkeypatch):
+        import re
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        # a colored cell must not push the next column out of alignment
+        output.table([[output.aurora("ab", "cyan"), "x"], ["cd", "y"]])
+        vis = [re.sub(r"\x1b\[[0-9;]*m", "", ln)
+               for ln in capsys.readouterr().out.splitlines()]
+        assert vis == ["ab  x", "cd  y"]
+
+    def test_header_row_is_bold_when_forced(self, capsys, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        output.table([["x", "1"]], headers=["NAME", "N"])
+        assert capsys.readouterr().out.startswith("\033[1mNAME")
+
+
 class TestTable:
     @pytest.fixture(autouse=True)
     def plain(self, monkeypatch):

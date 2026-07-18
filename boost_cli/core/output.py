@@ -272,19 +272,29 @@ def kv(key: str, value: str, width: int = 14) -> None:
     print("  " + c(key.ljust(width), DIM) + str(value))
 
 
+def _pad(cell: str, width: int) -> str:
+    """Left-justify by *visible* width, so ANSI-colored cells still align
+    (str.ljust counts the invisible escape bytes and under-pads)."""
+    return cell + " " * (width - visible_len(cell))
+
+
 def table(rows, headers=None) -> None:
-    """Print an aligned table. rows: list of tuples of strings."""
+    """Print an aligned table. rows: list of tuples of strings.
+
+    Column widths are measured by visible width (ignoring ANSI color codes),
+    so colored cells line up the same as plain ones.
+    """
     rows = [[str(x) for x in r] for r in rows]
     all_rows = ([list(map(str, headers))] if headers else []) + rows
     if not all_rows:
         return
-    widths = [max(len(r[i]) for r in all_rows if i < len(r))
+    widths = [max(visible_len(r[i]) for r in all_rows if i < len(r))
               for i in range(max(len(r) for r in all_rows))]
     if headers:
-        line = "  ".join(str(h).ljust(widths[i]) for i, h in enumerate(headers))
+        line = "  ".join(_pad(str(h), widths[i]) for i, h in enumerate(headers))
         print(c(line, BOLD))
     for r in rows:
-        print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(r)).rstrip())
+        print("  ".join(_pad(cell, widths[i]) for i, cell in enumerate(r)).rstrip())
 
 
 def confirm(prompt: str, default: bool = False) -> bool:
