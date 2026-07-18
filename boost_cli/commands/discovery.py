@@ -41,13 +41,7 @@ def _positive_int(s: str) -> int:
     return v
 
 
-def _tilde(p) -> str:
-    """Show a path with $HOME contracted to ~."""
-    s = str(p)
-    for h in (str(paths.home()), str(paths.home().resolve())):
-        if s == h or s.startswith(h + os.sep):
-            return "~" + s[len(h):]
-    return s
+_tilde = paths.tilde
 
 
 def _read_text(p: Path) -> str:

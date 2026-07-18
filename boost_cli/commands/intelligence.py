@@ -35,12 +35,7 @@ def _note_fallback() -> None:
         _warned_fallback = True
 
 
-def _tilde(p) -> str:
-    s = str(p)
-    for h in {str(paths.home()), str(paths.home().resolve())}:
-        if s.startswith(h):
-            return "~" + s[len(h):]
-    return s
+_tilde = paths.tilde
 
 
 def _skill_text(name: str) -> Tuple[str, str]:
