@@ -2,14 +2,14 @@
 id: stop-re-serializing-entry-meta-on-every-search
 board: code
 section: internals
-status: planned
+status: inflight
 category: Performance
 complexity: S
 impact: Med
 wow: 2
 note: 
 order: 11
-owner:
+owner: loop/precompute-search-blob
 pr:
 title: Stop re-serializing entry meta on every search
 ---
