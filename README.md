@@ -40,14 +40,17 @@ boost tap --defaults          # pull in the 5 starter registries
 ```
 
 Want the whole ecosystem instead of the starter set? boost ships a **curated
-registry catalog** — 90+ classified GitHub registries of skills, Cursor/Windsurf
+registry catalog** — 100+ classified GitHub registries of skills, Cursor/Windsurf
 **rules**, and Claude Code **workflows** (slash commands & subagents),
-collectively indexing thousands of items:
+collectively indexing thousands of items. Categories include a curated
+**`rag`** set — official Weaviate, Pinecone, and DSPy skill libraries plus
+Graph-RAG and agentic-RAG toolkits for building retrieval pipelines:
 
 ```bash
 boost tap --catalog --dry-run                 # browse the classified catalog
 boost tap --catalog --type skill --limit 20   # tap the 20 biggest skill packs
 boost tap --catalog --type rule               # every rules registry
+boost tap --catalog --category rag            # RAG / vector-search skill packs
 boost tap --catalog --category security       # filter by category
 ```
 
@@ -126,6 +129,13 @@ python3 tests/make_fixture.py /tmp/fixture-tap
 Standard-library Python only — no third-party runtime dependencies. Every
 path under `~/.boost` and `~/.agents/skills` is resolved from `$HOME` at
 call time, which is what makes the sandboxing above possible.
+
+When something misbehaves, boost keeps a rotating diagnostic log at
+`~/.boost/logs/boost.log` and writes a full crash report on any unexpected
+error. Turn up detail with `boost --verbose <cmd>` or `boost --debug <cmd>`,
+read the trail with `boost log --diagnostics`, and see
+[`docs/DEBUGGING.md`](docs/DEBUGGING.md) for log levels, env vars, crash
+reports, and the free services that monitor the project.
 
 ## Test suite
 

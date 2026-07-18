@@ -74,6 +74,14 @@ SKILLS = [
     ("chrisvoncsefalvay/claude-d3js-skill", "data", "Single skill for producing D3.js charts", 1, "med"),
     ("jthack/ffuf_claude_skill", "security", "Single skill wrapping ffuf web fuzzing", 1, "med"),
     ("yusufkaraaslan/Skill_Seekers", "meta", "Tool that converts documentation sites into Claude skills", 5, "med"),
+    # --- RAG / retrieval / vector-search skills (curated 2026-07) ------------
+    ("weaviate/agent-skills", "rag", "Official Weaviate skills: agentic RAG, hybrid/semantic search, multimodal PDF, cookbooks", 12, "high"),
+    ("pinecone-io/skills", "rag", "Pinecone's official Agent Skills library for building RAG pipelines", 10, "high"),
+    ("pinecone-io/pinecone-claude-code-plugin", "rag", "Official Pinecone Claude Code plugin: chunk, embed, retrieve, cite", 6, "high"),
+    ("saskinosie/weaviate-claude-skills", "rag", "Connect Claude to local Weaviate: manage collections, ingest, query with RAG", 5, "high"),
+    ("OmidZamani/dspy-skills", "rag", "DSPy framework skills for programmatic prompting and RAG optimization", 15, "high"),
+    ("osovv/grace-marketplace", "rag", "GRACE: Graph-RAG Anchored Code Engineering agent skill marketplace", 12, "high"),
+    ("TakaGoto/rag-learning-academy", "rag", "Multi-agent Claude Code environment for mastering RAG end-to-end", 5, "med"),
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------

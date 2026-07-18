@@ -1,0 +1,183 @@
+# Debugging, logging & observability
+
+boost keeps three separate channels of information, so when something goes
+sideways you always have a trail to follow. This page covers where that trail
+lives, how to turn up the verbosity, and the free services that watch the
+project itself.
+
+---
+
+## The three channels
+
+| Channel | Module | Audience | Where it goes |
+|---------|--------|----------|---------------|
+| **Output** | `core.output` | you, right now | pretty stdout (`✓`, tables, headings) |
+| **Activity** | `core.journal` | `boost pulse` / `trending` / `who` | `~/.boost/state/pulse.jsonl` |
+| **Diagnostics** | `core.logs` | you, *after* something breaks | `~/.boost/logs/boost.log` |
+
+The **diagnostic** channel is the one you reach for when debugging. It records
+what boost did and why, at `DEBUG` granularity, to a rotating log file — even on
+a run that looked completely normal.
+
+---
+
+## The diagnostic log
+
+Every invocation appends to a rotating log file:
+
+```
+~/.boost/logs/boost.log        # current file (rotates at ~1 MB)
+~/.boost/logs/boost.log.1      # … up to 3 older files (~4 MB ceiling total)
+```
+
+Read the tail without hunting for the path:
+
+```bash
+boost log --diagnostics          # last 20 lines of the trail
+boost log --diagnostics -n 200   # last 200 lines
+```
+
+The **file always records at `DEBUG`**, regardless of console verbosity, so a
+plain run still leaves a complete trail. The *console* diagnostic channel
+(stderr) is **off by default** — normal runs keep stderr clean because
+user-facing messages already go through the output channel.
+
+Every invocation is bookended by two lines — an `invoke:` at the start and a
+`done:` at the end that carries the **exit code and wall-clock duration** — so
+the trail doubles as a lightweight timing record. A failing run logs its `done:`
+line at `WARNING`, so it stands out when you scan the log:
+
+```
+… INFO    boost: invoke: boost install brainstorming
+… INFO    boost: done: boost install brainstorming -> rc=0 in 214ms
+… WARNING boost: done: boost install missing -> rc=1 in 48ms
+```
+
+### Turning up console verbosity
+
+Global flags go **before** the command name (`boost --debug install foo`); a
+flag after the command name belongs to that subcommand:
+
+| Flag / env | Effect |
+|------------|--------|
+| `--debug` / `BOOST_DEBUG=1` | console shows `DEBUG`; **unexpected errors re-raise the full traceback** |
+| `--verbose` / `-v` | console shows `INFO` (invocations, key steps) |
+| `--quiet` / `-q` | console diagnostic channel stays silent |
+| `BOOST_LOG_LEVEL=DEBUG\|INFO\|WARNING\|ERROR` | explicit console level |
+| config `logging.level` (default `OFF`) | persistent console level — set it once instead of passing a flag |
+
+```bash
+boost --verbose update          # see each step on stderr
+boost --debug install foo       # full detail + tracebacks on crash
+BOOST_LOG_LEVEL=INFO boost sync # same, via env
+boost config set logging.level INFO   # make it permanent
+```
+
+### Disabling the log file
+
+```bash
+BOOST_NO_LOG=1 boost install foo      # this run writes no file
+boost config set logging.file false   # permanently
+```
+
+---
+
+## Crash reports
+
+When an **unexpected** exception escapes (not a normal `BoostError` — those
+print a clean one-line message and hint), boost:
+
+1. writes a full **crash report** to `~/.boost/logs/crash-<timestamp>.log`,
+2. records the crash in the rotating trail, and
+3. prints a friendly message pointing at the report — *not* a raw traceback.
+
+A crash report bundles everything needed to reproduce or file a bug:
+
+```
+boost crash report
+==================
+time:     2026-07-18T05:23:14Z
+version:  1.0.3
+python:   3.14.5
+platform: macOS-26.5.2-arm64
+command:  boost install some-skill
+environment:
+  BOOST_HOME=/Users/you/.boost
+traceback:
+  Traceback (most recent call last):
+  ...
+```
+
+Only boost-relevant env vars (`BOOST_*`, `NO_COLOR`, `CLICOLOR_FORCE`) are
+captured — never your whole environment. The 20 most recent reports are kept;
+older ones are pruned automatically.
+
+```bash
+boost log --crashes             # list recent crash reports
+cat ~/.boost/logs/crash-*.log   # read one
+boost --debug install foo       # reproduce with a live traceback
+```
+
+### Filing a bug
+
+Re-run with `--debug`, then open an issue at
+<https://github.com/jonnyeclectic/boost/issues> and attach the crash report
+(scan it first — it's plain text you can read and redact).
+
+---
+
+## Health at a glance
+
+```bash
+boost doctor      # environment health; reports the log path + any crash reports
+boost health      # skill-environment dashboard
+boost heal        # self-diagnose & repair
+```
+
+`boost doctor` now surfaces the diagnostic log location and warns when crash
+reports are present, so a stuck environment points you at its own evidence.
+
+---
+
+## Environment variables
+
+Everything that changes boost's runtime behaviour, in one place:
+
+| Variable | Purpose |
+|----------|---------|
+| `BOOST_HOME` | override `~/.boost` (state, cache, logs, repos) |
+| `BOOST_AGENTS_STORE` | override `~/.agents/skills` (the canonical store) |
+| `BOOST_DEBUG` | `=1` → console `DEBUG` + tracebacks |
+| `BOOST_LOG_LEVEL` | explicit console diagnostic level |
+| `BOOST_NO_LOG` | `=1` → don't write the diagnostic log file |
+| `BOOST_NO_AI` | `=1` → disable all AI calls (offline / deterministic) |
+| `BOOST_ASSUME_YES` | `=1` → auto-confirm prompts (also `--yes`/`-y`) |
+| `NO_COLOR` / `CLICOLOR_FORCE` | force color off / on |
+
+Tests sandbox the whole tool by pointing `HOME`/`BOOST_HOME`/`BOOST_AGENTS_STORE`
+at a throwaway directory — the same mechanism you can use to try boost without
+touching your real config.
+
+---
+
+## Project-level monitoring (free / freemium)
+
+boost watches *itself* using only free tiers appropriate for an open-source
+CLI — no paid observability stack:
+
+| Concern | Service (free tier) | Where to look |
+|---------|--------------------|---------------|
+| Build & test health | **GitHub Actions** | [`ci.yml`](../.github/workflows/ci.yml) · CI badge in the README |
+| Red-main alerting | **Actions + auto-issue** | [`ci-failure-issue.yml`](../.github/workflows/ci-failure-issue.yml) opens/updates a `ci-failure` tracking issue when `ci` fails on `main` |
+| Test coverage | **Actions + coverage badge** | coverage badge (endpoint JSON on the `badges` branch) |
+| Mutation strength | **mutmut** in CI | `scripts/mutation_gate.py` (≥80% killed) |
+| Static security | **CodeQL** | [`codeql.yml`](../.github/workflows/codeql.yml) · Security tab |
+| Dependency updates | **Dependabot** | [`dependabot.yml`](../.github/dependabot.yml) |
+| Release notes | **release-drafter** | drafted GitHub releases |
+| Per-run summary | **Actions step summary** | the "Summary" panel of each CI run |
+
+Each CI run publishes a **job summary** (coverage %, test/smoke counts) to the
+run's Summary panel via `$GITHUB_STEP_SUMMARY` — so you can read the numbers
+without opening logs. All of the above are configured in-repo and cost nothing;
+adding a hosted error-tracking service (e.g. Sentry) would be the natural next
+step *only if* boost ever runs as a long-lived process rather than a CLI.

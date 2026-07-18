@@ -31,6 +31,23 @@ class FakeProc:
         self.returncode, self.stdout, self.stderr = rc, stdout, stderr
 
 
+def _record_run(monkeypatch, stdout=""):
+    """Replace gitutil.run with a recorder returning a fixed FakeProc.
+
+    Returns the list of (args, kwargs) tuples every call appends to, so a test
+    can assert the exact git argv the wrapper builds — independent of the host
+    filesystem's case sensitivity (which lets HEAD/head, .git/.GIT survive on
+    a real repo).
+    """
+    calls = []
+
+    def rec(args, **kw):
+        calls.append((args, kw))
+        return FakeProc(rc=0, stdout=stdout)
+    monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
+    return calls
+
+
 class TestHasGitAndRun:
     def test_has_git_true_on_real_path(self):
         assert gitutil.has_git() is True
@@ -76,6 +93,34 @@ class TestHasGitAndRun:
             gitutil.run(["fetch"], timeout=7)
         assert ei.value.message == "git fetch timed out after 7s"
 
+    def test_has_git_queries_the_git_binary_by_name(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr("boost_cli.core.gitutil.shutil.which",
+                            lambda name: seen.append(name) or "/usr/bin/git")
+        gitutil.has_git()
+        assert seen == ["git"]     # exact binary name, not "GIT"
+
+    def test_run_invokes_git_binary_with_default_timeout(self, monkeypatch):
+        calls = []
+
+        def rec(argv, **kw):
+            calls.append((argv, kw))
+            return FakeProc(rc=0, stdout="ok")
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run", rec)
+        gitutil.run(["status", "-s"], cwd=None)
+        (argv, kw), = calls
+        assert argv == ["git", "status", "-s"]     # literal "git", args appended
+        assert kw["timeout"] == 300                 # default timeout forwarded
+        assert kw["capture_output"] is True and kw["text"] is True
+
+    def test_run_failure_prefers_stdout_when_stderr_empty(self, monkeypatch):
+        # stderr empty, stdout carries the real error -> it must reach the message
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+                            lambda *a, **k: FakeProc(rc=1, stdout="fatal: bad object\n"))
+        with pytest.raises(BoostError) as ei:
+            gitutil.run(["cat-file", "-p", "deadbeef"])
+        assert ei.value.message == "git cat-file failed: fatal: bad object"
+
 
 class TestCloneAndInspect:
     def test_clone_shallow_and_head_commit(self, tmp_path, fixture_tap_src):
@@ -95,6 +140,28 @@ class TestCloneAndInspect:
 
     def test_remote_url_empty_on_non_repo(self, tmp_path):
         assert gitutil.remote_url(tmp_path) == ""
+
+    def test_clone_shallow_issues_exact_argv(self, tmp_path, monkeypatch):
+        calls = _record_run(monkeypatch)
+        gitutil.clone_shallow("git@example:x.git", tmp_path / "d")
+        (args, kw), = calls
+        assert args == ["clone", "--depth", "1", "--quiet",
+                        "git@example:x.git", str(tmp_path / "d")]
+        assert kw.get("timeout") == 600     # long clone timeout, not the 300 default
+
+    def test_head_commit_argv_is_rev_parse_head(self, tmp_path, monkeypatch):
+        calls = _record_run(monkeypatch, stdout="c0ffee\n")
+        assert gitutil.head_commit(tmp_path / "r") == "c0ffee"
+        (args, kw), = calls
+        assert args == ["-C", str(tmp_path / "r"), "rev-parse", "HEAD"]
+        assert kw.get("check") is False     # non-fatal: empty string on failure
+
+    def test_remote_url_argv_is_remote_get_url_origin(self, tmp_path, monkeypatch):
+        calls = _record_run(monkeypatch, stdout="https://x/y\n")
+        assert gitutil.remote_url(tmp_path / "r") == "https://x/y"
+        (args, kw), = calls
+        assert args == ["-C", str(tmp_path / "r"), "remote", "get-url", "origin"]
+        assert kw.get("check") is False
 
 
 class TestPull:
@@ -119,6 +186,50 @@ class TestPull:
         assert summary == "%s → %s" % (before[:7], after[:7])
         assert after == gitutil.head_commit(origin)
         assert after != before
+
+    def test_pull_issues_reset_sequence_and_falls_back_to_fetch_head(
+            self, tmp_path, monkeypatch):
+        # Drive pull() through a recorder so the exact git argv is asserted.
+        # rev-parse returns the SAME sha before and after the origin/HEAD reset,
+        # which forces the FETCH_HEAD fallback branch; the final rev-parse moves.
+        shas = iter(["a" * 40, "a" * 40, "b" * 40])
+        calls = []
+
+        def rec(args, **kw):
+            calls.append((args, kw))
+            out = next(shas) + "\n" if "rev-parse" in args else ""
+            return FakeProc(rc=0, stdout=out)
+        monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
+
+        repo = tmp_path / "clone"
+        summary = gitutil.pull(repo)
+        assert summary == "aaaaaaa → bbbbbbb"
+
+        argvs = [a for a, _ in calls]
+        # every subcommand targets the given repo, never str(None)
+        assert all(a[1] == str(repo) for a in argvs)
+        assert ["-C", str(repo), "fetch", "--depth", "1", "--quiet", "origin"] in argvs
+        # the origin/HEAD reset is non-fatal (check=False), exact tokens
+        oh = ["-C", str(repo), "reset", "--hard", "--quiet", "origin/HEAD"]
+        assert oh in argvs
+        assert calls[[a for a, _ in calls].index(oh)][1].get("check") is False
+        # fallback fired: FETCH_HEAD reset must be present
+        assert ["-C", str(repo), "reset", "--hard", "--quiet", "FETCH_HEAD"] in argvs
+
+    def test_pull_skips_fallback_when_origin_head_moves(self, tmp_path, monkeypatch):
+        # When the origin/HEAD reset already advances HEAD, the FETCH_HEAD
+        # fallback must NOT run (guards the == before condition, not !=).
+        shas = iter(["a" * 40, "b" * 40, "b" * 40])
+        calls = []
+
+        def rec(args, **kw):
+            calls.append(args)
+            out = next(shas) + "\n" if "rev-parse" in args else ""
+            return FakeProc(rc=0, stdout=out)
+        monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
+
+        gitutil.pull(tmp_path / "clone")
+        assert not any("FETCH_HEAD" in a for a in calls)
 
 
 class TestLogForPath:
@@ -153,3 +264,19 @@ class TestLogForPath:
     def test_no_commits_for_path(self, tmp_path):
         repo = _make_repo(tmp_path / "repo")
         assert gitutil.log_for_path(repo, "nonexistent-path") == []
+
+    def test_log_for_path_argv_forwards_path_and_limit(self, tmp_path, monkeypatch):
+        calls = _record_run(monkeypatch, stdout="")
+        gitutil.log_for_path(tmp_path / "r", "sub/dir", n=5)
+        (args, kw), = calls
+        assert args == ["-C", str(tmp_path / "r"), "log", "--date=short",
+                        "-n", "5", "--pretty=format:%h  %ad  %an  %s",
+                        "--", "sub/dir"]
+        assert kw.get("check") is False
+
+    def test_log_for_path_defaults_to_twenty_entries(self, tmp_path, monkeypatch):
+        calls = _record_run(monkeypatch, stdout="")
+        gitutil.log_for_path(tmp_path / "r")           # no n= -> default cap
+        (args, _), = calls
+        assert args[args.index("-n") + 1] == "20"      # default limit, not 21
+        assert args[-1] == "."                         # default rel_path

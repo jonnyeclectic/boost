@@ -6,7 +6,7 @@ import shutil
 
 import pytest
 
-from boost_cli.core import (catalog, journal, lockfile, paths,
+from boost_cli.core import (catalog, gitutil, journal, lockfile, paths,
                            policy, registry, store, util)
 from boost_cli.errors import BoostError
 
@@ -41,7 +41,10 @@ class TestInstall:
         rule = dict(entry, kind="rule", name="some-rule")
         with pytest.raises(BoostError) as ei:
             store.install(rule)
-        assert "cannot install yet" in ei.value.message
+        assert ei.value.message == (
+            "some-rule is a rule, which boost indexes but cannot install yet")
+        assert ei.value.hint == (
+            "rules and workflows show up in `boost search`/`boost taps` for now")
         assert lockfile.get_skill("some-rule") is None
 
     def test_happy_path(self, tap, entry):
@@ -75,6 +78,7 @@ class TestInstall:
         assert e["tap"] == "fixture-tap"
         assert e["source_dir"] == "skills/brainstorming"
         assert re.fullmatch(r"[0-9a-f]{40}", e["commit"])
+        assert e["commit"] == gitutil.head_commit(tap.path)   # tap HEAD, not cwd
         assert re.fullmatch(r"[0-9a-f]{64}", e["sha256"])
         assert e["sha256"] == util.sha256_dir(dest)
         assert re.fullmatch(ISO, e["installed_at"])
@@ -101,17 +105,37 @@ class TestInstall:
 
     def test_force_upgrades_preserving_installed_at_and_tags(self, brainstorming, entry):
         e = lockfile.get_skill("brainstorming")
+        # a fixed *past* timestamp — the second-granularity `now` of the force
+        # reinstall must not collide with it, or a dropped-preservation
+        # regression would masquerade as passing.
+        e["installed_at"] = "2020-01-01T00:00:00Z"
         e["tags"] = ["keeper"]
         e["pinned"] = True
         lockfile.set_skill("brainstorming", e)
-        orig_at = e["installed_at"]
 
         res = store.install(entry, force=True)
         assert res.upgraded is True
         e2 = lockfile.get_skill("brainstorming")
-        assert e2["installed_at"] == orig_at
+        assert e2["installed_at"] == "2020-01-01T00:00:00Z"   # preserved
+        assert e2["updated_at"] != "2020-01-01T00:00:00Z"     # refreshed to now
+        assert re.fullmatch(ISO, e2["updated_at"])
         assert e2["tags"] == ["keeper"]
         assert e2["pinned"] is True
+
+    def test_missing_version_defaults_to_zero(self, tap, entry):
+        no_ver = {k: v for k, v in entry.items() if k != "version"}
+        store.install(no_ver)
+        assert lockfile.get_skill("brainstorming")["version"] == "0.0.0"
+
+    def test_policy_block_joins_multiple_violations(self, tap, entry):
+        policy.save({"blocked_skills": ["brainstorming"],
+                     "blocked_taps": ["fixture-tap"]})
+        with pytest.raises(BoostError) as ei:
+            store.install(entry)
+        assert ei.value.message == (
+            "policy blocks installing brainstorming: "
+            "skill 'brainstorming' is on the blocklist; "
+            "tap 'fixture-tap' is blocked")
 
     def test_pinned_reinstall_raises(self, brainstorming, entry):
         e = lockfile.get_skill("brainstorming")
@@ -126,7 +150,8 @@ class TestInstall:
         lockfile.set_skill("brainstorming", e)
         with pytest.raises(BoostError) as ei:
             store.install(entry)
-        assert "pinned" in ei.value.message
+        assert ei.value.message == "brainstorming is pinned"
+        assert ei.value.hint == "`boost unpin brainstorming` first"
 
     def test_policy_block_then_restore(self, tap, entry):
         policy.save({"blocked_skills": ["brainstorming"]})
@@ -140,6 +165,15 @@ class TestInstall:
         policy.save({})
         store.install(entry)
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+
+    def test_max_skills_uses_live_installed_count(self, tap, entry):
+        # exercises the `installed_count` argument wiring into check_install:
+        # with the cap at 0 even the first install is over budget.
+        policy.save({"max_skills": 0})
+        with pytest.raises(BoostError) as ei:
+            store.install(entry)
+        assert "max_skills limit (0) reached" in ei.value.message
+        assert lockfile.get_skill("brainstorming") is None
 
     def test_only_agents_links_subset(self, tap, entry):
         res = store.install(entry, only_agents=["claude-code"])
@@ -210,7 +244,27 @@ class TestInstallFromPath:
         assert e["source_dir"] == str(src)
         assert e["commit"] == ""
         assert e["pinned"] is False
+        assert e["quarantined"] is False
+        assert e["tags"] == []
+        assert re.fullmatch(r"[0-9a-f]{64}", e["sha256"])
+        assert re.fullmatch(ISO, e["installed_at"])
+        assert e["updated_at"] == e["installed_at"]   # both set to `now`
         assert e["agents"] == ["claude-code", "windsurf", "cursor"]
+
+    def test_reinstall_preserves_installed_at_and_tags(self, sandbox, tmp_path):
+        src = self._src(tmp_path, "---\nname: keep\nversion: 1.0\n---", extras=False)
+        store.install_from_path(src)
+        e = lockfile.get_skill("keep")
+        e["installed_at"] = "2019-06-06T06:06:06Z"   # fixed past — no `now` collision
+        e["tags"] = ["fav", "team"]
+        lockfile.set_skill("keep", e)
+
+        store.install_from_path(src)
+        e2 = lockfile.get_skill("keep")
+        assert e2["installed_at"] == "2019-06-06T06:06:06Z"   # preserved
+        assert e2["updated_at"] != "2019-06-06T06:06:06Z"     # refreshed
+        assert re.fullmatch(ISO, e2["updated_at"])
+        assert e2["tags"] == ["fav", "team"]                  # preserved
 
     def test_name_falls_back_to_dirname(self, sandbox, tmp_path):
         src = self._src(tmp_path, "---\nversion: 1.0\n---", extras=False)

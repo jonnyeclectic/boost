@@ -22,6 +22,15 @@ DEFAULTS = {
     "serve": {"port": 8787},
     "policy_enforce": True,
     "telemetry": False,
+    "logging": {
+        # Console verbosity for the diagnostic log on stderr. "OFF" keeps
+        # stderr clean (the default); set DEBUG/INFO/WARNING/ERROR to always
+        # surface the trail. The rotating file always records at DEBUG.
+        # Overridden by --verbose/--debug/--quiet and BOOST_LOG_LEVEL.
+        # See core/logs.py and docs/DEBUGGING.md.
+        "level": "OFF",
+        "file": True,  # set false (or BOOST_NO_LOG=1) to disable the log file
+    },
 }
 
 # Recommended public registries, added via `boost tap --defaults`.

@@ -9,11 +9,20 @@ from __future__ import annotations
 import difflib
 import importlib
 import sys
+import time
 from typing import List
 
 from . import PRODUCT, TAGLINE, __version__
+from .core import logs
 from .core import output as out
 from .errors import BoostError
+
+# Global flags handled before dispatch, stripped from the command's own argv.
+_GLOBAL_FLAGS = {
+    "--verbose": "verbose", "-v": "verbose",
+    "--debug": "debug",
+    "--quiet": "quiet", "-q": "quiet",
+}
 
 # group key -> (icon token, title, description)
 GROUPS = {
@@ -160,6 +169,13 @@ def print_command_help(name: str) -> int:
     return _dispatch(name, ["--help"], soft=True)
 
 
+def _crash_hint(report) -> str:
+    where = ("a crash report was written to %s" % report if report
+             else "set BOOST_DEBUG=1 to see the full traceback")
+    return "%s — re-run with --debug for the traceback, or file it at %s" % (
+        where, "https://github.com/jonnyeclectic/boost/issues")
+
+
 def _unknown(name: str) -> int:
     close = difflib.get_close_matches(name, list(_BY_NAME), n=3)
     out.err("unknown command: %s" % name,
@@ -181,8 +197,25 @@ def _dispatch(name: str, argv: List[str], soft: bool = False) -> int:
     return int(rc or 0)
 
 
+def _extract_globals(argv: List[str]) -> tuple[dict, List[str]]:
+    """Peel leading global flags (`boost --debug install …`) off argv.
+
+    Only flags *before* the command name are treated as global, so a
+    subcommand keeps its own `--verbose`/`-q` (e.g. `boost lint --verbose`).
+    """
+    opts = {"verbose": False, "debug": False, "quiet": False}
+    i = 0
+    while i < len(argv) and argv[i] in _GLOBAL_FLAGS:
+        opts[_GLOBAL_FLAGS[argv[i]]] = True
+        i += 1
+    return opts, argv[i:]
+
+
 def main(argv: List[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    opts, argv = _extract_globals(argv)
+    logs.configure(verbose=opts["verbose"], debug=opts["debug"],
+                   quiet=opts["quiet"])
     if not argv or argv[0] in ("-h", "--help"):
         print_help()
         return 0
@@ -197,17 +230,39 @@ def main(argv: List[str] | None = None) -> int:
     name, rest = argv[0], argv[1:]
     if name not in _BY_NAME:
         return _unknown(name)
+    logs.log_invocation([name, *rest])
+    start = time.perf_counter()
+    rc = 70  # assume the worst until a handler proves otherwise
     try:
-        return _dispatch(name, rest)
+        rc = _dispatch(name, rest)
+        return rc
     except BoostError as e:
+        logs.get_logger().info("BoostError: %s", e.message)
+        rc = 1
         out.err(e.message, hint=e.hint)
-        return 1
+        return rc
     except KeyboardInterrupt:
+        logs.get_logger().debug("interrupted by user")
+        rc = 130
         print()
-        return 130
+        return rc
     except BrokenPipeError:
         try:
             sys.stdout.close()
         except Exception:
             pass
-        return 0
+        rc = 0
+        return rc
+    except Exception as e:  # noqa: BLE001 — top-level safety net
+        report = logs.write_crash_report(e, [name, *rest])
+        if logs.is_debug():
+            raise
+        out.err("boost hit an unexpected error: %s: %s"
+                % (type(e).__name__, e),
+                hint=_crash_hint(report))
+        return 70  # EX_SOFTWARE
+    finally:
+        # Bookend every invocation with its exit code + duration, even when the
+        # --debug path re-raises the traceback above.
+        logs.log_completion([name, *rest], rc,
+                            (time.perf_counter() - start) * 1000)

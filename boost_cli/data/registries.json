@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 94,
-  "est_items_total": 10231,
-  "est_items_scannable": 6021,
+  "count": 101,
+  "est_items_total": 10296,
+  "est_items_scannable": 6086,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -610,12 +610,56 @@
       "curated": true
     },
     {
+      "name": "OmidZamani/dspy-skills",
+      "url": "https://github.com/OmidZamani/dspy-skills",
+      "type": "skill",
+      "category": "rag",
+      "focus": "DSPy framework skills for programmatic prompting and RAG optimization",
+      "est_items": 15,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "Orchestra-Research/AI-Research-SKILLs",
       "url": "https://github.com/Orchestra-Research/AI-Research-SKILLs",
       "type": "skill",
       "category": "data",
       "focus": "98 skills across 23 categories for the AI research lifecycle",
       "est_items": 98,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "osovv/grace-marketplace",
+      "url": "https://github.com/osovv/grace-marketplace",
+      "type": "skill",
+      "category": "rag",
+      "focus": "GRACE: Graph-RAG Anchored Code Engineering agent skill marketplace",
+      "est_items": 12,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "pinecone-io/pinecone-claude-code-plugin",
+      "url": "https://github.com/pinecone-io/pinecone-claude-code-plugin",
+      "type": "skill",
+      "category": "rag",
+      "focus": "Official Pinecone Claude Code plugin: chunk, embed, retrieve, cite",
+      "est_items": 6,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "pinecone-io/skills",
+      "url": "https://github.com/pinecone-io/skills",
+      "type": "skill",
+      "category": "rag",
+      "focus": "Pinecone's official Agent Skills library for building RAG pipelines",
+      "est_items": 10,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -643,6 +687,17 @@
       "curated": true
     },
     {
+      "name": "saskinosie/weaviate-claude-skills",
+      "url": "https://github.com/saskinosie/weaviate-claude-skills",
+      "type": "skill",
+      "category": "rag",
+      "focus": "Connect Claude to local Weaviate: manage collections, ingest, query with RAG",
+      "est_items": 5,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "sickn33/antigravity-awesome-skills",
       "url": "https://github.com/sickn33/antigravity-awesome-skills",
       "type": "skill",
@@ -651,6 +706,17 @@
       "est_items": 1300,
       "confidence": "low",
       "list_only": true,
+      "curated": true
+    },
+    {
+      "name": "TakaGoto/rag-learning-academy",
+      "url": "https://github.com/TakaGoto/rag-learning-academy",
+      "type": "skill",
+      "category": "rag",
+      "focus": "Multi-agent Claude Code environment for mastering RAG end-to-end",
+      "est_items": 5,
+      "confidence": "med",
+      "list_only": false,
       "curated": true
     },
     {
@@ -717,6 +783,17 @@
       "est_items": 500,
       "confidence": "low",
       "list_only": true,
+      "curated": true
+    },
+    {
+      "name": "weaviate/agent-skills",
+      "url": "https://github.com/weaviate/agent-skills",
+      "type": "skill",
+      "category": "rag",
+      "focus": "Official Weaviate skills: agentic RAG, hybrid/semantic search, multimodal PDF, cookbooks",
+      "est_items": 12,
+      "confidence": "high",
+      "list_only": false,
       "curated": true
     },
     {

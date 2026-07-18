@@ -1,0 +1,250 @@
+"""Diagnostic logging & crash reporting — boost's black box recorder.
+
+This is separate from two neighbouring concerns:
+
+  * ``core.output`` is the *human* channel — the pretty stdout a user reads.
+  * ``core.journal`` is the *activity* feed — semantic events (`install`,
+    `uninstall`) that power `boost pulse`/`trending`/`who`.
+
+``core.logs`` is the *diagnostic* channel: a rotating, machine-greppable trail
+of what boost did and why, written to ``~/.boost/logs/boost.log``, plus full
+crash reports when an unexpected exception escapes. Nothing here is meant for
+normal reading — it exists so that when something breaks, there is a trail.
+
+Verbosity is resolved once, in this order (first wins):
+
+  1. ``--debug`` flag / ``BOOST_DEBUG=1``      -> console shows DEBUG + tracebacks
+  2. ``--verbose`` / ``-v`` flag              -> console shows INFO
+  3. ``--quiet`` / ``-q`` flag                -> console stays silent
+  4. ``BOOST_LOG_LEVEL=DEBUG|INFO|WARNING|…`` -> explicit console level
+  5. config ``logging.level`` (default ``OFF`` -> console silent)
+
+The console diagnostic channel is *off by default* — user-facing messages
+already go through ``core.output``. The *file* handler always records at DEBUG
+regardless of console verbosity, so a plain run still leaves a complete trail to
+inspect after the fact. Set ``BOOST_NO_LOG=1`` (or config ``logging.file=false``)
+to disable the file.
+
+Each invocation bookends the trail with an ``invoke:`` line and a ``done:`` line
+that carries the exit code and wall-clock duration, so the log doubles as a
+lightweight timing record for spotting slow commands after the fact.
+"""
+from __future__ import annotations
+
+import logging
+import logging.handlers
+import os
+import platform
+import sys
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional
+
+from . import paths
+
+LOGGER_NAME = "boost"
+MAX_BYTES = 1_000_000  # ~1 MB per file …
+BACKUP_COUNT = 3       # … times (N+1) files kept = ~4 MB ceiling
+KEEP_CRASH_REPORTS = 20
+
+_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+# Set by configure(); read by main()'s exception handler to decide whether to
+# print a full traceback or a friendly one-liner.
+_debug_console = False
+_configured = False
+
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _file_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def log_path() -> Path:
+    return paths.logs_dir() / "boost.log"
+
+
+def is_debug() -> bool:
+    """True when the user asked for debug output (flag or env)."""
+    return _debug_console
+
+
+def _console_level(verbose: bool, debug: bool, quiet: bool) -> Optional[int]:
+    """Resolve the stderr diagnostic-handler level, or None to suppress it.
+
+    The console diagnostic channel is *off by default* — user-facing messages
+    already go through ``core.output``. It turns on only when explicitly asked
+    for, so a normal run leaves stderr clean while the file keeps the full
+    DEBUG trail.
+    """
+    if debug or os.environ.get("BOOST_DEBUG"):
+        return logging.DEBUG
+    if verbose:
+        return logging.INFO
+    if quiet:
+        return None
+    env = (os.environ.get("BOOST_LOG_LEVEL") or "").strip().upper()
+    if env in _LEVELS:
+        return getattr(logging, env)
+    from . import config
+    cfg = str(config.get("logging.level", "OFF") or "OFF").upper()
+    return getattr(logging, cfg) if cfg in _LEVELS else None
+
+
+def _file_enabled() -> bool:
+    if os.environ.get("BOOST_NO_LOG"):
+        return False
+    from . import config
+    return bool(config.get("logging.file", True))
+
+
+def get_logger() -> logging.Logger:
+    return logging.getLogger(LOGGER_NAME)
+
+
+def reset() -> None:
+    """Detach all handlers and forget configuration.
+
+    Real runs configure logging exactly once, but an in-process test suite
+    reconfigures against a fresh sandbox $HOME each test; without this the
+    first test's file handler would linger and write to a stale path.
+    """
+    global _configured, _debug_console
+    logger = logging.getLogger(LOGGER_NAME)
+    for h in list(logger.handlers):
+        try:
+            h.close()
+        except Exception:
+            pass
+        logger.removeHandler(h)
+    _configured = False
+    _debug_console = False
+
+
+def configure(verbose: bool = False, debug: bool = False,
+              quiet: bool = False) -> logging.Logger:
+    """Install handlers on the ``boost`` logger. Idempotent within a process."""
+    global _debug_console, _configured
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.setLevel(logging.DEBUG)  # handlers do the real filtering
+    logger.propagate = False
+
+    _debug_console = bool(debug or os.environ.get("BOOST_DEBUG"))
+
+    if _configured:
+        return logger
+    _configured = True
+
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%SZ",
+    )
+
+    # File handler — always DEBUG, best-effort (never break the CLI over a log).
+    if _file_enabled():
+        try:
+            paths.logs_dir().mkdir(parents=True, exist_ok=True)
+            fh = logging.handlers.RotatingFileHandler(
+                log_path(), maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT,
+                encoding="utf-8", delay=True,
+            )
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(fmt)
+            logger.addHandler(fh)
+        except OSError:
+            pass
+
+    # Console handler — only attached when something should surface on stderr.
+    level = _console_level(verbose, debug, quiet)
+    if level is not None:
+        ch = logging.StreamHandler(sys.stderr)
+        ch.setLevel(level)
+        ch.setFormatter(fmt)
+        logger.addHandler(ch)
+
+    return logger
+
+
+def log_invocation(argv: List[str]) -> None:
+    """Record a command invocation at the head of the trail."""
+    get_logger().info("invoke: boost %s", " ".join(argv))
+
+
+def log_completion(argv: List[str], rc: int, elapsed_ms: float) -> None:
+    """Close out an invocation with its exit code and wall-clock duration.
+
+    A clean exit logs at INFO; any non-zero code logs at WARNING so a failing
+    run stands out when scanning the trail (and surfaces with ``--verbose``).
+    """
+    level = logging.INFO if rc == 0 else logging.WARNING
+    get_logger().log(level, "done: boost %s -> rc=%d in %dms",
+                     " ".join(argv), rc, round(elapsed_ms))
+
+
+def _boost_version() -> str:
+    try:
+        from .. import __version__
+        return str(__version__)
+    except Exception:
+        return "unknown"
+
+
+def _env_snapshot() -> List[str]:
+    keys = sorted(k for k in os.environ
+                  if k.startswith("BOOST_") or k in ("NO_COLOR", "CLICOLOR_FORCE"))
+    return ["%s=%s" % (k, os.environ[k]) for k in keys]
+
+
+def write_crash_report(exc: BaseException, argv: List[str]) -> Optional[Path]:
+    """Dump a full crash report and return its path (or None if it can't).
+
+    Captures the traceback, invocation, versions and boost-relevant env so a
+    user can attach one file to a bug report instead of reproducing by hand.
+    """
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    body = "\n".join([
+        "boost crash report",
+        "==================",
+        "time:     %s" % _stamp(),
+        "version:  %s" % _boost_version(),
+        "python:   %s" % sys.version.split()[0],
+        "platform: %s" % platform.platform(),
+        "command:  boost %s" % " ".join(argv),
+        "",
+        "environment:",
+        *("  " + line for line in (_env_snapshot() or ["  (none)"])),
+        "",
+        "traceback:",
+        tb.rstrip(),
+        "",
+    ])
+    # Always try to get it into the rotating trail, even if the file write fails.
+    try:
+        get_logger().error("crash: %s: %s", type(exc).__name__, exc)
+    except Exception:
+        pass
+    try:
+        paths.logs_dir().mkdir(parents=True, exist_ok=True)
+        report = paths.logs_dir() / ("crash-%s.log" % _file_stamp())
+        report.write_text(body, encoding="utf-8")
+        _prune_crash_reports()
+        return report
+    except OSError:
+        return None
+
+
+def _prune_crash_reports() -> None:
+    """Keep only the most recent KEEP_CRASH_REPORTS crash files."""
+    try:
+        reports = sorted(paths.logs_dir().glob("crash-*.log"))
+    except OSError:
+        return
+    for stale in reports[:-KEEP_CRASH_REPORTS]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass

@@ -49,7 +49,20 @@ jobs:
       - name: unit + functional (80% coverage gate)
         run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=term-missing --cov-report=json -q
       - name: shell smoke suite (152 checks, sandboxed)
-        run: bash tests/smoke.sh
+        run: bash tests/smoke.sh | tee /tmp/smoke.out
+      - name: job summary (coverage + counts)
+        if: always()
+        run: |
+          {
+            echo "### boost CI — ${{ matrix.os }} · py${{ matrix.python }}"
+            echo ""
+            if [ -f coverage.json ]; then
+              PCT=$(.venv/bin/python -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'],1))")
+              echo "- **Coverage:** ${PCT}% (gate: 80%)"
+            fi
+            SMOKE=$(grep -Eo '[0-9]+ passed, [0-9]+ failed' /tmp/smoke.out | tail -1 || true)
+            [ -n "$SMOKE" ] && echo "- **Smoke suite:** ${SMOKE}"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: publish coverage badge
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && github.ref == 'refs/heads/main'
         run: |

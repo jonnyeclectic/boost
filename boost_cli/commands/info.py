@@ -16,7 +16,7 @@ import textwrap
 import webbrowser
 from pathlib import Path
 
-from ..core import ai, catalog, frontmatter, gitutil, journal, lockfile, paths, registry, store, util
+from ..core import ai, catalog, frontmatter, gitutil, journal, lockfile, logs, paths, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -378,13 +378,52 @@ def cmd_explain(argv):
     return 0
 
 
+def _show_diagnostics(limit):
+    lp = logs.log_path()
+    if not lp.exists():
+        out.info("no diagnostic log yet at %s" % lp)
+        return 0
+    lines = lp.read_text(encoding="utf-8", errors="replace").splitlines()
+    out.heading("diagnostic log — %s" % lp)
+    for line in lines[-limit:]:
+        out.info(line)
+    return 0
+
+
+def _show_crashes(limit):
+    ldir = paths.logs_dir()
+    reports = sorted(ldir.glob("crash-*.log"), reverse=True) if ldir.is_dir() else []
+    if not reports:
+        out.info("no crash reports — nothing has blown up (that boost noticed)")
+        return 0
+    out.heading("crash reports in %s" % ldir)
+    for r in reports[:limit]:
+        try:
+            first = r.read_text(encoding="utf-8", errors="replace").splitlines()
+            summary = next((ln for ln in first if ln.startswith("command:")), "")
+        except OSError:
+            summary = ""
+        out.info("%s  %s" % (r.name, summary))
+    out.info("")
+    out.dim("  view one with:  cat %s/<name>" % ldir)
+    return 0
+
+
 def cmd_log(argv):
     ap = argparse.ArgumentParser(prog="boost log",
                                  description="Git log for a skill, or boost's activity log")
     ap.add_argument("name", nargs="?", help="skill to show upstream history for")
     ap.add_argument("-n", "--limit", type=int, default=20, metavar="N",
                     help="max entries (default 20)")
+    ap.add_argument("--diagnostics", action="store_true",
+                    help="show boost's diagnostic log trail (not skill history)")
+    ap.add_argument("--crashes", action="store_true",
+                    help="list recent crash reports")
     args = ap.parse_args(argv)
+    if args.crashes:
+        return _show_crashes(args.limit)
+    if args.diagnostics:
+        return _show_diagnostics(args.limit)
     if args.name:
         lock = lockfile.get_skill(args.name)
         if lock:

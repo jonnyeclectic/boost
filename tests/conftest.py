@@ -17,6 +17,15 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 
+@pytest.fixture(autouse=True)
+def _reset_logging():
+    """Rebind the diagnostic logger to each test's sandbox HOME."""
+    from boost_cli.core import logs
+    logs.reset()
+    yield
+    logs.reset()
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A fresh fake $HOME; returns its Path."""
@@ -25,6 +34,9 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("BOOST_HOME", raising=False)
     monkeypatch.delenv("BOOST_AGENTS_STORE", raising=False)
+    monkeypatch.delenv("BOOST_DEBUG", raising=False)
+    monkeypatch.delenv("BOOST_LOG_LEVEL", raising=False)
+    monkeypatch.delenv("BOOST_NO_LOG", raising=False)
     monkeypatch.setenv("BOOST_NO_AI", "1")       # deterministic: no AI calls
     monkeypatch.setenv("NO_COLOR", "1")         # plain output for assertions
     monkeypatch.setenv("BOOST_ASSUME_YES", "1")  # never block on confirm()

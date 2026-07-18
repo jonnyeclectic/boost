@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from ..core import (agents, ai, catalog, frontmatter, gitutil, journal,
-                    lockfile, output as out, paths, policy, registry, store,
-                    util)
+                    lockfile, logs, output as out, paths, policy, registry,
+                    store, util)
 from ..errors import BoostError
 
 # --- audit: dangerous-content patterns ------------------------------------
@@ -322,6 +322,16 @@ def cmd_doctor(argv):
     rotation = journal.rotation_healthy()
     if not rotation:
         bad("journal is overdue for rotation — run `boost heal`")
+
+    lp = logs.log_path()
+    if lp.exists():
+        out.ok("diagnostic log at %s" % _tilde(lp))
+    crashes = sorted(paths.logs_dir().glob("crash-*.log")) \
+        if paths.logs_dir().is_dir() else []
+    if crashes:
+        out.warn("%d crash report%s in %s (newest: %s) — see `boost log --crashes`"
+                 % (len(crashes), _s(len(crashes)), _tilde(paths.logs_dir()),
+                    crashes[-1].name))
 
     line1 = ("%d skill%s installed · %d tap%s synced · %d broken link%s"
              % (len(skills), _s(len(skills)), tap_ok, _s(tap_ok),
