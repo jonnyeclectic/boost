@@ -2,3 +2,4 @@
 # CONTRIBUTING.md "Generated files"). Marked linguist-generated so GitHub
 # collapses their diffs and excludes them from language stats.
 boost_cli/data/registries.json linguist-generated=true
+docs/roadmap.html              linguist-generated=true

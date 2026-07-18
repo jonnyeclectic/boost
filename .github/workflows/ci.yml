@@ -23,6 +23,8 @@ jobs:
         run: mypy
       - name: registries.json is regenerated
         run: python scripts/build_registries.py --check
+      - name: roadmap HTML is regenerated
+        run: python scripts/build_roadmap.py --check
 
   tests:
     runs-on: ${{ matrix.os }}

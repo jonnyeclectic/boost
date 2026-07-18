@@ -35,6 +35,13 @@ mutation:
 lint:
 	$(VENV)/bin/ruff check boost_cli tests
 	$(VENV)/bin/mypy
+	$(PY) scripts/build_registries.py --check
+	$(PY) scripts/build_roadmap.py --check
+
+# regenerate generated artifacts from their source (registries + roadmap boards)
+generate:
+	$(PY) scripts/build_registries.py
+	$(PY) scripts/build_roadmap.py
 
 # regenerate docs/demo.gif (brew install vhs)
 demo:
