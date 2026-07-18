@@ -97,7 +97,7 @@ boost doctor               # sanity check: broken links, lock drift, stale taps
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ```
 
-## 72 commands, organized into 8 groups
+## 75 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see
 [`docs/overview.html`](docs/overview.html).
@@ -105,12 +105,12 @@ boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 | Group | Commands |
 |---|---|
 | **Package Management** | install · uninstall · sync · update · reinstall · bundle · import · migrate · pin · unpin · snapshot · export |
-| **Discovery & Search** | search · discover · recommend · browse · index · trending · stats · count |
+| **Discovery & Search** | search · reindex · discover · recommend · browse · index · trending · stats · count |
 | **Skill Information** | list · info · cat · edit · preview · explain · log · home · deps · tag |
 | **Registry (Taps)** | tap · untap · taps · outdated |
 | **Intelligence** | distill · simulate · infer · absorb · evolve · context · focus · impact |
 | **Quality & Health** | doctor · lint · audit · verify · drift · test · fingerprint · quarantine · decay · heal · conflict · changelog · attest · health |
-| **Configuration** | config · clean · create · policy · onboard · completions · schedule · serve · mcp · self-update |
+| **Configuration** | config · clean · create · policy · onboard · completions · schedule · serve · mcp · hooks · bmad · self-update |
 | **Team & Collaboration** | cohort · profile · protocol · pulse · replay · who |
 
 The AI-assisted commands (`search --smart`, `explain`, `distill`, `infer`,
@@ -118,6 +118,42 @@ The AI-assisted commands (`search --smart`, `explain`, `distill`, `infer`,
 available on your PATH (or `ANTHROPIC_API_KEY` is set), and fall back to
 plain heuristics when it isn't — so the tool still works without an API key,
 just less cleverly.
+
+## Claude Code hooks & the BMAD Method
+
+`boost hooks` manages Claude Code hooks in `settings.json` at either scope —
+`--scope project` (`./.claude/settings.json`) or `--scope global`
+(`~/.claude/settings.json`). boost only ever touches hooks it created (tagged
+with a `# boost:<name>` marker in the command), never your own, and snapshots
+the prior file before each write.
+
+```bash
+boost hooks add SessionStart -c 'echo hello' -n greet --scope project
+boost hooks list
+boost hooks remove -n greet --scope project
+```
+
+`boost bmad` installs and manages the [BMAD Method](https://bmadcode.com/)
+(agentic Analyst / PM / Architect / Dev / QA personas + workflows) as a
+scope-aware, toggleable startup experience. Provisioning is delegated to the
+canonical `npx bmad-method install` (needs Node.js 20.12+); boost owns scope,
+the startup toggle, and teardown.
+
+```bash
+boost bmad install --scope project   # skills + per-project _bmad/ runtime
+boost bmad install --scope global    # skills into ~/.claude/skills for every session
+boost bmad init                      # add the _bmad/ runtime to the current repo
+boost bmad startup on                # inject light BMAD orientation on session start
+boost bmad startup off               # stop injecting it (skills stay installed)
+boost bmad disable / enable          # quarantine / restore skills (recoverable)
+boost bmad uninstall                 # delete skills + _bmad/ for a scope
+boost bmad doctor                    # what's installed where
+```
+
+When startup is on, a `SessionStart` hook runs `boost bmad orient`, which prints
+a short orientation into the session only while the toggle is enabled. Global
+installs stage the installer in a temp dir and copy only the `bmad-*` skills, so
+`$HOME` never gets a stray `_bmad/` — the workflow runtime stays per-project.
 
 ## The boost style
 

@@ -219,3 +219,8 @@ __marimo__/
 
 # setuptools-scm generated version file
 boost_cli/_version.py
+
+# BMAD Method — generated artifacts (provisioned via `boost bmad`, not source)
+_bmad/
+_bmad-output/
+.claude/skills/bmad-*/
