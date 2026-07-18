@@ -21,6 +21,8 @@ jobs:
         run: ruff check boost_cli tests
       - name: mypy
         run: mypy
+      - name: registries.json is regenerated
+        run: python scripts/build_registries.py --check
 
   tests:
     runs-on: ${{ matrix.os }}
