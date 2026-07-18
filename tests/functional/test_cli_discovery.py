@@ -644,6 +644,9 @@ class TestCount:
         r = boost("count")
         assert ("installed 1 · available 5 (across 1 tap) · "
                 "discovery index not built") in r.out
+        # D06: framed inventory card
+        assert "╭─ inventory" in r.out
+        assert "╰" in r.out
 
     def test_with_discovery_index_and_json(self, boost, installed):
         _write_index(_ITEMS)
