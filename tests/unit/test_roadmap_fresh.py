@@ -44,6 +44,19 @@ def test_roadmap_html_is_regenerated():
 
 @pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
                     reason="repo-root files not reachable (e.g. mutation sandbox)")
+def test_design_roadmap_html_is_regenerated():
+    builder = _load_builder()
+    path, fresh = builder.build_design()
+    committed = path.read_text()
+    assert committed == fresh, (
+        "docs/design-roadmap.html is out of date — regenerate with\n"
+        "    python3 scripts/build_roadmap.py\n"
+        "and commit the result (see CONTRIBUTING.md)."
+    )
+
+
+@pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
+                    reason="repo-root files not reachable (e.g. mutation sandbox)")
 def test_check_flag_passes_on_fresh_tree():
     builder = _load_builder()
     assert builder.main(["--check"]) == 0
@@ -58,3 +71,16 @@ def test_every_code_item_has_required_fields():
             assert item.get(field), "%s: missing %r" % (item["_file"], field)
         assert item["status"] in builder.STATUS_LABEL, (
             "%s: bad status %r" % (item["_file"], item["status"]))
+
+
+@pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
+                    reason="repo-root files not reachable (e.g. mutation sandbox)")
+def test_every_design_item_has_required_fields():
+    builder = _load_builder()
+    for item in builder.load_items("design"):
+        for field in ("id", "track", "status", "title"):
+            assert item.get(field), "%s: missing %r" % (item["_file"], field)
+        assert item["status"] in builder.DESIGN_STATUS, (
+            "%s: bad status %r" % (item["_file"], item["status"]))
+        assert str(item.get("impact", "")).lower() in builder.IMPACT_LABEL, (
+            "%s: bad impact %r" % (item["_file"], item.get("impact")))

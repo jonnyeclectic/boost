@@ -62,6 +62,15 @@ STATUS_LABEL = {
     "planned": "Planned",
 }
 
+# rstatus class -> visible label (design board).
+DESIGN_STATUS = {
+    "done": "Shipped",
+    "progress": "In progress",
+    "proposed": "Proposed",
+}
+IMPACT_LABEL = {"high": "High", "med": "Med", "low": "Low"}
+DESIGN_TRACKS = ["color", "layout", "motion", "commands", "system"]
+
 
 class RoadmapError(Exception):
     """Raised on malformed item data so CI fails loudly rather than silently."""
@@ -149,6 +158,58 @@ def code_blocks(items: list[dict]) -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------- #
+# Rendering — design board (design-roadmap.html)                               #
+# --------------------------------------------------------------------------- #
+def render_design_card(item: dict) -> str:
+    status = str(item.get("status", "proposed"))
+    if status not in DESIGN_STATUS:
+        raise RoadmapError("%s: unknown status %r" % (item["_file"], status))
+    impact = str(item.get("impact", "med")).lower()
+    if impact not in IMPACT_LABEL:
+        raise RoadmapError("%s: unknown impact %r" % (item["_file"], impact))
+    wow = _as_int(item.get("wow"), 0)
+    stars = "★" * wow + "☆" * (5 - wow)
+    lines = [
+        '<article class="ritem" data-track="%s" data-impact="%s">'
+        % (item.get("track", ""), impact),
+        '  <div class="ritem-top"><span class="rid">%s</span>'
+        '<span class="rstatus %s">%s</span></div>'
+        % (item.get("id", ""), status, DESIGN_STATUS[status]),
+        "  <h4>%s</h4>" % item.get("title", ""),
+        "  <p>%s</p>" % item["body"],
+        '  <div class="rmeta"><span class="m-cat">%s</span>'
+        "<span>Complexity %s</span>"
+        '<span class="m-imp %s">Impact %s</span>'
+        '<span class="m-wow">%s</span></div>'
+        % (item.get("category", item.get("track", "")), item.get("complexity", ""),
+           impact, IMPACT_LABEL[impact], stars),
+    ]
+    ref = item.get("ref")
+    if ref not in (None, ""):
+        lines.append('  <div class="rref"><code>%s</code></div>' % ref)
+    lines.append("</article>")
+    return "\n".join(lines)
+
+
+def design_blocks(items: list[dict]) -> dict[str, str]:
+    """Marker-key -> rendered HTML/text for the design board."""
+    by_track: dict[str, list[dict]] = {}
+    for it in items:
+        by_track.setdefault(str(it.get("track", "")), []).append(it)
+    blocks: dict[str, str] = {}
+    for track in DESIGN_TRACKS:
+        cards = by_track.get(track, [])
+        blocks["cards track=%s" % track] = "\n\n".join(
+            render_design_card(i) for i in cards)
+        blocks["count track=%s" % track] = "%d items" % len(cards)
+    # "N of N opportunities shown" — both start at the total (JS lowers #shown
+    # as filters apply, so the committed value is the unfiltered total).
+    blocks["count shown"] = str(len(items))
+    blocks["count total"] = str(len(items))
+    return blocks
+
+
+# --------------------------------------------------------------------------- #
 # Marker injection                                                            #
 # --------------------------------------------------------------------------- #
 def inject(html: str, key: str, rendered: str) -> str:
@@ -161,17 +222,21 @@ def inject(html: str, key: str, rendered: str) -> str:
     begin = "<!-- ROADMAP:%s -->" % key
     end = "<!-- /ROADMAP:%s -->" % key.split(" ")[0]
     pattern = re.compile(
-        re.escape(begin) + r"(?:.*?\n)?(?P<indent>[ \t]*)" + re.escape(end),
-        re.DOTALL,
-    )
-    if not pattern.search(html):
+        re.escape(begin) + r"(?P<mid>.*?)" + re.escape(end), re.DOTALL)
+    m = pattern.search(html)
+    if not m:
         raise RoadmapError("marker %r not found in target HTML" % key)
-    body = ("\n" + rendered + "\n") if rendered else "\n"
-
-    def _sub(m: re.Match) -> str:
-        return begin + body + m.group("indent") + end
-
-    return pattern.sub(_sub, html, count=1)
+    mid = m.group("mid")
+    if "\n" in mid or "\n" in rendered:
+        # Block region: preserve the indentation of the line the end marker sits
+        # on so the closing comment stays aligned under its container.
+        tail = mid.rsplit("\n", 1)[-1]
+        indent = tail if tail.strip() == "" else ""
+        body = "\n" + rendered + "\n" + indent
+    else:
+        # Inline region (e.g. a counter inside <b>…</b>).
+        body = rendered
+    return html[:m.start()] + begin + body + end + html[m.end():]
 
 
 def render_board(html: str, blocks: dict[str, str]) -> str:
@@ -189,6 +254,12 @@ def build_code() -> tuple[Path, str]:
     return CODE_HTML, html
 
 
+def build_design() -> tuple[Path, str]:
+    items = load_items("design")
+    html = render_board(DESIGN_HTML.read_text(), design_blocks(items))
+    return DESIGN_HTML, html
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Regenerate the roadmap boards.")
     parser.add_argument(
@@ -197,7 +268,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    targets = [build_code()]
+    targets = [build_code(), build_design()]
     drift = []
     for path, fresh in targets:
         if args.check:
