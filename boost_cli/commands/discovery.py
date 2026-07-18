@@ -300,6 +300,7 @@ def cmd_index(argv):
     items, total = [], 0
     pages = min((max(1, args.limit) + 99) // 100, 10)  # code search caps at 1000
     for page in range(1, pages + 1):
+        spin.progress(page, pages, "searching GitHub for SKILL.md")
         if page > 1:
             time.sleep(1)  # stay under the code-search rate limit
         try:

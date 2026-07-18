@@ -54,3 +54,28 @@ class Spinner:
         if self.active():
             self.stream.write("\r" + " " * (out.visible_len(self.label) + 2) + "\r")
             self.stream.flush()
+
+
+def bar(current: int, total: int, width: int = 20) -> str:
+    """A determinate progress bar (filled ▓ vs light ░) for current/total."""
+    total = total if total > 0 else 1
+    frac = current / total
+    frac = 0.0 if frac < 0 else 1.0 if frac > 1 else frac
+    filled = round(frac * width)
+    return "▓" * filled + "░" * (width - filled)
+
+
+def progress(current: int, total: int, label: str = "", stream=None) -> None:
+    """Redraw a determinate progress line in place. Silent (no output) unless
+    the stream is an interactive, color-capable TTY, so piped/CI/test output
+    stays clean. Clears the line once current reaches total.
+    """
+    s = stream if stream is not None else sys.stderr
+    if not (out.color_level(s) > 0 and hasattr(s, "isatty") and s.isatty()):
+        return
+    line = "%s %d/%d %s" % (out.aurora(bar(current, total), "cyan"),
+                            current, total, label)
+    s.write("\r" + line)
+    if current >= total:
+        s.write("\r" + " " * out.visible_len(line) + "\r")
+    s.flush()
