@@ -57,6 +57,44 @@ def test_context_manager_returns_self():
     assert sp.__exit__(None, None, None) is None   # doesn't suppress exceptions
 
 
+class TestBar:
+    def test_empty(self):
+        assert spin.bar(0, 10, 20) == "░" * 20
+
+    def test_full(self):
+        assert spin.bar(10, 10, 20) == "▓" * 20
+
+    def test_half(self):
+        assert spin.bar(5, 10, 20) == "▓" * 10 + "░" * 10
+
+    def test_clamps_over(self):
+        assert spin.bar(15, 10, 20) == "▓" * 20
+
+    def test_zero_total_is_safe(self):
+        assert spin.bar(1, 0, 4) == "▓" * 4   # total coerced to 1 -> full
+
+
+class TestProgress:
+    def test_silent_on_non_tty(self):
+        s = FakeStream(tty=False)
+        spin.progress(1, 3, "x", stream=s)
+        assert s.getvalue() == ""
+
+    def test_writes_on_tty(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        s = FakeStream(tty=True)
+        spin.progress(1, 3, "go", stream=s)
+        out = s.getvalue()
+        assert "1/3" in out and "go" in out and out.startswith("\r")
+
+    def test_clears_when_complete(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        s = FakeStream(tty=True)
+        spin.progress(3, 3, "done", stream=s)
+        # ends by returning the cursor to the start of a blanked line
+        assert s.getvalue().endswith("\r")
+
+
 def test_tty_run_writes_and_clears():
     # exercise the animated path: wait (bounded) for the thread's first frame
     import time
