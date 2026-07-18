@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 from .. import cliparse
 from ..core import (agents, ai, catalog, frontmatter, gitutil, journal,
                     lockfile, logs, output as out, paths, policy, registry,
-                    store, util)
+                    staleness, store, util)
 from ..errors import BoostError
 
 # --- audit: dangerous-content patterns ------------------------------------
@@ -119,18 +119,20 @@ def _drift_status(name: str, entry: dict) -> str:
     """'in-sync' | 'local-edits' | 'upstream-moved' | 'source-missing'
     | 'store-missing' | 'n/a' (local imports with no tap source)."""
     sdir = store.skill_store_dir(name)
-    if not sdir.is_dir():
-        return "store-missing"
-    if util.sha256_dir(sdir) != entry.get("sha256"):
-        return "local-edits"
-    if entry.get("tap") == "local":
-        return "n/a"
-    try:
-        src = store.source_dir_for({"name": name, "tap": entry.get("tap", ""),
-                                    "rel_dir": entry.get("source_dir", ".")})
-    except BoostError:
-        return "source-missing"
-    return "in-sync" if util.sha256_dir(src) == entry.get("sha256") else "upstream-moved"
+    store_sha = util.sha256_dir(sdir) if sdir.is_dir() else None
+    is_local = entry.get("tap") == "local"
+    lock_sha = entry.get("sha256", "")
+    source_sha = None
+    if store_sha is not None and store_sha == lock_sha and not is_local:
+        try:
+            src = store.source_dir_for(
+                {"name": name, "tap": entry.get("tap", ""),
+                 "rel_dir": entry.get("source_dir", ".")})
+        except BoostError:
+            source_sha = None
+        else:
+            source_sha = util.sha256_dir(src)
+    return staleness.drift_state(store_sha, lock_sha, is_local, source_sha)
 
 
 _DRIFT_STYLE = {"in-sync": out.GREEN, "local-edits": out.YELLOW,
