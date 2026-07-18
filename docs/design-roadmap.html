@@ -142,7 +142,7 @@
       <code>NO_COLOR</code> and non-TTY are always respected.
     </p>
     <div class="stats">
-      <div class="stat reveal"><b>22</b><span>Design opportunities</span></div>
+      <div class="stat reveal"><b>25</b><span>Design opportunities</span></div>
       <div class="stat reveal"><b>5</b><span>Design tracks</span></div>
       <div class="stat reveal"><b>0</b><span>New dependencies</span></div>
       <div class="stat reveal"><b>1:1</b><span>Web ↔ CLI parity goal</span></div>
@@ -213,7 +213,7 @@
       <button class="pill" data-filter="impact" data-val="med">Med</button>
       <button class="pill" data-filter="impact" data-val="low">Low</button>
     </div>
-    <p class="roadmap-count"><b id="shown">22</b> of <b>22</b> opportunities shown</p>
+    <p class="roadmap-count"><b id="shown">25</b> of <b>25</b> opportunities shown</p>
   </div>
 
   <div class="wrap" id="board">
@@ -273,7 +273,7 @@
           <h3>Structure &amp; Layout</h3>
           <p>Width-aware output, glass panels, and results that never blow up the pane.</p>
         </div>
-        <span class="n">5 items</span>
+        <span class="n">7 items</span>
       </div>
       <div class="rcards">
 
@@ -315,6 +315,22 @@
           <p>The web guide renders skills inside a titled window with traffic-light dots (<code>.window .dots</code>). Give <code>preview</code>/<code>cat</code> the same treatment: a titled frame with the skill name in the bar, so a rendered <code>SKILL.md</code> in the terminal matches the screenshots on the site.</p>
           <div class="rmeta"><span class="m-cat">layout</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
           <div class="rref"><code>commands/info.py · preview/cat</code></div>
+        </article>
+
+        <article class="ritem" data-track="layout" data-impact="high">
+          <div class="ritem-top"><span class="rid">BOOST-D23</span><span class="rstatus done">Shipped</span></div>
+          <h4><code>trending</code> had the same overflow as <code>search</code></h4>
+          <p>Grading the un-touched commands surfaced a sibling of D05: <code>boost trending</code> piped raw catalog descriptions straight into <code>table()</code>, so a single 300-char description blew the table across the pane. Fixed by clipping each description through <code>out.truncate()</code> to the width left after the name/installs/last columns — the same helper the search fix introduced.</p>
+          <div class="rmeta"><span class="m-cat">layout</span><span>Complexity S</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>commands/discovery.py · cmd_trending</code></div>
+        </article>
+
+        <article class="ritem" data-track="layout" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D24</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Width-aware shared <code>table()</code></h4>
+          <p><code>out.table()</code> backs 28 call sites, and several still overflow: <code>taps</code> pads the NAME column to the widest repo (<code>K-Dense-AI/claude-scientific-skills</code> = 44 cols) and then prints full URLs, so wide catalogs wrap. The durable fix is to make <code>table()</code> itself width-aware — shrink the widest text column to the terminal and right-align numeric columns — instead of truncating per-caller. Higher blast radius (28 callers, many exact-output tests), so it needs a careful, test-first pass.</p>
+          <div class="rmeta"><span class="m-cat">layout</span><span>Complexity L</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
+          <div class="rref"><code>core/output.py:table() · commands/taps.py</code></div>
         </article>
 
       </div>
@@ -375,12 +391,12 @@
           <h3>Command-by-command Polish</h3>
           <p>The screens users actually stare at — front door, doctor, list, info.</p>
         </div>
-        <span class="n">5 items</span>
+        <span class="n">6 items</span>
       </div>
       <div class="rcards">
 
         <article class="ritem" data-track="commands" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-D14</span><span class="rstatus progress">In progress</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D14</span><span class="rstatus done">Shipped</span></div>
           <h4>Front door: gradient wordmark + section glyphs</h4>
           <p>The <code>boost</code> home screen is the first thing everyone sees. Today the wordmark is plain bold and every group header is the same generic yellow. Paint the <code>boost</code> wordmark with the Aurora gradient and give each command group a colored bullet/glyph keyed to a brand hue — turning a flat list into a branded index.</p>
           <div class="rmeta"><span class="m-cat">commands</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★★</span></div>
@@ -417,6 +433,14 @@
           <p>Empty and hint lines are ad-hoc — <code>info</code>'s "no skills installed" hint is a hand-rolled <code>DIM</code> string. Standardize a single empty-state affordance (muted icon + one-line guidance + suggested command) and a single hint style, applied everywhere, so guidance always looks the same.</p>
           <div class="rmeta"><span class="m-cat">ux</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★☆☆☆</span></div>
           <div class="rref"><code>commands/info.py:117–119 · core/output.py</code></div>
+        </article>
+
+        <article class="ritem" data-track="commands" data-impact="med">
+          <div class="ritem-top"><span class="rid">BOOST-D25</span><span class="rstatus proposed">Proposed</span></div>
+          <h4>Branded usage &amp; error output</h4>
+          <p>Run a subcommand wrong — <code>boost snapshot</code> with no action — and you get raw, unstyled <code>argparse</code>: a multi-line usage dump with a bare <code>error:</code>, nothing like the branded help. Route argparse's usage/error through the Aurora output layer (accent the program name, dim the usage grammar, use the standard <code>Error:</code> affordance) so <em>failure</em> looks as designed as success. Bonus: a "did you mean …" suggestion for unknown commands.</p>
+          <div class="rmeta"><span class="m-cat">ux</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
+          <div class="rref"><code>cli.py · argparse formatter</code></div>
         </article>
 
       </div>

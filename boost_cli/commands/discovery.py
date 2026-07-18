@@ -602,7 +602,9 @@ def cmd_trending(argv):
         if not curated:
             out.info("no curated skills available — add taps with `boost tap --defaults`")
             return 0
-        out.table([(e["name"], "v" + e["version"], e["description"])
+        descw = max(out.term_width() - 24, 24)  # reserve name + version columns
+        out.table([(e["name"], "v" + e["version"],
+                    out.truncate(e["description"], descw))
                    for e in sorted(curated, key=lambda e: e["name"])[:args.limit]])
         return 0
     agg = {}
@@ -611,8 +613,9 @@ def cmd_trending(argv):
         rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})
         rec["count"] += 1
     ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    descw = max(out.term_width() - 44, 24)  # reserve name/installs/last columns
     out.table([(name, str(rec["count"]), util.rel_time(rec["last"]),
-                by_name.get(name, {}).get("description", ""))
+                out.truncate(by_name.get(name, {}).get("description", ""), descw))
                for name, rec in ranked[:args.limit]],
               headers=("name", "installs", "last", "description"))
     out.info(out.c("based on local install activity", out.DIM))
