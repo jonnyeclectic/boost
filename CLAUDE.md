@@ -50,6 +50,28 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   `workflow` (commands/agents/workflows Markdown). **Only `skill` installs** —
   `store.install` refuses non-skill kinds; rules/workflows are search/tap-only.
 
+## Parallel work & concurrent loops
+
+More than one agent (or `/loop` session) may be working this repo at once. To
+keep them from clobbering each other:
+
+- **Never edit a checkout that has someone else's branch checked out.** The user
+  works live in `~/boost`; long-running loops use a separate `git worktree`
+  (e.g. `~/boost-loop`, which needs its **own** `.venv` because mutmut wants an
+  editable `pip install -e .` pointed at that tree). Run `git worktree list` and
+  `git status` before touching a tree — staged or unstaged changes mean another
+  agent is mid-edit there, so pick a different worktree.
+- **Branch off `origin/main`, one topic per branch.** `git fetch origin main`
+  then `git checkout -B loop/<topic> origin/main`. Keep changes additive and
+  file-scoped so parallel branches merge without conflicts.
+- **Coordinate through PRs, not the working tree.** `gh pr merge` is server-side
+  and won't touch anyone's local checkout. Before committing a file, inspect
+  `git status` / `git diff` — if another session has it staged or dirty, leave
+  it to that owner rather than committing over their in-flight work.
+- **Every merge to `main` cuts a PyPI release.** Land one coherent change per PR,
+  never merge onto a red release, and after merging confirm the publish workflow
+  goes green — not just the PR checks.
+
 ## Layout
 
 - `boost_cli/commands/` — CLI command groups   · `boost_cli/core/` — engine (the mutation-gated code)
