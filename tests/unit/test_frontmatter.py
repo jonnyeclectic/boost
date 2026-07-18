@@ -100,14 +100,19 @@ class TestMutationHardening:
         assert s("'\"") == "'\""        # mismatched quotes stay literal
         assert s("  spaced  ") == "spaced"
 
-    def test_scalar_every_keyword(self):
+    def test_scalar_coerces_yaml12_keywords(self):
         s = frontmatter._scalar
-        for word, want in [("true", True), ("yes", True), ("on", True),
-                           ("TRUE", True), ("Yes", True),
-                           ("false", False), ("no", False), ("off", False),
-                           ("OFF", False),
-                           ("null", None), ("~", None), ("none", None)]:
+        for word, want in [("true", True), ("TRUE", True), ("True", True),
+                           ("false", False), ("FALSE", False), ("False", False),
+                           ("null", None), ("NULL", None), ("~", None)]:
             assert s(word) is want, word
+
+    def test_scalar_leaves_yaml11_aliases_as_strings(self):
+        # yes/no/on/off/none are ordinary words, not booleans/null: a skill
+        # legitimately named "none" or tagged "on" must survive as a string.
+        s = frontmatter._scalar
+        for word in ("yes", "Yes", "on", "no", "off", "OFF", "none", "None"):
+            assert s(word) == word, word
         assert s("maybe") == "maybe"     # not a keyword
         assert s("yess") == "yess"
 
