@@ -2,14 +2,14 @@
 id: typo-detection-codespell
 board: code
 section: dx
-status: planned
+status: inflight
 category: Quality · Docs
 complexity: S
 impact: Med
 wow: 2
 note: user-facing text
 order: 4
-owner:
+owner: loop/codespell-gate
 pr:
 title: Typo detection — <code>codespell</code>
 ---
