@@ -239,6 +239,8 @@ def cmd_doctor(argv):
     ap.parse_args(argv)
     issues = 0
 
+    out.heading("boost doctor")
+
     def bad(msg):
         nonlocal issues
         issues += 1
@@ -341,6 +343,11 @@ def cmd_doctor(argv):
         out.ok("lock file integrity OK · log rotation healthy")
     else:
         out.warn("lock file integrity or log rotation needs attention")
+
+    out.verdict(issues == 0,
+                "healthy" if not issues else
+                "%d issue%s need attention — see the suggestions above"
+                % (issues, _s(issues)))
     return 1 if issues else 0
 
 
