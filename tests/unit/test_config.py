@@ -157,9 +157,11 @@ class TestUnset:
 
 class TestDefaultTaps:
     def test_shape(self):
-        assert len(config.DEFAULT_TAPS) == 2
+        assert len(config.DEFAULT_TAPS) == 5
         names = [t["name"] for t in config.DEFAULT_TAPS]
-        assert names == ["anthropics/skills", "obra/superpowers"]
+        assert names == ["anthropics/skills", "obra/superpowers",
+                         "trailofbits/skills", "expo/skills",
+                         "K-Dense-AI/claude-scientific-skills"]
         for tap in config.DEFAULT_TAPS:
             assert tap["curated"] is True
             assert tap["url"].startswith("https://github.com/")

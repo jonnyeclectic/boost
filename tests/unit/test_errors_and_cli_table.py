@@ -104,12 +104,12 @@ def run_main(argv):
 class TestMainDispatch:
     def test_version_flag(self, sandbox, capsys):
         assert cli.main(["--version"]) == 0
-        assert capsys.readouterr().out == "boost 1.0.0\n"
+        assert capsys.readouterr().out == "boost 1.0.1\n"
 
     def test_version_word_and_short_flag(self, sandbox, capsys):
         assert cli.main(["version"]) == 0
         assert cli.main(["-V"]) == 0
-        assert capsys.readouterr().out == "boost 1.0.0\nboost 1.0.0\n"
+        assert capsys.readouterr().out == "boost 1.0.1\nboost 1.0.1\n"
 
     def test_no_args_prints_help(self, sandbox, capsys):
         assert cli.main([]) == 0

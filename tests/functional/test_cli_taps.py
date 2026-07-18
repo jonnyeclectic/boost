@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 
-from boost_cli.core import paths
+from boost_cli.core import config, paths
 
 
 def _copy_tap(src, dest):
@@ -89,8 +89,8 @@ class TestTap:
         assert ("tapped obra/superpowers (5 skills) — "
                 "Community powerhouse") in r.out
         cfg = json.loads(paths.config_path().read_text())
-        assert [t["name"] for t in cfg["taps"]] == ["anthropics/skills",
-                                                    "obra/superpowers"]
+        assert [t["name"] for t in cfg["taps"]] == [
+            t["name"] for t in config.DEFAULT_TAPS]
         assert all(t["curated"] for t in cfg["taps"])
         r = boost("tap", "--defaults")           # idempotent second run
         assert "anthropics/skills already tapped" in r.out
