@@ -170,8 +170,16 @@ def configure(verbose: bool = False, debug: bool = False,
 
 
 def log_invocation(argv: List[str]) -> None:
-    """Record a command invocation at the head of the trail."""
-    get_logger().info("invoke: boost %s", " ".join(argv))
+    """Record a command invocation at the head of the trail.
+
+    Includes ``pid``/``ppid`` and the interpreter path so a *native* crash —
+    which Python can't catch, so it never reaches :func:`write_crash_report` —
+    can still be correlated against an OS crash report by PID. If an OS report
+    names a PID that never appears here, boost is ruled out as that process.
+    """
+    get_logger().info(
+        "invoke: boost %s [pid=%d ppid=%d py=%s]",
+        " ".join(argv), os.getpid(), os.getppid(), sys.executable)
 
 
 def log_completion(argv: List[str], rc: int, elapsed_ms: float) -> None:

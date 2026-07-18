@@ -79,6 +79,19 @@ def test_invocation_is_logged(env):
     assert "invoke: boost install foo" in logs.log_path().read_text()
 
 
+def test_invocation_records_pid_ppid_and_interpreter(env):
+    """PID/PPID + interpreter are logged so a native crash can be correlated
+    against an OS crash report (and boost ruled in or out) by PID."""
+    import os
+    import sys
+    logs.configure()
+    logs.log_invocation(["mcp", "--stdio"])
+    line = logs.log_path().read_text()
+    assert ("pid=%d" % os.getpid()) in line
+    assert ("ppid=%d" % os.getppid()) in line
+    assert ("py=%s" % sys.executable) in line
+
+
 def test_completion_logs_rc_and_duration(env):
     logs.configure()
     logs.log_completion(["count"], 0, 12.7)
