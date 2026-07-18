@@ -2,12 +2,44 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
 
 IGNORED = {".git", "__pycache__", ".DS_Store"}
+
+
+def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Write ``text`` to ``path`` so a reader never sees a partial file.
+
+    The bytes go to a temp file in the *same* directory (so the rename stays on
+    one filesystem and is atomic), get flushed and fsynced to disk, then swap
+    into place with ``os.replace``. An interrupted or concurrent write can no
+    longer truncate the target: the previous file survives intact until the
+    complete new one atomically replaces it. This is the corruption-safe
+    substitute for a bare ``Path.write_text`` on any file boost must not lose —
+    the lock file, the config, the pulse journal.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent),
+                               prefix="." + path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(path))
+    except BaseException:
+        # Never leave a temp turd behind, and never mask the original error.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def now_iso() -> str:

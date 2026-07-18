@@ -67,4 +67,6 @@ def _maybe_rotate() -> None:
     except OSError:
         return
     if len(lines) > ROTATE_AT:
-        p.write_text("\n".join(lines[-ROTATE_KEEP:]) + "\n")
+        # Atomic swap: a bare write_text here races concurrent log() appends and
+        # can truncate the feed mid-line if interrupted.
+        util.atomic_write_text(p, "\n".join(lines[-ROTATE_KEEP:]) + "\n")

@@ -35,6 +35,31 @@ class TestRead:
         assert lock["version"] == 3
         assert lock["skills"] == {}
 
+    def test_corrupt_file_preserved_as_sidecar(self, sandbox):
+        paths.ensure_dirs()
+        p = paths.lockfile_path()
+        p.write_text("{definitely not json")
+        lockfile.read()
+        backup = p.with_name(p.name + ".corrupt")
+        assert backup.exists()
+        assert backup.read_text() == "{definitely not json"
+
+    def test_missing_file_leaves_no_sidecar(self, sandbox):
+        lockfile.read()
+        p = paths.lockfile_path()
+        assert not p.with_name(p.name + ".corrupt").exists()
+
+    def test_corrupt_read_does_not_lose_prior_records(self, sandbox):
+        # A corrupt lock followed by a new install must not silently erase the
+        # only surviving copy of the earlier records — they live on in .corrupt.
+        paths.ensure_dirs()
+        p = paths.lockfile_path()
+        p.write_text('{"skills": {"old": {"version": "1.0"}}, TRAILING GARBAGE')
+        lockfile.set_skill("new", {"version": "2.0"})
+        assert set(lockfile.installed()) == {"new"}      # skeleton took over
+        backup = p.with_name(p.name + ".corrupt")
+        assert '"old"' in backup.read_text()             # but old bytes survive
+
     def test_missing_keys_defaulted(self, sandbox):
         paths.ensure_dirs()
         paths.lockfile_path().write_text('{"skills": {"a": {}}}')
