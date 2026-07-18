@@ -14,6 +14,7 @@ def clean_env(monkeypatch):
     """Neutral color/confirm environment; each test opts in explicitly."""
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+    monkeypatch.delenv("BOOST_COLOR", raising=False)
     monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
     monkeypatch.setattr(sys, "argv", ["boost"])
 
@@ -45,6 +46,35 @@ class TestUseColor:
 
     def test_tty_true(self):
         assert output.use_color(FakeStream(tty=True)) is True
+
+    def test_boost_color_never_beats_clicolor_force(self, monkeypatch):
+        monkeypatch.setenv("BOOST_COLOR", "never")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert output.use_color(FakeStream(tty=True)) is False
+
+    def test_boost_color_always_beats_no_color(self, monkeypatch):
+        monkeypatch.setenv("BOOST_COLOR", "always")
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.use_color(FakeStream(tty=False)) is True
+
+    def test_boost_color_off_alias(self, monkeypatch):
+        monkeypatch.setenv("BOOST_COLOR", "off")
+        assert output.use_color(FakeStream(tty=True)) is False
+
+    def test_boost_color_auto_falls_through_to_tty(self, monkeypatch):
+        monkeypatch.setenv("BOOST_COLOR", "auto")
+        assert output.use_color(FakeStream(tty=True)) is True
+        assert output.use_color(FakeStream(tty=False)) is False
+
+    def test_boost_color_all_off_aliases(self, monkeypatch):
+        for val in ("never", "off", "0"):
+            monkeypatch.setenv("BOOST_COLOR", val)
+            assert output.use_color(FakeStream(tty=True)) is False, val
+
+    def test_boost_color_all_on_aliases(self, monkeypatch):
+        for val in ("always", "force", "1"):
+            monkeypatch.setenv("BOOST_COLOR", val)
+            assert output.use_color(FakeStream(tty=False)) is True, val
 
     def test_stream_without_isatty_false(self):
         assert output.use_color(object()) is False
