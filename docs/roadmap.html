@@ -3,718 +3,467 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>boost — Engineering Roadmap</title>
-<meta name="description" content="boost engineering roadmap — a staff-level backlog of correctness, performance, architecture, security, testing and docs opportunities, each scored by complexity, impact and wow-factor.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='56' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%86%97%3C/text%3E%3C/svg%3E">
+<title>boost — Roadmap</title>
+<meta name="description" content="The living roadmap for boost: shipped work, in-flight fixes, and planned quality investments — logged by the autonomous quality loop.">
+<!-- Canonical boost theme ("Aurora living-glass"). Pages serves from repo
+     root (source path "/"), so ../style resolves to /style on the site and
+     over file:// locally. Recolour everything by editing style/boost.css. -->
+<link rel="stylesheet" href="../style/boost.css">
 <style>
-  /* ============================================================================
-     boost Aurora theme — self-contained (matches style/boost.css + portfolio)
-     ========================================================================== */
-  :root {
-    --bg: #07080f;
-    --panel: rgba(255,255,255,.035);
-    --panel-solid: #0f1120;
-    --line: rgba(255,255,255,.09);
-    --line-soft: rgba(255,255,255,.05);
-    --line-hi: rgba(255,255,255,.22);
-    --text: #e9ebf5;
-    --text-2: #9298b0;
-    --text-3: #676d86;
-    --amber: #22d3ee;   /* primary accent → cyan */
-    --orange: #38bdf8;  /* cyan-blue */
-    --pink: #f472d0;
-    --violet: #a855f7;
-    --blue: #38bdf8;
-    --sky: #7dd3fc;
-    --green: #4ade80;
-    --yellow: #facc15;
-    --term-bg: #0d1024;
-    --term-bar: #171a33;
-    --cyan: #22d3ee;
-    --grad: linear-gradient(96deg, #22d3ee 0%, #a855f7 52%, #f472d0 100%);
-    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  /* Roadmap-specific layout — built only on boost.css :root tokens so the
+     page recolours with the rest of the system. No new palette. */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 18px;
+    padding: 14px 24px; margin-bottom: 8px;
+    background: rgba(7,8,15,.72);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
   }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html { scroll-behavior: smooth; scroll-padding-top: 84px; }
-  @media (prefers-reduced-motion: reduce) {
-    html { scroll-behavior: auto; }
-    .reveal { transition: none !important; transform: none !important; opacity: 1 !important; }
-    body::before { animation: none !important; }
-    .badge::before { animation: none !important; }
-  }
-  body {
-    background: var(--bg); color: var(--text); font-family: var(--sans);
-    font-size: 17px; line-height: 1.6; -webkit-font-smoothing: antialiased; min-height: 100vh;
-  }
-  /* ambient aurora drift */
-  body::before {
-    content: ""; position: fixed; inset: -25vmax; z-index: 0; pointer-events: none;
-    background:
-      radial-gradient(38vmax 38vmax at 12% 6%,  rgba(34,211,238,.20), transparent 60%),
-      radial-gradient(34vmax 34vmax at 90% 16%, rgba(168,85,247,.18), transparent 60%),
-      radial-gradient(30vmax 30vmax at 62% 104%, rgba(244,114,208,.14), transparent 62%);
-    filter: blur(34px) saturate(135%);
-    animation: aurora-drift 42s ease-in-out infinite; will-change: transform;
-  }
-  /* faint tech grid */
-  body::after {
-    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background-image:
-      linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
-    background-size: 46px 46px;
-    -webkit-mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.3) 60%, rgba(0,0,0,.1) 100%);
-            mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.3) 60%, rgba(0,0,0,.1) 100%);
-  }
-  @keyframes aurora-drift {
-    0%,100% { transform: translate3d(0,0,0) scale(1); }
-    50%     { transform: translate3d(2.5vmax,-2vmax,0) scale(1.08); }
-  }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
-  a { color: inherit; }
-  code { font-family: var(--mono); }
-  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 4px; }
+  .topbar .logo { font-weight: 800; letter-spacing: -.02em; font-size: 18px; text-decoration: none; }
+  .topbar .logo span { color: var(--text-3); font-weight: 600; margin-left: 8px; font-size: 13px; }
+  .topbar nav { margin-left: auto; display: flex; gap: 20px; }
+  .topbar nav a { color: var(--text-2); text-decoration: none; font-size: 14px; font-weight: 600; }
+  .topbar nav a:hover { color: var(--text); }
 
-  /* ---------- nav ---------- */
-  header {
-    position: sticky; top: 0; z-index: 50;
-    background: rgba(7,8,15,.82);
-    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-    border-bottom: 1px solid var(--line-soft);
-  }
-  .nav { display: flex; align-items: center; gap: 24px; height: 64px; }
-  .logo { display: flex; align-items: baseline; gap: 10px; text-decoration: none; }
-  .logo b { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--cyan); letter-spacing: -.02em; }
-  .logo span { font-size: 10.5px; letter-spacing: .24em; color: var(--text-2); text-transform: uppercase; }
-  .nav ul { display: flex; gap: 4px; list-style: none; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
-  .nav ul::-webkit-scrollbar { display: none; }
-  .nav ul a { display: block; padding: 8px 12px; border-radius: 8px; font-size: 14px; color: var(--text-2); text-decoration: none; white-space: nowrap; }
-  .nav ul a:hover { color: var(--text); background: var(--panel); }
-  .nav ul a.cta { color: var(--text); font-weight: 600; }
+  .hero { text-align: center; padding: 56px 0 20px; }
+  .hero .badge { margin-bottom: 22px; }
+  .hero h1 { font-size: clamp(38px, 6vw, 68px); font-weight: 850; letter-spacing: -.03em; line-height: 1.05; }
+  .hero p { max-width: 620px; margin: 20px auto 0; color: var(--text-2); font-size: 18px; text-wrap: balance; }
+  .hero .cta { margin-top: 30px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
-  /* ---------- badge + reveal ---------- */
-  .badge {
-    display: inline-flex; align-items: center; gap: 8px;
-    font-family: var(--mono); font-size: 12.5px; color: #c9e9f5;
-    border: 1px solid rgba(34,211,238,.4); border-radius: 999px;
-    padding: 7px 16px; background: rgba(34,211,238,.07);
-    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-  }
-  .badge::before {
-    content: ""; width: 7px; height: 7px; border-radius: 50%;
-    background: var(--cyan); box-shadow: 0 0 10px var(--cyan);
-    animation: badge-breathe 3.4s ease-in-out infinite;
-  }
-  @keyframes badge-breathe { 0%,100% { opacity: .45; transform: scale(.82); } 50% { opacity: 1; transform: scale(1.15); } }
-  .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
-  .reveal.in { opacity: 1; transform: none; }
+  section.block { padding: 40px 0; }
+  .block-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 24px; flex-wrap: wrap; }
+  .block-head h2 { font-size: clamp(22px, 3vw, 30px); font-weight: 800; letter-spacing: -.02em; }
+  .block-head .count { font-family: var(--mono); font-size: 13px; color: var(--text-3); }
+  .block-head .rule { flex: 1; height: 1px; background: var(--line); min-width: 40px; }
 
-  /* ---------- footer ---------- */
-  footer { margin-top: 120px; border-top: 1px solid var(--line-soft); padding: 44px 0 60px; text-align: center; }
-  footer .brand { font-size: 15px; color: var(--text-2); }
-  footer .brand b { font-family: var(--mono); color: var(--cyan); }
-  footer .meta { margin-top: 10px; font-size: 13.5px; color: var(--text-3); }
-  footer .meta code { color: var(--cyan); }
-  footer .links { margin-top: 14px; font-size: 13.5px; color: var(--text-3); }
-  footer .links a { color: var(--text-2); text-decoration: none; }
-  footer .links a:hover { color: var(--text); }
+  .rgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
 
-  /* ============================================================================
-     roadmap-specific chrome (built on the tokens above)
-     ========================================================================== */
-  .hero { padding: 88px 0 20px; }
-  .hero h1 { font-size: clamp(40px, 6.4vw, 74px); font-weight: 800; letter-spacing: -.035em; line-height: 1.03; max-width: 820px; text-wrap: balance; margin-top: 26px; }
-  .hero h1 .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .hero p.lede { max-width: 680px; margin-top: 28px; font-size: 19px; color: var(--text-2); }
-  .hero p.lede b { color: var(--text); font-weight: 650; }
-  .hero p.lede code { color: var(--cyan); background: rgba(34,211,238,.1); padding: 1px 7px; border-radius: 6px; font-size: .86em; }
+  .rcard { padding: 24px 22px; }
+  .rcard .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .rcard h3 { font-size: 17.5px; font-weight: 750; letter-spacing: -.01em; line-height: 1.3; }
+  .rcard p { font-size: 14px; color: var(--text-2); margin-top: 0; line-height: 1.6; }
+  .rcard .meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
 
-  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 56px; }
-  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 24px 20px; text-align: center; }
-  .stat b {
-    display: block; font-size: clamp(26px, 3.2vw, 40px); font-weight: 800; letter-spacing: -.02em;
-    background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
-    font-variant-numeric: tabular-nums;
-  }
-  .stat span { display: block; margin-top: 8px; font-size: 11px; font-weight: 650; letter-spacing: .16em; text-transform: uppercase; color: var(--text-2); }
-
-  /* ---------- legend ---------- */
-  .legend { max-width: 900px; margin: 60px auto 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); padding: 26px 28px; }
-  .legend h3 { font-size: 14px; font-weight: 700; font-family: var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text-2); margin-bottom: 18px; }
-  .legend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px 28px; }
-  .legend-grid dt { font-family: var(--mono); font-size: 12.5px; font-weight: 700; color: var(--cyan); margin-bottom: 5px; }
-  .legend-grid dd { font-size: 13.5px; color: var(--text-2); line-height: 1.5; }
-  .legend-grid dd code { color: var(--text); background: rgba(255,255,255,.06); border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 6px; font-size: .9em; }
-
-  /* ---------- filter bar ---------- */
-  .filterbar { max-width: 940px; margin: 40px auto 0; }
-  .filter-row { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 9px; margin-top: 14px; }
-  .filter-row .flabel { font-family: var(--mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--text-3); margin-right: 4px; }
+  /* status pill — colour encodes lifecycle stage */
   .pill {
-    font-size: 13px; font-weight: 600; color: var(--text-2);
-    background: var(--panel); border: 1px solid var(--line); border-radius: 999px;
-    padding: 8px 15px; cursor: pointer; font-family: var(--sans);
-    transition: color .15s, background .15s, border-color .15s;
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid currentColor;
   }
-  .pill:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
-  .pill.on { background: var(--cyan); border-color: var(--cyan); color: #05141a; }
-  .roadmap-count { text-align: center; margin: 34px 0 4px; font-size: 14.5px; color: var(--text-2); }
-  .roadmap-count b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.shipped   { color: var(--green); }
+  .pill.inflight  { color: var(--cyan); }
+  .pill.next      { color: var(--yellow); }
+  .pill.planned   { color: var(--violet); }
 
-  /* ---------- track groups ---------- */
-  .track { margin-top: 52px; }
-  .track-head { display: flex; align-items: center; gap: 14px; }
-  .track-icon { width: 12px; height: 34px; border-radius: 5px; background: var(--tk, var(--cyan)); box-shadow: 0 0 22px -2px var(--tk, var(--cyan)); }
-  .track-head h3 { font-size: 22px; font-weight: 780; letter-spacing: -.015em; }
-  .track-head p { font-size: 14px; color: var(--text-2); margin-top: 1px; }
-  .track-head .n { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--text-2); border: 1px solid var(--line); border-radius: 999px; padding: 5px 13px; white-space: nowrap; }
+  .cat { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); letter-spacing: .06em; text-transform: uppercase; }
 
-  .rcards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 22px; }
-  .ritem {
-    position: relative; background: var(--panel-solid); border: 1px solid var(--line-soft);
-    border-radius: 14px; padding: 20px 22px 18px; overflow: hidden;
-    transition: border-color .15s, transform .15s, box-shadow .3s ease;
-  }
-  .ritem::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--tk, var(--cyan)); opacity: .85; }
-  .ritem:hover { border-color: var(--line-hi); transform: translateY(-2px); box-shadow: 0 18px 50px -26px var(--tk, var(--cyan)); }
-  .ritem-top { display: flex; align-items: center; gap: 10px; margin-bottom: 11px; }
-  .rid { font-family: var(--mono); font-size: 11.5px; font-weight: 700; color: var(--text-3); letter-spacing: .04em; }
-  .rstatus { margin-left: auto; font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; }
-  .rstatus.proposed { color: var(--sky); background: rgba(125,211,252,.1); border: 1px solid rgba(125,211,252,.32); }
-  .rstatus.next     { color: var(--cyan); background: rgba(34,211,238,.1); border: 1px solid rgba(34,211,238,.35); }
-  .rstatus.progress { color: var(--green); background: rgba(74,222,128,.1); border: 1px solid rgba(74,222,128,.35); }
-  .rstatus.done     { color: var(--text-3); background: var(--panel); border: 1px solid var(--line); text-decoration: line-through; }
+  /* metadata chips: complexity / impact / wow / ref */
+  .m { font-size: 11.5px; color: var(--text-2); background: rgba(255,255,255,.05);
+       border: 1px solid var(--line-soft); border-radius: 7px; padding: 3px 9px; font-family: var(--mono); }
+  .m b { color: var(--text); font-weight: 700; }
+  .m.hi b { color: var(--pink); }
+  .wow { color: var(--yellow); letter-spacing: 1px; }
 
-  .ritem h4 { font-size: 16.5px; font-weight: 720; letter-spacing: -.01em; line-height: 1.28; }
-  .ritem h4 code { color: var(--sky); font-size: .92em; }
-  .ritem > p { font-size: 13.5px; color: var(--text-2); margin-top: 8px; line-height: 1.55; }
-  .ritem > p b { color: var(--text); font-weight: 640; }
-  .ritem > p code { color: var(--sky); font-size: .9em; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 26px; margin-top: 26px; justify-content: center; color: var(--text-2); font-size: 13px; }
+  .legend .k { display: inline-flex; align-items: center; gap: 8px; }
 
-  .rmeta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }
-  .rmeta span { font-family: var(--mono); font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 7px; border: 1px solid var(--line-soft); color: var(--text-2); background: rgba(255,255,255,.03); white-space: nowrap; }
-  .rmeta .m-imp.high { color: #fca5a5; border-color: rgba(248,113,113,.4); background: rgba(248,113,113,.08); }
-  .rmeta .m-imp.med  { color: var(--cyan); border-color: rgba(34,211,238,.35); background: rgba(34,211,238,.07); }
-  .rmeta .m-imp.low  { color: var(--text-2); }
-  .rmeta .m-wow { color: var(--yellow); letter-spacing: 1px; }
-  .rref { margin-top: 13px; font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
-  .rref code { color: var(--sky); background: rgba(125,211,252,.06); border: 1px solid var(--line-soft); border-radius: 6px; padding: 2px 7px; }
+  footer { text-align: center; padding: 60px 0 48px; color: var(--text-3); font-size: 13px; }
+  footer a { color: var(--cyan); text-decoration: none; }
 
-  .no-results { text-align: center; color: var(--text-2); padding: 70px 0 30px; display: none; }
-
-  .foot-note { max-width: 760px; margin: 70px auto 0; text-align: center; font-size: 13.5px; color: var(--text-3); line-height: 1.6; }
-  .foot-note code { color: var(--cyan); }
-
-  @media (max-width: 860px) {
-    .stats { grid-template-columns: repeat(2, 1fr); }
-    .rcards { grid-template-columns: 1fr; }
-  }
+  @media (max-width: 560px) { .topbar nav { display: none; } }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="wrap nav">
-    <a class="logo" href="./index.html"><b>boost</b><span>Engineering Roadmap</span></a>
-    <ul>
-      <li><a href="#reliability">Reliability</a></li>
-      <li><a href="#performance">Performance</a></li>
-      <li><a href="#architecture">Architecture</a></li>
-      <li><a href="#security">Security</a></li>
-      <li><a href="#testing">Testing &amp; CI</a></li>
-      <li><a href="#docs">Docs &amp; DX</a></li>
-      <li><a class="cta" href="./index.html">← Visual Guide</a></li>
-    </ul>
-  </div>
-</header>
+<div class="topbar">
+  <a class="logo" href="index.html">boost<span>Roadmap</span></a>
+  <nav>
+    <a href="index.html">Visual guide</a>
+    <a href="https://github.com/jonnyeclectic/boost">GitHub</a>
+    <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a>
+  </nav>
+</div>
 
-<main id="top">
+<div class="wrap">
 
-  <!-- ================= HERO ================= -->
-  <div class="wrap hero">
-    <span class="badge">Staff-level backlog · living document</span>
-    <h1><span class="grad">Roadmap.</span> Everything worth doing next.</h1>
-    <p class="lede">
-      A curated backlog of <b>31 concrete engineering opportunities</b> found by
-      scanning the <code>boost_cli</code> engine, command layer, tests and tooling —
-      each one traced to a real <code>file:line</code>, then scored by
-      <b>category, complexity, impact and wow-factor</b> so the highest-leverage
-      work rises to the top.
-    </p>
+  <header class="hero">
+    <span class="badge">living document · updated by the quality loop</span>
+    <h1>The <span class="grad-text">boost</span> roadmap</h1>
+    <p>Every finding from the autonomous quality loop lands here — what shipped,
+       what's mid-flight, and what's queued — scored by complexity, impact, and
+       a little bit of wow.</p>
+    <div class="cta">
+      <a class="btn btn-grad" href="#next">See what's next →</a>
+      <a class="btn btn-ghost" href="index.html">Back to the guide</a>
+    </div>
+
+    <div class="legend">
+      <span class="k"><span class="pill shipped">Shipped</span> merged &amp; released</span>
+      <span class="k"><span class="pill inflight">In flight</span> a PR is open</span>
+      <span class="k"><span class="pill next">Next</span> triaged, starting soon</span>
+      <span class="k"><span class="pill planned">Planned</span> on the list</span>
+    </div>
+  </header>
+
+  <!-- ================= SNAPSHOT ================= -->
+  <section class="block reveal">
     <div class="stats">
-      <div class="stat reveal"><b>31</b><span>Opportunities logged</span></div>
-      <div class="stat reveal"><b>6</b><span>Engineering tracks</span></div>
-      <div class="stat reveal"><b>6</b><span>High-impact items</span></div>
-      <div class="stat reveal"><b>100%</b><span>Traced to source</span></div>
+      <div class="stat"><b>4</b><span>Shipped</span></div>
+      <div class="stat"><b>3</b><span>Next up</span></div>
+      <div class="stat"><b>4</b><span>Planned</span></div>
+      <div class="stat"><b>8</b><span>Code-health finds</span></div>
     </div>
-  </div>
+  </section>
 
-  <!-- ================= LEGEND ================= -->
-  <div class="wrap">
-    <div class="legend reveal">
-      <h3>How to read this roadmap</h3>
-      <dl class="legend-grid">
-        <div>
-          <dt>Status</dt>
-          <dd><code>Proposed</code> logged &amp; triaged · <code>Next</code> queued · <code>In&nbsp;progress</code> being built · <code>Shipped</code> done.</dd>
-        </div>
-        <div>
-          <dt>Category</dt>
-          <dd>The nature of the work: <code>correctness</code>, <code>robustness</code>, <code>performance</code>, <code>security</code>, <code>tech-debt</code>, <code>testing</code>, <code>ci</code>, <code>docs</code>, <code>ux</code>.</dd>
-        </div>
-        <div>
-          <dt>Complexity</dt>
-          <dd><code>S</code> a focused change · <code>M</code> a module-sized effort · <code>L</code> a multi-file refactor.</dd>
-        </div>
-        <div>
-          <dt>Impact</dt>
-          <dd>Blast radius if left undone: <code>High</code> can break installs/releases · <code>Med</code> real friction · <code>Low</code> polish.</dd>
-        </div>
-        <div>
-          <dt>Wow-factor</dt>
-          <dd>★ to ★★★★★ — how visible the win is to users &amp; contributors relative to the effort spent.</dd>
-        </div>
-      </dl>
+  <!-- ================= SHIPPED ================= -->
+  <section class="block reveal" id="shipped">
+    <div class="block-head">
+      <h2>Shipped</h2><span class="count">// merged to main &amp; published</span>
+      <span class="rule"></span>
     </div>
-  </div>
+    <div class="rgrid">
 
-  <!-- ================= FILTERS ================= -->
-  <div class="wrap filterbar">
-    <div class="filter-row">
-      <span class="flabel">Track</span>
-      <button class="pill on" data-filter="track" data-val="all">All</button>
-      <button class="pill" data-filter="track" data-val="reliability">Reliability</button>
-      <button class="pill" data-filter="track" data-val="performance">Performance</button>
-      <button class="pill" data-filter="track" data-val="architecture">Architecture</button>
-      <button class="pill" data-filter="track" data-val="security">Security</button>
-      <button class="pill" data-filter="track" data-val="testing">Testing &amp; CI</button>
-      <button class="pill" data-filter="track" data-val="docs">Docs &amp; DX</button>
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Bug</span></div>
+        <h3>Mutation hardening — <code>core/store.py</code></h3>
+        <p>Cut mutmut survivors 54&nbsp;→&nbsp;29 and uncovered a latent
+           timestamp-preservation bug the old tests masked (second-precision
+           <code>now_iso()</code> collisions hid <code>installed_at</code>/<code>tags</code>
+           preservation mutants).</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">25 mutants killed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing</span></div>
+        <h3>Mutation hardening — <code>core/gitutil.py</code></h3>
+        <p>35&nbsp;→&nbsp;1 survivor via argv-assertion tests that record the exact
+           git command line — sidestepping the macOS case-insensitive filesystem
+           that let <code>HEAD/head</code>, <code>.git/.GIT</code> and
+           <code>git/GIT</code> mutants survive against a real repo.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">34 mutants killed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing</span></div>
+        <h3>Mutation hardening — <code>core/frontmatter.py</code></h3>
+        <p>34&nbsp;→&nbsp;11 survivors with exact-equality tests, replacing
+           substring <code>in</code> checks a mutated string literal still
+           satisfied (e.g. <code>dump()</code>'s <code>XX%s:XX</code> still
+           <em>contains</em> <code>tags:</code>).</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">PR #22 · 23 killed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Infra · DX</span></div>
+        <h3>Autonomous ship-workflow &amp; isolated worktree</h3>
+        <p>The loop now runs commit → PR → green CI → squash-merge → release in a
+           dedicated <code>~/boost-loop</code> git worktree (own venv for mutmut),
+           and modern <strong>git&nbsp;2.55</strong> replaced a 2017 build that
+           fatally choked on the global <code>zdiff3</code> config.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
     </div>
-    <div class="filter-row">
-      <span class="flabel">Impact</span>
-      <button class="pill on" data-filter="impact" data-val="all">All</button>
-      <button class="pill" data-filter="impact" data-val="high">High</button>
-      <button class="pill" data-filter="impact" data-val="med">Med</button>
-      <button class="pill" data-filter="impact" data-val="low">Low</button>
+  </section>
+
+  <!-- ================= NEXT ================= -->
+  <section class="block reveal" id="next">
+    <div class="block-head">
+      <h2>Next up</h2><span class="count">// triaged findings, starting soon</span>
+      <span class="rule"></span>
     </div>
-    <p class="roadmap-count"><b id="shown">31</b> of <b>31</b> opportunities shown</p>
-  </div>
+    <div class="rgrid">
 
-  <div class="wrap" id="board">
-
-    <!-- ===== RELIABILITY & CORRECTNESS ===== -->
-    <section class="track" id="reliability" style="--tk: var(--cyan); padding-top: 40px;">
-      <div class="track-head">
-        <div class="track-icon"></div>
-        <div>
-          <h3>Reliability &amp; Correctness</h3>
-          <p>State that survives interrupts, concurrent loops, and bad input.</p>
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Bug · Infra</span></div>
+        <h3>GitHub Pages deploy is broken every push</h3>
+        <p>Root cause found: a bogus <code>mutants/None</code> gitlink (a stray
+           mutmut artifact) was committed with no <code>.gitmodules</code> entry,
+           so Pages' submodule checkout aborts with
+           <code>fatal: No url found for submodule path 'mutants/None'</code>.
+           Fix: stop tracking <code>mutants/</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">docs site down</span>
         </div>
-        <span class="n">8 items</span>
-      </div>
-      <div class="rcards">
+      </article>
 
-        <article class="ritem reveal" data-track="reliability" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-001</span><span class="rstatus next">Next</span></div>
-          <h4>Atomic, corruption-safe lock-file writes</h4>
-          <p><code>read()</code> returns an empty skeleton on <b>any</b> JSON error and <code>write()</code> is a bare <code>write_text</code>. An interrupted or concurrent write truncates the lock — the next <code>set_skill()</code> then <b>permanently drops every prior install record</b> while store dirs linger as orphans. Write to a temp file + <code>os.replace()</code>, and tell "empty" apart from "corrupt".</p>
-          <div class="rmeta"><span class="m-cat">correctness</span><span>Complexity M</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★☆</span></div>
-          <div class="rref"><code>core/lockfile.py:26–36,55</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="reliability" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-002</span><span class="rstatus next">Next</span></div>
-          <h4>Fix <code>self-update</code> version detection (dead branch)</h4>
-          <p><code>cmd_self_update</code> greps <code>__init__.py</code> for a <code>__version__ = "…"</code> literal, but the constant is <code>_detect_version()</code> (setuptools-scm — no literal). The regex never matches, so it reports <b>"already up to date"</b> even after a pull brings a newer tag. The success path is unreachable.</p>
-          <div class="rmeta"><span class="m-cat">correctness</span><span>Complexity S</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>commands/configuration.py:1087–1090</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="reliability" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-003</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Atomic skill install (temp-dir swap)</h4>
-          <p><code>_copy_skill</code> does <code>rmtree(dest)</code> then <code>copytree()</code>; an interrupt between the two leaves a missing or half-copied skill, and the lock is written afterward — so a mid-copy failure leaves store and lock <b>disagreeing</b>. Copy to a temp dir and atomically swap into place.</p>
-          <div class="rmeta"><span class="m-cat">robustness</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>core/store.py:78–82,108–131</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="reliability" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-004</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>One shared atomic-write helper (journal, config, rag)</h4>
-          <p><code>journal._maybe_rotate</code> is a racy read-modify-write that concurrent appends can truncate mid-line; <code>rag._save</code> and <code>config.save</code> repeat the non-atomic pattern. Factor a single <code>atomic_write</code> into <code>core</code> and route all four through it.</p>
-          <div class="rmeta"><span class="m-cat">robustness</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>core/journal.py:63–70 · rag.py:252 · config.py:93</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="reliability" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-005</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Unify <code>_tilde()</code> — two copies have a boundary bug</h4>
-          <p>Eight command modules each define <code>_tilde</code>; the <code>quality</code> and <code>intelligence</code> versions use <code>startswith(home)</code> with no separator check, so <code>/Users/bob-backup</code> wrongly contracts to <code>~-backup</code>. Collapse to one helper in <code>core/paths</code>.</p>
-          <div class="rmeta"><span class="m-cat">correctness</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>commands/quality.py:76 · intelligence.py:38</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="reliability" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-006</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Consolidate skill-staleness / drift logic into core</h4>
-          <p>The "is this skill outdated" decision — <code>semver_gt</code> → commit compare → <code>sha256_dir</code> vs lock — is reimplemented nearly verbatim in <code>cmd_update</code>, <code>cmd_outdated</code> and <code>_drift_status</code>. Three copies of core business logic that <b>will drift apart</b>. Make it one <code>core</code> function the commands render.</p>
-          <div class="rmeta"><span class="m-cat">correctness</span><span>Complexity M</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>commands/pkg.py:277 · taps.py:225 · quality.py:120</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="reliability" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-007</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Frontmatter scalar over-coercion</h4>
-          <p><code>_scalar</code> turns <code>no</code>/<code>on</code>/<code>off</code>/<code>null</code> into bool/None, so a tag or name literally equal to one of those parses to the wrong type and leaks into search/ranking meta. Restrict boolean coercion to <code>true</code>/<code>false</code>.</p>
-          <div class="rmeta"><span class="m-cat">correctness</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>core/frontmatter.py:32–53</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="reliability" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-008</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Guard <code>output.table</code> against ragged rows</h4>
-          <p>Column-width computation does <code>max(... for r in rows if i &lt; len(r))</code>, which raises <code>max() arg is empty</code> when a header column has no matching cell in any row. Add <code>default=0</code>.</p>
-          <div class="rmeta"><span class="m-cat">robustness</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★☆☆☆☆</span></div>
-          <div class="rref"><code>core/output.py:71–83</code></div>
-        </article>
-
-      </div>
-    </section>
-
-    <!-- ===== PERFORMANCE ===== -->
-    <section class="track" id="performance" style="--tk: var(--sky);">
-      <div class="track-head">
-        <div class="track-icon"></div>
-        <div>
-          <h3>Performance</h3>
-          <p>Fewer disk reads and cheaper walks on the hot search / sync paths.</p>
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Hygiene · DX</span></div>
+        <h3>Untrack generated build noise</h3>
+        <p>Over a hundred <code>mutants/**</code>, <code>__pycache__/*.pyc</code>
+           and <code>.coverage</code> files are tracked despite being in
+           <code>.gitignore</code> — they churn every diff and forced careful
+           path-scoped <code>git add</code>s. Remove from the index.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">unblocks Pages</span>
         </div>
-        <span class="n">4 items</span>
-      </div>
-      <div class="rcards">
+      </article>
 
-        <article class="ritem reveal" data-track="performance" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-009</span><span class="rstatus next">Next</span></div>
-          <h4>Memoize <code>config.load()</code> in-process</h4>
-          <p>Every <code>config.get()</code> re-reads <code>config.json</code> and runs a recursive <code>deepcopy</code> of <code>DEFAULTS</code>. It's called all over hot paths — <code>ai.enabled</code>, per-skill <code>enabled_agents</code> in sync loops, log-level and policy checks — so one command triggers <b>dozens of full reads + deep-copies</b>. Cache the load, invalidate on <code>save</code>.</p>
-          <div class="rmeta"><span class="m-cat">performance</span><span>Complexity S</span><span class="m-imp med">Impact Med-High</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>core/config.py:80–102</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="performance" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-010</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Cache the catalog entry-set across RAG queries</h4>
-          <p><code>rag.retrieve()</code> calls <code>all_entries()</code>, which reads &amp; <code>json.loads</code> <b>every tap cache on every search</b> to build the live map (the BM25 index is mtime-cached, the entry set is not). Memoize the entry set on cache mtime the same way.</p>
-          <div class="rmeta"><span class="m-cat">performance</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>core/rag.py:323 · catalog.py:166–181</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="performance" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-011</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Stop re-serializing entry meta on every search</h4>
-          <p><code>catalog.search</code> computes <code>json.dumps(meta).lower()</code> for <b>every entry on every query</b> just to substring-match. Precompute a lowercased search blob at index time, or match structured fields directly.</p>
-          <div class="rmeta"><span class="m-cat">performance</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>core/catalog.py:222</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="performance" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-012</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Prune ignored dirs during <code>scan_dir</code> walk</h4>
-          <p>Two full <code>rglob</code> passes descend <b>into</b> <code>.git</code>/<code>node_modules</code> and only filter afterward, and the skill-dir membership test is O(files × skill_dirs). Switch to an <code>os.walk</code> that prunes ignored dirs in place; index skill dirs in a set.</p>
-          <div class="rmeta"><span class="m-cat">performance</span><span>Complexity M</span><span class="m-imp low">Impact Low-Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>core/catalog.py:106,119–123</code></div>
-        </article>
-
-      </div>
-    </section>
-
-    <!-- ===== ARCHITECTURE & TECH-DEBT ===== -->
-    <section class="track" id="architecture" style="--tk: var(--violet);">
-      <div class="track-head">
-        <div class="track-icon"></div>
-        <div>
-          <h3>Architecture &amp; Tech-Debt</h3>
-          <p>Pull business logic out of the command layer; shrink blast radius.</p>
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Design</span></div>
+        <h3>Reconcile the theme drift</h3>
+        <p><code>docs/index.html</code> inlines its own amber/orange palette
+           instead of the canonical <em>Aurora</em> cyan→violet→pink system in
+           <code>style/boost.css</code>. Move it onto the shared stylesheet so
+           one token edit recolours the guide, roadmap, and demo together.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
         </div>
-        <span class="n">7 items</span>
-      </div>
-      <div class="rcards">
+      </article>
 
-        <article class="ritem reveal" data-track="architecture" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-013</span><span class="rstatus next">Next</span></div>
-          <h4>Extract MCP + HTTP servers out of <code>configuration.py</code></h4>
-          <p>~290 lines implement a full HTTP catalog server <b>and</b> a JSON-RPC 2.0 MCP server — with search/install/doctor dispatch that duplicates the CLI — inside a "configuration" command module. Move to <code>core/mcp.py</code> / <code>core/serve.py</code>, leaving thin wrappers. It's the biggest driver of the file's 1,099 lines and is nearly untestable in place.</p>
-          <div class="rmeta"><span class="m-cat">tech-debt</span><span>Complexity L</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★☆</span></div>
-          <div class="rref"><code>commands/configuration.py:741–1028</code></div>
-        </article>
+    </div>
+  </section>
 
-        <article class="ritem reveal" data-track="architecture" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-014</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Single tech-stack prober</h4>
-          <p>Stack detection exists three times — <code>discovery.detect_stack</code>, <code>intelligence._local_stack</code>, <code>quality._STACK_MARKERS</code> — and two of them already <code>import detect_stack</code> yet still carry a parallel marker table "as a fallback". Three <code>package.json</code>/<code>pyproject.toml</code>→language maps to keep in sync. Consolidate into one core prober.</p>
-          <div class="rmeta"><span class="m-cat">tech-debt</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>commands/discovery.py:74 · intelligence.py:359 · quality.py:55</code></div>
-        </article>
+  <!-- ================= PLANNED ================= -->
+  <section class="block reveal" id="planned">
+    <div class="block-head">
+      <h2>Planned</h2><span class="count">// on the list</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
 
-        <article class="ritem reveal" data-track="architecture" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-015</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Single imperative-rule extractor</h4>
-          <p>Three separate regexes scan SKILL.md bodies for "Always / Never / Must / Do&nbsp;not" lines across <code>cmd_explain</code>, <code>simulate</code> and <code>conflict</code> — same concept, three slightly different implementations. Extract one shared <code>core</code> extractor.</p>
-          <div class="rmeta"><span class="m-cat">tech-debt</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>commands/info.py:363 · intelligence.py:254 · quality.py:822</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="architecture" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-016</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Split oversized command modules</h4>
-          <p><code>quality.py</code> (14 cmds / 1,051 lines) mixes audit regexes, conflict NLP, decay scoring, fingerprinting and a health dashboard; <code>intelligence.py</code> and <code>configuration.py</code> are similarly overloaded. Split along cohesive seams to shrink blast radius and sharpen mutation-gate targeting.</p>
-          <div class="rmeta"><span class="m-cat">maintainability</span><span>Complexity L</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>commands/quality.py · intelligence.py · configuration.py</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="architecture" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-017</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Robust <code>tag</code> argument parsing</h4>
-          <p>Because <code>-tag</code> looks like an option, <code>cmd_tag</code> calls <code>parse_known_args</code> then re-walks raw <code>argv</code> to reorder tokens — fragile enough that the comment calls it "defensive". Replace with a positional-only sub-parser or an explicit <code>--add/--remove</code> design.</p>
-          <div class="rmeta"><span class="m-cat">maintainability</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>commands/info.py:575–584</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="architecture" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-018</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Localize the stored BM25 snippet</h4>
-          <p><code>_make_docs</code> stores <code>piece[:200]</code> — the head of the best chunk — and <code>retrieve</code> surfaces it verbatim, yet the docstrings promise the "best-matching passage". Center the snippet on the matched terms to improve both display and the rerank context sent to the LLM.</p>
-          <div class="rmeta"><span class="m-cat">tech-debt</span><span>Complexity M</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>core/rag.py:154–172,337–341</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="architecture" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-019</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Reuse helpers; kill minor dead work</h4>
-          <p><code>cmd_migrate</code> re-implements agent validation instead of calling <code>_check_agents</code>; <code>_user()</code> is copy-pasted between <code>configuration</code> and <code>team</code>; <code>cmd_simulate</code> parses the same frontmatter twice back-to-back. Small, satisfying cleanups.</p>
-          <div class="rmeta"><span class="m-cat">tech-debt</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★☆☆☆☆</span></div>
-          <div class="rref"><code>commands/pkg.py:38,577 · configuration.py:39 · team.py:30</code></div>
-        </article>
-
-      </div>
-    </section>
-
-    <!-- ===== SECURITY ===== -->
-    <section class="track" id="security" style="--tk: var(--pink);">
-      <div class="track-head">
-        <div class="track-icon"></div>
-        <div>
-          <h3>Security</h3>
-          <p>Defense-in-depth around the bits that shell out to <code>git</code>.</p>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing</span></div>
+        <h3>Finish mutation hardening across <code>core/</code></h3>
+        <p>Work down the remaining survivor counts, biggest first: catalog&nbsp;(27),
+           util&nbsp;(26), ai&nbsp;(21), registry&nbsp;(20), lockfile&nbsp;(13),
+           policy&nbsp;(12), config&nbsp;(9), output&nbsp;(8), agents&nbsp;(6),
+           paths&nbsp;(4).</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">~146 survivors</span>
         </div>
-        <span class="n">1 item</span>
-      </div>
-      <div class="rcards">
+      </article>
 
-        <article class="ritem reveal" data-track="security" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-020</span><span class="rstatus next">Next</span></div>
-          <h4>End-of-options <code>--</code> guard on git commands</h4>
-          <p><code>clone_shallow</code>/<code>fetch</code>/<code>reset</code> pass the URL &amp; ref as positionals with no <code>--</code> separator, so a value starting with <code>-</code> is parsed as a git option. <code>parse_spec</code> constrains most URL shapes, but adding <code>--</code> before positionals and rejecting <code>ext::</code>/<code>file::</code>/<code>fd::</code> transports closes the argument-injection surface as defense-in-depth.</p>
-          <div class="rmeta"><span class="m-cat">security</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>core/gitutil.py:34–46 · registry.py:37–53</code></div>
-        </article>
-
-      </div>
-    </section>
-
-    <!-- ===== TESTING & CI ===== -->
-    <section class="track" id="testing" style="--tk: var(--green);">
-      <div class="track-head">
-        <div class="track-icon"></div>
-        <div>
-          <h3>Testing &amp; CI</h3>
-          <p>Keep the four gates green — and the release pipeline honest.</p>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Gap</span></div>
+        <h3>Bring <code>commands/</code> under mutation testing</h3>
+        <p>The ~5,000-line CLI command layer has <strong>zero</strong> mutation
+           coverage today — mutmut is scoped to <code>core/</code> only. Extend
+           the gate (or a second gate) to the command groups.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>XL</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
         </div>
-        <span class="n">7 items</span>
-      </div>
-      <div class="rcards">
+      </article>
 
-        <article class="ritem reveal" data-track="testing" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-021</span><span class="rstatus next">Next</span></div>
-          <h4>Pin CI dev-tool versions</h4>
-          <p>Every job installs <code>ruff mypy pytest pytest-cov coverage mutmut</code> unpinned. Since all four gates are zero-tolerance and <b>every merge to main cuts a PyPI release</b>, a new ruff rule or mypy release can turn a no-op commit red and stall releases. Add a <code>requirements-dev.txt</code> / constraints file.</p>
-          <div class="rmeta"><span class="m-cat">ci</span><span>Complexity S</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★☆</span></div>
-          <div class="rref"><code>.github/workflows/ci.yml:19,48,93 · Makefile:13</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="testing" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-022</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>De-flake the mutation gate on slow runners</h4>
-          <p>Score is <code>killed / (total − skipped)</code> with <code>timeout</code> mutants counting as survivors. A loaded CI runner inflates timeouts and can drop the score below 80% with <b>no code change</b>, blocking release. Exclude timeouts from the denominator or raise mutmut's per-test timeout.</p>
-          <div class="rmeta"><span class="m-cat">tooling</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>scripts/mutation_gate.py:46–47</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="testing" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-023</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Test the generator &amp; gate scripts</h4>
-          <p><code>build_registries.py</code> generates the shipped <code>registries.json</code> that goes out on PyPI, yet nothing validates its output (schema, item-count math, <code>LIST_ONLY</code>). <code>mutation_gate.py</code>'s score math and exit codes are likewise untested. A bug in either ships a broken catalog or a false gate.</p>
-          <div class="rmeta"><span class="m-cat">testing</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>scripts/build_registries.py · mutation_gate.py</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="testing" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-024</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Assert output content in the smoke suite</h4>
-          <p>The smoke <code>run</code> helper checks only exit code + absence of "Traceback" across ~157 checks — a command can return empty or wrong data and still pass. Add a handful of content assertions (install actually links; search finds the fixture skill).</p>
-          <div class="rmeta"><span class="m-cat">testing</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>tests/smoke.sh:24</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="testing" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-025</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Cache pip in CI</h4>
-          <p>None of the 8 jobs (6-way matrix + lint + mutation) use <code>setup-python</code>'s <code>cache: pip</code>, so every run reinstalls from scratch — slower CI and more exposure to transient PyPI flakes. Enable the cache.</p>
-          <div class="rmeta"><span class="m-cat">ci</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>.github/workflows/ci.yml</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="testing" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-026</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Exercise packaged data in the release wheel smoke</h4>
-          <p>The pre-publish check installs the wheel and runs <code>--version</code> only — it never touches packaged <code>data/*.json</code>. A regression that drops <code>registries.json</code> would still publish. Add a real command (<code>search</code> / <code>tap --catalog</code>) to the wheel smoke.</p>
-          <div class="rmeta"><span class="m-cat">ci</span><span>Complexity S</span><span class="m-imp low">Impact Low-Med</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>.github/workflows/publish.yml:66–70</code></div>
-        </article>
-
-        <article class="ritem reveal" data-track="testing" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-027</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>CodeQL <code>security-extended</code> + broader deprecation filter</h4>
-          <p>The weekly CodeQL scan runs only the default suite — enable <code>security-extended</code> for a CLI that shells out to git and writes symlinks. Separately, <code>filterwarnings</code> only escalates deprecations from <code>boost_cli.*</code>, hiding stdlib deprecations that will break on a future Python across the 3.9–3.14 matrix.</p>
-          <div class="rmeta"><span class="m-cat">ci</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>.github/workflows/codeql.yml · pyproject.toml:71</code></div>
-        </article>
-
-      </div>
-    </section>
-
-    <!-- ===== DOCS & DX ===== -->
-    <section class="track" id="docs" style="--tk: var(--blue);">
-      <div class="track-head">
-        <div class="track-icon"></div>
-        <div>
-          <h3>Docs &amp; DX</h3>
-          <p>The docs are the product's front door — keep them true.</p>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Design · QA</span></div>
+        <h3>Visual regression pass on the guide</h3>
+        <p>Drive <code>docs/index.html</code> in a real browser across breakpoints
+           to confirm the glass cards, aurora, and terminal windows render
+           cleanly — and to catch anything the theme reconciliation shifts.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
         </div>
-        <span class="n">4 items</span>
-      </div>
-      <div class="rcards">
+      </article>
 
-        <article class="ritem reveal" data-track="docs" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-028</span><span class="rstatus next">Next</span></div>
-          <h4>Document <code>reindex</code>; fix stale command/check counts</h4>
-          <p>The Phase-1 <code>reindex</code> command (tested in smoke + functional) is missing from the README Discovery table, the header still says <b>"72 commands"</b> while smoke drives 73, and "152 checks" is stale (~157 now). The one command absent from the table is exactly <code>reindex</code>.</p>
-          <div class="rmeta"><span class="m-cat">docs</span><span>Complexity S</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>README.md:100,108,151</code></div>
-        </article>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Marketing</span></div>
+        <h3>Refresh the marketing surface</h3>
+        <p>Re-record <code>docs/demo.gif</code> from <code>demo.tape</code> against
+           the current CLI, tighten the README hero, and give the landing page a
+           flashier first impression that matches the Aurora theme.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
 
-        <article class="ritem reveal" data-track="docs" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-029</span><span class="rstatus next">Next</span></div>
-          <h4>Fix broken <code>docs/overview.html</code> links</h4>
-          <p>README and CLAUDE.md both send readers to <code>docs/overview.html</code> for the "visual tour", but that file doesn't exist — the guide is <code>docs/index.html</code>. A dead link in the two most-read docs. (This roadmap now lives beside it as <code>docs/roadmap.html</code>.)</p>
-          <div class="rmeta"><span class="m-cat">docs</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>README.md:103 · CLAUDE.md:80</code></div>
-        </article>
+    </div>
+  </section>
 
-        <article class="ritem reveal" data-track="docs" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-030</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Consistent <code>--json</code> wiring &amp; output contracts</h4>
-          <p><code>discovery</code> uses <code>dest="as_json"</code> while everything else reads <code>args.json</code>; and <code>config list</code> / <code>policy list</code> always emit JSON even without the flag, unlike every other command. Inconsistent enough to trip scripts. Standardize the flag name and gate JSON behind it everywhere.</p>
-          <div class="rmeta"><span class="m-cat">ux</span><span>Complexity S</span><span class="m-imp low">Impact Low-Med</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>commands/discovery.py · configuration.py:70,296</code></div>
-        </article>
+  <!-- ============ CODE HEALTH & SECURITY ============ -->
+  <section class="block reveal" id="health">
+    <div class="block-head">
+      <h2>Code health &amp; security</h2>
+      <span class="count">// planned · free tooling to catch vulns, smells &amp; bugs</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
 
-        <article class="ritem reveal" data-track="docs" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-031</span><span class="rstatus proposed">Proposed</span></div>
-          <h4>Color the coverage badge by threshold</h4>
-          <p>The CI-generated coverage badge hardcodes <code>"color":"brightgreen"</code>, so a slide toward or below the 80% gate still reads green. Color it by the actual value so the badge tells the truth.</p>
-          <div class="rmeta"><span class="m-cat">ci</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★☆☆☆</span></div>
-          <div class="rref"><code>.github/workflows/ci.yml:71</code></div>
-        </article>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Vuln</span></div>
+        <h3>Security linting — <code>bandit</code> via ruff <code>S</code> rules</h3>
+        <p>Turn on the <em>flake8-bandit</em> (<code>S</code>) rule family already
+           bundled in ruff — one line in <code>pyproject.toml</code>, zero new
+           tools. It catches the Python SAST smells the linter is blind to today:
+           <code>subprocess(shell=True)</code>, <code>assert</code> as a runtime
+           check, <code>tempfile.mktemp</code>, unsafe <code>yaml.load</code>,
+           hardcoded secrets and weak hashing. Semgrep Community rules are the
+           heavier alternative when a finding needs real dataflow.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">0 new deps</span>
+        </div>
+      </article>
 
-      </div>
-    </section>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Supply chain</span></div>
+        <h3>Dependency CVE gate — <code>pip-audit</code></h3>
+        <p>PyPA's <code>pip-audit</code> fails CI when a resolved dependency
+           matches a known advisory in the OSV / PyPI Advisory database.
+           Dependabot <em>opens</em> update PRs but never blocks a merge on a live
+           CVE; a scheduled&nbsp;+&nbsp;PR <code>pip-audit</code> job closes that
+           gap and covers the dev/test toolchain that ships nothing but can still
+           run malicious code.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">OSV-backed</span>
+        </div>
+      </article>
 
-    <p class="no-results" id="noResults">No opportunities match this filter.</p>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Posture</span></div>
+        <h3>Supply-chain posture — OpenSSF Scorecard</h3>
+        <p>The Scorecard GitHub Action audits ~18 supply-chain signals weekly —
+           branch protection, token permissions, SHA-pinned actions, dangerous
+           workflows, signed releases — and publishes results to the Security tab
+           plus a README badge. Turns <em>"are we set up safely?"</em> into a
+           tracked, trend-able number for a repo that owns a Trusted-Publisher
+           release path.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">badge-worthy</span>
+        </div>
+      </article>
 
-    <p class="foot-note">
-      Every item was traced to a real <code>file:line</code> during a staff-level
-      scan of the engine, command layer, tests and tooling. Status, complexity,
-      impact and wow-factor are engineering estimates — refine them as work lands.
-      Regenerate or extend this board with <code>/loop</code>.
-    </p>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Secrets</span></div>
+        <h3>Secret scanning — <code>gitleaks</code> + push protection</h3>
+        <p>Scan the full history and every PR diff for leaked tokens, keys and
+           PyPI credentials with the free <code>gitleaks</code> action, paired
+           with GitHub push-protection (free on public repos) so a secret is
+           blocked <em>before</em> it lands. Cheap insurance for a project whose
+           release automation trades on trusted identity.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">pre-commit-able</span>
+        </div>
+      </article>
 
-  </div>
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Smell</span></div>
+        <h3>Complexity &amp; dead-code radar — <code>xenon</code> · <code>vulture</code></h3>
+        <p>Gate CI on a maintainability grade with <code>xenon</code> (built on
+           <code>radon</code>) and flag unreachable branches, unused arguments and
+           orphan helpers with <code>vulture</code>. First target: the
+           ~5,000-line <code>commands/</code> layer that has no complexity signal
+           today. Surfaces the structural smells mutation testing can't see.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">commands/ first</span>
+        </div>
+      </article>
 
-  <!-- ================= FOOTER ================= -->
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Platform</span></div>
+        <h3>Quality dashboard — SonarCloud (free for OSS)</h3>
+        <p>SonarCloud is free for public repos and layers bugs, code smells,
+           security hotspots, duplication and a coverage overlay into one
+           dashboard, decorating each PR with a pass/fail quality gate. The
+           single highest-signal freemium add — one external surface that unifies
+           everything else in this section.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">PR quality gate</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Bug</span></div>
+        <h3>Property-based tests — <code>hypothesis</code> on the parsers</h3>
+        <p>Generate adversarial inputs against <code>core/frontmatter</code> and
+           <code>core/catalog.scan_dir</code> to surface crashes and round-trip
+           failures the example-based unit tests never think to try — a
+           <code>dump</code>→<code>parse</code> must round-trip; a scan must never
+           raise on arbitrary bytes. Complements the gate: mutmut proves the tests
+           are strict, Hypothesis proves the inputs are wide.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">finds edge cases</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Bug</span></div>
+        <h3>Coverage-guided fuzzing — <code>atheris</code> / OSS-Fuzz</h3>
+        <p>Google's <code>atheris</code> fuzzes the frontmatter and registry
+           parsers under coverage guidance to mine deep crash inputs; OSS-Fuzz
+           runs it continuously for free once boost qualifies as an open-source
+           project. The stretch goal — the highest ceiling for finding the bug
+           nobody thought to write a test for.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">stretch</span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
   <footer>
-    <div class="wrap">
-      <p class="brand"><b>boost</b> · Engineering Roadmap · living document</p>
-      <p class="meta">31 opportunities across 6 tracks · themed with the <code>boost</code> Aurora system (<code>style/boost.css</code>)</p>
-      <p class="links"><a href="./index.html">Visual Guide</a> · <a href="https://github.com/jonnyeclectic/boost">GitHub</a> · <a href="#top">Top</a></p>
-    </div>
+    <p>Maintained by the boost quality loop · themed with
+       <a href="../style/boost.css">style/boost.css</a> ·
+       <a href="index.html">visual guide</a></p>
   </footer>
 
-</main>
+</div>
 
-<script>
-// ---------- roadmap filtering ----------
-(function () {
-  var state = { track: "all", impact: "all" };
-  var items = Array.prototype.slice.call(document.querySelectorAll(".ritem"));
-  var shown = document.getElementById("shown");
-  var noResults = document.getElementById("noResults");
-  var tracks = Array.prototype.slice.call(document.querySelectorAll(".track"));
-
-  function apply() {
-    var n = 0;
-    items.forEach(function (el) {
-      var okT = state.track === "all" || el.dataset.track === state.track;
-      var okI = state.impact === "all" || el.dataset.impact === state.impact;
-      var vis = okT && okI;
-      el.style.display = vis ? "" : "none";
-      if (vis) n++;
-    });
-    // hide track sections that have no visible cards
-    tracks.forEach(function (sec) {
-      var any = sec.querySelectorAll('.ritem:not([style*="display: none"])').length > 0;
-      sec.style.display = any ? "" : "none";
-    });
-    shown.textContent = n;
-    noResults.style.display = n === 0 ? "block" : "none";
-  }
-
-  document.querySelectorAll(".pill").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      var dim = btn.dataset.filter, val = btn.dataset.val;
-      state[dim] = val;
-      document.querySelectorAll('.pill[data-filter="' + dim + '"]').forEach(function (b) {
-        b.classList.toggle("on", b === btn);
-      });
-      apply();
-    });
-  });
-})();
-
-// ---------- reveal on scroll ----------
-(function () {
-  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (reduce || !("IntersectionObserver" in window)) {
-    document.querySelectorAll(".reveal").forEach(function (el) { el.classList.add("in"); });
-    return;
-  }
-  var io = new IntersectionObserver(function (entries) {
-    entries.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); } });
-  }, { threshold: 0.12 });
-  document.querySelectorAll(".reveal").forEach(function (el) { io.observe(el); });
-})();
-</script>
-
+<script src="../style/boost.js" defer></script>
 </body>
 </html>
