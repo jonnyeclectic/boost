@@ -224,6 +224,8 @@
   .tok { color: var(--green); }        /* ✓ */
   .tstar { color: var(--amber); }
   .tdim { color: #9d9dbd; }
+  .tacc { color: var(--cyan); font-weight: 700; }  /* Aurora accent: meters, names, ==> */
+  .tbox { color: var(--green); }        /* framed-card border (panel hue=green) */
 
   /* ---------- architecture ---------- */
   .flow { max-width: 860px; margin: 64px auto 0; display: flex; flex-direction: column; align-items: center; }
@@ -587,19 +589,25 @@ facilitate structured divergent thinking:
         <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
           <div class="bar-title">zsh — boost</div></div>
         <pre><span class="tp">$</span> <span class="tv">boost</span> <span class="tc">search</span> jira
-  jira-integration   Sync commits and PRs to Jira tickets <span class="tstar">★ curated</span>
-  commit-messages    Conventional, atomic commit message discipline
+  <span class="tacc">▰▰▰▰</span> <span class="tacc">jira-integration</span>   Sync commits and PRs to Jira tickets <span class="tstar">★ curated</span>
+  <span class="tacc">▰▰▱▱</span> <span class="tacc">commit-messages</span>    Conventional, atomic commit message discipline
   <span class="tdim">2 matches · ranked by Claude Haiku relevance</span>
 
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">install</span> jira-integration
   <span class="tok">✓</span> copied to ~/.agents/skills/jira-integration
   <span class="tok">✓</span> linked → claude-code · windsurf · cursor
   <span class="tok">✓</span> lock updated (.skill-lock.json)
-  Installed 1 new skill; quality score 92/100
+  <span class="tbox">╭─ </span><b>installed</b><span class="tbox"> ────────────────────────────────────────╮</span>
+  <span class="tbox">│</span> Installed 1 new skill; quality score 92/100        <span class="tbox">│</span>
+  <span class="tbox">│</span> <span class="tdim">jira-integration → claude-code · windsurf · cursor</span> <span class="tbox">│</span>
+  <span class="tbox">│</span> <span class="tdim">next: boost info jira-integration</span>                  <span class="tbox">│</span>
+  <span class="tbox">╰────────────────────────────────────────────────────╯</span>
 
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">doctor</span>
+  <span class="tacc">==&gt;</span> <b>boost doctor</b>
   <span class="tok">✓</span> 14 skills installed · 2 taps synced · 0 broken links
   <span class="tok">✓</span> lock file integrity OK · log rotation healthy
+  <span class="tok">● healthy</span>
 
 <span class="cm"># share the whole setup with your team:</span>
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">bundle</span> dump &gt; Boostfile   <span class="cm"># teammates run: boost bundle install</span></pre>
