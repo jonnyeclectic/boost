@@ -809,20 +809,54 @@ class TestSelfUpdate:
         assert "boost is not running from a git checkout" in r.err
         assert "git clone the boost repo" in r.err
 
-    def test_git_path_pulls_and_reports(self, boost, sandbox, monkeypatch):
+    def _fake_git(self, monkeypatch, *, before, after, described):
+        """Stub gitutil so self-update sees a controlled HEAD move + describe.
+
+        ``rev-parse HEAD`` returns ``before`` until the pull runs, ``after``
+        afterwards; ``describe`` returns ``described``; ``pull`` is a no-op.
+        """
         calls = []
+        pulled = {"done": False}
         monkeypatch.setattr("boost_cli.core.gitutil.is_repo", lambda p: True)
 
         def fake_run(args, **kw):
             calls.append(list(args))
+            if "pull" in args:
+                pulled["done"] = True
+                return _proc(args, 0)
+            if "rev-parse" in args:
+                return _proc(args, 0, out=(after if pulled["done"] else before))
+            if "describe" in args:
+                return _proc(args, 0, out=described)
             return _proc(args, 0)
 
         monkeypatch.setattr("boost_cli.core.gitutil.run", fake_run)
+        return calls
+
+    def test_reports_already_up_to_date_when_head_unchanged(
+            self, boost, sandbox, monkeypatch):
+        # HEAD is identical before and after the pull -> nothing landed
+        calls = self._fake_git(monkeypatch, before="sha1\n", after="sha1\n",
+                               described="v2.3.3\n")
         r = boost("self-update")
         root = paths.repo_root()
-        assert calls == [["-C", str(root), "pull", "--ff-only"]]
         from boost_cli import __version__
+        assert ["-C", str(root), "pull", "--ff-only"] in calls
         assert ("already up to date (v%s)" % __version__) in r.out
+        assert "→" not in r.out
         ev = journal.events(action="self-update")[0]
-        assert ev["subject"] == __version__
+        assert ev["subject"] == __version__ and ev["previous"] == __version__
+
+    def test_reports_new_version_when_pull_advances_head(
+            self, boost, sandbox, monkeypatch):
+        # the pull fast-forwards HEAD -> report the git-described new version.
+        # This path was unreachable before the fix (the old code grepped
+        # __init__.py for a __version__ literal setuptools-scm never writes).
+        self._fake_git(monkeypatch, before="oldsha\n", after="newsha\n",
+                       described="v9.9.9\n")
+        r = boost("self-update")
+        from boost_cli import __version__
+        assert ("boost v%s → v9.9.9" % __version__) in r.out
+        ev = journal.events(action="self-update")[0]
+        assert ev["subject"] == "9.9.9"          # git-derived, not the stale const
         assert ev["previous"] == __version__

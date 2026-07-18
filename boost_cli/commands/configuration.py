@@ -1147,14 +1147,21 @@ def cmd_self_update(argv) -> int:
         raise BoostError("boost is not running from a git checkout",
                         hint="git clone the boost repo and symlink bin")
     old = __version__
+    before = gitutil.head_commit(root)
     gitutil.run(["-C", str(root), "pull", "--ff-only"], timeout=120)
-    new = old
-    m = re.search(r"__version__\s*=\s*[\"']([^\"']+)[\"']",
-                  (root / "boost_cli" / "__init__.py").read_text())
-    if m:
-        new = m.group(1)
-    journal.log("self-update", new, previous=old)
-    if new != old:
+    after = gitutil.head_commit(root)
+    # The version is setuptools-scm derived — there is no `__version__ = "…"`
+    # literal to grep, and the build-time _version.py / installed metadata are
+    # stale until a reinstall. Ask git for the freshly-pulled version directly
+    # (mirrors boost_cli._detect_version()'s git-checkout fallback), and treat a
+    # moved HEAD as the unambiguous "an update landed" signal — independent of
+    # how the two version strings happen to be formatted.
+    new = gitutil.run(
+        ["-C", str(root), "describe", "--tags", "--always", "--dirty"],
+        check=False, timeout=10).stdout.strip().lstrip("v") or old
+    updated = bool(after) and after != before
+    journal.log("self-update", new if updated else old, previous=old)
+    if updated:
         out.ok("boost v%s → v%s" % (old, new))
     else:
         out.ok("already up to date (v%s)" % old)
