@@ -193,3 +193,106 @@ class TestDump:
     def test_dump_quotes_colon_values(self):
         text = frontmatter.dump({"desc": "a: b"})
         assert '"a: b"' in text
+
+
+class TestMutationPrecision:
+    """Exact-output tests pinning behaviour that substring `in` checks miss.
+
+    Each targets a specific mutmut survivor class in frontmatter.py; the
+    assertions are equalities (not `in`) so a mutated literal is observable.
+    """
+
+    # --- split() -------------------------------------------------------
+    def test_body_lstrip_only_strips_newlines(self):
+        # body begins with 'X'; lstrip must strip newlines only, not any char
+        _, body = frontmatter.parse("---\nname: a\n---\nXeno body")
+        assert body == "Xeno body"
+
+    # --- _scalar() -----------------------------------------------------
+    def test_scalar_only_quote_chars_unwrap(self):
+        # a value fenced by a non-quote char stays literal
+        assert frontmatter._scalar("XfooX") == "XfooX"
+
+    # --- _split_commas() ----------------------------------------------
+    def test_flow_list_non_quote_char_does_not_open_quote(self):
+        meta, _ = frontmatter.parse("---\ntags: [X, y]\n---\n")
+        assert meta["tags"] == ["X", "y"]        # 'X' is not a quote opener
+
+    def test_flow_list_quote_midtoken_keeps_buffer(self):
+        # a quote in the middle of a token must not reset the accumulated buf
+        meta, _ = frontmatter.parse('---\ntags: [x"y"]\n---\n')
+        assert meta["tags"] == ['x"y"']
+
+    def test_flow_list_multichar_unquoted_items(self):
+        meta, _ = frontmatter.parse("---\ntags: [abc, def]\n---\n")
+        assert meta["tags"] == ["abc", "def"]
+
+    # --- parse_block(): control flow ----------------------------------
+    def test_blank_line_is_skipped_not_terminal(self):
+        meta, _ = frontmatter.parse("---\nname: a\n\nversion: 2\n---\n")
+        assert meta == {"name": "a", "version": 2}   # blank didn't stop parse
+
+    def test_comment_with_colon_is_ignored(self):
+        meta, _ = frontmatter.parse("---\n# note: hi\nname: x\n---\n")
+        assert meta == {"name": "x"}                 # '# note' not a key
+
+    def test_bare_dash_list_item_is_empty_string(self):
+        meta, _ = frontmatter.parse("---\nreq:\n  -\n  - a\n---\n")
+        assert meta["req"] == ["", "a"]
+
+    def test_continuation_folds_at_single_space_indent(self):
+        meta, _ = frontmatter.parse("---\ndesc: hello\n world\n---\n")
+        assert meta["desc"] == "hello world"         # indent > 0, not > 1
+
+    def test_indented_colon_line_is_a_key_not_a_fold(self):
+        meta, _ = frontmatter.parse("---\ndesc: hello\n  key: val\n---\n")
+        assert meta["desc"] == "hello"
+        assert meta["key"] == "val"
+
+    def test_unindented_colonless_word_is_skipped_not_terminal(self):
+        # a bare word at indent 0 is skipped; parsing continues past it
+        meta, _ = frontmatter.parse("---\nname: a\nbareword\nversion: 2\n---\n")
+        assert meta == {"name": "a", "version": 2}
+
+    def test_fold_then_next_key_both_survive(self):
+        meta, _ = frontmatter.parse(
+            "---\ndesc: hello\n  world\nversion: 2\n---\n")
+        assert meta["desc"] == "hello world"
+        assert meta["version"] == 2                  # parsing continued
+
+    # --- parse_block(): comment stripping -----------------------------
+    def test_double_quoted_value_keeps_inline_hash(self):
+        meta, _ = frontmatter.parse('---\nname: "foo # bar"\n---\n')
+        assert meta["name"] == "foo # bar"
+
+    def test_comment_strip_splits_on_first_space_hash_only(self):
+        meta, _ = frontmatter.parse("---\nname: foo bar # c\n---\n")
+        assert meta["name"] == "foo bar"             # keeps internal space
+
+    def test_comment_strip_uses_leftmost_hash(self):
+        meta, _ = frontmatter.parse("---\nname: a # b # c\n---\n")
+        assert meta["name"] == "a"                   # split, not rsplit
+
+    def test_flow_list_needs_both_brackets(self):
+        meta, _ = frontmatter.parse("---\ntags: [unclosed\n---\n")
+        assert meta["tags"] == "[unclosed"           # not parsed as a list
+
+    # --- dump(): exact lines ------------------------------------------
+    def test_dump_list_exact(self):
+        assert frontmatter.dump({"tags": ["a"]}) == "---\ntags:\n  - a\n---"
+
+    def test_dump_bool_true_exact(self):
+        assert frontmatter.dump({"x": True}) == "---\nx: true\n---"
+
+    def test_dump_bool_false_exact(self):
+        assert frontmatter.dump({"x": False}) == "---\nx: false\n---"
+
+    def test_dump_none_exact(self):
+        assert frontmatter.dump({"x": None}) == "---\nx:\n---"
+
+    def test_dump_colon_value_quoted_exact(self):
+        assert frontmatter.dump({"d": "a: b"}) == '---\nd: "a: b"\n---'
+
+    def test_dump_escapes_embedded_quote_exact(self):
+        # value has a quote AND a colon -> quoted branch escapes the quote
+        assert frontmatter.dump({"d": 'a": b'}) == '---\nd: "a\\": b"\n---'
