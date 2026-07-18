@@ -627,9 +627,115 @@ class TestBrowse:
                            FakeCurses.KEY_BACKSPACE, ord("i")])
         picked = discovery._browse_tui(fake, entries)
         assert picked["name"] == "brainstorming"
-        assert any(s.startswith("filter: t") for s in fake.drawn)
+        # the typed query is echoed after the "❯" prompt
+        assert "t" in fake.drawn
+        assert any("boost browse" in s for s in fake.drawn)
         # ESC quits without a pick
         assert discovery._browse_tui(FakeCurses([27]), entries) is None
+
+
+class TestBrowseAurora:
+    """The curses browser paints itself in the single-source Aurora palette."""
+
+    def test_curses_rgb1000_parity_with_tokens(self):
+        from boost_cli.commands import discovery
+        from boost_cli.core import output as out
+        rgb = discovery._curses_rgb1000()
+        assert set(rgb) == set(out.TOKENS)
+        # cyan #22d3ee scaled 0..255 -> 0..1000
+        r, g, b = out.TOKENS["cyan"]
+        assert rgb["cyan"] == (round(r / 255 * 1000), round(g / 255 * 1000),
+                               round(b / 255 * 1000))
+        for triple in rgb.values():
+            assert all(0 <= c <= 1000 for c in triple)
+
+    def test_nearest_base_covers_every_token(self):
+        import curses
+        from boost_cli.commands import discovery
+        from boost_cli.core import output as out
+        base = discovery._nearest_base(curses)
+        assert set(base) == set(out.TOKENS)
+        assert base["cyan"] == curses.COLOR_CYAN
+        assert base["violet"] == base["pink"] == curses.COLOR_MAGENTA
+
+    def test_match_positions(self):
+        from boost_cli.commands import discovery
+        assert discovery._match_positions("bs", "brainstorm") == [0, 5]
+        assert discovery._match_positions("", "anything") == []
+        assert discovery._match_positions("zzz", "brainstorm") == []
+        # left-to-right greedy: first 'o', then trailing 'm'
+        assert discovery._match_positions("om", "brainstorm") == [7, 9]
+
+    def test_scrollbar_math(self):
+        from boost_cli.commands import discovery
+        assert discovery._scrollbar(5, 10, 0) is None      # all fits
+        assert discovery._scrollbar(10, 0, 0) is None      # no rows
+        start, length = discovery._scrollbar(100, 10, 0)
+        assert start == 0 and 1 <= length <= 10
+        end_start, _ = discovery._scrollbar(100, 10, 90)   # scrolled to bottom
+        assert end_start == 10 - length
+
+    def test_grad_segments_partition(self):
+        from boost_cli.commands import discovery
+        assert discovery._grad_segments(0) == []
+        segs = discovery._grad_segments(10, 3)
+        assert [s[1] for s in segs] == [4, 3, 3]           # sums to width
+        assert sum(s[1] for s in segs) == 10
+        assert [s[0] for s in segs] == [0, 4, 7]           # contiguous
+        assert len(discovery._grad_segments(2, 3)) == 2    # n clamps to width
+
+    def test_theme_upgrades_to_colour(self):
+        from boost_cli.commands import discovery
+
+        class ColorCurses:
+            COLOR_CYAN, COLOR_MAGENTA, COLOR_GREEN = 6, 5, 2
+            COLOR_YELLOW, COLOR_RED = 3, 1
+            COLORS = 256
+            A_BOLD, A_DIM, A_REVERSE, A_NORMAL = 1, 2, 4, 0
+
+            class error(Exception):
+                pass
+
+            def __init__(self):
+                self.colors, self.pairs = {}, {}
+
+            def start_color(self):
+                pass
+
+            def use_default_colors(self):
+                pass
+
+            def can_change_color(self):
+                return True
+
+            def init_color(self, slot, r, g, b):
+                self.colors[slot] = (r, g, b)
+
+            def init_pair(self, i, fg, bg):
+                self.pairs[i] = (fg, bg)
+
+            def color_pair(self, i):
+                return i << 8
+
+        cc = ColorCurses()
+        th = discovery._aurora_theme(cc)
+        # custom colours were defined from the parity-locked palette
+        assert cc.colors[16] == discovery._curses_rgb1000()["cyan"]
+        # title carries a colour pair plus bold, not bare monochrome
+        assert th["title"] & cc.A_BOLD
+        assert th["title"] & ~cc.A_BOLD
+        assert len(th["rule"]) == 3
+        assert th["rule"][0] != th["rule"][1] != th["rule"][2]
+
+    def test_theme_falls_back_without_colour(self):
+        from boost_cli.commands import discovery
+
+        class MonoCurses:
+            A_BOLD, A_DIM, A_REVERSE, A_NORMAL = 1, 2, 4, 0
+        th = discovery._aurora_theme(MonoCurses)
+        assert th["title"] == MonoCurses.A_BOLD
+        assert th["sel_bar"] == MonoCurses.A_REVERSE
+        assert th["rule"] == [MonoCurses.A_NORMAL] * 3
 
 
 # ---------------------------------------------------------------- trending
