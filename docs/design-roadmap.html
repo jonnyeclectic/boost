@@ -231,7 +231,7 @@
       <div class="rcards">
 
         <article class="ritem" data-track="color" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-D01</span><span class="rstatus next">Next</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D01</span><span class="rstatus done">Shipped</span></div>
           <h4>24-bit Aurora palette in <code>output.py</code></h4>
           <p>The whole CLI runs on eight legacy SGR codes (<code>RED</code>…<code>CYAN</code>) that don't match the brand at all — the front door paints section headers in generic <code>[33m</code> yellow. Add truecolor <code>rgb()</code> helpers mapping the exact web tokens: cyan <b>#22d3ee</b>, violet <b>#a855f7</b>, pink <b>#f472d0</b>, green <b>#4ade80</b>, yellow <b>#facc15</b>, plus <code>--text</code>/<code>--text-3</code> greys. One map recolors everything.</p>
           <div class="rmeta"><span class="m-cat">color</span><span>Complexity S</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★☆</span></div>
@@ -239,7 +239,7 @@
         </article>
 
         <article class="ritem" data-track="color" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-D02</span><span class="rstatus next">Next</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D02</span><span class="rstatus progress">In progress</span></div>
           <h4>Terminal capability detection &amp; graceful degradation</h4>
           <p><code>use_color()</code> is binary — color or nothing. Add a tier ladder: <b>truecolor</b> (<code>COLORTERM=truecolor/24bit</code>) → <b>256</b> → <b>16</b> → <b>none</b>, so the Aurora tokens snap to the nearest available color instead of vanishing. Keep the existing <code>NO_COLOR</code> honor, add a <code>BOOST_COLOR=always/auto/never</code> override, and treat <code>TERM=dumb</code> as none.</p>
           <div class="rmeta"><span class="m-cat">color</span><span>Complexity M</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★☆☆</span></div>
@@ -247,7 +247,7 @@
         </article>
 
         <article class="ritem" data-track="color" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-D03</span><span class="rstatus proposed">Proposed</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D03</span><span class="rstatus done">Shipped</span></div>
           <h4>Gradient text renderer — the signature move</h4>
           <p>The brand <em>is</em> the cyan→violet→pink <code>--grad</code>. Interpolate it per-character across a string so headings, the <code>boost</code> wordmark and hero counts shimmer in the terminal exactly like the web hero. A pure-Python lerp over the three stops; falls back to a single accent color when truecolor is unavailable.</p>
           <div class="rmeta"><span class="m-cat">color</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★★</span></div>
@@ -380,7 +380,7 @@
       <div class="rcards">
 
         <article class="ritem" data-track="commands" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-D14</span><span class="rstatus next">Next</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D14</span><span class="rstatus progress">In progress</span></div>
           <h4>Front door: gradient wordmark + section glyphs</h4>
           <p>The <code>boost</code> home screen is the first thing everyone sees. Today the wordmark is plain bold and every group header is the same generic yellow. Paint the <code>boost</code> wordmark with the Aurora gradient and give each command group a colored bullet/glyph keyed to a brand hue — turning a flat list into a branded index.</p>
           <div class="rmeta"><span class="m-cat">commands</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★★</span></div>

@@ -68,6 +68,135 @@ class TestC:
             "\033[31m\033[1mhi\033[0m")
 
 
+class TestColorLevel:
+    def test_none_when_no_color(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.color_level(FakeStream(tty=True)) == 0
+
+    def test_none_when_non_tty(self, monkeypatch):
+        monkeypatch.delenv("COLORTERM", raising=False)
+        assert output.color_level(FakeStream(tty=False)) == 0
+
+    def test_basic_when_tty_without_colorterm(self, monkeypatch):
+        monkeypatch.delenv("COLORTERM", raising=False)
+        assert output.color_level(FakeStream(tty=True)) == 1
+
+    def test_truecolor_from_colorterm(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.color_level(FakeStream(tty=True)) == 2
+
+    def test_truecolor_from_24bit(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "24bit")
+        assert output.color_level(FakeStream(tty=True)) == 2
+
+    def test_colorterm_is_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "TrueColor")
+        assert output.color_level(FakeStream(tty=True)) == 2
+
+    def test_unrelated_colorterm_is_basic(self, monkeypatch):
+        monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+        monkeypatch.setenv("COLORTERM", "8bit")
+        assert output.color_level(FakeStream(tty=True)) == 1
+
+    def test_truecolor_when_forced_even_off_tty(self, monkeypatch):
+        monkeypatch.delenv("COLORTERM", raising=False)
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert output.color_level(FakeStream(tty=False)) == 2
+
+
+class TestRgb:
+    def test_channels_formatted(self):
+        assert output.rgb(34, 211, 238) == "\033[38;2;34;211;238m"
+
+    def test_zero_channels(self):
+        assert output.rgb(0, 0, 0) == "\033[38;2;0;0;0m"
+
+
+class TestAurora:
+    def test_plain_when_no_color(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.aurora("boost", "cyan", FakeStream(tty=True)) == "boost"
+
+    def test_truecolor_cyan_exact_hex(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.aurora("x", "cyan", FakeStream(tty=True)) == (
+            "\033[38;2;34;211;238mx\033[0m")
+
+    def test_truecolor_pink_exact_hex(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.aurora("x", "pink", FakeStream(tty=True)) == (
+            "\033[38;2;244;114;208mx\033[0m")
+
+    def test_basic_cyan_uses_16color_fallback(self, monkeypatch):
+        monkeypatch.delenv("COLORTERM", raising=False)
+        assert output.aurora("x", "cyan", FakeStream(tty=True)) == (
+            output.CYAN + "x" + output.RESET)
+
+    def test_basic_violet_falls_back_to_magenta(self, monkeypatch):
+        monkeypatch.delenv("COLORTERM", raising=False)
+        assert output.aurora("x", "violet", FakeStream(tty=True)) == (
+            output.MAGENTA + "x" + output.RESET)
+
+
+class TestGradient:
+    def test_plain_when_no_color(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.gradient("boost", FakeStream(tty=True)) == "boost"
+
+    def test_empty_string_passthrough(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.gradient("", FakeStream(tty=True)) == ""
+
+    def test_basic_level_is_single_brand_color(self, monkeypatch):
+        monkeypatch.delenv("COLORTERM", raising=False)
+        assert output.gradient("ab", FakeStream(tty=True)) == (
+            output.MAGENTA + "ab" + output.RESET)
+
+    def test_truecolor_first_char_is_cyan_stop(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.gradient("boost", FakeStream(tty=True)).startswith(
+            "\033[38;2;34;211;238mb")
+
+    def test_truecolor_last_char_is_pink_stop(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.gradient("boost", FakeStream(tty=True)).endswith(
+            "\033[38;2;244;114;208mt\033[0m")
+
+    def test_single_char_uses_first_stop(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.gradient("Z", FakeStream(tty=True)) == (
+            "\033[38;2;34;211;238mZ\033[0m")
+
+    def test_exactly_one_reset_at_end(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        assert output.gradient("boost", FakeStream(tty=True)).count(
+            output.RESET) == 1
+
+    def test_midpoint_char_hits_violet_stop(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        # "abc": i=1 -> t=0.5 -> lands exactly on the middle (violet) stop.
+        assert "\033[38;2;168;85;247mb" in output.gradient(
+            "abc", FakeStream(tty=True))
+
+    def test_two_char_spans_full_gradient(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        # n == 2 boundary: first char = cyan stop, second = pink stop — not both
+        # collapsed onto the first stop.
+        assert output.gradient("ab", FakeStream(tty=True)) == (
+            "\033[38;2;34;211;238ma\033[38;2;244;114;208mb\033[0m")
+
+    def test_exact_interpolation_across_all_chars(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        # Pins every character's interpolated color so any drift in the
+        # per-char gradient math (segment, local-t, lerp rounding) is caught.
+        assert output.gradient("abcd", FakeStream(tty=True)) == (
+            "\033[38;2;34;211;238ma"
+            "\033[38;2;123;127;244mb"
+            "\033[38;2;193;95;234mc"
+            "\033[38;2;244;114;208md"
+            "\033[0m")
+
+
 class TestHelpers:
     @pytest.fixture(autouse=True)
     def plain(self, monkeypatch):
