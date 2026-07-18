@@ -179,6 +179,16 @@ behind the page, and glass cards that light up under the cursor. Drop
 [`style/demo.html`](style/demo.html) for the whole system on one page and
 [`style/README.md`](style/README.md) for the tokens and class reference.
 
+The same palette runs in the **terminal**. boost renders in 24-bit Aurora color
+where the terminal advertises it (`COLORTERM=truecolor`), degrading cleanly to
+16-color and then to plain text — so the gradient `boost` wordmark, framed
+result cards, search relevance meters, and the green `● healthy` doctor verdict
+all speak the same design system as the web (the CLI palette is even
+[test-locked](tests/unit/test_token_parity.py) to `style/boost.css`, so the two
+can't drift). Color follows the [NO_COLOR](https://no-color.org) convention plus
+a `BOOST_COLOR` override — set `BOOST_COLOR=never` to force plain output (handy
+for logs and pipes) or `BOOST_COLOR=always` to keep color through a pipe.
+
 ## Working on boost
 
 ```bash
