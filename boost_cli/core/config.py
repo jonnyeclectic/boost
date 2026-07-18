@@ -47,8 +47,8 @@ DEFAULT_TAPS = [
     {"name": "expo/skills", "url": "https://github.com/expo/skills",
      "curated": True,
      "focus": "Official Expo team skills — EAS builds, app stores, deployments"},
-    {"name": "K-Dense-AI/claude-scientific-skills",
-     "url": "https://github.com/K-Dense-AI/claude-scientific-skills",
+    {"name": "K-Dense-AI/scientific-agent-skills",
+     "url": "https://github.com/K-Dense-AI/scientific-agent-skills",
      "curated": True,
      "focus": "Scientific computing — research libraries, databases, analysis"},
 ]

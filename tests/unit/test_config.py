@@ -161,7 +161,7 @@ class TestDefaultTaps:
         names = [t["name"] for t in config.DEFAULT_TAPS]
         assert names == ["anthropics/skills", "obra/superpowers",
                          "trailofbits/skills", "expo/skills",
-                         "K-Dense-AI/claude-scientific-skills"]
+                         "K-Dense-AI/scientific-agent-skills"]
         for tap in config.DEFAULT_TAPS:
             assert tap["curated"] is True
             assert tap["url"].startswith("https://github.com/")
