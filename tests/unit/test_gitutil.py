@@ -145,9 +145,35 @@ class TestCloneAndInspect:
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("git@example:x.git", tmp_path / "d")
         (args, kw), = calls
-        assert args == ["clone", "--depth", "1", "--quiet",
+        assert args == ["clone", "--depth", "1", "--quiet", "--",
                         "git@example:x.git", str(tmp_path / "d")]
         assert kw.get("timeout") == 600     # long clone timeout, not the 300 default
+
+    def test_clone_shallow_puts_end_of_options_before_url(self, tmp_path,
+                                                          monkeypatch):
+        # a URL beginning with `-` must be a positional, never a git flag
+        calls = _record_run(monkeypatch)
+        gitutil.clone_shallow("--upload-pack=evil", tmp_path / "d")
+        (args, _kw), = calls
+        assert "--" in args and args.index("--") < args.index("--upload-pack=evil")
+
+    @pytest.mark.parametrize("bad", [
+        "ext::sh -c evil", "file::/etc/passwd", "fd::7",
+        "EXT::sh -c evil",           # case-insensitive
+        "  ext::sh -c evil",         # leading whitespace stripped first
+    ])
+    def test_clone_shallow_rejects_unsafe_transports(self, tmp_path, monkeypatch,
+                                                     bad):
+        calls = _record_run(monkeypatch)
+        with pytest.raises(BoostError) as ei:
+            gitutil.clone_shallow(bad, tmp_path / "d")
+        assert "unsafe git transport" in ei.value.message
+        assert calls == []           # git is never invoked for a rejected URL
+
+    def test_clone_shallow_allows_ordinary_https(self, tmp_path, monkeypatch):
+        calls = _record_run(monkeypatch)
+        gitutil.clone_shallow("https://github.com/o/r", tmp_path / "d")
+        assert len(calls) == 1       # a normal remote clones, not rejected
 
     def test_head_commit_argv_is_rev_parse_head(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch, stdout="c0ffee\n")

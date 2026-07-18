@@ -31,9 +31,21 @@ def run(args: List[str], cwd: Optional[Path] = None, check: bool = True,
     return proc
 
 
+# git's remote-helper transports run arbitrary commands straight from the URL
+# (notably `ext::sh -c …`), so refuse them outright — boost only ever clones
+# real http(s)/ssh/git remotes.
+_UNSAFE_TRANSPORTS = ("ext::", "file::", "fd::")
+
+
 def clone_shallow(url: str, dest: Path) -> None:
+    if url.lstrip().lower().startswith(_UNSAFE_TRANSPORTS):
+        raise BoostError(
+            "refusing to clone via unsafe git transport: %s" % url,
+            hint="use an https://, ssh://, or git@ remote")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    run(["clone", "--depth", "1", "--quiet", url, str(dest)], timeout=600)
+    # `--` ends option parsing so a URL beginning with `-` cannot be read as a
+    # git flag — argument-injection defense-in-depth beside registry.parse_spec.
+    run(["clone", "--depth", "1", "--quiet", "--", url, str(dest)], timeout=600)
 
 
 def pull(repo: Path) -> str:
