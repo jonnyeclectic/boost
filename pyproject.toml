@@ -1,9 +1,46 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "boost-cli"
-version = "1.0.0"
+dynamic = ["version"]
 description = "boost — Homebrew for AI coding skills"
+readme = "README.md"
 requires-python = ">=3.9"
 license = {file = "LICENSE"}
+authors = [{name = "Jonathan Reyes"}]
+keywords = ["ai", "skills", "package-manager", "claude-code", "cursor", "windsurf", "cli"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Build Tools",
+]
+
+[project.urls]
+Homepage = "https://github.com/jonnyeclectic/boost"
+Repository = "https://github.com/jonnyeclectic/boost"
+Changelog = "https://github.com/jonnyeclectic/boost/releases"
+
+[project.scripts]
+boost = "boost_cli.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "boost_cli.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["boost_cli*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -104,3 +104,15 @@ class TestRepoRoot:
         assert (root / "boost_cli" / "cli.py").is_file()
         assert (root / "boost_cli" / "core" / "paths.py").is_file()
         assert root == Path(paths.__file__).resolve().parent.parent.parent
+
+
+class TestLauncher:
+    def test_prefers_console_script_on_path(self, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.paths.shutil.which",
+                            lambda c: "/opt/homebrew/bin/boost")
+        assert paths.launcher() == Path("/opt/homebrew/bin/boost")
+
+    def test_falls_back_to_checkout_shim(self, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.paths.shutil.which",
+                            lambda c: None)
+        assert paths.launcher() == paths.repo_root() / "boost"

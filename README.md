@@ -38,13 +38,20 @@ Mac binaries or npm for JS packages.
 
 ## Install
 
-One shim script, nothing to configure beyond that. Needs Python 3.9+ and `git`.
+Needs Python 3.9+ and `git`.
 
-```bash 
+```bash
+pipx install boost-cli        # or: pip install boost-cli
+boost --version
+boost tap --defaults          # pull in the starter registries
+```
+
+Or run it straight from a checkout — the runtime is stdlib-only, so there's
+nothing to install beyond the shim:
+
+```bash
 git clone https://github.com/jonnyeclectic/boost ~/.boost-src
 ln -s ~/.boost-src/boost ~/bin/boost        # anywhere on PATH works
-boost --version
-boost tap --defaults                       # pull in the starter registries
 ```
 
 ## Under the hood

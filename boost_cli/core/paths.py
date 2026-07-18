@@ -15,6 +15,7 @@ Layout:
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 
@@ -89,6 +90,17 @@ def policy_path() -> Path:
 def repo_root() -> Path:
     """The boost source checkout this module runs from."""
     return Path(__file__).resolve().parent.parent.parent
+
+
+def launcher() -> Path:
+    """Absolute path other processes should use to invoke boost.
+
+    A pip/pipx install has no `boost` shim next to the package (repo_root()
+    lands inside site-packages), so prefer the console script on PATH and
+    fall back to the source-checkout shim.
+    """
+    found = shutil.which("boost")
+    return Path(found) if found else repo_root() / "boost"
 
 
 def ensure_dirs() -> None:
