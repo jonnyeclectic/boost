@@ -1,16 +1,26 @@
 ---
 id: end-of-options-guard-on-git-commands
 board: code
-section: internals
-status: next
+section: shipped
+status: shipped
 category: Security
 complexity: S
 impact: Med
 wow: 3
-note: 
-order: 6
-owner:
+note: transport allow-list + -- guard
+order: 8
+owner: loop/gitutil-transport-guard
 pr:
 title: End-of-options <code>--</code> guard on git commands
 ---
-<code>clone_shallow</code>/<code>fetch</code>/<code>reset</code> pass the URL &amp; ref as positionals with no <code>--</code> separator (<code>core/gitutil.py:34–46</code>), so a value starting with <code>-</code> is parsed as a git option. <code>parse_spec</code> constrains most URL shapes, but adding <code>--</code> before positionals and rejecting <code>ext::</code>/<code>file::</code>/<code>fd::</code> transports closes the argument-injection surface as defense-in-depth.
+<code>clone_shallow</code> passed the clone URL as a positional with no
+           <code>--</code> separator, so a value beginning with <code>-</code>
+           could be read as a git flag, and git's remote-helper transports
+           (<code>ext::sh -c …</code>, <code>file::</code>, <code>fd::</code>)
+           can execute arbitrary commands straight from a URL. Now it refuses
+           those transports outright and passes <code>--</code> before the URL
+           so option parsing can't be hijacked — argument-injection
+           defense-in-depth beside <code>registry.parse_spec</code>. Kept scoped
+           to the one primitive that takes a user-influenced URL (the refs in
+           <code>pull</code>/<code>reset</code> are constants, and <code>--</code>
+           there would wrongly mean a pathspec). Six tests, mutation-verified.
