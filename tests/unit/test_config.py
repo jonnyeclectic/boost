@@ -81,6 +81,53 @@ class TestSaveRoundtrip:
         assert raw.endswith("\n")
 
 
+class TestCaching:
+    def test_reads_only_once_when_file_unchanged(self, sandbox, monkeypatch):
+        calls = {"n": 0}
+        real = config._read
+
+        def counting():
+            calls["n"] += 1
+            return real()
+
+        monkeypatch.setattr(config, "_cache", None)
+        monkeypatch.setattr(config, "_cache_key", None)
+        monkeypatch.setattr(config, "_read", counting)
+        config.get("ai.model")
+        config.get("serve.port")
+        config.load()
+        assert calls["n"] == 1  # cached: file never re-read
+
+    def test_external_write_invalidates_cache(self, sandbox):
+        paths.ensure_dirs()
+        paths.config_path().write_text(json.dumps({"serve": {"port": 1}}))
+        assert config.get("serve.port") == 1
+        # A different size on disk changes the stat stamp -> reload.
+        paths.config_path().write_text(json.dumps({"serve": {"port": 22222}}))
+        assert config.get("serve.port") == 22222
+
+    def test_save_visible_to_get(self, sandbox):
+        assert config.get("telemetry") is False  # warm the cache
+        config.save({"telemetry": True})
+        assert config.get("telemetry") is True
+
+    def test_get_returns_isolated_container(self, sandbox):
+        agents = config.get("agents")
+        agents["claude-code"]["enabled"] = False
+        assert config.get("agents")["claude-code"]["enabled"] is True
+
+    def test_load_returns_isolated_copy(self, sandbox):
+        first = config.load()
+        first["serve"]["port"] = 424242
+        assert config.get("serve.port") == 8787
+        assert config.load()["serve"]["port"] == 8787
+
+    def test_missing_file_stamps_then_reloads_on_create(self, sandbox):
+        assert config.get("serve.port") == 8787  # no file yet -> defaults
+        config.save({"serve": {"port": 7000}})
+        assert config.get("serve.port") == 7000
+
+
 class TestGet:
     def test_dotted_hit(self, sandbox):
         assert config.get("ai.model") == "claude-haiku-4-5-20251001"
