@@ -544,6 +544,140 @@ def _browse_plain(entries, why: str):
     return 0
 
 
+# --- Aurora palette for the curses browser -----------------------------------
+# The full-screen browser paints itself in the same Aurora tokens as the rest
+# of the CLI. curses can't reuse the ANSI escapes from core.output, so these
+# helpers translate the single-source palette (out.TOKENS) into curses colour
+# pairs, degrading to the 8 base colours — then to monochrome — when a terminal
+# (or the test fake) can't do better.
+
+def _curses_rgb1000():
+    """out.TOKENS scaled from 0..255 to curses' 0..1000 RGB range.
+
+    Parity-locked to the web palette: whatever style/boost.css defines, the
+    browser renders, so the TUI can never drift from the design system.
+    """
+    return {name: tuple(round(c / 255 * 1000) for c in rgb)
+            for name, rgb in out.TOKENS.items()}
+
+
+def _nearest_base(curses):
+    """Each Aurora token mapped to its closest of the 8 base curses colours.
+
+    Used when the terminal can't redefine colours (mirrors the 16-colour
+    fallback in core.output._AURORA).
+    """
+    return {"cyan": curses.COLOR_CYAN, "violet": curses.COLOR_MAGENTA,
+            "pink": curses.COLOR_MAGENTA, "green": curses.COLOR_GREEN,
+            "yellow": curses.COLOR_YELLOW}
+
+
+def _match_positions(needle, hay):
+    """Indices in hay consumed by a left-to-right subsequence match of needle.
+
+    Drives fuzzy-match highlighting; returns [] when needle isn't a
+    subsequence of hay (so nothing is highlighted).
+    """
+    positions, i = [], 0
+    for j, ch in enumerate(hay):
+        if i < len(needle) and ch == needle[i]:
+            positions.append(j)
+            i += 1
+    return positions if i == len(needle) else []
+
+
+def _scrollbar(total, rows, top):
+    """(thumb_start, thumb_len) for a rows-tall scrollbar; None when all fits."""
+    if rows <= 0 or total <= rows:
+        return None
+    thumb = max(1, rows * rows // total)
+    max_top = total - rows
+    start = round((rows - thumb) * top / max_top) if max_top else 0
+    return (start, thumb)
+
+
+def _grad_segments(width, n=3):
+    """Split a width-wide rule into n near-equal [(start, length)] runs.
+
+    Lets the browser paint a cyan -> violet -> pink gradient bar the same way
+    out.gradient() lerps the wordmark.
+    """
+    if width <= 0:
+        return []
+    n = min(n, width)
+    base, extra = divmod(width, n)
+    segs, pos = [], 0
+    for k in range(n):
+        length = base + (1 if k < extra else 0)
+        segs.append((pos, length))
+        pos += length
+    return segs
+
+
+def _aurora_pairs(curses):
+    """Allocate Aurora curses colour pairs; token-name -> attr int (0 if none)."""
+    names = ("cyan", "violet", "pink", "green", "yellow")
+    try:
+        custom = curses.can_change_color() and curses.COLORS >= 16 + len(names)
+    except curses.error:
+        custom = False
+    fg = dict(_nearest_base(curses))
+    if custom:
+        rgb = _curses_rgb1000()
+        for idx, nm in enumerate(names):
+            slot = 16 + idx
+            try:
+                curses.init_color(slot, *rgb[nm])
+                fg[nm] = slot
+            except curses.error:
+                pass
+    fg["red"] = curses.COLOR_RED
+    pairs = {}
+    for i, nm in enumerate(("cyan", "violet", "pink", "green", "yellow", "red"),
+                           start=1):
+        try:
+            curses.init_pair(i, fg[nm], -1)
+            pairs[nm] = curses.color_pair(i)
+        except curses.error:
+            pairs[nm] = 0
+    return pairs
+
+
+def _aurora_theme(curses):
+    """role -> curses attr. Monochrome baseline, upgraded to Aurora where able."""
+    t = {"title": curses.A_BOLD, "prompt": curses.A_BOLD, "query": curses.A_BOLD,
+         "count": curses.A_DIM, "help": curses.A_DIM, "star": curses.A_NORMAL,
+         "name": curses.A_NORMAL, "sel_bar": curses.A_REVERSE,
+         "sel_name": curses.A_BOLD, "match": curses.A_BOLD,
+         "version": curses.A_DIM, "tap": curses.A_NORMAL,
+         "rule": [curses.A_NORMAL, curses.A_NORMAL, curses.A_NORMAL],
+         "scroll": curses.A_DIM, "detail_name": curses.A_BOLD,
+         "detail_meta": curses.A_DIM, "detail_tag": curses.A_NORMAL,
+         "dot_r": curses.A_NORMAL, "dot_y": curses.A_NORMAL,
+         "dot_g": curses.A_NORMAL}
+    if not hasattr(curses, "start_color"):
+        return t
+    try:
+        curses.start_color()
+        curses.use_default_colors()
+    except curses.error:
+        return t
+    p = _aurora_pairs(curses)
+
+    def P(nm, bold=False):
+        a = p.get(nm, 0)
+        return (a | curses.A_BOLD) if bold else a
+
+    t.update({"title": P("cyan", True), "prompt": P("cyan", True),
+              "star": P("yellow"), "sel_bar": P("cyan", True),
+              "sel_name": P("cyan", True), "match": P("pink", True),
+              "tap": P("violet"), "rule": [P("cyan"), P("violet"), P("pink")],
+              "scroll": P("cyan"), "detail_name": P("cyan", True),
+              "detail_tag": P("pink"), "dot_r": P("red"), "dot_y": P("yellow"),
+              "dot_g": P("green")})
+    return t
+
+
 def _browse_tui(curses, entries):
     """Run the curses UI. Returns the entry picked for install, or None."""
     state = {"pick": None}
@@ -553,40 +687,83 @@ def _browse_tui(curses, entries):
             curses.curs_set(0)
         except curses.error:
             pass
+        th = _aurora_theme(curses)
+
+        def put(y, x, s, attr=0):  # clip-safe cell writer
+            if 0 <= y < _h and 0 <= x < _w - 1 and s:
+                try:
+                    scr.addnstr(y, x, s, _w - 1 - x, attr)
+                except curses.error:
+                    pass
+
         filt, sel, detail = "", 0, False
         while True:
             q = filt.lower()
             matches = [e for e in entries
                        if _subseq(q, (e["name"] + " " + e["tap"]).lower())]
             sel = max(0, min(sel, len(matches) - 1))
-            h, w = scr.getmaxyx()
+            _h, _w = scr.getmaxyx()
             pane = 6 if detail and matches else 0
             try:
                 scr.erase()
-                scr.addnstr(0, 0, "filter: " + filt, w - 1, curses.A_BOLD)
-                scr.addnstr(1, 0, "up/down move · enter detail · i install · "
-                            "q quit · %d/%d" % (len(matches), len(entries)),
-                            w - 1, curses.A_DIM)
-                rows = max(1, h - 3 - pane)
+                # titlebar: macOS traffic dots + wordmark + gradient rule
+                put(0, 0, "●", th["dot_r"])
+                put(0, 2, "●", th["dot_y"])
+                put(0, 4, "●", th["dot_g"])
+                title = " boost browse"
+                put(0, 6, title, th["title"])
+                rx = 6 + len(title) + 1
+                for (start, length), attr in zip(
+                        _grad_segments(max(0, _w - 1 - rx)), th["rule"]):
+                    put(0, rx + start, "─" * length, attr)
+                # prompt line: cyan chevron, query, cursor, right-aligned count
+                put(1, 0, "❯", th["prompt"])
+                put(1, 2, filt, th["query"])
+                put(1, 2 + len(filt), "▏", th["prompt"])
+                count = "%d/%d" % (len(matches), len(entries))
+                put(1, max(2 + len(filt) + 2, _w - 1 - len(count)), count,
+                    th["count"])
+                put(2, 0, "↑↓ move  ↵ detail  i install  q quit",
+                    th["help"])
+                rows = max(1, _h - 3 - pane)
                 top = max(0, sel - rows + 1)
-                for i, e in enumerate(matches[top:top + rows]):
-                    line = "%s %s  v%s  %s" % ("★" if e.get("curated") else " ",
-                                               e["name"], e["version"], e["tap"])
-                    attr = curses.A_REVERSE if top + i == sel else curses.A_NORMAL
-                    scr.addnstr(2 + i, 0, line.ljust(w - 1), w - 1, attr)
+                view = matches[top:top + rows]
+                namew = min(max((len(e["name"]) for e in view), default=4),
+                            max(4, _w - 26))
+                bar = _scrollbar(len(matches), rows, top)
+                for i, e in enumerate(view):
+                    y = 3 + i
+                    chosen = top + i == sel
+                    put(y, 0, "▎" if chosen else " ", th["sel_bar"])
+                    put(y, 1, "★" if e.get("curated") else " ", th["star"])
+                    nm = out.truncate(e["name"], namew)
+                    put(y, 3, nm.ljust(namew),
+                        th["sel_name"] if chosen else th["name"])
+                    for pos in _match_positions(q, nm.lower()):
+                        put(y, 3 + pos, nm[pos], th["match"])
+                    vx = 3 + namew + 2
+                    put(y, vx, "v" + e["version"], th["version"])
+                    put(y, vx + len(e["version"]) + 3, e["tap"], th["tap"])
+                    if bar:
+                        bstart, blen = bar
+                        put(y, _w - 2,
+                            "█" if bstart <= i < bstart + blen else "│",
+                            th["scroll"])
                 if pane and matches:
                     e = matches[sel]
-                    y0 = h - pane
-                    scr.hline(y0, 0, curses.ACS_HLINE, w - 1)
-                    tags = ", ".join(str(t) for t in
+                    y0 = _h - pane
+                    for (start, length), attr in zip(
+                            _grad_segments(_w - 1), th["rule"]):
+                        put(y0, start, "─" * length, attr)
+                    tags = "  ".join("#" + str(t) for t in
                                      (e.get("meta", {}).get("tags") or []))
-                    for j, ln in enumerate((
-                            "%s  v%s" % (e["name"], e["version"]),
-                            (e["description"] or "")[:w - 3],
-                            "tap: %s   dir: %s" % (e["tap"], e["rel_dir"]),
-                            "tags: %s" % (tags or "-"))):
-                        if y0 + 1 + j < h:
-                            scr.addnstr(y0 + 1 + j, 1, ln, w - 2)
+                    put(y0 + 1, 1, "%s  v%s" % (e["name"], e["version"]),
+                        th["detail_name"])
+                    put(y0 + 2, 1, out.truncate(e["description"] or "", _w - 3),
+                        th["name"])
+                    put(y0 + 3, 1, "tap %s   dir %s" % (e["tap"], e["rel_dir"]),
+                        th["detail_meta"])
+                    put(y0 + 4, 1, tags or "no tags", th["detail_tag"])
                 scr.refresh()
             except curses.error:
                 pass  # terminal too small mid-draw; retry on next key
