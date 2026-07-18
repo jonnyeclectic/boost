@@ -66,3 +66,25 @@ also keeps line-adjacent conflicts rare.
 
 Branch from `main`, keep PRs focused, and write the PR description in the
 commit message (it becomes the release notes via release-drafter).
+
+## Merge queue (recommended — enable in repo Settings)
+
+Every merge to `main` cuts a PyPI release, and two PRs that are each green in
+isolation can still land a broken *combination*. The CI workflow already listens
+for the `merge_group` event, so once the GitHub **merge queue** is turned on, each
+queued PR is re-tested against the current tip before it lands — no broken
+combination ships. `merge_group` runs on a `gh-readonly-queue/*` ref, so it does
+**not** trigger the release; publish still fires only on the real push to `main`.
+
+Enable it once (repo admin), **Settings → Branches → Add branch ruleset for
+`main`**:
+
+- **Require a pull request before merging.**
+- **Require status checks to pass** — select `lint`, every `tests (…)` matrix job,
+  `mutation`, and `CodeQL`; tick **Require branches to be up to date before merging**.
+- **Require merge queue** (merge method: squash; build concurrency ~2–5).
+
+Or via CLI (`gh api -X PUT repos/:owner/:repo/branches/main/protection …` plus
+`repos/:owner/:repo/rulesets` for the queue). After enabling, land PRs with
+**`gh pr merge --squash --auto`** — the PR joins the queue instead of merging
+directly.
