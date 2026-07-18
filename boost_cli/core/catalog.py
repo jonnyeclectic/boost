@@ -210,6 +210,28 @@ def resolve_one(name: str) -> dict:
     return matches[0]
 
 
+def _meta_text(meta) -> str:
+    """Lowercased, space-joined flatten of a frontmatter dict for substring
+    search. Cheaper than ``json.dumps(meta).lower()`` — which built and threw
+    away a JSON string on every entry of every query just to substring-match —
+    while matching the same words (tags, keys, scalar values)."""
+    parts: List[str] = []
+
+    def walk(v) -> None:
+        if isinstance(v, dict):
+            for k, val in v.items():
+                parts.append(str(k))
+                walk(val)
+        elif isinstance(v, (list, tuple)):
+            for val in v:
+                walk(val)
+        elif v is not None:
+            parts.append(str(v))
+
+    walk(meta or {})
+    return " ".join(parts).lower()
+
+
 def search(query: str, entries: Optional[List[dict]] = None):
     """Rank entries against a query -> [(entry, score)] best-first."""
     entries = all_entries() if entries is None else entries
@@ -219,7 +241,7 @@ def search(query: str, entries: Optional[List[dict]] = None):
     for e in entries:
         name = e["name"].lower()
         desc = (e["description"] or "").lower()
-        blob = " ".join([name, desc, json.dumps(e.get("meta", {})).lower()])
+        blob = " ".join([name, desc, _meta_text(e.get("meta", {}))])
         score = 0
         if q == name:
             score += 100

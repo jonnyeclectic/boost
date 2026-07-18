@@ -443,6 +443,32 @@ class TestSearchRanking:
         res = catalog.search("security", entries=[e])
         assert [(m["name"], s) for m, s in res] == [("x", 2)]
 
+    def test_meta_key_still_matches(self):
+        # keys are part of the search text, just as json.dumps(meta) included
+        # them — a query for a frontmatter key name still scores.
+        e = _entry("x", "t", meta={"framework": "react"})
+        assert [(m["name"], s) for m, s in catalog.search("framework", entries=[e])] \
+            == [("x", 2)]
+
+    def test_meta_nested_value_matches(self):
+        e = _entry("x", "t", meta={"requires": [{"skill": "planning"}]})
+        assert [(m["name"], s) for m, s in catalog.search("planning", entries=[e])] \
+            == [("x", 2)]
+
+
+class TestMetaText:
+    def test_flattens_keys_and_values_lowercased(self):
+        assert catalog._meta_text({"Tags": ["AI", "ML"]}) == "tags ai ml"
+
+    def test_nested_dicts_and_lists(self):
+        out = catalog._meta_text({"a": {"b": [1, "Two"]}})
+        assert out == "a b 1 two"
+
+    def test_skips_none_and_empty(self):
+        assert catalog._meta_text({}) == ""
+        assert catalog._meta_text(None) == ""
+        assert catalog._meta_text({"k": None}) == "k"
+
     def test_description_only_match(self):
         e = _entry("styler", "t", desc="handles jira tickets")
         res = catalog.search("jira", entries=[e])
