@@ -123,9 +123,13 @@ def cmd_list(argv):
     rows = []
     for name in sorted(skills):
         e = skills[name]
-        flags = (["pinned"] if e.get("pinned") else []) + \
-                (["quarantined"] if e.get("quarantined") else []) + \
-                ["#" + t for t in e.get("tags") or []]
+        # Aurora-tinted flags — now that table() aligns by visible width,
+        # colored cells stay in their column: pinned amber, quarantined pink,
+        # tags dim.
+        flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
+                ([out.aurora("quarantined", "pink")] if e.get("quarantined")
+                 else []) + \
+                [out.c("#" + t, out.DIM) for t in e.get("tags") or []]
         rows.append((name, e.get("version", "?"), e.get("tap", "?"),
                      "·".join(a.split("-")[0] for a in e.get("agents") or []),
                      " ".join(flags)))
