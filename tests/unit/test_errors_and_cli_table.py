@@ -102,7 +102,9 @@ def run_main(argv):
         return e.code if isinstance(e.code, int) else 0
 
 
-VERSION_LINE = re.compile(r"^boost \d+\.\d+.*$")
+# The version token varies by environment (semver from a tag, a dev version,
+# or a bare commit SHA in a tag-less shallow checkout) — only assert shape.
+VERSION_LINE = re.compile(r"^boost \S+$")
 
 
 class TestMainDispatch:

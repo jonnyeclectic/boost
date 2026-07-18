@@ -9,7 +9,6 @@ from __future__ import annotations
 import getpass
 import io
 import json
-import re
 import socket
 import subprocess
 import sys
@@ -647,7 +646,7 @@ class TestMcp:
         assert by_id[1]["result"]["protocolVersion"] == "2024-11-05"
         server_info = by_id[1]["result"]["serverInfo"]
         assert server_info["name"] == "boost"
-        assert re.match(r"\d+\.\d+", server_info["version"])
+        assert isinstance(server_info["version"], str) and server_info["version"]
         tools = by_id[2]["result"]["tools"]
         assert [t["name"] for t in tools] == [
             "boost_search", "boost_list", "boost_info", "boost_install",
