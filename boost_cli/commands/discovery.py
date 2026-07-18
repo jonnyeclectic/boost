@@ -15,6 +15,7 @@ import sys
 import time
 from pathlib import Path
 
+from .. import cliparse
 from ..core import agents, ai, catalog, dense, embed, gitutil, journal, lockfile, paths, rag, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
@@ -169,7 +170,7 @@ def _ai_rank(query: str, scored):
 
 def cmd_search(argv):
     """Search the tap catalogs, optionally AI-reranked with --smart."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost search",
         description="Search skills across tap registries (AI-ranked)")
     p.add_argument("query", nargs="+", help="search terms")
@@ -233,7 +234,7 @@ def cmd_search(argv):
 
 def cmd_reindex(argv):
     """Build/refresh the full-content (RAG) search index over tapped items."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost reindex",
         description="Build or refresh the full-content search index")
     p.add_argument("--force", action="store_true",
@@ -282,7 +283,7 @@ def _reindex_dense(force):
 
 def cmd_index(argv):
     """Build ~/.boost/cache/discovery.json via `gh api` code search."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost index",
         description="Build the discovery registry via GitHub Code Search")
     p.add_argument("--limit", type=_positive_int, default=300,
@@ -345,7 +346,7 @@ def cmd_index(argv):
 
 def cmd_discover(argv):
     """Browse/filter the GitHub-wide index built by `boost index`."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost discover",
         description="Browse & search the GitHub-wide skill discovery index")
     p.add_argument("query", nargs="*", help="filter terms (repo/path substring)")
@@ -414,7 +415,7 @@ def _ai_picks(stack: dict, cands):
 
 def cmd_recommend(argv):
     """Match the detected tech stack against the catalog."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost recommend",
         description="Suggest skills based on your project's tech stack")
     p.add_argument("--path", default=".", help="project directory (default: cwd)")
@@ -564,7 +565,7 @@ def _browse_tui(curses, entries):
 
 def cmd_browse(argv):
     """Full-screen fuzzy browser over every catalog entry."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost browse",
         description="Interactive full-screen TUI with fuzzy search")
     p.parse_args(argv)
@@ -594,7 +595,7 @@ def cmd_browse(argv):
 
 def cmd_trending(argv):
     """Rank skills by local install events from the journal."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost trending",
         description="Show trending skills by install count")
     p.add_argument("--limit", type=_positive_int, default=10,
@@ -630,7 +631,7 @@ def cmd_trending(argv):
 
 def cmd_stats(argv):
     """Lock-file, journal, and upstream stats for one skill."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost stats",
         description="Install statistics & trend for a single skill")
     p.add_argument("name", help="skill name")
@@ -696,7 +697,7 @@ def cmd_stats(argv):
 
 def cmd_count(argv):
     """One-line inventory: installed / available / taps / discovery index."""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost count",
         description="Quick summary of installed / available / taps")
     p.add_argument("--json", action="store_true", dest="as_json",

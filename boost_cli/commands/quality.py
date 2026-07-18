@@ -7,7 +7,6 @@ deterministic environment fingerprint.
 """
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -16,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .. import cliparse
 from ..core import (agents, ai, catalog, frontmatter, gitutil, journal,
                     lockfile, logs, output as out, paths, policy, registry,
                     store, util)
@@ -234,7 +234,7 @@ def _decay_rows(cwd: Path) -> List[dict]:
 # --- commands ---------------------------------------------------------------
 
 def cmd_doctor(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost doctor", description="Check installation health & report issues")
     ap.parse_args(argv)
     issues = 0
@@ -352,7 +352,7 @@ def cmd_doctor(argv):
 
 
 def cmd_lint(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost lint", description="Validate SKILL.md frontmatter & quality")
     ap.add_argument("names", nargs="*", metavar="NAME")
     ap.add_argument("--tap", metavar="TAP", help="lint every skill in a tap's clone")
@@ -428,7 +428,7 @@ def cmd_lint(argv):
 
 
 def cmd_audit(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost audit",
         description="Check installed skills against a safety blocklist")
     ap.add_argument("--json", action="store_true")
@@ -501,7 +501,7 @@ def cmd_audit(argv):
 
 
 def cmd_verify(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost verify",
         description="Validate skill quality & lock-file integrity")
     ap.add_argument("names", nargs="*", metavar="NAME")
@@ -547,7 +547,7 @@ def cmd_verify(argv):
 
 
 def cmd_drift(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost drift",
         description="Detect installed skills diverging from source")
     ap.add_argument("names", nargs="*", metavar="NAME")
@@ -576,7 +576,7 @@ def cmd_drift(argv):
 
 
 def cmd_test(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost test",
         description="Validate installed skills against quality checks")
     ap.add_argument("names", nargs="*", metavar="NAME")
@@ -613,7 +613,7 @@ def cmd_test(argv):
 
 
 def cmd_fingerprint(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost fingerprint",
         description="Deterministic hash of the skill environment")
     ap.add_argument("--verbose", action="store_true",
@@ -636,7 +636,7 @@ def cmd_fingerprint(argv):
 
 
 def cmd_quarantine(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost quarantine",
         description="Isolate a problematic skill without uninstalling")
     ap.add_argument("name", nargs="?", metavar="NAME")
@@ -700,7 +700,7 @@ def cmd_quarantine(argv):
 
 
 def cmd_decay(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost decay",
         description="Flag skills irrelevant to your current stack")
     ap.add_argument("--json", action="store_true")
@@ -731,7 +731,7 @@ def cmd_decay(argv):
 
 
 def cmd_heal(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost heal",
         description="Self-diagnose & repair the boost environment")
     ap.add_argument("--dry-run", action="store_true",
@@ -810,7 +810,7 @@ def cmd_heal(argv):
 
 
 def cmd_conflict(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost conflict",
         description="Detect contradictory rules between skills")
     ap.add_argument("--json", action="store_true")
@@ -899,7 +899,7 @@ def cmd_conflict(argv):
 
 
 def cmd_changelog(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost changelog",
         description="Show a skill's upstream change history")
     ap.add_argument("name", metavar="NAME")
@@ -933,7 +933,7 @@ def cmd_changelog(argv):
 
 
 def cmd_attest(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost attest",
         description="Display/verify the install record for skills")
     ap.add_argument("name", nargs="?", metavar="NAME")
@@ -988,7 +988,7 @@ def cmd_attest(argv):
 
 
 def cmd_health(argv):
-    ap = argparse.ArgumentParser(
+    ap = cliparse.parser(
         prog="boost health", description="Dashboard of skill-environment health")
     ap.parse_args(argv)
 

@@ -436,11 +436,11 @@
         </article>
 
         <article class="ritem" data-track="commands" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-D25</span><span class="rstatus progress">In progress</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D25</span><span class="rstatus done">Shipped</span></div>
           <h4>Branded usage &amp; error output</h4>
           <p>Grading confirmed this hits <b>every command with a required argument</b> — <code>boost uninstall</code>, <code>boost snapshot</code> and more all dump raw, unstyled <code>argparse</code>: a multi-line usage block with a bare <code>error:</code>, nothing like the branded top-level dispatch (which already routes through <code>Error:</code> + a difflib "did you mean"). The durable fix is a shared <code>BoostArgumentParser</code> subclass whose <code>error()</code>/usage route through the Aurora output layer, adopted across the ~50 per-command parsers — a broad, test-first sweep, so logged rather than rushed.</p>
           <div class="rmeta"><span class="m-cat">ux</span><span>Complexity L</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
-          <div class="rref"><code>cliparse.py (BoostArgumentParser) · pkg.py done · 9 files to go</code></div>
+          <div class="rref"><code>cliparse.py (BoostArgumentParser) · all 10 command files</code></div>
         </article>
 
       </div>

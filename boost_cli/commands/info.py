@@ -5,7 +5,6 @@ Read-mostly views over the lock file, the canonical store, and tap catalogs.
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -16,6 +15,7 @@ import textwrap
 import webbrowser
 from pathlib import Path
 
+from .. import cliparse
 from ..core import ai, catalog, frontmatter, gitutil, journal, lockfile, logs, paths, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
@@ -101,7 +101,7 @@ def _print_wrapped(text: str) -> None:
 # ---------------------------------------------------------------- commands
 
 def cmd_list(argv):
-    ap = argparse.ArgumentParser(prog="boost list",
+    ap = cliparse.parser(prog="boost list",
                                  description="List installed skills")
     ap.add_argument("--tag", help="only show skills carrying this tag")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
@@ -136,7 +136,7 @@ def cmd_list(argv):
 
 
 def cmd_info(argv):
-    ap = argparse.ArgumentParser(prog="boost info",
+    ap = cliparse.parser(prog="boost info",
                                  description="Show detailed info about a skill")
     ap.add_argument("name")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
@@ -242,7 +242,7 @@ def cmd_info(argv):
 
 
 def cmd_cat(argv):
-    ap = argparse.ArgumentParser(prog="boost cat",
+    ap = cliparse.parser(prog="boost cat",
                                  description="Print a skill or rule's contents")
     ap.add_argument("name")
     ap.add_argument("--raw", action="store_true", help="no styling even on a TTY")
@@ -265,7 +265,7 @@ def cmd_cat(argv):
 
 
 def cmd_edit(argv):
-    ap = argparse.ArgumentParser(prog="boost edit",
+    ap = cliparse.parser(prog="boost edit",
                                  description="Open a skill's SKILL.md in your editor")
     ap.add_argument("name")
     args = ap.parse_args(argv)
@@ -341,7 +341,7 @@ def _render_markdown(body: str) -> None:
 
 
 def cmd_preview(argv):
-    ap = argparse.ArgumentParser(prog="boost preview",
+    ap = cliparse.parser(prog="boost preview",
                                  description="Render a SKILL.md with rich formatting")
     ap.add_argument("name")
     args = ap.parse_args(argv)
@@ -356,7 +356,7 @@ def cmd_preview(argv):
 
 
 def cmd_explain(argv):
-    ap = argparse.ArgumentParser(prog="boost explain",
+    ap = cliparse.parser(prog="boost explain",
                                  description="Explain what a skill does in plain English")
     ap.add_argument("name")
     args = ap.parse_args(argv)
@@ -432,7 +432,7 @@ def _show_crashes(limit):
 
 
 def cmd_log(argv):
-    ap = argparse.ArgumentParser(prog="boost log",
+    ap = cliparse.parser(prog="boost log",
                                  description="Git log for a skill, or boost's activity log")
     ap.add_argument("name", nargs="?", help="skill to show upstream history for")
     ap.add_argument("-n", "--limit", type=int, default=20, metavar="N",
@@ -487,7 +487,7 @@ def cmd_log(argv):
 
 
 def cmd_home(argv):
-    ap = argparse.ArgumentParser(prog="boost home",
+    ap = cliparse.parser(prog="boost home",
                                  description="Open a skill's GitHub page in the browser")
     ap.add_argument("name")
     ap.add_argument("--print", dest="print_only", action="store_true",
@@ -517,7 +517,7 @@ def cmd_home(argv):
 
 
 def cmd_deps(argv):
-    ap = argparse.ArgumentParser(prog="boost deps",
+    ap = cliparse.parser(prog="boost deps",
                                  description="Show dependency & conflict relationships")
     ap.add_argument("name", nargs="?", help="skill to inspect (default: check all installed)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
@@ -587,7 +587,7 @@ def cmd_deps(argv):
 
 
 def cmd_tag(argv):
-    ap = argparse.ArgumentParser(prog="boost tag",
+    ap = cliparse.parser(prog="boost tag",
                                  description="Custom labels for organizing skills")
     ap.add_argument("--list", dest="list_all", action="store_true",
                     help="show every tag and the skills carrying it")

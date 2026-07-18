@@ -18,7 +18,6 @@ runtime is per-project (`boost bmad init`).
 """
 from __future__ import annotations
 
-import argparse
 import getpass
 import json
 import os
@@ -29,6 +28,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from .. import cliparse
 from ..core import claude_settings as cs
 from ..core import journal
 from ..core import output as out
@@ -64,7 +64,7 @@ _ACTIONS = ("install", "init", "startup", "orient", "uninstall",
 
 
 def cmd_bmad(argv) -> int:
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost bmad",
         description="Install & manage the BMAD Method (scope-aware, toggleable)")
     p.add_argument("action", choices=_ACTIONS, help=" | ".join(_ACTIONS))

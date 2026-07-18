@@ -1,7 +1,6 @@
 """Team & Collaboration commands: cohort, profile, protocol, pulse, replay, who."""
 from __future__ import annotations
 
-import argparse
 import getpass
 import hashlib
 import json
@@ -11,6 +10,7 @@ import shutil
 import stat
 import urllib.parse
 
+from .. import cliparse
 from ..core import catalog, journal, lockfile, paths, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
@@ -75,7 +75,7 @@ def _is_member(user: str, cohort_name: str, percent: int) -> bool:
 
 def cmd_cohort(argv) -> int:
     """boost cohort [list|create NAME --skills a,b --percent N|delete NAME|status|apply [NAME]]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost cohort",
         description="Controlled skill rollouts & team A/B testing",
         epilog="Membership is a deterministic hash of user+cohort, so a 50%% "
@@ -217,7 +217,7 @@ def _profile_diff(profile: dict):
 
 def cmd_profile(argv) -> int:
     """boost profile [list|save NAME|use NAME [--prune]|show NAME|diff NAME|delete NAME]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost profile",
         description="Named skill profiles for context switching")
     p.add_argument("action", nargs="?", default="list",
@@ -369,7 +369,7 @@ def _parse_boost_url(url: str):
 
 def cmd_protocol(argv) -> int:
     """boost protocol [status|register|unregister|open URL]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost protocol",
         description="Manage the boost:// one-click-install handler")
     p.add_argument("action", nargs="?", default="status",
@@ -472,7 +472,7 @@ _ACTION_COLOR = {"install": out.GREEN, "uninstall": out.RED,
 
 def cmd_pulse(argv) -> int:
     """boost pulse [-n N] [--all] [--action A] [--json]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost pulse",
         description="Team activity feed of skill-management events")
     p.add_argument("-n", type=int, default=20, help="events to show (default 20)")
@@ -510,7 +510,7 @@ def cmd_pulse(argv) -> int:
 
 def cmd_replay(argv) -> int:
     """boost replay [list|show ID|rollback ID]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost replay",
         description="View version history & roll back skills")
     p.add_argument("action", nargs="?", default="list",
@@ -619,7 +619,7 @@ def cmd_replay(argv) -> int:
 
 def cmd_who(argv) -> int:
     """boost who [SKILL] [--json]"""
-    p = argparse.ArgumentParser(
+    p = cliparse.parser(
         prog="boost who",
         description="Discover who on the team has skill expertise")
     p.add_argument("skill", nargs="?", help="focus on one skill")
