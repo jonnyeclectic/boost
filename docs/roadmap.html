@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — Roadmap</title>
+<meta name="description" content="The living roadmap for boost: shipped work, in-flight fixes, and planned quality investments — logged by the autonomous quality loop.">
+<!-- Canonical boost theme ("Aurora living-glass"). Pages serves from repo
+     root (source path "/"), so ../style resolves to /style on the site and
+     over file:// locally. Recolour everything by editing style/boost.css. -->
+<link rel="stylesheet" href="../style/boost.css">
+<style>
+  /* Roadmap-specific layout — built only on boost.css :root tokens so the
+     page recolours with the rest of the system. No new palette. */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 18px;
+    padding: 14px 24px; margin-bottom: 8px;
+    background: rgba(7,8,15,.72);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar .logo { font-weight: 800; letter-spacing: -.02em; font-size: 18px; text-decoration: none; }
+  .topbar .logo span { color: var(--text-3); font-weight: 600; margin-left: 8px; font-size: 13px; }
+  .topbar nav { margin-left: auto; display: flex; gap: 20px; }
+  .topbar nav a { color: var(--text-2); text-decoration: none; font-size: 14px; font-weight: 600; }
+  .topbar nav a:hover { color: var(--text); }
+
+  .hero { text-align: center; padding: 56px 0 20px; }
+  .hero .badge { margin-bottom: 22px; }
+  .hero h1 { font-size: clamp(38px, 6vw, 68px); font-weight: 850; letter-spacing: -.03em; line-height: 1.05; }
+  .hero p { max-width: 620px; margin: 20px auto 0; color: var(--text-2); font-size: 18px; text-wrap: balance; }
+  .hero .cta { margin-top: 30px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+  section.block { padding: 40px 0; }
+  .block-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 24px; flex-wrap: wrap; }
+  .block-head h2 { font-size: clamp(22px, 3vw, 30px); font-weight: 800; letter-spacing: -.02em; }
+  .block-head .count { font-family: var(--mono); font-size: 13px; color: var(--text-3); }
+  .block-head .rule { flex: 1; height: 1px; background: var(--line); min-width: 40px; }
+
+  .rgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
+
+  .rcard { padding: 24px 22px; }
+  .rcard .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .rcard h3 { font-size: 17.5px; font-weight: 750; letter-spacing: -.01em; line-height: 1.3; }
+  .rcard p { font-size: 14px; color: var(--text-2); margin-top: 0; line-height: 1.6; }
+  .rcard .meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+
+  /* status pill — colour encodes lifecycle stage */
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid currentColor;
+  }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.shipped   { color: var(--green); }
+  .pill.inflight  { color: var(--cyan); }
+  .pill.next      { color: var(--yellow); }
+  .pill.planned   { color: var(--violet); }
+
+  .cat { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--text-3); letter-spacing: .06em; text-transform: uppercase; }
+
+  /* metadata chips: complexity / impact / wow / ref */
+  .m { font-size: 11.5px; color: var(--text-2); background: rgba(255,255,255,.05);
+       border: 1px solid var(--line-soft); border-radius: 7px; padding: 3px 9px; font-family: var(--mono); }
+  .m b { color: var(--text); font-weight: 700; }
+  .m.hi b { color: var(--pink); }
+  .wow { color: var(--yellow); letter-spacing: 1px; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 12px 26px; margin-top: 26px; justify-content: center; color: var(--text-2); font-size: 13px; }
+  .legend .k { display: inline-flex; align-items: center; gap: 8px; }
+
+  footer { text-align: center; padding: 60px 0 48px; color: var(--text-3); font-size: 13px; }
+  footer a { color: var(--cyan); text-decoration: none; }
+
+  @media (max-width: 560px) { .topbar nav { display: none; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <a class="logo" href="index.html">boost<span>Roadmap</span></a>
+  <nav>
+    <a href="index.html">Visual guide</a>
+    <a href="https://github.com/jonnyeclectic/boost">GitHub</a>
+    <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a>
+  </nav>
+</div>
+
+<div class="wrap">
+
+  <header class="hero">
+    <span class="badge">living document · updated by the quality loop</span>
+    <h1>The <span class="grad-text">boost</span> roadmap</h1>
+    <p>Every finding from the autonomous quality loop lands here — what shipped,
+       what's mid-flight, and what's queued — scored by complexity, impact, and
+       a little bit of wow.</p>
+    <div class="cta">
+      <a class="btn btn-grad" href="#next">See what's next →</a>
+      <a class="btn btn-ghost" href="index.html">Back to the guide</a>
+    </div>
+
+    <div class="legend">
+      <span class="k"><span class="pill shipped">Shipped</span> merged &amp; released</span>
+      <span class="k"><span class="pill inflight">In flight</span> a PR is open</span>
+      <span class="k"><span class="pill next">Next</span> triaged, starting soon</span>
+      <span class="k"><span class="pill planned">Planned</span> on the list</span>
+    </div>
+  </header>
+
+  <!-- ================= SNAPSHOT ================= -->
+  <section class="block reveal">
+    <div class="stats">
+      <div class="stat"><b>4</b><span>Shipped</span></div>
+      <div class="stat"><b>3</b><span>Next up</span></div>
+      <div class="stat"><b>4</b><span>Planned</span></div>
+      <div class="stat"><b>≥80%</b><span>Mutation gate</span></div>
+    </div>
+  </section>
+
+  <!-- ================= SHIPPED ================= -->
+  <section class="block reveal" id="shipped">
+    <div class="block-head">
+      <h2>Shipped</h2><span class="count">// merged to main &amp; published</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Bug</span></div>
+        <h3>Mutation hardening — <code>core/store.py</code></h3>
+        <p>Cut mutmut survivors 54&nbsp;→&nbsp;29 and uncovered a latent
+           timestamp-preservation bug the old tests masked (second-precision
+           <code>now_iso()</code> collisions hid <code>installed_at</code>/<code>tags</code>
+           preservation mutants).</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">25 mutants killed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing</span></div>
+        <h3>Mutation hardening — <code>core/gitutil.py</code></h3>
+        <p>35&nbsp;→&nbsp;1 survivor via argv-assertion tests that record the exact
+           git command line — sidestepping the macOS case-insensitive filesystem
+           that let <code>HEAD/head</code>, <code>.git/.GIT</code> and
+           <code>git/GIT</code> mutants survive against a real repo.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">34 mutants killed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing</span></div>
+        <h3>Mutation hardening — <code>core/frontmatter.py</code></h3>
+        <p>34&nbsp;→&nbsp;11 survivors with exact-equality tests, replacing
+           substring <code>in</code> checks a mutated string literal still
+           satisfied (e.g. <code>dump()</code>'s <code>XX%s:XX</code> still
+           <em>contains</em> <code>tags:</code>).</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">PR #22 · 23 killed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Infra · DX</span></div>
+        <h3>Autonomous ship-workflow &amp; isolated worktree</h3>
+        <p>The loop now runs commit → PR → green CI → squash-merge → release in a
+           dedicated <code>~/boost-loop</code> git worktree (own venv for mutmut),
+           and modern <strong>git&nbsp;2.55</strong> replaced a 2017 build that
+           fatally choked on the global <code>zdiff3</code> config.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ================= NEXT ================= -->
+  <section class="block reveal" id="next">
+    <div class="block-head">
+      <h2>Next up</h2><span class="count">// triaged findings, starting soon</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Bug · Infra</span></div>
+        <h3>GitHub Pages deploy is broken every push</h3>
+        <p>Root cause found: a bogus <code>mutants/None</code> gitlink (a stray
+           mutmut artifact) was committed with no <code>.gitmodules</code> entry,
+           so Pages' submodule checkout aborts with
+           <code>fatal: No url found for submodule path 'mutants/None'</code>.
+           Fix: stop tracking <code>mutants/</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">docs site down</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Hygiene · DX</span></div>
+        <h3>Untrack generated build noise</h3>
+        <p>Over a hundred <code>mutants/**</code>, <code>__pycache__/*.pyc</code>
+           and <code>.coverage</code> files are tracked despite being in
+           <code>.gitignore</code> — they churn every diff and forced careful
+           path-scoped <code>git add</code>s. Remove from the index.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">unblocks Pages</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Design</span></div>
+        <h3>Reconcile the theme drift</h3>
+        <p><code>docs/index.html</code> inlines its own amber/orange palette
+           instead of the canonical <em>Aurora</em> cyan→violet→pink system in
+           <code>style/boost.css</code>. Move it onto the shared stylesheet so
+           one token edit recolours the guide, roadmap, and demo together.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ================= PLANNED ================= -->
+  <section class="block reveal" id="planned">
+    <div class="block-head">
+      <h2>Planned</h2><span class="count">// on the list</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing</span></div>
+        <h3>Finish mutation hardening across <code>core/</code></h3>
+        <p>Work down the remaining survivor counts, biggest first: catalog&nbsp;(27),
+           util&nbsp;(26), ai&nbsp;(21), registry&nbsp;(20), lockfile&nbsp;(13),
+           policy&nbsp;(12), config&nbsp;(9), output&nbsp;(8), agents&nbsp;(6),
+           paths&nbsp;(4).</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">~146 survivors</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Gap</span></div>
+        <h3>Bring <code>commands/</code> under mutation testing</h3>
+        <p>The ~5,000-line CLI command layer has <strong>zero</strong> mutation
+           coverage today — mutmut is scoped to <code>core/</code> only. Extend
+           the gate (or a second gate) to the command groups.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>XL</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Design · QA</span></div>
+        <h3>Visual regression pass on the guide</h3>
+        <p>Drive <code>docs/index.html</code> in a real browser across breakpoints
+           to confirm the glass cards, aurora, and terminal windows render
+           cleanly — and to catch anything the theme reconciliation shifts.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Marketing</span></div>
+        <h3>Refresh the marketing surface</h3>
+        <p>Re-record <code>docs/demo.gif</code> from <code>demo.tape</code> against
+           the current CLI, tighten the README hero, and give the landing page a
+           flashier first impression that matches the Aurora theme.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <footer>
+    <p>Maintained by the boost quality loop · themed with
+       <a href="../style/boost.css">style/boost.css</a> ·
+       <a href="index.html">visual guide</a></p>
+  </footer>
+
+</div>
+
+<script src="../style/boost.js" defer></script>
+</body>
+</html>
