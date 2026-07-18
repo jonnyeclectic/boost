@@ -1,0 +1,352 @@
+/* ============================================================================
+   boost style — "Aurora living-glass"
+   ----------------------------------------------------------------------------
+   A neon-tech, glassmorphic design system: a cyan → violet → pink triad on a
+   near-black ground, an ambient aurora that drifts behind the page, and glass
+   cards that light up under the cursor. Slightly alive, never distracting.
+
+   Everything is driven by CSS custom properties (see :root below) — recolor the
+   whole system by changing token *values*, not selectors.
+
+   Usage:
+     <link rel="stylesheet" href="boost.css">
+     <script src="boost.js" defer></script>   <!-- cursor glow + scroll reveal -->
+
+   The interactions (cursor-follow spotlight, reveal-on-scroll) are progressive
+   enhancement — the page is fully styled and legible with JS disabled.
+   ========================================================================== */
+
+:root {
+  /* --- ground & ink --- */
+  --bg:          #07080f;   /* near-black page ground */
+  --panel:       rgba(255,255,255,.035);
+  --panel-solid: #0f1120;
+  --line:        rgba(255,255,255,.09);
+  --line-soft:   rgba(255,255,255,.05);
+  --line-hi:     rgba(255,255,255,.22);
+  --text:        #e9ebf5;
+  --text-2:      #9298b0;
+  --text-3:      #676d86;
+
+  /* --- the triad: the whole identity lives in these three --- */
+  --cyan:        #22d3ee;   /* primary accent */
+  --violet:      #a855f7;
+  --pink:        #f472d0;
+
+  /* --- extended accents --- */
+  --blue:        #38bdf8;
+  --sky:         #7dd3fc;
+  --green:       #4ade80;
+  --yellow:      #facc15;
+
+  /* --- signature gradient --- */
+  --grad: linear-gradient(96deg, var(--cyan) 0%, var(--violet) 52%, var(--pink) 100%);
+
+  /* --- terminal surfaces --- */
+  --term-bg:  #0d1024;
+  --term-bar: #171a33;
+
+  /* --- type --- */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* --- rhythm --- */
+  --radius:    16px;
+  --radius-lg: 18px;
+  --maxw:      1120px;
+}
+
+/* ---------- reset ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; padding: 0; }
+html { scroll-behavior: smooth; scroll-padding-top: 84px; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+a    { color: inherit; }
+code { font-family: var(--mono); }
+
+:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ============================================================================
+   Atmosphere — the ambient aurora + faint tech grid
+   Two fixed, non-interactive layers behind everything (z-index 0). Give your
+   content a positioned wrapper (.wrap sets z-index:1) so it sits above them.
+   ========================================================================== */
+body::before {
+  content: "";
+  position: fixed; inset: -25vmax; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(38vmax 38vmax at 12% 6%,   rgba(34,211,238,.20), transparent 60%),
+    radial-gradient(34vmax 34vmax at 90% 16%,  rgba(168,85,247,.18), transparent 60%),
+    radial-gradient(30vmax 30vmax at 62% 104%, rgba(244,114,208,.14), transparent 62%);
+  filter: blur(34px) saturate(135%);
+  animation: aurora-drift 42s ease-in-out infinite;
+  will-change: transform;
+}
+body::after {
+  content: "";
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
+  background-size: 46px 46px;
+  -webkit-mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.3) 60%, rgba(0,0,0,.1) 100%);
+          mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.3) 60%, rgba(0,0,0,.1) 100%);
+}
+@keyframes aurora-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(2.5vmax, -2vmax, 0) scale(1.08); }
+}
+
+/* ---------- layout container ---------- */
+.wrap {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 0 24px;
+  position: relative;
+  z-index: 1;               /* lift content above the atmosphere */
+}
+
+/* ============================================================================
+   Typographic chrome — eyebrows, section titles, ledes
+   ========================================================================== */
+.eyebrow {
+  display: block; text-align: center; margin-bottom: 18px;
+  font-family: var(--mono); font-size: 12px; font-weight: 700;
+  letter-spacing: .24em; text-transform: uppercase;
+  background: var(--grad);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.sec-title {
+  font-size: clamp(30px, 4.5vw, 50px); font-weight: 800;
+  letter-spacing: -.025em; line-height: 1.1;
+  text-align: center; text-wrap: balance;
+}
+.sec-sub {
+  max-width: 640px; margin: 18px auto 0; text-align: center;
+  color: var(--text-2); font-size: 17.5px; text-wrap: balance;
+}
+.sec-sub code {
+  color: var(--cyan); background: rgba(34,211,238,.1);
+  padding: 1px 7px; border-radius: 6px; font-size: .88em;
+}
+
+/* Gradient-clipped text — apply to any inline span or heading part. */
+.grad-text {
+  background: var(--grad);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+/* ============================================================================
+   Badge — a "live" pill with a breathing dot
+   ========================================================================== */
+.badge {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono); font-size: 12.5px; color: #c9e9f5;
+  border: 1px solid rgba(34,211,238,.4); border-radius: 999px;
+  padding: 7px 16px;
+  background: rgba(34,211,238,.07);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.badge::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--cyan); box-shadow: 0 0 10px var(--cyan);
+  animation: badge-breathe 3.4s ease-in-out infinite;
+}
+@keyframes badge-breathe {
+  0%, 100% { opacity: .45; transform: scale(.82); }
+  50%      { opacity: 1;   transform: scale(1.15); }
+}
+
+/* ============================================================================
+   Buttons
+   ========================================================================== */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 15.5px; font-weight: 650; text-decoration: none;
+  padding: 14px 26px; border-radius: 12px; border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn-grad {
+  color: #05141a;
+  background: linear-gradient(96deg, var(--cyan), var(--violet));
+  box-shadow: 0 8px 30px rgba(34,211,238,.32);
+}
+.btn-grad:hover { box-shadow: 0 12px 40px rgba(168,85,247,.5); }
+.btn-ghost { color: var(--text); border-color: var(--line); background: var(--panel); }
+.btn-ghost:hover { border-color: rgba(255,255,255,.2); }
+
+/* ============================================================================
+   Stat cards
+   ========================================================================== */
+.stats {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+}
+.stat {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 26px 22px; text-align: center;
+}
+.stat b {
+  display: block; font-size: clamp(28px, 3.4vw, 42px); font-weight: 800;
+  letter-spacing: -.02em; font-variant-numeric: tabular-nums;
+  background: var(--grad);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.stat span {
+  display: block; margin-top: 8px; font-size: 11px; font-weight: 650;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--text-2);
+}
+
+/* ============================================================================
+   Glass cards — the primary content surface
+   .glass is the reusable primitive; .cap adds card padding + a header slot.
+   ========================================================================== */
+.glass, .cap {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.cap {
+  padding: 30px 26px; display: flex; flex-direction: column;
+}
+a.cap, a.glass { text-decoration: none; }
+
+.cap .ic {
+  width: 46px; height: 46px; border-radius: 13px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 21px; margin-bottom: 20px;
+  background: var(--ic-bg, rgba(255,255,255,.06)); color: var(--ic-fg, var(--text));
+  border: 1px solid var(--line-soft);
+}
+.cap h3 { font-size: 19.5px; font-weight: 750; letter-spacing: -.01em; }
+.cap p  { font-size: 14.5px; color: var(--text-2); margin-top: 10px; }
+.cap .tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+.cap .tags code, .chip {
+  font-size: 12px; color: #d5d5e2; background: rgba(255,255,255,.06);
+  border: 1px solid var(--line-soft); border-radius: 7px; padding: 3px 9px;
+}
+.cap .more { margin-top: auto; padding-top: 16px; font-size: 13.5px; font-weight: 650; color: var(--cyan); }
+
+/* ============================================================================
+   Terminal window — for showing off commands / code
+   ========================================================================== */
+.window {
+  background: var(--term-bg); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px; box-shadow: 0 24px 70px rgba(0,0,0,.5); overflow: hidden;
+}
+.window .bar {
+  display: flex; align-items: center; height: 38px; padding: 0 14px;
+  background: var(--term-bar); border-bottom: 1px solid rgba(0,0,0,.25);
+}
+.window .dots { display: flex; gap: 7px; }
+.window .dots i { width: 12px; height: 12px; border-radius: 50%; }
+.window .dots i:nth-child(1) { background: #ff5f57; }
+.window .dots i:nth-child(2) { background: #febc2e; }
+.window .dots i:nth-child(3) { background: #28c840; }
+.window .bar-title {
+  flex: 1; text-align: center; font-family: var(--mono);
+  font-size: 12.5px; color: #b8b8d0; margin-right: 47px;
+}
+.window pre {
+  padding: 22px 24px; overflow-x: auto;
+  font-family: var(--mono); font-size: 13.5px; line-height: 1.75; color: #dcdcf0;
+}
+/* syntax token colors for use inside .window pre */
+.tp   { color: #8888aa; }               /* prompt $ */
+.tv   { color: #7ee787; font-weight: 700; }  /* command name */
+.tc   { color: var(--yellow); font-weight: 700; }  /* subcommand */
+.tok  { color: var(--green); }          /* success check */
+.tdim { color: #9d9dbd; }
+.cm   { color: #9d9dbd; font-style: italic; }  /* comment */
+
+/* ============================================================================
+   Living glass — cursor-following spotlight + lift on hover
+   Applies to .glass and the built-in surfaces. boost.js writes --mx / --my
+   (pointer position within the element); with no JS the spotlight simply
+   never appears and the hover lift still works.
+   ========================================================================== */
+.glass, .cap, .stat {
+  position: relative; overflow: hidden;
+  backdrop-filter: blur(14px) saturate(130%);
+  -webkit-backdrop-filter: blur(14px) saturate(130%);
+  transition: transform .3s cubic-bezier(.2,.7,.2,1), border-color .3s ease,
+              background .3s ease, box-shadow .35s ease;
+}
+.glass > *, .cap > *, .stat > * { position: relative; z-index: 1; }
+.glass::before, .cap::before, .stat::before {
+  content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
+  pointer-events: none; opacity: 0; transition: opacity .35s ease;
+  background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 50%),
+              rgba(34,211,238,.16), rgba(168,85,247,.10) 42%, transparent 70%);
+}
+.glass:hover, .cap:hover, .stat:hover {
+  transform: translateY(-4px);
+  border-color: var(--line-hi);
+  background: rgba(255,255,255,.06);
+  box-shadow: 0 22px 60px -22px rgba(168,85,247,.5),
+              inset 0 0 0 1px rgba(34,211,238,.12);
+}
+.glass:hover::before, .cap:hover::before, .stat:hover::before { opacity: 1; }
+
+/* terminal window gets a gentler accent bloom */
+.window { transition: box-shadow .35s ease, transform .3s ease; }
+.window:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 30px 80px -24px rgba(34,211,238,.4), 0 24px 70px rgba(0,0,0,.5);
+}
+
+/* ============================================================================
+   Reveal on scroll — add class="reveal"; boost.js flips .in when it enters view
+   ========================================================================== */
+.reveal { opacity: 1; }               /* visible by default (no-JS safe) */
+.js .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+.js .reveal.in { opacity: 1; transform: none; }
+
+/* ============================================================================
+   Responsive
+   ========================================================================== */
+@media (max-width: 960px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 620px) {
+  .stats { gap: 10px; }
+  .stat  { padding: 18px 10px; }
+}
+
+/* ============================================================================
+   Accessibility — honor reduced-motion, and print cleanly
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  body::before { animation: none !important; }
+  .badge::before { animation: none !important; }
+  .glass, .cap, .stat, .window {
+    transition: border-color .3s ease, box-shadow .3s ease;
+  }
+  .glass:hover, .cap:hover, .stat:hover, .window:hover { transform: none; }
+  .reveal, .js .reveal {
+    transition: none !important; transform: none !important; opacity: 1 !important;
+  }
+}
+
+@media print {
+  body::before, body::after { display: none !important; }
+  .glass, .cap, .stat, .window {
+    box-shadow: none !important; backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+}
