@@ -67,24 +67,28 @@ also keeps line-adjacent conflicts rare.
 Branch from `main`, keep PRs focused, and write the PR description in the
 commit message (it becomes the release notes via release-drafter).
 
-## Merge queue (recommended — enable in repo Settings)
+## Release safety — require branches be up to date
 
 Every merge to `main` cuts a PyPI release, and two PRs that are each green in
-isolation can still land a broken *combination*. The CI workflow already listens
-for the `merge_group` event, so once the GitHub **merge queue** is turned on, each
-queued PR is re-tested against the current tip before it lands — no broken
-combination ships. `merge_group` runs on a `gh-readonly-queue/*` ref, so it does
-**not** trigger the release; publish still fires only on the real push to `main`.
-
-Enable it once (repo admin), **Settings → Branches → Add branch ruleset for
-`main`**:
+isolation can still land a broken *combination*. Guard against it in the `main`
+branch ruleset (**Settings → Rules → Rulesets**):
 
 - **Require a pull request before merging.**
 - **Require status checks to pass** — select `lint`, every `tests (…)` matrix job,
-  `mutation`, and `CodeQL`; tick **Require branches to be up to date before merging**.
-- **Require merge queue** (merge method: squash; build concurrency ~2–5).
+  `mutation`, and `CodeQL`, and tick **Require branches to be up to date before
+  merging**. This is the key one: it forces each PR to be rebased onto the latest
+  `main` and re-pass the full gate before it can merge, so an incompatible pair
+  can't both land — the second PR must include the first and re-run CI.
 
-Or via CLI (`gh api -X PUT repos/:owner/:repo/branches/main/protection …` plus
-`repos/:owner/:repo/rulesets` for the queue). After enabling, land PRs with
-**`gh pr merge --squash --auto`** — the PR joins the queue instead of merging
-directly.
+Then land PRs with `gh pr merge --squash` once green (never onto a red release).
+
+### Merge queue (organization-owned repos only)
+
+GitHub's **merge queue** auto-batches and re-tests queued PRs against the current
+tip — a stronger, hands-off version of the "up to date" rule above. It is only
+available on **organization-owned** repositories, so it does **not** appear in the
+ruleset for this user-owned repo. The CI workflow already listens for the
+`merge_group` event (it runs on a `gh-readonly-queue/*` ref and never triggers the
+release), so if this repo is ever transferred to an org, enable **Require merge
+queue** in the ruleset and it activates with no code changes — then merge with
+`gh pr merge --squash --auto`.
