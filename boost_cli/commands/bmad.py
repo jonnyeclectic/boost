@@ -8,6 +8,7 @@ full provisioning is delegated to the canonical `npx bmad-method install`.
     boost bmad install --scope global      # skills into ~/.claude/skills (+ toggle)
     boost bmad init                        # add _bmad/ runtime to the current repo
     boost bmad startup on|off|status       # toggle the SessionStart orientation
+                                           # (biases build/fix/change work to bmad-quick-dev)
     boost bmad disable / enable            # quarantine / restore skills (recoverable)
     boost bmad uninstall                   # delete skills + _bmad/ for a scope
     boost bmad doctor                      # what's installed where
@@ -55,6 +56,10 @@ Phases: Analysis (bmad-brainstorming -> bmad-product-brief -> research) ->
 Planning (bmad-prd -> bmad-architecture -> bmad-create-epics-and-stories) ->
 Build (bmad-sprint-planning -> bmad-create-story -> bmad-dev-story ->
 bmad-code-review -> bmad-qa-generate-e2e-tests -> bmad-retrospective).
+
+Default bias: for a build, fix, change, or refactor request, go straight to the
+`bmad-quick-dev` skill (clarify -> plan -> implement -> review) — skip the full
+brief -> PRD -> architecture ceremony unless the user asks for full planning.
 
 Full workflows need a per-project `_bmad/` runtime — run `boost bmad init` in a
 repo if it isn't there yet. Turn this orientation off with `boost bmad startup off`."""
