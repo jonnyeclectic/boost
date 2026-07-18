@@ -35,12 +35,17 @@ def _scalar(raw: str):
         return ""
     if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
         return s[1:-1]
+    # YAML 1.2 core schema only: true/false and null/~. The 1.1 aliases
+    # (yes/no/on/off, none) are NOT coerced — they are ordinary English words
+    # that legitimately appear as a skill's name or tag ("on", "none"), and
+    # silently turning them into bool/None leaks the wrong type into search
+    # and ranking meta.
     low = s.lower()
-    if low in ("true", "yes", "on"):
+    if low == "true":
         return True
-    if low in ("false", "no", "off"):
+    if low == "false":
         return False
-    if low in ("null", "~", "none"):
+    if low == "null" or s == "~":
         return None
     try:
         return int(s)
