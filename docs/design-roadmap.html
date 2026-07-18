@@ -213,7 +213,7 @@
       <button class="pill" data-filter="impact" data-val="med">Med</button>
       <button class="pill" data-filter="impact" data-val="low">Low</button>
     </div>
-    <p class="roadmap-count"><b id="shown"><!-- ROADMAP:count shown -->25<!-- /ROADMAP:count --></b> of <b><!-- ROADMAP:count total -->25<!-- /ROADMAP:count --></b> opportunities shown</p>
+    <p class="roadmap-count"><b id="shown"><!-- ROADMAP:count shown -->26<!-- /ROADMAP:count --></b> of <b><!-- ROADMAP:count total -->26<!-- /ROADMAP:count --></b> opportunities shown</p>
   </div>
 
   <div class="wrap" id="board">
@@ -397,7 +397,7 @@
           <h3>Command-by-command Polish</h3>
           <p>The screens users actually stare at — front door, doctor, list, info, browse.</p>
         </div>
-        <span class="n"><!-- ROADMAP:count track=commands -->6 items<!-- /ROADMAP:count --></span>
+        <span class="n"><!-- ROADMAP:count track=commands -->7 items<!-- /ROADMAP:count --></span>
       </div>
       <div class="rcards">
 
@@ -449,16 +449,15 @@
   <div class="rmeta"><span class="m-cat">ux</span><span>Complexity L</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
   <div class="rref"><code>cliparse.py (BoostArgumentParser) · all 10 command files</code></div>
 </article>
+
+<article class="ritem" data-track="commands" data-impact="high">
+  <div class="ritem-top"><span class="rid">BOOST-D26</span><span class="rstatus done">Shipped</span></div>
+  <h4><code>browse</code> — Aurora the full-screen TUI</h4>
+  <p>The interactive <code>browse</code> pane was the <b>last off-theme surface</b>: a curses screen drawn in raw <code>A_BOLD</code>/<code>A_DIM</code>/<code>A_REVERSE</code> — zero brand color while every other command spoke Aurora. Rebuilt it as a first-class TUI: a macOS <b>titlebar</b> (traffic-light dots + <code>boost browse</code> wordmark under a cyan→violet→pink gradient rule), an <code>❯</code> chevron prompt with a live <code>▏</code> caret, <b>fuzzy-match highlighting</b> (matched chars glow pink as you type), a cyan selection bar, yellow curated <code>★</code>, violet tap labels, a right-edge scrollbar, and a gradient-topped detail pane with <code>#tag</code> chips. Colors come from the single-source <code>out.TOKENS</code> via <code>init_color</code> — parity-locked to <code>style/boost.css</code> — and degrade truecolor → 8-color → monochrome. Stdlib only. With this, <b>every boost command is on-theme</b>.</p>
+  <div class="rmeta"><span class="m-cat">commands</span><span>Complexity L</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★★</span></div>
+  <div class="rref"><code>commands/discovery.py · _browse_tui / _aurora_theme</code></div>
+</article>
       <!-- /ROADMAP:cards -->
-
-        <article class="ritem" data-track="commands" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-D26</span><span class="rstatus done">Shipped</span></div>
-          <h4><code>browse</code> — Aurora the full-screen TUI</h4>
-          <p>The interactive <code>browse</code> pane was the <b>last off-theme surface</b>: a curses screen drawn in raw <code>A_BOLD</code>/<code>A_DIM</code>/<code>A_REVERSE</code> — zero brand color while every other command spoke Aurora. Rebuilt it as a first-class TUI: a macOS <b>titlebar</b> (traffic-light dots + <code>boost browse</code> wordmark under a cyan→violet→pink gradient rule), an <code>❯</code> chevron prompt with a live cursor, <b>fuzzy-match highlighting</b> (matched chars glow pink as you type), a cyan selection bar, yellow curated <code>★</code>, violet tap labels, a right-edge scrollbar, and a gradient-topped detail pane. Colors come from the single-source <code>out.TOKENS</code> via <code>init_color</code> — parity-locked to <code>style/boost.css</code> — and degrade truecolor → 8-color → monochrome. Stdlib only.</p>
-          <div class="rmeta"><span class="m-cat">commands</span><span>Complexity L</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★★★</span></div>
-          <div class="rref"><code>commands/discovery.py · _browse_tui / _aurora_theme</code></div>
-        </article>
-
       </div>
     </section>
 
