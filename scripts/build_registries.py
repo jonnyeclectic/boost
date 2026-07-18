@@ -6,12 +6,17 @@ entry is deduped by owner/repo, classified by type + category, and tagged with
 `list_only` when the repo is an awesome-list that mostly links out (so its
 scannable item count is far below its advertised total).
 
-Run:  python3 scripts/build_registries.py
+Run:    python3 scripts/build_registries.py            # regenerate the JSON
+Verify: python3 scripts/build_registries.py --check    # fail if it has drifted
 """
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 from pathlib import Path
+
+DEST = Path(__file__).resolve().parent.parent / "boost_cli" / "data" / "registries.json"
 
 # Repos that are index/awesome READMEs — they *point at* many items but ship
 # few or no scannable item files themselves. Kept for discovery, flagged so
@@ -163,7 +168,12 @@ def rows(pairs, typ):
         }
 
 
-def main() -> int:
+def build_payload() -> dict:
+    """Assemble the registries payload from the SKILLS/RULES/WORKFLOWS tuples.
+
+    Pure function of the source tuples — no I/O — so both the writer and the
+    ``--check`` verifier render byte-for-byte identical output.
+    """
     by_name: dict = {}
     for entry in list(rows(SKILLS, "skill")) + list(rows(RULES, "rule")) + \
             list(rows(WORKFLOWS, "workflow")):
@@ -181,7 +191,7 @@ def main() -> int:
 
     entries = sorted(by_name.values(), key=lambda e: (e["type"], e["name"].lower()))
     scannable = [e for e in entries if not e["list_only"]]
-    payload = {
+    return {
         "generated_note": "Curated skill/rule/workflow registries for boost. "
                           "est_items are research estimates; verify by tapping. "
                           "list_only repos are index/awesome lists that link out.",
@@ -190,10 +200,16 @@ def main() -> int:
         "est_items_scannable": sum(e["est_items"] for e in scannable),
         "registries": entries,
     }
-    dest = Path(__file__).resolve().parent.parent / "boost_cli" / "data" / "registries.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(payload, indent=2) + "\n")
-    print("wrote %s" % dest)
+
+
+def render(payload: dict) -> str:
+    """Serialize a payload to the exact on-disk representation."""
+    return json.dumps(payload, indent=2) + "\n"
+
+
+def _summary(payload: dict) -> None:
+    entries = payload["registries"]
+    scannable = [e for e in entries if not e["list_only"]]
     print("registries: %d  (scannable %d, list-only %d)"
           % (len(entries), len(scannable), len(entries) - len(scannable)))
     print("est items total: %d   scannable: %d"
@@ -205,6 +221,37 @@ def main() -> int:
         by_type[e["type"]][1] += e["est_items"]
     for typ, (n, est) in sorted(by_type.items()):
         print("  %-9s %3d repos  ~%d items" % (typ, n, est))
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check", action="store_true",
+        help="verify the committed JSON matches a fresh build; exit 1 on drift "
+             "(does not write). Used in CI to catch un-regenerated edits.",
+    )
+    args = parser.parse_args(argv)
+
+    payload = build_payload()
+    fresh = render(payload)
+
+    if args.check:
+        current = DEST.read_text() if DEST.exists() else ""
+        if current != fresh:
+            print(
+                "ERROR: %s is out of date — regenerate it with\n"
+                "    python3 scripts/build_registries.py\n"
+                "and commit the result (see CONTRIBUTING.md)." % DEST,
+                file=sys.stderr,
+            )
+            return 1
+        print("%s is up to date." % DEST)
+        return 0
+
+    DEST.parent.mkdir(parents=True, exist_ok=True)
+    DEST.write_text(fresh)
+    print("wrote %s" % DEST)
+    _summary(payload)
     return 0
 
 

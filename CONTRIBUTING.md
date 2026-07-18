@@ -33,6 +33,20 @@ agent configs.
 - Anything under `boost_cli/core/` is mutation-tested; expect to add unit
   tests that actually kill your mutants.
 
+## Generated files — never hand-edit
+
+Some checked-in files are build outputs. Edit the source, regenerate, and commit
+the result **as the final step before opening the PR** so the artifact never
+drifts from its source (CI fails the build otherwise):
+
+| Generated file | Source of truth | Regenerate with |
+|---|---|---|
+| `boost_cli/data/registries.json` | `SKILLS`/`RULES`/`WORKFLOWS` tuples in `scripts/build_registries.py` | `python3 scripts/build_registries.py` |
+
+CI runs `python3 scripts/build_registries.py --check` and fails on drift; the
+same guard lives in `tests/unit/test_registries_fresh.py`. Regenerating last also
+keeps line-adjacent JSON conflicts between parallel branches rare.
+
 ## Pull requests
 
 Branch from `main`, keep PRs focused, and write the PR description in the

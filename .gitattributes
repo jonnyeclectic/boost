@@ -1,0 +1,4 @@
+# Generated build outputs — never hand-edit; regenerate from source (see
+# CONTRIBUTING.md "Generated files"). Marked linguist-generated so GitHub
+# collapses their diffs and excludes them from language stats.
+boost_cli/data/registries.json linguist-generated=true
