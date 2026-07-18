@@ -6,12 +6,31 @@ asserting exact output shapes, exit codes, and on-disk cache effects.
 from __future__ import annotations
 
 import json
+import sqlite3
 import subprocess
 import types
 
 import pytest
 
 from boost_cli.core import paths, util
+
+
+def _vec_loadable() -> bool:
+    """True only if sqlite-vec both imports and loads (see test_dense.py)."""
+    try:
+        import sqlite_vec  # type: ignore
+    except ImportError:
+        return False
+    con = sqlite3.connect(":memory:")
+    try:
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.execute("select vec_version()").fetchone()
+        return True
+    except Exception:
+        return False
+    finally:
+        con.close()
 
 
 def _git(cwd, *args):
@@ -656,7 +675,8 @@ class TestReindex:
         assert "dense index skipped" in r.out
 
     def test_dense_builds_vector_store(self, boost, tapped, monkeypatch):
-        pytest.importorskip("sqlite_vec")
+        if not _vec_loadable():
+            pytest.skip("sqlite-vec extension not loadable here")
         from boost_cli.core import dense, embed
 
         def toy(texts, input_type=None, timeout=60):

@@ -8,12 +8,38 @@ Skipped entirely when the `[rag]` extra (sqlite-vec) isn't installed.
 from __future__ import annotations
 
 import math
+import sqlite3
 
 import pytest
 
 from boost_cli.core import dense, embed, rag
 
-pytest.importorskip("sqlite_vec")
+
+def _vec_loadable() -> bool:
+    """True only if sqlite-vec both imports *and* loads on this interpreter.
+
+    macOS' bundled Python is often built without ``enable_load_extension``, so
+    the package imports but the extension can't load — dense retrieval is then
+    genuinely unavailable and the product degrades to BM25, so we skip here.
+    """
+    try:
+        import sqlite_vec  # type: ignore
+    except ImportError:
+        return False
+    con = sqlite3.connect(":memory:")
+    try:
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.execute("select vec_version()").fetchone()
+        return True
+    except Exception:
+        return False
+    finally:
+        con.close()
+
+
+pytestmark = pytest.mark.skipif(
+    not _vec_loadable(), reason="sqlite-vec extension not loadable here")
 
 _VOCAB = {"react": (1.0, 0.0, 0.0), "python": (0.0, 1.0, 0.0),
           "testing": (0.0, 0.0, 1.0)}
