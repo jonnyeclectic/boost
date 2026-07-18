@@ -20,6 +20,16 @@ update all of them, you run one command.
   <sub><em>tap a registry → search → install into every agent → doctor — one flow</em></sub>
 </p>
 
+## Roadmap
+
+boost is built in the open. Two living boards — generated from
+`docs/roadmap/items/*.md` — track what's shipped, in flight, and planned:
+
+- **[Code roadmap](https://jonnyeclectic.github.io/boost/roadmap.html)** — engine, correctness, and tooling work
+- **[Design roadmap](https://jonnyeclectic.github.io/boost/design-roadmap.html)** — the Visual Guide and docsite aesthetics
+
+Both are reachable from the [Visual Guide](https://jonnyeclectic.github.io/boost/) nav.
+
 ## What's a "skill," exactly?
 
 A **skill** is just a `SKILL.md` file — Markdown plus a bit of YAML up top —
