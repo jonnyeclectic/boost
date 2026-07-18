@@ -72,9 +72,33 @@ keep them from clobbering each other:
   never merge onto a red release, and after merging confirm the publish workflow
   goes green — not just the PR checks.
 
+### The roadmap is data-driven — add items, never hand-edit the HTML
+
+`docs/roadmap.html` is **generated** from one file per item under
+`docs/roadmap/items/*.md` by `scripts/build_roadmap.py` (this is what stopped the
+roadmap being the repo's #1 merge-conflict source). To add or change a card:
+
+1. Create/edit `docs/roadmap/items/<id>.md` — a Markdown-with-frontmatter file
+   (`id, board: code, section, status, category, complexity, impact, wow, note,
+   order, owner, pr, title` + the card body after the `---`).
+2. Run `python3 scripts/build_roadmap.py` (or `make generate`) and commit both
+   the item file and the regenerated HTML. Counters ("Loop finds" etc.) are
+   **computed** — never hand-type them.
+
+Never hand-edit the `<article>` cards or snapshot counters in `docs/roadmap.html`:
+CI's `build_roadmap.py --check` and `tests/unit/test_roadmap_fresh.py` fail on
+drift. Two loops adding two items now touch two *different files* → clean merge.
+
+**Claiming an item (so two loops never pick the same one):** set `status:` and
+`owner: loop/<topic>` in that item's file on your branch and open the PR. Two
+loops claiming *different* items edit different files (no conflict); two loops
+claiming the *same* item edit the same small file, so the second merge conflicts —
+the intended "already claimed" signal, first-to-merge wins. (`docs/design-roadmap.html`
+is still hand-edited until the Phase 1b migration lands.)
+
 ## Layout
 
 - `boost_cli/commands/` — CLI command groups   · `boost_cli/core/` — engine (the mutation-gated code)
 - `boost_cli/data/` — shipped catalog data (generated)   · `scripts/` — build/gate tooling
 - `tests/unit`, `tests/functional`, `tests/smoke.sh` — the three test tiers
-- `docs/` — `overview.html` (visual guide), `DEBUGGING.md`
+- `docs/` — `overview.html` (visual guide), `DEBUGGING.md`; `roadmap.html` is generated from `docs/roadmap/items/*.md` (see above)
