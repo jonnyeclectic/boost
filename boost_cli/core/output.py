@@ -10,6 +10,7 @@ Conventions used across all commands:
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 
 RESET = "\033[0m"
@@ -151,6 +152,29 @@ def verdict(ok: bool, msg: str) -> None:
     """A dashboard verdict line: a green dot when healthy, amber when not."""
     dot = aurora("●", "green" if ok else "yellow")
     print("  " + dot + " " + c(msg, GREEN if ok else YELLOW))
+
+
+def term_width(default: int = 80) -> int:
+    """Best-effort terminal column count; a stable default when detached."""
+    return shutil.get_terminal_size((default, 20)).columns
+
+
+def truncate(text: str, width: int, ellipsis: str = "…") -> str:
+    """Collapse whitespace (including literal \\n / \\t escapes) to single
+    spaces, then clip to at most `width` columns with a trailing ellipsis.
+
+    Keeps list output to one tidy line each — a 2,000-char blob becomes a
+    scannable snippet instead of blowing up the pane.
+    """
+    text = text.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")
+    text = " ".join(text.split())
+    if width <= 0:
+        return ""
+    if len(text) <= width:
+        return text
+    if width <= len(ellipsis):
+        return ellipsis[:width]
+    return text[:width - len(ellipsis)] + ellipsis
 
 
 def kv(key: str, value: str, width: int = 14) -> None:
