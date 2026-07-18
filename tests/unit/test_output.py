@@ -584,6 +584,21 @@ class TestTable:
         output.table([("a",), ("bb", "c")])
         assert capsys.readouterr().out == "a\nbb  c\n"
 
+    def test_header_arity_exceeds_every_row(self, capsys):
+        # a header column with no data cell in any row must not raise: the
+        # width generator is guarded by `i < len(r)`, and the header row itself
+        # (part of all_rows) always supplies its own columns.
+        output.table([("1",)], headers=["A", "B", "C"])
+        assert capsys.readouterr().out == "A  B  C\n1\n"
+
+    def test_degenerate_row_shapes_never_raise(self, capsys):
+        # empty tuples and all-empty rows are the shapes the (non-)bug feared;
+        # assert they render without a `max() arg is empty` crash.
+        for rows in ([(), ("a",)], [(), ()], [("a", "b"), ()]):
+            output.table(rows)                    # must not raise
+        output.table([(), ()], headers=["A", "B"])
+        assert "A  B" in capsys.readouterr().out
+
     def test_non_string_cells_coerced(self, capsys):
         output.table([(1, 22.5)])
         assert capsys.readouterr().out == "1  22.5\n"
