@@ -563,6 +563,14 @@ class TestTrending:
         assert "jira-integration" in r.out
         assert "brainstorming" not in r.out
 
+    def test_long_description_is_clipped(self, boost, tapped, monkeypatch):
+        # D23: description column must not dump raw — it clips to the width.
+        boost("install", "brainstorming")
+        monkeypatch.setenv("COLUMNS", "40")
+        r = boost("trending")
+        assert "brainstorming" in r.out
+        assert "…" in r.out
+
 
 # ---------------------------------------------------------------- stats
 
