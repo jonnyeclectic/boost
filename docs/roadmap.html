@@ -476,7 +476,7 @@
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Correctness</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Correctness</span></div>
         <h3>Unify <code>_tilde()</code> — two copies have a boundary bug</h3>
         <p>Eight command modules each define <code>_tilde</code>; the <code>quality</code> and <code>intelligence</code> versions use <code>startswith(home)</code> with no separator check (<code>quality.py:78</code>), so <code>/Users/bob-backup</code> wrongly contracts to <code>~-backup</code>. Collapse to one helper in <code>core/paths</code>.</p>
         <div class="meta">

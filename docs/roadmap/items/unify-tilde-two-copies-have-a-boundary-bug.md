@@ -2,14 +2,14 @@
 id: unify-tilde-two-copies-have-a-boundary-bug
 board: code
 section: internals
-status: planned
+status: inflight
 category: Correctness
 complexity: S
 impact: Med
 wow: 2
 note: 
 order: 9
-owner:
+owner: loop/unify-tilde
 pr:
 title: Unify <code>_tilde()</code> — two copies have a boundary bug
 ---
