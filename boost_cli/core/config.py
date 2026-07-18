@@ -77,7 +77,30 @@ def _merge(base: dict, override: dict) -> dict:
     return out
 
 
-def load() -> dict:
+# In-process cache of the merged config. get() is on many hot paths
+# (ai.enabled, per-skill enabled_agents, log level, policy) and every call
+# used to re-read config.json and re-merge/deep-copy DEFAULTS. We cache the
+# merged result keyed on the config path + its stat stamp, so any write —
+# save(), an external edit, or a HOME/BOOST_HOME switch between tests — is
+# picked up automatically without an explicit invalidation call.
+_cache: dict | None = None
+_cache_key: tuple | None = None
+
+
+def _stat_stamp(p: Any) -> tuple:
+    """Identity of the config file: (path, mtime_ns, size).
+
+    A missing file stamps as (path, None, None); any create/modify/delete
+    changes the stamp, which is what invalidates the cache.
+    """
+    try:
+        st = p.stat()
+    except OSError:
+        return (str(p), None, None)
+    return (str(p), st.st_mtime_ns, st.st_size)
+
+
+def _read() -> dict:
     p = paths.config_path()
     if not p.exists():
         return deepcopy(DEFAULTS)
@@ -88,6 +111,24 @@ def load() -> dict:
     return _merge(DEFAULTS, user)
 
 
+def _cached() -> dict:
+    """The merged config, re-read from disk only when the file changes."""
+    global _cache, _cache_key
+    key = _stat_stamp(paths.config_path())
+    cache = _cache
+    if cache is None or _cache_key != key:
+        cache = _read()
+        _cache = cache
+        _cache_key = key
+    return cache
+
+
+def load() -> dict:
+    # A defensive copy so callers can mutate the result (set_value/unset do)
+    # without corrupting the shared cache.
+    return deepcopy(_cached())
+
+
 def save(cfg: dict) -> None:
     paths.ensure_dirs()
     util.atomic_write_text(
@@ -95,12 +136,12 @@ def save(cfg: dict) -> None:
 
 
 def get(dotted: str, default=None):
-    node = load()
+    node = _cached()
     for part in dotted.split("."):
         if not isinstance(node, dict) or part not in node:
             return default
         node = node[part]
-    return node
+    return deepcopy(node)
 
 
 def set_value(dotted: str, raw: str) -> None:
