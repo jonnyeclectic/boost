@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -36,8 +36,11 @@ Changelog = "https://github.com/jonnyeclectic/boost/releases"
 [project.scripts]
 boost = "boost_cli.cli:main"
 
-[tool.setuptools.dynamic]
-version = {attr = "boost_cli.__version__"}
+[tool.setuptools_scm]
+# Version is derived from the latest git tag (vX.Y.Z) at build time, so tags
+# are the single source of truth — no constant to bump, no drift. Writes the
+# resolved version to boost_cli/_version.py (git-ignored).
+version_file = "boost_cli/_version.py"
 
 [tool.setuptools.packages.find]
 include = ["boost_cli*"]

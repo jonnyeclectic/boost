@@ -6,6 +6,7 @@ contract (output shapes, exit codes, real symlinks and lock file on disk).
 from __future__ import annotations
 
 import json
+import re
 
 from boost_cli.core import paths
 
@@ -57,7 +58,7 @@ def test_unknown_command_suggests_closest(boost):
 
 
 def test_version_and_help(boost):
-    assert "boost 1.0.1" in boost("--version").out
+    assert re.match(r"boost \d+\.\d+", boost("--version").out)
     r = boost("--help")
     assert "72 commands · 8 groups" in r.out
     for group in ("Package Management", "Discovery & Search", "Intelligence",
