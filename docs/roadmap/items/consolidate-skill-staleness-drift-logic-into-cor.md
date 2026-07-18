@@ -2,14 +2,14 @@
 id: consolidate-skill-staleness-drift-logic-into-cor
 board: code
 section: internals
-status: next
+status: inflight
 category: Correctness
 complexity: M
 impact: High
 wow: 3
 note: 
 order: 3
-owner:
+owner: loop/consolidate-staleness
 pr:
 title: Consolidate skill-staleness / drift logic into core
 ---

@@ -440,7 +440,7 @@
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill next">Next</span><span class="cat">Correctness</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Correctness</span></div>
         <h3>Consolidate skill-staleness / drift logic into core</h3>
         <p>The "is this skill outdated" decision — <code>semver_gt</code> → commit compare → <code>sha256_dir</code> vs lock — is reimplemented nearly verbatim in <code>cmd_update</code>, <code>cmd_outdated</code> and <code>_drift_status</code> (<code>pkg.py:277 · taps.py:225 · quality.py:120</code>). Three copies of core business logic that <b>will drift apart</b>. Make it one <code>core</code> function the commands render.</p>
         <div class="meta">
