@@ -45,6 +45,19 @@ DEFAULT_TAPS = [
 ]
 
 
+# Path to the bundled curated registry catalog (skills + rules + workflows).
+REGISTRY_CATALOG = paths.package_root() / "data" / "registries.json"
+
+
+def load_registry_catalog() -> list:
+    """The bundled curated registries, or [] if the data file is missing."""
+    try:
+        data = json.loads(REGISTRY_CATALOG.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data.get("registries", [])
+
+
 def _merge(base: dict, override: dict) -> dict:
     out = deepcopy(base)
     for k, v in (override or {}).items():

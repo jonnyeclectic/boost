@@ -82,6 +82,11 @@ def _copy_skill(src: Path, dest: Path) -> None:
 def install(entry: dict, force: bool = False,
             only_agents: Optional[List[str]] = None) -> InstallResult:
     """Install a catalog entry. Raises BoostError on policy block or conflict."""
+    kind = entry.get("kind", "skill")
+    if kind != "skill":
+        raise BoostError(
+            "%s is a %s, which boost indexes but cannot install yet" % (entry["name"], kind),
+            hint="rules and workflows show up in `boost search`/`boost taps` for now")
     name = entry["name"]
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:

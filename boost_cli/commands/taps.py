@@ -21,8 +21,58 @@ def _tilde(p) -> str:
     return s
 
 
+def _tap_catalog(args) -> int:
+    """Tap every registry in the filtered catalog selection."""
+    selection = _catalog_selection(args)
+    if not selection:
+        out.warn("no catalog registries match that filter")
+        return 1
+    if args.dry_run:
+        rows = [(e["name"], e["type"], e.get("category", ""),
+                 "~%d" % (e.get("est_items") or 0),
+                 out.c(e.get("focus", ""), out.DIM)) for e in selection]
+        out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST", "FOCUS"))
+        print()
+        out.dim("%d registries · ~%d items (dry run — nothing tapped)"
+                % (len(selection), sum(e.get("est_items") or 0 for e in selection)))
+        return 0
+    existing = {t.name for t in registry.list_taps()}
+    rc = 0
+    for e in selection:
+        if e["name"] in existing:
+            out.info(out.c("%s already tapped" % e["name"], out.DIM))
+            continue
+        try:
+            tap = registry.add(str(e["url"]), curated=True)
+            entries = catalog.rebuild_tap(tap)
+        except BoostError as err:
+            out.warn("could not tap %s: %s" % (e["name"], err.message))
+            rc = 1
+            continue
+        journal.log("tap", tap.name)
+        out.ok("tapped %s (%d items) — %s"
+               % (tap.name, len(entries), e.get("focus", "")))
+    return rc
+
+
+def _catalog_selection(args) -> list:
+    """Filter the bundled registry catalog by --type/--category/--limit."""
+    entries = config.load_registry_catalog()
+    if args.type:
+        entries = [e for e in entries
+                   if e.get("type") == args.type or args.type in e.get("also_types", [])]
+    if args.category:
+        entries = [e for e in entries if e.get("category") == args.category]
+    if not args.include_lists:
+        entries = [e for e in entries if not e.get("list_only")]
+    entries.sort(key=lambda e: (-int(e.get("est_items") or 0), e["name"].lower()))
+    if args.limit:
+        entries = entries[:args.limit]
+    return entries
+
+
 def cmd_tap(argv) -> int:
-    """boost tap [SPEC] [--defaults] [--curated]"""
+    """boost tap [SPEC] [--defaults] [--catalog] [--curated]"""
     p = argparse.ArgumentParser(
         prog="boost tap",
         description="Add a GitHub repo as a skill registry")
@@ -30,13 +80,26 @@ def cmd_tap(argv) -> int:
                    help="owner/repo, a git URL, or a local directory")
     p.add_argument("--defaults", action="store_true",
                    help="tap the recommended public registries")
+    p.add_argument("--catalog", action="store_true",
+                   help="tap from the bundled curated registry catalog")
+    p.add_argument("--type", choices=("skill", "rule", "workflow"),
+                   help="with --catalog: restrict to one item type")
+    p.add_argument("--category", help="with --catalog: restrict to one category")
+    p.add_argument("--limit", type=int, metavar="N",
+                   help="with --catalog: only the top N registries by est. size")
+    p.add_argument("--include-lists", action="store_true",
+                   help="with --catalog: also tap awesome-list/index repos")
+    p.add_argument("--dry-run", action="store_true",
+                   help="with --catalog: print what would be tapped, tap nothing")
     p.add_argument("--curated", action="store_true",
                    help="mark the tap as curated (★ in listings)")
     args = p.parse_args(argv)
-    if not args.spec and not args.defaults:
-        p.error("provide a SPEC or --defaults")
+    if not args.spec and not args.defaults and not args.catalog:
+        p.error("provide a SPEC, --defaults, or --catalog")
 
     rc = 0
+    if args.catalog:
+        rc |= _tap_catalog(args)
     if args.defaults:
         existing = {t.name for t in registry.list_taps()}
         for default in config.DEFAULT_TAPS:

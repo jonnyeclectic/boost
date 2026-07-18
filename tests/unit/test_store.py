@@ -37,6 +37,13 @@ def brainstorming(entry):
 
 
 class TestInstall:
+    def test_non_skill_kind_refused(self, tap, entry):
+        rule = dict(entry, kind="rule", name="some-rule")
+        with pytest.raises(BoostError) as ei:
+            store.install(rule)
+        assert "cannot install yet" in ei.value.message
+        assert lockfile.get_skill("some-rule") is None
+
     def test_happy_path(self, tap, entry):
         src = tap.path / "skills" / "brainstorming"
         (src / ".git").mkdir()
