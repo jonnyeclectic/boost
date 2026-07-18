@@ -26,6 +26,15 @@ CYAN = "\033[36m"
 
 
 def use_color(stream=None) -> bool:
+    # BOOST_COLOR is boost's own explicit override and wins over everything
+    # else (most-specific-wins): always/never force it on/off regardless of
+    # NO_COLOR, CLICOLOR_FORCE or the TTY check. Anything else (incl. "auto")
+    # falls through to the standard detection below.
+    override = os.environ.get("BOOST_COLOR", "").lower()
+    if override in ("never", "off", "0"):
+        return False
+    if override in ("always", "force", "1"):
+        return True
     if os.environ.get("NO_COLOR"):
         return False
     if os.environ.get("CLICOLOR_FORCE"):

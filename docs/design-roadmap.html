@@ -239,7 +239,7 @@
         </article>
 
         <article class="ritem" data-track="color" data-impact="high">
-          <div class="ritem-top"><span class="rid">BOOST-D02</span><span class="rstatus progress">In progress</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D02</span><span class="rstatus done">Shipped</span></div>
           <h4>Terminal capability detection &amp; graceful degradation</h4>
           <p><code>use_color()</code> is binary — color or nothing. Add a tier ladder: <b>truecolor</b> (<code>COLORTERM=truecolor/24bit</code>) → <b>256</b> → <b>16</b> → <b>none</b>, so the Aurora tokens snap to the nearest available color instead of vanishing. Keep the existing <code>NO_COLOR</code> honor, add a <code>BOOST_COLOR=always/auto/never</code> override, and treat <code>TERM=dumb</code> as none.</p>
           <div class="rmeta"><span class="m-cat">color</span><span>Complexity M</span><span class="m-imp high">Impact High</span><span class="m-wow">★★★☆☆</span></div>
