@@ -14,7 +14,11 @@ pulled from GitHub-hosted registries, then hooks them straight into
 skill files into three different agent folders and hoping you remember to
 update all of them, you run one command.
 
-![boost demo](docs/demo.gif)
+<p align="center">
+  <img src="docs/demo.gif" alt="boost demo: tap a registry, search for a skill, install it into every agent, then run doctor" width="820">
+  <br>
+  <sub><em>tap a registry → search → install into every agent → doctor — one flow</em></sub>
+</p>
 
 ## What's a "skill," exactly?
 
