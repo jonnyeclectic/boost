@@ -67,20 +67,30 @@ def rgb(r: int, g: int, b: int) -> str:
     return "\033[38;2;%d;%d;%dm" % (r, g, b)
 
 
-# Each Aurora token pairs its exact truecolor value with a 16-color fallback,
-# so the brand still reads on terminals without truecolor. Hexes mirror
-# style/boost.css: --cyan #22d3ee, --violet #a855f7, --pink #f472d0,
-# --green #4ade80, --yellow #facc15.
+# Aurora palette — the single source of truth for boost's terminal colors.
+# These RGB triples mirror the web design system's :root tokens in
+# style/boost.css and must be kept in lockstep with it; everything else here
+# (the gradient, brand tints, badges) is derived from them, never re-typed.
+TOKENS = {
+    "cyan":   (0x22, 0xd3, 0xee),   # --cyan   #22d3ee
+    "violet": (0xa8, 0x55, 0xf7),   # --violet #a855f7
+    "pink":   (0xf4, 0x72, 0xd0),   # --pink   #f472d0
+    "green":  (0x4a, 0xde, 0x80),   # --green  #4ade80
+    "yellow": (0xfa, 0xcc, 0x15),   # --yellow #facc15
+}
+
+# Each Aurora token pairs its truecolor value with a 16-color fallback, so the
+# brand still reads on terminals without truecolor.
 _AURORA = {
-    "cyan":   ((0x22, 0xd3, 0xee), CYAN),
-    "violet": ((0xa8, 0x55, 0xf7), MAGENTA),
-    "pink":   ((0xf4, 0x72, 0xd0), MAGENTA),
-    "green":  ((0x4a, 0xde, 0x80), GREEN),
-    "yellow": ((0xfa, 0xcc, 0x15), YELLOW),
+    "cyan":   (TOKENS["cyan"], CYAN),
+    "violet": (TOKENS["violet"], MAGENTA),
+    "pink":   (TOKENS["pink"], MAGENTA),
+    "green":  (TOKENS["green"], GREEN),
+    "yellow": (TOKENS["yellow"], YELLOW),
 }
 
 # The signature cyan -> violet -> pink gradient (style/boost.css --grad).
-_GRAD_STOPS = ((0x22, 0xd3, 0xee), (0xa8, 0x55, 0xf7), (0xf4, 0x72, 0xd0))
+_GRAD_STOPS = (TOKENS["cyan"], TOKENS["violet"], TOKENS["pink"])
 
 
 def aurora(text: str, name: str, stream=None) -> str:

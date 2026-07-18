@@ -467,11 +467,11 @@
         </article>
 
         <article class="ritem" data-track="system" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-D20</span><span class="rstatus proposed">Proposed</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D20</span><span class="rstatus progress">In progress</span></div>
           <h4>Single source of design tokens (web ↔ CLI)</h4>
-          <p>The palette lives only in CSS; the CLI would hard-code its own copy of the same hexes — guaranteeing drift. Emit both from one <code>tokens.json</code>: generate the CSS custom properties <em>and</em> the Python ANSI map from it, so a brand change updates the site and the terminal in lockstep. Fits the repo's existing "generate, never hand-edit" pattern (cf. <code>build_registries.py</code>).</p>
+          <p><b>Done:</b> the CLI palette is now single-sourced — one <code>output.TOKENS</code> dict holds every Aurora RGB triple, and the gradient, brand tints and badges all <em>derive</em> from it (previously cyan/violet/pink were re-typed across <code>_AURORA</code> and <code>_GRAD_STOPS</code>). A test locks the contract so a stray hex can't drift. <b>Remaining:</b> lift <code>TOKENS</code> into a shared <code>tokens.json</code> and generate <em>both</em> the CSS custom properties and this map from it, so the site and the terminal move in lockstep (the repo's "generate, never hand-edit" pattern, cf. <code>build_registries.py</code>).</p>
           <div class="rmeta"><span class="m-cat">system</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
-          <div class="rref"><code>scripts/ · new build_tokens.py</code></div>
+          <div class="rref"><code>core/output.py TOKENS · style/boost.css · future build_tokens.py</code></div>
         </article>
 
         <article class="ritem" data-track="system" data-impact="med">
