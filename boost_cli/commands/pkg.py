@@ -140,7 +140,15 @@ def cmd_install(argv: List[str]) -> int:
         if len(results) - new:
             parts.append("Upgraded %s" % _plural(len(results) - new, "skill"))
         avg = round(sum(r.score for r in results) / len(results))
-        out.info("%s; quality score %d/100" % ("; ".join(parts), avg))
+        summary = "%s; quality score %d/100" % ("; ".join(parts), avg)
+        lines = [summary]
+        if len(results) == 1:
+            r0 = results[0]
+            if r0.linked:
+                lines.append(out.c("%s → %s" % (r0.name, " · ".join(r0.linked)),
+                                   out.DIM))
+            lines.append(out.c("next: boost info %s" % r0.name, out.DIM))
+        print(out.panel(lines, title="installed", hue="green"))
     return 1 if failed else 0
 
 

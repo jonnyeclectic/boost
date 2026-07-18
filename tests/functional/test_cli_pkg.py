@@ -50,6 +50,9 @@ class TestInstall:
         assert "linked → claude-code · windsurf · cursor" in r.out
         assert "lock updated (.skill-lock.json)" in r.out
         assert "Installed 1 new skill; quality score 95/100" in r.out
+        # D13: framed success card with a next-step hint
+        assert "╭─ installed" in r.out
+        assert "next: boost info brainstorming" in r.out
         entry = _lock()["brainstorming"]
         assert entry["version"] == "1.4.0"
         assert entry["tap"] == "fixture-tap"
