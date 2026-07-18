@@ -367,20 +367,38 @@ def rerank(query: str, hits: List[Hit], limit: int = 10) -> Tuple[List[Hit], str
     return (picked + rest)[:limit], "Claude relevance"
 
 
+def _retrieve_any(query: str, k: int, kind: Optional[str],
+                  entries: Optional[List[dict]]
+                  ) -> Tuple[Optional[List[Hit]], str]:
+    """Prefer the opt-in dense backend, floor to BM25.
+
+    Returns ``(hits, engine_label)``; ``hits`` is ``None`` only when no index of
+    any kind exists so the caller can fall back to ``catalog.search``.
+    """
+    from . import dense
+    if dense.ready():
+        hits = dense.retrieve(query, k=k, kind=kind, entries=entries)
+        if hits is not None:
+            return hits, "dense vectors"
+    if ready():
+        return retrieve(query, k=k, kind=kind, entries=entries), "BM25 full-content"
+    return None, ""
+
+
 def search(query: str, limit: int = 10, kind: Optional[str] = None,
            smart: bool = True,
            entries: Optional[List[dict]] = None) -> Optional[Tuple[List[Hit], str]]:
-    """Two-stage RAG search: BM25 retrieve -> optional LLM rerank.
+    """Two-stage RAG search: dense-or-BM25 retrieve -> optional LLM rerank.
 
     Returns ``(hits, ranker_label)``, or ``None`` when no index exists yet so
     the caller can fall back to ``catalog.search``.
     """
-    if not ready():
+    hits, engine = _retrieve_any(query, max(60, limit * 4), kind, entries)
+    if hits is None:
         return None
-    hits = retrieve(query, k=max(60, limit * 4), kind=kind, entries=entries)
     if smart:
         return rerank(query, hits, limit)
-    return hits[:limit], "BM25 full-content"
+    return hits[:limit], engine
 
 
 def _json_array(text):

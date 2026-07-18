@@ -12,6 +12,7 @@ import math
 
 import pytest
 
+from boost_cli.core import dense as dense_mod
 from boost_cli.core import rag, registry
 
 
@@ -822,3 +823,41 @@ class TestSearchForwarding:
 class TestIndexPath:
     def test_filename(self, sandbox):
         assert rag.index_path().name == "rag_index.json"
+
+
+class TestEngineRouting:
+    """search() prefers the dense backend, floors to BM25, else falls back."""
+
+    def _bm25_ready(self):
+        rag._save([{"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 1,
+                    "snip": "s", "tf": {"react": 1}}], {})
+
+    def test_prefers_dense_when_ready(self, sandbox, monkeypatch):
+        monkeypatch.setattr(dense_mod, "ready", lambda: True)
+        picked = [{"entry": {"name": "d", "tap": "x/y"}, "score": 9.0,
+                   "snippet": "D"}]
+        monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: picked)
+        hits, label = rag.search("react", smart=False)
+        assert label == "dense vectors"
+        assert hits[0]["entry"]["name"] == "d"
+
+    def test_dense_none_falls_through_to_bm25(self, sandbox, monkeypatch):
+        self._bm25_ready()
+        monkeypatch.setattr(dense_mod, "ready", lambda: True)
+        monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: None)
+        result = rag.search("react", smart=False,
+                            entries=[_entry("a", tap="x/y")])
+        assert result is not None
+        _hits, label = result
+        assert label == "BM25 full-content"
+
+    def test_bm25_when_dense_not_ready(self, sandbox, monkeypatch):
+        self._bm25_ready()
+        monkeypatch.setattr(dense_mod, "ready", lambda: False)
+        _hits, label = rag.search("react", smart=False,
+                                  entries=[_entry("a", tap="x/y")])
+        assert label == "BM25 full-content"
+
+    def test_none_when_no_index_at_all(self, sandbox, monkeypatch):
+        monkeypatch.setattr(dense_mod, "ready", lambda: False)
+        assert rag.search("react", smart=False) is None

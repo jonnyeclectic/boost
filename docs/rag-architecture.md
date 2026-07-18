@@ -164,7 +164,12 @@ counts. The search path also lazily triggers a refresh when it detects a tap com
 
 ---
 
-## 7. Phase 2 — opt-in dense semantic backend (`[rag]` extra)
+## 7. Phase 2 — opt-in dense semantic backend (`[rag]` extra) — ✅ shipped
+
+Implemented in `boost_cli/core/embed.py` (embeddings bridge) + `boost_cli/core/dense.py`
+(sqlite-vec vector store), wired through `rag.search` → `rag._retrieve_any` (prefer dense,
+floor to BM25) and surfaced via `boost reindex --dense`. The `[rag]` extra pulls only
+`sqlite-vec`; embeddings come from Voyage/OpenAI over `urllib`, so no client library is added.
 
 Establish the project's **first** optional extra:
 

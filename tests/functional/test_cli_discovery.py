@@ -649,3 +649,25 @@ class TestReindex:
         boost("reindex")
         r = boost("search", "brainstorming")
         assert "ranked by full-content BM25" in r.out
+
+    def test_dense_skipped_without_embeddings_key(self, boost, tapped):
+        r = boost("reindex", "--dense")
+        assert "indexed" in r.out                 # BM25 still builds
+        assert "dense index skipped" in r.out
+
+    def test_dense_builds_vector_store(self, boost, tapped, monkeypatch):
+        pytest.importorskip("sqlite_vec")
+        from boost_cli.core import dense, embed
+
+        def toy(texts, input_type=None, timeout=60):
+            return [[float(len(t) % 5) + 1.0, 2.0, 3.0] for t in texts]
+        monkeypatch.setattr(embed, "embed", toy)
+        monkeypatch.setattr(embed, "available", lambda: True)
+        monkeypatch.setattr(embed, "provider", lambda: "openai")
+        monkeypatch.setattr(embed, "model", lambda: "toy-3")
+        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        data = json.loads(boost("reindex", "--dense", "--json").out)
+        assert data["bm25"]["docs"] >= 1
+        assert data["dense"]["chunks"] >= 1
+        assert data["dense"]["provider"] == "openai"
+        assert dense.ready() is True

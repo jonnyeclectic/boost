@@ -46,6 +46,9 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip -q install pytest pytest-cov coverage
+          # [rag] extra so the opt-in dense backend is exercised (py3-none
+          # wheel; falls back to importorskip if a platform lacks it)
+          .venv/bin/pip -q install sqlite-vec || true
       - name: unit + functional (80% coverage gate)
         run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=term-missing --cov-report=json -q
       - name: shell smoke suite (152 checks, sandboxed)
@@ -91,5 +94,7 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip -q install pytest pytest-cov coverage mutmut
+          # sqlite-vec so dense.py's mutants are covered by the dense tests
+          .venv/bin/pip -q install sqlite-vec || true
       - name: mutation strength gate (>=80% killed)
         run: .venv/bin/python scripts/mutation_gate.py --run --min 80

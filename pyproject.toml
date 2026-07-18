@@ -33,6 +33,14 @@ Homepage = "https://github.com/jonnyeclectic/boost"
 Repository = "https://github.com/jonnyeclectic/boost"
 Changelog = "https://github.com/jonnyeclectic/boost/releases"
 
+[project.optional-dependencies]
+# Opt-in dense semantic retrieval (RAG Phase 2). The default install stays
+# zero-dependency; `pip install boost-skill-cli[rag]` adds a single-file
+# on-disk vector store. Embeddings come from an API over urllib (Voyage or
+# OpenAI, keyed by env var) — no client library required. Without this extra,
+# or without an embeddings key, search degrades to the always-on BM25 engine.
+rag = ["sqlite-vec>=0.1.6"]
+
 [project.scripts]
 boost = "boost_cli.cli:main"
 

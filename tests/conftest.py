@@ -38,6 +38,9 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.delenv("BOOST_LOG_LEVEL", raising=False)
     monkeypatch.delenv("BOOST_NO_LOG", raising=False)
     monkeypatch.setenv("BOOST_NO_AI", "1")       # deterministic: no AI calls
+    monkeypatch.delenv("VOYAGE_API_KEY", raising=False)   # no real embed calls
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("BOOST_NO_EMBED", raising=False)
     monkeypatch.setenv("NO_COLOR", "1")         # plain output for assertions
     monkeypatch.setenv("BOOST_ASSUME_YES", "1")  # never block on confirm()
     return home

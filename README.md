@@ -43,6 +43,19 @@ boost --version
 boost tap --defaults          # pull in the 5 starter registries
 ```
 
+The default install is **zero-dependency** (pure stdlib). `boost search` and the
+`boost_search` MCP tool rank results with a built-in full-content BM25 engine
+(run `boost reindex` once to build the index). For optional **dense semantic
+search**, install the `[rag]` extra and set an embeddings key — retrieval then
+embeds every skill and ranks by vector similarity, falling back to BM25 whenever
+the extra or key is absent:
+
+```bash
+pip install "boost-skill-cli[rag]"            # adds the sqlite-vec vector store
+export VOYAGE_API_KEY=...                      # or OPENAI_API_KEY
+boost reindex --dense                          # embed chunks into the vector store
+```
+
 Want the whole ecosystem instead of the starter set? boost ships a **curated
 registry catalog** — 100+ classified GitHub registries of skills, Cursor/Windsurf
 **rules**, and Claude Code **workflows** (slash commands & subagents),

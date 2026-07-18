@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-from ..core import agents, ai, catalog, gitutil, journal, lockfile, paths, rag, registry, store, util
+from ..core import agents, ai, catalog, dense, embed, gitutil, journal, lockfile, paths, rag, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -228,6 +228,9 @@ def cmd_reindex(argv):
         description="Build or refresh the full-content search index")
     p.add_argument("--force", action="store_true",
                    help="reindex every tap, ignoring cached commits")
+    p.add_argument("--dense", action="store_true",
+                   help="also embed chunks into the opt-in dense vector store "
+                        "(needs the `rag` extra and an embeddings API key)")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
@@ -235,8 +238,10 @@ def cmd_reindex(argv):
         raise BoostError("no taps configured — nothing to index",
                         hint="add the recommended registries with `boost tap --defaults`")
     stats = rag.build(force=args.force)
+    dense_stats = _reindex_dense(args.force) if args.dense else None
     if args.as_json:
-        print(json.dumps(stats))
+        print(json.dumps({"bm25": stats, "dense": dense_stats}
+                         if args.dense else stats))
         return 0
     out.ok("indexed %d passages across %d items from %d tap%s"
            % (stats["docs"], stats["entries"], stats["taps"],
@@ -247,9 +252,22 @@ def cmd_reindex(argv):
                           "" if len(stats["reused"]) == 1 else "s",
                           ", ".join(stats["reindexed"]) or "none"),
                        out.DIM))
+    if args.dense:
+        if dense_stats is None:
+            out.warn("dense index skipped — %s" % embed.fallback_note())
+        else:
+            out.ok("embedded %d passages (%s) into the dense vector store"
+                   % (dense_stats["chunks"], dense_stats["provider"]))
     journal.log("reindex", "%d passages" % stats["docs"],
                 entries=stats["entries"])
     return 0
+
+
+def _reindex_dense(force):
+    """Build the dense vector store; returns stats or None when unavailable."""
+    if not dense.have_backend() or not embed.available():
+        return None
+    return dense.build(force=force)
 
 
 def cmd_index(argv):
