@@ -498,7 +498,7 @@
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Performance</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance</span></div>
         <h3>Stop re-serializing entry meta on every search</h3>
         <p><code>catalog.search</code> computes <code>json.dumps(meta).lower()</code> for <b>every entry on every query</b> just to substring-match (<code>catalog.py:222</code>). Precompute a lowercased search blob at index time, or match structured fields directly.</p>
         <div class="meta">
