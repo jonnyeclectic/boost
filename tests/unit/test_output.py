@@ -296,6 +296,32 @@ class TestBadge:
             "\033[38;2;74;222;128m[installed]\033[0m")
 
 
+class TestMeter:
+    def test_full(self):
+        assert output.meter(1.0, 4) == "▰▰▰▰"
+
+    def test_empty(self):
+        assert output.meter(0.0, 4) == "▱▱▱▱"
+
+    def test_half(self):
+        assert output.meter(0.5, 4) == "▰▰▱▱"
+
+    def test_default_width_is_four(self):
+        assert output.meter(1.0) == "▰▰▰▰"
+
+    def test_clamps_above_one(self):
+        # 1.5 lands in (1, 2] — must still clamp, not overflow to 6 cells
+        assert output.meter(1.5, 4) == "▰▰▰▰"
+        assert output.meter(2.5, 4) == "▰▰▰▰"
+
+    def test_clamps_below_zero(self):
+        assert output.meter(-3.0, 4) == "▱▱▱▱"
+
+    def test_rounds_to_nearest_cell(self):
+        # 0.6 * 5 = 3.0 -> exactly three filled
+        assert output.meter(0.6, 5) == "▰▰▰▱▱"
+
+
 class TestHelpers:
     @pytest.fixture(autouse=True)
     def plain(self, monkeypatch):

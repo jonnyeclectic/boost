@@ -212,13 +212,19 @@ def cmd_search(argv):
     # Cap the name column so one long name can't pad every row, and clip each
     # description to the remaining terminal width so results stay one line each.
     name_w = min(max(len(e["name"]) for e, _ in shown), 32)
+    top = max((s for _e, s in shown), default=0) or 1
     cols = out.term_width()
-    for e, _s in shown:
+    for e, sc in shown:
+        # A relevance meter makes the ranking visible; tint it by magnitude.
+        frac = sc / top
+        hue = "cyan" if frac >= 0.66 else "violet" if frac >= 0.33 else "pink"
+        bar = out.aurora(out.meter(frac), hue)
         tag = "  " + out.c("★ curated", out.YELLOW) if e.get("curated") else ""
         tag_w = len("  ★ curated") if e.get("curated") else 0
-        desc_w = max(cols - 2 - name_w - 2 - tag_w, 8)
+        desc_w = max(cols - 2 - 5 - name_w - 2 - tag_w, 8)  # 5 = meter + space
         name_cell = out.c(out.truncate(e["name"], name_w).ljust(name_w), out.CYAN)
-        out.info(name_cell + "  " + out.truncate(e["description"] or "", desc_w) + tag)
+        out.info(bar + " " + name_cell + "  "
+                 + out.truncate(e["description"] or "", desc_w) + tag)
     out.info(out.c("%d match%s · ranked by %s"
                    % (len(scored), "" if len(scored) == 1 else "es", ranker),
                    out.DIM))

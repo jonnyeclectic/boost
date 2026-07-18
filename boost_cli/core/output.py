@@ -183,6 +183,19 @@ def badge(label: str, hue: str = "cyan") -> str:
     return aurora("[" + label + "]", hue)
 
 
+def meter(fraction: float, width: int = 4) -> str:
+    """A tiny proportional bar for a 0..1 fraction — filled ▰ vs empty ▱.
+
+    Uncolored on purpose so callers can Aurora-tint it by magnitude.
+    """
+    if fraction < 0:
+        fraction = 0.0
+    elif fraction > 1:
+        fraction = 1.0
+    filled = round(fraction * width)
+    return "▰" * filled + "▱" * (width - filled)
+
+
 def kv(key: str, value: str, width: int = 14) -> None:
     print("  " + c(key.ljust(width), DIM) + str(value))
 

@@ -69,6 +69,14 @@ class TestSearch:
         assert r.out.index("commit-messages") < r.out.index("jira-integration")
         assert "2 matches · ranked by heuristic relevance" in r.out
 
+    def test_results_show_relevance_meter(self, boost, tapped):
+        # D07: the ranking is visible as a per-result meter; the top exact
+        # match earns a full bar.
+        r = boost("search", "commit", "messages")
+        assert "▰" in r.out
+        top = next(l for l in r.out.splitlines() if "commit-messages" in l)
+        assert "▰▰▰▰" in top
+
     def test_limit_caps_rows_but_footer_counts_all(self, boost, tapped):
         r = boost("search", "workflow", "--limit", "1")
         assert "tdd-workflow" in r.out
