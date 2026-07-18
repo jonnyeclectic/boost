@@ -114,7 +114,7 @@
   <!-- ================= SNAPSHOT ================= -->
   <section class="block reveal">
     <div class="stats">
-      <div class="stat"><b>4</b><span>Shipped</span></div>
+      <div class="stat"><b>5</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
       <div class="stat"><b>48</b><span>Loop finds</span></div>
@@ -171,6 +171,25 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">PR #22 · 23 killed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Coverage</span></div>
+        <h3>Extension-free tests — <code>core/dense.py</code></h3>
+        <p>The dense-vector RAG backend's whole test module is
+           <code>skipif</code>-gated on the <code>[rag]</code> sqlite-vec C
+           extension, so on the default zero-dependency install
+           <em>every</em> degradation and ranking path went untested
+           (17.6%&nbsp;→&nbsp;89% coverage). New tests force
+           <code>_load()&nbsp;→&nbsp;None</code> and drive the SQL helpers and
+           <code>retrieve()</code>'s cosine reducer through in-memory/fake
+           connections — killing mutants on every machine, extension or not.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">42 tests · +71pts coverage</span>
         </div>
       </article>
 
