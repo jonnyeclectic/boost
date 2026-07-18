@@ -255,6 +255,8 @@ class TestProtocol:
     def test_register_unregister_darwin(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.team.platform.system",
                             lambda: "Darwin")
+        monkeypatch.setattr("boost_cli.core.paths.shutil.which",
+                            lambda c: None)
         r = boost("protocol", "register")
         script = paths.state_dir() / "boost-protocol-handler.sh"
         assert "wrote handler script ~/.boost/state/boost-protocol-handler.sh" in r.out

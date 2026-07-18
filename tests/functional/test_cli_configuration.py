@@ -394,6 +394,10 @@ class TestScheduleDarwin:
                                      "next_run": None}
 
     def test_enable_writes_plist_and_loads(self, boost, sandbox, monkeypatch):
+        # force launcher() onto its checkout-shim fallback regardless of
+        # whether the dev machine has `boost` on PATH
+        monkeypatch.setattr("boost_cli.core.paths.shutil.which",
+                            lambda c: None)
         calls = []
         monkeypatch.setattr(
             "boost_cli.commands.configuration.subprocess.run",
@@ -692,8 +696,11 @@ class TestMcp:
         assert journal.events(action="mcp")[0]["subject"] == "unregister"
 
     def test_register_with_claude_cli(self, boost, sandbox, monkeypatch):
+        # one patch covers both lookups (shutil is shared): find `claude`,
+        # keep launcher() on its checkout-shim fallback
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
-                            lambda c: "/usr/local/bin/claude")
+                            lambda c: "/usr/local/bin/claude"
+                            if c == "claude" else None)
         calls = []
 
         def fake_run(cmd, **kw):

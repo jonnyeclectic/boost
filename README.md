@@ -6,6 +6,7 @@
 [![Coverage](https://img.shields.io/badge/coverage-92%25_(80%25_gated)-brightgreen)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/jonnyeclectic/boost)](LICENSE)
 
 **boost** is a CLI that finds, installs, and keeps track of AI coding skills
 pulled from GitHub-hosted registries, then hooks them straight into
@@ -37,13 +38,20 @@ Mac binaries or npm for JS packages.
 
 ## Install
 
-One shim script, nothing to configure beyond that. Needs Python 3.9+ and `git`.
+Needs Python 3.9+ and `git`.
 
-```bash 
+```bash
+pipx install boost-cli        # or: pip install boost-cli
+boost --version
+boost tap --defaults          # pull in the starter registries
+```
+
+Or run it straight from a checkout — the runtime is stdlib-only, so there's
+nothing to install beyond the shim:
+
+```bash
 git clone https://github.com/jonnyeclectic/boost ~/.boost-src
 ln -s ~/.boost-src/boost ~/bin/boost        # anywhere on PATH works
-boost --version
-boost tap --defaults                       # pull in the starter registries
 ```
 
 ## Under the hood

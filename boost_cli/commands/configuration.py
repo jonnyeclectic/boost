@@ -610,7 +610,7 @@ def cmd_schedule(argv) -> int:
     args = p.parse_args(argv)
 
     darwin = sys.platform == "darwin"
-    shim = paths.repo_root() / "boost"
+    shim = paths.launcher()
 
     if args.action == "status":
         present, interval, next_run = False, None, None
@@ -1030,7 +1030,7 @@ def cmd_mcp(argv) -> int:
     if args.stdio:
         return _mcp_serve_stdio()
 
-    shim = paths.repo_root() / "boost"
+    shim = paths.launcher()
     if args.action == "register":
         cmd = ["claude", "mcp", "add", "--scope", "user", "boost", "--",
                str(shim), "mcp", "--stdio"]

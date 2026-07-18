@@ -404,7 +404,7 @@ def cmd_protocol(argv) -> int:
 
     if args.action == "register":
         paths.ensure_dirs()
-        shim = paths.repo_root() / "boost"
+        shim = paths.launcher()
         script = _handler_script()
         script.write_text("#!/usr/bin/env bash\n"
                           "# boost:// URL handler — invoked with the URL as $1\n"
