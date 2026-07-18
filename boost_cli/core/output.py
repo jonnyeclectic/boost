@@ -223,6 +223,16 @@ _TRAFFIC = ((0xff, 0x5f, 0x57, RED), (0xfe, 0xbc, 0x2e, YELLOW),
             (0x28, 0xc8, 0x40, GREEN))
 
 
+def empty_state(message: str, hint: str | None = None) -> str:
+    """A standardized empty-state: a muted ○ bullet + message, with an optional
+    dim → hint on the next line. One affordance so 'nothing here' always reads
+    the same across commands."""
+    out_lines = ["  " + c("○ " + message, DIM)]
+    if hint:
+        out_lines.append("  " + c("→ " + hint, DIM))
+    return "\n".join(out_lines)
+
+
 def titlebar(title: str) -> str:
     """A terminal window title bar: traffic-light dots + a bold title, the
     terminal echo of the web .window .bar. Plain dots under NO_COLOR."""

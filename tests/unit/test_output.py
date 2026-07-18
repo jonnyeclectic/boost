@@ -343,6 +343,30 @@ class TestPanel:
         assert "\033[1minventory\033[0m" in output.panel("x", title="inventory")
 
 
+class TestEmptyState:
+    def test_message_only_plain(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.empty_state("nothing here") == "  ○ nothing here"
+
+    def test_message_and_hint_plain(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.empty_state("empty", hint="try x") == (
+            "  ○ empty\n  → try x")
+
+    def test_no_hint_is_single_line(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert "\n" not in output.empty_state("solo")
+
+    def test_message_is_dim_when_forced(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert output.empty_state("x") == "  \033[2m○ x\033[0m"
+
+    def test_both_lines_dim_when_forced(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert output.empty_state("x", hint="y") == (
+            "  \033[2m○ x\033[0m\n  \033[2m→ y\033[0m")
+
+
 class TestTitlebar:
     def test_plain_dots_and_title(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")

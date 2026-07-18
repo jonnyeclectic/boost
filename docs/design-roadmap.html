@@ -412,7 +412,7 @@
         </article>
 
         <article class="ritem" data-track="commands" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-D16</span><span class="rstatus proposed">Proposed</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D16</span><span class="rstatus done">Shipped</span></div>
           <h4><code>info</code> skill identity card</h4>
           <p><code>info</code> lists <code>kv()</code> pairs as flat dim labels. Promote it to a framed identity card: gradient skill name, status badges (<b>installed</b> / <b>pinned</b> / tap origin) styled like the web <code>.badge</code> pills, then the metadata — a real "detail view," not a key-value dump.</p>
           <div class="rmeta"><span class="m-cat">commands</span><span>Complexity M</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★★☆</span></div>
@@ -428,7 +428,7 @@
         </article>
 
         <article class="ritem" data-track="commands" data-impact="low">
-          <div class="ritem-top"><span class="rid">BOOST-D18</span><span class="rstatus proposed">Proposed</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D18</span><span class="rstatus done">Shipped</span></div>
           <h4>Consistent empty-states &amp; hint styling</h4>
           <p>Empty and hint lines are ad-hoc — <code>info</code>'s "no skills installed" hint is a hand-rolled <code>DIM</code> string. Standardize a single empty-state affordance (muted icon + one-line guidance + suggested command) and a single hint style, applied everywhere, so guidance always looks the same.</p>
           <div class="rmeta"><span class="m-cat">ux</span><span>Complexity S</span><span class="m-imp low">Impact Low</span><span class="m-wow">★★☆☆☆</span></div>
@@ -459,7 +459,7 @@
       <div class="rcards">
 
         <article class="ritem" data-track="system" data-impact="med">
-          <div class="ritem-top"><span class="rid">BOOST-D19</span><span class="rstatus next">Next</span></div>
+          <div class="ritem-top"><span class="rid">BOOST-D19</span><span class="rstatus done">Shipped</span></div>
           <h4>Resolve theme drift: <code>style/</code> vs <code>docs/style/</code></h4>
           <p>Two copies of <code>boost.css</code> have <b>diverged</b>: the root <code>style/</code> uses a cyan→violet→pink gradient (<code>--violet #a855f7</code>), while <code>docs/style/</code> uses an orange→pink→violet one (<code>--violet #a78bfa</code>). Same brand, two looks. Pick <code>style/</code> as canonical and make <code>docs/style/</code> a generated copy or symlink so the portfolio, roadmaps and CLI can't drift again.</p>
           <div class="rmeta"><span class="m-cat">system</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★★☆☆</span></div>
