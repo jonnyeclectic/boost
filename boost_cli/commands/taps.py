@@ -5,7 +5,7 @@ import argparse
 import json
 
 from .. import cliparse, spin
-from ..core import catalog, config, gitutil, journal, lockfile, paths, registry, store, util
+from ..core import catalog, config, gitutil, journal, lockfile, paths, registry, staleness, store, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -218,9 +218,8 @@ def cmd_outdated(argv) -> int:
         latest = str(entry.get("version") or "0.0.0")
         installed_v = str(lk.get("version") or "0.0.0")
         stale, latest_disp = False, latest
-        if util.semver_gt(latest, installed_v):
-            stale = True
-        else:
+        head, src_sha, src_missing = "", None, False
+        if not util.semver_gt(latest, installed_v):
             if tap_name not in heads:
                 try:
                     tap = registry.get(tap_name)
@@ -231,13 +230,19 @@ def cmd_outdated(argv) -> int:
             head = heads[tap_name]
             if head and head != lk.get("commit"):
                 try:
-                    src = store.source_dir_for(entry)
+                    src_sha = util.sha256_dir(store.source_dir_for(entry))
                 except BoostError:
-                    stale, latest_disp = True, "source missing"
-                else:
-                    if util.sha256_dir(src) != lk.get("sha256"):
-                        stale = True
-                        latest_disp = "%s (%s)" % (latest, head[:7])
+                    src_missing = True
+        if src_missing:
+            stale, latest_disp = True, "source missing"
+        else:
+            reason = staleness.upstream_reason(
+                installed_v, latest, lk.get("commit", ""), head,
+                lk.get("sha256", ""), src_sha)
+            if reason == staleness.VERSION:
+                stale = True
+            elif reason == staleness.CONTENT:
+                stale, latest_disp = True, "%s (%s)" % (latest, head[:7])
         if stale:
             results.append({"name": name, "installed": installed_v,
                             "latest": latest_disp, "tap": tap_name,

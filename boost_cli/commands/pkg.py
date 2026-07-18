@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 from .. import cliparse
 from ..core import (agents, catalog, gitutil, journal, lockfile, paths,
-                    registry, store, util)
+                    registry, staleness, store, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -287,16 +287,16 @@ def cmd_update(argv: List[str]) -> int:
         entry = matches[0]
         old_v = str(lk.get("version", "0.0.0"))
         new_v = str(entry.get("version", "0.0.0"))
-        reason = "version" if util.semver_gt(new_v, old_v) else None
-        if reason is None:
+        head, src_sha = "", None
+        if not util.semver_gt(new_v, old_v):
             head = gitutil.head_commit(registry.get(tapname).path)
             if head and head != lk.get("commit"):
                 try:
-                    src = store.source_dir_for(entry)
+                    src_sha = util.sha256_dir(store.source_dir_for(entry))
                 except BoostError:
                     continue
-                if util.sha256_dir(src) != lk.get("sha256"):
-                    reason = "content"
+        reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
+                                           head, lk.get("sha256", ""), src_sha)
         if reason is None:
             continue
         try:
