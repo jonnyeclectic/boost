@@ -42,10 +42,22 @@ drifts from its source (CI fails the build otherwise):
 | Generated file | Source of truth | Regenerate with |
 |---|---|---|
 | `boost_cli/data/registries.json` | `SKILLS`/`RULES`/`WORKFLOWS` tuples in `scripts/build_registries.py` | `python3 scripts/build_registries.py` |
+| `docs/roadmap.html` | one file per item under `docs/roadmap/items/` | `python3 scripts/build_roadmap.py` |
 
-CI runs `python3 scripts/build_registries.py --check` and fails on drift; the
-same guard lives in `tests/unit/test_registries_fresh.py`. Regenerating last also
-keeps line-adjacent JSON conflicts between parallel branches rare.
+Or regenerate everything at once with `make generate`. CI runs the matching
+`--check` for each and fails on drift; the same guards live in
+`tests/unit/test_registries_fresh.py` and `tests/unit/test_roadmap_fresh.py`.
+
+### The roadmap is data-driven — add items, don't edit the HTML
+
+To add or change a roadmap card, create/edit a small Markdown-with-frontmatter
+file under `docs/roadmap/items/` and run `python3 scripts/build_roadmap.py`.
+**Never hand-edit the `<article>` cards or the snapshot counters in
+`docs/roadmap.html`** — they are regenerated, and the counters are computed. This
+is what lets parallel loops work the roadmap without colliding: two loops adding
+two items create two different files (clean merge); a status change edits one
+small file instead of a shared line in a 1,400-line document. Regenerating last
+also keeps line-adjacent conflicts rare.
 
 ## Pull requests
 

@@ -114,10 +114,12 @@
   <!-- ================= SNAPSHOT ================= -->
   <section class="block reveal">
     <div class="stats">
+      <!-- ROADMAP:stats -->
       <div class="stat"><b>6</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>48</b><span>Loop finds</span></div>
+      <div class="stat"><b>84</b><span>Loop finds</span></div>
+      <!-- /ROADMAP:stats -->
     </div>
   </section>
 
@@ -129,6 +131,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=shipped -->
       <article class="cap rcard">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Bug</span></div>
         <h3>Mutation hardening — <code>core/store.py</code></h3>
@@ -170,7 +173,7 @@
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">PR #22 · 23 killed</span>
+          <span class="m">PR</span>
         </div>
       </article>
 
@@ -224,6 +227,7 @@
           <span class="m">Wow <b class="wow">★★★★</b></span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
@@ -236,6 +240,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=next -->
       <article class="cap rcard">
         <div class="head"><span class="pill next">Next</span><span class="cat">Bug · Infra</span></div>
         <h3>GitHub Pages deploy is broken every push</h3>
@@ -280,6 +285,7 @@
           <span class="m">Wow <b class="wow">★★★</b></span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
@@ -292,6 +298,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=planned -->
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing</span></div>
         <h3>Finish mutation hardening across <code>core/</code></h3>
@@ -345,6 +352,7 @@
           <span class="m">Wow <b class="wow">★★★★</b></span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
@@ -357,6 +365,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=internals -->
       <article class="cap rcard">
         <div class="head"><span class="pill next">Next</span><span class="cat">Correctness · Robustness</span></div>
         <h3>Atomic, corruption-safe lock-file writes</h3>
@@ -396,7 +405,7 @@
         <p>Every <code>config.get()</code> re-reads <code>config.json</code> and runs a recursive <code>deepcopy</code> of <code>DEFAULTS</code> (<code>core/config.py:80–102</code>). It's called all over hot paths — <code>ai.enabled</code>, per-skill <code>enabled_agents</code> in sync loops, log-level and policy checks — so one command triggers <b>dozens of full reads + deep-copies</b>. Cache the load, invalidate on <code>save</code>.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
-          <span class="m hi">Impact <b>Med-High</b></span>
+          <span class="m">Impact <b>Med-High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
         </div>
       </article>
@@ -418,7 +427,7 @@
         <p><code>clone_shallow</code>/<code>fetch</code>/<code>reset</code> pass the URL &amp; ref as positionals with no <code>--</code> separator (<code>core/gitutil.py:34–46</code>), so a value starting with <code>-</code> is parsed as a git option. <code>parse_spec</code> constrains most URL shapes, but adding <code>--</code> before positionals and rejecting <code>ext::</code>/<code>file::</code>/<code>fd::</code> transports closes the argument-injection surface as defense-in-depth.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
-          <span class="m hi">Impact <b>Med</b></span>
+          <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
         </div>
       </article>
@@ -576,6 +585,7 @@
           <span class="m">Wow <b class="wow">★</b></span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
@@ -589,6 +599,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=health -->
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Vuln</span></div>
         <h3>Security linting — <code>bandit</code> via ruff <code>S</code> rules</h3>
@@ -721,6 +732,7 @@
           <span class="m">stretch</span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
@@ -734,6 +746,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=pipeline -->
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · CI/CD</span></div>
         <h3>Workflow SAST — <code>zizmor</code></h3>
@@ -861,6 +874,7 @@
           <span class="m">self-hosted</span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
@@ -874,6 +888,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=dx -->
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">DX · Design system</span></div>
         <h3>Promote nav / footer into the shared style system</h3>
@@ -1014,6 +1029,7 @@
           <span class="m">runtime + static</span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
@@ -1027,6 +1043,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=docsite -->
       <article class="cap rcard">
         <div class="head"><span class="pill next">Next</span><span class="cat">Docs · Discoverability</span></div>
         <h3>Make the roadmaps discoverable</h3>
@@ -1171,6 +1188,27 @@
         </div>
       </article>
 
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Command reference</span></div>
+        <h3>Command reference documentation site</h3>
+        <p>boost has no browsable command reference — help lives only in
+           <code>--help</code> output and scattered README prose, so there's no
+           versioned, searchable home for what each command does. Build a proper
+           docs site in the shape of
+           <a href="https://learning-python.readthedocs.io/en/latest/">learning-python.readthedocs.io</a>:
+           a left-nav tree of commands, per-command pages (synopsis, flags,
+           examples, exit codes), and full-text search. Generate the command
+           pages from the CLI's own definitions so the docs can't drift from the
+           code, and publish alongside the existing Pages site under the Aurora theme.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">Read the Docs–style</span>
+        </div>
+      </article>
+      <!-- /ROADMAP:cards -->
+
     </div>
   </section>
 
@@ -1183,6 +1221,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=compat -->
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Compat · Platform</span></div>
         <h3>Windows in the CI matrix</h3>
@@ -1308,6 +1347,7 @@
           <span class="m">local == CI</span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
@@ -1321,6 +1361,7 @@
     </div>
     <div class="rgrid">
 
+      <!-- ROADMAP:cards section=trust -->
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Content</span></div>
         <h3>Prompt-injection scanning of skill Markdown</h3>
@@ -1449,6 +1490,7 @@
           <span class="m">builds on policy.py</span>
         </div>
       </article>
+      <!-- /ROADMAP:cards -->
 
     </div>
   </section>
