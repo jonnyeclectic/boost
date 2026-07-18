@@ -176,7 +176,10 @@ def cmd_uninstall(argv: List[str]) -> int:
         out.ok("removed %s" % _tilde(dest))
         removed += 1
     if removed:
-        out.info("Uninstalled %s" % _plural(removed, "skill"))
+        lines = ["Uninstalled %s" % _plural(removed, "skill")]
+        if removed == 1 and len(args.names) == 1:
+            lines.append(out.c("next: boost list", out.DIM))
+        print(out.panel(lines, title="removed", hue="pink"))
     return 1 if failed else 0
 
 
