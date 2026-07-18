@@ -164,9 +164,13 @@ boost bmad doctor                    # what's installed where
 ```
 
 When startup is on, a `SessionStart` hook runs `boost bmad orient`, which prints
-a short orientation into the session only while the toggle is enabled. Global
-installs stage the installer in a temp dir and copy only the `bmad-*` skills, so
-`$HOME` never gets a stray `_bmad/` — the workflow runtime stays per-project.
+a short orientation into the session only while the toggle is enabled. That
+orientation sets a **default bias**: build/fix/change/refactor requests go
+straight to the `bmad-quick-dev` skill (clarify → plan → implement → review),
+skipping the full brief → PRD → architecture ceremony unless you ask for full
+planning. Global installs stage the installer in a temp dir and copy only the
+`bmad-*` skills, so `$HOME` never gets a stray `_bmad/` — the workflow runtime
+stays per-project.
 
 ## The boost style
 
