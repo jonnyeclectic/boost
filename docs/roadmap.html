@@ -553,7 +553,7 @@
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Maintainability</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Maintainability</span></div>
         <h3>Robust <code>tag</code> argument parsing</h3>
         <p>Because <code>-tag</code> looks like an option, <code>cmd_tag</code> calls <code>parse_known_args</code> then re-walks raw <code>argv</code> to reorder tokens (<code>info.py:575–584</code>) — fragile enough that the comment calls it "defensive". Replace with a positional-only sub-parser or an explicit <code>--add/--remove</code> design.</p>
         <div class="meta">

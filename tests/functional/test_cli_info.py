@@ -330,3 +330,27 @@ class TestTag:
         assert len(events) == 1
         assert events[0]["subject"] == "brainstorming"
         assert events[0]["tags"] == ["kept"]
+
+    def test_operand_order_preserved_add_then_remove(self, boost, installed):
+        # `+x -x` in argv order: add then remove -> nets to no tag.
+        boost("tag", "brainstorming", "+x", "-x")
+        assert _lock()["brainstorming"].get("tags", []) == []
+
+    def test_operand_order_preserved_remove_then_add(self, boost, installed):
+        # `-x +x`: remove (no-op on absent) then add -> nets to the tag present.
+        boost("tag", "brainstorming", "-x", "+x")
+        assert _lock()["brainstorming"]["tags"] == ["x"]
+
+    def test_removal_token_not_parsed_as_option(self, boost, installed):
+        # `-alpha` looks like an option but must be treated as a removal.
+        boost("tag", "brainstorming", "+alpha", "+beta")
+        r = boost("tag", "brainstorming", "-alpha")
+        assert "#beta" in r.out and "#alpha" not in r.out
+        assert _lock()["brainstorming"]["tags"] == ["beta"]
+
+    def test_list_flag_after_name_still_lists(self, boost, tapped):
+        # `--list` anywhere is a flag, not an operand.
+        boost("install", "brainstorming")
+        boost("tag", "brainstorming", "+shared")
+        r = boost("tag", "--list")
+        assert "#shared" in r.out
