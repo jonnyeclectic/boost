@@ -67,10 +67,12 @@ def _description(meta: dict, body: str) -> str:
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
                 tap_name: str, curated: bool, meta: dict, body: str) -> dict:
     name = str(meta.get("name") or "").strip() or default_name
+    slug = util.slugify(name) if " " in name else name
+    description = _description(meta, body)
     item_dir = defining_file.parent
     return {
-        "name": util.slugify(name) if " " in name else name,
-        "description": _description(meta, body),
+        "name": slug,
+        "description": description,
         "version": str(meta.get("version") or "0.0.0"),
         "tap": tap_name,
         "curated": curated,
@@ -78,6 +80,9 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
         "rel_dir": str(item_dir.relative_to(root)) if item_dir != root else ".",
         "skill_md": str(defining_file.relative_to(root)),
         "meta": meta,
+        # Lowercased substring-search blob, flattened once at index time so
+        # search() never re-walks the frontmatter per query (see _search_blob).
+        "search_blob": _search_blob(slug, description, meta),
     }
 
 
@@ -232,6 +237,13 @@ def _meta_text(meta) -> str:
     return " ".join(parts).lower()
 
 
+def _search_blob(name: str, description: str, meta) -> str:
+    """The full lowercased substring-search text for an entry: its name,
+    description and flattened frontmatter. Built once at index time and cached
+    on the entry as ``search_blob`` so search() never rebuilds it per query."""
+    return " ".join([name.lower(), (description or "").lower(), _meta_text(meta)])
+
+
 def search(query: str, entries: Optional[List[dict]] = None):
     """Rank entries against a query -> [(entry, score)] best-first."""
     entries = all_entries() if entries is None else entries
@@ -241,7 +253,12 @@ def search(query: str, entries: Optional[List[dict]] = None):
     for e in entries:
         name = e["name"].lower()
         desc = (e["description"] or "").lower()
-        blob = " ".join([name, desc, _meta_text(e.get("meta", {}))])
+        # Precomputed at index time; fall back for older caches / entries
+        # constructed without a blob (e.g. tests passing raw dicts).
+        blob = e.get("search_blob")
+        if blob is None:
+            blob = _search_blob(e["name"], e.get("description", ""),
+                                e.get("meta", {}))
         score = 0
         if q == name:
             score += 100
