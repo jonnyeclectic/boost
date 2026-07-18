@@ -32,6 +32,23 @@ def expand(p: str) -> Path:
     return Path(p)
 
 
+def tilde(p) -> str:
+    """Contract $HOME to ``~`` in a path-ish string for display.
+
+    Only contracts a real path boundary: the string must equal home() or sit
+    directly beneath it (``home + os.sep``). A bare ``startswith(home)`` would
+    wrongly turn a sibling like ``/Users/bob-backup`` into ``~-backup``. Both
+    the raw and resolved forms of home() are tried so symlinked homes contract.
+    """
+    s = str(p)
+    for h in (str(home()), str(home().resolve())):
+        if s == h:
+            return "~"
+        if s.startswith(h + os.sep):
+            return "~" + s[len(h):]
+    return s
+
+
 def boost_home() -> Path:
     override = os.environ.get("BOOST_HOME")
     return Path(override) if override else home() / ".boost"

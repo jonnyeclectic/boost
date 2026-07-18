@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 
 from .. import cliparse, spin
 from ..core import catalog, config, gitutil, journal, lockfile, paths, registry, store, util
@@ -11,15 +10,7 @@ from ..core import output as out
 from ..errors import BoostError
 
 
-def _tilde(p) -> str:
-    """Contract $HOME to ~ in a path-ish string for display."""
-    s = str(p)
-    for h in {str(paths.home()), str(paths.home().resolve())}:
-        if s == h:
-            return "~"
-        if s.startswith(h + os.sep):
-            return "~" + s[len(h):]
-    return s
+_tilde = paths.tilde
 
 
 def _tap_catalog(args) -> int:

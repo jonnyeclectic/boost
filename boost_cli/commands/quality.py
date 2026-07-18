@@ -73,9 +73,7 @@ _STACK_MARKERS = [
 
 # --- shared helpers ---------------------------------------------------------
 
-def _tilde(p) -> str:
-    s, h = str(p), str(paths.home())
-    return "~" + s[len(h):] if s.startswith(h) else s
+_tilde = paths.tilde
 
 
 def _s(n: int) -> str:

@@ -23,14 +23,7 @@ from ..errors import BoostError
 
 # ---------------------------------------------------------------- helpers
 
-def _tilde(p) -> str:
-    """Show a path with $HOME contracted to ~."""
-    s, h = str(p), str(paths.home())
-    if s == h:
-        return "~"
-    if s.startswith(h + os.sep):
-        return "~" + s[len(h):]
-    return s
+_tilde = paths.tilde
 
 
 def _read(p: Path) -> str:

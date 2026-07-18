@@ -1,6 +1,7 @@
 """Unit tests: boost_cli/core/paths.py — all locations derive from $HOME."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from boost_cli.core import paths
@@ -79,6 +80,40 @@ class TestExpand:
     def test_tilde_user_not_expanded(self, sandbox):
         # only ~ and ~/ forms are special; ~user is left as-is
         assert paths.expand("~other") == Path("~other")
+
+
+class TestTilde:
+    def test_exact_home_is_tilde(self, sandbox):
+        assert paths.tilde(str(sandbox)) == "~"
+
+    def test_path_under_home_contracts(self, sandbox):
+        p = sandbox / "x" / "y"
+        assert paths.tilde(str(p)) == "~" + os.sep + "x" + os.sep + "y"
+
+    def test_sibling_prefix_not_contracted(self, sandbox):
+        # regression: /Users/bob-backup must NOT contract to ~-backup when
+        # home is /Users/bob. A separator boundary is required, not a bare
+        # startswith(home).
+        sibling = str(sandbox) + "-backup"
+        assert paths.tilde(sibling) == sibling
+
+    def test_path_outside_home_unchanged(self, sandbox):
+        assert paths.tilde("/etc/hosts") == "/etc/hosts"
+
+    def test_accepts_path_object(self, sandbox):
+        assert paths.tilde(sandbox / "cache") == "~" + os.sep + "cache"
+
+    def test_resolved_home_contracts_through_symlink(self, tmp_path, monkeypatch):
+        # HOME is a symlink; a path expressed against the *resolved* home must
+        # still contract (the helper tries both raw and resolved home).
+        real = tmp_path / "real_home"
+        real.mkdir()
+        link = tmp_path / "link_home"
+        link.symlink_to(real)
+        monkeypatch.setenv("HOME", str(link))
+        monkeypatch.delenv("BOOST_HOME", raising=False)
+        resolved = str(paths.home().resolve())
+        assert paths.tilde(resolved + os.sep + "sub") == "~" + os.sep + "sub"
 
 
 class TestEnsureDirs:
