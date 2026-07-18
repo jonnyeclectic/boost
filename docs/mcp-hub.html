@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — MCP as a hub (Phase 3)</title>
+<meta name="description" content="How boost's MCP tool layer became an extensible registry: architecture, sequence diagrams, and an ELI5-vs-deep cheat sheet for the Phase-3 hub and its first reach-out tool, boost_discover_github.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<!-- Shared Aurora design system. Recolour everything by editing style/boost.css. -->
+<link rel="stylesheet" href="../style/boost.css">
+<style>
+  /* Page-specific layout — built only on boost.css :root tokens so it stays on-palette. */
+  main { padding-bottom: 40px; }
+  section { padding: 92px 0 8px; }
+  .hero { padding: 84px 0 8px; }
+  .hero h1 { font-size: clamp(38px, 6vw, 68px); font-weight: 800;
+             letter-spacing: -.035em; line-height: 1.05; max-width: 900px;
+             text-wrap: balance; margin-top: 24px; }
+  .hero p.lede { max-width: 680px; margin-top: 24px; font-size: 18.5px; color: var(--text-2); }
+  .crumbs { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); margin-bottom: 4px; }
+  .crumbs a { color: var(--sky); text-decoration: none; }
+  .stats { margin-top: 58px; }
+
+  /* Diagram frame: a glass surface that scrolls its own wide SVG (body never scrolls X). */
+  .diagram { margin-top: 40px; padding: 22px; border: 1px solid var(--line);
+             border-radius: var(--radius-lg); background: var(--panel);
+             overflow-x: auto; }
+  .diagram svg { display: block; min-width: 640px; width: 100%; height: auto; }
+  .diagram + .caption, .caption { margin-top: 14px; font-size: 13.5px;
+             color: var(--text-3); font-family: var(--mono); }
+
+  /* SVG shared type via CSS classes (keeps the markup lean). */
+  svg .lbl   { font-family: var(--mono); font-size: 13px; fill: var(--text); }
+  svg .lbl-s { font-family: var(--mono); font-size: 11px; fill: var(--text-2); }
+  svg .lbl-t { font-family: var(--mono); font-size: 11px; fill: var(--text-3); }
+  svg .head  { font-family: var(--sans); font-size: 13.5px; font-weight: 700; fill: var(--text); }
+  svg .note  { font-family: var(--mono); font-size: 10.5px; fill: var(--yellow); }
+
+  /* Cheat sheet: two synced columns of collapsibles (ELI5 | Deep technical). */
+  .cheat { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px 18px; }
+  .cheat .col-head { font-family: var(--mono); font-size: 12px; font-weight: 700;
+             letter-spacing: .04em; padding: 6px 2px; }
+  .cheat .col-head.eli  { color: var(--sky); }
+  .cheat .col-head.tech { color: var(--pink); }
+  details.card { border: 1px solid var(--line); border-radius: 14px;
+             background: var(--panel); padding: 0; transition: border-color .2s ease; }
+  details.card[open] { border-color: var(--line-hi); }
+  details.card > summary { cursor: pointer; list-style: none; padding: 16px 18px;
+             font-weight: 700; font-size: 15px; color: var(--text);
+             display: flex; align-items: center; gap: 10px; }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::before { content: "▸"; color: var(--cyan);
+             font-size: 12px; transition: transform .2s ease; }
+  details.card[open] > summary::before { transform: rotate(90deg); }
+  details.card .body { padding: 0 18px 18px; font-size: 14.5px; color: var(--text-2);
+             line-height: 1.6; }
+  details.card .body p { margin-top: 10px; }
+  details.card .body code { font-family: var(--mono); font-size: 12.5px;
+             background: rgba(255,255,255,.05); padding: 1px 5px; border-radius: 5px;
+             color: var(--sky); }
+  details.eli5 > summary::before { color: var(--sky); }
+  details.tech > summary::before { color: var(--pink); }
+  .topic-tag { font-family: var(--mono); font-size: 11px; color: var(--text-3);
+             margin-left: auto; font-weight: 500; }
+
+  /* Before/after code panes. */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 40px; }
+  .split .window { margin: 0; }
+  .split .window pre { font-size: 12.5px; }
+  .tag-was { color: var(--pink); } .tag-now { color: var(--green); }
+
+  table.contract { width: 100%; border-collapse: collapse; margin-top: 32px; font-size: 14px; }
+  table.contract th, table.contract td { text-align: left; padding: 12px 14px;
+             border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  table.contract th { font-family: var(--mono); font-size: 12px; color: var(--text-2);
+             text-transform: uppercase; letter-spacing: .05em; }
+  table.contract td code { font-family: var(--mono); font-size: 12.5px; color: var(--sky); }
+  table.contract tr:last-child td { border-bottom: none; }
+
+  footer { margin-top: 96px; border-top: 1px solid var(--line-soft);
+           padding: 36px 0 56px; text-align: center; }
+  footer p { color: var(--text-3); font-size: 13px; }
+  footer a { color: var(--sky); text-decoration: none; }
+
+  @media (max-width: 820px) {
+    .cheat, .split { grid-template-columns: 1fr; }
+    .cheat .col-head.tech { margin-top: 8px; }
+  }
+</style>
+</head>
+<body>
+
+<main>
+  <!-- ===== hero ===== -->
+  <div class="wrap hero">
+    <p class="crumbs"><a href="index.html">boost</a> / docs / mcp-hub · Phase 3</p>
+    <span class="badge">RAG Phase 3 · shipped in PR #64</span>
+    <h1>MCP as a <span class="grad-text">hub</span>.</h1>
+    <p class="lede">boost's Model Context Protocol server used to dispatch tools through a flat
+      <code>if/elif</code> ladder. Phase 3 turns it into an <b>extensible registry</b>: every tool
+      self-registers a spec + handler, the server just iterates, and adding a capability — like the
+      new <code>boost_discover_github</code> reach-out — is one <code>register()</code> call with
+      zero dispatcher edits.</p>
+
+    <div class="stats">
+      <div class="stat reveal"><b>6</b><span>Registered MCP tools</span></div>
+      <div class="stat reveal"><b>0</b><span>Dispatcher edits to add one</span></div>
+      <div class="stat reveal"><b>89.6%</b><span>Mutation kill on core/</span></div>
+      <div class="stat reveal"><b>0</b><span>New runtime deps</span></div>
+    </div>
+  </div>
+
+  <!-- ===== architecture ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Architecture</span>
+      <h2 class="sec-title">One registry, many handlers</h2>
+      <p class="sec-sub">The JSON-RPC server never knows what tools exist — it asks the
+        <code>Registry</code> in <code>core/mcp.py</code>. Handlers that reach out to the world
+        (like GitHub) probe for their dependency and <b>degrade to a message instead of crashing</b>.</p>
+
+      <div class="diagram reveal">
+        <svg viewBox="0 0 920 500" role="img" aria-label="Architecture: an MCP client speaks JSON-RPC over stdio to the boost server, which routes tools/list and tools/call through the core/mcp Registry to six self-registering handlers; the boost_discover_github handler reaches out to the gh CLI and degrades gracefully.">
+          <defs>
+            <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" fill="#7dd3fc"/>
+            </marker>
+            <marker id="ahp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" fill="#f472d0"/>
+            </marker>
+          </defs>
+
+          <!-- MCP client -->
+          <rect x="40" y="30" width="230" height="66" rx="12" fill="rgba(56,189,248,.08)" stroke="#38bdf8" stroke-width="1.2"/>
+          <text x="155" y="58" text-anchor="middle" class="head">MCP client</text>
+          <text x="155" y="78" text-anchor="middle" class="lbl-s">Claude Code · Cursor · Windsurf</text>
+
+          <!-- transport -->
+          <line x1="155" y1="96" x2="155" y2="150" stroke="#7dd3fc" stroke-width="1.4" marker-end="url(#ah)" marker-start="url(#ah)"/>
+          <text x="170" y="128" class="lbl-t">JSON-RPC 2.0 · newline-delimited over stdio</text>
+
+          <!-- server loop -->
+          <rect x="40" y="150" width="230" height="86" rx="12" fill="rgba(168,85,247,.08)" stroke="#a855f7" stroke-width="1.2"/>
+          <text x="155" y="178" text-anchor="middle" class="head">_mcp_serve_stdio()</text>
+          <text x="155" y="199" text-anchor="middle" class="lbl-s">read line → dispatch → send</text>
+          <text x="155" y="217" text-anchor="middle" class="lbl-t">initialize · ping · tools/list · tools/call</text>
+
+          <!-- registry -->
+          <rect x="360" y="120" width="250" height="150" rx="14" fill="rgba(34,211,238,.07)" stroke="#22d3ee" stroke-width="1.4"/>
+          <text x="485" y="148" text-anchor="middle" class="head">REGISTRY — core/mcp.py</text>
+          <text x="485" y="168" text-anchor="middle" class="lbl-t">ordered name → (spec, handler)</text>
+          <rect x="378" y="182" width="214" height="30" rx="7" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
+          <text x="485" y="201" text-anchor="middle" class="lbl-s">.specs()  →  tools/list</text>
+          <rect x="378" y="220" width="214" height="30" rx="7" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
+          <text x="485" y="239" text-anchor="middle" class="lbl-s">.call(name, args)  →  tools/call</text>
+
+          <!-- server to registry -->
+          <line x1="270" y1="193" x2="360" y2="193" stroke="#7dd3fc" stroke-width="1.4" marker-end="url(#ah)"/>
+
+          <!-- handlers -->
+          <text x="770" y="52" text-anchor="middle" class="head">Handlers  (self-registered)</text>
+          <g font-family="var(--mono)">
+            <rect x="660" y="70" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
+            <text x="672" y="87" class="lbl-s">boost_search</text>
+            <rect x="660" y="102" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
+            <text x="672" y="119" class="lbl-s">boost_list</text>
+            <rect x="660" y="134" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
+            <text x="672" y="151" class="lbl-s">boost_info</text>
+            <rect x="660" y="166" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
+            <text x="672" y="183" class="lbl-s">boost_install</text>
+            <rect x="660" y="198" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
+            <text x="672" y="215" class="lbl-s">boost_doctor</text>
+            <rect x="660" y="230" width="220" height="26" rx="6" fill="rgba(244,114,208,.10)" stroke="#f472d0" stroke-width="1.2"/>
+            <text x="672" y="247" class="lbl-s" fill="#f9a8d4">boost_discover_github  ✦ new</text>
+          </g>
+          <!-- registry to handlers -->
+          <line x1="610" y1="180" x2="660" y2="150" stroke="#7dd3fc" stroke-width="1.2" marker-end="url(#ah)"/>
+          <line x1="610" y1="205" x2="660" y2="243" stroke="#f472d0" stroke-width="1.2" marker-end="url(#ahp)"/>
+
+          <!-- reach-out -->
+          <rect x="620" y="330" width="260" height="72" rx="12" fill="rgba(244,114,208,.06)" stroke="#f472d0" stroke-width="1.2"/>
+          <text x="750" y="358" text-anchor="middle" class="head">gh CLI → GitHub code search</text>
+          <text x="750" y="378" text-anchor="middle" class="lbl-s">github_skill_search(query, limit)</text>
+          <text x="750" y="394" text-anchor="middle" class="lbl-t">one page · no cache · SKILL.md repos</text>
+          <line x1="770" y1="256" x2="770" y2="330" stroke="#f472d0" stroke-width="1.2" marker-end="url(#ahp)"/>
+          <rect x="352" y="345" width="234" height="42" rx="9" fill="rgba(250,204,21,.05)" stroke="#facc15" stroke-width="1"/>
+          <text x="469" y="363" text-anchor="middle" class="note">no gh / offline / failure</text>
+          <text x="469" y="379" text-anchor="middle" class="note">→ helpful message, never crash</text>
+          <line x1="620" y1="366" x2="586" y2="366" stroke="#facc15" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#ah)"/>
+
+          <!-- core engine deps -->
+          <rect x="40" y="330" width="290" height="72" rx="12" fill="rgba(255,255,255,.03)" stroke="var(--line-hi)"/>
+          <text x="185" y="358" text-anchor="middle" class="head">core engine (read-only from here)</text>
+          <text x="185" y="379" text-anchor="middle" class="lbl-s">rag · catalog · store · lockfile · registry</text>
+          <line x1="185" y1="236" x2="185" y2="330" stroke="#676d86" stroke-width="1.1" stroke-dasharray="3 3" marker-end="url(#ah)"/>
+          <text x="196" y="290" class="lbl-t">handlers call the engine</text>
+        </svg>
+      </div>
+      <p class="caption">Fig 1 — The server holds no tool knowledge; it delegates every
+        <code>tools/list</code> / <code>tools/call</code> to the registry. New tools slot in on the
+        right without touching the loop on the left.</p>
+    </div>
+  </section>
+
+  <!-- ===== sequence ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Sequence</span>
+      <h2 class="sec-title">A <code>boost_discover_github</code> call, end to end</h2>
+      <p class="sec-sub">The happy path reaches GitHub; the shaded branch is what happens when
+        <code>gh</code> is missing or the search fails — the server answers, never dies.</p>
+
+      <div class="diagram reveal">
+        <svg viewBox="0 0 920 470" role="img" aria-label="Sequence diagram of a tools/call for boost_discover_github: client to server to registry to handler; the handler probes for gh, calls github_skill_search which runs gh api, maps results, and returns text; a degradation branch returns a hint when gh is absent.">
+          <defs>
+            <marker id="sq" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 0L10 5L0 10z" fill="#7dd3fc"/>
+            </marker>
+            <marker id="sqr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 0L10 5L0 10z" fill="#4ade80"/>
+            </marker>
+          </defs>
+          <!-- lifelines -->
+          <g class="lbl" text-anchor="middle">
+            <text x="80"  y="34">Client</text>
+            <text x="270" y="34">Server</text>
+            <text x="450" y="34">Registry</text>
+            <text x="630" y="34">Handler</text>
+            <text x="840" y="34">gh · GitHub</text>
+          </g>
+          <g stroke="var(--line-hi)" stroke-width="1" stroke-dasharray="3 4">
+            <line x1="80"  y1="44" x2="80"  y2="440"/>
+            <line x1="270" y1="44" x2="270" y2="440"/>
+            <line x1="450" y1="44" x2="450" y2="440"/>
+            <line x1="630" y1="44" x2="630" y2="440"/>
+            <line x1="840" y1="44" x2="840" y2="440"/>
+          </g>
+
+          <!-- 1 tools/call -->
+          <line x1="80" y1="76" x2="270" y2="76" stroke="#7dd3fc" stroke-width="1.4" marker-end="url(#sq)"/>
+          <text x="84" y="70" class="lbl-s">tools/call · boost_discover_github {query,limit}</text>
+          <!-- 2 REGISTRY.call -->
+          <line x1="270" y1="112" x2="450" y2="112" stroke="#7dd3fc" stroke-width="1.4" marker-end="url(#sq)"/>
+          <text x="274" y="106" class="lbl-s">REGISTRY.call(name, args)</text>
+          <!-- 3 dispatch handler -->
+          <line x1="450" y1="148" x2="630" y2="148" stroke="#7dd3fc" stroke-width="1.4" marker-end="url(#sq)"/>
+          <text x="454" y="142" class="lbl-s">handler(args)</text>
+
+          <!-- 4 probe -->
+          <rect x="600" y="168" width="60" height="26" rx="6" fill="rgba(250,204,21,.06)" stroke="#facc15"/>
+          <text x="630" y="185" text-anchor="middle" class="note">probe</text>
+          <text x="558" y="212" class="lbl-t">shutil.which("gh")</text>
+
+          <!-- 5 github_skill_search -->
+          <line x1="630" y1="236" x2="840" y2="236" stroke="#7dd3fc" stroke-width="1.4" marker-end="url(#sq)"/>
+          <text x="634" y="230" class="lbl-s">github_skill_search → gh api search/code</text>
+          <!-- 6 results -->
+          <line x1="840" y1="272" x2="630" y2="272" stroke="#4ade80" stroke-width="1.4" marker-end="url(#sqr)"/>
+          <text x="634" y="266" class="lbl-s">items[] (repo · path · desc)</text>
+          <!-- 7 text back -->
+          <line x1="630" y1="308" x2="450" y2="308" stroke="#4ade80" stroke-width="1.4" marker-end="url(#sqr)"/>
+          <text x="454" y="302" class="lbl-s">(text, is_error=False)</text>
+          <line x1="450" y1="332" x2="270" y2="332" stroke="#4ade80" stroke-width="1.4" marker-end="url(#sqr)"/>
+          <line x1="270" y1="356" x2="80"  y2="356" stroke="#4ade80" stroke-width="1.4" marker-end="url(#sqr)"/>
+          <text x="84" y="350" class="lbl-s">result.content[0].text</text>
+
+          <!-- degradation branch -->
+          <rect x="300" y="388" width="470" height="52" rx="10" fill="rgba(250,204,21,.05)" stroke="#facc15" stroke-width="1" stroke-dasharray="5 3"/>
+          <text x="316" y="410" class="note">alt · no gh / gh returns error / bad JSON</text>
+          <text x="316" y="428" class="lbl-s" fill="#facc15">handler returns ("install gh …" / "search failed …", is_error=True) — server still replies</text>
+        </svg>
+      </div>
+      <p class="caption">Fig 2 — Steps 5–6 are the only ones that touch the network. Everything
+        below step 4 has a mirror in the shaded <code>alt</code> branch, so a missing dependency is
+        a <i>message</i>, not an exception.</p>
+    </div>
+  </section>
+
+  <!-- ===== before / after ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The refactor</span>
+      <h2 class="sec-title">From an <span class="tag-was">if/elif</span> ladder to a <span class="tag-now">registry</span></h2>
+      <p class="sec-sub">Same behaviour, same wire protocol — but adding tool #7 no longer means
+        editing the dispatcher, and an unknown tool resolves in exactly one place.</p>
+
+      <div class="split reveal">
+        <div class="window">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+            <div class="bar-title">before — configuration.py</div></div>
+          <pre><span class="cm"># flat dispatch: every tool is a branch</span>
+<span class="tv">def</span> _mcp_tool(tool, args):
+    <span class="tv">if</span> tool == <span class="tok">"boost_search"</span>:
+        ...
+    <span class="tv">if</span> tool == <span class="tok">"boost_list"</span>:
+        ...
+    <span class="cm"># +1 tool = +1 branch here</span>
+    <span class="tv">return</span> None, False
+
+_MCP_TOOLS = [ {<span class="cm">…5 hand-kept specs…</span>} ]</pre>
+        </div>
+        <div class="window">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+            <div class="bar-title">after — core/mcp.py + configuration.py</div></div>
+          <pre><span class="cm"># the seam: an ordered name → (spec, handler) map</span>
+REGISTRY = mcp.<span class="tv">Registry</span>()
+
+REGISTRY.register(
+    <span class="tok">"boost_discover_github"</span>,
+    <span class="tok">"Discover new SKILL.md repos…"</span>,
+    {<span class="tok">"type"</span>: <span class="tok">"object"</span>, <span class="tok">"properties"</span>: {…}},
+    _tool_discover_github)          <span class="cm"># ← the only edit</span>
+
+_MCP_TOOLS = REGISTRY.specs()       <span class="cm"># list stays in sync</span></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== cheat sheet ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Cheat sheet</span>
+      <h2 class="sec-title">Explain it two ways</h2>
+      <p class="sec-sub">Every concept, twice: the <b class="tag-was" style="color:var(--sky)">ELI5</b> on
+        the left, the <b style="color:var(--pink)">deep technical</b> on the right. Open both and
+        compare — they describe the same thing at different altitudes.</p>
+
+      <div class="cheat reveal">
+        <div class="col-head eli">🧸 Explain like I'm 5</div>
+        <div class="col-head tech">🔬 Deep technical</div>
+
+        <!-- Registry -->
+        <details class="card eli5">
+          <summary>The toy box <span class="topic-tag">registry</span></summary>
+          <div class="body"><p>Imagine a toy box with labelled slots. Each toy knows its own
+            name and what it does, and it puts <i>itself</i> into a slot. When someone asks "what
+            toys do you have?" you just read the labels. When they say "play with the drum," you
+            grab the drum from its slot. You never keep a giant list in your head — the box does.</p></div>
+        </details>
+        <details class="card tech">
+          <summary><code>Registry</code>: ordered name → (spec, handler) <span class="topic-tag">core/mcp.py</span></summary>
+          <div class="body"><p><code>Registry</code> holds three parallel structures keyed by tool
+            name: an insertion-ordered name list, a <code>specs</code> map
+            (<code>{name, description, inputSchema}</code>), and a <code>handlers</code> map.
+            <code>register()</code> rejects empty or duplicate names; <code>specs()</code> returns
+            the JSON payload in registration order; <code>call(name, args)</code> looks up the
+            handler and returns <code>(None, False)</code> for anything unknown. It's pure,
+            stdlib-only, and mutation-gated.</p></div>
+        </details>
+
+        <!-- Handler -->
+        <details class="card eli5">
+          <summary>What each toy promises <span class="topic-tag">handler</span></summary>
+          <div class="body"><p>Every toy promises the same thing: "give me your ask, and I'll hand
+            back some words, plus a thumbs-up or thumbs-down." That's it. Because they all promise
+            the exact same shape, the toy box doesn't care which toy it grabbed — they're
+            interchangeable.</p></div>
+        </details>
+        <details class="card tech">
+          <summary>The handler contract <span class="topic-tag">(text, is_error)</span></summary>
+          <div class="body"><p>A handler is <code>fn(args: dict) -&gt; (text, is_error)</code>.
+            <code>text</code> is the human-readable result; <code>is_error</code> becomes the MCP
+            <code>result.isError</code> flag. A handler may return <code>text is None</code> to mean
+            "no result," which the server renders identically to an unknown tool — so the
+            <code>-32602</code> path lives in exactly one place. Handlers close over the core engine
+            (<code>rag</code>, <code>catalog</code>, <code>store</code>) but the registry knows
+            nothing about them.</p></div>
+        </details>
+
+        <!-- discover_github -->
+        <details class="card eli5">
+          <summary>The scout that looks outside <span class="topic-tag">boost_discover_github</span></summary>
+          <div class="body"><p>Most toys play with things already in the room. This one is a scout:
+            it opens the door and looks down the street (GitHub) for new skills to bring home. If the
+            door is locked (no <code>gh</code> tool installed), it doesn't panic — it just says
+            "hey, you need a key, here's how to get one" and comes back inside.</p></div>
+        </details>
+        <details class="card tech">
+          <summary>First reach-out tool <span class="topic-tag">gh code search</span></summary>
+          <div class="body"><p><code>_tool_discover_github</code> probes <code>shutil.which("gh")</code>,
+            then calls <code>discovery.github_skill_search(query, limit)</code> — a single
+            <code>gh api search/code?q=filename:SKILL.md…</code> page (no cache write, limit clamped
+            to 100, query URL-encoded and appended to the filename filter). Results map to
+            <code>{repo, path, url, description}</code> and render one per line. Every failure mode
+            (<code>TimeoutExpired</code>, <code>OSError</code>, non-zero exit, bad JSON) returns
+            <code>None</code> so the handler emits a hint instead of raising.</p></div>
+        </details>
+
+        <!-- graceful degradation -->
+        <details class="card eli5">
+          <summary>Never cry, always answer <span class="topic-tag">degradation</span></summary>
+          <div class="body"><p>The rule for any toy that reaches outside: never throw a tantrum. If
+            something it needs is missing, it must still say something friendly and useful. That way
+            the whole toy box keeps working even when one toy can't reach its toy.</p></div>
+        </details>
+        <details class="card tech">
+          <summary>Probe-then-degrade <span class="topic-tag">core/ai.py pattern</span></summary>
+          <div class="body"><p>Mirrors the established <code>core/ai.py</code> discipline: detect the
+            dependency, and if absent return a short actionable message rather than raising. The MCP
+            server is a long-lived stdio loop — an uncaught exception in one <code>tools/call</code>
+            would be caught by the server's blanket handler, but degrading <i>inside</i> the tool
+            gives a precise, testable message and keeps <code>is_error</code> semantically correct.</p></div>
+        </details>
+
+        <!-- back-compat shims -->
+        <details class="card eli5">
+          <summary>Old handles still turn <span class="topic-tag">shims</span></summary>
+          <div class="body"><p>We rearranged the room, but we kept the old light switches on the wall
+            so anything that used to flip them still works. Nobody has to relearn where the switches
+            are.</p></div>
+        </details>
+        <details class="card tech">
+          <summary>Back-compat: <code>_MCP_TOOLS</code> / <code>_mcp_tool</code> <span class="topic-tag">no churn</span></summary>
+          <div class="body"><p><code>_MCP_TOOLS = REGISTRY.specs()</code> and a one-line
+            <code>_mcp_tool()</code> that delegates to <code>REGISTRY.call()</code> preserve the two
+            symbols the server loop and the existing test suite reference. The refactor is
+            behaviour-preserving: the
+            <code>tools/list</code> order is unchanged for the first five tools, and only the new
+            sixth entry is appended — so <code>TestMcp</code> needed a single one-line assertion
+            update.</p></div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== extension contract ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Extension contract</span>
+      <h2 class="sec-title">Adding tool #7</h2>
+      <p class="sec-sub">The whole point of the seam: a new capability — a database query, another
+        external API — is a handler plus one <code>register()</code>. No server edit, no dispatcher edit.</p>
+
+      <div class="window reveal" style="margin-top:36px;">
+        <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+          <div class="bar-title">your_new_tool.py</div></div>
+        <pre><span class="tv">def</span> _tool_x(args):                       <span class="cm"># fn(args) -> (text, is_error)</span>
+    <span class="tv">if</span> <span class="tv">not</span> _dependency_available():
+        <span class="tv">return</span> <span class="tok">"needs &lt;dep&gt; — here's how to get it"</span>, <span class="tv">True</span>   <span class="cm"># degrade</span>
+    <span class="tv">return</span> _do_the_work(args), <span class="tv">False</span>
+
+REGISTRY.register(
+    <span class="tok">"boost_x"</span>,
+    <span class="tok">"one-line description shown to the agent"</span>,
+    {<span class="tok">"type"</span>: <span class="tok">"object"</span>, <span class="tok">"properties"</span>: {…}},
+    _tool_x)                              <span class="cm"># tools/list + tools/call: automatic</span></pre>
+      </div>
+
+      <table class="contract">
+        <tr><th>Rule</th><th>Why</th></tr>
+        <tr><td>Handler returns <code>(text, is_error)</code></td><td>Uniform shape lets the registry stay tool-agnostic.</td></tr>
+        <tr><td>Reach-out tools <b>must</b> degrade, never raise</td><td>The stdio server is long-lived; a missing <code>gh</code>, offline network, or absent <code>[rag]</code> extra must not kill it.</td></tr>
+        <tr><td>Registration order = <code>tools/list</code> order</td><td>Deterministic surface; existing clients see a stable ordering with new tools appended.</td></tr>
+        <tr><td>Put reusable logic in <code>core/</code></td><td>It gets unit-tested <i>and</i> mutation-gated — the registry itself lives in <code>core/mcp.py</code> for exactly this reason.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p>boost · <b>MCP as a hub</b> (RAG Phase 3) — see
+        <a href="rag-architecture.md">rag-architecture.md §8</a> ·
+        <a href="index.html">docs home</a> ·
+        <a href="https://github.com/jonnyeclectic/boost/pull/64">PR #64</a><br>
+        Styled with the shared <a href="../style/boost.css">Aurora</a> design system.</p>
+    </div>
+  </footer>
+</main>
+
+<script src="../style/boost.js" defer></script>
+</body>
+</html>
