@@ -2,14 +2,14 @@
 id: memoize-config-load-in-process
 board: code
 section: internals
-status: next
+status: inflight
 category: Performance
 complexity: S
 impact: Med-High
 wow: 3
 note: 
 order: 4
-owner:
+owner: loop/memoize-config
 pr:
 title: Memoize <code>config.load()</code> in-process
 ---
