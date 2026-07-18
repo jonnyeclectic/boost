@@ -716,7 +716,8 @@ def cmd_count(argv):
         print(json.dumps({"installed": installed_n, "available": available_n,
                           "taps": taps_n, "discovery": discovery}))
         return 0
-    out.info("installed %d · available %d (across %d tap%s) · discovery index %s"
-             % (installed_n, available_n, taps_n, "" if taps_n == 1 else "s",
-                discovery if discovery is not None else "not built"))
+    summary = ("installed %d · available %d (across %d tap%s) · discovery index %s"
+               % (installed_n, available_n, taps_n, "" if taps_n == 1 else "s",
+                  discovery if discovery is not None else "not built"))
+    print(out.panel(summary, title="inventory"))
     return 0

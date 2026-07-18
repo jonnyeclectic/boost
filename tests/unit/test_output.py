@@ -296,6 +296,53 @@ class TestBadge:
             "\033[38;2;74;222;128m[installed]\033[0m")
 
 
+class TestVisibleLen:
+    def test_plain_string(self):
+        assert output.visible_len("hello") == 5
+
+    def test_ignores_ansi_codes(self):
+        assert output.visible_len("\033[31mhi\033[0m") == 2
+
+    def test_truecolor_codes_stripped(self):
+        assert output.visible_len("\033[38;2;34;211;238m●\033[0m") == 1
+
+
+class TestPanel:
+    def test_single_line_plain(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.panel("hi") == "╭────╮\n│ hi │\n╰────╯"
+
+    def test_pads_lines_to_widest(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.panel(["a", "bbb"]) == (
+            "╭─────╮\n│ a   │\n│ bbb │\n╰─────╯")
+
+    def test_title_in_top_rule(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        # inner = max(len("hello")=5, len("x")+2=3) = 5
+        assert output.panel("hello", title="x") == (
+            "╭─ x ───╮\n│ hello │\n╰───────╯")
+
+    def test_wide_title_sets_inner_width(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        # title longer than content: inner = len("widetitle")+2 = 11
+        p = output.panel("hi", title="widetitle")
+        first, mid, last = p.split("\n")
+        assert output.visible_len(first) == output.visible_len(last)
+        assert output.visible_len(mid) == output.visible_len(last)
+
+    def test_border_is_aurora_tinted_when_truecolor(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        # top-left corner painted cyan #22d3ee
+        assert output.panel("x").startswith("\033[38;2;34;211;238m╭")
+
+    def test_title_is_bold_when_forced(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert "\033[1minventory\033[0m" in output.panel("x", title="inventory")
+
+
 class TestMeter:
     def test_full(self):
         assert output.meter(1.0, 4) == "▰▰▰▰"

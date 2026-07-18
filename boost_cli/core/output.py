@@ -10,6 +10,7 @@ Conventions used across all commands:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 
@@ -181,6 +182,39 @@ def badge(label: str, hue: str = "cyan") -> str:
     """A compact status pill for identity cards — an Aurora-tinted [label]
     (plain under NO_COLOR), echoing the web design system's .badge pills."""
     return aurora("[" + label + "]", hue)
+
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def visible_len(s: str) -> int:
+    """Length of a string ignoring ANSI color escapes — its column width."""
+    return len(_ANSI_RE.sub("", s))
+
+
+def panel(lines, title: str | None = None, hue: str = "cyan") -> str:
+    """A rounded box around one or more lines, with an Aurora-tinted border and
+    an optional title set into the top rule — the terminal echo of the web
+    design system's .glass / .window surfaces. Plain box under NO_COLOR.
+    """
+    if isinstance(lines, str):
+        lines = [lines]
+    widths = [visible_len(x) for x in lines]
+    tw = visible_len(title) if title else 0
+    inner = max(widths + [tw + 2])  # a titled rule needs a space each side
+
+    def b(s: str) -> str:
+        return aurora(s, hue)
+
+    rows = []
+    if title:
+        rows.append(b("╭─ ") + c(title, BOLD) + b(" " + "─" * (inner - tw - 1) + "╮"))
+    else:
+        rows.append(b("╭" + "─" * (inner + 2) + "╮"))
+    for x, xw in zip(lines, widths):
+        rows.append(b("│ ") + x + " " * (inner - xw) + b(" │"))
+    rows.append(b("╰" + "─" * (inner + 2) + "╯"))
+    return "\n".join(rows)
 
 
 def meter(fraction: float, width: int = 4) -> str:
