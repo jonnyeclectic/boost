@@ -115,10 +115,10 @@
   <section class="block reveal">
     <div class="stats">
       <!-- ROADMAP:stats -->
-      <div class="stat"><b>8</b><span>Shipped</span></div>
+      <div class="stat"><b>9</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>83</b><span>Loop finds</span></div>
+      <div class="stat"><b>85</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -268,6 +268,25 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">transport allow-list + -- guard</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Observability · Diagnostics</span></div>
+        <h3>Crash-correlation breadcrumbs in the invocation log</h3>
+        <p>A native abort (e.g. a macOS Obj-C fork-safety <code>SIGABRT</code>) kills the
+           process outright, so it never reaches boost's Python crash recorder —
+           leaving no boost-side trace to confirm or clear boost when an OS crash
+           report appears. <code>log_invocation</code> now records
+           <code>pid</code>, <code>ppid</code> and the interpreter path on every
+           run, so any OS crash report can be cross-referenced by PID: if the
+           crashing PID never appears in <code>~/.boost/logs/boost.log</code>,
+           boost is definitively ruled out.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">rule boost in/out of OS crash reports</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -740,6 +759,28 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">stretch</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Reliability · Network</span></div>
+        <h3>Fork-safe network layer — explicit <code>ProxyHandler</code></h3>
+        <p><code>core/ai.py</code> and <code>core/embed.py</code> call
+           <code>urllib.request.urlopen</code> with the default opener, which on
+           macOS runs <code>getproxies_macosx_sysconf()</code> →
+           <code>_scproxy</code> → SystemConfiguration/CoreFoundation — an
+           Obj-C path that is <strong>not fork-safe</strong> and aborts on the
+           child side of a <code>fork()</code>. Harmless in today's single-process
+           CLI, but fragile if boost ever runs post-fork (a future multiprocessing
+           worker, or an embedding host). Build the opener with an explicit
+           <code>ProxyHandler</code> honoring <code>HTTP(S)_PROXY</code>/<code>NO_PROXY</code>
+           so network calls never touch the Obj-C proxy machinery — deterministic
+           and fork-safe.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">avoid macOS _scproxy Obj-C path</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
