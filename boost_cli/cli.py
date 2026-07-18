@@ -1,4 +1,4 @@
-"""boost CLI dispatcher — 72 commands across 8 groups.
+"""boost CLI dispatcher — 75 commands across 8 groups.
 
 Each command lives in boost_cli/commands/<module>.py as
     def cmd_<name_with_underscores>(argv: list[str]) -> int
@@ -110,7 +110,7 @@ COMMANDS = [
     ("changelog",   "chk", "quality", "Show a skill's upstream change history"),
     ("attest",      "chk", "quality", "Display/verify the install record for skills"),
     ("health",      "chk", "quality", "Dashboard of skill-environment health"),
-    # Configuration (10)
+    # Configuration (12)
     ("config",      "cfg", "configuration", "Display or modify boost configuration"),
     ("clean",       "cfg", "configuration", "Clear stale caches & broken symlinks"),
     ("create",      "cfg", "configuration", "Scaffold a new skill from a template"),
@@ -120,6 +120,8 @@ COMMANDS = [
     ("schedule",    "cfg", "configuration", "Manage automatic skill-sync scheduling"),
     ("serve",       "cfg", "configuration", "Serve the skill catalog over HTTP (port 8787)"),
     ("mcp",         "cfg", "configuration", "Register boost as an MCP server for Claude Code"),
+    ("hooks",       "cfg", "hooks", "Manage Claude Code hooks (scope-aware) in settings.json"),
+    ("bmad",        "cfg", "bmad", "Install & manage the BMAD Method (scope-aware, toggleable)"),
     ("self-update", "cfg", "configuration", "Update boost itself to the latest version"),
     # Team & Collaboration (6)
     ("cohort",      "team", "team", "Controlled skill rollouts & team A/B testing"),
