@@ -93,8 +93,12 @@ drift. Two loops adding two items now touch two *different files* → clean merg
 `owner: loop/<topic>` in that item's file on your branch and open the PR. Two
 loops claiming *different* items edit different files (no conflict); two loops
 claiming the *same* item edit the same small file, so the second merge conflicts —
-the intended "already claimed" signal, first-to-merge wins. (`docs/design-roadmap.html`
-is still hand-edited until the Phase 1b migration lands.)
+the intended "already claimed" signal, first-to-merge wins.
+
+Both boards are data-driven: `docs/roadmap.html` from `board: code` items and
+`docs/design-roadmap.html` from `board: design` items (track/impact/wow, rendered
+into the per-track sections; the filter JS and counters are computed). Same rule
+for both — edit items, run `build_roadmap.py`, never touch the HTML by hand.
 
 ## Layout
 

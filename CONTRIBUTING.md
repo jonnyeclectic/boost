@@ -42,7 +42,8 @@ drifts from its source (CI fails the build otherwise):
 | Generated file | Source of truth | Regenerate with |
 |---|---|---|
 | `boost_cli/data/registries.json` | `SKILLS`/`RULES`/`WORKFLOWS` tuples in `scripts/build_registries.py` | `python3 scripts/build_registries.py` |
-| `docs/roadmap.html` | one file per item under `docs/roadmap/items/` | `python3 scripts/build_roadmap.py` |
+| `docs/roadmap.html` | one file per item (`board: code`) under `docs/roadmap/items/` | `python3 scripts/build_roadmap.py` |
+| `docs/design-roadmap.html` | one file per item (`board: design`) under `docs/roadmap/items/` | `python3 scripts/build_roadmap.py` |
 
 Or regenerate everything at once with `make generate`. CI runs the matching
 `--check` for each and fails on drift; the same guards live in
@@ -50,10 +51,12 @@ Or regenerate everything at once with `make generate`. CI runs the matching
 
 ### The roadmap is data-driven — add items, don't edit the HTML
 
-To add or change a roadmap card, create/edit a small Markdown-with-frontmatter
-file under `docs/roadmap/items/` and run `python3 scripts/build_roadmap.py`.
-**Never hand-edit the `<article>` cards or the snapshot counters in
-`docs/roadmap.html`** — they are regenerated, and the counters are computed. This
+To add or change a roadmap card (either board), create/edit a small
+Markdown-with-frontmatter file under `docs/roadmap/items/` (set `board: code` or
+`board: design`) and run `python3 scripts/build_roadmap.py`.
+**Never hand-edit the cards or the counters in `docs/roadmap.html` /
+`docs/design-roadmap.html`** — they are regenerated, and the counters are
+computed. This
 is what lets parallel loops work the roadmap without colliding: two loops adding
 two items create two different files (clean merge); a status change edits one
 small file instead of a shared line in a 1,400-line document. Regenerating last
