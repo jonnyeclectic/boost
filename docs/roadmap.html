@@ -311,6 +311,237 @@
     </div>
   </section>
 
+  <!-- ============ ENGINE & COMMAND INTERNALS ============ -->
+  <section class="block reveal" id="internals">
+    <div class="block-head">
+      <h2>Engine &amp; command internals</h2><span class="count">// concrete file:line findings from the code scan</span>
+      <span class="rule"></span>
+    </div>
+    <div class="rgrid">
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Correctness · Robustness</span></div>
+        <h3>Atomic, corruption-safe lock-file writes</h3>
+        <p><code>read()</code> returns an empty skeleton on <b>any</b> JSON error and <code>write()</code> is a bare <code>write_text</code> at <code>core/lockfile.py:55</code>. An interrupted or concurrent write truncates the lock — the next <code>set_skill()</code> then <b>permanently drops every prior install record</b> while store dirs linger as orphans. Write to a temp file + <code>os.replace()</code>, and tell "empty" apart from "corrupt".</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Correctness</span></div>
+        <h3>Fix <code>self-update</code> version detection (dead branch)</h3>
+        <p><code>cmd_self_update</code> greps <code>__init__.py</code> for a <code>__version__ = "…"</code> literal (<code>commands/configuration.py:1090</code>), but the constant is <code>_detect_version()</code> (setuptools-scm — no literal). The regex never matches, so it reports <b>"already up to date"</b> even after a pull brings a newer tag. The success path is unreachable.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Correctness</span></div>
+        <h3>Consolidate skill-staleness / drift logic into core</h3>
+        <p>The "is this skill outdated" decision — <code>semver_gt</code> → commit compare → <code>sha256_dir</code> vs lock — is reimplemented nearly verbatim in <code>cmd_update</code>, <code>cmd_outdated</code> and <code>_drift_status</code> (<code>pkg.py:277 · taps.py:225 · quality.py:120</code>). Three copies of core business logic that <b>will drift apart</b>. Make it one <code>core</code> function the commands render.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Performance</span></div>
+        <h3>Memoize <code>config.load()</code> in-process</h3>
+        <p>Every <code>config.get()</code> re-reads <code>config.json</code> and runs a recursive <code>deepcopy</code> of <code>DEFAULTS</code> (<code>core/config.py:80–102</code>). It's called all over hot paths — <code>ai.enabled</code>, per-skill <code>enabled_agents</code> in sync loops, log-level and policy checks — so one command triggers <b>dozens of full reads + deep-copies</b>. Cache the load, invalidate on <code>save</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>Med-High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Tech-debt</span></div>
+        <h3>Extract MCP + HTTP servers out of <code>configuration.py</code></h3>
+        <p>~290 lines implement a full HTTP catalog server <b>and</b> a JSON-RPC 2.0 MCP server — with search/install/doctor dispatch that duplicates the CLI — inside a "configuration" command module (<code>commands/configuration.py:741–1028</code>). Move to <code>core/mcp.py</code> / <code>core/serve.py</code>, leaving thin wrappers. It's the biggest driver of the file's 1,099 lines and nearly untestable in place.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Security</span></div>
+        <h3>End-of-options <code>--</code> guard on git commands</h3>
+        <p><code>clone_shallow</code>/<code>fetch</code>/<code>reset</code> pass the URL &amp; ref as positionals with no <code>--</code> separator (<code>core/gitutil.py:34–46</code>), so a value starting with <code>-</code> is parsed as a git option. <code>parse_spec</code> constrains most URL shapes, but adding <code>--</code> before positionals and rejecting <code>ext::</code>/<code>file::</code>/<code>fd::</code> transports closes the argument-injection surface as defense-in-depth.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness</span></div>
+        <h3>Atomic skill install (temp-dir swap)</h3>
+        <p><code>_copy_skill</code> does <code>rmtree(dest)</code> then <code>copytree()</code> (<code>core/store.py:108–131</code>); an interrupt between the two leaves a missing or half-copied skill, and the lock is written afterward — so a mid-copy failure leaves store and lock <b>disagreeing</b>. Copy to a temp dir and atomically swap into place.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness</span></div>
+        <h3>One shared atomic-write helper</h3>
+        <p><code>journal._maybe_rotate</code> is a racy read-modify-write that concurrent appends can truncate mid-line; <code>rag._save</code> and <code>config.save</code> repeat the non-atomic pattern (<code>journal.py:63 · rag.py:252 · config.py:93</code>). Factor a single <code>atomic_write</code> into <code>core</code> and route all four through it.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Correctness</span></div>
+        <h3>Unify <code>_tilde()</code> — two copies have a boundary bug</h3>
+        <p>Eight command modules each define <code>_tilde</code>; the <code>quality</code> and <code>intelligence</code> versions use <code>startswith(home)</code> with no separator check (<code>quality.py:78</code>), so <code>/Users/bob-backup</code> wrongly contracts to <code>~-backup</code>. Collapse to one helper in <code>core/paths</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Performance</span></div>
+        <h3>Cache the catalog entry-set across RAG queries</h3>
+        <p><code>rag.retrieve()</code> calls <code>all_entries()</code>, which reads &amp; <code>json.loads</code> <b>every tap cache on every search</b> to build the live map (<code>rag.py:323 · catalog.py:166–181</code>) — the BM25 index is mtime-cached, the entry set is not. Memoize the entry set on cache mtime the same way.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Performance</span></div>
+        <h3>Stop re-serializing entry meta on every search</h3>
+        <p><code>catalog.search</code> computes <code>json.dumps(meta).lower()</code> for <b>every entry on every query</b> just to substring-match (<code>catalog.py:222</code>). Precompute a lowercased search blob at index time, or match structured fields directly.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Performance</span></div>
+        <h3>Prune ignored dirs during <code>scan_dir</code> walk</h3>
+        <p>Two full <code>rglob</code> passes descend <b>into</b> <code>.git</code>/<code>node_modules</code> and only filter afterward, and the skill-dir membership test is O(files × skill_dirs) (<code>catalog.py:106,119–123</code>). Switch to an <code>os.walk</code> that prunes ignored dirs in place; index skill dirs in a set.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low-Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>Single tech-stack prober</h3>
+        <p>Stack detection exists three times — <code>discovery.detect_stack</code>, <code>intelligence._local_stack</code>, <code>quality._STACK_MARKERS</code> (<code>discovery.py:74 · intelligence.py:359 · quality.py:55</code>) — and two already <code>import detect_stack</code> yet still carry a parallel marker table "as a fallback". Consolidate into one core prober.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>Single imperative-rule extractor</h3>
+        <p>Three separate regexes scan SKILL.md bodies for "Always / Never / Must / Do&nbsp;not" lines across <code>cmd_explain</code>, <code>simulate</code> and <code>conflict</code> (<code>info.py:363 · intelligence.py:254 · quality.py:822</code>) — same concept, three implementations. Extract one shared <code>core</code> extractor.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Maintainability</span></div>
+        <h3>Split oversized command modules</h3>
+        <p><code>quality.py</code> (14 cmds / 1,051 lines) mixes audit regexes, conflict NLP, decay scoring, fingerprinting and a health dashboard; <code>intelligence.py</code> and <code>configuration.py</code> are similarly overloaded. Split along cohesive seams to shrink blast radius and sharpen mutation-gate targeting.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Maintainability</span></div>
+        <h3>Robust <code>tag</code> argument parsing</h3>
+        <p>Because <code>-tag</code> looks like an option, <code>cmd_tag</code> calls <code>parse_known_args</code> then re-walks raw <code>argv</code> to reorder tokens (<code>info.py:575–584</code>) — fragile enough that the comment calls it "defensive". Replace with a positional-only sub-parser or an explicit <code>--add/--remove</code> design.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt · RAG</span></div>
+        <h3>Localize the stored BM25 snippet</h3>
+        <p><code>_make_docs</code> stores <code>piece[:200]</code> — the head of the best chunk — and <code>retrieve</code> surfaces it verbatim (<code>rag.py:154–172,337–341</code>), yet the docstrings promise the "best-matching passage". Center the snippet on the matched terms to improve display and the rerank context sent to the LLM.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Correctness</span></div>
+        <h3>Frontmatter scalar over-coercion</h3>
+        <p><code>_scalar</code> turns <code>no</code>/<code>on</code>/<code>off</code>/<code>null</code> into bool/None (<code>core/frontmatter.py:32–53</code>), so a tag or name literally equal to one of those parses to the wrong type and leaks into search/ranking meta. Restrict boolean coercion to <code>true</code>/<code>false</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness</span></div>
+        <h3>Guard <code>output.table</code> against ragged rows</h3>
+        <p>Column-width computation does <code>max(… for r in rows if i &lt; len(r))</code> (<code>core/output.py:300</code>), which raises <code>max() arg is empty</code> when a header column has no matching cell in any row. Add <code>default=0</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>Reuse helpers; kill minor dead work</h3>
+        <p><code>cmd_migrate</code> re-implements agent validation instead of calling <code>_check_agents</code>; <code>_user()</code> is copy-pasted between <code>configuration</code> and <code>team</code>; <code>cmd_simulate</code> parses the same frontmatter twice (<code>pkg.py:38,577 · configuration.py:39 · team.py:30</code>). Small, satisfying cleanups.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
   <!-- ============ CODE HEALTH & SECURITY ============ -->
   <section class="block reveal" id="health">
     <div class="block-head">
