@@ -1,11 +1,11 @@
 name: publish
 
-# Publishes boost-cli to PyPI when a GitHub release is published.
+# Publishes boost-skill-cli to PyPI when a GitHub release is published.
 #
 # Uses PyPI Trusted Publishing (OIDC) — no API token secret needed, but it
 # requires one-time setup on PyPI by the project owner:
 #   pypi.org → your account → Publishing → add a "pending publisher":
-#     project:     boost-cli
+#     project:     boost-skill-cli
 #     owner:       jonnyeclectic
 #     repository:  boost
 #     workflow:    publish.yml

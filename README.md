@@ -34,7 +34,7 @@ Mac binaries or npm for JS packages.
 Needs Python 3.9+ and `git`.
 
 ```bash
-pipx install boost-cli        # or: pip install boost-cli
+pipx install boost-skill-cli        # or: pip install boost-skill-cli
 boost --version
 boost tap --defaults          # pull in the starter registries
 ```

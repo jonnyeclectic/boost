@@ -1,5 +1,5 @@
 [project]
-name = "boost-cli"
+name = "boost-skill-cli"
 version = "2.3.3"
 description = "boost — Homebrew for AI coding skills"
 requires-python = ">=3.9"
