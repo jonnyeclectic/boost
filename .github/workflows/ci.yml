@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run the full gate against each queued merge combination when the GitHub
+  # merge queue is enabled, so two independently-green PRs can't land a broken
+  # combination. merge_group runs on a gh-readonly-queue/* ref (not main), so it
+  # never triggers the release workflow — publish still fires only on the real
+  # push to main. Enabling the queue itself is a repo Setting (see CONTRIBUTING).
+  merge_group:
 
 jobs:
   lint:
