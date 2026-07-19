@@ -528,17 +528,17 @@ class TestScheduleCron:
 
 class TestServe:
     def test_endpoints(self, boost, installed, monkeypatch):
-        from boost_cli.commands import configuration as cfg_mod
+        from boost_cli.core import serve as serve_mod
         from boost_cli.cli import main
         captured = {}
-        real = cfg_mod.ThreadingHTTPServer
+        real = serve_mod.ThreadingHTTPServer
 
         class Capturing(real):
             def __init__(self, *a, **kw):
                 super().__init__(*a, **kw)
                 captured["server"] = self
 
-        monkeypatch.setattr(cfg_mod, "ThreadingHTTPServer", Capturing)
+        monkeypatch.setattr(serve_mod, "ThreadingHTTPServer", Capturing)
         # server_bind() calls socket.getfqdn(), whose reverse-DNS lookup can
         # hang for many seconds on macOS CI runners; stub it out
         monkeypatch.setattr(socket, "getfqdn", lambda name="": "localhost")

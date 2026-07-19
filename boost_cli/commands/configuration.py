@@ -2,9 +2,7 @@
 completions, schedule, serve, mcp, self-update."""
 from __future__ import annotations
 
-import errno
 import getpass
-import html
 import json
 import os
 import re
@@ -12,15 +10,13 @@ import shutil
 import subprocess
 import sys
 import time
-import urllib.parse
 from datetime import datetime, timedelta
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from .. import cliparse
 from .. import __version__
 from ..core import agents, catalog, config, frontmatter, gitutil, journal
-from ..core import lockfile, mcp, paths, policy, rag, registry, store, util
+from ..core import lockfile, mcp, paths, policy, rag, registry, serve, store, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -730,106 +726,8 @@ def cmd_schedule(argv) -> int:
 
 # ---------------------------------------------------------------- serve
 
-_PAGE_CSS = ("body{background:#111;color:#ddd;font-family:ui-monospace,SFMono-Regular,"
-             "Menlo,monospace;max-width:720px;margin:2rem auto;padding:0 1rem}"
-             "h1{color:#fff;font-size:1.3rem}a{color:#7dc4ff;text-decoration:none}"
-             "a:hover{text-decoration:underline}table{border-collapse:collapse;width:100%}"
-             "th,td{text-align:left;padding:.3rem .8rem .3rem 0;"
-             "border-bottom:1px solid #2a2a2a}.dim{color:#777}")
-
-_SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-
-
-def _serve_page() -> str:
-    installed = lockfile.installed()
-    entries = catalog.all_entries()
-    taps = registry.list_taps()
-    rows = "".join(
-        '<tr><td><a href="/skill/%s">%s</a></td><td>%s</td><td>%s</td></tr>'
-        % (urllib.parse.quote(n), html.escape(n),
-           html.escape(str(e.get("version", "?"))),
-           html.escape(str(e.get("tap", "?"))))
-        for n, e in sorted(installed.items()))
-    return ("<!doctype html><html><head><meta charset='utf-8'>"
-            "<title>boost — skill catalog</title><style>%s</style></head><body>"
-            "<h1>⚡ boost <span class='dim'>v%s</span></h1>"
-            "<p class='dim'>%d installed · %d available across %d taps</p>"
-            "<table><tr><th>skill</th><th>version</th><th>tap</th></tr>%s</table>"
-            "<p><a href='/installed.json'>installed.json</a> · "
-            "<a href='/catalog.json'>catalog.json</a></p></body></html>"
-            % (_PAGE_CSS, __version__, len(installed), len(entries), len(taps),
-               rows or "<tr><td colspan='3' class='dim'>nothing installed</td></tr>"))
-
-
-def _skill_text(name: str):
-    """SKILL.md text for an installed skill, else from a tap. None if unknown."""
-    if not _SKILL_NAME_RE.fullmatch(name):
-        return None
-    fp = store.skill_store_dir(name) / "SKILL.md"
-    if fp.is_file():
-        return fp.read_text(encoding="utf-8", errors="replace")
-    for e in catalog.find(name):
-        try:
-            fp = registry.get(e["tap"]).path / e["skill_md"]
-        except BoostError:
-            continue
-        if fp.is_file():
-            return fp.read_text(encoding="utf-8", errors="replace")
-    return None
-
-
-class _CatalogHandler(BaseHTTPRequestHandler):
-    server_version = "boost/" + __version__
-
-    def log_message(self, fmt, *args):  # logged in _send instead
-        pass
-
-    def _send(self, status: int, ctype: str, body: bytes) -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-        out.dim("  %s %s → %d" % (self.command, self.path, status))
-
-    def do_GET(self):
-        path = urllib.parse.unquote(self.path.split("?", 1)[0])
-        try:
-            if path in ("/", "/index.html"):
-                self._send(200, "text/html; charset=utf-8", _serve_page().encode())
-            elif path == "/catalog.json":
-                self._send(200, "application/json",
-                           json.dumps(catalog.all_entries(), indent=2).encode())
-            elif path == "/installed.json":
-                self._send(200, "application/json",
-                           json.dumps(lockfile.read(), indent=2).encode())
-            elif path.startswith("/skill/"):
-                name = path[len("/skill/"):].strip("/")
-                if not _SKILL_NAME_RE.fullmatch(name):
-                    self._send(404, "application/json",
-                               json.dumps({"error": "no skill named %r" % name}).encode())
-                    return
-                text = _skill_text(name)
-                if text is None:
-                    self._send(404, "application/json",
-                               json.dumps({"error": "no skill named %r" % name}).encode())
-                else:
-                    self._send(200, "text/plain; charset=utf-8", text.encode())
-            else:
-                self._send(404, "application/json",
-                           json.dumps({"error": "not found"}).encode())
-        except BrokenPipeError:
-            pass
-        except Exception as e:  # noqa: BLE001 — keep the server alive
-            try:
-                self._send(500, "application/json",
-                           json.dumps({"error": str(e)}).encode())
-            except Exception:
-                pass
-
-
 def cmd_serve(argv) -> int:
-    """boost serve [--port N] [--host H]"""
+    """boost serve [--port N] [--host H] — thin wrapper over core.serve."""
     p = cliparse.parser(
         prog="boost serve",
         description="Serve the skill catalog over HTTP (port 8787)")
@@ -839,24 +737,7 @@ def cmd_serve(argv) -> int:
     p.add_argument("--host", default="127.0.0.1",
                    help="address to bind (default: 127.0.0.1)")
     args = p.parse_args(argv)
-
-    try:
-        httpd = ThreadingHTTPServer((args.host, args.port), _CatalogHandler)
-    except OSError as e:
-        if e.errno == errno.EADDRINUSE:
-            raise BoostError("port %d is already in use" % args.port,
-                            hint="pick another with --port")
-        raise BoostError("cannot bind %s:%d — %s" % (args.host, args.port, e),
-                        hint="check --host and --port")
-    out.info("⚡ serving skill catalog on http://%s:%d %s"
-             % (args.host, args.port, out.c("(ctrl-c to stop)", out.DIM)))
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        print()
-        out.ok("server stopped")
-    finally:
-        httpd.server_close()
+    serve.serve_http(args.host, args.port)
     return 0
 
 
@@ -1021,70 +902,13 @@ _MCP_TOOLS = REGISTRY.specs()
 
 
 def _mcp_tool(tool: str, args: dict):
-    """Run one MCP tool -> (text, is_error). (None, _) for unknown tools."""
+    """Run one MCP tool -> (text, is_error). (None, _) for unknown tools.
+
+    Thin shim over ``REGISTRY.call`` kept for the functional tests; the JSON-RPC
+    protocol itself now lives in ``core/mcp.py`` (``handle_request`` /
+    ``serve_stdio``).
+    """
     return REGISTRY.call(tool, args)
-
-
-def _mcp_send(msg: dict) -> bool:
-    try:
-        sys.stdout.write(json.dumps(msg) + "\n")
-        sys.stdout.flush()
-        return True
-    except (BrokenPipeError, OSError):
-        return False
-
-
-def _mcp_serve_stdio() -> int:
-    """Newline-delimited JSON-RPC 2.0 MCP server on stdin/stdout."""
-    while True:
-        try:
-            line = sys.stdin.readline()
-        except (KeyboardInterrupt, OSError):
-            return 0
-        if not line:  # EOF
-            return 0
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            req = json.loads(line)
-        except json.JSONDecodeError:
-            if not _mcp_send({"jsonrpc": "2.0", "id": None,
-                              "error": {"code": -32700, "message": "parse error"}}):
-                return 0
-            continue
-        method = str(req.get("method", ""))
-        if "id" not in req:  # notification (e.g. notifications/initialized)
-            continue
-        resp = {"jsonrpc": "2.0", "id": req.get("id")}
-        if method == "initialize":
-            resp["result"] = {"protocolVersion": "2024-11-05",
-                              "capabilities": {"tools": {}},
-                              "serverInfo": {"name": "boost", "version": __version__}}
-        elif method == "ping":
-            resp["result"] = {}
-        elif method == "tools/list":
-            resp["result"] = {"tools": _MCP_TOOLS}
-        elif method == "tools/call":
-            params = req.get("params") or {}
-            tool = str(params.get("name", ""))
-            try:
-                text, is_err = _mcp_tool(tool, params.get("arguments") or {})
-            except BoostError as e:
-                text = "Error: %s" % e.message + ("\nhint: %s" % e.hint if e.hint else "")
-                is_err = True
-            except Exception as e:  # noqa: BLE001 — server must not die
-                text, is_err = "Error: %s" % e, True
-            if text is None:
-                resp["error"] = {"code": -32602, "message": "unknown tool %r" % tool}
-            else:
-                resp["result"] = {"content": [{"type": "text", "text": text}]}
-                if is_err:
-                    resp["result"]["isError"] = True
-        else:
-            resp["error"] = {"code": -32601, "message": "method not found: %s" % method}
-        if not _mcp_send(resp):
-            return 0
 
 
 def cmd_mcp(argv) -> int:
@@ -1100,7 +924,7 @@ def cmd_mcp(argv) -> int:
     args = p.parse_args(argv)
 
     if args.stdio:
-        return _mcp_serve_stdio()
+        return mcp.serve_stdio(REGISTRY, version=__version__)
 
     shim = paths.launcher()
     if args.action == "register":
