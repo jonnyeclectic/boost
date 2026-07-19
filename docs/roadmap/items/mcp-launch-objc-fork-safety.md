@@ -2,14 +2,14 @@
 id: mcp-launch-objc-fork-safety
 board: code
 section: compat
-status: planned
+status: inflight
 category: Compatibility · macOS
 complexity: S
 impact: Med
 wow: 3
 note: OBJC_DISABLE_INITIALIZE_FORK_SAFETY
 order: 9
-owner:
+owner: loop/mcp-fork-safety
 pr:
 title: Harden <code>boost mcp</code> launch against macOS Obj-C fork aborts
 ---
