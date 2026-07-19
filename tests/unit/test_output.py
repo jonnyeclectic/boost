@@ -665,6 +665,121 @@ class TestTable:
         assert capsys.readouterr().out == "1  22.5\n"
 
 
+class TestRpad:
+    def test_pads_left_to_visible_width(self):
+        assert output._rpad("42", 5) == "   42"
+
+    def test_no_pad_when_already_wide(self):
+        assert output._rpad("12345", 5) == "12345"
+
+    def test_uses_visible_width_with_color(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        colored = output.aurora("7", "cyan")            # visible width 1
+        assert output._rpad(colored, 3) == "  " + colored
+
+
+class TestNumericCol:
+    def test_all_integers_is_numeric(self):
+        assert output._numeric_col(["1", "22", "300"]) is True
+
+    def test_floats_and_negatives_are_numeric(self):
+        assert output._numeric_col(["-1", "2.5", "0"]) is True
+
+    def test_blanks_are_ignored(self):
+        assert output._numeric_col(["1", "", "3"]) is True
+
+    def test_all_blank_is_not_numeric(self):
+        # a column of only blanks has nothing to right-align.
+        assert output._numeric_col(["", "  ", ""]) is False
+
+    def test_any_text_makes_it_non_numeric(self):
+        assert output._numeric_col(["1", "2x", "3"]) is False
+
+    def test_version_strings_are_not_numeric(self):
+        assert output._numeric_col(["v1", "1.2.3", "8/10"]) is False
+
+    def test_numeric_measured_ignoring_color(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        assert output._numeric_col([output.aurora("5", "green"), "10"]) is True
+
+
+class TestClipVisible:
+    def test_noop_when_fits(self):
+        assert output._clip_visible("hello", 5) == "hello"
+
+    def test_truncates_with_ellipsis(self):
+        assert output._clip_visible("hello world", 8) == "hello w…"
+
+    def test_zero_width_is_empty(self):
+        assert output._clip_visible("hello", 0) == ""
+
+    def test_preserves_color_and_closes_with_reset(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        colored = output.aurora("abcdef", "cyan")       # visible width 6
+        clipped = output._clip_visible(colored, 4)
+        assert output.visible_len(clipped) == 4          # 3 chars + ellipsis
+        assert clipped.endswith(output.RESET)
+        assert "abc…" in output._ANSI_RE.sub("", clipped)
+
+    def test_clipped_visible_width_never_exceeds_target(self):
+        for w in range(1, 10):
+            assert output.visible_len(output._clip_visible("abcdefghij", w)) <= w
+
+
+class TestFitWidths:
+    def test_no_shrink_when_it_fits(self):
+        assert output._fit_widths([3, 4], [False, True], avail=80) == [3, 4]
+
+    def test_shrinks_widest_text_column(self):
+        # 20 + 2(sep) + 5 = 27 > 20 -> the 20-wide text col shrinks to 13.
+        assert output._fit_widths([20, 5], [False, True], avail=20) == [13, 5]
+
+    def test_never_shrinks_numeric_column(self):
+        # only the text col may give; the numeric col holds at 10.
+        out_w = output._fit_widths([10, 10], [False, True], avail=8)
+        assert out_w[1] == 10 and out_w[0] < 10
+
+    def test_stops_at_floor_when_unfittable(self):
+        # both text cols bottom out at the floor instead of looping forever.
+        assert output._fit_widths([9, 9], [False, False], avail=1,
+                                  floor=1) == [1, 1]
+
+    def test_empty_widths_returns_empty(self):
+        assert output._fit_widths([], [], avail=80) == []
+
+
+class TestTableWidthAware:
+    @pytest.fixture(autouse=True)
+    def plain(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+
+    def test_numeric_column_is_right_aligned(self, capsys, monkeypatch):
+        monkeypatch.setattr(output, "term_width", lambda: 80)
+        output.table([("alpha", "5"), ("b", "100")], headers=("NAME", "N"))
+        # the count column is right-justified so 5 and 100 share a right edge.
+        assert capsys.readouterr().out == (
+            "NAME     N\n"
+            "alpha    5\n"
+            "b      100\n")
+
+    def test_overflow_shrinks_text_not_numeric(self, capsys, monkeypatch):
+        monkeypatch.setattr(output, "term_width", lambda: 24)
+        long = "K-Dense-AI/claude-scientific-skills"
+        output.table([(long, "3")], headers=("NAME", "N"))
+        line = capsys.readouterr().out.splitlines()[1]
+        assert "…" in line                       # text column was clipped
+        assert line.rstrip().endswith("3")        # the count survived intact
+        assert output.visible_len(line) <= 24
+
+    def test_wide_table_stays_within_terminal(self, capsys, monkeypatch):
+        monkeypatch.setattr(output, "term_width", lambda: 40)
+        rows = [("a-really-long-repository-name-here", "9",
+                 "https://example.com/some/deep/path")]
+        output.table(rows, headers=("NAME", "N", "URL"))
+        for line in capsys.readouterr().out.splitlines():
+            assert output.visible_len(line) <= 40
+
+
 class TestConfirm:
     def test_assume_yes_env_wins(self, monkeypatch):
         monkeypatch.setenv("BOOST_ASSUME_YES", "1")

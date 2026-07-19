@@ -323,23 +323,104 @@ def _pad(cell: str, width: int) -> str:
     return cell + " " * (width - visible_len(cell))
 
 
+def _rpad(cell: str, width: int) -> str:
+    """Right-justify by *visible* width — the numeric-column counterpart to
+    _pad, so counts line up on their ones digit like tabular figures."""
+    return " " * (width - visible_len(cell)) + cell
+
+
+_NUMERIC_RE = re.compile(r"-?\d+(?:\.\d+)?")
+
+
+def _numeric_col(cells) -> bool:
+    """True when every non-empty cell in a column is a plain number, so the
+    column reads as a count and should be right-aligned. Blank cells are
+    ignored; a column of only blanks is not numeric."""
+    seen = False
+    for cell in cells:
+        v = _ANSI_RE.sub("", str(cell)).strip()
+        if v == "":
+            continue
+        seen = True
+        if not _NUMERIC_RE.fullmatch(v):
+            return False
+    return seen
+
+
+def _clip_visible(s: str, width: int, ellipsis: str = "…") -> str:
+    """Truncate to `width` *visible* columns, preserving ANSI color runs and
+    closing any open color with a RESET. A no-op when the cell already fits."""
+    if visible_len(s) <= width:
+        return s
+    if width <= 0:
+        return ""
+    keep = width - len(ellipsis) if width > len(ellipsis) else 0
+    out_chars, vis, i, had_escape = [], 0, 0, False
+    while i < len(s) and vis < keep:
+        m = _ANSI_RE.match(s, i)
+        if m:
+            out_chars.append(m.group(0))
+            had_escape = True
+            i = m.end()
+            continue
+        out_chars.append(s[i])
+        vis += 1
+        i += 1
+    result = "".join(out_chars) + ellipsis
+    if had_escape and not result.endswith(RESET):
+        result += RESET
+    return result
+
+
+def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1):
+    """Shrink the widest non-numeric column one step at a time until the row
+    fits `avail` columns (or nothing text-like is left to shrink). Numeric
+    columns are never squeezed — a truncated number is a wrong number."""
+    widths = list(widths)
+    if not widths:
+        return widths
+    text_cols = [i for i, is_num in enumerate(numeric) if not is_num]
+
+    def total():
+        return sum(widths) + sep * (len(widths) - 1)
+
+    while total() > avail:
+        shrinkable = [i for i in text_cols if widths[i] > floor]
+        if not shrinkable:
+            break
+        widths[max(shrinkable, key=lambda i: widths[i])] -= 1
+    return widths
+
+
 def table(rows, headers=None) -> None:
     """Print an aligned table. rows: list of tuples of strings.
 
     Column widths are measured by visible width (ignoring ANSI color codes),
-    so colored cells line up the same as plain ones.
+    so colored cells line up the same as plain ones. The table is width-aware:
+    numeric columns are right-aligned, and when a row would overflow the
+    terminal the widest text column is shrunk (its cells clipped with an
+    ellipsis) so wide catalogs stay on one line instead of wrapping.
     """
     rows = [[str(x) for x in r] for r in rows]
     all_rows = ([list(map(str, headers))] if headers else []) + rows
     if not all_rows:
         return
+    ncols = max(len(r) for r in all_rows)
     widths = [max(visible_len(r[i]) for r in all_rows if i < len(r))
-              for i in range(max(len(r) for r in all_rows))]
+              for i in range(ncols)]
+    numeric = [_numeric_col([r[i] for r in rows if i < len(r)])
+               for i in range(ncols)]
+    widths = _fit_widths(widths, numeric, term_width())
+
+    def fmt(cell: str, i: int) -> str:
+        cell = _clip_visible(cell, widths[i])
+        return _rpad(cell, widths[i]) if numeric[i] else _pad(cell, widths[i])
+
     if headers:
-        line = "  ".join(_pad(str(h), widths[i]) for i, h in enumerate(headers))
-        print(c(line, BOLD))
+        line = "  ".join(fmt(str(h), i) for i, h in enumerate(headers))
+        print(c(line.rstrip(), BOLD))
     for r in rows:
-        print("  ".join(_pad(cell, widths[i]) for i, cell in enumerate(r)).rstrip())
+        print("  ".join(fmt(cell, i) for i, cell in enumerate(r)).rstrip())
 
 
 def confirm(prompt: str, default: bool = False) -> bool:
