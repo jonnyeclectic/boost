@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from . import config
+from . import config, nethttp
 
 API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -93,7 +93,7 @@ def _ask_api(prompt: str, system: Optional[str], model: str,
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  fixed https endpoint
+        with nethttp.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode())
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
         return None

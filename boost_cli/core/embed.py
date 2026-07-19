@@ -16,6 +16,8 @@ import urllib.error
 import urllib.request
 from typing import List, Optional
 
+from . import nethttp
+
 VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
 OPENAI_URL = "https://api.openai.com/v1/embeddings"
 
@@ -96,7 +98,7 @@ def _post(url: str, key: str, payload: dict, timeout: int) -> Optional[dict]:
         "Content-Type": "application/json",
     })
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  fixed https endpoint
+        with nethttp.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
     except (urllib.error.URLError, OSError, ValueError):
         return None
