@@ -115,7 +115,7 @@
   <section class="block reveal">
     <div class="stats">
       <!-- ROADMAP:stats -->
-      <div class="stat"><b>10</b><span>Shipped</span></div>
+      <div class="stat"><b>11</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
       <div class="stat"><b>89</b><span>Loop finds</span></div>
@@ -223,6 +223,28 @@
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">7 branches · 88%→100%</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
+        <h3>Extract MCP + HTTP servers out of <code>configuration.py</code></h3>
+        <p>~200 lines implementing a full HTTP catalog server <b>and</b> a JSON-RPC 2.0 MCP
+server lived inside the "configuration" command module — nearly untestable in
+place. The JSON-RPC protocol now lives in <code>core/mcp.py</code> as a <em>pure</em>
+<code>handle_request(req, *, version, registry)</code> plus a
+<code>serve_stdio()</code> loop with injectable stdin/stdout; the HTTP server
+moved to a new <code>core/serve.py</code> with a pure <code>route()</code>
+function, <code>serve_page()</code>/<code>skill_text()</code>, and
+<code>serve_http()</code>. <code>cmd_serve</code> and <code>cmd_mcp --stdio</code>
+became thin wrappers. Behavior is preserved exactly (the full-server and
+stdio-protocol functional tests pass unchanged) and the extracted core is pinned
+by new unit tests covering every branch.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">two servers now testable in core</span>
         </div>
       </article>
 
@@ -459,17 +481,6 @@
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med-High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-        </div>
-      </article>
-
-      <article class="cap rcard">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Tech-debt</span></div>
-        <h3>Extract MCP + HTTP servers out of <code>configuration.py</code></h3>
-        <p>~290 lines implement a full HTTP catalog server <b>and</b> a JSON-RPC 2.0 MCP server — with search/install/doctor dispatch that duplicates the CLI — inside a "configuration" command module (<code>commands/configuration.py:741–1028</code>). Move to <code>core/mcp.py</code> / <code>core/serve.py</code>, leaving thin wrappers. It's the biggest driver of the file's 1,099 lines and nearly untestable in place.</p>
-        <div class="meta">
-          <span class="m">Complexity <b>L</b></span>
-          <span class="m hi">Impact <b>High</b></span>
-          <span class="m">Wow <b class="wow">★★★★</b></span>
         </div>
       </article>
 
