@@ -53,19 +53,31 @@ def serve_page() -> str:
                rows or "<tr><td colspan='3' class='dim'>nothing installed</td></tr>"))
 
 
+def _is_within(base, target) -> bool:
+    """True when target resolves inside base (or equals base)."""
+    try:
+        base_r = base.resolve()
+        target_r = target.resolve()
+    except OSError:
+        return False
+    return base_r == target_r or base_r in target_r.parents
+
+
 def skill_text(name: str) -> Optional[str]:
     """SKILL.md text for an installed skill, else from a tap. None if unknown."""
     if not SKILL_NAME_RE.fullmatch(name):
         return None
-    fp = store.skill_store_dir(name) / "SKILL.md"
-    if fp.is_file():
+    base = store.skill_store_dir(name)
+    fp = base / "SKILL.md"
+    if _is_within(base, fp) and fp.is_file():
         return fp.read_text(encoding="utf-8", errors="replace")
     for e in catalog.find(name):
         try:
-            fp = registry.get(e["tap"]).path / e["skill_md"]
+            tap_base = registry.get(e["tap"]).path
+            fp = tap_base / e["skill_md"]
         except BoostError:
             continue
-        if fp.is_file():
+        if _is_within(tap_base, fp) and fp.is_file():
             return fp.read_text(encoding="utf-8", errors="replace")
     return None
 
