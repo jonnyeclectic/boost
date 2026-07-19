@@ -21,7 +21,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from ..errors import BoostError
 from . import frontmatter, gitutil, paths, registry, util
@@ -167,15 +167,49 @@ def rebuild_tap(tap: "registry.Tap") -> List[dict]:
         "commit": gitutil.head_commit(tap.path),
         "skills": entries,
     }, indent=1))
+    # Drop the mtime-keyed cache so a rebuild is visible to an immediately
+    # following load even when the filesystem mtime granularity is coarse.
+    _ENTRY_CACHE.pop(str(tap.cache_file), None)
     return entries
 
 
+# Entry-set cache, keyed on each tap cache file's (mtime_ns, size) stamp. The
+# BM25 index is mtime-cached the same way (rag._load_raw); without this, every
+# search reparses every tap cache. Entries are treated read-only by callers, so
+# the cached list is shared by reference (matching the index cache). Keying on
+# nanosecond mtime + size catches rewrites a bare second-resolution mtime would
+# miss.
+_ENTRY_CACHE: Dict[str, Tuple[Tuple[int, int], List[dict]]] = {}
+
+
+def _cached_tap(tap: "registry.Tap") -> Optional[List[dict]]:
+    """Memoized ``skills`` for a tap's cache file, or ``None`` to force a
+    rebuild (file missing, unreadable, or corrupt JSON)."""
+    p = tap.cache_file
+    key = str(p)
+    try:
+        st = p.stat()
+    except OSError:
+        _ENTRY_CACHE.pop(key, None)
+        return None
+    stamp = (st.st_mtime_ns, st.st_size)
+    cached = _ENTRY_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    try:
+        skills = json.loads(p.read_text()).get("skills", [])
+    except (json.JSONDecodeError, OSError):
+        _ENTRY_CACHE.pop(key, None)
+        return None
+    _ENTRY_CACHE[key] = (stamp, skills)
+    return skills
+
+
 def load_tap(tap: "registry.Tap", rebuild: bool = False) -> List[dict]:
-    if not rebuild and tap.cache_file.exists():
-        try:
-            return json.loads(tap.cache_file.read_text()).get("skills", [])
-        except (json.JSONDecodeError, OSError):
-            pass
+    if not rebuild:
+        cached = _cached_tap(tap)
+        if cached is not None:
+            return cached
     if tap.is_cloned:
         return rebuild_tap(tap)
     return []

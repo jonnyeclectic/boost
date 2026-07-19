@@ -345,6 +345,50 @@ class TestTapCaches:
         assert catalog.load_tap(registry.Tap(name="fake", url="")) == []
 
 
+class TestEntrySetCache:
+    """load_tap memoizes parsed skills on the cache file's (mtime_ns, size)
+    stamp, so repeated searches don't re-parse every tap cache."""
+
+    def test_unchanged_cache_returns_memoized_object(self, sandbox):
+        paths.ensure_dirs()
+        tap = registry.Tap(name="fake", url="")
+        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}))
+        first = catalog.load_tap(tap)
+        second = catalog.load_tap(tap)
+        # A cache hit returns the memoized list itself; a re-parse would build a
+        # fresh list, so identity proves the second call did not touch disk.
+        assert first == [{"name": "s1"}]
+        assert second is first
+
+    def test_content_change_invalidates_cache(self, sandbox):
+        paths.ensure_dirs()
+        tap = registry.Tap(name="fake", url="")
+        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}))
+        assert catalog.load_tap(tap) == [{"name": "s1"}]
+        # New content ⇒ different size ⇒ new stamp ⇒ the cache must re-read.
+        tap.cache_file.write_text(
+            json.dumps({"skills": [{"name": "s1"}, {"name": "s2"}]}))
+        assert catalog.load_tap(tap) == [{"name": "s1"}, {"name": "s2"}]
+
+    def test_rebuild_pops_stale_memo(self, sandbox, fixture_tap_src):
+        tap = registry.add(str(fixture_tap_src))
+        catalog.rebuild_tap(tap)          # write the cache file
+        catalog.load_tap(tap)             # read + memoize it
+        assert str(tap.cache_file) in catalog._ENTRY_CACHE
+        catalog.rebuild_tap(tap)          # must evict the now-stale memo
+        assert str(tap.cache_file) not in catalog._ENTRY_CACHE
+
+    def test_missing_cache_file_evicts_stamp(self, sandbox):
+        paths.ensure_dirs()
+        tap = registry.Tap(name="fake", url="")
+        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}))
+        assert catalog.load_tap(tap) == [{"name": "s1"}]
+        assert str(tap.cache_file) in catalog._ENTRY_CACHE
+        tap.cache_file.unlink()
+        assert catalog.load_tap(tap) == []  # no file, uncloned
+        assert str(tap.cache_file) not in catalog._ENTRY_CACHE
+
+
 class TestAllEntriesAndFind:
     def test_all_entries_config_order(self, sandbox):
         _fake_taps(
