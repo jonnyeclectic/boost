@@ -13,7 +13,7 @@ import types
 
 import pytest
 
-from boost_cli.core import paths, util
+from boost_cli.core import output, paths, util
 
 
 def _vec_loadable() -> bool:
@@ -789,12 +789,16 @@ class TestTrending:
         assert "brainstorming" not in r.out
 
     def test_long_description_is_clipped(self, boost, tapped, monkeypatch):
-        # D23: description column must not dump raw — it clips to the width.
+        # D23/D24: at a narrow width the table clips wide text columns to fit
+        # one line rather than wrapping — a recognizable name prefix and an
+        # ellipsis survive, and no rendered row exceeds the terminal.
         boost("install", "brainstorming")
         monkeypatch.setenv("COLUMNS", "40")
         r = boost("trending")
-        assert "brainstorming" in r.out
+        assert "brainstor" in r.out
         assert "…" in r.out
+        for line in r.out.splitlines():
+            assert output.visible_len(line) <= 40
 
 
 # ---------------------------------------------------------------- stats
