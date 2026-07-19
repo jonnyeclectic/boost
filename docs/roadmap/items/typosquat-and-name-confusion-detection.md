@@ -2,15 +2,15 @@
 id: typosquat-and-name-confusion-detection
 board: code
 section: trust
-status: planned
+status: shipped
 category: Security · Registry
 complexity: M
 impact: Med
 wow: 4
 note: edit-distance guard
 order: 4
-owner:
-pr:
+owner: loop/typosquat-detect
+pr: 107
 title: Typosquat &amp; name-confusion detection
 ---
 The classic package-manager attack: a skill named one edit-distance from
