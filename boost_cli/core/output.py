@@ -112,6 +112,39 @@ def aurora(text: str, name: str, stream=None) -> str:
     return code + text + RESET
 
 
+# --------------------------------------------------------------------------- #
+# Semantic color roles — name the *intent* (accent / brand / success / warn /
+# danger / muted), never the raw code. Every surface resolves its color through
+# this one table, so a re-theme is a single edit here instead of a repo-wide
+# sweep, and each call site reads as meaning ("danger") rather than mechanics
+# ("RED"). Brand hues resolve through the Aurora palette (truecolor -> 16-color
+# -> plain); danger/muted map to base SGR attributes that have no Aurora token.
+# --------------------------------------------------------------------------- #
+ROLES = {
+    "accent":  ("aurora", "cyan"),
+    "brand":   ("aurora", "violet"),
+    "success": ("aurora", "green"),
+    "warn":    ("aurora", "yellow"),
+    "danger":  ("sgr", RED),
+    "muted":   ("sgr", DIM),
+}
+
+
+def role(text: str, name: str, bold: bool = False, stream=None) -> str:
+    """Paint text by semantic role instead of a raw color code.
+
+    Roles resolve through ROLES so re-theming is a one-file edit; they degrade
+    truecolor -> 16-color -> plain exactly like the rest of this module. Pass
+    bold=True for an emphasized variant (the weight, like color, is dropped
+    when color is off).
+    """
+    if color_level(stream) == 0:
+        return text
+    kind, value = ROLES[name]
+    painted = aurora(text, value, stream) if kind == "aurora" else value + text + RESET
+    return BOLD + painted if bold else painted
+
+
 def _lerp(a, b, t: float):
     return tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
 
@@ -141,11 +174,11 @@ def gradient(text: str, stream=None) -> str:
 
 
 def ok(msg: str) -> None:
-    print("  " + c("✓", GREEN) + " " + msg)
+    print("  " + role("✓", "success") + " " + msg)
 
 
 def warn(msg: str) -> None:
-    print("  " + c("!", YELLOW) + " " + c(msg, YELLOW))
+    print("  " + role("!", "warn") + " " + role(msg, "warn"))
 
 
 def err(msg: str, hint: str | None = None) -> None:
@@ -159,19 +192,22 @@ def info(msg: str = "") -> None:
 
 
 def dim(msg: str) -> None:
-    print(c(msg, DIM))
+    print(role(msg, "muted"))
 
 
 def heading(msg: str) -> None:
-    # Brand the section marker in Aurora cyan (truecolor, 16-color fallback,
-    # plain under NO_COLOR) so every command's headers read as one system.
-    print(aurora("==>", "cyan") + " " + c(msg, BOLD))
+    # Brand the section marker in the accent role (Aurora cyan — truecolor,
+    # 16-color fallback, plain under NO_COLOR) so every command's headers read
+    # as one system.
+    print(role("==>", "accent") + " " + c(msg, BOLD))
 
 
 def verdict(ok: bool, msg: str) -> None:
-    """A dashboard verdict line: a green dot when healthy, amber when not."""
-    dot = aurora("●", "green" if ok else "yellow")
-    print("  " + dot + " " + c(msg, GREEN if ok else YELLOW))
+    """A dashboard verdict line: a success dot + text when healthy, warn when
+    not — both the dot and the message resolve through the same role so the
+    line reads as one on-theme unit."""
+    name = "success" if ok else "warn"
+    print("  " + role("●", name) + " " + role(msg, name))
 
 
 def term_width(default: int = 80) -> int:

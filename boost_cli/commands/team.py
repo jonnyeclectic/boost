@@ -133,13 +133,13 @@ def cmd_cohort(argv) -> int:
         for cname in targets:
             spec = cohorts[cname]
             if not _is_member(user, cname, spec["percent"]):
-                out.info(out.c("%s: not in the %d%% rollout — skipping"
-                               % (cname, spec["percent"]), out.DIM))
+                out.info(out.role("%s: not in the %d%% rollout — skipping"
+                               % (cname, spec["percent"]), "muted"))
                 continue
             out.heading("cohort %s" % cname)
             for skill in spec["skills"]:
                 if skill in installed:
-                    out.info(out.c("%s already installed" % skill, out.DIM))
+                    out.info(out.role("%s already installed" % skill, "muted"))
                     skipped += 1
                     continue
                 entry = _resolve_entry(skill)
@@ -163,14 +163,13 @@ def cmd_cohort(argv) -> int:
                      "created": spec.get("created", "")})
         rows.append((cname, ", ".join(spec["skills"]),
                      "%d%%" % spec["percent"],
-                     out.c("IN", out.GREEN) if member else out.c("out", out.DIM)))
+                     out.role("IN", "success") if member else out.role("out", "muted")))
     if args.json:
         print(json.dumps(data, indent=2))
         return 0
     if not rows:
         out.info("no cohorts defined")
-        out.info(out.c("create one: `boost cohort create pilot --skills tdd-workflow --percent 50`",
-                       out.DIM))
+        out.info(out.role("create one: `boost cohort create pilot --skills tdd-workflow --percent 50`", "muted"))
         return 0
     out.table(rows, headers=("COHORT", "SKILLS", "ROLLOUT", "YOU"))
     print()
@@ -237,7 +236,7 @@ def cmd_profile(argv) -> int:
             return 0
         if not profiles:
             out.info("no profiles saved")
-            out.info(out.c("snapshot the current setup: `boost profile save daily`", out.DIM))
+            out.info(out.role("snapshot the current setup: `boost profile save daily`", "muted"))
             return 0
         rows = [(pr["name"], str(pr["skills"]), util.rel_time(pr["saved"]))
                 for pr in profiles]
@@ -282,11 +281,11 @@ def cmd_profile(argv) -> int:
             out.ok("current setup matches profile %s" % args.name)
             return 0
         for n in missing:
-            out.info(out.c("+ %s" % n, out.GREEN) + out.c("  (in profile, not installed)", out.DIM))
+            out.info(out.role("+ %s" % n, "success") + out.role("  (in profile, not installed)", "muted"))
         for n in extras:
-            out.info(out.c("- %s" % n, out.RED) + out.c("  (installed, not in profile)", out.DIM))
+            out.info(out.role("- %s" % n, "danger") + out.role("  (installed, not in profile)", "muted"))
         for n in changed:
-            out.info(out.c("~ %s" % n, out.YELLOW) + out.c("  (version differs)", out.DIM))
+            out.info(out.role("~ %s" % n, "warn") + out.role("  (version differs)", "muted"))
         return 0
 
     if args.action == "delete":
@@ -407,7 +406,7 @@ def cmd_protocol(argv) -> int:
             out.info("  1. Automator → New → Application → 'Run Shell Script'")
             out.info('  2. script: %s "$1"   (pass input: as arguments)' % _tilde(script))
             out.info("  3. save as Boost.app, then add CFBundleURLTypes for 'boost' to its Info.plist")
-            out.info(out.c("  (or: brew install duti && duti -s <bundle-id> boost)", out.DIM))
+            out.info(out.role("  (or: brew install duti && duti -s <bundle-id> boost)", "muted"))
         elif system == "Linux":
             desktop = _desktop_file()
             desktop.parent.mkdir(parents=True, exist_ok=True)
@@ -457,8 +456,8 @@ def cmd_protocol(argv) -> int:
 
 # ---------------------------------------------------------------- pulse
 
-_ACTION_COLOR = {"install": out.GREEN, "uninstall": out.RED,
-                 "evolve": out.YELLOW, "edit": out.YELLOW}
+_ACTION_ROLE = {"install": "success", "uninstall": "danger",
+                "evolve": "warn", "edit": "warn"}
 
 
 def cmd_pulse(argv) -> int:
@@ -481,17 +480,17 @@ def cmd_pulse(argv) -> int:
         return 0
     for e in events:
         action = e.get("action", "?")
-        color = _ACTION_COLOR.get(action, out.CYAN)
+        action_role = _ACTION_ROLE.get(action, "accent")
         extras = {k: v for k, v in e.items()
                   if k not in ("ts", "user", "action", "subject")}
         extra_s = ("  " + " ".join("%s=%s" % kv for kv in sorted(extras.items()))
                    if extras else "")
         print("  %s  %s  %s  %s%s" % (
             util.rel_time(e.get("ts", "")).rjust(7),
-            out.c(e.get("user", "?").ljust(10), out.CYAN),
-            out.c(action.ljust(11), color),
+            out.role(e.get("user", "?").ljust(10), "accent"),
+            out.role(action.ljust(11), action_role),
             out.c(e.get("subject", ""), out.BOLD),
-            out.c(extra_s, out.DIM)))
+            out.role(extra_s, "muted")))
     print()
     out.dim("local journal · share it with your team via `boost onboard`")
     return 0
@@ -565,12 +564,12 @@ def cmd_replay(argv) -> int:
             out.ok("current state matches this snapshot")
             return 0
         for n in added:
-            out.info(out.c("+ %s" % n, out.GREEN) + out.c("  added since", out.DIM))
+            out.info(out.role("+ %s" % n, "success") + out.role("  added since", "muted"))
         for n in removed:
-            out.info(out.c("- %s" % n, out.RED) + out.c("  removed since", out.DIM))
+            out.info(out.role("- %s" % n, "danger") + out.role("  removed since", "muted"))
         for n in changed:
-            out.info(out.c("~ %s  %s → %s" % (n, snap_skills[n].get("version"),
-                                              current[n].get("version")), out.YELLOW))
+            out.info(out.role("~ %s  %s → %s" % (n, snap_skills[n].get("version"),
+                                              current[n].get("version")), "warn"))
         return 0
 
     # rollback

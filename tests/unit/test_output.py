@@ -169,6 +169,65 @@ class TestAurora:
             output.MAGENTA + "x" + output.RESET)
 
 
+class TestRoles:
+    def _truecolor(self, monkeypatch):
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+
+    def test_role_names_are_the_documented_six(self):
+        assert set(output.ROLES) == {
+            "accent", "brand", "success", "warn", "danger", "muted"}
+
+    def test_brand_hues_resolve_through_aurora_tokens(self, monkeypatch):
+        # accent/brand/success/warn are the Aurora tokens, truecolor exact hex —
+        # proving the role table resolves through the palette, not raw copies.
+        self._truecolor(monkeypatch)
+        for role_name, token in (("accent", "cyan"), ("brand", "violet"),
+                                 ("success", "green"), ("warn", "yellow")):
+            r, g, b = output.TOKENS[token]
+            assert output.role("x", role_name) == (
+                output.rgb(r, g, b) + "x" + output.RESET)
+
+    def test_danger_is_base_red(self, monkeypatch):
+        # danger/muted have no Aurora token; they use base SGR attributes and
+        # so read identically on 16-color and truecolor terminals.
+        self._truecolor(monkeypatch)
+        assert output.role("x", "danger") == output.RED + "x" + output.RESET
+
+    def test_muted_is_base_dim(self, monkeypatch):
+        self._truecolor(monkeypatch)
+        assert output.role("x", "muted") == output.DIM + "x" + output.RESET
+
+    def test_aurora_role_degrades_to_16color(self, monkeypatch):
+        # a TTY without COLORTERM is level 1 -> the token's 16-color fallback.
+        monkeypatch.delenv("COLORTERM", raising=False)
+        assert output.role("x", "accent", stream=FakeStream(tty=True)) == (
+            output.CYAN + "x" + output.RESET)
+
+    def test_plain_when_color_off(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        for role_name in output.ROLES:
+            assert output.role("x", role_name,
+                               stream=FakeStream(tty=True)) == "x"
+
+    def test_bold_prepends_bold(self, monkeypatch):
+        self._truecolor(monkeypatch)
+        r, g, b = output.TOKENS["yellow"]
+        assert output.role("x", "warn", bold=True) == (
+            output.BOLD + output.rgb(r, g, b) + "x" + output.RESET)
+
+    def test_bold_on_sgr_role(self, monkeypatch):
+        self._truecolor(monkeypatch)
+        assert output.role("x", "danger", bold=True) == (
+            output.BOLD + output.RED + "x" + output.RESET)
+
+    def test_bold_dropped_when_color_off(self, monkeypatch):
+        # the weight, like color, is dropped when color is off — no stray escape.
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.role("x", "warn", bold=True,
+                           stream=FakeStream(tty=True)) == "x"
+
+
 class TestTokens:
     def test_known_hexes(self):
         assert output.TOKENS["cyan"] == (0x22, 0xd3, 0xee)
@@ -266,16 +325,18 @@ class TestHeadingAndVerdictColor:
     def test_verdict_ok_green_dot_and_green_text(self, monkeypatch, capsys):
         self._force_truecolor(monkeypatch)
         output.verdict(True, "healthy")
-        # aurora green dot (#4ade80) + green message text
+        # success role for both dot and text -> aurora green (#4ade80) truecolor
         assert capsys.readouterr().out == (
-            "  \033[38;2;74;222;128m●\033[0m \033[32mhealthy\033[0m\n")
+            "  \033[38;2;74;222;128m●\033[0m "
+            "\033[38;2;74;222;128mhealthy\033[0m\n")
 
     def test_verdict_bad_yellow_dot_and_yellow_text(self, monkeypatch, capsys):
         self._force_truecolor(monkeypatch)
         output.verdict(False, "1 issue")
-        # aurora yellow dot (#facc15) + yellow message text
+        # warn role for both dot and text -> aurora yellow (#facc15) truecolor
         assert capsys.readouterr().out == (
-            "  \033[38;2;250;204;21m●\033[0m \033[33m1 issue\033[0m\n")
+            "  \033[38;2;250;204;21m●\033[0m "
+            "\033[38;2;250;204;21m1 issue\033[0m\n")
 
 
 class TestTermWidth:

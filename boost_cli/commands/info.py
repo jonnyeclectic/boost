@@ -78,8 +78,8 @@ def _file_count(d: Path) -> int:
 
 
 def _mark(installed: bool) -> str:
-    return (out.c("✓ installed", out.GREEN) if installed
-            else out.c("✗ not installed", out.RED))
+    return (out.role("✓ installed", "success") if installed
+            else out.role("✗ not installed", "danger"))
 
 
 def _print_wrapped(text: str) -> None:
@@ -122,7 +122,7 @@ def cmd_list(argv):
         flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                 ([out.aurora("quarantined", "pink")] if e.get("quarantined")
                  else []) + \
-                [out.c("#" + t, out.DIM) for t in e.get("tags") or []]
+                [out.role("#" + t, "muted") for t in e.get("tags") or []]
         rows.append((name, e.get("version", "?"), e.get("tap", "?"),
                      "·".join(a.split("-")[0] for a in e.get("agents") or []),
                      " ".join(flags)))
@@ -204,8 +204,8 @@ def cmd_info(argv):
         out.kv("version", inst_v)
         latest = str((cat or {}).get("version") or "")
         if cat and latest != inst_v:
-            out.kv("latest", out.c(latest, out.YELLOW, out.BOLD)
-                   + out.c("  (update available)", out.DIM))
+            out.kv("latest", out.role(latest, "warn", bold=True)
+                   + out.role("  (update available)", "muted"))
     else:
         out.kv("latest", str(cat.get("version", "?")))
     out.kv("tap", (lock or cat).get("tap", "?"))
@@ -251,10 +251,10 @@ def cmd_cat(argv):
         return 0
     block, body = frontmatter.split(text)
     if block:
-        print(out.c("---", out.DIM))
+        print(out.role("---", "muted"))
         for line in block.splitlines():
-            print(out.c(line, out.DIM))
-        print(out.c("---", out.DIM))
+            print(out.role(line, "muted"))
+        print(out.role("---", "muted"))
         print()
     for line in body.splitlines():
         print(out.c(line, out.BOLD) if re.match(r"^#{1,6} ", line) else line)
@@ -297,7 +297,7 @@ def cmd_edit(argv):
 
 
 def _inline(s: str) -> str:
-    s = re.sub(r"`([^`]+)`", lambda m: out.c(m.group(1), out.CYAN), s)
+    s = re.sub(r"`([^`]+)`", lambda m: out.role(m.group(1), "accent"), s)
     return re.sub(r"\*\*([^*]+)\*\*", lambda m: out.c(m.group(1), out.BOLD), s)
 
 
@@ -310,7 +310,7 @@ def _render_markdown(body: str) -> None:
             in_fence = not in_fence
             continue
         if in_fence:
-            print(out.c("    " + line, out.DIM))
+            print(out.role("    " + line, "muted"))
             prev_blank = False
             continue
         if not line:
@@ -323,12 +323,12 @@ def _render_markdown(body: str) -> None:
         if m:
             level, txt = len(m.group(1)), m.group(2)
             if level == 1:
-                print(out.c(txt, out.BOLD, out.YELLOW))
-                print(out.c("─" * min(len(txt), 60), out.DIM))
+                print(out.role(txt, "warn", bold=True))
+                print(out.role("─" * min(len(txt), 60), "muted"))
             elif level == 2:
                 print(out.c(txt, out.BOLD))
             else:
-                print(out.c(txt, out.BOLD, out.DIM))
+                print(out.role(txt, "muted", bold=True))
             continue
         m = re.match(r"^(\s*)[-*]\s+(.*)$", line)
         if m:
@@ -470,7 +470,7 @@ def cmd_log(argv):
     if not events:
         out.info("no activity yet")
         return 0
-    colors = {"install": out.GREEN, "uninstall": out.RED}
+    action_roles = {"install": "success", "uninstall": "danger"}
     w_time = max(len(util.rel_time(e.get("ts", ""))) for e in events)
     w_user = max(len(e.get("user", "?")) for e in events)
     for e in events:
@@ -478,7 +478,7 @@ def cmd_log(argv):
         out.info(("%s  %s  %s %s" % (
             util.rel_time(e.get("ts", "")).ljust(w_time),
             e.get("user", "?").ljust(w_user),
-            out.c(action, colors.get(action, out.CYAN)),
+            out.role(action, action_roles.get(action, "accent")),
             e.get("subject", ""))).rstrip())
     return 0
 
@@ -539,16 +539,16 @@ def cmd_deps(argv):
             return 1 if problems else 0
         out.info(out.c(args.name, out.BOLD))
         if not requires:
-            out.info("  requires: " + out.c("(none)", out.DIM))
+            out.info("  requires: " + out.role("(none)", "muted"))
         for r in requires:
             out.info("  requires: %s %s" % (r, _mark(r in inst)))
             for sub in _as_list((_skill_meta(r) or {}).get("requires")):
                 out.info("      ↳ %s %s" % (sub, _mark(sub in inst)))
         if not conflicts:
-            out.info("  conflicts: " + out.c("(none)", out.DIM))
+            out.info("  conflicts: " + out.role("(none)", "muted"))
         for c_name in conflicts:
-            state = (out.c("✗ installed (conflict!)", out.RED) if c_name in inst
-                     else out.c("not installed", out.DIM))
+            state = (out.role("✗ installed (conflict!)", "danger") if c_name in inst
+                     else out.role("not installed", "muted"))
             out.info("  conflicts: %s %s" % (c_name, state))
         return 1 if problems else 0
 
@@ -575,7 +575,7 @@ def cmd_deps(argv):
                  % (out.c(u["skill"], out.BOLD), u["requires"], _mark(False)))
     for a, b in pairs:
         out.info("%s %s %s" % (out.c(a, out.BOLD),
-                               out.c("conflicts with", out.RED), out.c(b, out.BOLD)))
+                               out.role("conflicts with", "danger"), out.c(b, out.BOLD)))
     if not unmet and not pairs:
         out.ok("no unmet requirements or conflicts across %d skill%s"
                % (len(inst), "" if len(inst) == 1 else "s"))
@@ -613,7 +613,7 @@ def cmd_tag(argv):
             return 0
         if not mapping:
             out.info("no tags yet")
-            out.info(out.c("hint: boost tag <skill> +mytag", out.DIM))
+            out.info(out.role("hint: boost tag <skill> +mytag", "muted"))
             return 0
         out.table([("#" + t, ", ".join(mapping[t])) for t in sorted(mapping)],
                   headers=("TAG", "SKILLS"))
@@ -649,6 +649,6 @@ def cmd_tag(argv):
     if args.json:
         print(json.dumps({"name": args.name, "tags": tags}, indent=2))
         return 0
-    shown = " ".join(out.c("#" + t, out.CYAN) for t in tags) or out.c("(no tags)", out.DIM)
+    shown = " ".join(out.role("#" + t, "accent") for t in tags) or out.role("(no tags)", "muted")
     (out.ok if changed else out.info)("%s  %s" % (args.name, shown))
     return 0

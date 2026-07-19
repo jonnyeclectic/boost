@@ -256,11 +256,11 @@
 </article>
 
 <article class="ritem" data-track="color" data-impact="med">
-  <div class="ritem-top"><span class="rid">BOOST-D04</span><span class="rstatus proposed">Proposed</span></div>
+  <div class="ritem-top"><span class="rid">BOOST-D04</span><span class="rstatus done">Shipped</span></div>
   <h4>Semantic color roles, not raw codes</h4>
-  <p>Commands scatter <code>out.c(x, out.YELLOW)</code> and <code>out.GREEN</code> literally throughout the command layer, so a palette change means a repo-wide sweep. Introduce named roles — <code>accent</code>, <code>brand</code>, <code>success</code>, <code>warn</code>, <code>danger</code>, <code>muted</code> — resolved through the palette. Re-theming becomes a one-file edit, and intent reads clearly at every call site.</p>
+  <p>Commands scattered <code>out.c(x, out.YELLOW)</code> and <code>out.GREEN</code> literally throughout the command layer, so a palette change meant a repo-wide sweep. Now a single <code>ROLES</code> table in <code>output.py</code> maps six named roles — <code>accent</code>, <code>brand</code>, <code>success</code>, <code>warn</code>, <code>danger</code>, <code>muted</code> — resolved through the Aurora palette (truecolor → 16-color → plain), and <code>out.role(text, name)</code> paints by intent. Every color call site across all eight command groups now reads as meaning, not mechanics; brand hues (accent/success/warn) upgraded from flat 16-color to on-theme truecolor in the process. Re-theming is a one-file edit.</p>
   <div class="rmeta"><span class="m-cat">color</span><span>Complexity S</span><span class="m-imp med">Impact Med</span><span class="m-wow">★★☆☆☆</span></div>
-  <div class="rref"><code>core/output.py · commands/*.py</code></div>
+  <div class="rref"><code>core/output.py:ROLES / role() · commands/*.py</code></div>
 </article>
       <!-- /ROADMAP:cards -->
 

@@ -113,13 +113,17 @@ class TestForcedColorOutput:
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
 
     def test_ok_exact_ansi(self, capsys):
+        # success role -> aurora green (#4ade80) truecolor under forced color
         out.ok("done")
-        assert capsys.readouterr().out == "  \033[32m✓\033[0m done\n"
+        assert capsys.readouterr().out == (
+            "  \033[38;2;74;222;128m✓\033[0m done\n")
 
     def test_warn_exact_ansi(self, capsys):
+        # warn role -> aurora yellow (#facc15) truecolor, marker and message
         out.warn("careful")
         assert capsys.readouterr().out == (
-            "  \033[33m!\033[0m \033[33mcareful\033[0m\n")
+            "  \033[38;2;250;204;21m!\033[0m "
+            "\033[38;2;250;204;21mcareful\033[0m\n")
 
     def test_err_exact_ansi(self, capsys):
         out.err("boom", hint="try x")
