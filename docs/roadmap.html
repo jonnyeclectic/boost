@@ -647,7 +647,7 @@ by new unit tests covering every branch.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Tech-debt</span></div>
         <h3>Reuse helpers; kill minor dead work</h3>
         <p><code>cmd_migrate</code> re-implements agent validation instead of calling <code>_check_agents</code>; <code>_user()</code> is copy-pasted between <code>configuration</code> and <code>team</code>; <code>cmd_simulate</code> parses the same frontmatter twice (<code>pkg.py:38,577 · configuration.py:39 · team.py:30</code>). Small, satisfying cleanups.</p>
         <div class="meta">

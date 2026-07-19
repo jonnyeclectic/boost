@@ -2,14 +2,14 @@
 id: reuse-helpers-kill-minor-dead-work
 board: code
 section: internals
-status: planned
+status: inflight
 category: Tech-debt
 complexity: S
 impact: Low
 wow: 1
 note: 
 order: 20
-owner:
+owner: loop/reuse-user-helper
 pr:
 title: Reuse helpers; kill minor dead work
 ---
