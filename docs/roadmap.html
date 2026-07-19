@@ -116,7 +116,7 @@
     <div class="stats">
       <!-- ROADMAP:stats -->
       <div class="stat"><b>14</b><span>Shipped</span></div>
-      <div class="stat"><b>1</b><span>Next up</span></div>
+      <div class="stat"><b>2</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
       <div class="stat"><b>90</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
@@ -387,6 +387,29 @@ by new unit tests covering every branch.</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=next -->
+      <article class="cap rcard">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Bug · UX</span></div>
+        <h3><code>browse</code> crashes when you pick a rule or workflow</h3>
+        <p><code>cmd_browse</code> lists <em>every</em> catalog entry — skills, rules
+<b>and</b> workflows (<code>commands/discovery.py:791</code>) — then calls
+<code>store.install(picked)</code> unconditionally
+(<code>discovery.py:804</code>). Only <code>skill</code> installs, so selecting a
+rule or workflow raises
+<code>… is a workflow, which boost indexes but cannot install yet</code> and the
+TUI exits with a fatal <code>Error:</code> after the user has already navigated
+and chosen. Reported from a real <code>boost browse</code> session on
+<code>AGENT-playbook-to-automated-agent-workflow</code>. Fix: keep non-installable
+kinds browsable but handle a non-skill pick gracefully (a friendly "search/tap
+only" message, stay put or exit 0) instead of crashing — mirror how
+<code>store.install</code> already distinguishes the three item kinds.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">user-reported</span>
+        </div>
+      </article>
+
       <article class="cap rcard">
         <div class="head"><span class="pill next">Next</span><span class="cat">Design</span></div>
         <h3>Reconcile the theme drift</h3>
