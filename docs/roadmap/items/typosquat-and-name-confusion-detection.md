@@ -2,14 +2,14 @@
 id: typosquat-and-name-confusion-detection
 board: code
 section: trust
-status: planned
+status: inflight
 category: Security · Registry
 complexity: M
 impact: Med
 wow: 4
 note: edit-distance guard
 order: 4
-owner:
+owner: loop/typosquat-detect
 pr:
 title: Typosquat &amp; name-confusion detection
 ---
