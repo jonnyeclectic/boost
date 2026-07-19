@@ -2,14 +2,14 @@
 id: extract-mcp-http-servers-out-of-configuration-py
 board: code
 section: internals
-status: next
+status: inflight
 category: Tech-debt
 complexity: L
 impact: High
 wow: 4
 note: 
 order: 5
-owner:
+owner: loop/extract-serve-mcp
 pr:
 title: Extract MCP + HTTP servers out of <code>configuration.py</code>
 ---

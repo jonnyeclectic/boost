@@ -463,7 +463,7 @@
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill next">Next</span><span class="cat">Tech-debt</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Tech-debt</span></div>
         <h3>Extract MCP + HTTP servers out of <code>configuration.py</code></h3>
         <p>~290 lines implement a full HTTP catalog server <b>and</b> a JSON-RPC 2.0 MCP server — with search/install/doctor dispatch that duplicates the CLI — inside a "configuration" command module (<code>commands/configuration.py:741–1028</code>). Move to <code>core/mcp.py</code> / <code>core/serve.py</code>, leaving thin wrappers. It's the biggest driver of the file's 1,099 lines and nearly untestable in place.</p>
         <div class="meta">
