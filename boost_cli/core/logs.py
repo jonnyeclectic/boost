@@ -36,6 +36,7 @@ import logging.handlers
 import os
 import platform
 import sys
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,6 +144,10 @@ def configure(verbose: bool = False, debug: bool = False,
         "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%SZ",
     )
+    # datefmt stamps a literal ``Z`` (UTC) suffix, so the timestamp must be
+    # rendered in UTC — otherwise ``%(asctime)s`` uses local time and every
+    # line is mislabelled by the machine's offset. gmtime keeps it honest.
+    fmt.converter = time.gmtime
 
     # File handler — always DEBUG, best-effort (never break the CLI over a log).
     if _file_enabled():

@@ -2,7 +2,7 @@
 id: log-timestamps-mislabeled-utc
 board: code
 section: health
-status: inflight
+status: shipped
 category: Observability · Diagnostics
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note: converter = time.gmtime
 order: 10
 owner: loop/utc-log-timestamps
-pr:
+pr: 104
 title: Log timestamps are local time mislabeled <code>Z</code>
 ---
 <code>core/logs.py</code> builds the <code>logging.Formatter</code> with

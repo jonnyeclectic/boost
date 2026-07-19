@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import pathlib
+import time
 
 import pytest
 
@@ -342,3 +344,37 @@ def test_doctor_reports_log_location(boost):
     boost("count")
     res = boost("doctor", expect=None)
     assert "diagnostic log at" in res.out
+
+
+def _file_formatter():
+    """The formatter attached to the configured file handler."""
+    for h in logs.get_logger().handlers:
+        if isinstance(h, logging.handlers.RotatingFileHandler):
+            return h.formatter
+    raise AssertionError("no file handler configured")
+
+
+class TestUtcTimestamps:
+    def test_formatter_uses_gmtime_converter(self, env):
+        # datefmt stamps a literal ``Z`` (UTC) suffix, so the converter MUST be
+        # gmtime; the default (localtime) would mislabel every line.
+        logs.configure()
+        assert _file_formatter().converter is time.gmtime
+
+    def test_asctime_is_utc_regardless_of_local_zone(self, env, monkeypatch):
+        # Force a non-UTC local zone; the rendered stamp must still be UTC.
+        if not hasattr(time, "tzset"):
+            pytest.skip("time.tzset unavailable on this platform")
+        monkeypatch.setenv("TZ", "America/New_York")  # UTC-5/-4, never UTC
+        time.tzset()
+        try:
+            logs.configure()
+            fmt = _file_formatter()
+            record = logging.LogRecord(
+                "boost", logging.INFO, __file__, 1, "msg", None, None
+            )
+            record.created = 0.0  # 1970-01-01T00:00:00Z
+            assert fmt.formatTime(record, fmt.datefmt) == "1970-01-01T00:00:00Z"
+        finally:
+            monkeypatch.delenv("TZ", raising=False)
+            time.tzset()
