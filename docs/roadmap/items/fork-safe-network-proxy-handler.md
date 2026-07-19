@@ -2,14 +2,14 @@
 id: fork-safe-network-proxy-handler
 board: code
 section: health
-status: planned
+status: inflight
 category: Reliability · Network
 complexity: S
 impact: Med
 wow: 3
 note: avoid macOS _scproxy Obj-C path
 order: 9
-owner:
+owner: loop/fork-safe-proxy
 pr:
 title: Fork-safe network layer — explicit <code>ProxyHandler</code>
 ---
