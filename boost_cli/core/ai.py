@@ -82,7 +82,7 @@ def _ask_api(prompt: str, system: Optional[str], model: str,
     }
     if system:
         body["system"] = system
-    req = urllib.request.Request(
+    req = urllib.request.Request(  # noqa: S310  API_URL is a hardcoded https endpoint
         API_URL,
         data=json.dumps(body).encode(),
         headers={
@@ -93,7 +93,7 @@ def _ask_api(prompt: str, system: Optional[str], model: str,
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  fixed https endpoint
             data = json.loads(resp.read().decode())
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
         return None

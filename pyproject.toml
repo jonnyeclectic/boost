@@ -59,9 +59,27 @@ boost_cli = ["data/*.json"]
 [tool.ruff]
 target-version = "py39"
 
+[tool.ruff.lint]
+# Turn on flake8-bandit (S) — Python SAST smells ruff's default E/F set is
+# blind to: shell=True, assert-as-runtime-check, tempfile.mktemp, unsafe
+# yaml.load, hardcoded secrets, weak hashing. Zero new tools.
+extend-select = ["S"]
+ignore = [
+    # boost is a CLI that shells out to git by design: every subprocess call
+    # passes an argument LIST (never a shell string) and resolves `git` via
+    # PATH on purpose, so these two fire only on safe, intentional code.
+    "S603",  # subprocess-without-shell-equals-true (list form is not injectable)
+    "S607",  # start-process-with-partial-path (`git` on PATH is deliberate)
+    # Best-effort cleanup/logging swallows are a pervasive, commented pattern
+    # (logger teardown, corrupt-lock preservation, the crash handler) where a
+    # raised exception would be worse than the one being swallowed.
+    "S110",  # try-except-pass
+]
+
 [tool.ruff.lint.per-file-ignores]
-# short throwaway names and lambda helpers are fine in tests
-"tests/*" = ["E741", "E731"]
+# short throwaway names and lambda helpers are fine in tests; asserts are the
+# whole point of a test suite, and tests legitimately open fixture URLs.
+"tests/*" = ["E741", "E731", "S101", "S310"]
 
 [tool.codespell]
 # Spell-check user-facing text (see `make lint`: boost_cli, docs, README).

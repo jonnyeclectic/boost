@@ -2,15 +2,15 @@
 id: security-linting-bandit-via-ruff-s-rules
 board: code
 section: health
-status: planned
+status: shipped
 category: Security · Vuln
 complexity: S
 impact: High
 wow: 3
-note: 0 new deps
+note: extend-select S; git/swallow rules ignored, real cases noqa'd
 order: 1
-owner:
-pr:
+owner: loop/bandit-s-rules
+pr: 99
 title: Security linting — <code>bandit</code> via ruff <code>S</code> rules
 ---
 Turn on the <em>flake8-bandit</em> (<code>S</code>) rule family already

@@ -771,8 +771,11 @@ def _snapshot_restore(snap_id: str) -> int:
                 child.unlink()
         try:
             tf.extractall(str(root), members=members, filter="data")
-        except TypeError:  # Python < 3.12
-            tf.extractall(str(root), members=members)
+        except TypeError:  # Python < 3.12: no data filter available
+            # snapshots are archives boost itself produced under the user's own
+            # store (never fetched from a remote), so this legacy-interpreter
+            # fallback restores a locally-trusted tar.
+            tf.extractall(str(root), members=members)  # noqa: S202
     for action in store.sync_apply(store.sync_plan()):
         out.ok(action)
     journal.log("snapshot-restore", snap_id)
