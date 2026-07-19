@@ -1,0 +1,19 @@
+# Golden stacks for boost's recommendation eval (Tier 2b).
+# One JSON object per line: {stack, relevant[], note}
+#   stack    - a detect_stack() result: {languages[], frameworks[], keywords[]}
+#   relevant - skill names that are a GOOD recommendation for this stack, drawn
+#              from the heuristic shortlist so both arms are judged on the same
+#              candidate pool. A lower bound (a good pick outside the set is not
+#              scored wrong). The sets deliberately EXCLUDE the off-topic noise
+#              each keyword search drags in (django in a Go list, javascript in
+#              a Java list, dragonruby in a Rails list) — skipping that noise is
+#              exactly what a good picker should do.
+#   note     - short human label.
+{"stack": {"languages": ["python"], "frameworks": ["fastapi"], "keywords": ["docker", "fastapi", "python"]}, "relevant": ["python-pro", "fastapi", "python", "python-312-fastapi-best-practices-cursorrules-prom", "python-fastapi-best-practices-cursorrules-prompt-f", "python-fastapi-scalable-api-cursorrules-prompt-fil", "cursorrules-file-cursor-ai-python-fastapi-api", "python-fastapi-cursorrules-prompt-file", "python-containerization-cursorrules-prompt-file"], "note": "python+fastapi+docker"}
+{"stack": {"languages": ["javascript", "typescript"], "frameworks": ["react"], "keywords": ["javascript", "react", "typescript"]}, "relevant": ["typescript-pro", "typescript", "javascript-pro", "react-typescript-nextjs-nodejs-cursorrules-prompt-", "typescript-nextjs-react-cursorrules-prompt-file", "typescript-nodejs-react-vite-cursorrules-prompt-fi", "nextjs-react-typescript-cursorrules-prompt-file", "react-redux-typescript-cursorrules-prompt-file"], "note": "react+typescript"}
+{"stack": {"languages": ["javascript"], "frameworks": ["express"], "keywords": ["express", "javascript"]}, "relevant": ["javascript-pro", "express", "javascript", "javascript-developer", "nodejs-mongodb-jwt-express-react-cursorrules-promp"], "note": "node+express"}
+{"stack": {"languages": ["go"], "frameworks": [], "keywords": ["docker", "go"]}, "relevant": ["golang-pro", "go", "go-servemux-rest-api-cursorrules-prompt-file", "go-backend-scalability-cursorrules-prompt-file", "docker"], "note": "go+docker"}
+{"stack": {"languages": ["rust"], "frameworks": [], "keywords": ["rust"]}, "relevant": ["rust-pro", "rust", "rust-engineer", "rust-expert", "rust-systems", "rust-actix", "rust-async-patterns", "rust-axum", "rust-cli-builder", "rust-general"], "note": "rust"}
+{"stack": {"languages": ["java"], "frameworks": ["spring"], "keywords": ["java", "spring"]}, "relevant": ["java-springboot-jpa-cursorrules-prompt-file", "java-pro", "java-architect", "java", "spring-boot-engineer", "java-developer", "springboot"], "note": "java+spring"}
+{"stack": {"languages": ["ruby"], "frameworks": ["rails"], "keywords": ["rails", "ruby"]}, "relevant": ["rails-expert", "ruby-pro", "ruby-expert", "ruby", "rails-backend-expert"], "note": "ruby+rails"}
+{"stack": {"languages": ["python"], "frameworks": ["django"], "keywords": ["ci", "django", "python"]}, "relevant": ["python-pro", "python-django-best-practices-cursorrules-prompt-fi", "python", "django", "python-containerization-cursorrules-prompt-file", "python-cursorrules-prompt-file-best-practices"], "note": "python+django+ci"}
