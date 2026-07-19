@@ -2,14 +2,14 @@
 id: cache-the-catalog-entry-set-across-rag-queries
 board: code
 section: internals
-status: planned
+status: inflight
 category: Performance
 complexity: M
 impact: Med
 wow: 3
 note: 
 order: 10
-owner:
+owner: loop/cache-entry-set
 pr:
 title: Cache the catalog entry-set across RAG queries
 ---

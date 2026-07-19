@@ -526,7 +526,7 @@ by new unit tests covering every branch.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Performance</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Performance</span></div>
         <h3>Cache the catalog entry-set across RAG queries</h3>
         <p><code>rag.retrieve()</code> calls <code>all_entries()</code>, which reads &amp; <code>json.loads</code> <b>every tap cache on every search</b> to build the live map (<code>rag.py:323 · catalog.py:166–181</code>) — the BM25 index is mtime-cached, the entry set is not. Memoize the entry set on cache mtime the same way.</p>
         <div class="meta">
