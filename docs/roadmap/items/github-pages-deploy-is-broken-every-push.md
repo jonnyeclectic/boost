@@ -1,20 +1,22 @@
 ---
 id: github-pages-deploy-is-broken-every-push
 board: code
-section: next
-status: next
+section: shipped
+status: shipped
 category: Bug · Infra
 complexity: S
 impact: High
 wow: 2
-note: docs site down
+note: root cause removed in #60
 order: 1
-owner:
-pr:
+owner: loop/roadmap-hygiene-stale-cards
+pr: 60
 title: GitHub Pages deploy is broken every push
 ---
-Root cause found: a bogus <code>mutants/None</code> gitlink (a stray
-           mutmut artifact) was committed with no <code>.gitmodules</code> entry,
-           so Pages' submodule checkout aborts with
-           <code>fatal: No url found for submodule path 'mutants/None'</code>.
-           Fix: stop tracking <code>mutants/</code>.
+Fixed by <b>#60</b>: the bogus <code>mutants/None</code> gitlink (a stray mutmut
+artifact with no <code>.gitmodules</code> entry) that made Pages' submodule
+checkout abort with <code>fatal: No url found for submodule path 'mutants/None'</code>
+is gone. Verified: the Pages "build and deployment" now completes successfully and
+the site serves — the boards live at
+<code>jonnyeclectic.github.io/boost/docs/roadmap.html</code> (200), since Pages
+publishes from the repo root.
