@@ -2,14 +2,14 @@
 id: browse-crashes-selecting-a-rule-or-workflow
 board: code
 section: next
-status: next
+status: inflight
 category: Bug · UX
 complexity: S
 impact: Med
 wow: 2
 note: user-reported
 order: 3
-owner:
+owner: loop/fix-browse-crash
 pr:
 title: <code>browse</code> crashes when you pick a rule or workflow
 ---
