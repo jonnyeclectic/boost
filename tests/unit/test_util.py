@@ -27,6 +27,18 @@ class TestNowIso:
         assert delta < 5
 
 
+class TestUser:
+    def test_returns_getpass_user(self, monkeypatch):
+        monkeypatch.setattr(util.getpass, "getuser", lambda: "alice")
+        assert util.user() == "alice"
+
+    def test_falls_back_to_unknown_when_getpass_raises(self, monkeypatch):
+        def boom():
+            raise KeyError("no login")
+        monkeypatch.setattr(util.getpass, "getuser", boom)
+        assert util.user() == "unknown"
+
+
 class TestRelTime:
     def test_just_now_floors_to_one_second(self):
         assert util.rel_time(iso_ago(0)) == "1s ago"

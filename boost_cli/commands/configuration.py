@@ -2,7 +2,6 @@
 completions, schedule, serve, mcp, self-update."""
 from __future__ import annotations
 
-import getpass
 import json
 import os
 import re
@@ -22,13 +21,6 @@ from ..errors import BoostError
 
 
 _tilde = paths.tilde
-
-
-def _user() -> str:
-    try:
-        return getpass.getuser()
-    except Exception:
-        return "unknown"
 
 
 # ---------------------------------------------------------------- config
@@ -406,7 +398,7 @@ def cmd_onboard(argv) -> int:
         "enabled": True,
         "share_pulse": True,
         "created": util.now_iso(),
-        "by": _user(),
+        "by": util.user(),
     }, indent=2) + "\n"
     files = [(_TELEMETRY_REL, telemetry), (_WORKFLOW_REL, _WORKFLOW_YML)]
     if repo != paths.store_dir().resolve():

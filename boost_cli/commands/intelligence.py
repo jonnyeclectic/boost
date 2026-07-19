@@ -226,8 +226,7 @@ def cmd_simulate(argv: List[str]) -> int:
             return 0
     _note_fallback()
 
-    _, body = frontmatter.parse(text)
-    meta, _ = frontmatter.parse(text)
+    meta, body = frontmatter.parse(text)
     out.kv("task", task)
     rules = _imperative_rules(body)
     out.info("Without it: default behavior — none of the rules below are enforced.")

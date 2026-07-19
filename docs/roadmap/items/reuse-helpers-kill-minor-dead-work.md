@@ -1,16 +1,26 @@
 ---
 id: reuse-helpers-kill-minor-dead-work
 board: code
-section: internals
-status: inflight
+section: shipped
+status: shipped
 category: Tech-debt
 complexity: S
 impact: Low
 wow: 1
-note: 
+note: helper dedup + double-parse removed
 order: 20
 owner: loop/reuse-user-helper
-pr:
+pr: 126
 title: Reuse helpers; kill minor dead work
 ---
-<code>cmd_migrate</code> re-implements agent validation instead of calling <code>_check_agents</code>; <code>_user()</code> is copy-pasted between <code>configuration</code> and <code>team</code>; <code>cmd_simulate</code> parses the same frontmatter twice (<code>pkg.py:38,577 · configuration.py:39 · team.py:30</code>). Small, satisfying cleanups.
+Shipped in <b>#126</b>. The byte-identical <code>_user()</code> getpass helper —
+copy-pasted three times across <code>core/journal.py</code>,
+<code>commands/configuration.py</code> and <code>commands/team.py</code> — is now a
+single public <code>core/util.user()</code> the three call sites delegate to
+(covered incl. the getpass-raises fallback). <code>cmd_simulate</code> also parsed
+the same frontmatter <em>twice</em> (<code>_, body = …</code> then
+<code>meta, _ = …</code>); collapsed to one
+<code>meta, body = frontmatter.parse(text)</code>.
+<code>cmd_migrate</code>'s two-agent validation is intentionally left as-is —
+its first-fail wording differs from <code>_check_agents</code>' collect-all
+message, so routing it through the helper would change user-facing errors.

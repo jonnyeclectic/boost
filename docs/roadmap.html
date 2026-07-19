@@ -115,7 +115,7 @@
   <section class="block reveal">
     <div class="stats">
       <!-- ROADMAP:stats -->
-      <div class="stat"><b>15</b><span>Shipped</span></div>
+      <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
       <div class="stat"><b>93</b><span>Loop finds</span></div>
@@ -395,6 +395,28 @@ by new unit tests covering every branch.</p>
           <span class="m">rule boost in/out of OS crash reports</span>
         </div>
       </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
+        <h3>Reuse helpers; kill minor dead work</h3>
+        <p>Shipped in <b>#126</b>. The byte-identical <code>_user()</code> getpass helper —
+copy-pasted three times across <code>core/journal.py</code>,
+<code>commands/configuration.py</code> and <code>commands/team.py</code> — is now a
+single public <code>core/util.user()</code> the three call sites delegate to
+(covered incl. the getpass-raises fallback). <code>cmd_simulate</code> also parsed
+the same frontmatter <em>twice</em> (<code>_, body = …</code> then
+<code>meta, _ = …</code>); collapsed to one
+<code>meta, body = frontmatter.parse(text)</code>.
+<code>cmd_migrate</code>'s two-agent validation is intentionally left as-is —
+its first-fail wording differs from <code>_check_agents</code>' collect-all
+message, so routing it through the helper would change user-facing errors.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">helper dedup + double-parse removed</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -643,17 +665,6 @@ by new unit tests covering every branch.</p>
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-        </div>
-      </article>
-
-      <article class="cap rcard">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Tech-debt</span></div>
-        <h3>Reuse helpers; kill minor dead work</h3>
-        <p><code>cmd_migrate</code> re-implements agent validation instead of calling <code>_check_agents</code>; <code>_user()</code> is copy-pasted between <code>configuration</code> and <code>team</code>; <code>cmd_simulate</code> parses the same frontmatter twice (<code>pkg.py:38,577 · configuration.py:39 · team.py:30</code>). Small, satisfying cleanups.</p>
-        <div class="meta">
-          <span class="m">Complexity <b>S</b></span>
-          <span class="m">Impact <b>Low</b></span>
-          <span class="m">Wow <b class="wow">★</b></span>
         </div>
       </article>
 
