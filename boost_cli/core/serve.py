@@ -13,6 +13,7 @@ import html
 import json
 import re
 import urllib.parse
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Optional, Tuple
 
@@ -57,13 +58,20 @@ def skill_text(name: str) -> Optional[str]:
     """SKILL.md text for an installed skill, else from a tap. None if unknown."""
     if not SKILL_NAME_RE.fullmatch(name):
         return None
-    fp = store.skill_store_dir(name) / "SKILL.md"
+    skill_dir = store.skill_store_dir(name).resolve()
+    fp = (skill_dir / "SKILL.md").resolve()
+    try:
+        fp.relative_to(skill_dir)
+    except ValueError:
+        return None
     if fp.is_file():
         return fp.read_text(encoding="utf-8", errors="replace")
     for e in catalog.find(name):
         try:
-            fp = registry.get(e["tap"]).path / e["skill_md"]
-        except BoostError:
+            tap_root = registry.get(e["tap"]).path.resolve()
+            fp = (tap_root / Path(e["skill_md"])).resolve()
+            fp.relative_to(tap_root)
+        except (BoostError, ValueError):
             continue
         if fp.is_file():
             return fp.read_text(encoding="utf-8", errors="replace")
