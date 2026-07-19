@@ -928,8 +928,15 @@ def cmd_mcp(argv) -> int:
 
     shim = paths.launcher()
     if args.action == "register":
-        cmd = ["claude", "mcp", "add", "--scope", "user", "boost", "--",
-               str(shim), "mcp", "--stdio"]
+        # Fork-safe launch env: a host that fork()s into `boost mcp --stdio`
+        # on macOS can SIGABRT on the child side *pre-exec* if Obj-C is touched
+        # post-fork (CFPreferences / _scproxy proxy lookup). Disabling the
+        # fork-safety trap and short-circuiting proxy resolution keeps the
+        # host's fork into boost from aborting before our Python ever runs.
+        cmd = ["claude", "mcp", "add", "--scope", "user",
+               "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
+               "-e", "no_proxy=*",
+               "boost", "--", str(shim), "mcp", "--stdio"]
     else:
         cmd = ["claude", "mcp", "remove", "boost"]
 
