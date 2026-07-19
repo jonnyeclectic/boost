@@ -16,7 +16,11 @@ short helpful message rather than raising.
 """
 from __future__ import annotations
 
+import json
+import sys
 from typing import Callable, Dict, List, Optional, Tuple
+
+from ..errors import BoostError
 
 # A handler maps parsed arguments to (text, is_error). ``text is None`` means the
 # handler produced no result (treated by the server as an unknown/aborted tool).
@@ -68,3 +72,94 @@ class Registry:
         if handler is None:
             return None, False
         return handler(args)
+
+
+# ── JSON-RPC 2.0 protocol ─────────────────────────────────────────────────
+# The wire protocol Claude Code speaks to `boost mcp --stdio`. handle_request is
+# a *pure* request→response mapping (no I/O), so the whole protocol is unit
+# testable; serve_stdio only adds the newline-delimited stdin/stdout loop.
+PROTOCOL_VERSION = "2024-11-05"
+
+
+def handle_request(req: dict, *, version: str,
+                   registry: "Registry") -> Optional[dict]:
+    """Map one parsed JSON-RPC request to its response dict.
+
+    Returns ``None`` for a notification (a request with no ``id``) — the caller
+    sends nothing back. Handlers that raise during ``tools/call`` are turned into
+    an error *result* (``isError``) rather than a protocol error, so a failing
+    tool never kills the session.
+    """
+    method = str(req.get("method", ""))
+    if "id" not in req:  # notification (e.g. notifications/initialized)
+        return None
+    resp: dict = {"jsonrpc": "2.0", "id": req.get("id")}
+    if method == "initialize":
+        resp["result"] = {"protocolVersion": PROTOCOL_VERSION,
+                          "capabilities": {"tools": {}},
+                          "serverInfo": {"name": "boost", "version": version}}
+    elif method == "ping":
+        resp["result"] = {}
+    elif method == "tools/list":
+        resp["result"] = {"tools": registry.specs()}
+    elif method == "tools/call":
+        params = req.get("params") or {}
+        tool = str(params.get("name", ""))
+        try:
+            text, is_err = registry.call(tool, params.get("arguments") or {})
+        except BoostError as e:
+            text = "Error: %s" % e.message + ("\nhint: %s" % e.hint if e.hint else "")
+            is_err = True
+        except Exception as e:  # noqa: BLE001 — server must not die
+            text, is_err = "Error: %s" % e, True
+        if text is None:
+            resp["error"] = {"code": -32602, "message": "unknown tool %r" % tool}
+        else:
+            resp["result"] = {"content": [{"type": "text", "text": text}]}
+            if is_err:
+                resp["result"]["isError"] = True
+    else:
+        resp["error"] = {"code": -32601, "message": "method not found: %s" % method}
+    return resp
+
+
+def serve_stdio(registry: "Registry", *, version: str,
+                stdin=None, stdout=None) -> int:
+    """Newline-delimited JSON-RPC 2.0 MCP server on stdin/stdout.
+
+    ``stdin``/``stdout`` default to the process streams but can be injected
+    (e.g. ``io.StringIO``) so the loop is testable end to end.
+    """
+    stdin = stdin if stdin is not None else sys.stdin
+    stdout = stdout if stdout is not None else sys.stdout
+
+    def send(msg: dict) -> bool:
+        try:
+            stdout.write(json.dumps(msg) + "\n")
+            stdout.flush()
+            return True
+        except (BrokenPipeError, OSError):
+            return False
+
+    while True:
+        try:
+            line = stdin.readline()
+        except (KeyboardInterrupt, OSError):
+            return 0
+        if not line:  # EOF
+            return 0
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except json.JSONDecodeError:
+            if not send({"jsonrpc": "2.0", "id": None,
+                         "error": {"code": -32700, "message": "parse error"}}):
+                return 0
+            continue
+        resp = handle_request(req, version=version, registry=registry)
+        if resp is None:  # notification — nothing to send
+            continue
+        if not send(resp):
+            return 0

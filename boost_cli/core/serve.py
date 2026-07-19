@@ -1,0 +1,151 @@
+"""The `boost serve` HTTP catalog server — a small read-only view of the
+installed skills plus JSON endpoints, extracted from the command layer.
+
+The routing is a pure function (:func:`route`) that maps a request path to a
+``(status, content_type, body)`` triple with no socket bound, so the whole
+endpoint surface is unit-testable. :func:`serve_http` wires it into a threaded
+stdlib HTTP server for the CLI.
+"""
+from __future__ import annotations
+
+import errno
+import html
+import json
+import re
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Optional, Tuple
+
+from .. import __version__
+from ..errors import BoostError
+from . import catalog, lockfile, registry, store
+from . import output as out
+
+SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+_PAGE_CSS = ("body{background:#111;color:#ddd;font-family:ui-monospace,SFMono-Regular,"
+             "Menlo,monospace;max-width:720px;margin:2rem auto;padding:0 1rem}"
+             "h1{color:#fff;font-size:1.3rem}a{color:#7dc4ff;text-decoration:none}"
+             "a:hover{text-decoration:underline}table{border-collapse:collapse;width:100%}"
+             "th,td{text-align:left;padding:.3rem .8rem .3rem 0;"
+             "border-bottom:1px solid #2a2a2a}.dim{color:#777}")
+
+
+def serve_page() -> str:
+    """The HTML index: a table of installed skills with JSON-endpoint links."""
+    installed = lockfile.installed()
+    entries = catalog.all_entries()
+    taps = registry.list_taps()
+    rows = "".join(
+        '<tr><td><a href="/skill/%s">%s</a></td><td>%s</td><td>%s</td></tr>'
+        % (urllib.parse.quote(n), html.escape(n),
+           html.escape(str(e.get("version", "?"))),
+           html.escape(str(e.get("tap", "?"))))
+        for n, e in sorted(installed.items()))
+    return ("<!doctype html><html><head><meta charset='utf-8'>"
+            "<title>boost — skill catalog</title><style>%s</style></head><body>"
+            "<h1>⚡ boost <span class='dim'>v%s</span></h1>"
+            "<p class='dim'>%d installed · %d available across %d taps</p>"
+            "<table><tr><th>skill</th><th>version</th><th>tap</th></tr>%s</table>"
+            "<p><a href='/installed.json'>installed.json</a> · "
+            "<a href='/catalog.json'>catalog.json</a></p></body></html>"
+            % (_PAGE_CSS, __version__, len(installed), len(entries), len(taps),
+               rows or "<tr><td colspan='3' class='dim'>nothing installed</td></tr>"))
+
+
+def skill_text(name: str) -> Optional[str]:
+    """SKILL.md text for an installed skill, else from a tap. None if unknown."""
+    if not SKILL_NAME_RE.fullmatch(name):
+        return None
+    fp = store.skill_store_dir(name) / "SKILL.md"
+    if fp.is_file():
+        return fp.read_text(encoding="utf-8", errors="replace")
+    for e in catalog.find(name):
+        try:
+            fp = registry.get(e["tap"]).path / e["skill_md"]
+        except BoostError:
+            continue
+        if fp.is_file():
+            return fp.read_text(encoding="utf-8", errors="replace")
+    return None
+
+
+def _json_body(obj) -> bytes:
+    return json.dumps(obj, indent=2).encode()
+
+
+def route(path: str) -> Tuple[int, str, bytes]:
+    """Map a GET path to ``(status, content_type, body)``. Pure — no socket.
+
+    Mirrors the historical dispatch exactly: ``/`` and ``/index.html`` serve the
+    HTML page; ``/catalog.json`` and ``/installed.json`` the JSON views; a
+    ``/skill/<name>`` path the raw SKILL.md (404 for an invalid or unknown name);
+    anything else a JSON ``not found``.
+    """
+    path = urllib.parse.unquote(path.split("?", 1)[0])
+    if path in ("/", "/index.html"):
+        return 200, "text/html; charset=utf-8", serve_page().encode()
+    if path == "/catalog.json":
+        return 200, "application/json", _json_body(catalog.all_entries())
+    if path == "/installed.json":
+        return 200, "application/json", _json_body(lockfile.read())
+    if path.startswith("/skill/"):
+        name = path[len("/skill/"):].strip("/")
+        if not SKILL_NAME_RE.fullmatch(name):
+            return (404, "application/json",
+                    json.dumps({"error": "no skill named %r" % name}).encode())
+        text = skill_text(name)
+        if text is None:
+            return (404, "application/json",
+                    json.dumps({"error": "no skill named %r" % name}).encode())
+        return 200, "text/plain; charset=utf-8", text.encode()
+    return 404, "application/json", json.dumps({"error": "not found"}).encode()
+
+
+class _CatalogHandler(BaseHTTPRequestHandler):
+    server_version = "boost/" + __version__
+
+    def log_message(self, fmt, *args):  # logged in _send instead
+        pass
+
+    def _send(self, status: int, ctype: str, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        out.dim("  %s %s → %d" % (self.command, self.path, status))
+
+    def do_GET(self):
+        try:
+            status, ctype, body = route(self.path)
+            self._send(status, ctype, body)
+        except BrokenPipeError:
+            pass
+        except Exception as e:  # noqa: BLE001 — keep the server alive
+            try:
+                self._send(500, "application/json",
+                           json.dumps({"error": str(e)}).encode())
+            except Exception:
+                pass
+
+
+def serve_http(host: str, port: int) -> None:
+    """Bind and run the catalog server until interrupted (blocks)."""
+    try:
+        httpd = ThreadingHTTPServer((host, port), _CatalogHandler)
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            raise BoostError("port %d is already in use" % port,
+                            hint="pick another with --port")
+        raise BoostError("cannot bind %s:%d — %s" % (host, port, e),
+                        hint="check --host and --port")
+    out.info("⚡ serving skill catalog on http://%s:%d %s"
+             % (host, port, out.c("(ctrl-c to stop)", out.DIM)))
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print()
+        out.ok("server stopped")
+    finally:
+        httpd.server_close()
