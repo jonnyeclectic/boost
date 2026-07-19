@@ -237,7 +237,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
         if not knn:
             return []
         by_id = {r[0]: (r[1], r[2], r[3], r[4]) for r in con.execute(
-            "SELECT id, name, tap, kind, snip FROM chunks WHERE id IN (%s)"
+            "SELECT id, name, tap, kind, snip FROM chunks WHERE id IN (%s)"  # noqa: S608  interpolates only `?` placeholders; ids are bound params
             % ",".join("?" * len(knn)), [rid for rid, _d in knn])}
     finally:
         con.close()

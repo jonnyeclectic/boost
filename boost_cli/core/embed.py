@@ -91,12 +91,12 @@ def embed(texts: List[str], input_type: Optional[str] = None,
 
 def _post(url: str, key: str, payload: dict, timeout: int) -> Optional[dict]:
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers={
+    req = urllib.request.Request(url, data=data, headers={  # noqa: S310  url is a hardcoded VOYAGE_URL/OPENAI_URL constant
         "Authorization": "Bearer %s" % key,
         "Content-Type": "application/json",
     })
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310  fixed https endpoint
             return json.loads(resp.read())
     except (urllib.error.URLError, OSError, ValueError):
         return None
