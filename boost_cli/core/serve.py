@@ -56,11 +56,18 @@ def serve_page() -> str:
 def _is_within(base, target) -> bool:
     """True when target resolves inside base (or equals base)."""
     try:
-        base_r = base.resolve()
-        target_r = target.resolve()
-    except OSError:
+        base_r = base.resolve(strict=False)
+        target_r = target.resolve(strict=False)
+        target_r.relative_to(base_r)
+        if target.exists():
+            target_parent_r = target.parent.resolve()
+            try:
+                target_parent_r.relative_to(base_r)
+            except ValueError:
+                return False
+    except (OSError, ValueError):
         return False
-    return base_r == target_r or base_r in target_r.parents
+    return True
 
 
 def skill_text(name: str) -> Optional[str]:
