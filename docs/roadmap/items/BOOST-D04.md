@@ -2,7 +2,7 @@
 id: BOOST-D04
 board: design
 track: color
-status: inflight
+status: progress
 impact: med
 complexity: S
 wow: 2
