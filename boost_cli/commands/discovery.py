@@ -801,7 +801,16 @@ def cmd_browse(argv):
     picked = _browse_tui(curses, entries)
     if picked is None:
         return 0
-    res = store.install(picked)
+    try:
+        res = store.install(picked)
+    except BoostError as e:
+        # browse lists every catalog kind (skills, rules, workflows), but only
+        # skills install; a rule/workflow pick — or an already-installed/pinned
+        # skill — must not exit the interactive TUI with a fatal error.
+        out.warn(e.message)
+        if e.hint:
+            out.info(out.c(e.hint, out.DIM))
+        return 0
     out.ok("installed %s v%s → %s"
            % (picked["name"], picked["version"], _tilde(res.dest)))
     if res.linked:
