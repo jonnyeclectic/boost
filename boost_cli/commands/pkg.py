@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 from .. import cliparse
 from ..core import (agents, catalog, gitutil, journal, lockfile, paths,
-                    registry, staleness, store, util)
+                    registry, staleness, store, typosquat, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -33,6 +33,23 @@ def _tilde(p) -> str:
 
 def _plural(n: int, word: str) -> str:
     return "%d %s%s" % (n, word, "" if n == 1 else "s")
+
+
+def _warn_confusions(entries: List[dict]) -> None:
+    """Warn when a skill about to be installed is confusable with one from a
+    *different* tap — the typosquat / owner-confusion guard (core.typosquat).
+
+    Quiet by default: it only speaks up when a near-identical name resolves to
+    another owner, which is exactly the fat-finger-into-a-look-alike case.
+    """
+    if not entries:
+        return
+    all_entries = catalog.all_entries()
+    for e in entries:
+        for other in typosquat.find_confusions(e, all_entries)[:3]:
+            out.warn("%s (%s) closely resembles %s (%s) — double-check you "
+                     "meant this one" % (e["name"], e["tap"],
+                                         other["name"], other["tap"]))
 
 
 def _check_agents(names: Optional[List[str]]) -> Optional[List[str]]:
@@ -105,6 +122,8 @@ def cmd_install(argv: List[str]) -> int:
                 raise
             out.warn("%s: %s" % (n, err.message))
             failed += 1
+
+    _warn_confusions(entries)
 
     if args.dry_run:
         targets = [a for a in agents.enabled_agents() if not only or a in only]
