@@ -2,14 +2,14 @@
 id: surface-every-docs-page-from-the-guide
 board: code
 section: docsite
-status: planned
+status: inflight
 category: Docs · Discoverability
 complexity: S
 impact: Med
 wow: 2
 note:
 order: 11
-owner:
+owner: loop/docs-discoverable
 pr:
 title: Surface every <code>docs/*.html</code> page from the main page
 ---
