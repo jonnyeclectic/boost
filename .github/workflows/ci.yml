@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: install linters
@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: git identity (fixture repos)
@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
       - name: git identity (fixture repos)
