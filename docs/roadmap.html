@@ -118,7 +118,7 @@
       <div class="stat"><b>14</b><span>Shipped</span></div>
       <div class="stat"><b>2</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>90</b><span>Loop finds</span></div>
+      <div class="stat"><b>92</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1426,6 +1426,24 @@ and the work stays visible.</p>
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Visual polish</span></div>
+        <h3>Fix overflowing node text in the RAG diagram (<code>mcp-hub.html</code>)</h3>
+        <p>On the Fig 2 RAG-pipeline diagram, the <code>read_body → chunk</code> node
+           overflows its rounded box: the third caption line
+           (<code>1000 chars · 150 overlap · ≤40…</code>) runs past the node's
+           right border and is clipped where the pink <em>embed</em> arrow begins.
+           Give the node room so all three lines sit inside the bubble — widen its
+           min-width, wrap or shrink the caption, or trim the label text — and
+           re-check the other nodes at the same breakpoint so none clip.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">read_body→chunk node clips its 3rd line</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
