@@ -2,14 +2,14 @@
 id: BOOST-D04
 board: design
 track: color
-status: proposed
+status: inflight
 impact: med
 complexity: S
 wow: 2
 category: color
 ref: core/output.py · commands/*.py
 order: 4
-owner:
+owner: loop/color-roles
 pr:
 title: Semantic color roles, not raw codes
 ---
