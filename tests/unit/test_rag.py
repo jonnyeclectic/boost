@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -861,3 +862,39 @@ class TestEngineRouting:
     def test_none_when_no_index_at_all(self, sandbox, monkeypatch):
         monkeypatch.setattr(dense_mod, "ready", lambda: False)
         assert rag.search("react", smart=False) is None
+
+
+class TestAtomicIndexSave:
+    """`_save` must route the index through util.atomic_write_text so a crash
+    or concurrent reader never sees a truncated/corrupt BM25 index."""
+
+    def test_save_routes_through_atomic_write_text(self, corpus, monkeypatch):
+        _root, entries = corpus
+        calls = []
+        real = rag.util.atomic_write_text
+
+        def spy(path, text, *a, **k):
+            calls.append(Path(path))
+            return real(path, text, *a, **k)
+
+        monkeypatch.setattr(rag.util, "atomic_write_text", spy)
+        rag.build(entries=entries, force=True)
+        # The index write went through the atomic helper, not a bare write_text.
+        assert rag.index_path() in calls
+
+    def test_index_is_complete_json_and_leaves_no_temp_turd(self, corpus):
+        _root, entries = corpus
+        rag.build(entries=entries, force=True)
+        p = rag.index_path()
+        payload = json.loads(p.read_text())  # parseable ⇒ not truncated
+        assert payload["docs"] and "postings" in payload
+        # atomic_write_text writes to ".<name>.*.tmp" then os.replace — the
+        # temp file must not survive a successful save.
+        assert list(p.parent.glob("." + p.name + ".*")) == []
+
+    def test_rebuild_replaces_index_atomically(self, corpus):
+        _root, entries = corpus
+        rag.build(entries=entries, force=True)
+        rag.build(entries=entries, force=True)  # second save swaps in place
+        payload = json.loads(rag.index_path().read_text())
+        assert payload["stats"]["docs"] >= 2
