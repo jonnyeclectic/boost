@@ -2,7 +2,7 @@
 id: surface-every-docs-page-from-the-guide
 board: code
 section: docsite
-status: inflight
+status: shipped
 category: Docs · Discoverability
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note:
 order: 11
 owner: loop/docs-discoverable
-pr:
+pr: 128
 title: Surface every <code>docs/*.html</code> page from the main page
 ---
 <a href="make-the-roadmaps-discoverable.html">Making the roadmaps discoverable</a>
