@@ -59,8 +59,8 @@ def _is_within(base, target) -> bool:
         base_r = base.resolve(strict=False)
         target_r = target.resolve(strict=False)
         target_r.relative_to(base_r)
-        if target.exists():
-            target_parent_r = target.parent.resolve()
+        if target_r.exists():
+            target_parent_r = target_r.parent
             try:
                 target_parent_r.relative_to(base_r)
             except ValueError:
