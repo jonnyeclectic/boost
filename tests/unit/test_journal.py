@@ -121,7 +121,7 @@ class TestFallbacks:
     def test_user_falls_back_to_unknown(self, sandbox, monkeypatch):
         def no_user():
             raise KeyError("no login")
-        monkeypatch.setattr("boost_cli.core.journal.getpass.getuser", no_user)
+        monkeypatch.setattr("boost_cli.core.util.getpass.getuser", no_user)
         journal.log("install", "x")
         assert json.loads(paths.pulse_path().read_text())["user"] == "unknown"
 

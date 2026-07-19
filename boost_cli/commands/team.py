@@ -1,7 +1,6 @@
 """Team & Collaboration commands: cohort, profile, protocol, pulse, replay, who."""
 from __future__ import annotations
 
-import getpass
 import hashlib
 import json
 import platform
@@ -16,13 +15,6 @@ from ..errors import BoostError
 
 
 _tilde = paths.tilde
-
-
-def _user() -> str:
-    try:
-        return getpass.getuser()
-    except Exception:
-        return "unknown"
 
 
 def _resolve_entry(name: str, prefer_tap: str | None = None):
@@ -82,7 +74,7 @@ def cmd_cohort(argv) -> int:
     args = p.parse_args(argv)
 
     cohorts = _load_cohorts()
-    user = _user()
+    user = util.user()
 
     if args.action == "create":
         if not args.name:
@@ -245,7 +237,7 @@ def cmd_profile(argv) -> int:
 
     if args.action == "save":
         installed = lockfile.installed()
-        profile = {"name": args.name, "saved": util.now_iso(), "user": _user(),
+        profile = {"name": args.name, "saved": util.now_iso(), "user": util.user(),
                    "skills": {n: {"tap": e.get("tap", "local"),
                                   "version": e.get("version", "0.0.0")}
                               for n, e in installed.items()}}

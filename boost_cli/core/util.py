@@ -1,6 +1,7 @@
 """Small shared utilities: time, hashing, versions, skill quality scoring."""
 from __future__ import annotations
 
+import getpass
 import hashlib
 import os
 import re
@@ -44,6 +45,15 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def user() -> str:
+    """Best-effort login name for journal/team attribution; 'unknown' if the
+    environment has no resolvable user (getpass raises in some sandboxes)."""
+    try:
+        return getpass.getuser()
+    except Exception:
+        return "unknown"
 
 
 def rel_time(iso: str) -> str:

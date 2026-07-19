@@ -4,7 +4,6 @@ Powers `boost pulse`, `boost trending`, `boost stats`, and `boost who`.
 """
 from __future__ import annotations
 
-import getpass
 import json
 from typing import List, Optional
 
@@ -16,20 +15,13 @@ ROTATE_KEEP = 2500
 
 def log(action: str, subject: str = "", **fields) -> None:
     paths.ensure_dirs()
-    event = {"ts": util.now_iso(), "user": _user(), "action": action,
+    event = {"ts": util.now_iso(), "user": util.user(), "action": action,
              "subject": subject}
     event.update({k: v for k, v in fields.items() if v is not None})
     p = paths.pulse_path()
     with p.open("a") as f:
         f.write(json.dumps(event) + "\n")
     _maybe_rotate()
-
-
-def _user() -> str:
-    try:
-        return getpass.getuser()
-    except Exception:
-        return "unknown"
 
 
 def events(n: Optional[int] = None, action: Optional[str] = None,
