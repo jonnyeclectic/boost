@@ -78,7 +78,7 @@ def _install_generated(name: str, text: str) -> None:
         res = store.install_from_path(src, name=name, tap_label="local")
     out.ok("installed %s → %s" % (name, _tilde(res.dest)))
     if res.linked:
-        out.info(out.c("linked into: %s" % ", ".join(res.linked), out.DIM))
+        out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))
 
 
 def _write_generated(dest: Path, text: str) -> bool:
@@ -139,7 +139,7 @@ def cmd_distill(argv: List[str]) -> int:
         dest = Path.cwd() / new / "SKILL.md"
         if not _write_generated(dest, merged):
             return 1
-        out.info(out.c("install it with `boost import ./%s`" % new, out.DIM))
+        out.info(out.role("install it with `boost import ./%s`" % new, "muted"))
     journal.log("distill", new, sources=names)
     return 0
 
@@ -212,7 +212,7 @@ def cmd_simulate(argv: List[str]) -> int:
 
     text, origin = _skill_text(args.name)
     task = args.task or "a typical coding task in this repo"
-    out.heading("simulating %s  %s" % (args.name, out.c("(%s)" % origin, out.DIM)))
+    out.heading("simulating %s  %s" % (args.name, out.role("(%s)" % origin, "muted")))
 
     if ai.available():
         reply = ai.ask(
@@ -236,13 +236,13 @@ def cmd_simulate(argv: List[str]) -> int:
         for rule in rules[:8]:
             out.info("  • " + rule)
         if len(rules) > 8:
-            out.info(out.c("  … and %d more rules" % (len(rules) - 8), out.DIM))
+            out.info(out.role("  … and %d more rules" % (len(rules) - 8), "muted"))
     else:
         out.info("  • (no imperative rules found in the skill body)")
     desc = str(meta.get("description") or "").strip()
     if desc:
-        out.info(out.c('likely triggers when the task involves: "%s"'
-                       % desc[:100], out.DIM))
+        out.info(out.role('likely triggers when the task involves: "%s"'
+                       % desc[:100], "muted"))
     return 0
 
 
@@ -526,8 +526,8 @@ def cmd_absorb(argv: List[str]) -> int:
             src = paths.home() / ".claude" / "projects"
         if not src.exists():
             out.info("no chat history found under ~/.claude — nothing to absorb")
-            out.info(out.c("point at a .jsonl file or directory with "
-                           "--history PATH", out.DIM))
+            out.info(out.role("point at a .jsonl file or directory with "
+                           "--history PATH", "muted"))
             return 0
     files = [src] if src.is_file() else sorted(src.rglob("*.jsonl"))
     if not files:
@@ -663,7 +663,7 @@ def cmd_evolve(argv: List[str]) -> int:
     old_meta, _ = frontmatter.parse(old)
     old_ver = str(old_meta.get("version") or "0.0.0")
 
-    out.heading("evolving %s  %s" % (args.name, out.c("(v%s)" % old_ver, out.DIM)))
+    out.heading("evolving %s  %s" % (args.name, out.role("(v%s)" % old_ver, "muted")))
     new = _evolve_ai(old, old_ver, args.feedback) if ai.available() else None
     if new is None:
         _note_fallback()
@@ -673,7 +673,7 @@ def cmd_evolve(argv: List[str]) -> int:
     new_ver = str(new_meta.get("version") or old_ver)
 
     if not args.apply:
-        out.info(out.c("re-run with --apply to write these changes", out.DIM))
+        out.info(out.role("re-run with --apply to write these changes", "muted"))
         return 0
     skill_md.write_text(new)
     entry["sha256"] = util.sha256_dir(store.skill_store_dir(args.name))
@@ -726,11 +726,11 @@ def _print_diff(old: str, new: str) -> None:
         if line.startswith(("+++", "---")):
             print(out.c(line, out.BOLD))
         elif line.startswith("@@"):
-            print(out.c(line, out.CYAN))
+            print(out.role(line, "accent"))
         elif line.startswith("+"):
-            print(out.c(line, out.GREEN))
+            print(out.role(line, "success"))
         elif line.startswith("-"):
-            print(out.c(line, out.RED))
+            print(out.role(line, "danger"))
         else:
             print(line)
 
@@ -776,7 +776,7 @@ def cmd_context(argv: List[str]) -> int:
         journal.log("context", args.pattern, op="map", skills=skills)
         out.ok("mapped %s → %s" % (args.pattern, ", ".join(skills)))
         if missing:
-            out.info(out.c("not installed yet: %s" % ", ".join(missing), out.DIM))
+            out.info(out.role("not installed yet: %s" % ", ".join(missing), "muted"))
         return 0
     if action == "unmap":
         rules = [r for r in state["rules"] if r.get("pattern") != args.pattern]
@@ -872,7 +872,7 @@ def _context_apply(state: dict) -> int:
     if not linked and not unlinked:
         out.info("nothing to change")
     if missing:
-        out.info(out.c("mapped but not installed: %s" % ", ".join(missing), out.DIM))
+        out.info(out.role("mapped but not installed: %s" % ", ".join(missing), "muted"))
     if linked or unlinked:
         journal.log("context", branch, op="apply",
                     linked=linked or None, unlinked=unlinked or None)
@@ -921,9 +921,8 @@ def cmd_focus(argv: List[str]) -> int:
         if state.get("active"):
             out.info("⌁ focus: %s  %s"
                      % (", ".join(state["active"]),
-                        out.c("(since %s)" % util.rel_time(state.get("since", "")),
-                              out.DIM)))
-            out.info(out.c("end it with `boost focus --clear`", out.DIM))
+                        out.role("(since %s)" % util.rel_time(state.get("since", "")), "muted")))
+            out.info(out.role("end it with `boost focus --clear`", "muted"))
         else:
             out.info("no focus session — start one with `boost focus SKILL...`")
         return 0
@@ -950,7 +949,7 @@ def cmd_focus(argv: List[str]) -> int:
     journal.log("focus", ",".join(names))
     out.info("⌁ focus: %s %s"
              % (", ".join(names),
-                out.c("(other %d skills sidelined)" % sidelined, out.DIM)))
+                out.role("(other %d skills sidelined)" % sidelined, "muted")))
     return 0
 
 

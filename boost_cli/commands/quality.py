@@ -37,7 +37,7 @@ _AUDIT_PATTERNS = [
 ]
 _CRED_POST = re.compile(r"(?i)(?:curl\b[^\n]*\s(?:-d|--data)\b|POST\s+[^\n]*https?://)")
 _CRED_HINT = re.compile(r"(?i)secret|token|api[-_]?key|password|credential")
-_SEV_STYLE = {"HIGH": out.RED, "MED": out.YELLOW, "LOW": out.DIM}
+_SEV_ROLE = {"HIGH": "danger", "MED": "warn", "LOW": "muted"}
 
 # --- conflict: normative-rule extraction -----------------------------------
 
@@ -135,9 +135,9 @@ def _drift_status(name: str, entry: dict) -> str:
     return staleness.drift_state(store_sha, lock_sha, is_local, source_sha)
 
 
-_DRIFT_STYLE = {"in-sync": out.GREEN, "local-edits": out.YELLOW,
-                "upstream-moved": out.CYAN, "source-missing": out.RED,
-                "store-missing": out.RED, "n/a": out.DIM}
+_DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
+               "upstream-moved": "accent", "source-missing": "danger",
+               "store-missing": "danger", "n/a": "muted"}
 
 
 def _drift_hint(name: str, status: str) -> str:
@@ -410,14 +410,14 @@ def cmd_lint(argv):
 
     width = max(len(r["name"]) for r in results)
     for r in results:
-        style = (out.GREEN if r["score"] >= 80
-                 else out.YELLOW if r["score"] >= args.min_score else out.RED)
+        score_role = ("success" if r["score"] >= 80
+                      else "warn" if r["score"] >= args.min_score else "danger")
         print("  %s  %s" % (r["name"].ljust(width),
-                            out.c("%d/100" % r["score"], style)))
+                            out.role("%d/100" % r["score"], score_role)))
         for e in r["errors"]:
-            print("    " + out.c("error: " + e, out.RED))
+            print("    " + out.role("error: " + e, "danger"))
         for n in r["notes"]:
-            print("    " + out.c(n, out.DIM))
+            print("    " + out.role(n, "muted"))
     if failed:
         out.warn("%d of %d skill%s below %d or with errors"
                  % (len(failed), len(results), _s(len(results)), args.min_score))
@@ -492,8 +492,8 @@ def cmd_audit(argv):
         print("  " + out.c(name, out.BOLD))
         for f in findings[name]:
             print("    %s %s  %s  %s"
-                  % (out.c(f["severity"].ljust(4), _SEV_STYLE[f["severity"]]),
-                     f["label"], out.c(f["file"], out.DIM), f["snippet"]))
+                  % (out.role(f["severity"].ljust(4), _SEV_ROLE[f["severity"]]),
+                     f["label"], out.role(f["file"], "muted"), f["snippet"]))
     out.info("%d high · %d medium · %d low across %d skill%s"
              % (counts["HIGH"], counts["MED"], counts["LOW"],
                 len(installed), _s(len(installed))))
@@ -531,13 +531,13 @@ def cmd_verify(argv):
         out.info("no skills installed")
         return 0
     width = max(len(r["name"]) for r in results)
-    style = {"ok": out.GREEN, "modified": out.YELLOW, "missing": out.RED}
+    status_role = {"ok": "success", "modified": "warn", "missing": "danger"}
     for r in results:
         note = ("  missing lock fields: " + ", ".join(r["missing_fields"])
                 if r["missing_fields"] else "")
         print("  %s  %s%s" % (r["name"].ljust(width),
-                              out.c(r["status"], style[r["status"]]),
-                              out.c(note, out.DIM)))
+                              out.role(r["status"], status_role[r["status"]]),
+                              out.role(note, "muted")))
     if bad:
         out.warn("%d of %d skill%s failed verification"
                  % (len(bad), len(results), _s(len(results))))
@@ -565,8 +565,8 @@ def cmd_drift(argv):
     if not rows:
         out.info("no skills installed")
         return 0
-    out.table([(r["name"], out.c(r["status"], _DRIFT_STYLE[r["status"]]),
-                out.c(r["hint"], out.DIM)) for r in rows],
+    out.table([(r["name"], out.role(r["status"], _DRIFT_ROLE[r["status"]]),
+                out.role(r["hint"], "muted")) for r in rows],
               headers=("SKILL", "STATUS", "HINT"))
     counts: dict = {}
     for r in rows:
@@ -602,8 +602,8 @@ def cmd_test(argv):
         if failed:
             failed_count += 1
         rows.append((name,
-                     out.c("FAIL", out.RED) if failed else out.c("PASS", out.GREEN),
-                     out.c(", ".join(failed), out.DIM)))
+                     out.role("FAIL", "danger") if failed else out.role("PASS", "success"),
+                     out.role(", ".join(failed), "muted")))
     if not rows:
         out.info("no skills installed")
         return 0
@@ -627,8 +627,8 @@ def cmd_fingerprint(argv):
                           "components": comps}))
         return 0
     out.heading("environment fingerprint")
-    print("  " + out.c(digest[:16], out.BOLD, out.CYAN)
-          + "  " + out.c(digest, out.DIM))
+    print("  " + out.role(digest[:16], "accent", bold=True)
+          + "  " + out.role(digest, "muted"))
     if args.verbose:
         out.table([tuple(line.split(":", 1)) for line in comps],
                   headers=("COMPONENT", "DIGEST/COMMIT"))
@@ -713,11 +713,11 @@ def cmd_decay(argv):
     if not rows:
         out.info("no skills installed")
         return 0
-    rel_style = {"none": out.RED, "low": out.YELLOW, "ok": out.GREEN}
-    verdicts = {"decay": out.c("decay candidate", out.RED),
-                "review": out.c("review", out.YELLOW),
-                "ok": out.c("ok", out.GREEN)}
-    out.table([(r["name"], out.c(r["relevance"], rel_style[r["relevance"]]),
+    rel_role = {"none": "danger", "low": "warn", "ok": "success"}
+    verdicts = {"decay": out.role("decay candidate", "danger"),
+                "review": out.role("review", "warn"),
+                "ok": out.role("ok", "success")}
+    out.table([(r["name"], out.role(r["relevance"], rel_role[r["relevance"]]),
                 r["last_activity"], verdicts[r["verdict"]]) for r in rows],
               headers=("SKILL", "RELEVANCE", "LAST ACTIVITY", "VERDICT"))
     n_decay = sum(1 for r in rows if r["verdict"] == "decay")
@@ -726,7 +726,7 @@ def cmd_decay(argv):
              % (n_decay, _s(n_decay), n_review,
                 len(rows) - n_decay - n_review))
     if n_decay:
-        print(out.c("  isolate one with `boost quarantine <name>`", out.DIM))
+        print(out.role("  isolate one with `boost quarantine <name>`", "muted"))
     return 0
 
 
@@ -891,9 +891,9 @@ def cmd_conflict(argv):
     out.heading("rule conflicts")
     for p in pairs:
         out.warn("%s ↔ %s  (%s)" % (p["a"], p["b"], p["kind"]))
-        print("      " + out.c("%s: %s" % (p["a"], p["a_line"]), out.DIM))
+        print("      " + out.role("%s: %s" % (p["a"], p["a_line"]), "muted"))
         if p["b_line"]:
-            print("      " + out.c("%s: %s" % (p["b"], p["b_line"]), out.DIM))
+            print("      " + out.role("%s: %s" % (p["b"], p["b_line"]), "muted"))
     out.info("%d conflict pair%s found" % (len(pairs), _s(len(pairs))))
     return 1
 
@@ -927,8 +927,8 @@ def cmd_changelog(argv):
     if not lines:
         out.warn("no history found for %s in %s" % (rel, tap.name))
     if len(lines) < 3:
-        print(out.c("  (shallow clone: run `git -C %s fetch --unshallow` "
-                    "for full history)" % _tilde(tap.path), out.DIM))
+        print(out.role("  (shallow clone: run `git -C %s fetch --unshallow` "
+                    "for full history)" % _tilde(tap.path), "muted"))
     return 0
 
 
@@ -1011,8 +1011,8 @@ def cmd_health(argv):
         full = linked == len(expected)
         coverage_ok = coverage_ok and full
         out.kv(agent, "%d/%d %s" % (linked, len(expected),
-                                    out.c("✓", out.GREEN) if full
-                                    else out.c("!", out.YELLOW)))
+                                    out.role("✓", "success") if full
+                                    else out.role("!", "warn")))
 
     drift_counts: dict = {}
     for name, entry in installed:
@@ -1052,7 +1052,7 @@ def cmd_health(argv):
                  or drift_counts.get("source-missing", 0) > 0
                  or not journal.rotation_healthy())
     if attention:
-        print("  " + out.c("● needs attention (run boost doctor)", out.YELLOW))
+        print("  " + out.role("● needs attention (run boost doctor)", "warn"))
     else:
-        print("  " + out.c("● healthy", out.GREEN))
+        print("  " + out.role("● healthy", "success"))
     return 0

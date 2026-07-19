@@ -193,8 +193,7 @@ def cmd_search(argv):
         return 0
     if not scored:
         out.info("no matches for %r" % query)
-        out.info(out.c("try `boost discover %s` to search all of GitHub" % query,
-                       out.DIM))
+        out.info(out.role("try `boost discover %s` to search all of GitHub" % query, "muted"))
         return 0
     ranker = "full-content BM25" if use_rag else "heuristic relevance"
     if args.smart:
@@ -216,15 +215,14 @@ def cmd_search(argv):
         frac = sc / top
         hue = "cyan" if frac >= 0.66 else "violet" if frac >= 0.33 else "pink"
         bar = out.aurora(out.meter(frac), hue)
-        tag = "  " + out.c("★ curated", out.YELLOW) if e.get("curated") else ""
+        tag = "  " + out.role("★ curated", "warn") if e.get("curated") else ""
         tag_w = len("  ★ curated") if e.get("curated") else 0
         desc_w = max(cols - 2 - 5 - name_w - 2 - tag_w, 8)  # 5 = meter + space
-        name_cell = out.c(out.truncate(e["name"], name_w).ljust(name_w), out.CYAN)
+        name_cell = out.role(out.truncate(e["name"], name_w).ljust(name_w), "accent")
         out.info(bar + " " + name_cell + "  "
                  + out.truncate(e["description"] or "", desc_w) + tag)
-    out.info(out.c("%d match%s · ranked by %s"
-                   % (len(scored), "" if len(scored) == 1 else "es", ranker),
-                   out.DIM))
+    out.info(out.role("%d match%s · ranked by %s"
+                   % (len(scored), "" if len(scored) == 1 else "es", ranker), "muted"))
     return 0
 
 
@@ -258,11 +256,10 @@ def cmd_reindex(argv):
            % (stats["docs"], stats["entries"], stats["taps"],
               "" if stats["taps"] == 1 else "s"))
     if stats["reused"]:
-        out.info(out.c("reused %d unchanged tap%s; reindexed: %s"
+        out.info(out.role("reused %d unchanged tap%s; reindexed: %s"
                        % (len(stats["reused"]),
                           "" if len(stats["reused"]) == 1 else "s",
-                          ", ".join(stats["reindexed"]) or "none"),
-                       out.DIM))
+                          ", ".join(stats["reindexed"]) or "none"), "muted"))
     if args.dense:
         if dense_stats is None:
             out.warn("dense index skipped — %s" % embed.fallback_note())
@@ -426,15 +423,15 @@ def cmd_discover(argv):
         return 0
     if not shown:
         out.info("no indexed skills match %r" % " ".join(args.query))
-        out.info(out.c("the index holds %d entries — rebuild with `boost index`"
-                       % len(all_items), out.DIM))
+        out.info(out.role("the index holds %d entries — rebuild with `boost index`"
+                       % len(all_items), "muted"))
         return 0
     out.table([(it.get("repo", "?"), it.get("path", ""),
-                out.c(it.get("url", ""), out.DIM)) for it in shown],
+                out.role(it.get("url", ""), "muted")) for it in shown],
               headers=("repo", "path", "url"))
-    out.info(out.c("%d of %d indexed skills · GitHub reports ~%d total"
+    out.info(out.role("%d of %d indexed skills · GitHub reports ~%d total"
                    % (len(shown), len(all_items),
-                      int(data.get("github_total") or 0)), out.DIM))
+                      int(data.get("github_total") or 0)), "muted"))
     return 0
 
 
@@ -494,7 +491,7 @@ def cmd_recommend(argv):
     line = "stack: " + (", ".join(stack["languages"]) or "unknown")
     if stack["frameworks"]:
         line += " · frameworks: " + ", ".join(stack["frameworks"])
-    out.info(out.c("%s  (%s)" % (line, _tilde(target)), out.DIM))
+    out.info(out.role("%s  (%s)" % (line, _tilde(target)), "muted"))
     shown = ranked[:args.limit]
     if not shown:
         shown = [{"entry": e, "score": 0, "because": {"curated"}}
@@ -509,15 +506,15 @@ def cmd_recommend(argv):
         e = r["entry"]
         because = "because: %s" % ", ".join(sorted(r["because"]))
         desc_w = max(cols - 2 - width - 2 - (len(because) + 2), 8)
-        name_cell = out.c(out.truncate(e["name"], width).ljust(width), out.CYAN)
+        name_cell = out.role(out.truncate(e["name"], width).ljust(width), "accent")
         out.info(name_cell + "  " + out.truncate(e["description"] or "", desc_w)
-                 + "  " + out.c(because, out.DIM))
+                 + "  " + out.role(because, "muted"))
     if ai.available():
         picks = _ai_picks(stack, [r["entry"] for r in ranked[:20]])
         if picks:
             out.heading("AI picks")
             for pk in picks:
-                out.info(out.c(str(pk.get("name", "?")), out.CYAN) + "  "
+                out.info(out.role(str(pk.get("name", "?")), "accent") + "  "
                          + str(pk.get("reason", "")))
     return 0
 
@@ -533,8 +530,8 @@ def _browse_plain(entries, why: str):
     out.table([(e["name"], "v" + e["version"], e["tap"],
                 "★" if e.get("curated") else "") for e in entries],
               headers=("name", "version", "tap", ""))
-    out.info(out.c("%d skills · install with `boost install <name>`"
-                   % len(entries), out.DIM))
+    out.info(out.role("%d skills · install with `boost install <name>`"
+                   % len(entries), "muted"))
     return 0
 
 
@@ -844,7 +841,7 @@ def cmd_trending(argv):
                 out.truncate(by_name.get(name, {}).get("description", ""), descw))
                for name, rec in ranked[:args.limit]],
               headers=("name", "installs", "last", "description"))
-    out.info(out.c("based on local install activity", out.DIM))
+    out.info(out.role("based on local install activity", "muted"))
     return 0
 
 
@@ -901,14 +898,14 @@ def cmd_stats(argv):
         out.kv("version", cat["version"])
         out.kv("tap", cat["tap"])
         out.kv("description", cat["description"])
-        out.info(out.c("not installed — `boost install %s`" % name, out.DIM))
+        out.info(out.role("not installed — `boost install %s`" % name, "muted"))
     out.kv("activity", "%d installs · %d updates · %d uninstalls"
            % (acts["install"], acts["update"], acts["uninstall"]))
     if lock and latest:
         if util.semver_gt(latest, lock.get("version", "0")):
-            out.kv("latest", "%s %s" % (latest, out.c("(update available)", out.YELLOW)))
+            out.kv("latest", "%s %s" % (latest, out.role("(update available)", "warn")))
         else:
-            out.kv("latest", "%s %s" % (latest, out.c("(up to date)", out.DIM)))
+            out.kv("latest", "%s %s" % (latest, out.role("(up to date)", "muted")))
     if upstream:
         out.kv("upstream", upstream)
     return 0

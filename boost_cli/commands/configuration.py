@@ -165,7 +165,7 @@ def cmd_clean(argv) -> int:
                 out.warn("could not remove %s: %s" % (_tilde(pth), e))
                 continue
         freed += size
-        out.info("%s %s %s" % (verb, _tilde(pth), out.c("(%s)" % kind, out.DIM)))
+        out.info("%s %s %s" % (verb, _tilde(pth), out.role("(%s)" % kind, "muted")))
     if args.dry_run:
         out.dim("  %d item(s) · %s would be freed" % (len(items), util.human_size(freed)))
     else:

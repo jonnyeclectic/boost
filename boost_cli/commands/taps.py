@@ -22,7 +22,7 @@ def _tap_catalog(args) -> int:
     if args.dry_run:
         rows = [(e["name"], e["type"], e.get("category", ""),
                  "~%d" % (e.get("est_items") or 0),
-                 out.c(e.get("focus", ""), out.DIM)) for e in selection]
+                 out.role(e.get("focus", ""), "muted")) for e in selection]
         out.table(rows, headers=("NAME", "TYPE", "CATEGORY", "EST", "FOCUS"))
         print()
         out.dim("%d registries · ~%d items (dry run — nothing tapped)"
@@ -32,7 +32,7 @@ def _tap_catalog(args) -> int:
     rc = 0
     for e in selection:
         if e["name"] in existing:
-            out.info(out.c("%s already tapped" % e["name"], out.DIM))
+            out.info(out.role("%s already tapped" % e["name"], "muted"))
             continue
         try:
             tap = registry.add(str(e["url"]), curated=True)
@@ -96,7 +96,7 @@ def cmd_tap(argv) -> int:
         existing = {t.name for t in registry.list_taps()}
         for default in config.DEFAULT_TAPS:
             if default["name"] in existing:
-                out.info(out.c("%s already tapped" % default["name"], out.DIM))
+                out.info(out.role("%s already tapped" % default["name"], "muted"))
                 continue
             try:
                 tap = registry.add(str(default["url"]), curated=True)
@@ -184,11 +184,10 @@ def cmd_taps(argv) -> int:
         return 0
     if not taps:
         out.info("no taps configured")
-        out.info(out.c("add the recommended registries with `boost tap --defaults`",
-                       out.DIM))
+        out.info(out.role("add the recommended registries with `boost tap --defaults`", "muted"))
         return 0
     rows = [(t["name"], str(t["skills"]), t["updated"],
-             "★" if t["curated"] else "", out.c(_tilde(t["url"]), out.DIM))
+             "★" if t["curated"] else "", out.role(_tilde(t["url"]), "muted"))
             for t in taps]
     out.table(rows, headers=("NAME", "SKILLS", "UPDATED", "", "URL"))
     print()

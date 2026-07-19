@@ -164,9 +164,8 @@ def cmd_install(argv: List[str]) -> int:
         if len(results) == 1:
             r0 = results[0]
             if r0.linked:
-                lines.append(out.c("%s → %s" % (r0.name, " · ".join(r0.linked)),
-                                   out.DIM))
-            lines.append(out.c("next: boost info %s" % r0.name, out.DIM))
+                lines.append(out.role("%s → %s" % (r0.name, " · ".join(r0.linked)), "muted"))
+            lines.append(out.role("next: boost info %s" % r0.name, "muted"))
         print(out.panel(lines, title="installed", hue="green"))
     return 1 if failed else 0
 
@@ -197,7 +196,7 @@ def cmd_uninstall(argv: List[str]) -> int:
     if removed:
         lines = ["Uninstalled %s" % _plural(removed, "skill")]
         if removed == 1 and len(args.names) == 1:
-            lines.append(out.c("next: boost list", out.DIM))
+            lines.append(out.role("next: boost list", "muted"))
         print(out.panel(lines, title="removed", hue="pink"))
     return 1 if failed else 0
 
