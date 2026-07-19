@@ -1,0 +1,52 @@
+# Golden retrieval judgments for boost's RAG engines.
+# One JSON object per line: {query, relevant[], kind, note}
+#   query    - what a user might type
+#   relevant - skill/rule/workflow name(s) that count as a correct top hit
+#   kind     - the target's item kind (for per-kind metric slices)
+# Grading is by name; `relevant` is a set, so a query may have >1 right answer.
+# ---- skills ----
+{"query": "generate algorithmic art with p5.js flow fields and particle systems", "relevant": ["algorithmic-art"], "kind": "skill", "note": "creative coding"}
+{"query": "build an MCP server to expose an external API as tools", "relevant": ["mcp-builder"], "kind": "skill", "note": "MCP authoring"}
+{"query": "extract text and fill form fields in a PDF document", "relevant": ["pdf"], "kind": "skill", "note": "PDF handling"}
+{"query": "create and format a Microsoft Word document", "relevant": ["docx"], "kind": "skill", "note": "Word docs"}
+{"query": "make a PowerPoint slide deck with charts", "relevant": ["pptx"], "kind": "skill", "note": "slides"}
+{"query": "apply company brand colors, logos and fonts to a design", "relevant": ["brand-guidelines"], "kind": "skill", "note": "brand system"}
+{"query": "create an animated gif for slack", "relevant": ["slack-gif-creator"], "kind": "skill", "note": "gif tooling"}
+{"query": "claude api model ids pricing prompt caching and token limits", "relevant": ["claude-api"], "kind": "skill", "note": "API reference"}
+{"query": "style an html artifact with a color and font theme", "relevant": ["theme-factory", "web-artifacts-builder"], "kind": "skill", "note": "two acceptable"}
+{"query": "author a new skill with a SKILL.md frontmatter file", "relevant": ["skill-creator"], "kind": "skill", "note": "meta-skill"}
+{"query": "design a clean modern frontend web interface", "relevant": ["frontend-design"], "kind": "skill", "note": "UI design"}
+{"query": "co-author and edit a long form document collaboratively", "relevant": ["doc-coauthoring"], "kind": "skill", "note": "known hard case"}
+{"query": "design a poster layout and graphics on a canvas", "relevant": ["canvas-design"], "kind": "skill", "note": "canvas"}
+{"query": "write an internal company announcement to employees", "relevant": ["internal-comms"], "kind": "skill", "note": "comms"}
+{"query": "handle form state and validation with Formik in React", "relevant": ["formik-patterns"], "kind": "skill", "note": "react forms"}
+{"query": "write GraphQL queries mutations and schema code generation", "relevant": ["graphql-schema"], "kind": "skill", "note": "graphql"}
+{"query": "make my documentation writing clearer and more concise", "relevant": ["write-concisely"], "kind": "skill", "note": "writing rules"}
+{"query": "create and configure a git hook for my project", "relevant": ["create-hook"], "kind": "skill", "note": "git hooks"}
+{"query": "add line-specific review comments to a pull request via the github cli", "relevant": ["attach-review-to-pr"], "kind": "skill", "note": "pr review"}
+{"query": "set up an arxiv paper search mcp server with docker", "relevant": ["setup-arxiv-mcp"], "kind": "skill", "note": "arxiv mcp"}
+{"query": "load all open github issues and save them as markdown files", "relevant": ["load-issues"], "kind": "skill", "note": "issues"}
+{"query": "run a fishbone cause and effect root cause analysis", "relevant": ["cause-and-effect"], "kind": "skill", "note": "fishbone"}
+{"query": "run a plan do check act continuous improvement cycle", "relevant": ["plan-do-check-act"], "kind": "skill", "note": "pdca"}
+# ---- rules ----
+{"query": "best practices for publishing a high quality nuget package", "relevant": ["nuget-package-publishing"], "kind": "rule", "note": "nuget"}
+{"query": "how should I code sign my dotnet assemblies", "relevant": ["code-signing"], "kind": "rule", "note": "signing"}
+{"query": "conventions and best practices for the dotnet build system", "relevant": ["dotnet-build"], "kind": "rule", "note": "build"}
+{"query": "designing benchmarks for measuring dotnet performance", "relevant": ["benchmarking"], "kind": "rule", "note": "benchmarks"}
+{"query": "maintain a dotnet solution with consistent sdk versions", "relevant": ["solution-management"], "kind": "rule", "note": "solution"}
+{"query": "go backend scalability best practices for microservices and apis", "relevant": ["go-backend-scalability"], "kind": "rule", "note": "go scale"}
+# ---- workflows ----
+{"query": "build a high performance rust web application with actix", "relevant": ["actix-expert"], "kind": "workflow", "note": "rust web"}
+{"query": "optimize an asp.net core web application", "relevant": ["aspnet-core-expert"], "kind": "workflow", "note": "aspnet"}
+{"query": "manage a nodejs background task queue with bullmq", "relevant": ["bullmq-expert"], "kind": "workflow", "note": "bullmq"}
+{"query": "distributed task queue with celery in python", "relevant": ["celery-expert"], "kind": "workflow", "note": "celery"}
+{"query": "configure and optimize a circleci pipeline", "relevant": ["circleci-expert"], "kind": "workflow", "note": "circleci"}
+{"query": "modern typescript runtime with deno security and performance", "relevant": ["deno-expert"], "kind": "workflow", "note": "deno"}
+{"query": "build a scalable web app with express.js", "relevant": ["express-expert"], "kind": "workflow", "note": "express"}
+{"query": "build a web service in go with the gin framework", "relevant": ["gin-expert"], "kind": "workflow", "note": "gin"}
+{"query": "configure a gitlab ci cd pipeline", "relevant": ["gitlab-ci-expert"], "kind": "workflow", "note": "gitlab"}
+{"query": "create grafana dashboards with visualization and alerting", "relevant": ["grafana-expert"], "kind": "workflow", "note": "grafana"}
+{"query": "design and optimize a cassandra database schema", "relevant": ["cassandra-expert"], "kind": "workflow", "note": "cassandra"}
+{"query": "implement auth0 authentication and configuration", "relevant": ["auth0-expert"], "kind": "workflow", "note": "auth0"}
+{"query": "write modern high quality efficient c++ code", "relevant": ["cpp-expert"], "kind": "workflow", "note": "cpp"}
+{"query": "idiomatic go with concurrency and performance optimization", "relevant": ["go-expert"], "kind": "workflow", "note": "go"}
