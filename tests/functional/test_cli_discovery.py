@@ -581,6 +581,22 @@ class TestBrowse:
         assert "installed" not in r.out
         assert not (paths.store_dir() / "brainstorming").exists()
 
+    def test_tui_pick_non_skill_does_not_crash(self, boost, tapped, monkeypatch):
+        # browse lists rules/workflows too; picking one must not exit the TUI
+        # with a fatal Error (regression: `boost browse` crashed on a workflow).
+        from boost_cli.commands import discovery
+        tty = types.SimpleNamespace(isatty=lambda: True)
+        monkeypatch.setattr(discovery, "sys",
+                            types.SimpleNamespace(stdin=tty, stdout=tty))
+        workflow = {"name": "AGENT-playbook", "kind": "workflow",
+                    "version": "1.0", "tap": "fixture-tap"}
+        monkeypatch.setattr(discovery, "_browse_tui",
+                            lambda curses, entries: workflow)
+        r = boost("browse")                       # default expect=0 → no crash
+        assert "cannot install yet" in r.out      # friendly message, not Error:
+        assert "boost search" in r.out            # the hint is shown
+        assert "installed AGENT-playbook" not in r.out
+
     def test_tui_loop_with_fake_curses(self, boost, tapped):
         from boost_cli.commands import discovery
         from boost_cli.core import catalog
