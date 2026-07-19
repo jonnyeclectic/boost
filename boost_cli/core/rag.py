@@ -20,7 +20,7 @@ import math
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 try:  # TypedDict lives in typing on 3.9+, kept optional for safety
     from typing import TypedDict
@@ -29,13 +29,23 @@ except ImportError:  # pragma: no cover - 3.9+ always has it
 
 from . import ai, catalog, frontmatter, gitutil, paths, registry, util
 
-INDEX_VERSION = 1
+# v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
+# chars) so `retrieve` can window it onto the query terms; bump forces a
+# one-time reindex.
+INDEX_VERSION = 2
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
 CHUNK_CHARS = 1000
 OVERLAP = 150
 MAX_CHUNKS = 40
+
+# Width of the passage surfaced for display + rerank context, and how much of
+# the matched chunk is stored to center that window on. SNIP_STORE bounds index
+# growth: a match in the chunk's first half still lands in the window; storing
+# the whole chunk instead bloated the index ~70%.
+SNIP_WIDTH = 200
+SNIP_STORE = 500
 
 # BM25 parameters (§6a). Exposed in the persisted `params` so they are
 # tunable without a format change.
@@ -166,7 +176,7 @@ def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
             docs.append({
                 "n": e["name"], "t": e["tap"], "k": e.get("kind", "skill"),
                 "c": ci, "l": sum(tf.values()),
-                "snip": piece[:200].strip(),
+                "snip": piece[:SNIP_STORE].strip(),  # windowed at retrieve time
                 "tf": dict(tf),
             })
     return docs
@@ -312,6 +322,31 @@ def _bm25(query_terms: List[str], raw: dict) -> Dict[int, float]:
     return scores
 
 
+def _passage(text: str, terms: Sequence[str], width: int = SNIP_WIDTH) -> str:
+    """A ``width``-char window of ``text`` centered on the first query term.
+
+    The stored ``snip`` is a large head of the matched chunk (``SNIP_STORE``);
+    this surfaces the passage that earned the match rather than the chunk's
+    first ``SNIP_WIDTH`` chars, improving both
+    display and the rerank context sent to the LLM. Falls back to the head (the
+    old ``piece[:width]`` behavior) when no term is present. Trimmed edges are
+    marked with a single-character ellipsis.
+    """
+    text = text.strip()
+    if len(text) <= width:
+        return text
+    low = text.lower()
+    positions = [p for p in (low.find(t) for t in terms) if p >= 0]
+    if not positions:
+        return text[:width].rstrip() + "…"
+    start = max(0, min(min(positions) - width // 4, len(text) - width))
+    end = start + width
+    snip = text[start:end].strip()
+    lead = "…" if start > 0 else ""
+    tail = "…" if end < len(text) else ""
+    return lead + snip + tail
+
+
 def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
              entries: Optional[List[dict]] = None) -> List[Hit]:
     """Top-k full-content hits for ``query``. ``[]`` if the index is empty."""
@@ -339,7 +374,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     hits: List[Hit] = []
     for (name, tap), (score, snip) in ranked[:k]:
         hits.append({"entry": live[(name, tap)], "score": score,
-                     "snippet": snip})  # type: ignore[typeddict-item]
+                     "snippet": _passage(snip, terms)})  # type: ignore[typeddict-item]
     return hits
 
 
