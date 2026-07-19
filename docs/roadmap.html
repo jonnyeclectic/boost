@@ -118,7 +118,7 @@
       <div class="stat"><b>10</b><span>Shipped</span></div>
       <div class="stat"><b>3</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>88</b><span>Loop finds</span></div>
+      <div class="stat"><b>89</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -638,6 +638,31 @@
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">rules are indexed but never installed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Install engine · Scope</span></div>
+        <h3>Workspace scope — <code>boost install --local</code> into the project</h3>
+        <p>boost is user-global only: the store is <code>~/.agents/skills</code> and every
+           install symlinks into home-level agent dirs (<code>~/.claude/skills</code>,
+           <code>~/.cursor/skills</code>, <code>~/.windsurf/skills</code>). There is
+           no per-project scope — <code>install</code> takes <code>--agent</code>
+           (which agents) but no <code>--global</code>/<code>--local</code>. Add a
+           workspace paradigm mirroring <code>npm</code> (local vs
+           <code>-g</code>): <code>boost install &lt;skill&gt; --local</code> writes
+           into the current repo's <code>.claude/skills/</code> (and the other
+           agents' project dirs), and — paired with rule install — merges a rule
+           into the project's <code>./CLAUDE.md</code> rather than the global one,
+           so a team can commit its skills and rules with the repo. Needs a
+           per-scope store/lock, scope resolution (walk up for the nearest
+           project root), and <code>list</code>/<code>sync</code>/<code>uninstall</code>
+           that understand both scopes.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">--global vs --local, project .claude/</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
