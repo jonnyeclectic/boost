@@ -37,7 +37,7 @@ def _capture(monkeypatch, payload=None, exc=None):
         if exc is not None:
             raise exc
         return FakeResp(payload)
-    monkeypatch.setattr("boost_cli.core.embed.urllib.request.urlopen",
+    monkeypatch.setattr("boost_cli.core.nethttp.urlopen",
                         fake_urlopen)
     return cap
 
@@ -126,7 +126,7 @@ class TestEmbed:
         class BadResp(FakeResp):
             def read(self):
                 return b"not json"
-        monkeypatch.setattr("boost_cli.core.embed.urllib.request.urlopen",
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen",
                             lambda req, timeout=None: BadResp(None))
         assert embed.embed(["a"]) is None
 
@@ -137,7 +137,7 @@ class TestEmbed:
 
     def test_non_dict_response_is_none(self, sandbox, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "o")
-        monkeypatch.setattr("boost_cli.core.embed.urllib.request.urlopen",
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen",
                             lambda req, timeout=None: FakeResp([1, 2, 3]))
         assert embed.embed(["a"]) is None
 

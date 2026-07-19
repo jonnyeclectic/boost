@@ -70,7 +70,7 @@ def _with_api(monkeypatch, payload):
         captured["timeout"] = timeout
         return FakeResp(payload)
 
-    monkeypatch.setattr("boost_cli.core.ai.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("boost_cli.core.nethttp.urlopen", fake_urlopen)
     return captured
 
 
@@ -114,12 +114,12 @@ class TestAvailable:
 class TestAskCli:
     def test_disabled_returns_none_without_calls(self, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.core.ai.subprocess.run", _boom)
-        monkeypatch.setattr("boost_cli.core.ai.urllib.request.urlopen", _boom)
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
         assert ai.ask("hi") is None
 
     def test_cli_command_shape_with_system(self, ai_on, monkeypatch):
         calls = _with_cli(monkeypatch, rc=0, stdout="  answer \n")
-        monkeypatch.setattr("boost_cli.core.ai.urllib.request.urlopen", _boom)
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
         assert ai.ask("hi", system="sys prompt") == "answer"
         assert calls == [{
             "cmd": ["claude", "-p", "--model", DEFAULT_MODEL,
@@ -147,7 +147,7 @@ class TestAskCli:
 
     def test_cli_failure_no_api_key_returns_none(self, ai_on, monkeypatch):
         _with_cli(monkeypatch, rc=1)
-        monkeypatch.setattr("boost_cli.core.ai.urllib.request.urlopen", _boom)
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
         assert ai.ask("hi") is None
 
     def test_cli_empty_stdout_falls_through(self, ai_on, monkeypatch):
@@ -167,7 +167,7 @@ class TestAskCli:
 
     def test_no_cli_no_key_returns_none(self, ai_on, monkeypatch):
         _without_cli(monkeypatch)
-        monkeypatch.setattr("boost_cli.core.ai.urllib.request.urlopen", _boom)
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", _boom)
         assert ai.ask("hi") is None
 
 
@@ -210,7 +210,7 @@ class TestAskApi:
 
         def fail(req, timeout=None):
             raise urllib.error.URLError("boom")
-        monkeypatch.setattr("boost_cli.core.ai.urllib.request.urlopen", fail)
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", fail)
         assert ai.ask("p") is None
 
     def test_api_no_text_blocks_returns_none(self, ai_on, monkeypatch):
