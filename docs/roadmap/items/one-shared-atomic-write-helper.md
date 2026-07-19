@@ -2,14 +2,14 @@
 id: one-shared-atomic-write-helper
 board: code
 section: internals
-status: planned
+status: inflight
 category: Robustness
 complexity: S
 impact: Med
 wow: 2
 note: 
 order: 8
-owner:
+owner: loop/atomic-rag-save
 pr:
 title: One shared atomic-write helper
 ---
