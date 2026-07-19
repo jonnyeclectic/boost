@@ -27,7 +27,7 @@ try:  # TypedDict lives in typing on 3.9+, kept optional for safety
 except ImportError:  # pragma: no cover - 3.9+ always has it
     TypedDict = None  # type: ignore
 
-from . import ai, catalog, frontmatter, gitutil, paths, registry
+from . import ai, catalog, frontmatter, gitutil, paths, registry, util
 
 INDEX_VERSION = 1
 ENGINE = "bm25"
@@ -249,14 +249,15 @@ def _save(docs: List[dict], commits: Dict[str, str]) -> None:
     }
     paths.ensure_dirs()
     p = index_path()
-    p.write_text(json.dumps(payload))
+    # Atomic swap: a bare write_text here can leave a truncated/corrupt index
+    # on disk if the process dies mid-write or a query reads concurrently.
+    util.atomic_write_text(p, json.dumps(payload))
     # Drop the mtime-keyed cache so a reindex is visible to an immediately
     # following query even when the filesystem mtime granularity is coarse.
     _CACHE.pop(str(p), None)
 
 
 def _now() -> str:
-    from . import util
     return util.now_iso()
 
 

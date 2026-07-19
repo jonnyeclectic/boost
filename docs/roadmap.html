@@ -496,7 +496,7 @@ by new unit tests covering every branch.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness</span></div>
         <h3>One shared atomic-write helper</h3>
         <p><code>journal._maybe_rotate</code> is a racy read-modify-write that concurrent appends can truncate mid-line; <code>rag._save</code> and <code>config.save</code> repeat the non-atomic pattern (<code>journal.py:63 · rag.py:252 · config.py:93</code>). Factor a single <code>atomic_write</code> into <code>core</code> and route all four through it.</p>
         <div class="meta">
