@@ -115,8 +115,8 @@
   <section class="block reveal">
     <div class="stats">
       <!-- ROADMAP:stats -->
-      <div class="stat"><b>11</b><span>Shipped</span></div>
-      <div class="stat"><b>3</b><span>Next up</span></div>
+      <div class="stat"><b>14</b><span>Shipped</span></div>
+      <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
       <div class="stat"><b>89</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
@@ -132,6 +132,41 @@
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=shipped -->
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Correctness · Robustness</span></div>
+        <h3>Atomic, corruption-safe lock-file writes</h3>
+        <p>Shipped in <b>#65</b> (this card lingered as "next" after the fact).
+<code>core/lockfile.py</code> now writes through <code>util.atomic_write_text</code>
+(temp file + <code>os.replace()</code>) and <code>read()</code> tells "empty"
+apart from "corrupt": an unparseable lock is preserved as <code>&lt;lock&gt;.corrupt</code>
+and surfaced loudly rather than silently overwritten, so an interrupted or
+concurrent write can no longer drop every prior install record.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">already fixed in</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · Infra</span></div>
+        <h3>GitHub Pages deploy is broken every push</h3>
+        <p>Fixed by <b>#60</b>: the bogus <code>mutants/None</code> gitlink (a stray mutmut
+artifact with no <code>.gitmodules</code> entry) that made Pages' submodule
+checkout abort with <code>fatal: No url found for submodule path 'mutants/None'</code>
+is gone. Verified: the Pages "build and deployment" now completes successfully and
+the site serves — the boards live at
+<code>jonnyeclectic.github.io/boost/docs/roadmap.html</code> (200), since Pages
+publishes from the repo root.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">root cause removed in</span>
+        </div>
+      </article>
+
       <article class="cap rcard">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Bug</span></div>
         <h3>Mutation hardening — <code>core/store.py</code></h3>
@@ -159,6 +194,21 @@
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">34 mutants killed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Hygiene · DX</span></div>
+        <h3>Untrack generated build noise</h3>
+        <p>Shipped in <b>#60</b>. The generated <code>mutants/**</code>,
+<code>__pycache__/*.pyc</code> and <code>.coverage</code> files were removed from
+the index (verified: <code>git ls-files</code> now tracks zero of them), so they
+no longer churn every diff or force path-scoped <code>git add</code>s.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">already fixed in</span>
         </div>
       </article>
 
@@ -338,37 +388,6 @@ by new unit tests covering every branch.</p>
 
       <!-- ROADMAP:cards section=next -->
       <article class="cap rcard">
-        <div class="head"><span class="pill next">Next</span><span class="cat">Bug · Infra</span></div>
-        <h3>GitHub Pages deploy is broken every push</h3>
-        <p>Root cause found: a bogus <code>mutants/None</code> gitlink (a stray
-           mutmut artifact) was committed with no <code>.gitmodules</code> entry,
-           so Pages' submodule checkout aborts with
-           <code>fatal: No url found for submodule path 'mutants/None'</code>.
-           Fix: stop tracking <code>mutants/</code>.</p>
-        <div class="meta">
-          <span class="m">Complexity <b>S</b></span>
-          <span class="m hi">Impact <b>High</b></span>
-          <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">docs site down</span>
-        </div>
-      </article>
-
-      <article class="cap rcard">
-        <div class="head"><span class="pill next">Next</span><span class="cat">Hygiene · DX</span></div>
-        <h3>Untrack generated build noise</h3>
-        <p>Over a hundred <code>mutants/**</code>, <code>__pycache__/*.pyc</code>
-           and <code>.coverage</code> files are tracked despite being in
-           <code>.gitignore</code> — they churn every diff and forced careful
-           path-scoped <code>git add</code>s. Remove from the index.</p>
-        <div class="meta">
-          <span class="m">Complexity <b>S</b></span>
-          <span class="m">Impact <b>Med</b></span>
-          <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">unblocks Pages</span>
-        </div>
-      </article>
-
-      <article class="cap rcard">
         <div class="head"><span class="pill next">Next</span><span class="cat">Design</span></div>
         <h3>Reconcile the theme drift</h3>
         <p><code>docs/index.html</code> inlines its own amber/orange palette
@@ -462,17 +481,6 @@ by new unit tests covering every branch.</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=internals -->
-      <article class="cap rcard">
-        <div class="head"><span class="pill next">Next</span><span class="cat">Correctness · Robustness</span></div>
-        <h3>Atomic, corruption-safe lock-file writes</h3>
-        <p><code>read()</code> returns an empty skeleton on <b>any</b> JSON error and <code>write()</code> is a bare <code>write_text</code> at <code>core/lockfile.py:55</code>. An interrupted or concurrent write truncates the lock — the next <code>set_skill()</code> then <b>permanently drops every prior install record</b> while store dirs linger as orphans. Write to a temp file + <code>os.replace()</code>, and tell "empty" apart from "corrupt".</p>
-        <div class="meta">
-          <span class="m">Complexity <b>M</b></span>
-          <span class="m hi">Impact <b>High</b></span>
-          <span class="m">Wow <b class="wow">★★★★</b></span>
-        </div>
-      </article>
-
       <article class="cap rcard">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance</span></div>
         <h3>Memoize <code>config.load()</code> in-process</h3>
