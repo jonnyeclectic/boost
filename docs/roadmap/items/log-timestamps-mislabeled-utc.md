@@ -2,14 +2,14 @@
 id: log-timestamps-mislabeled-utc
 board: code
 section: health
-status: planned
+status: inflight
 category: Observability · Diagnostics
 complexity: S
 impact: Med
 wow: 2
 note: converter = time.gmtime
 order: 10
-owner:
+owner: loop/utc-log-timestamps
 pr:
 title: Log timestamps are local time mislabeled <code>Z</code>
 ---
