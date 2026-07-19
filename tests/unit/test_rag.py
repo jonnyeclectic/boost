@@ -165,6 +165,27 @@ class TestBuildAndRetrieve:
         rag.build(entries=entries, force=True)
         assert len(rag.retrieve("testing", k=1, entries=entries)) == 1
 
+    def test_snippet_centers_on_match_past_the_head(
+            self, tmp_path, monkeypatch, sandbox):
+        # the matched terms sit well past the chunk's first 200 chars: the old
+        # head-only snip would miss them; the windowed passage must surface them.
+        root = tmp_path / "repo"
+        filler = "intro paragraph about setup and config. " * 8   # ~320 chars
+        body = filler + "\n\nThe kubernetes operator reconciles pods."
+        (root / "k8s").mkdir(parents=True)
+        (root / "k8s" / "SKILL.md").write_text(
+            "---\nname: k8s\n---\n\n%s\n" % body)
+        e = _entry("k8s", skill_md="k8s/SKILL.md")
+        monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": root})
+        monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
+        rag.build(entries=[e], force=True)
+        hits = rag.retrieve("kubernetes operator", entries=[e])
+        assert hits
+        snip = hits[0]["snippet"]
+        assert "kubernetes" in snip.lower()          # centered, not the head
+        assert snip.startswith("…")                   # head was trimmed away
+        assert len(snip) <= rag.SNIP_WIDTH + 2        # windowed, not whole chunk
+
 
 class TestBm25Math:
     """Pin the exact BM25 arithmetic (k1=1.2, b=0.75) so formula mutants die."""
@@ -531,11 +552,21 @@ class TestMakeDocs:
         assert docs[0]["tf"] == {"widget": 2, "gadget": 1}
         assert docs[0]["k"] == "skill"          # e.get("kind", "skill")
 
-    def test_snippet_is_first_200_chars(self, monkeypatch):
+    def test_snippet_stores_chunk_head_up_to_snip_store(self, monkeypatch):
+        # v2: more than SNIP_WIDTH is stored (windowed later at retrieve time)
+        # so `retrieve` can center on the matched terms — but capped at
+        # SNIP_STORE to bound index growth.
         monkeypatch.setattr(rag, "read_body", lambda e, tp: "Q" * 250)
         e = _entry("n")
         docs = rag._make_docs([e], {})
-        assert docs[0]["snip"] == "Q" * 200
+        assert docs[0]["snip"] == "Q" * 250              # under cap -> stored whole
+
+    def test_snippet_storage_is_capped(self, monkeypatch):
+        monkeypatch.setattr(rag, "read_body",
+                            lambda e, tp: "Q" * (rag.SNIP_STORE + 200))
+        e = _entry("n")
+        docs = rag._make_docs([e], {})
+        assert docs[0]["snip"] == "Q" * rag.SNIP_STORE
 
     def test_long_body_yields_multiple_chunks(self, monkeypatch):
         monkeypatch.setattr(rag, "read_body", lambda e, tp: "widget " * 400)
@@ -551,6 +582,67 @@ class TestMakeDocs:
         # first chunk is all stopwords (empty tf) -> `continue`, keep going
         assert len(docs) == 1
         assert "widget" in docs[0]["tf"]
+
+
+class TestPassage:
+    def test_short_text_returned_stripped_and_whole(self):
+        assert rag._passage("  hello world  ", ["hello"], width=200) \
+            == "hello world"
+
+    def test_exact_width_returned_as_is(self):
+        t = "x" * 50
+        assert rag._passage(t, [], width=50) == t        # len == width -> as-is
+
+    def test_no_term_falls_back_to_head_and_rstrips(self):
+        # width lands on a trailing space -> right-strip it (not left), + ellipsis
+        t = "word " * 100                                 # long, term absent
+        out = rag._passage(t, ["zzz"], width=40)
+        assert out == ("word " * 8).rstrip() + "…"
+
+    def test_centers_on_match_with_left_context(self):
+        t = "a" * 100 + " needle " + "b" * 100
+        out = rag._passage(t, ["needle"], width=40)
+        assert "needle" in out
+        assert out.startswith("…") and out.endswith("…")
+        # left context is exactly width // 4 chars before the match
+        assert out.lstrip("…").index("needle") == 40 // 4
+
+    def test_centers_on_first_not_last_occurrence(self):
+        t = "P" * 11 + "needle" + "Q" * 400 + "needle" + "R" * 50
+        out = rag._passage(t, ["needle"], width=40)
+        assert "P" in out and "R" not in out             # first match (find, not rfind)
+
+    def test_match_at_position_zero_is_counted(self):
+        t = "aa" + "P" * 300 + "bb" + "Q" * 50
+        out = rag._passage(t, ["aa", "bb"], width=40)
+        assert out.startswith("aa")                       # p >= 0, not p > 0
+
+    def test_leading_ellipsis_when_window_starts_at_one(self):
+        t = "x" * 11 + "needle" + "y" * 100               # start == 11 - 40//4 == 1
+        out = rag._passage(t, ["needle"], width=40)
+        assert out.startswith("…")                        # start > 0, not start > 1
+
+    def test_match_near_start_has_no_leading_ellipsis(self):
+        t = "needle " + "b" * 300
+        out = rag._passage(t, ["needle"], width=40)
+        assert not out.startswith("…")
+        assert out.endswith("…")
+        assert out.startswith("needle")
+
+    def test_match_near_end_clamps_window_no_trailing_ellipsis(self):
+        t = "a" * 300 + " needle"
+        out = rag._passage(t, ["needle"], width=40)
+        # clamped so a full width window still ends exactly at the match
+        assert out == "…" + "a" * 33 + " needle"
+
+    def test_case_insensitive_match(self):
+        t = "x" * 100 + " NEEDLE " + "y" * 100
+        assert "NEEDLE" in rag._passage(t, ["needle"], width=30)
+
+    def test_earliest_of_several_terms_wins(self):
+        t = "a" * 50 + " zebra " + "b" * 200 + " apple " + "c" * 50
+        out = rag._passage(t, ["apple", "zebra"], width=40)
+        assert "zebra" in out and "apple" not in out
 
 
 class TestPostingsAndKept:
@@ -641,7 +733,8 @@ class TestLoadRaw:
         assert first["stats"]["docs"] == 1          # cached (mtime, A)
         p = rag.index_path()
         p.write_text(json.dumps({
-            "version": 1, "engine": "bm25", "generated": "x", "commits": {},
+            "version": rag.INDEX_VERSION, "engine": "bm25", "generated": "x",
+            "commits": {},
             "params": {}, "stats": {"docs": 5}, "docs": [], "postings": {}}))
         st = p.stat()
         os.utime(p, (st.st_mtime + 50, st.st_mtime + 50))
@@ -660,7 +753,8 @@ class TestBuildEdge:
         _root, entries = corpus
         paths.ensure_dirs()
         rag.index_path().write_text(json.dumps(
-            {"version": 1, "docs": [], "postings": {}}))  # no "commits" key
+            {"version": rag.INDEX_VERSION, "docs": [],
+             "postings": {}}))  # no "commits" key
         rag._CACHE.clear()
         stats = rag.build(entries=entries)  # force=False -> loads the old index
         assert stats["docs"] >= 1
