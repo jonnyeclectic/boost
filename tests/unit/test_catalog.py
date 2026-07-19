@@ -349,22 +349,16 @@ class TestEntrySetCache:
     """load_tap memoizes parsed skills on the cache file's (mtime_ns, size)
     stamp, so repeated searches don't re-parse every tap cache."""
 
-    def test_unchanged_cache_is_parsed_once(self, sandbox, monkeypatch):
+    def test_unchanged_cache_returns_memoized_object(self, sandbox):
         paths.ensure_dirs()
         tap = registry.Tap(name="fake", url="")
         tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}))
-        n = {"loads": 0}
-        real = catalog.json.loads
-
-        def counting(s, *a, **k):
-            n["loads"] += 1
-            return real(s, *a, **k)
-
-        monkeypatch.setattr(catalog.json, "loads", counting)
-        assert catalog.load_tap(tap) == [{"name": "s1"}]
-        assert catalog.load_tap(tap) == [{"name": "s1"}]
-        assert catalog.load_tap(tap) == [{"name": "s1"}]
-        assert n["loads"] == 1  # first parse cached; next two were cache hits
+        first = catalog.load_tap(tap)
+        second = catalog.load_tap(tap)
+        # A cache hit returns the memoized list itself; a re-parse would build a
+        # fresh list, so identity proves the second call did not touch disk.
+        assert first == [{"name": "s1"}]
+        assert second is first
 
     def test_content_change_invalidates_cache(self, sandbox):
         paths.ensure_dirs()
