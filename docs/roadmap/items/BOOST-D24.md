@@ -2,14 +2,14 @@
 id: BOOST-D24
 board: design
 track: layout
-status: proposed
+status: progress
 impact: med
 complexity: L
 wow: 4
 category: layout
 ref: "core/output.py:table() · commands/taps.py"
 order: 7
-owner:
+owner: loop/table-width
 pr:
 title: Width-aware shared <code>table()</code>
 ---
