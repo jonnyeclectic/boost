@@ -25,8 +25,8 @@ update all of them, you run one command.
 boost is built in the open. Two living boards — generated from
 `docs/roadmap/items/*.md` — track what's shipped, in flight, and planned:
 
-- **[Code roadmap](https://jonnyeclectic.github.io/boost/roadmap.html)** — engine, correctness, and tooling work
-- **[Design roadmap](https://jonnyeclectic.github.io/boost/design-roadmap.html)** — the Visual Guide and docsite aesthetics
+- **[Code roadmap](https://jonnyeclectic.github.io/boost/docs/roadmap.html)** — engine, correctness, and tooling work
+- **[Design roadmap](https://jonnyeclectic.github.io/boost/docs/design-roadmap.html)** — the Visual Guide and docsite aesthetics
 
 Both are reachable from the [Visual Guide](https://jonnyeclectic.github.io/boost/) nav.
 
