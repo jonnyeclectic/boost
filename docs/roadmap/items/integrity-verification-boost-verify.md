@@ -2,15 +2,15 @@
 id: integrity-verification-boost-verify
 board: code
 section: trust
-status: planned
+status: shipped
 category: Security · Integrity
 complexity: S
 impact: High
 wow: 4
 note: reuses sha256_dir
 order: 2
-owner:
-pr:
+owner: loop/doctor-integrity
+pr: 139
 title: Integrity verification — <code>boost verify</code>
 ---
 The lockfile already records a <code>sha256</code> per install via
