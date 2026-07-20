@@ -29,6 +29,14 @@ jobs:
         run: mypy
       - name: codespell (user-facing text)
         run: codespell boost_cli docs README.md
+      - name: actionlint (workflow linting + shellcheck)
+        # The release is fully automated across every workflow file — a malformed
+        # ${{ }} expression or a bug in a run: block is a broken publish. Pin the
+        # binary; shellcheck is preinstalled on the runner, so run: blocks are
+        # checked too.
+        run: |
+          curl -sSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar xz actionlint
+          ./actionlint -color
       - name: registries.json is regenerated
         run: python scripts/build_registries.py --check
       - name: roadmap HTML is regenerated

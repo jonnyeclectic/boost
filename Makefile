@@ -36,6 +36,7 @@ lint:
 	$(VENV)/bin/ruff check boost_cli tests
 	$(VENV)/bin/mypy
 	$(VENV)/bin/codespell boost_cli docs README.md
+	@command -v actionlint >/dev/null 2>&1 && actionlint || echo "actionlint not on PATH — skipping (CI enforces it)"
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
 

@@ -2,7 +2,7 @@
 id: workflow-linting-actionlint
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: Quality · CI/CD
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: shellcheck built in
 order: 2
 owner: loop/actionlint
-pr:
+pr: 136
 title: Workflow linting — <code>actionlint</code>
 ---
 Catches GitHub Actions YAML bugs before they fail a live release:
