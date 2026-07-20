@@ -102,6 +102,11 @@ def _warn_secrets(res: store.InstallResult) -> None:
 
 def _report_result(res: store.InstallResult) -> None:
     """The canonical three-line install report."""
+    if res.kind == "rule":
+        out.ok("materialized → %s" % (" · ".join(res.linked) or "(no enabled agents)"))
+        out.ok("lock updated (.skill-lock.json)")
+        _warn_injection(res)
+        return
     out.ok("copied to %s" % _tilde(res.dest))
     if res.linked:
         out.ok("linked → %s" % " · ".join(res.linked))
@@ -165,6 +170,13 @@ def cmd_install(argv: List[str]) -> int:
     if args.dry_run:
         targets = [a for a in agents.enabled_agents() if not only or a in only]
         for e in entries:
+            if e.get("kind") == "rule":
+                verb = "reinstall" if lockfile.get_rule(e["name"]) else "install"
+                out.info("would %s rule %s v%s from %s" % (verb, e["name"],
+                                                           e["version"], e["tap"]))
+                out.info("  materialize → %s" % (" · ".join(targets)
+                                                 or "(no enabled agents)"))
+                continue
             verb = "upgrade" if lockfile.get_skill(e["name"]) else "install"
             out.info("would %s %s v%s from %s" % (verb, e["name"],
                                                   e["version"], e["tap"]))
@@ -189,14 +201,22 @@ def cmd_install(argv: List[str]) -> int:
         _report_result(res)
         results.append(res)
     if results:
+        kinds = {r.kind for r in results}
+        noun = "skill" if kinds == {"skill"} else "rule" if kinds == {"rule"} else "item"
         new = sum(1 for r in results if not r.upgraded)
         parts = []
         if new:
-            parts.append("Installed %s" % _plural(new, "new skill"))
+            parts.append("Installed %s" % _plural(new, "new " + noun))
         if len(results) - new:
-            parts.append("Upgraded %s" % _plural(len(results) - new, "skill"))
-        avg = round(sum(r.score for r in results) / len(results))
-        summary = "%s; quality score %d/100" % ("; ".join(parts), avg)
+            parts.append("Upgraded %s" % _plural(len(results) - new, noun))
+        # Quality score is skill-only (rules have no scored tree); omit it when
+        # nothing scoreable was installed so a rule doesn't report 0/100.
+        scored = [r for r in results if r.kind == "skill"]
+        if scored:
+            avg = round(sum(r.score for r in scored) / len(scored))
+            summary = "%s; quality score %d/100" % ("; ".join(parts), avg)
+        else:
+            summary = "; ".join(parts)
         lines = [summary]
         if len(results) == 1:
             r0 = results[0]

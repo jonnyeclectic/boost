@@ -37,15 +37,16 @@ def brainstorming(entry):
 
 
 class TestInstall:
-    def test_non_skill_kind_refused(self, tap, entry):
-        rule = dict(entry, kind="rule", name="some-rule")
+    def test_workflow_kind_still_refused(self, tap, entry):
+        # Rules install now (see TestRuleInstall); workflows remain tap-only.
+        wf = dict(entry, kind="workflow", name="some-workflow")
         with pytest.raises(BoostError) as ei:
-            store.install(rule)
+            store.install(wf)
         assert ei.value.message == (
-            "some-rule is a rule, which boost indexes but cannot install yet")
+            "some-workflow is a workflow, which boost indexes but cannot install yet")
         assert ei.value.hint == (
-            "rules and workflows show up in `boost search`/`boost taps` for now")
-        assert lockfile.get_skill("some-rule") is None
+            "workflows show up in `boost search`/`boost taps` for now")
+        assert lockfile.get_skill("some-workflow") is None
 
     def test_happy_path(self, tap, entry):
         src = tap.path / "skills" / "brainstorming"
@@ -489,3 +490,89 @@ class TestCopySkillAtomic:
             store._copy_skill(tmp_path / "s1" / "sk", dest)
         assert (dest / "SKILL.md").read_text() == "original"
         assert self._leftovers(dest.parent, "sk") == []
+
+
+def _rule_entry(tap, name="team-conventions", rel="rules/team.mdc"):
+    """Write a rule file into the tap clone and return its catalog entry."""
+    src = tap.path / rel
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("---\nname: Team Conventions\n---\n\nAlways write tests first.\n")
+    return {
+        "name": name, "kind": "rule", "tap": tap.name, "version": "1.0.0",
+        "rel_dir": str(src.parent.relative_to(tap.path)), "skill_md": rel,
+        "description": "team rules", "curated": False,
+        "meta": {"name": "Team Conventions"},
+    }
+
+
+class TestRuleInstall:
+    def _claude_md(self):
+        return paths.home() / ".claude" / "CLAUDE.md"
+
+    def test_materializes_into_each_agent_native_format(self, tap):
+        res = store.install(_rule_entry(tap))
+        assert set(res.linked) == {"claude-code", "windsurf", "cursor"}
+
+        # Claude Code has no rules folder -> managed block in CLAUDE.md.
+        text = self._claude_md().read_text()
+        assert "boost:rule:team-conventions start" in text
+        assert "# Team Conventions" in text
+        assert "Always write tests first." in text
+        assert "name: Team Conventions" not in text  # frontmatter stripped for CLAUDE.md
+
+        # Cursor: verbatim .mdc drop, frontmatter preserved (native metadata).
+        cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        assert cur.is_file()
+        assert "name: Team Conventions" in cur.read_text()
+
+        # Windsurf: .md drop.
+        assert (paths.home() / ".windsurf" / "rules" / "team-conventions.md").is_file()
+
+        rec = lockfile.get_rule("team-conventions")
+        assert rec["kind"] == "rule"
+        assert rec["tap"] == tap.name
+        assert {m["agent"] for m in rec["materializations"]} == {
+            "claude-code", "windsurf", "cursor"}
+        assert lockfile.get_skill("team-conventions") is None  # not a skill
+
+    def test_uninstall_reverses_every_materialization(self, tap):
+        store.install(_rule_entry(tap))
+        claude_md = self._claude_md()
+        # A hand-authored note above our block must survive uninstall.
+        claude_md.write_text("# My own standing notes\n\n" + claude_md.read_text())
+
+        info = store.uninstall("team-conventions")
+        assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor"}
+        assert lockfile.get_rule("team-conventions") is None
+        text = claude_md.read_text()
+        assert "boost:rule" not in text
+        assert "# My own standing notes" in text
+        assert not (paths.home() / ".cursor" / "rules" / "team-conventions.mdc").exists()
+        assert not (paths.home() / ".windsurf" / "rules" / "team-conventions.md").exists()
+
+    def test_uninstall_removes_claude_md_when_only_our_block(self, tap):
+        store.install(_rule_entry(tap, name="solo"))
+        store.uninstall("solo")
+        # CLAUDE.md held only our block -> boost created it -> removed on uninstall.
+        assert not self._claude_md().exists()
+
+    def test_reinstall_requires_force_and_stays_idempotent(self, tap):
+        entry = _rule_entry(tap)
+        store.install(entry)
+        with pytest.raises(BoostError):
+            store.install(entry)
+        res = store.install(entry, force=True)
+        assert res.upgraded is True
+        assert self._claude_md().read_text().count("boost:rule:team-conventions start") == 1
+
+    def test_only_agents_limits_materialization(self, tap):
+        res = store.install(_rule_entry(tap), only_agents=["cursor"])
+        assert res.linked == ["cursor"]
+        assert (paths.home() / ".cursor" / "rules" / "team-conventions.mdc").is_file()
+        assert not self._claude_md().exists()
+
+    def test_missing_source_raises(self, tap):
+        entry = _rule_entry(tap)
+        (tap.path / entry["skill_md"]).unlink()
+        with pytest.raises(BoostError, match="vanished from tap"):
+            store.install(entry)

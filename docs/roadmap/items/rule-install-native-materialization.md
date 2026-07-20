@@ -2,7 +2,7 @@
 id: rule-install-native-materialization
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Install engine · Rules
 complexity: L
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: rules are indexed but never installed
 order: 21
 owner: loop/rule-install
-pr:
+pr: 141
 title: Rule install — materialize rules into each agent's native format
 ---
 Today <code>store.install</code> refuses every non-skill kind
