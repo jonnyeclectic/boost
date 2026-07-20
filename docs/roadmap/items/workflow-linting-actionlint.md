@@ -2,14 +2,14 @@
 id: workflow-linting-actionlint
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: Quality · CI/CD
 complexity: S
 impact: Med
 wow: 3
 note: shellcheck built in
 order: 2
-owner:
+owner: loop/actionlint
 pr:
 title: Workflow linting — <code>actionlint</code>
 ---
