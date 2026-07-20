@@ -2,7 +2,7 @@
 id: list-rules-and-workflows
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Install engine · UX
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note: list was skill-only after rule/workflow install landed
 order: 23
 owner: loop/list-all-kinds
-pr:
+pr: 154
 title: <code>boost list</code> shows installed rules and workflows
 ---
 Rule (<code>#141</code>) and workflow (<code>#150</code>) install landed, but
