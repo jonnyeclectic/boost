@@ -2,14 +2,14 @@
 id: prompt-injection-scanning-of-skill-markdown
 board: code
 section: trust
-status: planned
+status: inflight
 category: Security · Content
 complexity: M
 impact: High
 wow: 5
 note: the core risk
 order: 1
-owner:
+owner: loop/inject-scan
 pr:
 title: Prompt-injection scanning of skill Markdown
 ---
