@@ -2,7 +2,7 @@
 id: install-scope-user-or-project
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Install engine · UX
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 3
 note: rules/workflows were user-global only
 order: 27
 owner: loop/install-scope
-pr:
+pr: 169
 title: <code>boost install --scope user|project</code> for rules/workflows
 ---
 Rule and workflow install always materialized into user-global agent config
