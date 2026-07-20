@@ -15,9 +15,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .. import cliparse
-from ..core import (agents, catalog, gitutil, injectscan, journal, lockfile,
-                    paths, registry, secretscan, staleness, store, typosquat,
-                    updatediff, util)
+from ..core import (adapters, agents, catalog, frontmatter, gitutil,
+                    injectscan, journal, lockfile, paths, registry,
+                    secretscan, staleness, store, typosquat, updatediff, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -941,4 +941,47 @@ def cmd_export(argv: List[str]) -> int:
     out.ok("exported %s → %s (%s)" % (_plural(len(chosen), "skill"),
                                       _tilde(dest.resolve()),
                                       util.human_size(dest.stat().st_size)))
+    return 0
+
+
+def _resolve_skill_source(name: str):
+    """(display_name, description, body) for a skill — installed store first,
+    then any tap clone. Raises BoostError if the name resolves nowhere."""
+    p = store.skill_store_dir(name) / "SKILL.md"
+    if not p.exists():
+        entry = catalog.resolve_one(name)   # raises BoostError if unknown
+        p = registry.get(entry["tap"]).path / entry["skill_md"]
+        if not p.exists():
+            raise BoostError("SKILL.md missing for %s" % name,
+                            hint="refresh the tap with `boost update`")
+    meta, body = frontmatter.parse(p.read_text(encoding="utf-8", errors="replace"))
+    display = str(meta.get("name") or name).strip() or name
+    return display, str(meta.get("description") or "").strip(), body
+
+
+def cmd_adapt(argv: List[str]) -> int:
+    ap = cliparse.parser(
+        prog="boost adapt",
+        description="Render a skill as another agent framework's native source")
+    ap.add_argument("name", help="skill to adapt")
+    ap.add_argument("--to", metavar="FRAMEWORK", required=True,
+                    help="target framework: %s" % ", ".join(adapters.formats()))
+    ap.add_argument("-o", "--out", metavar="FILE",
+                    help="write to FILE instead of stdout")
+    args = ap.parse_args(argv)
+    if args.to not in adapters.FORMATS:
+        raise BoostError("unknown framework: %s" % args.to,
+                        hint="supported: %s" % ", ".join(adapters.formats()))
+    display, description, body = _resolve_skill_source(args.name)
+    source = adapters.render(args.to, display, description, body)
+    if args.out:
+        dest = paths.expand(args.out)
+        try:
+            util.atomic_write_text(dest, source)
+        except OSError as e:
+            raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
+                            hint="check the output path exists and is writable")
+        out.ok("adapted %s → %s (%s)" % (display, _tilde(dest.resolve()), args.to))
+    else:
+        sys.stdout.write(source)
     return 0
