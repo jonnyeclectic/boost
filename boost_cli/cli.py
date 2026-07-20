@@ -14,6 +14,7 @@ from typing import List
 
 from . import PRODUCT, TAGLINE, __version__
 from .core import logs
+from .core import nethttp
 from .core import output as out
 from .errors import BoostError
 
@@ -223,6 +224,11 @@ def _extract_globals(argv: List[str]) -> tuple[dict, List[str]]:
 
 def main(argv: List[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    # Belt-and-suspenders fork safety: a host may fork() into `boost mcp
+    # --stdio` without the no_proxy env boost injects at registration, leaving
+    # the process one default getproxies() away from a macOS _scproxy SIGABRT.
+    # Seed the guard for every invocation before any code path can trip it.
+    nethttp.harden_fork_safety()
     opts, argv = _extract_globals(argv)
     logs.configure(verbose=opts["verbose"], debug=opts["debug"],
                    quiet=opts["quiet"])

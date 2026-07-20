@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>101</b><span>Loop finds</span></div>
+      <div class="stat"><b>102</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1782,6 +1782,31 @@ and the work stays visible.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">OBJC_DISABLE_INITIALIZE_FORK_SAFETY</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compatibility · macOS</span></div>
+        <h3>Self-harden every boost process against the macOS fork-safety abort</h3>
+        <p>The launch-env fix (<a href="#mcp-launch-objc-fork-safety">#119</a>) only
+           protects hosts that register boost <em>through boost</em>, which
+           injects <code>no_proxy=*</code>. A host that <code>fork()</code>s into
+           <code>boost mcp --stdio</code> from a stale or hand-written config —
+           or any stray default-opener call inside the process — is still one
+           <code>getproxies()</code> away from the macOS <code>_scproxy</code>
+           Obj-C <code>SIGABRT</code>. Close the gap from inside: at the top of
+           <code>main()</code>, seed <code>no_proxy</code> for the current
+           process (only when no <code>*_proxy</code> env is already set, so a
+           real proxy is never clobbered) so the stdlib default
+           <code>getproxies()</code> short-circuits on
+           <code>getproxies_environment()</code> and never consults
+           SystemConfiguration. Belt-and-suspenders atop the
+           <code>nethttp</code> opener (<a href="#fork-safe-network-proxy-handler">#115</a>).</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">self-seed no_proxy at startup</span>
         </div>
       </article>
 
