@@ -94,42 +94,81 @@ def _print_wrapped(text: str) -> None:
 
 # ---------------------------------------------------------------- commands
 
+def _materialized_agents(entry):
+    """Abbreviated agent column for a rule/workflow, from its materializations."""
+    ags = [m.get("agent", "") for m in entry.get("materializations") or []]
+    return "·".join(a.split("-")[0] for a in ags)
+
+
+def _kind_table(heading, items, extra=None):
+    """Render an installed rule/workflow table. ``extra`` is an optional
+    ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
+    count line reuses the heading's trailing noun (`installed rules` -> `rule`)."""
+    out.heading(heading)
+    headers = ("NAME", "VERSION", "TAP", "AGENTS")
+    rows = []
+    for name in sorted(items):
+        e = items[name]
+        row = [name, e.get("version", "?"), e.get("tap", "?"),
+               _materialized_agents(e)]
+        if extra:
+            row.append(str(e.get(extra[1], "") or ""))
+        rows.append(tuple(row))
+    if extra:
+        headers = headers + (extra[0],)
+    out.table(rows, headers=headers)
+    noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
+    print("  " + out.aurora("%d %s%s installed"
+                            % (len(rows), noun, "" if len(rows) == 1 else "s"),
+                            "cyan"))
+
+
 def cmd_list(argv):
     ap = cliparse.parser(prog="boost list",
-                                 description="List installed skills")
+                                 description="List installed skills, rules and workflows")
     ap.add_argument("--tag", help="only show skills carrying this tag")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
     skills = lockfile.installed()
+    rules = lockfile.installed_rules()
+    workflows = lockfile.installed_workflows()
     if args.tag:
+        # Tags are a skill-only concept, so --tag narrows to skills.
         want = args.tag.lstrip("#")
         skills = {n: e for n, e in skills.items() if want in (e.get("tags") or [])}
+        rules, workflows = {}, {}
     if args.json:
-        print(json.dumps(skills, indent=2, sort_keys=True))
+        print(json.dumps({"skills": skills, "rules": rules, "workflows": workflows},
+                         indent=2, sort_keys=True))
         return 0
-    if not skills:
+    if not skills and not rules and not workflows:
         print(out.empty_state(
             "no skills installed"
             + (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""),
             hint="boost tap --defaults && boost search <topic>"))
         return 0
-    out.heading("installed skills")
-    rows = []
-    for name in sorted(skills):
-        e = skills[name]
-        # Aurora-tinted flags — now that table() aligns by visible width,
-        # colored cells stay in their column: pinned amber, quarantined pink,
-        # tags dim.
-        flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
-                ([out.aurora("quarantined", "pink")] if e.get("quarantined")
-                 else []) + \
-                [out.role("#" + t, "muted") for t in e.get("tags") or []]
-        rows.append((name, e.get("version", "?"), e.get("tap", "?"),
-                     "·".join(a.split("-")[0] for a in e.get("agents") or []),
-                     " ".join(flags)))
-    out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"))
-    print("  " + out.aurora("%d skill%s installed"
-                            % (len(rows), "" if len(rows) == 1 else "s"), "cyan"))
+    if skills:
+        out.heading("installed skills")
+        rows = []
+        for name in sorted(skills):
+            e = skills[name]
+            # Aurora-tinted flags — now that table() aligns by visible width,
+            # colored cells stay in their column: pinned amber, quarantined pink,
+            # tags dim.
+            flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
+                    ([out.aurora("quarantined", "pink")] if e.get("quarantined")
+                     else []) + \
+                    [out.role("#" + t, "muted") for t in e.get("tags") or []]
+            rows.append((name, e.get("version", "?"), e.get("tap", "?"),
+                         "·".join(a.split("-")[0] for a in e.get("agents") or []),
+                         " ".join(flags)))
+        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"))
+        print("  " + out.aurora("%d skill%s installed"
+                                % (len(rows), "" if len(rows) == 1 else "s"), "cyan"))
+    if rules:
+        _kind_table("installed rules", rules)
+    if workflows:
+        _kind_table("installed workflows", workflows, extra=("SLOT", "slot"))
     return 0
 
 
