@@ -9,7 +9,7 @@ impact: Med
 wow: 3
 note: pre-publish gate
 order: 6
-owner:
+owner: loop/pkg-metadata-check
 pr:
 title: Package-metadata validation — <code>twine check</code> + friends
 ---
