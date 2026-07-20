@@ -14,7 +14,7 @@ EVAL_HOME := $(CURDIR)/.eval-home
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis
 
 unit:
 	$(PYTEST) tests/unit -q
