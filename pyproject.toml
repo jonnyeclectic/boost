@@ -40,12 +40,21 @@ Changelog = "https://github.com/jonnyeclectic/boost/releases"
 # OpenAI, keyed by env var) — no client library required. Without this extra,
 # or without an embeddings key, search degrades to the always-on BM25 engine.
 rag = ["sqlite-vec>=0.1.6"]
-# Opt-in retrieval-eval extras. The Tier 1 gate (scripts/eval_retrieval.py) is
-# pure-stdlib and required in CI; this extra only powers the optional `--stats`
-# mode, which adds `ranx` for statistical-significance testing (paired t-test)
-# between engines. `pip install boost-skill-cli[eval]`. Never imported by the
-# CLI or the required gate.
-eval = ["ranx>=0.3.20"]
+# Opt-in eval extras. The Tier 1 gate (scripts/eval_retrieval.py) is pure-stdlib
+# and required in CI; nothing here is imported by the CLI or the required gate.
+# `pip install boost-skill-cli[eval]`. Powers:
+#   - Tier 1b `--stats`: ranx statistical-significance testing between engines.
+#   - Tier 2c (scripts/eval_explain.py): ragas `faithfulness` for `boost explain`.
+# ragas 0.2.x hard-imports a ChatVertexAI path that langchain>=1.0 /
+# langchain-community>=0.4 removed, so the langchain 0.3 stack is pinned — an
+# unavoidable constraint of ragas's packaging, isolated to this opt-in extra.
+eval = [
+    "ranx>=0.3.20",
+    "ragas>=0.2,<0.3",
+    "langchain-core<0.4",
+    "langchain-community<0.4",
+    "langchain-openai<1",
+]
 
 [project.scripts]
 boost = "boost_cli.cli:main"

@@ -1,0 +1,15 @@
+# Golden skills for the Tier 2c explain-faithfulness eval (scripts/eval_explain.py).
+# One JSON object per line: {name, note}
+#   name - a skill that exists in the pinned corpus (tests/eval/taps.txt), so the
+#          eval is reproducible; its SKILL.md is the faithfulness context.
+#   note - why it's here / what it exercises.
+# The eval generates `boost explain <name>` and scores how faithfully the summary
+# reflects that SKILL.md (ragas faithfulness). These are well-specified skills
+# with concrete capabilities, so an unfaithful summary is a real overclaim.
+{"name": "pdf", "note": "narrow, concrete tool — text extraction + form fill"}
+{"name": "docx", "note": "document creation/format — easy to overclaim features"}
+{"name": "pptx", "note": "slide decks + charts"}
+{"name": "xlsx", "note": "spreadsheets/formulas — distinct from docx/pptx"}
+{"name": "mcp-builder", "note": "MCP server authoring — technical, trigger-specific"}
+{"name": "brand-guidelines", "note": "brand system application — vaguer scope"}
+{"name": "algorithmic-art", "note": "creative coding — tempting to embellish"}

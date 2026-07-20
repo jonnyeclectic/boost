@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats audit dist-check
+.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check
 
 venv:
 	python3 -m venv $(VENV)
@@ -87,6 +87,14 @@ eval-rec:
 eval-stats:
 	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
 	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 --stats
+
+# Tier 2c: explain-faithfulness (ragas, LLM-judged). Opt-in and key-gated —
+# needs the [eval] extra plus a judge key (OPENAI_API_KEY, or ANTHROPIC_API_KEY
+# with langchain-anthropic) and boost AI to generate the explanations. Skips
+# cleanly when any piece is missing. Over the pinned corpus; out of `check`.
+eval-explain:
+	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
+	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_explain.py --fail-under 0.80
 
 # regenerate generated artifacts from their source (registries + roadmap boards)
 generate:
