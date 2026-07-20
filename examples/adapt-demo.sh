@@ -40,7 +40,9 @@ export HOME="$DEMO/home"; mkdir -p "$HOME"          # boost store → $DEMO/home
 "$PYBIN" -m venv "$DEMO/.venv"                       # absolute py: independent of HOME
 BOOST="$DEMO/.venv/bin/boost"; PY="$DEMO/.venv/bin/python"
 dim "installing boost + crewai + openai-agents … (crewai is a big tree; ~2-3 min first run)"
-"$DEMO/.venv/bin/pip" -q install -U boost-skill-cli crewai openai-agents
+# [anthropic] / [litellm] extras so the default LLM wiring (boost's ai.model =
+# Claude) constructs — see the model line printed in step 3.
+"$DEMO/.venv/bin/pip" -q install -U boost-skill-cli "crewai[anthropic]" "openai-agents[litellm]"
 dim "boost $("$BOOST" --version | awk '{print $2}')  ·  isolated home = $HOME/.agents"
 
 # ---- 2. author ONE skill (the single source of truth) -----------------------
@@ -58,8 +60,10 @@ MD
 "$BOOST" import "$DEMO/src/$SKILL" >/dev/null
 ok "installed '$SKILL' into boost (one SKILL.md — the single source)"
 
-# ---- 3. VALUE (1): author once -> two frameworks (no key) -------------------
+# ---- 3. VALUE (1): author once -> two frameworks, on boost's model (no key) -
 c "3/5  VALUE 1 — one skill → native agents for TWO frameworks (no API key)"
+# No --model: agents are wired to boost's configured ai.model (Claude) by
+# default, so they run on the same LLM boost uses — no OpenAI key needed.
 "$BOOST" adapt "$SKILL" --to crewai     -o "$DEMO/crew_agent.py"
 "$BOOST" adapt "$SKILL" --to agents-sdk -o "$DEMO/sdk_agent.py"
 cd "$DEMO"
@@ -69,9 +73,9 @@ from crewai import Agent as CrewAgent
 from agents import Agent as SdkAgent
 crew = next(v for v in vars(crew_agent).values() if isinstance(v, CrewAgent))
 sdk  = next(v for v in vars(sdk_agent).values()  if isinstance(v, SdkAgent))
-print(f"  CrewAI     -> {type(crew).__module__}.{type(crew).__name__}   role={crew.role!r}")
-print(f"  Agents SDK -> {type(sdk).__module__}.{type(sdk).__name__}   name={sdk.name!r}")
-print("  \033[1;32m✓ same SKILL.md, two real framework Agent objects — zero hand-porting\033[0m")
+print(f"  CrewAI     -> {type(crew).__module__}.{type(crew).__name__}   role={crew.role!r}   llm={crew.llm.model!r}")
+print(f"  Agents SDK -> {type(sdk).__module__}.{type(sdk).__name__}   name={sdk.name!r}   model={sdk.model.model!r}")
+print("  \033[1;32m✓ same SKILL.md, two real Agents — both pinned to boost's model (Claude), no OpenAI key\033[0m")
 PYEOF
 
 # ---- 4. VALUE (2): edit once -> both update (zero drift) --------------------
@@ -91,8 +95,8 @@ printf '  %-14s %-10s %-10s\n' 'after  edit' "$ac"      "$as"
 ok "one edit → both outputs carry it (1 & 1). Hand-porting means keeping N copies in sync forever."
 
 # ---- 5. optional: run live inference (needs a key) --------------------------
-c "5/5  (optional) run the agent — needs an LLM key"
-if [ -n "${OPENAI_API_KEY:-}" ]; then
+c "5/5  (optional) run the agent — on boost's model, needs ANTHROPIC_API_KEY"
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
   "$PY" - <<'PYEOF'
 from agents import Runner, Agent as SdkAgent
 import sdk_agent
@@ -100,9 +104,11 @@ sdk = next(v for v in vars(sdk_agent).values() if isinstance(v, SdkAgent))
 print("  " + Runner.run_sync(sdk, "Name two things you check in a code review.").final_output.replace("\n", "\n  "))
 PYEOF
 else
-  dim "  OPENAI_API_KEY not set — skipping live run (instantiation above already"
-  dim "  proved the contract without a key). To run for real:"
-  dim "    OPENAI_API_KEY=sk-... bash $0"
+  dim "  ANTHROPIC_API_KEY not set — skipping live run (instantiation above already"
+  dim "  proved the contract without a key). The agents default to boost's model"
+  dim "  (Claude), so run for real with:"
+  dim "    ANTHROPIC_API_KEY=sk-ant-... bash $0"
+  dim "  (or export to a different provider: boost adapt … --model openai/gpt-4o)"
 fi
 
 c "done"

@@ -19,11 +19,14 @@ What it does (all offline — **no `OPENAI_API_KEY` needed**):
 2. Authors **one** `SKILL.md` and imports it into boost.
 3. **Value 1** — renders it to *both* frameworks and instantiates each:
    a real `crewai.Agent` and a real `agents.Agent` from the same source, no
-   hand-porting.
+   hand-porting. Both are wired to **boost's configured `ai.model` (Claude)** by
+   default, so they run on the same LLM boost uses — no OpenAI key. Override per
+   run with `boost adapt … --model openai/gpt-4o`, or `--model none` for the
+   framework's own default.
 4. **Value 2** — edits the skill **once** and re-adapts; the change appears in
    **both** generated files (before/after `0 0` → `1 1`). That is the
    drift-killing payoff: one edit, every runtime current.
-5. Optional: if `OPENAI_API_KEY` is set, actually runs the agent.
+5. Optional: if `ANTHROPIC_API_KEY` is set, actually runs the agent on Claude.
 
 Requirements: **Python 3.11–3.13** (CrewAI's `tiktoken` dependency has no 3.14
 wheel yet; boost itself supports 3.9–3.14). Clean up with

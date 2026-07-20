@@ -22,12 +22,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # name  → the `--to` id · pip package · import module · Agent attr
+          # name → the `--to` id · pip package · import module.
+          # The [anthropic]/[litellm] extras are required because `boost adapt`
+          # wires the agent to boost's ai.model (Claude) by DEFAULT, so the
+          # emitted file imports the framework's LiteLLM/native-Anthropic path.
           - to: crewai
-            pip: crewai
+            pip: crewai[anthropic]
             module: crewai
           - to: agents-sdk
-            pip: openai-agents
+            pip: openai-agents[litellm]
             module: agents
     name: ${{ matrix.to }} accepts boost adapt output
     steps:
