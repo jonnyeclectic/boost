@@ -2,7 +2,7 @@
 id: scan-and-sync-rules-and-workflows
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Install engine · Safety
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note: close the last skill-only gaps for rules/workflows
 order: 26
 owner: loop/scan-sync-all-kinds
-pr:
+pr: 160
 title: Scan and <code>sync</code> rules/workflows like skills
 ---
 Two skill-only gaps remained after rule (<code>#141</code>) / workflow
