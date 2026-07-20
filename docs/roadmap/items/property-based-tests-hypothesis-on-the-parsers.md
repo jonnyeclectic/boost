@@ -2,7 +2,7 @@
 id: property-based-tests-hypothesis-on-the-parsers
 board: code
 section: health
-status: inflight
+status: shipped
 category: Testing · Bug
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: finds edge cases
 order: 7
 owner: loop/property-parsers
-pr:
+pr: 149
 title: Property-based tests — <code>hypothesis</code> on the parsers
 ---
 Generate adversarial inputs against <code>core/frontmatter</code> and

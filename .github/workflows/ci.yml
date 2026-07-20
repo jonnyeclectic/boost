@@ -77,7 +77,8 @@ jobs:
       - name: install test deps
         run: |
           python -m venv .venv
-          .venv/bin/pip -q install pytest pytest-cov coverage
+          # hypothesis powers the property-based parser tests (tests/functional)
+          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis
           # [rag] extra so the opt-in dense backend is exercised (py3-none
           # wheel; falls back to importorskip if a platform lacks it)
           .venv/bin/pip -q install sqlite-vec || true
