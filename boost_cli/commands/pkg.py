@@ -16,7 +16,8 @@ from typing import Dict, List, Optional
 
 from .. import cliparse
 from ..core import (agents, catalog, gitutil, injectscan, journal, lockfile,
-                    paths, registry, staleness, store, typosquat, util)
+                    paths, registry, staleness, store, typosquat, updatediff,
+                    util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -292,6 +293,29 @@ def cmd_sync(argv: List[str]) -> int:
 
 # ── update ───────────────────────────────────────────────────────────────
 
+def _confirm_risky_update(name: str, entry: dict) -> bool:
+    """Gate an in-place update behind a visible diff when it is risky.
+
+    Diffs the installed skill against the incoming source. If the change adds
+    executable-looking instructions (shell commands, pipe-to-shell, shebangs),
+    the unified diff is printed and the update must be confirmed — so a poisoned
+    update is *seen* before it lands. Routine edits apply silently. If the
+    source can't be read we fail open and let ``store.install`` surface the real
+    error rather than blocking on a phantom diff.
+    """
+    try:
+        new_tree = updatediff.read_tree(store.source_dir_for(entry))
+    except BoostError:
+        return True
+    diff = updatediff.diff_tree(updatediff.read_tree(store.skill_store_dir(name)),
+                                new_tree)
+    if not diff.risky:
+        return True
+    out.warn("%s: upstream update changes executable-looking instructions" % name)
+    print(diff.text)
+    return out.confirm("Apply this update to %s?" % name)
+
+
 def cmd_update(argv: List[str]) -> int:
     ap = cliparse.parser(prog="boost update",
                                  description="Sync taps or update installed skills")
@@ -334,6 +358,10 @@ def cmd_update(argv: List[str]) -> int:
         reason = staleness.upstream_reason(old_v, new_v, lk.get("commit", ""),
                                            head, lk.get("sha256", ""), src_sha)
         if reason is None:
+            continue
+        if not _confirm_risky_update(name, entry):
+            out.warn("%s: update skipped — review the diff, then `boost update "
+                     "--yes` to apply" % name)
             continue
         try:
             store.install(entry, force=True)
