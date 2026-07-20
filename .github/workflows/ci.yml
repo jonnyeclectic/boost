@@ -110,3 +110,35 @@ jobs:
           .venv/bin/pip -q install sqlite-vec || true
       - name: mutation strength gate (>=80% killed)
         run: .venv/bin/python scripts/mutation_gate.py --run --min 80
+
+  install-smoke:
+    # Every gate above runs an editable `pip install -e .`, which cannot catch a
+    # broken artifact: missing package-data, a bad entry point, or an undeclared
+    # runtime dependency only surface in the built wheel. A merge to main cuts a
+    # PyPI release, so build the real wheel + sdist and install what a user gets.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: build wheel + sdist
+        run: |
+          python -m pip -q install build
+          python -m build
+      - name: pip install the wheel into a fresh venv
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip -q install dist/*.whl
+          # entry point resolves and setuptools-scm baked in a real version
+          /tmp/clean/bin/boost --version | grep -Eq '^boost \S+$'
+          # package-data shipped: the bundled registry catalog must load from the
+          # installed wheel (data/registries.json), not the source tree
+          /tmp/clean/bin/boost tap --catalog --dry-run --limit 1 | grep -Eq 'items \(dry run'
+      - name: pipx install the wheel (isolated end-user install)
+        run: |
+          python -m pip -q install pipx
+          pipx install dist/*.whl
+          "$(pipx environment --value PIPX_BIN_DIR)/boost" --version | grep -Eq '^boost \S+$'
