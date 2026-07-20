@@ -2,14 +2,14 @@
 id: single-imperative-rule-extractor
 board: code
 section: internals
-status: planned
+status: inflight
 category: Tech-debt
 complexity: M
 impact: Med
 wow: 2
 note: 
 order: 14
-owner:
+owner: loop/imperative-extractor
 pr:
 title: Single imperative-rule extractor
 ---
