@@ -2,7 +2,7 @@
 id: secret-and-pii-scanning-of-installed-skills
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Security · Secrets
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: installed content
 order: 6
 owner: loop/secret-scan
-pr:
+pr: 138
 title: Secret &amp; PII scanning of installed skills
 ---
 Point the round-2 secret scanners (<code>gitleaks</code>/<code>trufflehog</code>)

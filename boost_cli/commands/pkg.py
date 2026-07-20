@@ -16,8 +16,8 @@ from typing import Dict, List, Optional
 
 from .. import cliparse
 from ..core import (agents, catalog, gitutil, injectscan, journal, lockfile,
-                    paths, registry, staleness, store, typosquat, updatediff,
-                    util)
+                    paths, registry, secretscan, staleness, store, typosquat,
+                    updatediff, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -83,6 +83,23 @@ def _warn_injection(res: store.InstallResult) -> None:
         out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
 
 
+def _warn_secrets(res: store.InstallResult) -> None:
+    """Flag embedded credentials / secrets in the skill just copied.
+
+    Scans the installed ``SKILL.md`` (core.secretscan) for known secret shapes
+    and surfaces any hits worst-first, with the secret value redacted. Advisory
+    only — it warns, it never blocks the install.
+    """
+    findings = secretscan.scan_file(res.dest / "SKILL.md")
+    if not findings:
+        return
+    out.warn("%s: %d possible secret%s in SKILL.md (%s) — do not commit"
+             % (res.name, len(findings), "" if len(findings) == 1 else "s",
+                secretscan.worst_severity(findings)))
+    for f in findings[:3]:
+        out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
+
+
 def _report_result(res: store.InstallResult) -> None:
     """The canonical three-line install report."""
     out.ok("copied to %s" % _tilde(res.dest))
@@ -94,6 +111,7 @@ def _report_result(res: store.InstallResult) -> None:
         out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
+    _warn_secrets(res)
 
 
 def _boostfile_text(skills: Dict[str, dict], via: str = "boost bundle dump") -> str:
