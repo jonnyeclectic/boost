@@ -2,14 +2,14 @@
 id: integrity-verification-boost-verify
 board: code
 section: trust
-status: planned
+status: inflight
 category: Security · Integrity
 complexity: S
 impact: High
 wow: 4
 note: reuses sha256_dir
 order: 2
-owner:
+owner: loop/doctor-integrity
 pr:
 title: Integrity verification — <code>boost verify</code>
 ---
