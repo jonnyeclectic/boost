@@ -2,7 +2,7 @@
 id: mcp-hub-diagram-node-text-overflow
 board: code
 section: docsite
-status: inflight
+status: shipped
 category: Docs · Visual polish
 complexity: S
 impact: Low
@@ -10,7 +10,7 @@ wow: 2
 note: read_body→chunk node clips its 3rd line
 order: 12
 owner: loop/mcp-hub-diagram-fit
-pr:
+pr: 137
 title: Fix overflowing node text in the RAG diagram (<code>mcp-hub.html</code>)
 ---
 On the Fig 2 RAG-pipeline diagram, the <code>read_body → chunk</code> node
