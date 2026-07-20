@@ -2,14 +2,14 @@
 id: update-diff-before-apply
 board: code
 section: trust
-status: planned
+status: inflight
 category: Security · Supply chain
 complexity: M
 impact: Med
 wow: 3
 note: no silent overwrites
 order: 5
-owner:
+owner: loop/update-diff-gate
 pr:
 title: Update-diff before apply
 ---
