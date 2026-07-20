@@ -10,7 +10,7 @@ wow: 3
 note: self-seed no_proxy at startup
 order: 9
 owner: loop/mcp-startup-fork-safety
-pr: 160
+pr: 162
 title: Self-harden every boost process against the macOS fork-safety abort
 ---
 The launch-env fix (<a href="#mcp-launch-objc-fork-safety">#119</a>) only
