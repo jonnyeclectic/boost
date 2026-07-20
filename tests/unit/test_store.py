@@ -309,7 +309,8 @@ class TestUninstall:
 
 class TestSyncPlan:
     EMPTY = {"missing_store": [], "missing_links": [],
-             "stale_links": [], "orphaned_store": []}
+             "stale_links": [], "orphaned_store": [],
+             "missing_materializations": []}
 
     def test_clean_state_empty_plan(self, brainstorming):
         assert store.sync_plan() == self.EMPTY
@@ -642,3 +643,60 @@ class TestWorkflowInstall:
         (tap.path / entry["skill_md"]).unlink()
         with pytest.raises(BoostError, match="vanished from tap"):
             store.install(entry)
+
+
+class TestSyncMaterializations:
+    def _install_rule(self, tap, name="team-conventions"):
+        entry = _rule_entry(tap, name=name)
+        catalog.rebuild_tap(tap)          # so catalog.find(name) sees the rule
+        store.install(entry)
+        return entry
+
+    def _install_workflow(self, tap, name="ship-it"):
+        entry = _workflow_entry(tap, name=name)
+        catalog.rebuild_tap(tap)
+        store.install(entry)
+        return entry
+
+    def test_intact_materializations_not_flagged(self, tap):
+        self._install_rule(tap)
+        assert store.sync_plan()["missing_materializations"] == []
+
+    def test_flags_missing_rule_file(self, tap):
+        self._install_rule(tap)
+        (paths.home() / ".cursor" / "rules" / "team-conventions.mdc").unlink()
+        assert store.sync_plan()["missing_materializations"] == [
+            ("rule", "team-conventions")]
+
+    def test_flags_stripped_claude_block(self, tap):
+        self._install_rule(tap)
+        (paths.home() / ".claude" / "CLAUDE.md").write_text("# only my notes\n")
+        assert ("rule", "team-conventions") in \
+            store.sync_plan()["missing_materializations"]
+
+    def test_apply_rematerializes_missing_rule(self, tap):
+        self._install_rule(tap)
+        cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        cur.unlink()
+        actions = store.sync_apply(store.sync_plan())
+        assert any("re-materialized rule team-conventions" in a for a in actions)
+        assert cur.is_file()
+
+    def test_flags_and_repairs_missing_workflow_file(self, tap):
+        self._install_workflow(tap)
+        f = paths.home() / ".claude" / "commands" / "ship-it.md"
+        f.unlink()
+        assert store.sync_plan()["missing_materializations"] == [
+            ("workflow", "ship-it")]
+        store.sync_apply(store.sync_plan())
+        assert f.is_file()
+
+    def test_rule_install_carries_scan_text(self, tap):
+        res = store.install(_rule_entry(tap))
+        assert res.scan_text is not None
+        assert "Always write tests first." in res.scan_text  # raw source, for scan
+
+    def test_workflow_install_carries_scan_text(self, tap):
+        res = store.install(_workflow_entry(tap))
+        assert res.scan_text is not None
+        assert "Run the release." in res.scan_text
