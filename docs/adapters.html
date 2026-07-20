@@ -287,10 +287,10 @@ code_reviewer = <span class="fn">Agent</span>(
           <span class="tag">Out of the gate · framework installed</span>
           <h3>Does the live API accept it?</h3>
           <ul class="ticks">
-            <li>An opt-in job <code>pip install crewai</code> and <b>imports the emitted file</b>.</li>
-            <li>Confirms the constructor still accepts these kwargs on that version.</li>
-            <li>Mirrors how the AI evals stay key-gated and out of <code>make check</code>.</li>
-            <li>Version-coupling risk lives here — it can never redden a PyPI release.</li>
+            <li><b><code>adapter-conformance.yml</code></b> — a matrix job that <code>pip install</code>s each framework and <b>imports the emitted file</b> to instantiate a real <code>Agent</code>.</li>
+            <li>Runs on <b>manual dispatch + weekly cron</b> — never on PRs, so it can't redden a PyPI release.</li>
+            <li>Pinned to <b>Python 3.13</b>: CrewAI's <code>tiktoken</code> has no 3.14 wheel — the frameworks, not boost, set the ceiling.</li>
+            <li>Verified against <b>crewai 1.15.5</b> and the <b>OpenAI Agents SDK</b> — both instantiate cleanly.</li>
           </ul>
         </div>
       </div>

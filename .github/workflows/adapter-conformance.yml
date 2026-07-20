@@ -1,0 +1,73 @@
+name: adapter-conformance
+
+# Opt-in: does `boost adapt`'s output actually load in the real frameworks?
+#
+# This is deliberately OUT of the release gate (ci.yml). boost stays
+# zero-dependency and its own suite runs on Python 3.9-3.14; CrewAI and the
+# OpenAI Agents SDK are third-party trees we don't control, so coupling the
+# PyPI release to their install/import would let upstream drift redden a
+# release. Instead, the release gate proves the emitted source is deterministic
+# and valid Python (tests/unit/test_adapters.py); THIS job proves the live
+# constructors still accept it — run manually before shipping an adapter change,
+# and weekly to catch upstream breakage early. It never blocks a merge.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC — early warning on framework drift
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # name  → the `--to` id · pip package · import module · Agent attr
+          - to: crewai
+            pip: crewai
+            module: crewai
+          - to: agents-sdk
+            pip: openai-agents
+            module: agents
+    name: ${{ matrix.to }} accepts boost adapt output
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+      - uses: actions/setup-python@v6
+        with:
+          # 3.13, NOT 3.14: CrewAI pulls tiktoken, which has no cp314 wheel yet
+          # and fails to build from source. boost itself supports 3.9-3.14; this
+          # job is pinned to what the frameworks can actually install on.
+          python-version: "3.13"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install boost + ${{ matrix.pip }}
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -e .
+          .venv/bin/pip -q install "${{ matrix.pip }}"
+      - name: render a skill via `boost adapt --to ${{ matrix.to }}`
+        run: |
+          SB="$(mktemp -d)"
+          FIX="$(mktemp -d)/fixture-tap"
+          export HOME="$SB" BOOST_NO_AI=1 BOOST_ASSUME_YES=1 NO_COLOR=1
+          # Absolute paths: HOME is repointed at a sandbox, so `~` must not be used.
+          .venv/bin/python "$GITHUB_WORKSPACE/tests/make_fixture.py" "$FIX"
+          .venv/bin/python -m boost_cli tap "$FIX"
+          .venv/bin/python -m boost_cli adapt brainstorming \
+            --to "${{ matrix.to }}" -o "$GITHUB_WORKSPACE/agent_out.py"
+          echo "----- generated -----"
+          cat "$GITHUB_WORKSPACE/agent_out.py"
+      - name: import the emitted file and instantiate a live Agent
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          .venv/bin/python - <<'PY'
+          import agent_out
+          from ${{ matrix.module }} import Agent
+          a = agent_out.brainstorming
+          assert isinstance(a, Agent), "not a real ${{ matrix.module }}.Agent: %r" % type(a)
+          print("PASS — ${{ matrix.to }} instantiated", type(a).__module__ + "." + type(a).__name__)
+          PY
