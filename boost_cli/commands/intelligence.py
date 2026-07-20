@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .. import cliparse
-from ..core import ai, catalog, frontmatter, gitutil, journal, lockfile, paths, store, util
+from ..core import (ai, catalog, frontmatter, gitutil, imperative, journal,
+                    lockfile, paths, store, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -197,9 +198,6 @@ def _distill_merge(new: str, sources: List[dict]) -> str:
 
 # ---------------------------------------------------------------- simulate
 
-_RULE_RE = re.compile(r"^(always|never|must|do not|don't)\b", re.I)
-_LIST_RE = re.compile(r"^([-*+]|\d+[.)])\s+")
-
 
 def cmd_simulate(argv: List[str]) -> int:
     ap = cliparse.parser(
@@ -228,7 +226,7 @@ def cmd_simulate(argv: List[str]) -> int:
 
     meta, body = frontmatter.parse(text)
     out.kv("task", task)
-    rules = _imperative_rules(body)
+    rules = imperative.imperative_rules(body)
     out.info("Without it: default behavior — none of the rules below are enforced.")
     out.info(out.c("With %s active, Claude would:" % args.name, out.BOLD))
     if rules:
@@ -243,29 +241,6 @@ def cmd_simulate(argv: List[str]) -> int:
         out.info(out.role('likely triggers when the task involves: "%s"'
                        % desc[:100], "muted"))
     return 0
-
-
-def _imperative_rules(body: str) -> List[str]:
-    """Lines that read as rules: Always/Never/Must/Do not + numbered steps."""
-    rules: List[str] = []
-    for raw in body.splitlines():
-        line = raw.strip()
-        stripped = _LIST_RE.sub("", line)
-        numbered = bool(re.match(r"^\d+[.)]\s+", line))
-        if _RULE_RE.match(stripped):
-            rule = _norm_rule(stripped)
-        elif numbered and len(stripped.split()) >= 2:
-            rule = "follow: " + _norm_rule(stripped)
-        else:
-            continue
-        if rule and rule not in rules:
-            rules.append(rule)
-    return rules
-
-
-def _norm_rule(text: str) -> str:
-    t = re.sub(r"[*_`]", "", text).strip().rstrip(".")
-    return (t[:1].lower() + t[1:]) if t else t
 
 
 # ---------------------------------------------------------------- infer
