@@ -2,14 +2,14 @@
 id: single-tech-stack-prober
 board: code
 section: internals
-status: planned
+status: inflight
 category: Tech-debt
 complexity: M
 impact: Med
 wow: 2
 note: 
 order: 13
-owner:
+owner: loop/core-stack-prober
 pr:
 title: Single tech-stack prober
 ---
