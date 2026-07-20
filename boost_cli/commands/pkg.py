@@ -66,36 +66,51 @@ def _check_agents(names: Optional[List[str]]) -> Optional[List[str]]:
     return names
 
 
-def _warn_injection(res: store.InstallResult) -> None:
-    """Flag prompt-injection / risky-content patterns in the skill just copied.
+def _scan_label(res: store.InstallResult) -> str:
+    """What was scanned, for the warning text: skills ship a SKILL.md; rules and
+    workflows ship a single file, so name the kind instead."""
+    return "SKILL.md" if res.kind == "skill" else "%s content" % res.kind
 
-    boost installs Markdown the agent then executes, so the installed
-    ``SKILL.md`` is scanned (core.injectscan) and any hits are surfaced worst
-    -first. Advisory only — it warns, it never blocks the install.
+
+def _scan_findings(res: store.InstallResult, scanner):
+    """Findings for the content boost just installed. Skills scan their
+    SKILL.md; rules/workflows scan the raw source (res.scan_text) — the exact
+    Markdown that landed, not a non-existent SKILL.md under the dest file."""
+    if res.scan_text is not None:
+        return scanner.scan_text(res.scan_text)
+    return scanner.scan_file(res.dest / "SKILL.md")
+
+
+def _warn_injection(res: store.InstallResult) -> None:
+    """Flag prompt-injection / risky-content patterns in what was just installed.
+
+    boost installs Markdown the agent then executes, so the installed content is
+    scanned (core.injectscan) and any hits are surfaced worst-first. Advisory
+    only — it warns, it never blocks the install.
     """
-    findings = injectscan.scan_file(res.dest / "SKILL.md")
+    findings = _scan_findings(res, injectscan)
     if not findings:
         return
-    out.warn("%s: %d suspicious pattern%s in SKILL.md (%s) — review before use"
+    out.warn("%s: %d suspicious pattern%s in %s (%s) — review before use"
              % (res.name, len(findings), "" if len(findings) == 1 else "s",
-                injectscan.worst_severity(findings)))
+                _scan_label(res), injectscan.worst_severity(findings)))
     for f in findings[:3]:
         out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
 
 
 def _warn_secrets(res: store.InstallResult) -> None:
-    """Flag embedded credentials / secrets in the skill just copied.
+    """Flag embedded credentials / secrets in what was just installed.
 
-    Scans the installed ``SKILL.md`` (core.secretscan) for known secret shapes
-    and surfaces any hits worst-first, with the secret value redacted. Advisory
+    Scans the installed content (core.secretscan) for known secret shapes and
+    surfaces any hits worst-first, with the secret value redacted. Advisory
     only — it warns, it never blocks the install.
     """
-    findings = secretscan.scan_file(res.dest / "SKILL.md")
+    findings = _scan_findings(res, secretscan)
     if not findings:
         return
-    out.warn("%s: %d possible secret%s in SKILL.md (%s) — do not commit"
+    out.warn("%s: %d possible secret%s in %s (%s) — do not commit"
              % (res.name, len(findings), "" if len(findings) == 1 else "s",
-                secretscan.worst_severity(findings)))
+                _scan_label(res), secretscan.worst_severity(findings)))
     for f in findings[:3]:
         out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
 
@@ -106,6 +121,7 @@ def _report_result(res: store.InstallResult) -> None:
         out.ok("materialized → %s" % (" · ".join(res.linked) or "(no enabled agents)"))
         out.ok("lock updated (.skill-lock.json)")
         _warn_injection(res)
+        _warn_secrets(res)
         return
     out.ok("copied to %s" % _tilde(res.dest))
     if res.linked:
@@ -268,6 +284,7 @@ _PLAN_LABELS = [
     ("missing_links", "missing agent links"),
     ("stale_links", "stale links"),
     ("orphaned_store", "orphaned store dirs"),
+    ("missing_materializations", "missing rule/workflow files"),
 ]
 
 
@@ -297,6 +314,8 @@ def cmd_sync(argv: List[str]) -> int:
             for item in plan[key]:
                 if key == "missing_links":
                     out.info("%s → %s" % (item[0], item[1]))
+                elif key == "missing_materializations":
+                    out.info("%s %s" % (item[0], item[1]))  # (kind, name)
                 else:
                     out.info(_tilde(item))
         return 0

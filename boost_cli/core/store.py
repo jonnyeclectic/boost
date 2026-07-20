@@ -26,6 +26,10 @@ class InstallResult:
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
+    # For rules/workflows the installed content is a single file (or a merged
+    # CLAUDE.md block), not a SKILL.md tree — carry the raw source so the caller
+    # scans exactly what it installed instead of a non-existent SKILL.md.
+    scan_text: Optional[str] = None
 
 
 def skill_store_dir(name: str) -> Path:
@@ -233,7 +237,7 @@ def _install_rule(entry: dict, force: bool = False,
     res = InstallResult(
         name=name,
         dest=Path(materializations[0]["path"]) if materializations else paths.store_dir(),
-        kind="rule")
+        kind="rule", scan_text=raw)
     res.linked = linked
     res.upgraded = existing is not None
     return res
@@ -322,7 +326,7 @@ def _install_workflow(entry: dict, force: bool = False,
     res = InstallResult(
         name=name,
         dest=Path(materializations[0]["path"]) if materializations else paths.store_dir(),
-        kind="workflow")
+        kind="workflow", scan_text=raw)
     res.linked = linked
     res.upgraded = existing is not None
     return res
@@ -408,7 +412,8 @@ def sync_plan() -> Dict[str, list]:
     """
     lock = lockfile.installed()
     plan: dict[str, list] = {"missing_store": [], "missing_links": [],
-            "stale_links": [], "orphaned_store": []}
+            "stale_links": [], "orphaned_store": [],
+            "missing_materializations": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
         if not sdir.is_dir():
@@ -434,7 +439,32 @@ def sync_plan() -> Dict[str, list]:
                     link.resolve() if link.exists() else link.readlink())
                 if not link.exists() or (points_into_store and link.name not in lock):
                     plan["stale_links"].append(str(link))
+    # Rules/workflows don't live in the store — they materialize into agent dirs.
+    # A materialization whose file (or CLAUDE.md block) is gone can be repaired
+    # by re-materializing from the tap, same as a missing skill store dir.
+    for name, entry in lockfile.installed_rules().items():
+        if any(not _rule_materialization_ok(name, m)
+               for m in entry.get("materializations") or []):
+            plan["missing_materializations"].append(("rule", name))
+    for name, entry in lockfile.installed_workflows().items():
+        if any(not Path(m.get("path", "")).is_file()
+               for m in entry.get("materializations") or []):
+            plan["missing_materializations"].append(("workflow", name))
     return plan
+
+
+def _rule_materialization_ok(name: str, m: dict) -> bool:
+    """True if a rule materialization is still present: a file drop must exist,
+    and a Claude rule's CLAUDE.md must still carry its managed block."""
+    from . import rules
+    p = Path(m.get("path", ""))
+    if m.get("mode") == rules.MODE_CLAUDE:
+        try:
+            return p.exists() and ("boost:rule:%s start" % name) in \
+                p.read_text(encoding="utf-8")
+        except OSError:
+            return False
+    return p.is_file()
 
 
 def sync_apply(plan: Dict[str, list]) -> List[str]:
@@ -466,6 +496,24 @@ def sync_apply(plan: Dict[str, list]) -> List[str]:
         if not restored:
             lockfile.remove_skill(name)
             actions.append("dropped %s from lock (store dir missing, source gone)" % name)
+    for kind, name in plan.get("missing_materializations", []):
+        getter = lockfile.get_rule if kind == "rule" else lockfile.get_workflow
+        entry = getter(name) or {}
+        tap_name = entry.get("tap")
+        if tap_name and tap_name != "local":
+            try:
+                from . import catalog
+                matches = [e for e in catalog.find(name)
+                           if e["tap"] == tap_name and e.get("kind", "skill") == kind]
+                if matches:
+                    install(matches[0], force=True)
+                    actions.append("re-materialized %s %s from %s"
+                                   % (kind, name, tap_name))
+                    continue
+            except BoostError:
+                pass
+        actions.append("%s %s has a missing materialization but its source is "
+                       "gone — run `boost update` or reinstall" % (kind, name))
     if actions:
         journal.log("sync", "%d fixes" % len(actions))
     return actions
