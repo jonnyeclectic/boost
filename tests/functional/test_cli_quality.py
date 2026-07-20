@@ -90,6 +90,52 @@ class TestDoctor:
         assert "skill brainstorming modified since install — run `boost verify`" in r.out
         assert "need attention" in r.out
 
+    def test_materialized_rules_and_workflows_ok_rc0(self, boost, sandbox):
+        from boost_cli.core import lockfile
+        rp = paths.home() / ".cursor" / "rules" / "r.mdc"
+        rp.parent.mkdir(parents=True)
+        rp.write_text("rule body")
+        lockfile.set_rule("r", {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(rp)}]})
+        wp = paths.home() / ".claude" / "commands" / "w.md"
+        wp.parent.mkdir(parents=True)
+        wp.write_text("workflow body")
+        lockfile.set_workflow("w", {"kind": "workflow", "slot": "commands",
+                                    "materializations": [
+                                        {"agent": "claude-code", "path": str(wp)}]})
+        r = boost("doctor")
+        assert "1 rule and 1 workflow fully materialized" in r.out
+
+    def test_missing_rule_file_rc1(self, boost, sandbox):
+        from boost_cli.core import lockfile
+        gone = paths.home() / ".cursor" / "rules" / "gone.mdc"
+        lockfile.set_rule("gone", {"kind": "rule", "materializations": [
+            {"agent": "cursor", "mode": "file", "path": str(gone)}]})
+        r = boost("doctor", expect=1)
+        assert ("rule gone missing its cursor materialization — "
+                "run `boost reinstall gone`") in r.out
+        assert "need attention" in r.out
+
+    def test_missing_claude_block_rc1(self, boost, sandbox):
+        from boost_cli.core import lockfile
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.parent.mkdir(parents=True)
+        cm.write_text("# just my own notes, no boost block\n")  # block was stripped
+        lockfile.set_rule("blk", {"kind": "rule", "materializations": [
+            {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
+        r = boost("doctor", expect=1)
+        assert "rule blk missing its claude-code materialization" in r.out
+
+    def test_missing_workflow_file_rc1(self, boost, sandbox):
+        from boost_cli.core import lockfile
+        gone = paths.home() / ".claude" / "commands" / "gone.md"
+        lockfile.set_workflow("gone", {"kind": "workflow", "slot": "commands",
+                                       "materializations": [
+                                           {"agent": "claude-code", "path": str(gone)}]})
+        r = boost("doctor", expect=1)
+        assert ("workflow gone missing its claude-code file — "
+                "run `boost reinstall gone`") in r.out
+
 
 # ── lint ─────────────────────────────────────────────────────────────────
 

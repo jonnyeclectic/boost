@@ -309,6 +309,37 @@ def cmd_doctor(argv):
         out.ok("%d skill%s present in store with agent links"
                % (len(skills), _s(len(skills))))
 
+    # Rules and workflows don't live in the store — they materialize into agent
+    # dirs (a file drop, or a CLAUDE.md managed block). Health = every recorded
+    # materialization is still on disk; a deleted file means the install rotted.
+    rules = lockfile.installed_rules()
+    workflows = lockfile.installed_workflows()
+    mat_issues = 0
+    for name, entry in sorted(rules.items()):
+        for m in entry.get("materializations") or []:
+            p = Path(m.get("path", ""))
+            if m.get("mode") == "claude":
+                try:
+                    present = p.exists() and ("boost:rule:%s start" % name) in \
+                        p.read_text(encoding="utf-8")
+                except OSError:
+                    present = False
+            else:
+                present = p.is_file()
+            if not present:
+                bad("rule %s missing its %s materialization — run "
+                    "`boost reinstall %s`" % (name, m.get("agent", "?"), name))
+                mat_issues += 1
+    for name, entry in sorted(workflows.items()):
+        for m in entry.get("materializations") or []:
+            if not Path(m.get("path", "")).is_file():
+                bad("workflow %s missing its %s file — run `boost reinstall %s`"
+                    % (name, m.get("agent", "?"), name))
+                mat_issues += 1
+    if (rules or workflows) and not mat_issues:
+        out.ok("%d rule%s and %d workflow%s fully materialized"
+               % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows))))
+
     root = paths.store_dir()
     orphans = [c.name for c in sorted(root.iterdir())
                if c.is_dir() and not c.name.startswith(".") and c.name not in skills
