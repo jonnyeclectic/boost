@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>95</b><span>Loop finds</span></div>
+      <div class="stat"><b>96</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -537,9 +537,14 @@ message, so routing it through the helper would change user-facing errors.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Robustness</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness</span></div>
         <h3>Atomic skill install (temp-dir swap)</h3>
-        <p><code>_copy_skill</code> does <code>rmtree(dest)</code> then <code>copytree()</code> (<code>core/store.py:108–131</code>); an interrupt between the two leaves a missing or half-copied skill, and the lock is written afterward — so a mid-copy failure leaves store and lock <b>disagreeing</b>. Copy to a temp dir and atomically swap into place.</p>
+        <p>Already shipped: <code>core/store.py</code>'s <code>_copy_skill</code> stages the
+           full copy in a temp dir on the same filesystem, then swaps it in with
+           two atomic <code>os.replace</code> renames and rolls back to the original
+           on any failure — the old rmtree-then-copytree window is gone. Covered by
+           <code>test_copytree_failure_preserves_existing</code> and the flaky
+           <code>os.replace</code> test in <code>tests/unit/test_store.py</code>.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -682,9 +687,13 @@ chunks instead cost ~70%.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Correctness</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Correctness</span></div>
         <h3>Frontmatter scalar over-coercion</h3>
-        <p><code>_scalar</code> turns <code>no</code>/<code>on</code>/<code>off</code>/<code>null</code> into bool/None (<code>core/frontmatter.py:32–53</code>), so a tag or name literally equal to one of those parses to the wrong type and leaks into search/ranking meta. Restrict boolean coercion to <code>true</code>/<code>false</code>.</p>
+        <p>Already shipped: <code>core/frontmatter._scalar</code> coerces only the YAML 1.2
+           core keywords (<code>true</code>/<code>false</code>/<code>null</code>/<code>~</code>);
+           the 1.1 aliases <code>yes/no/on/off/none</code> stay strings, so a skill
+           named <code>none</code> or tagged <code>on</code> keeps the right type.
+           Guarded by <code>test_scalar_leaves_yaml11_aliases_as_strings</code>.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
