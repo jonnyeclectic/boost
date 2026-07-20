@@ -25,6 +25,7 @@ class InstallResult:
     conflicts: List[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
+    kind: str = "skill"
 
 
 def skill_store_dir(name: str) -> Path:
@@ -116,10 +117,12 @@ def install(entry: dict, force: bool = False,
             only_agents: Optional[List[str]] = None) -> InstallResult:
     """Install a catalog entry. Raises BoostError on policy block or conflict."""
     kind = entry.get("kind", "skill")
+    if kind == "rule":
+        return _install_rule(entry, force=force, only_agents=only_agents)
     if kind != "skill":
         raise BoostError(
             "%s is a %s, which boost indexes but cannot install yet" % (entry["name"], kind),
-            hint="rules and workflows show up in `boost search`/`boost taps` for now")
+            hint="workflows show up in `boost search`/`boost taps` for now")
     name = entry["name"]
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
@@ -162,6 +165,100 @@ def install(entry: dict, force: bool = False,
     return res
 
 
+def _install_rule(entry: dict, force: bool = False,
+                  only_agents: Optional[List[str]] = None) -> InstallResult:
+    """Materialize a rule into each enabled agent's native format.
+
+    Cursor/Windsurf/Cline get a verbatim file drop in their ``rules/`` dir
+    (frontmatter preserved — it is native rule metadata); Claude Code has no
+    rules folder, so the rule merges into ``CLAUDE.md`` as an idempotent managed
+    block. Every materialization is recorded so ``uninstall`` reverses exactly
+    what was written.
+    """
+    import hashlib
+
+    from . import frontmatter, gitutil, rules
+    name = entry["name"]
+    existing = lockfile.get_rule(name)
+    if existing and not force:
+        raise BoostError("%s is already installed" % name,
+                        hint="`boost reinstall %s` to force" % name)
+
+    violations = policy.check_install(entry, len(lockfile.installed()))
+    if violations:
+        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
+                        hint="inspect with `boost policy list`")
+
+    tap = registry.get(entry["tap"])
+    src = tap.path / entry.get("skill_md", "")
+    if not src.is_file():
+        raise BoostError("source for rule %s vanished from tap %s" % (name, tap.name),
+                        hint="run `boost update %s`" % tap.name)
+    raw = src.read_text(encoding="utf-8", errors="replace")
+    meta, body = frontmatter.parse(raw)
+    claude_body = rules.render_claude_body(str(meta.get("name") or name), body)
+
+    paths.ensure_dirs()
+    materializations: List[dict] = []
+    linked: List[str] = []
+    for agent, skills_dir in agents.enabled_agents().items():
+        if only_agents and agent not in only_agents:
+            continue
+        mode, path = rules.rule_target(agent, skills_dir, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if mode == rules.MODE_CLAUDE:
+            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            util.atomic_write_text(path, rules.merge_block(current, name, claude_body))
+        else:
+            util.atomic_write_text(path, raw)
+        materializations.append({"agent": agent, "mode": mode, "path": str(path)})
+        linked.append(agent)
+
+    now = util.now_iso()
+    lockfile.set_rule(name, {
+        "kind": "rule",
+        "version": entry.get("version", "0.0.0"),
+        "tap": entry["tap"],
+        "source_file": entry.get("skill_md", ""),
+        "commit": gitutil.head_commit(tap.path),
+        "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "installed_at": (existing or {}).get("installed_at", now),
+        "updated_at": now,
+        "materializations": materializations,
+    })
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
+
+    res = InstallResult(
+        name=name,
+        dest=Path(materializations[0]["path"]) if materializations else paths.store_dir(),
+        kind="rule")
+    res.linked = linked
+    res.upgraded = existing is not None
+    return res
+
+
+def _uninstall_rule(name: str, rule: dict) -> dict:
+    """Reverse every materialization recorded for an installed rule."""
+    from . import rules
+    removed: List[str] = []
+    for m in rule.get("materializations", []):
+        path = Path(m.get("path", ""))
+        if m.get("mode") == rules.MODE_CLAUDE:
+            if path.exists():
+                stripped = rules.strip_block(path.read_text(encoding="utf-8"), name)
+                if stripped:
+                    util.atomic_write_text(path, stripped)
+                else:
+                    path.unlink()  # file held only our block — boost created it
+        elif path.is_file() or path.is_symlink():
+            path.unlink()
+        if m.get("agent"):
+            removed.append(m["agent"])
+    lockfile.remove_rule(name)
+    journal.log("uninstall", name)
+    return {"name": name, "unlinked": removed, "entry": rule}
+
+
 def install_from_path(src_dir: Path, name: Optional[str] = None,
                       tap_label: str = "local",
                       only_agents: Optional[List[str]] = None) -> InstallResult:
@@ -200,6 +297,9 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
 def uninstall(name: str) -> dict:
     entry = lockfile.get_skill(name)
     if not entry:
+        rule = lockfile.get_rule(name)
+        if rule:
+            return _uninstall_rule(name, rule)
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     removed_links = unlink_agents(name)
