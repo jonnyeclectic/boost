@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Golden-set retrieval eval for boost's RAG engines.
 
-Tier 1 (deterministic, offline): grades the always-on retrieval stack against a
-fixed set of query -> expected-skill judgments. It is the semantic-quality gate
+Tier 1 (deterministic given a pinned corpus): grades the always-on retrieval
+stack against a fixed set of query -> expected-skill judgments. The judgments
+name real catalog items, so the corpus must contain them — CI and `make eval`
+first tap the pinned repo list (tests/eval/taps.txt) via
+scripts/ensure_eval_corpus.sh. It is the semantic-quality gate
 the exact-arithmetic unit tests in tests/unit/test_rag.py cannot be — those pin
 the math, this asks "does the right skill actually come back for a real question."
 

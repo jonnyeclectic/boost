@@ -1,10 +1,14 @@
 # boost — test & quality gates
 # `make check` is the full production gate: unit + functional with >=80%
-# coverage, the shell-level smoke suite, and >=80% mutation strength.
+# coverage, the shell-level smoke suite, >=80% mutation strength, and the
+# Tier 1 retrieval-quality gate (golden-set recall@k).
 
-VENV    := .venv
-PY      := $(VENV)/bin/python
-PYTEST  := $(VENV)/bin/pytest
+VENV      := .venv
+PY        := $(VENV)/bin/python
+PYTEST    := $(VENV)/bin/pytest
+# Sandboxed boost home for the Tier 1 eval corpus (gitignored) — keeps the
+# pinned taps out of the developer's real ~/.boost.
+EVAL_HOME := $(CURDIR)/.eval-home
 
 .PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec audit dist-check
 
@@ -54,10 +58,15 @@ dist-check:
 	$(VENV)/bin/check-wheel-contents dist/*.whl
 	$(VENV)/bin/pyroma --min 8 dist/*.tar.gz
 
-# Tier 1 retrieval quality gate: golden-set recall@k over the tapped catalog.
-# Deterministic + offline; a release-quality gate, kept separate from `check`.
+# Tier 1 retrieval quality gate: golden-set recall@k over a pinned corpus
+# (tests/eval/taps.txt). Part of `check` and required in CI (the lint job).
+# Taps the pinned repos into a sandboxed $(EVAL_HOME) first (network on the
+# first run; a sentinel skips re-tapping after), then floors BM25 recall@k at
+# 0.85. Regression-vs-baseline is relaxed here (drift tolerance); the absolute
+# floor is the gate.
 eval:
-	$(PY) scripts/eval_retrieval.py --build -k 10 --fail-under 0.85
+	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
+	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 --fail-under 0.85 --regression-eps 1
 
 # Tier 2a: LLM rerank lift over BM25 on the same golden set. Opt-in and
 # key-gated — needs the `claude` CLI on PATH or ANTHROPIC_API_KEY; skips
@@ -80,7 +89,7 @@ generate:
 demo:
 	vhs docs/demo.tape
 
-check: lint test smoke mutation
+check: lint eval test smoke mutation
 	@echo "== all gates passed =="
 
 clean-test:

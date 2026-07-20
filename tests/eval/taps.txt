@@ -1,0 +1,23 @@
+# Pinned corpus for the Tier 1 retrieval-quality gate (scripts/eval_retrieval.py).
+#
+# The golden set (golden.jsonl) grades real catalog items by NAME, so the gate
+# needs the repos that actually contain those items tapped before it can score.
+# This is the minimal set of repos that covers all 44 golden targets across the
+# skill / rule / workflow kinds. Over it, BM25 recall@10 == 1.000, so the 0.85
+# floor gate has a wide margin and tolerates upstream drift.
+#
+# NOTE: `boost tap --defaults` is NOT sufficient — it taps only skill repos and
+# scores 0.000 on every rule and workflow query (overall recall ~0.33). That is
+# why this explicit list exists.
+#
+# If you edit this list, regenerate the baseline:
+#   BOOST_HOME=/tmp/evalhome bash scripts/ensure_eval_corpus.sh
+#   BOOST_HOME=/tmp/evalhome python3 scripts/eval_retrieval.py --build --save-baseline
+#
+# Future hardening: pin each repo to a commit SHA for full reproducibility.
+anthropics/skills
+0xfurai/claude-code-subagents
+NeoLabHQ/context-engineering-kit
+Aaronontheweb/dotnet-cursor-rules
+ChrisWiles/claude-code-showcase
+LessUp/awesome-cursorrules-zh

@@ -41,6 +41,18 @@ jobs:
         run: python scripts/build_registries.py --check
       - name: roadmap HTML is regenerated
         run: python scripts/build_roadmap.py --check
+      # Tier 1 retrieval quality gate: golden-set recall@k over a PINNED corpus.
+      # The golden set grades real catalog items by name, so the repos holding
+      # them (tests/eval/taps.txt) are tapped first — deterministic given that
+      # pinned set (pure-stdlib BM25; no ANTHROPIC_API_KEY). Gates BM25 recall
+      # >=0.85 (measured 1.000 over the pinned corpus, wide margin). Regression-
+      # vs-baseline is relaxed (--regression-eps 1) so upstream repo drift can't
+      # flake the gate red on an unrelated PR. PYTHONPATH=. makes boost_cli
+      # importable without an editable install.
+      - name: retrieval quality gate (Tier 1 golden set)
+        run: |
+          bash scripts/ensure_eval_corpus.sh
+          PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 --fail-under 0.85 --regression-eps 1
 
   tests:
     runs-on: ${{ matrix.os }}
