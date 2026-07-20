@@ -45,8 +45,11 @@ class TestList:
     def test_json_pure_with_fields(self, boost, installed):
         r = boost("list", "--json")
         data = json.loads(r.out)
-        assert list(data) == ["brainstorming"]
-        e = data["brainstorming"]
+        # structured by kind so rules/workflows show up too (not just skills).
+        assert set(data) == {"skills", "rules", "workflows"}
+        assert list(data["skills"]) == ["brainstorming"]
+        assert data["rules"] == {} and data["workflows"] == {}
+        e = data["skills"]["brainstorming"]
         assert e["version"] == "1.4.0"
         assert e["tap"] == "fixture-tap"
         assert e["agents"] == ["claude-code", "windsurf", "cursor"]
@@ -67,6 +70,53 @@ class TestList:
         r = boost("list")
         assert "no skills installed" in r.out
         assert "boost tap --defaults && boost search <topic>" in r.out
+
+    def _seed_rule(self, name="team-rules"):
+        from boost_cli.core import lockfile
+        lockfile.set_rule(name, {
+            "kind": "rule", "version": "2.0.0", "tap": "acme/rules",
+            "materializations": [{"agent": "claude-code", "mode": "claude"},
+                                 {"agent": "cursor", "mode": "file"}]})
+
+    def _seed_workflow(self, name="ship-it"):
+        from boost_cli.core import lockfile
+        lockfile.set_workflow(name, {
+            "kind": "workflow", "version": "1.2.0", "tap": "acme/wf", "slot": "commands",
+            "materializations": [{"agent": "claude-code", "slot": "commands"}]})
+
+    def test_lists_installed_rules_and_workflows(self, boost, sandbox):
+        self._seed_rule()
+        self._seed_workflow()
+        r = boost("list")
+        assert "installed rules" in r.out
+        assert "team-rules" in r.out and "2.0.0" in r.out
+        assert "claude·cursor" in r.out          # materialized agents column
+        assert "1 rule installed" in r.out
+        assert "installed workflows" in r.out
+        assert "ship-it" in r.out and "commands" in r.out  # SLOT column
+        assert "1 workflow installed" in r.out
+
+    def test_rules_and_workflows_show_without_skills(self, boost, sandbox):
+        # empty-state must not fire (and hide them) when only non-skills exist.
+        self._seed_rule()
+        r = boost("list")
+        assert "no skills installed" not in r.out
+        assert "team-rules" in r.out
+
+    def test_json_includes_all_kinds(self, boost, sandbox):
+        self._seed_rule()
+        self._seed_workflow()
+        data = json.loads(boost("list", "--json").out)
+        assert list(data["rules"]) == ["team-rules"]
+        assert data["rules"]["team-rules"]["version"] == "2.0.0"
+        assert list(data["workflows"]) == ["ship-it"]
+
+    def test_tag_filter_excludes_rules_and_workflows(self, boost, sandbox):
+        # --tag is a skill-only concept: rules/workflows must not leak into it.
+        self._seed_rule()
+        r = boost("list", "--tag", "fav")
+        assert "team-rules" not in r.out
+        assert "no skills installed with tag #fav" in r.out
 
 
 # ── info ─────────────────────────────────────────────────────────────────

@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>96</b><span>Loop finds</span></div>
+      <div class="stat"><b>97</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -771,6 +771,29 @@ chunks instead cost ~70%.</p>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">--global vs --local, project .claude/</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Install engine · UX</span></div>
+        <h3><code>boost list</code> shows installed rules and workflows</h3>
+        <p>Rule (<code>#141</code>) and workflow (<code>#150</code>) install landed, but
+           <code>boost list</code> still read only the lock file's
+           <code>skills</code> section — so a rule or workflow installed from
+           <code>browse</code> showed up nowhere, and worse, the empty-state
+           (<em>"no skills installed"</em>) fired whenever no <em>skill</em> was
+           present even if rules/workflows were, hiding them entirely. Extend
+           <code>list</code> to render an <em>installed rules</em> and
+           <em>installed workflows</em> table (agents drawn from each item's
+           recorded materializations, workflows also showing their slot), gate
+           the empty state on all three kinds being empty, and move
+           <code>--json</code> to a <code>{skills, rules, workflows}</code> shape.
+           <code>--tag</code> stays skill-only.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">list was skill-only after rule/workflow install landed</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
