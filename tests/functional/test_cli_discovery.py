@@ -62,12 +62,20 @@ def _make_tap(root):
 # ---------------------------------------------------------------- search
 
 class TestSearch:
+    def test_defaults_to_bm25_without_reindex(self, boost, tapped):
+        # RAG is the default: the first search auto-builds the full-content
+        # index, so a fresh user gets BM25 ranking without running `boost
+        # reindex` first.
+        r = boost("search", "commit", "messages")
+        assert "ranked by full-content BM25" in r.out
+        assert "commit-messages" in r.out
+
     def test_multiword_ranks_exact_token_hits_first(self, boost, tapped):
         r = boost("search", "commit", "messages")
         assert "commit-messages" in r.out
         assert "jira-integration" in r.out
         assert r.out.index("commit-messages") < r.out.index("jira-integration")
-        assert "2 matches · ranked by heuristic relevance" in r.out
+        assert "2 matches · ranked by full-content BM25" in r.out
 
     def test_results_show_relevance_meter(self, boost, tapped):
         # D07: the ranking is visible as a per-result meter; the top exact
@@ -81,11 +89,11 @@ class TestSearch:
         r = boost("search", "workflow", "--limit", "1")
         assert "tdd-workflow" in r.out
         assert "jira-integration" not in r.out
-        assert "2 matches · ranked by heuristic relevance" in r.out
+        assert "2 matches · ranked by full-content BM25" in r.out
 
     def test_single_match_uses_singular_footer(self, boost, tapped):
         r = boost("search", "brainstorming")
-        assert "1 match · ranked by heuristic relevance" in r.out
+        assert "1 match · ranked by full-content BM25" in r.out
         assert "1 matches" not in r.out
 
     def test_json_is_pure_and_scored(self, boost, tapped):
@@ -96,7 +104,9 @@ class TestSearch:
         assert data[0]["name"] == "brainstorming"
         assert data[0]["version"] == "1.4.0"
         assert data[0]["tap"] == "fixture-tap"
-        assert data[0]["score"] == 114  # 100 exact + 12 token-in-name + 2 blob
+        # BM25 (the default engine) scores are positive floats, not the old
+        # integer heuristic score — assert the shape, not a magic constant.
+        assert isinstance(data[0]["score"], float) and data[0]["score"] > 0
 
     def test_no_taps_fails_with_hint(self, boost):
         r = boost("search", "anything", expect=1)
@@ -125,31 +135,46 @@ class TestSearch:
         for ln in rows:
             assert len(ansi.sub("", ln)) <= 60
 
-    def test_smart_without_ai_warns_and_stays_heuristic(self, boost, tapped):
-        r = boost("search", "testing", "--smart")
+    def test_smart_without_ai_warns_and_keeps_base_ranker(self, boost, tapped):
+        # Without AI, --smart warns and keeps the base ranking — which is now
+        # the BM25 default, not the heuristic.
+        r = boost("search", "workflow", "--smart")
         assert "using the heuristic fallback" in r.out
-        assert "ranked by heuristic relevance" in r.out
+        assert "ranked by full-content BM25" in r.out
 
     def test_smart_with_ai_reorders_and_credits_haiku(self, boost, tapped,
                                                       monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        # BM25 for "workflow" returns tdd-workflow then jira-integration; the
+        # rerank flips them.
         monkeypatch.setattr("boost_cli.core.ai.ask",
-                            lambda *a, **k: '["tdd-workflow", "cowboy-coding"]')
-        r = boost("search", "testing", "--smart")
-        assert r.out.index("tdd-workflow") < r.out.index("cowboy-coding")
+                            lambda *a, **k: '["jira-integration", "tdd-workflow"]')
+        r = boost("search", "workflow", "--smart")
+        assert r.out.index("jira-integration") < r.out.index("tdd-workflow")
         assert "ranked by Claude Haiku relevance" in r.out
-        assert "heuristic relevance" not in r.out
+        assert "full-content BM25" not in r.out
 
-    def test_smart_with_junk_ai_reply_keeps_heuristic(self, boost, tapped,
-                                                      monkeypatch):
+    def test_smart_with_junk_ai_reply_keeps_base_ranker(self, boost, tapped,
+                                                        monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
         monkeypatch.setattr("boost_cli.core.ai.ask",
                             lambda *a, **k: "sorry, no list here")
-        r = boost("search", "testing", "--smart")
-        # heuristic tie broken by name: cowboy-coding sorts first
-        assert r.out.index("cowboy-coding") < r.out.index("tdd-workflow")
+        r = boost("search", "workflow", "--smart")
+        # junk reply → keep the base BM25 order (tdd-workflow ranks first)
+        assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
+        assert "ranked by full-content BM25" in r.out
+
+    def test_index_build_failure_degrades_to_heuristic(self, boost, tapped,
+                                                       monkeypatch):
+        # If the on-demand index build fails, search must not crash — it falls
+        # back to the frontmatter heuristic.
+        def _boom(*a, **k):
+            raise RuntimeError("disk full")
+        monkeypatch.setattr("boost_cli.core.rag.build", _boom)
+        r = boost("search", "commit", "messages")
+        assert "commit-messages" in r.out
         assert "ranked by heuristic relevance" in r.out
 
     def test_limit_must_be_positive_int(self, boost, tapped):

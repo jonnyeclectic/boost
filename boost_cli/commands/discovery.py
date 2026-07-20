@@ -91,9 +91,14 @@ def cmd_search(argv):
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to search",
                         hint="add the recommended registries with `boost tap --defaults`")
-    # Prefer the full-content (RAG) index when it exists; otherwise fall back
-    # to the frontmatter search so nothing regresses before `boost reindex`.
+    # Full-content (RAG) search is the default: build the index on first use so
+    # every user gets BM25 ranking without having to know about `boost reindex`.
+    # rag.ensure() is incremental, offline, and degrades to frontmatter search
+    # if the build fails — so a search never hard-fails on an indexing problem.
     use_rag = rag.ready()
+    if not use_rag:
+        with spin.Spinner("building the search index (first run)"):
+            use_rag = rag.ensure()
     if use_rag:
         scored = [(h["entry"], h["score"])
                   for h in rag.retrieve(query, k=max(60, args.limit * 4))]

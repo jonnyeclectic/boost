@@ -745,6 +745,7 @@ REGISTRY = mcp.Registry()
 
 def _tool_search(args: dict):
     query = str(args.get("query", ""))
+    rag.ensure()  # build the full-content index on first use (BM25 by default)
     rag_result = rag.search(query, limit=10)
     if rag_result is not None:  # full-content index is built
         hits, _ranker = rag_result

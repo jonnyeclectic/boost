@@ -121,6 +121,44 @@ def corpus(tmp_path, monkeypatch, sandbox):
     return root, entries
 
 
+class TestEnsure:
+    """rag.ensure() — build-on-first-use so BM25 is the default everywhere."""
+
+    def test_returns_true_without_building_when_ready(self, monkeypatch):
+        monkeypatch.setattr(rag, "ready", lambda: True)
+        monkeypatch.setattr(rag, "build", lambda *a, **k:
+                            pytest.fail("must not build when already ready"))
+        assert rag.ensure() is True
+
+    def test_returns_false_without_taps(self, monkeypatch):
+        monkeypatch.setattr(rag, "ready", lambda: False)
+        monkeypatch.setattr(registry, "list_taps", lambda: [])
+        monkeypatch.setattr(rag, "build", lambda *a, **k:
+                            pytest.fail("must not build without taps"))
+        assert rag.ensure() is False
+
+    def test_builds_when_index_missing(self, monkeypatch):
+        state = {"ready": False, "built": 0}
+        monkeypatch.setattr(rag, "ready", lambda: state["ready"])
+        monkeypatch.setattr(registry, "list_taps", lambda: ["a-tap"])
+
+        def _build(*a, **k):
+            state["built"] += 1
+            state["ready"] = True
+        monkeypatch.setattr(rag, "build", _build)
+        assert rag.ensure() is True
+        assert state["built"] == 1
+
+    def test_returns_false_when_build_raises(self, monkeypatch):
+        monkeypatch.setattr(rag, "ready", lambda: False)
+        monkeypatch.setattr(registry, "list_taps", lambda: ["a-tap"])
+
+        def _boom(*a, **k):
+            raise RuntimeError("disk full")
+        monkeypatch.setattr(rag, "build", _boom)
+        assert rag.ensure() is False
+
+
 class TestBuildAndRetrieve:
     def test_ready_false_before_build(self, sandbox):
         assert rag.ready() is False

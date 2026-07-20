@@ -17,7 +17,7 @@ def test_tap_search_install_doctor_uninstall(boost, fixture_tap_src):
 
     r = boost("search", "jira")
     assert "jira-integration" in r.out
-    assert "ranked by heuristic relevance" in r.out
+    assert "ranked by full-content BM25" in r.out
 
     r = boost("install", "jira-integration")
     assert "copied to" in r.out
