@@ -303,6 +303,25 @@ def ready() -> bool:
     return bool(raw and raw.get("docs"))
 
 
+def ensure() -> bool:
+    """Ensure a usable full-content index exists, building it on first use.
+
+    This makes BM25 search the default for every surface (CLI + MCP) without the
+    user having to run ``boost reindex`` first. Returns True when RAG is usable.
+    Never raises: with no taps, or if the build fails, it returns False so the
+    caller degrades to frontmatter search instead of erroring.
+    """
+    if ready():
+        return True
+    if not registry.list_taps():
+        return False
+    try:
+        build()
+    except Exception:  # noqa: BLE001 — degrade to heuristic, never crash search
+        return False
+    return ready()
+
+
 def _bm25(query_terms: List[str], raw: dict) -> Dict[int, float]:
     docs = raw["docs"]
     n = len(docs)

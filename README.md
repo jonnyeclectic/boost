@@ -54,8 +54,9 @@ boost tap --defaults          # pull in the 5 starter registries
 ```
 
 The default install is **zero-dependency** (pure stdlib). `boost search` and the
-`boost_search` MCP tool rank results with a built-in full-content BM25 engine
-(run `boost reindex` once to build the index). For optional **dense semantic
+`boost_search` MCP tool rank results with a built-in full-content BM25 engine —
+the index builds automatically on your first search, so BM25 is the default with
+no setup (`boost reindex` just forces a rebuild). For optional **dense semantic
 search**, install the `[rag]` extra and set an embeddings key — retrieval then
 embeds every skill and ranks by vector similarity, falling back to BM25 whenever
 the extra or key is absent:
