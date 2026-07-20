@@ -357,6 +357,54 @@ def _confirm_risky_update(name: str, entry: dict) -> bool:
     return out.confirm("Apply this update to %s?" % name)
 
 
+def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
+    """Re-materialize installed rules/workflows whose tap source moved.
+
+    Mirrors the skill upgrade loop: for each installed item from a refreshed
+    tap, reinstall (force) when the source version bumped or its content sha
+    changed. Rules/workflows carry no pin/quarantine flags and their source is a
+    single file, so there is no risky-diff gate — re-applying a file drop or a
+    CLAUDE.md managed block is cheap. Returns how many were refreshed.
+    """
+    import hashlib
+    n = 0
+    for name, lk in sorted(installed.items()):
+        tapname = lk.get("tap")
+        if tapname in (None, "local") or tapname not in results:
+            continue
+        matches = [e for e in catalog.find(name)
+                   if e["tap"] == tapname and e.get("kind", "skill") == kind]
+        if not matches:
+            out.warn("%s %s is no longer in tap %s — leaving as-is"
+                     % (kind, name, tapname))
+            continue
+        entry = matches[0]
+        old_v = str(lk.get("version", "0.0.0"))
+        new_v = str(entry.get("version", "0.0.0"))
+        bumped = util.semver_gt(new_v, old_v)
+        changed = bumped
+        if not changed:
+            try:
+                src = registry.get(tapname).path / entry.get("skill_md", "")
+                cur = (hashlib.sha256(
+                    src.read_text(encoding="utf-8", errors="replace").encode("utf-8")
+                ).hexdigest() if src.is_file() else None)
+            except OSError:
+                cur = None
+            changed = bool(cur and cur != lk.get("sha256"))
+        if not changed:
+            continue
+        try:
+            store.install(entry, force=True)
+        except BoostError as err:
+            out.warn("%s: %s" % (name, err.message))
+            continue
+        out.ok(("upgraded %s %s v%s → v%s" % (kind, name, old_v, new_v)) if bumped
+               else ("refreshed %s %s v%s (source changed)" % (kind, name, new_v)))
+        n += 1
+    return n
+
+
 def cmd_update(argv: List[str]) -> int:
     ap = cliparse.parser(prog="boost update",
                                  description="Sync taps or update installed skills")
@@ -414,6 +462,9 @@ def cmd_update(argv: List[str]) -> int:
         else:
             out.ok("refreshed %s v%s (source changed)" % (name, new_v))
         upgraded += 1
+    # Rules and workflows refresh from the same tap update.
+    upgraded += _update_materialized("rule", lockfile.installed_rules(), results)
+    upgraded += _update_materialized("workflow", lockfile.installed_workflows(), results)
     if not upgraded:
         out.ok("everything up to date")
     return 0
