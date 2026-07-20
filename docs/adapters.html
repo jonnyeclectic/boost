@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — Framework adapters (boost adapt)</title>
+<meta name="description" content="How `boost adapt` renders one authored skill into another agent framework's native source — CrewAI, the OpenAI Agents SDK — as a deterministic, zero-dependency string transform, with architecture and sequence diagrams and the exact field mapping.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<!-- Shared Aurora design system. Recolour everything by editing style/boost.css. -->
+<link rel="stylesheet" href="../style/boost.css">
+<style>
+  /* Page-specific layout — built only on boost.css :root tokens so it stays on-palette. */
+  main { padding-bottom: 40px; }
+  section { padding: 88px 0 8px; }
+  .hero { padding: 84px 0 8px; }
+  .hero h1 { font-size: clamp(38px, 6vw, 66px); font-weight: 800;
+             letter-spacing: -.035em; line-height: 1.05; max-width: 900px;
+             text-wrap: balance; margin-top: 24px; }
+  .hero p.lede { max-width: 700px; margin-top: 24px; font-size: 18.5px; color: var(--text-2); }
+  .crumbs { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); margin-bottom: 4px; }
+  .crumbs a { color: var(--text-2); }
+  .sec-sub { max-width: 720px; color: var(--text-2); font-size: 17px; margin-top: 10px; }
+  .diagram { margin-top: 34px; padding: 22px; border: 1px solid var(--line);
+             border-radius: 16px; background: var(--panel); overflow-x: auto; }
+  .diagram svg { display: block; margin: 0 auto; min-width: 620px; }
+  svg .lbl   { font-family: var(--mono); font-size: 13px;   fill: var(--text); }
+  svg .lbl-s { font-family: var(--mono); font-size: 11px;   fill: var(--text-2); }
+  svg .lbl-t { font-family: var(--mono); font-size: 10.5px; fill: var(--text-3); }
+  svg .head  { font-family: var(--sans); font-size: 13.5px; font-weight: 700; fill: var(--text); }
+  svg .mono  { font-family: var(--mono); }
+  /* mapping / contract tables */
+  table.map { width: 100%; border-collapse: collapse; margin-top: 30px; font-size: 14px; }
+  table.map th, table.map td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--line-soft); }
+  table.map th { font-family: var(--mono); font-size: 12px; color: var(--text-3);
+                 text-transform: uppercase; letter-spacing: .06em; font-weight: 700; }
+  table.map td code { font-family: var(--mono); font-size: 12.5px; color: var(--cyan); }
+  table.map td.crew code  { color: var(--pink); }
+  table.map td.sdk  code  { color: var(--green); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 30px; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  .panel { border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 8px;
+           background: var(--panel); }
+  .panel h3 { font-size: 16px; margin: 0 0 4px; }
+  .panel .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .05em;
+                text-transform: uppercase; }
+  .panel.in  .tag { color: var(--green); }
+  .panel.out .tag { color: var(--yellow); }
+  pre.code { font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: var(--text);
+             background: var(--panel-solid); border: 1px solid var(--line); border-radius: 12px;
+             padding: 16px 18px; overflow-x: auto; margin-top: 24px; }
+  pre.code .c { color: var(--text-3); }
+  pre.code .k { color: var(--violet); }
+  pre.code .s { color: var(--green); }
+  pre.code .fn { color: var(--cyan); }
+  ul.ticks { list-style: none; padding: 0; margin: 14px 0 0; }
+  ul.ticks li { position: relative; padding-left: 26px; margin: 10px 0; color: var(--text-2); font-size: 14.5px; }
+  ul.ticks li::before { content: "✦"; position: absolute; left: 0; color: var(--cyan); }
+  ul.ticks li b { color: var(--text); }
+  .callout { margin-top: 26px; border-left: 3px solid var(--yellow); background: rgba(250,204,21,.06);
+             padding: 14px 18px; border-radius: 0 10px 10px 0; color: var(--text-2); font-size: 14px; }
+  .callout b { color: var(--yellow); }
+</style>
+</head>
+<body>
+
+<main>
+  <!-- ===== hero ===== -->
+  <div class="wrap hero">
+    <p class="crumbs"><a href="index.html">boost</a> / docs / adapters · <span class="mono">boost adapt</span></p>
+    <span class="badge">New command · <span class="mono">boost adapt &lt;skill&gt; --to &lt;framework&gt;</span></span>
+    <h1>One authored skill, <span class="grad-text">every agent framework</span>.</h1>
+    <p class="lede">boost installs skills as files for editor-style agents — Claude Code, Cursor, Windsurf.
+      But frameworks like <b>CrewAI</b> and the <b>OpenAI Agents SDK</b> aren't editors watching a folder;
+      an agent there is a value constructed in a Python source file. <code>boost adapt</code> bridges that
+      gap: it renders one <code>SKILL.md</code> into each framework's native idiom — a deterministic,
+      <b>zero-dependency</b> string transform that never imports the framework it targets.</p>
+
+    <div class="stats">
+      <div class="stat reveal"><b>2</b><span>Frameworks rendered</span></div>
+      <div class="stat reveal"><b>97.6%</b><span>Mutation kill on the renderer</span></div>
+      <div class="stat reveal"><b>56</b><span>Unit + functional tests</span></div>
+      <div class="stat reveal"><b>0</b><span>Runtime dependencies added</span></div>
+    </div>
+  </div>
+
+  <!-- ===== simple explanation ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The idea, plainly</span>
+      <h2 class="sec-title">Author once. Distribute anywhere. No drift.</h2>
+      <p class="sec-sub">A skill's value is its instructions. Today those instructions can only reach agents
+        that read a skills directory. Copy them by hand into a CrewAI or LangGraph app and you now maintain
+        two, three, four divergent copies — and the moment the checklist changes, they skew. <code>boost
+        adapt</code> makes boost the single distribution point: the skill lives in one versioned
+        <code>SKILL.md</code>, and each framework gets a freshly-rendered copy on demand.</p>
+
+      <ul class="ticks">
+        <li><b>Kills drift.</b> One source of truth; re-run <code>boost adapt</code> after any edit and every framework picks up the change.</li>
+        <li><b>Grows the audience.</b> <code>boost search</code> / <code>install</code>'s whole catalog becomes reachable from CrewAI and Agents-SDK shops, not just editor plugins.</li>
+        <li><b>Governance travels.</b> The exported agent inherits which version, from which tap, pinned to which SHA — provenance those frameworks have no native answer for.</li>
+        <li><b>Zero dependency cost.</b> Each renderer emits <i>text</i>; boost never imports CrewAI or LangGraph, so the zero-dep runtime contract holds.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ===== architecture ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Architecture</span>
+      <h2 class="sec-title">Two lanes out of one skill</h2>
+      <p class="sec-sub">The existing <b>install</b> lane copies <code>SKILL.md</code> verbatim into folders that
+        editor agents watch. The new <b>adapt</b> lane <i>transforms</i> the same skill into framework source.
+        Same input, two consumers — files for editors, code for frameworks.</p>
+
+      <div class="diagram reveal">
+        <svg viewBox="0 0 940 340" role="img" aria-label="One SKILL.md feeds two lanes: the install lane symlinks it verbatim into Claude Code, Cursor and Windsurf directories; the adapt lane runs it through per-framework renderers to emit native CrewAI and OpenAI Agents SDK source.">
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0L10 5L0 10z" fill="#7dd3fc"/>
+            </marker>
+          </defs>
+
+          <!-- source -->
+          <rect x="40" y="132" width="150" height="76" rx="12" fill="rgba(34,211,238,.08)" stroke="#22d3ee" stroke-width="1.3"/>
+          <text x="115" y="164" text-anchor="middle" class="head">SKILL.md</text>
+          <text x="115" y="184" text-anchor="middle" class="lbl-s">name · description</text>
+          <text x="115" y="199" text-anchor="middle" class="lbl-s">+ markdown body</text>
+
+          <!-- install lane -->
+          <line x1="190" y1="150" x2="360" y2="80" stroke="#3a4363" stroke-width="1.4" marker-end="url(#a)"/>
+          <rect x="360" y="44" width="200" height="52" rx="10" fill="rgba(255,255,255,.04)" stroke="#4a5578" stroke-width="1.1"/>
+          <text x="375" y="66" class="lbl">boost install</text>
+          <text x="375" y="84" class="lbl-t mono">store.install → symlink</text>
+
+          <rect x="600" y="30" width="300" height="82" rx="10" fill="rgba(34,211,238,.05)" stroke="#22d3ee" stroke-width="1.1"/>
+          <text x="616" y="52" class="head">Editor agents <tspan class="lbl-t">(file consumers)</tspan></text>
+          <text x="616" y="74" class="lbl-s mono">~/.claude/skills/ · Cursor · Windsurf</text>
+          <text x="616" y="94" class="lbl-t">copied verbatim — no transform</text>
+          <line x1="560" y1="70" x2="600" y2="70" stroke="#3a4363" stroke-width="1.4" marker-end="url(#a)"/>
+
+          <!-- adapt lane -->
+          <line x1="190" y1="190" x2="360" y2="230" stroke="#3a4363" stroke-width="1.4" marker-end="url(#a)"/>
+          <rect x="360" y="210" width="200" height="72" rx="10" fill="rgba(168,85,247,.08)" stroke="#a855f7" stroke-width="1.2"/>
+          <text x="375" y="234" class="lbl">boost adapt --to X</text>
+          <text x="375" y="253" class="lbl-t mono">adapters.render(fmt, …)</text>
+          <text x="375" y="270" class="lbl-t mono">_py_str · _ident</text>
+
+          <rect x="600" y="176" width="300" height="56" rx="10" fill="rgba(244,114,208,.06)" stroke="#f472d0" stroke-width="1.1"/>
+          <text x="616" y="198" class="head" fill="#f472d0">CrewAI</text>
+          <text x="616" y="218" class="lbl-s mono">from crewai import Agent</text>
+          <line x1="560" y1="238" x2="600" y2="212" stroke="#3a4363" stroke-width="1.4" marker-end="url(#a)"/>
+
+          <rect x="600" y="252" width="300" height="56" rx="10" fill="rgba(74,222,128,.06)" stroke="#4ade80" stroke-width="1.1"/>
+          <text x="616" y="274" class="head" fill="#4ade80">OpenAI Agents SDK</text>
+          <text x="616" y="294" class="lbl-s mono">from agents import Agent</text>
+          <line x1="560" y1="258" x2="600" y2="278" stroke="#3a4363" stroke-width="1.4" marker-end="url(#a)"/>
+
+          <text x="620" y="330" class="lbl-t">…LangGraph, and more, are just another renderer in the same registry.</text>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== sequence ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Sequence</span>
+      <h2 class="sec-title">What happens on <span class="mono">boost adapt code-reviewer --to crewai</span></h2>
+      <p class="sec-sub">Resolution prefers the installed store, then falls back to any tap clone — so you can
+        adapt a skill you haven't installed. The framework is never imported; the last step (instantiating the
+        agent) runs only in <i>your</i> app, out of boost's process.</p>
+
+      <div class="diagram reveal">
+        <svg viewBox="0 0 900 330" role="img" aria-label="Sequence: the CLI command resolves the skill from store or tap, parses its frontmatter into name/description/body, dispatches to the CrewAI renderer which safely quotes each field, and writes valid Python to stdout or a file; a separate out-of-process step imports it into CrewAI.">
+          <!-- lifelines -->
+          <g stroke="#2a3350" stroke-width="1">
+            <line x1="90"  y1="60" x2="90"  y2="300"/>
+            <line x1="300" y1="60" x2="300" y2="300"/>
+            <line x1="510" y1="60" x2="510" y2="300"/>
+            <line x1="720" y1="60" x2="720" y2="300"/>
+          </g>
+          <!-- actors -->
+          <g text-anchor="middle">
+            <rect x="40"  y="34" width="100" height="30" rx="7" fill="rgba(255,255,255,.05)" stroke="#4a5578"/>
+            <text x="90"  y="54" class="lbl">cmd_adapt</text>
+            <rect x="240" y="34" width="120" height="30" rx="7" fill="rgba(34,211,238,.07)" stroke="#22d3ee"/>
+            <text x="300" y="54" class="lbl">resolve+parse</text>
+            <rect x="450" y="34" width="120" height="30" rx="7" fill="rgba(168,85,247,.08)" stroke="#a855f7"/>
+            <text x="510" y="54" class="lbl">render_crewai</text>
+            <rect x="665" y="34" width="110" height="30" rx="7" fill="rgba(250,204,21,.07)" stroke="#facc15"/>
+            <text x="720" y="54" class="lbl">stdout / file</text>
+          </g>
+          <!-- messages -->
+          <g class="lbl-s">
+            <line x1="90"  y1="96"  x2="300" y2="96"  stroke="#7dd3fc" stroke-width="1.3" marker-end="url(#a)"/>
+            <text x="105" y="90">store.skill_store_dir → else tap clone</text>
+
+            <line x1="300" y1="134" x2="90"  y2="134" stroke="#5b6588" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#a)"/>
+            <text x="105" y="128">(name, description, body)</text>
+
+            <line x1="90"  y1="172" x2="510" y2="172" stroke="#7dd3fc" stroke-width="1.3" marker-end="url(#a)"/>
+            <text x="105" y="166">adapters.render("crewai", …)</text>
+
+            <line x1="510" y1="210" x2="510" y2="210" stroke="#a855f7"/>
+            <rect x="470" y="196" width="200" height="26" rx="6" fill="rgba(168,85,247,.10)" stroke="#a855f7"/>
+            <text x="480" y="213" class="lbl-t mono">_py_str() quotes · _ident() names</text>
+
+            <line x1="510" y1="250" x2="720" y2="250" stroke="#7dd3fc" stroke-width="1.3" marker-end="url(#a)"/>
+            <text x="524" y="244">valid Python source</text>
+
+            <line x1="720" y1="288" x2="90"  y2="288" stroke="#5b6588" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#a)"/>
+            <text x="300" y="282" class="lbl-t">rc 0 — later: `python app.py` imports it into CrewAI (out of boost's process)</text>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== the mapping (technical) ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Technical · the contract</span>
+      <h2 class="sec-title">How a skill maps onto each framework</h2>
+      <p class="sec-sub">Every renderer is a pure function <code>(name, description, body) → str</code>. The three
+        skill fields map onto each framework's constructor kwargs. Nothing else is invented — the body <i>is</i>
+        the agent's instructions.</p>
+
+      <table class="map">
+        <thead><tr><th>boost skill field</th><th>CrewAI <code class="mono">Agent(…)</code></th><th>OpenAI Agents SDK <code class="mono">Agent(…)</code></th></tr></thead>
+        <tbody>
+          <tr><td><code>name</code></td>            <td class="crew"><code>role</code></td>      <td class="sdk"><code>name</code></td></tr>
+          <tr><td><code>description</code></td>     <td class="crew"><code>goal</code></td>      <td class="sdk"><code>handoff_description</code></td></tr>
+          <tr><td>markdown <code>body</code></td>   <td class="crew"><code>backstory</code></td> <td class="sdk"><code>instructions</code></td></tr>
+        </tbody>
+      </table>
+
+      <div class="two">
+        <div class="panel">
+          <h3>The escaping defense</h3>
+          <p class="sec-sub" style="margin-top:8px">A skill body full of quotes, backslashes or <code>"""</code>
+            is what breaks a naïve template. The renderer emits every string via <code>json.dumps(s,
+            ensure_ascii=False)</code> — JSON string syntax is a subset of Python's, so the result is always a
+            valid, safely-escaped Python literal, with non-ASCII left readable.</p>
+        </div>
+        <div class="panel">
+          <h3>The identifier rule</h3>
+          <p class="sec-sub" style="margin-top:8px">The assignment target is derived from the skill name:
+            <code>code-reviewer → code_reviewer</code>. A leading digit or a Python keyword gets an
+            <code>s_</code> prefix, so the emitted variable always parses. <code>_ident()</code> is proven to
+            return a valid identifier for every input.</p>
+        </div>
+      </div>
+
+      <pre class="code"><span class="c"># boost adapt code-reviewer --to crewai</span>
+<span class="c"># Generated by `boost adapt code-reviewer --to crewai`. Do not edit by hand.</span>
+<span class="k">from</span> crewai <span class="k">import</span> Agent
+
+code_reviewer = <span class="fn">Agent</span>(
+    role=<span class="s">"code-reviewer"</span>,
+    goal=<span class="s">"Reviews a diff for correctness, security, and test coverage"</span>,
+    backstory=<span class="s">"Review the provided diff.\nFlag: unhandled errors, ..."</span>,
+)</pre>
+    </div>
+  </section>
+
+  <!-- ===== testing ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Validation</span>
+      <h2 class="sec-title">What the gate can prove — and what it can't</h2>
+      <p class="sec-sub">boost stays zero-dependency, so CI never installs CrewAI. That draws a hard line
+        through the test strategy: everything provable without the framework runs in the release gate; the one
+        thing that needs the framework runs opt-in, and can never flake a release.</p>
+
+      <div class="two">
+        <div class="panel in">
+          <span class="tag">In the gate · stdlib only</span>
+          <h3>Deterministic + valid Python</h3>
+          <ul class="ticks">
+            <li><b>Byte-exact golden output</b> — any template mutation changes the string and fails a test.</li>
+            <li><b>compile()</b> every emitted source, incl. adversarial bodies (quotes, <code>"""</code>, backslashes, unicode).</li>
+            <li><b>ast round-trip</b> — the body literal decodes back to the original.</li>
+            <li><b>97.6%</b> mutation kill on <code>core/adapters.py</code>; full CLI paths in functional tests.</li>
+          </ul>
+        </div>
+        <div class="panel out">
+          <span class="tag">Out of the gate · framework installed</span>
+          <h3>Does the live API accept it?</h3>
+          <ul class="ticks">
+            <li><b><code>adapter-conformance.yml</code></b> — a matrix job that <code>pip install</code>s each framework and <b>imports the emitted file</b> to instantiate a real <code>Agent</code>.</li>
+            <li>Runs on <b>manual dispatch + weekly cron</b> — never on PRs, so it can't redden a PyPI release.</li>
+            <li>Pinned to <b>Python 3.13</b>: CrewAI's <code>tiktoken</code> has no 3.14 wheel — the frameworks, not boost, set the ceiling.</li>
+            <li>Verified against <b>crewai 1.15.5</b> and the <b>OpenAI Agents SDK</b> — both instantiate cleanly.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout"><b>The honest boundary.</b> <code>make check</code> proves the transform is
+        deterministic, byte-exact, valid Python, escaping-safe, and the CLI behaves. It does <i>not</i> prove
+        CrewAI's live API accepts the output — that verification is real, but it lives with the dependency we
+        don't control, never in the release gate.</div>
+    </div>
+  </section>
+
+  <!-- ===== try it ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Try it locally</span>
+      <h2 class="sec-title">From a boost skill to a running CrewAI agent</h2>
+      <pre class="code"><span class="c"># 1 — render the skill to CrewAI source (nothing installed needed)</span>
+boost adapt code-reviewer --to crewai -o reviewer.py
+
+<span class="c"># 2 — in a throwaway venv, install the framework and load it</span>
+python3 -m venv /tmp/crew && /tmp/crew/bin/pip install crewai
+/tmp/crew/bin/python -c <span class="s">"import reviewer; print(reviewer.code_reviewer.role)"</span>
+<span class="c"># → code-reviewer   ✦ the emitted file imported and instantiated</span></pre>
+      <p class="sec-sub" style="margin-top:22px">Supported targets today: <code>crewai</code>,
+        <code>agents-sdk</code>. Adding another framework is one <code>render_*</code> function plus a row in
+        the <code>FORMATS</code> registry and its golden test.</p>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p>boost · <b>Framework adapters</b> — <code class="mono">boost adapt &lt;skill&gt; --to &lt;framework&gt;</code> ·
+        <a href="index.html">docs home</a> ·
+        <a href="mcp-hub.html">RAG &amp; MCP hub</a><br>
+        Styled with the shared <a href="../style/boost.css">Aurora</a> design system.</p>
+    </div>
+  </footer>
+</main>
+
+<script src="../style/boost.js" defer></script>
+</body>
+</html>

@@ -54,6 +54,8 @@ run "cat"                    0 ./boost cat brainstorming
 run "preview"                0 ./boost preview brainstorming
 run "explain (no AI)"        0 ./boost explain brainstorming
 run "stats"                  0 ./boost stats brainstorming
+run "adapt crewai"           0 ./boost adapt brainstorming --to crewai
+run "adapt bad framework"    1 ./boost adapt brainstorming --to nope
 run "count"                  0 ./boost count
 run "log (journal)"          0 ./boost log
 run "log skill"              0 ./boost log brainstorming
@@ -144,6 +146,7 @@ pin
 unpin
 snapshot
 export
+adapt
 search
 reindex
 discover

@@ -47,7 +47,7 @@ GROUPS = {
 # (name, group, module, summary) — the single source of truth for the
 # command surface. docs/overview.html mirrors this list.
 COMMANDS = [
-    # Package Management (12)
+    # Package Management (13)
     ("install",     "pkg", "pkg", "Install a skill from a tap registry"),
     ("uninstall",   "pkg", "pkg", "Remove an installed skill, rule, workflow, or config"),
     ("sync",        "pkg", "pkg", "Reconcile installed skills & symlinks against the lock file"),
@@ -60,6 +60,7 @@ COMMANDS = [
     ("unpin",       "pkg", "pkg", "Allow a pinned skill to update again"),
     ("snapshot",    "pkg", "pkg", "Save & restore whole skill environments"),
     ("export",      "pkg", "pkg", "Package skills as shareable zip/tar archives"),
+    ("adapt",       "pkg", "pkg", "Render a skill as another framework's agent source (CrewAI, Agents SDK)"),
     # Discovery & Search (9)
     ("search",      "find", "discovery", "Search skills across tap registries (AI-ranked)"),
     ("reindex",     "find", "discovery", "Build/refresh the full-content search index"),
