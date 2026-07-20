@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>97</b><span>Loop finds</span></div>
+      <div class="stat"><b>98</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -794,6 +794,27 @@ chunks instead cost ~70%.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">list was skill-only after rule/workflow install landed</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · UX</span></div>
+        <h3><code>boost update</code> refreshes installed rules and workflows</h3>
+        <p>After rule (<code>#141</code>) and workflow (<code>#150</code>) install landed,
+           <code>boost update</code> still upgraded only skills — a rule or
+           workflow stayed frozen at its install-time content even after its tap
+           moved. Extend the update pass: for each installed rule/workflow from a
+           refreshed tap, re-materialize (force reinstall) when the source
+           version bumped or its file content sha changed, mirroring the skill
+           upgrade loop. Rules/workflows carry no pin/quarantine flags and their
+           source is a single file, so there is no risky-diff gate — re-applying
+           a file drop or a <code>CLAUDE.md</code> managed block is cheap and the
+           refresh is reported per item.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">update was skill-only after rule/workflow install</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

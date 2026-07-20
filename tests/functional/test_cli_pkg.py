@@ -28,6 +28,16 @@ def _bump(tap_dir, skill, old, new):
                    check=True, capture_output=True)
 
 
+def _add_and_commit(tap_dir, relpath, content, msg):
+    p = tap_dir / relpath
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content)
+    subprocess.run(["git", "-C", str(tap_dir), "add", "-A"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", msg],
+                   check=True, capture_output=True)
+
+
 def _lock():
     return json.loads(paths.lockfile_path().read_text())["skills"]
 
@@ -191,6 +201,39 @@ class TestUpdate:
         assert "to-tap:" in r.out
         assert "upgraded" not in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
+
+    def test_refreshes_rule_when_source_changes(self, boost, fixture_tap_src,
+                                                tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "rule-tap")
+        _add_and_commit(tap_dir, "rules/team.mdc",
+                        "---\nname: team-rules\n---\n\nv1 body\n", "add rule")
+        boost("tap", tap_dir)
+        boost("install", "team-rules")
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        assert "v1 body" in claude_md.read_text()
+        # content change with no version bump — detected via source sha.
+        _add_and_commit(tap_dir, "rules/team.mdc",
+                        "---\nname: team-rules\n---\n\nv2 body\n", "edit rule")
+        r = boost("update")
+        assert "refreshed rule team-rules" in r.out
+        assert "v2 body" in claude_md.read_text()      # re-materialized
+        assert "v1 body" not in claude_md.read_text()
+
+    def test_upgrades_workflow_on_version_bump(self, boost, fixture_tap_src,
+                                               tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "wf-tap")
+        _add_and_commit(tap_dir, "commands/ship.md",
+                        "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
+                        "allowed-tools: Bash\n---\n\ngo\n", "add wf")
+        boost("tap", tap_dir)
+        boost("install", "ship-it")
+        _add_and_commit(tap_dir, "commands/ship.md",
+                        "---\nname: ship-it\nversion: 1.1.0\ndescription: d\n"
+                        "allowed-tools: Bash\n---\n\ngo v2\n", "bump wf")
+        r = boost("update")
+        assert "upgraded workflow ship-it v1.0.0 → v1.1.0" in r.out
+        wf = paths.home() / ".claude" / "commands" / "ship-it.md"
+        assert "go v2" in wf.read_text()
 
 
 def _poison(tap_dir, skill, old, new):
