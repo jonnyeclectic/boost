@@ -2,14 +2,14 @@
 id: secret-and-pii-scanning-of-installed-skills
 board: code
 section: trust
-status: planned
+status: inflight
 category: Security · Secrets
 complexity: S
 impact: Med
 wow: 3
 note: installed content
 order: 6
-owner:
+owner: loop/secret-scan
 pr:
 title: Secret &amp; PII scanning of installed skills
 ---
