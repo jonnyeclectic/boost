@@ -40,6 +40,12 @@ Changelog = "https://github.com/jonnyeclectic/boost/releases"
 # OpenAI, keyed by env var) — no client library required. Without this extra,
 # or without an embeddings key, search degrades to the always-on BM25 engine.
 rag = ["sqlite-vec>=0.1.6"]
+# Opt-in retrieval-eval extras. The Tier 1 gate (scripts/eval_retrieval.py) is
+# pure-stdlib and required in CI; this extra only powers the optional `--stats`
+# mode, which adds `ranx` for statistical-significance testing (paired t-test)
+# between engines. `pip install boost-skill-cli[eval]`. Never imported by the
+# CLI or the required gate.
+eval = ["ranx>=0.3.20"]
 
 [project.scripts]
 boost = "boost_cli.cli:main"

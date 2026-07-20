@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec audit dist-check
+.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats audit dist-check
 
 venv:
 	python3 -m venv $(VENV)
@@ -79,6 +79,14 @@ eval-ai:
 # Same opt-in/key-gated contract as eval-ai; the heuristic arm always runs.
 eval-rec:
 	$(PY) scripts/eval_recommend.py --build -k 5 --fail-hallucination
+
+# Tier 1b: statistical-significance testing between engines (ranx paired
+# t-test). Opt-in — needs the [eval] extra (`pip install -e '.[eval]'`);
+# degrades cleanly if ranx is absent. Runs over the pinned corpus like `eval`.
+# Informational (no gate): tells you whether a metric gap is real or noise.
+eval-stats:
+	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
+	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 --stats
 
 # regenerate generated artifacts from their source (registries + roadmap boards)
 generate:
