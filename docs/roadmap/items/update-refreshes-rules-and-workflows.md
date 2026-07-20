@@ -2,7 +2,7 @@
 id: update-refreshes-rules-and-workflows
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Install engine · UX
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note: update was skill-only after rule/workflow install
 order: 25
 owner: loop/update-all-kinds
-pr:
+pr: 156
 title: <code>boost update</code> refreshes installed rules and workflows
 ---
 After rule (<code>#141</code>) and workflow (<code>#150</code>) install landed,
