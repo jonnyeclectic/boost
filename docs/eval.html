@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — how the evaluation system works</title>
+<meta name="description" content="boost grades its own retrieval and recommendation quality: a required, deterministic golden-set gate plus opt-in significance testing and LLM-judged faithfulness. Architecture, sequence diagrams, and a simple-vs-technical cheat sheet.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<!-- Shared Aurora design system. Recolour everything by editing style/boost.css. -->
+<link rel="stylesheet" href="../style/boost.css">
+<style>
+  /* Page-specific layout — built only on boost.css :root tokens so it stays on-palette. */
+  main { padding-bottom: 40px; }
+  section { padding: 92px 0 8px; }
+  .hero { padding: 84px 0 8px; }
+  .hero h1 { font-size: clamp(38px, 6vw, 66px); font-weight: 800;
+             letter-spacing: -.035em; line-height: 1.06; max-width: 900px;
+             text-wrap: balance; margin-top: 24px; }
+  .hero p.lede { max-width: 700px; margin-top: 24px; font-size: 18.5px; color: var(--text-2); }
+  .crumbs { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); margin-bottom: 4px; }
+  .crumbs a { color: var(--sky); text-decoration: none; }
+  .stats { margin-top: 58px; }
+
+  .lead { max-width: 760px; margin: 0 auto; text-align: center; color: var(--text-2);
+          font-size: 16.5px; }
+  .prose { max-width: 720px; margin: 28px auto 0; color: var(--text-2); font-size: 15.5px; }
+  .prose p { margin-top: 14px; }
+  .prose b { color: var(--text); }
+  .prose code, .lead code { font-family: var(--mono); font-size: .86em; color: var(--sky);
+          background: rgba(34,211,238,.09); padding: 1px 6px; border-radius: 6px; }
+
+  /* Diagram frame: a glass surface that scrolls its own wide SVG (body never scrolls X). */
+  .diagram { margin: 40px auto 0; padding: 24px; border: 1px solid var(--line);
+             border-radius: var(--radius-lg); background: var(--panel); overflow-x: auto; }
+  .diagram svg { display: block; min-width: 700px; width: 100%; height: auto; }
+  .caption { margin: 14px auto 0; max-width: 720px; text-align: center; font-size: 13px;
+             color: var(--text-3); font-family: var(--mono); }
+
+  /* SVG shared type + shapes via CSS classes (keeps the markup lean, on-palette). */
+  svg .box   { fill: rgba(255,255,255,.03); stroke: var(--line); }
+  svg .box-hi { fill: rgba(34,211,238,.07); stroke: rgba(34,211,238,.38); }
+  svg .box-gate { fill: rgba(74,222,128,.06); stroke: rgba(74,222,128,.42); }
+  svg .head  { font-family: var(--sans); font-size: 13.5px; font-weight: 700; fill: var(--text); }
+  svg .lbl   { font-family: var(--mono); font-size: 12px; fill: var(--text); }
+  svg .lbl-s { font-family: var(--mono); font-size: 11px; fill: var(--text-2); }
+  svg .lbl-t { font-family: var(--mono); font-size: 10.5px; fill: var(--text-3); }
+  svg .flow  { stroke: var(--line-hi); stroke-width: 1.5; fill: none; }
+  svg .flow-c { stroke: var(--cyan); stroke-width: 1.5; fill: none; }
+  svg .life  { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+  svg .msg   { stroke: var(--cyan); stroke-width: 1.4; fill: none; }
+  svg .ret   { stroke: var(--green); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+  svg .ok    { font-family: var(--mono); font-size: 11px; fill: var(--green); font-weight: 700; }
+
+  /* Tier contract table. */
+  table.contract { width: 100%; border-collapse: collapse; margin-top: 40px; font-size: 14px; }
+  table.contract th, table.contract td { text-align: left; padding: 13px 14px;
+             border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  table.contract th { font-family: var(--mono); font-size: 11.5px; color: var(--text-2);
+             text-transform: uppercase; letter-spacing: .05em; }
+  table.contract td code { font-family: var(--mono); font-size: 12.5px; color: var(--sky); }
+  table.contract td b.t { color: var(--cyan); }
+  table.contract tr:last-child td { border-bottom: none; }
+  .pill { font-family: var(--mono); font-size: 10.5px; font-weight: 700; padding: 2px 9px;
+          border-radius: 999px; white-space: nowrap; }
+  .pill.req { color: #bff2d0; background: rgba(74,222,128,.12); border: 1px solid rgba(74,222,128,.4); }
+  .pill.opt { color: #cfe8ff; background: rgba(56,189,248,.1);  border: 1px solid rgba(56,189,248,.35); }
+
+  /* Simple | Technical cheat sheet: two synced columns of collapsibles. */
+  .cheat { margin-top: 44px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px 18px; }
+  .cheat .col-head { font-family: var(--mono); font-size: 12px; font-weight: 700;
+             letter-spacing: .04em; padding: 6px 2px; }
+  .cheat .col-head.simple { color: var(--sky); }
+  .cheat .col-head.tech   { color: var(--pink); }
+  .cheat .group { grid-column: 1 / -1; margin-top: 14px; padding: 4px 2px 2px;
+             font-family: var(--mono); font-size: 12.5px; font-weight: 700;
+             color: var(--text-2); border-top: 1px solid var(--line-soft); }
+  .cheat .group span { color: var(--cyan); }
+  details.card { border: 1px solid var(--line); border-radius: 14px; background: var(--panel);
+             padding: 0; transition: border-color .2s ease; }
+  details.card[open] { border-color: var(--line-hi); }
+  details.card > summary { cursor: pointer; list-style: none; padding: 15px 18px;
+             font-weight: 700; font-size: 14.5px; color: var(--text);
+             display: flex; align-items: center; gap: 10px; }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary::before { content: "▸"; font-size: 12px; transition: transform .2s ease; }
+  details.card[open] > summary::before { transform: rotate(90deg); }
+  details.simple > summary::before { color: var(--sky); }
+  details.tech > summary::before   { color: var(--pink); }
+  details.card .body { padding: 0 18px 18px; font-size: 14px; color: var(--text-2); line-height: 1.62; }
+  details.card .body p { margin-top: 10px; }
+  details.card .body code { font-family: var(--mono); font-size: 12px;
+             background: rgba(255,255,255,.05); padding: 1px 5px; border-radius: 5px; color: var(--sky); }
+
+  .term-wrap { max-width: 820px; margin: 40px auto 0; }
+
+  footer { margin-top: 96px; border-top: 1px solid var(--line-soft);
+           padding: 36px 0 56px; text-align: center; }
+  footer p { color: var(--text-3); font-size: 13px; }
+  footer a { color: var(--sky); text-decoration: none; }
+
+  @media (max-width: 820px) {
+    .cheat { grid-template-columns: 1fr; }
+    .cheat .col-head.tech { margin-top: 8px; }
+  }
+</style>
+</head>
+<body>
+
+<main>
+  <!-- ===== hero ===== -->
+  <div class="wrap hero">
+    <p class="crumbs"><a href="index.html">boost</a> / docs / evaluation system</p>
+    <span class="badge">Quality · shipped in PR #112 · #142 · #145 · #147</span>
+    <h1>boost <span class="grad-text">grades its own</span> retrieval quality.</h1>
+    <p class="lede">A package manager for AI skills is only as good as the skill it hands back for
+      "the best thing for &lt;task&gt;." So boost measures that — with a <b>required, deterministic
+      golden-set gate</b> that fails the build on a retrieval regression, plus opt-in tiers for
+      statistical significance and LLM-judged faithfulness. Everything degrades gracefully; the
+      required gate has <b>zero dependencies</b>.</p>
+
+    <div class="stats">
+      <div class="stat reveal"><b>5</b><span>Evaluation tiers</span></div>
+      <div class="stat reveal"><b>0.919</b><span>BM25 recall@10 · full catalog</span></div>
+      <div class="stat reveal"><b>43</b><span>Golden judgments</span></div>
+      <div class="stat reveal"><b>0</b><span>Deps in the required gate</span></div>
+    </div>
+  </div>
+
+  <!-- ===== why ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The problem</span>
+      <h2 class="sec-title">Search quality is a <span class="grad-text">number, not a vibe</span>.</h2>
+      <p class="lead" style="margin-top:20px">boost has several ways to find a skill — a frontmatter
+        heuristic, a full-content BM25 index, an opt-in dense-vector backend, and an LLM reranker.
+        Which one actually returns the <em>right</em> skill for a real question? The eval system
+        answers that empirically, so a change that quietly degrades retrieval can't ship.</p>
+      <div class="prose">
+        <p>The core idea is the classic information-retrieval one: a <b>golden set</b> of
+          <code>query → the skill(s) that should come back</code> judgments, scored with standard
+          IR metrics (recall@k, hit@1, MRR, nDCG). It's the same shape as a TREC
+          <code>qrels</code> file — hand-labelled ground truth that turns "seems good" into "recall
+          went from 0.92 to 0.71, block the merge."</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== architecture ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Architecture</span>
+      <h2 class="sec-title">One golden set, four engines, five verdicts</h2>
+      <p class="lead" style="margin-top:20px">Every tier reuses the same golden judgments and the
+        same retrieval stack. Data flows left to right; the golden set feeds the scoring stage from
+        above.</p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 900 372" role="img" aria-label="boost evaluation architecture data-flow diagram">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#7dd3fc"></path>
+            </marker>
+            <marker id="ahc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#22d3ee"></path>
+            </marker>
+          </defs>
+
+          <!-- golden sets (top) -->
+          <rect class="box-hi" x="270" y="18" width="360" height="66" rx="12"></rect>
+          <text class="head" x="450" y="44" text-anchor="middle">Golden sets · ground truth</text>
+          <text class="lbl-s" x="450" y="64" text-anchor="middle">golden.jsonl · recommend.jsonl · explain.jsonl</text>
+          <text class="lbl-t" x="450" y="78" text-anchor="middle">43 queries · 8 stacks · 7 skills — labelled by hand</text>
+
+          <!-- pipeline row -->
+          <!-- corpus -->
+          <rect class="box" x="20" y="176" width="188" height="86" rx="12"></rect>
+          <text class="head" x="114" y="206" text-anchor="middle">1 · Corpus</text>
+          <text class="lbl-s" x="114" y="228" text-anchor="middle">pinned taps.txt</text>
+          <text class="lbl-s" x="114" y="245" text-anchor="middle">→ BM25 index</text>
+
+          <!-- engines -->
+          <rect class="box" x="248" y="176" width="188" height="86" rx="12"></rect>
+          <text class="head" x="342" y="206" text-anchor="middle">2 · Engines</text>
+          <text class="lbl-s" x="342" y="228" text-anchor="middle">catalog · BM25</text>
+          <text class="lbl-s" x="342" y="245" text-anchor="middle">dense · rerank</text>
+
+          <!-- scoring -->
+          <rect class="box-hi" x="476" y="176" width="188" height="86" rx="12"></rect>
+          <text class="head" x="570" y="206" text-anchor="middle">3 · Scoring</text>
+          <text class="lbl-s" x="570" y="228" text-anchor="middle">recall@k · hit@1</text>
+          <text class="lbl-s" x="570" y="245" text-anchor="middle">MRR · nDCG · grounding</text>
+
+          <!-- verdict -->
+          <rect class="box-gate" x="704" y="176" width="188" height="86" rx="12"></rect>
+          <text class="head" x="798" y="206" text-anchor="middle">4 · Verdict</text>
+          <text class="lbl-s" x="798" y="228" text-anchor="middle">floor gate (required)</text>
+          <text class="lbl-s" x="798" y="245" text-anchor="middle">+ 4 opt-in verdicts</text>
+
+          <!-- horizontal flow arrows -->
+          <path class="flow" marker-end="url(#ah)" d="M208 219 L246 219"></path>
+          <path class="flow" marker-end="url(#ah)" d="M436 219 L474 219"></path>
+          <path class="flow" marker-end="url(#ah)" d="M664 219 L702 219"></path>
+
+          <!-- golden set feeds scoring from above -->
+          <path class="flow-c" marker-end="url(#ahc)" d="M450 84 L450 130 L570 130 L570 174"></path>
+          <text class="lbl-t" x="588" y="120">labels grade the ranked results</text>
+
+          <!-- footer band: the five tiers -->
+          <text class="lbl" x="20" y="312">Verdicts →</text>
+          <text class="lbl-s" x="98" y="312"><tspan fill="#4ade80">Tier 1</tspan>  recall floor 0.85 (required in CI)</text>
+          <text class="lbl-s" x="98" y="332"><tspan fill="#7dd3fc">Tier 1b</tspan>  ranx significance   ·   <tspan fill="#7dd3fc">Tier 2a</tspan>  rerank lift</text>
+          <text class="lbl-s" x="98" y="352"><tspan fill="#7dd3fc">Tier 2b</tspan>  recommend grounding   ·   <tspan fill="#7dd3fc">Tier 2c</tspan>  explain faithfulness</text>
+        </svg>
+      </div>
+      <p class="caption">The required gate (Tier 1) is pure-stdlib and offline. Everything green-lit
+        beyond it is opt-in.</p>
+    </div>
+  </section>
+
+  <!-- ===== the five tiers ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The contract</span>
+      <h2 class="sec-title">Five tiers, one rule: <span class="grad-text">never block on a maybe</span></h2>
+      <p class="lead" style="margin-top:20px">Only Tier 1 gates the build. It is deterministic and
+        dependency-free precisely so it can be <em>required</em> without ever flaking. Everything
+        that needs a network, a key, or a heavy library is opt-in and skips cleanly when its
+        prerequisites are absent.</p>
+
+      <table class="contract">
+        <thead>
+          <tr><th>Tier</th><th>What it grades</th><th>Metric / gate</th><th>Needs</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b class="t">1</b> · retrieval</td>
+            <td>Does the right skill come back for a real query?</td>
+            <td><code>recall@k ≥ 0.85</code> floor vs the pinned corpus</td>
+            <td>nothing — pure stdlib, offline</td>
+            <td><span class="pill req">required</span></td>
+          </tr>
+          <tr>
+            <td><b class="t">1b</b> · significance</td>
+            <td>Is engine A <em>really</em> better than B, or just lucky?</td>
+            <td>ranx paired Student's t-test (<code>p&lt;0.05</code>)</td>
+            <td><code>[eval]</code> extra (ranx)</td>
+            <td><span class="pill opt">opt-in</span></td>
+          </tr>
+          <tr>
+            <td><b class="t">2a</b> · rerank</td>
+            <td>How much does the LLM reranker improve ordering?</td>
+            <td>hit@1 / MRR / nDCG <em>lift</em> over raw BM25</td>
+            <td>claude CLI or <code>ANTHROPIC_API_KEY</code></td>
+            <td><span class="pill opt">opt-in</span></td>
+          </tr>
+          <tr>
+            <td><b class="t">2b</b> · recommend</td>
+            <td>Are <code>boost recommend</code>'s AI picks relevant and grounded?</td>
+            <td>precision@k + <b>hard grounding gate</b> (0 hallucinated picks)</td>
+            <td>claude CLI or <code>ANTHROPIC_API_KEY</code></td>
+            <td><span class="pill opt">opt-in</span></td>
+          </tr>
+          <tr>
+            <td><b class="t">2c</b> · explain</td>
+            <td>Does <code>boost explain</code> stay true to the SKILL.md?</td>
+            <td>ragas <code>faithfulness</code> (claims verified vs source)</td>
+            <td><code>[eval]</code> extra + judge key</td>
+            <td><span class="pill opt">opt-in</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== sequence: the required gate ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Sequence · the required gate</span>
+      <h2 class="sec-title">How Tier 1 runs on every PR</h2>
+      <p class="lead" style="margin-top:20px">The golden set grades items <em>by name</em>, so the
+        repos that hold them must be present. CI taps a pinned corpus first, builds the BM25 index,
+        scores the golden set, and floors recall — all offline after the tap, all deterministic.</p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 840 400" role="img" aria-label="Tier 1 CI gate sequence diagram">
+          <defs>
+            <marker id="sm" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#22d3ee"></path>
+            </marker>
+            <marker id="sr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#4ade80"></path>
+            </marker>
+          </defs>
+
+          <!-- lifelines -->
+          <g>
+            <rect class="box-hi" x="30"  y="16" width="150" height="46" rx="10"></rect>
+            <text class="head" x="105" y="44" text-anchor="middle">CI · lint job</text>
+            <line class="life" x1="105" y1="62" x2="105" y2="376"></line>
+
+            <rect class="box" x="240" y="16" width="170" height="46" rx="10"></rect>
+            <text class="head" x="325" y="38" text-anchor="middle">ensure_corpus</text>
+            <text class="lbl-t" x="325" y="53" text-anchor="middle">+ boost tap</text>
+            <line class="life" x1="325" y1="62" x2="325" y2="376"></line>
+
+            <rect class="box" x="470" y="16" width="150" height="46" rx="10"></rect>
+            <text class="head" x="545" y="44" text-anchor="middle">rag · BM25</text>
+            <line class="life" x1="545" y1="62" x2="545" y2="376"></line>
+
+            <rect class="box-gate" x="680" y="16" width="130" height="46" rx="10"></rect>
+            <text class="head" x="745" y="38" text-anchor="middle">golden set</text>
+            <text class="lbl-t" x="745" y="53" text-anchor="middle">+ floor gate</text>
+            <line class="life" x1="745" y1="62" x2="745" y2="376"></line>
+          </g>
+
+          <!-- messages -->
+          <path class="msg" marker-end="url(#sm)" d="M105 100 L323 100"></path>
+          <text class="lbl-s" x="110" y="92">run gate → tap pinned repos (network, once)</text>
+
+          <path class="msg" marker-end="url(#sm)" d="M325 148 L543 148"></path>
+          <text class="lbl-s" x="330" y="140">catalog.all_entries() → build index (~9.5k chunks)</text>
+
+          <path class="msg" marker-end="url(#sm)" d="M105 210 L543 210"></path>
+          <text class="lbl-s" x="110" y="202">retrieve(query) for each of 43 golden cases</text>
+
+          <path class="ret" marker-end="url(#sr)" d="M543 258 L747 258"></path>
+          <text class="lbl-s" x="360" y="250" text-anchor="middle">ranked names → compare to labelled relevant set</text>
+
+          <path class="ret" marker-end="url(#sr)" d="M745 316 L107 316"></path>
+          <text class="ok" x="420" y="308" text-anchor="middle">recall@10 = 1.000  ≥  0.85   →   PASS ✓</text>
+
+          <text class="lbl-t" x="105" y="360" text-anchor="middle">fail-under 0.85</text>
+          <text class="lbl-t" x="745" y="360" text-anchor="middle">regression relaxed (drift-safe)</text>
+        </svg>
+      </div>
+      <p class="caption">On the pinned corpus BM25 recall is 1.000, so the 0.85 floor leaves wide
+        margin — a drift-resistant gate that still catches a broken index or a scoring regression.</p>
+    </div>
+  </section>
+
+  <!-- ===== cheat sheet ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Explained twice</span>
+      <h2 class="sec-title">Simple on the left, <span class="grad-text">technical on the right</span></h2>
+      <p class="lead" style="margin-top:20px">Same concept, two depths. Open the left card for the
+        plain-English version, the right card for what actually happens in the code.</p>
+
+      <div class="cheat">
+        <div class="col-head simple">◍ SIMPLE</div>
+        <div class="col-head tech">◍ TECHNICAL</div>
+
+        <div class="group"><span>#</span> The golden set</div>
+        <details class="card simple"><summary>What is a "golden set"?</summary>
+          <div class="body"><p>A hand-written answer key. Each row is a question a user might type and
+            the skill that <em>should</em> come back. To grade any search engine, you run every
+            question through it and check whether the right answer showed up near the top.</p></div>
+        </details>
+        <details class="card tech"><summary>qrels + IR metrics</summary>
+          <div class="body"><p><code>tests/eval/golden.jsonl</code> holds
+            <code>{query, relevant[], kind}</code> rows — a TREC-style qrels file. The harness runs
+            each ranker, then computes <code>recall@k</code>, <code>hit@1</code>, <code>MRR</code>
+            and <code>nDCG@k</code> with binary relevance, sliced per item kind (skill / rule /
+            workflow).</p></div>
+        </details>
+
+        <div class="group"><span>#</span> Why BM25 beats the heuristic</div>
+        <details class="card simple"><summary>Why not just match keywords?</summary>
+          <div class="body"><p>The simple approach only reads a skill's short description. BM25 reads
+            the <em>whole</em> skill file, so it finds matches the description never mentions. The
+            eval proves it: BM25 finds the right skill far more often.</p></div>
+        </details>
+        <details class="card tech"><summary>0.756 → 0.919 recall@10</summary>
+          <div class="body"><p>The frontmatter heuristic (<code>catalog.search</code>) scores
+            recall@10 = 0.756; full-content BM25 (<code>rag.retrieve</code>) scores 0.919 on the same
+            43 queries. That measured +0.163 is the evidence that justifies the RAG stack's
+            complexity — not a hunch.</p></div>
+        </details>
+
+        <div class="group"><span>#</span> Is the win real? (Tier 1b)</div>
+        <details class="card simple"><summary>Could a better score be luck?</summary>
+          <div class="body"><p>On only a few dozen questions, one engine can look better just by
+            chance. A significance test asks: if you re-ran on fresh questions, would the winner keep
+            winning? It reports "real difference" or "too close to call."</p></div>
+        </details>
+        <details class="card tech"><summary>ranx paired t-test</summary>
+          <div class="body"><p><code>--stats</code> feeds the per-query scores to <code>ranx</code>,
+            which runs a paired Student's t-test between engines and reports a p-value plus
+            win/tie/loss. Deterministic, offline. On the small pinned corpus the gap is <em>not</em>
+            yet significant (p≈0.11–0.26) — an honest signal to widen the set.</p></div>
+        </details>
+
+        <div class="group"><span>#</span> Faithful explanations (Tier 2c)</div>
+        <details class="card simple"><summary>Can <code>explain</code> make things up?</summary>
+          <div class="body"><p><code>boost explain</code> writes a plain-English summary of a skill.
+            The risk is it invents abilities the skill doesn't have. This tier checks every sentence
+            against the real skill file and scores how much of the summary is actually supported.</p></div>
+        </details>
+        <details class="card tech"><summary>ragas faithfulness</summary>
+          <div class="body"><p><code>scripts/eval_explain.py</code> generates the explanation with
+            boost's own <code>ai.ask</code>, then scores it with ragas <code>faithfulness</code>:
+            the answer is decomposed into claims and each is verified against the SKILL.md context.
+            LLM-judged, so it's key-gated and never part of <code>make check</code>.</p></div>
+        </details>
+
+        <div class="group"><span>#</span> Why a pinned corpus</div>
+        <details class="card simple"><summary>Where do the skills come from?</summary>
+          <div class="body"><p>To grade "did the right skill come back," the skills have to exist.
+            CI starts empty, so the gate first downloads a fixed, hand-picked list of skill repos —
+            always the same list, so the score means the same thing every run.</p></div>
+        </details>
+        <details class="card tech"><summary>taps.txt + ensure_eval_corpus.sh</summary>
+          <div class="body"><p><code>tests/eval/taps.txt</code> is the minimal repo set covering all 44
+            golden targets (<code>boost tap --defaults</code> omits every rule/workflow repo).
+            <code>ensure_eval_corpus.sh</code> taps it into <code>$BOOST_HOME</code> — idempotent via
+            a sentinel. Regression-vs-baseline is relaxed (<code>--regression-eps 1</code>) so
+            upstream drift can't flake the required gate.</p></div>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== run it ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Run it yourself</span>
+      <h2 class="sec-title">One command per tier</h2>
+      <div class="term-wrap">
+        <div class="window">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+            <div class="bar-title">make · boost evaluation tiers</div></div>
+          <pre><span class="cm"># Tier 1 — required, deterministic, part of `make check`</span>
+<span class="tp">$</span> <span class="tv">make</span> <span class="tc">eval</span>
+  <span class="tdim">GATE recall@10 = 1.000  (min 0.850)  -&gt;</span> <span class="tok">PASS</span>
+
+<span class="cm"># Tier 1b — is the difference statistically significant? (needs [eval])</span>
+<span class="tp">$</span> <span class="tv">make</span> <span class="tc">eval-stats</span>
+  <span class="tdim">best engine: BM25 full-content</span>
+  <span class="tdim">vs catalog.search  ndcg@10  p=0.1127  not significant  W/T/L=7/34/2</span>
+
+<span class="cm"># Tier 2a / 2b — LLM rerank lift &amp; recommendation grounding (key-gated)</span>
+<span class="tp">$</span> <span class="tv">make</span> <span class="tc">eval-ai</span>   <span class="cm"># rerank: hit@1 +0.163 over raw BM25</span>
+<span class="tp">$</span> <span class="tv">make</span> <span class="tc">eval-rec</span>  <span class="cm"># recommend: grounded 1.000, 0 hallucinated picks</span>
+
+<span class="cm"># Tier 2c — explain faithfulness via ragas (needs [eval] + a judge key)</span>
+<span class="tp">$</span> <span class="tv">make</span> <span class="tc">eval-explain</span>
+  <span class="tdim">skill                         faithfulness</span>
+  <span class="tdim">pdf                                  0.94</span>
+  <span class="tdim">MEAN                                 0.91   (n=7)</span></pre>
+        </div>
+      </div>
+      <p class="caption">Illustrative output. Opt-in tiers print a one-line hint and exit 0 when a
+        dependency or key is missing — they never block.</p>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <p>boost — a Homebrew for AI coding skills. ·
+        <a href="index.html">Home</a> · <a href="mcp-hub.html">RAG &amp; the MCP hub</a> ·
+        <a href="roadmap.html">Roadmap</a></p>
+      <p style="margin-top:8px">Source: <code>scripts/eval_retrieval.py</code>,
+        <code>scripts/eval_recommend.py</code>, <code>scripts/eval_explain.py</code>,
+        <code>tests/eval/</code></p>
+    </div>
+  </footer>
+</main>
+
+<script src="../style/boost.js" defer></script>
+</body>
+</html>
