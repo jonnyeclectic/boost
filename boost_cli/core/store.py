@@ -26,6 +26,7 @@ class InstallResult:
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
+    scope: str = "user"   # "user" or "project" — where a rule/workflow landed
     # For rules/workflows the installed content is a single file (or a merged
     # CLAUDE.md block), not a SKILL.md tree — carry the raw source so the caller
     # scans exactly what it installed instead of a non-existent SKILL.md.
@@ -117,14 +118,32 @@ def _copy_skill(src: Path, dest: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
+def _resolve_base(scope: str, base) -> Optional[Path]:
+    """Directory a project-scoped install materializes under (the repo), or None
+    for user scope. An explicit ``base`` (e.g. from a lock record on update/sync)
+    wins so a re-materialization lands where the original install did, not in
+    whatever the current working directory happens to be."""
+    if base:
+        return Path(base)
+    return Path.cwd() if scope == "project" else None
+
+
 def install(entry: dict, force: bool = False,
-            only_agents: Optional[List[str]] = None) -> InstallResult:
-    """Install a catalog entry. Raises BoostError on policy block or conflict."""
+            only_agents: Optional[List[str]] = None,
+            scope: str = "user", base=None) -> InstallResult:
+    """Install a catalog entry. Raises BoostError on policy block or conflict.
+
+    ``scope`` is ``"user"`` (default — the agent's user config dirs) or
+    ``"project"`` (the current repo). Skills ignore scope (they always live in
+    the canonical store); rules/workflows honor it.
+    """
     kind = entry.get("kind", "skill")
     if kind == "rule":
-        return _install_rule(entry, force=force, only_agents=only_agents)
+        return _install_rule(entry, force=force, only_agents=only_agents,
+                             scope=scope, base=base)
     if kind == "workflow":
-        return _install_workflow(entry, force=force, only_agents=only_agents)
+        return _install_workflow(entry, force=force, only_agents=only_agents,
+                                 scope=scope, base=base)
     if kind != "skill":
         raise BoostError(
             "%s is a %s, which boost does not know how to install" % (entry["name"], kind),
@@ -172,14 +191,16 @@ def install(entry: dict, force: bool = False,
 
 
 def _install_rule(entry: dict, force: bool = False,
-                  only_agents: Optional[List[str]] = None) -> InstallResult:
+                  only_agents: Optional[List[str]] = None,
+                  scope: str = "user", base=None) -> InstallResult:
     """Materialize a rule into each enabled agent's native format.
 
     Cursor/Windsurf/Cline get a verbatim file drop in their ``rules/`` dir
     (frontmatter preserved — it is native rule metadata); Claude Code has no
     rules folder, so the rule merges into ``CLAUDE.md`` as an idempotent managed
-    block. Every materialization is recorded so ``uninstall`` reverses exactly
-    what was written.
+    block. With ``scope="project"`` these land under the repo (and Claude uses
+    ``CLAUDE.local.md``). Every materialization is recorded so ``uninstall``
+    reverses exactly what was written.
     """
     import hashlib
 
@@ -204,13 +225,14 @@ def _install_rule(entry: dict, force: bool = False,
     meta, body = frontmatter.parse(raw)
     claude_body = rules.render_claude_body(str(meta.get("name") or name), body)
 
+    resolved_base = _resolve_base(scope, base)
     paths.ensure_dirs()
     materializations: List[dict] = []
     linked: List[str] = []
     for agent, skills_dir in agents.enabled_agents().items():
         if only_agents and agent not in only_agents:
             continue
-        mode, path = rules.rule_target(agent, skills_dir, name)
+        mode, path = rules.rule_target(agent, skills_dir, name, base=resolved_base)
         path.parent.mkdir(parents=True, exist_ok=True)
         if mode == rules.MODE_CLAUDE:
             current = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -228,6 +250,8 @@ def _install_rule(entry: dict, force: bool = False,
         "source_file": entry.get("skill_md", ""),
         "commit": gitutil.head_commit(tap.path),
         "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "scope": scope,
+        "base": str(resolved_base) if resolved_base is not None else None,
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
         "materializations": materializations,
@@ -240,6 +264,7 @@ def _install_rule(entry: dict, force: bool = False,
         kind="rule", scan_text=raw)
     res.linked = linked
     res.upgraded = existing is not None
+    res.scope = scope
     return res
 
 
@@ -266,12 +291,14 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
 
 
 def _install_workflow(entry: dict, force: bool = False,
-                      only_agents: Optional[List[str]] = None) -> InstallResult:
+                      only_agents: Optional[List[str]] = None,
+                      scope: str = "user", base=None) -> InstallResult:
     """Materialize a workflow (slash command / subagent) into each enabled agent.
 
     A verbatim Markdown drop into the agent's ``commands/`` or ``agents/`` dir —
-    the slot derived from the source path — with no transformation. Every drop is
-    recorded so ``uninstall`` removes exactly the files it wrote.
+    the slot derived from the source path — with no transformation. With
+    ``scope="project"`` the drop lands under the repo (``<repo>/.claude/…``).
+    Every drop is recorded so ``uninstall`` removes exactly the files it wrote.
     """
     import hashlib
 
@@ -296,13 +323,14 @@ def _install_workflow(entry: dict, force: bool = False,
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
 
+    resolved_base = _resolve_base(scope, base)
     paths.ensure_dirs()
     materializations: List[dict] = []
     linked: List[str] = []
     for agent, skills_dir in agents.enabled_agents().items():
         if only_agents and agent not in only_agents:
             continue
-        path = workflows.workflow_target(skills_dir, slot, name)
+        path = workflows.workflow_target(skills_dir, slot, name, base=resolved_base)
         path.parent.mkdir(parents=True, exist_ok=True)
         util.atomic_write_text(path, raw)
         materializations.append({"agent": agent, "slot": slot, "path": str(path)})
@@ -317,6 +345,8 @@ def _install_workflow(entry: dict, force: bool = False,
         "source_file": source_rel,
         "commit": gitutil.head_commit(tap.path),
         "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "scope": scope,
+        "base": str(resolved_base) if resolved_base is not None else None,
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
         "materializations": materializations,
@@ -329,6 +359,7 @@ def _install_workflow(entry: dict, force: bool = False,
         kind="workflow", scan_text=raw)
     res.linked = linked
     res.upgraded = existing is not None
+    res.scope = scope
     return res
 
 
@@ -506,7 +537,10 @@ def sync_apply(plan: Dict[str, list]) -> List[str]:
                 matches = [e for e in catalog.find(name)
                            if e["tap"] == tap_name and e.get("kind", "skill") == kind]
                 if matches:
-                    install(matches[0], force=True)
+                    # preserve the original scope/base so a project rule repairs
+                    # into its repo, not wherever sync happens to run.
+                    install(matches[0], force=True,
+                            scope=entry.get("scope", "user"), base=entry.get("base"))
                     actions.append("re-materialized %s %s from %s"
                                    % (kind, name, tap_name))
                     continue

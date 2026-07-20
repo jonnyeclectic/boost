@@ -43,6 +43,24 @@ class TestRuleTarget:
         assert mode == rules.MODE_FILE
         assert path == Path("/h/.zed/rules/r.md")
 
+    # --- project scope (base=<repo>) ---
+    def test_project_claude_uses_claude_local_md_at_repo_root(self):
+        mode, path = rules.rule_target("claude-code", Path("/h/.claude/skills"),
+                                       "r", base=Path("/repo"))
+        assert mode == rules.MODE_CLAUDE
+        assert path == Path("/repo/CLAUDE.local.md")   # personal, not ~/.claude
+
+    def test_project_cursor_uses_repo_dotcursor_rules(self):
+        mode, path = rules.rule_target("cursor", Path("/h/.cursor/skills"),
+                                       "r", base=Path("/repo"))
+        assert mode == rules.MODE_FILE
+        assert path == Path("/repo/.cursor/rules/r.mdc")
+
+    def test_project_windsurf_uses_repo_dotwindsurf(self):
+        _mode, path = rules.rule_target("windsurf", Path("/h/.windsurf/skills"),
+                                        "r", base=Path("/repo"))
+        assert path == Path("/repo/.windsurf/rules/r.md")
+
 
 class TestRenderClaudeBody:
     def test_title_header_then_body(self):

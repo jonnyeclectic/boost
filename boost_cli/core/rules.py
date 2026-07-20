@@ -15,7 +15,7 @@ the filesystem writes and the lock record so uninstall can reverse them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 # Name-scoped managed-block markers for CLAUDE.md. Stable + per-rule so install
 # is idempotent (a re-install replaces the block) and uninstall strips exactly
@@ -40,17 +40,27 @@ def markers(name: str) -> Tuple[str, str]:
     return BLOCK_START % name, BLOCK_END % name
 
 
-def rule_target(agent: str, skills_dir: Path, name: str) -> Tuple[str, Path]:
-    """Where rule ``name`` materializes for ``agent``, given its skills dir.
+def rule_target(agent: str, skills_dir: Path, name: str,
+                base: "Optional[Path]" = None) -> Tuple[str, Path]:
+    """Where rule ``name`` materializes for ``agent``.
 
-    Returns ``(mode, path)``: ``MODE_CLAUDE`` writes/merges the CLAUDE.md at the
-    agent root; ``MODE_FILE`` drops a file into the agent's ``rules/`` dir. The
-    agent root is the parent of its configured skills dir (``~/.cursor/skills``
-    -> ``~/.cursor``), so no extra config is needed.
+    Returns ``(mode, path)``: ``MODE_CLAUDE`` writes/merges a CLAUDE.md;
+    ``MODE_FILE`` drops a file into the agent's ``rules/`` dir.
+
+    ``base`` selects the scope:
+      * ``None`` (user scope) — the agent's user config: the parent of its
+        configured skills dir (``~/.cursor/skills`` -> ``~/.cursor``), and
+        ``~/.claude/CLAUDE.md`` for Claude.
+      * a directory (project scope) — that repo: ``<base>/.cursor/rules/…`` and,
+        since Claude reads per-repo memory from the root, ``<base>/CLAUDE.local.md``
+        (the personal, git-ignored file) for Claude.
     """
-    root = Path(skills_dir).parent
+    dotdir = Path(skills_dir).parent.name          # ".claude" / ".cursor" / …
     if agent in CLAUDE_MD_AGENTS:
-        return MODE_CLAUDE, root / "CLAUDE.md"
+        if base is not None:
+            return MODE_CLAUDE, Path(base) / "CLAUDE.local.md"
+        return MODE_CLAUDE, Path(skills_dir).parent / "CLAUDE.md"
+    root = (Path(base) / dotdir) if base is not None else Path(skills_dir).parent
     ext = RULE_DIR_EXT.get(agent, DEFAULT_RULE_EXT)
     return MODE_FILE, root / "rules" / (name + ext)
 

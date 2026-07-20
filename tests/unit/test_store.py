@@ -700,3 +700,51 @@ class TestSyncMaterializations:
         res = store.install(_workflow_entry(tap))
         assert res.scan_text is not None
         assert "Run the release." in res.scan_text
+
+
+class TestInstallScope:
+    def test_resolve_base(self):
+        from pathlib import Path as P
+        assert store._resolve_base("user", None) is None
+        assert store._resolve_base("project", None) == P.cwd()
+        assert store._resolve_base("project", "/x") == P("/x")
+
+    def test_rule_project_scope_materializes_under_base(self, tap, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        res = store.install(_rule_entry(tap), scope="project", base=str(repo))
+        assert res.scope == "project"
+        # Claude -> personal repo file, not ~/.claude/CLAUDE.md
+        cm = repo / "CLAUDE.local.md"
+        assert cm.is_file()
+        assert "boost:rule:team-conventions start" in cm.read_text()
+        assert (repo / ".cursor" / "rules" / "team-conventions.mdc").is_file()
+        assert (repo / ".windsurf" / "rules" / "team-conventions.md").is_file()
+        assert not (paths.home() / ".claude" / "CLAUDE.md").exists()  # not global
+        rec = lockfile.get_rule("team-conventions")
+        assert rec["scope"] == "project"
+        assert rec["base"] == str(repo)
+
+    def test_workflow_project_scope_under_base(self, tap, tmp_path):
+        repo = tmp_path / "repo2"
+        repo.mkdir()
+        store.install(_workflow_entry(tap), scope="project", base=str(repo))
+        assert (repo / ".claude" / "commands" / "ship-it.md").is_file()
+        assert not (paths.home() / ".claude" / "commands" / "ship-it.md").exists()
+        assert lockfile.get_workflow("ship-it")["base"] == str(repo)
+
+    def test_user_scope_is_default_and_global(self, tap):
+        res = store.install(_rule_entry(tap))
+        assert res.scope == "user"
+        assert (paths.home() / ".claude" / "CLAUDE.md").is_file()
+        rec = lockfile.get_rule("team-conventions")
+        assert rec["scope"] == "user" and rec["base"] is None
+
+    def test_project_uninstall_reverses_repo_files(self, tap, tmp_path):
+        repo = tmp_path / "repo3"
+        repo.mkdir()
+        store.install(_rule_entry(tap), scope="project", base=str(repo))
+        store.uninstall("team-conventions")
+        assert not (repo / ".cursor" / "rules" / "team-conventions.mdc").exists()
+        assert not (repo / "CLAUDE.local.md").exists()  # held only our block
+        assert lockfile.get_rule("team-conventions") is None

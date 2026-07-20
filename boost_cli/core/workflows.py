@@ -14,6 +14,7 @@ the filesystem writes and the lock record so uninstall can reverse them.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 SLOT_COMMANDS = "commands"
 SLOT_AGENTS = "agents"
@@ -36,11 +37,16 @@ def detect_slot(source_rel: str) -> str:
     return SLOT_AGENTS if parts & AGENT_DIRS else SLOT_COMMANDS
 
 
-def workflow_target(skills_dir: Path, slot: str, name: str) -> Path:
+def workflow_target(skills_dir: Path, slot: str, name: str,
+                    base: Optional[Path] = None) -> Path:
     """Where workflow ``name`` (in ``slot``) materializes for an agent.
 
-    The agent root is the parent of its configured skills dir
-    (``~/.claude/skills`` -> ``~/.claude``), so the file lands at
-    ``<root>/<slot>/<name>.md`` with no extra config.
+    ``base`` selects the scope:
+      * ``None`` (user scope) — the parent of the agent's configured skills dir
+        (``~/.claude/skills`` -> ``~/.claude/<slot>/<name>.md``).
+      * a directory (project scope) — that repo's per-agent dotdir
+        (``<base>/.claude/<slot>/<name>.md``).
     """
-    return Path(skills_dir).parent / slot / (name + ".md")
+    root = (Path(base) / Path(skills_dir).parent.name) if base is not None \
+        else Path(skills_dir).parent
+    return root / slot / (name + ".md")
