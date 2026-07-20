@@ -119,10 +119,12 @@ def install(entry: dict, force: bool = False,
     kind = entry.get("kind", "skill")
     if kind == "rule":
         return _install_rule(entry, force=force, only_agents=only_agents)
+    if kind == "workflow":
+        return _install_workflow(entry, force=force, only_agents=only_agents)
     if kind != "skill":
         raise BoostError(
-            "%s is a %s, which boost indexes but cannot install yet" % (entry["name"], kind),
-            hint="workflows show up in `boost search`/`boost taps` for now")
+            "%s is a %s, which boost does not know how to install" % (entry["name"], kind),
+            hint="known kinds: skill, rule, workflow")
     name = entry["name"]
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
@@ -259,6 +261,87 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
     return {"name": name, "unlinked": removed, "entry": rule}
 
 
+def _install_workflow(entry: dict, force: bool = False,
+                      only_agents: Optional[List[str]] = None) -> InstallResult:
+    """Materialize a workflow (slash command / subagent) into each enabled agent.
+
+    A verbatim Markdown drop into the agent's ``commands/`` or ``agents/`` dir —
+    the slot derived from the source path — with no transformation. Every drop is
+    recorded so ``uninstall`` removes exactly the files it wrote.
+    """
+    import hashlib
+
+    from . import gitutil, workflows
+    name = entry["name"]
+    existing = lockfile.get_workflow(name)
+    if existing and not force:
+        raise BoostError("%s is already installed" % name,
+                        hint="`boost reinstall %s` to force" % name)
+
+    violations = policy.check_install(entry, len(lockfile.installed()))
+    if violations:
+        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
+                        hint="inspect with `boost policy list`")
+
+    tap = registry.get(entry["tap"])
+    source_rel = entry.get("skill_md", "")
+    src = tap.path / source_rel
+    if not src.is_file():
+        raise BoostError("source for workflow %s vanished from tap %s" % (name, tap.name),
+                        hint="run `boost update %s`" % tap.name)
+    raw = src.read_text(encoding="utf-8", errors="replace")
+    slot = workflows.detect_slot(source_rel)
+
+    paths.ensure_dirs()
+    materializations: List[dict] = []
+    linked: List[str] = []
+    for agent, skills_dir in agents.enabled_agents().items():
+        if only_agents and agent not in only_agents:
+            continue
+        path = workflows.workflow_target(skills_dir, slot, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        util.atomic_write_text(path, raw)
+        materializations.append({"agent": agent, "slot": slot, "path": str(path)})
+        linked.append(agent)
+
+    now = util.now_iso()
+    lockfile.set_workflow(name, {
+        "kind": "workflow",
+        "slot": slot,
+        "version": entry.get("version", "0.0.0"),
+        "tap": entry["tap"],
+        "source_file": source_rel,
+        "commit": gitutil.head_commit(tap.path),
+        "sha256": hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        "installed_at": (existing or {}).get("installed_at", now),
+        "updated_at": now,
+        "materializations": materializations,
+    })
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
+
+    res = InstallResult(
+        name=name,
+        dest=Path(materializations[0]["path"]) if materializations else paths.store_dir(),
+        kind="workflow")
+    res.linked = linked
+    res.upgraded = existing is not None
+    return res
+
+
+def _uninstall_workflow(name: str, workflow: dict) -> dict:
+    """Remove every file dropped for an installed workflow."""
+    removed: List[str] = []
+    for m in workflow.get("materializations", []):
+        path = Path(m.get("path", ""))
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+        if m.get("agent"):
+            removed.append(m["agent"])
+    lockfile.remove_workflow(name)
+    journal.log("uninstall", name)
+    return {"name": name, "unlinked": removed, "entry": workflow}
+
+
 def install_from_path(src_dir: Path, name: Optional[str] = None,
                       tap_label: str = "local",
                       only_agents: Optional[List[str]] = None) -> InstallResult:
@@ -300,6 +383,9 @@ def uninstall(name: str) -> dict:
         rule = lockfile.get_rule(name)
         if rule:
             return _uninstall_rule(name, rule)
+        workflow = lockfile.get_workflow(name)
+        if workflow:
+            return _uninstall_workflow(name, workflow)
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     removed_links = unlink_agents(name)

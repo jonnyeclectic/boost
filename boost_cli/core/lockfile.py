@@ -21,7 +21,7 @@ HISTORY_KEEP = 50
 
 def _skeleton() -> dict:
     return {"version": SCHEMA_VERSION, "updated": util.now_iso(),
-            "skills": {}, "rules": {}}
+            "skills": {}, "rules": {}, "workflows": {}}
 
 
 def read() -> dict:
@@ -39,7 +39,8 @@ def read() -> dict:
         return _skeleton()
     lock.setdefault("version", SCHEMA_VERSION)
     lock.setdefault("skills", {})
-    lock.setdefault("rules", {})  # rules install alongside skills (v3+)
+    lock.setdefault("rules", {})       # rules install alongside skills (v3+)
+    lock.setdefault("workflows", {})   # workflows too (v3+)
     return lock
 
 
@@ -138,6 +139,29 @@ def remove_rule(name: str) -> bool:
 
 def installed_rules() -> dict:
     return read()["rules"]
+
+
+def get_workflow(name: str) -> Optional[dict]:
+    return read()["workflows"].get(name)
+
+
+def set_workflow(name: str, entry: dict) -> None:
+    lock = read()
+    lock["workflows"][name] = entry
+    write(lock)
+
+
+def remove_workflow(name: str) -> bool:
+    lock = read()
+    if name in lock["workflows"]:
+        del lock["workflows"][name]
+        write(lock)
+        return True
+    return False
+
+
+def installed_workflows() -> dict:
+    return read()["workflows"]
 
 
 def history_list() -> List[dict]:

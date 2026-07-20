@@ -37,16 +37,16 @@ def brainstorming(entry):
 
 
 class TestInstall:
-    def test_workflow_kind_still_refused(self, tap, entry):
-        # Rules install now (see TestRuleInstall); workflows remain tap-only.
-        wf = dict(entry, kind="workflow", name="some-workflow")
+    def test_unknown_kind_refused(self, tap, entry):
+        # skill/rule/workflow all install (see TestRuleInstall/TestWorkflowInstall);
+        # anything else is refused with the kinds it does know.
+        weird = dict(entry, kind="gizmo", name="some-gizmo")
         with pytest.raises(BoostError) as ei:
-            store.install(wf)
+            store.install(weird)
         assert ei.value.message == (
-            "some-workflow is a workflow, which boost indexes but cannot install yet")
-        assert ei.value.hint == (
-            "workflows show up in `boost search`/`boost taps` for now")
-        assert lockfile.get_skill("some-workflow") is None
+            "some-gizmo is a gizmo, which boost does not know how to install")
+        assert ei.value.hint == "known kinds: skill, rule, workflow"
+        assert lockfile.get_skill("some-gizmo") is None
 
     def test_happy_path(self, tap, entry):
         src = tap.path / "skills" / "brainstorming"
@@ -573,6 +573,72 @@ class TestRuleInstall:
 
     def test_missing_source_raises(self, tap):
         entry = _rule_entry(tap)
+        (tap.path / entry["skill_md"]).unlink()
+        with pytest.raises(BoostError, match="vanished from tap"):
+            store.install(entry)
+
+
+def _workflow_entry(tap, name="ship-it", rel="commands/ship.md",
+                    body="---\nname: ship-it\ndescription: release helper\n"
+                         "allowed-tools: Bash\n---\n\nRun the release.\n"):
+    """Write a workflow file into the tap clone and return its catalog entry."""
+    src = tap.path / rel
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(body)
+    return {
+        "name": name, "kind": "workflow", "tap": tap.name, "version": "1.0.0",
+        "rel_dir": str(src.parent.relative_to(tap.path)), "skill_md": rel,
+        "description": "release helper", "curated": False, "meta": {},
+    }
+
+
+class TestWorkflowInstall:
+    def test_command_drops_into_each_agents_commands_dir(self, tap):
+        res = store.install(_workflow_entry(tap))
+        assert res.kind == "workflow"
+        assert set(res.linked) == {"claude-code", "windsurf", "cursor"}
+        for adir in (".claude", ".windsurf", ".cursor"):
+            f = paths.home() / adir / "commands" / "ship-it.md"
+            assert f.is_file()
+            assert "Run the release." in f.read_text()  # verbatim drop
+        rec = lockfile.get_workflow("ship-it")
+        assert rec["kind"] == "workflow"
+        assert rec["slot"] == "commands"
+        assert lockfile.get_skill("ship-it") is None
+
+    def test_subagent_drops_into_agents_dir(self, tap):
+        entry = _workflow_entry(tap, name="reviewer", rel="agents/reviewer.md",
+                                body="---\nname: reviewer\ndescription: reviews\n"
+                                     "tools: Read\n---\n\nReview it.\n")
+        store.install(entry)
+        assert (paths.home() / ".claude" / "agents" / "reviewer.md").is_file()
+        assert not (paths.home() / ".claude" / "commands" / "reviewer.md").exists()
+        assert lockfile.get_workflow("reviewer")["slot"] == "agents"
+
+    def test_uninstall_removes_every_dropped_file(self, tap):
+        store.install(_workflow_entry(tap))
+        info = store.uninstall("ship-it")
+        assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor"}
+        assert lockfile.get_workflow("ship-it") is None
+        for adir in (".claude", ".windsurf", ".cursor"):
+            assert not (paths.home() / adir / "commands" / "ship-it.md").exists()
+
+    def test_reinstall_requires_force(self, tap):
+        entry = _workflow_entry(tap)
+        store.install(entry)
+        with pytest.raises(BoostError):
+            store.install(entry)
+        res = store.install(entry, force=True)
+        assert res.upgraded is True
+
+    def test_only_agents_limits_drop(self, tap):
+        res = store.install(_workflow_entry(tap), only_agents=["claude-code"])
+        assert res.linked == ["claude-code"]
+        assert (paths.home() / ".claude" / "commands" / "ship-it.md").is_file()
+        assert not (paths.home() / ".cursor" / "commands" / "ship-it.md").exists()
+
+    def test_missing_source_raises(self, tap):
+        entry = _workflow_entry(tap)
         (tap.path / entry["skill_md"]).unlink()
         with pytest.raises(BoostError, match="vanished from tap"):
             store.install(entry)

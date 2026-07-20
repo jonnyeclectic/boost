@@ -2,7 +2,7 @@
 id: workflow-install-native-materialization
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Install engine · Workflows
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 3
 note: rules install (#141); workflows were still tap-only
 order: 22
 owner: loop/workflow-install
-pr:
+pr: 150
 title: Workflow install — drop commands/subagents into each agent's native dir
 ---
 After rules landed (<code>#141</code>), <code>store.install</code> still refused
