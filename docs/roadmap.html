@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>99</b><span>Loop finds</span></div>
+      <div class="stat"><b>100</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1369,6 +1369,17 @@ explanations and safety, not better ranking.</p>
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med-High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Interop</span></div>
+        <h3><code>boost adapt --to langgraph</code> — third framework renderer</h3>
+        <p>Extend <code>boost adapt</code> (shipped in #146) with a LangGraph target. Unlike CrewAI / Agents-SDK, a LangGraph agent isn't one <code>Agent(...)</code> constructor — the skill body is the system prompt of a node bound into a <code>StateGraph</code>. Add a <code>render_langgraph</code> to <code>core/adapters.py</code> emitting a node factory (prebuilt <code>create_react_agent</code>, or a prompt-carrying node) + its <code>FORMATS</code> row, with byte-exact golden + <code>compile()</code> tests. Then add a <code>langgraph</code> leg to <code>.github/workflows/adapter-conformance.yml</code> (pip install langgraph, import the emitted file). Follows the pattern in <a href="../adapters.html">adapters.html</a>: one <code>render_*</code> fn + registry row + golden test + one matrix line.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
