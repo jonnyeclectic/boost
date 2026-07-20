@@ -96,8 +96,8 @@ def _print_wrapped(text: str) -> None:
 
 def _materialized_agents(entry):
     """Abbreviated agent column for a rule/workflow, from its materializations."""
-    ags = [m.get("agent", "") for m in entry.get("materializations") or []]
-    return "·".join(a.split("-")[0] for a in ags)
+    names = [m.get("agent", "") for m in entry.get("materializations") or []]
+    return "·".join(a.split("-")[0] for a in names)
 
 
 def _kind_table(heading, items, extra=None):
