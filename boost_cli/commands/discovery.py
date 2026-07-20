@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -19,15 +18,10 @@ from pathlib import Path
 from .. import cliparse, spin
 from ..core import agents, ai, catalog, dense, embed, gitutil, journal, lockfile, paths, rag, registry, store, util
 from ..core import output as out
+from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
 from ..errors import BoostError
 
-_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv",
-              "dist", "build", "target", "vendor"}
-
-_EXT_LANGS = {".py": "python", ".ts": "typescript", ".tsx": "typescript",
-              ".js": "javascript", ".jsx": "javascript", ".go": "go",
-              ".rs": "rust", ".java": "java", ".rb": "ruby", ".kt": "kotlin",
-              ".swift": "swift", ".php": "php", ".cs": "csharp"}
+__all__ = ["detect_stack"]
 
 
 def _positive_int(s: str) -> int:
@@ -44,13 +38,6 @@ def _positive_int(s: str) -> int:
 _tilde = paths.tilde
 
 
-def _read_text(p: Path) -> str:
-    try:
-        return p.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-
-
 def _json_array(text):
     """Best-effort extraction of the first JSON array in an AI reply."""
     m = re.search(r"\[.*\]", text or "", re.S)
@@ -65,82 +52,6 @@ def _json_array(text):
 
 def _discovery_path() -> Path:
     return paths.cache_dir() / "discovery.json"
-
-
-def detect_stack(path) -> dict:
-    """Detect a project's tech stack from files on disk.
-
-    Walks at most two directory levels (skipping .git/node_modules etc.) and
-    returns {"languages": [...], "frameworks": [...], "keywords": [...]}.
-    Shared with the Quality commands.
-    """
-    root = Path(path)
-    langs, frameworks, extras = set(), set(), set()
-    markers: dict = {}
-    ext_counts: dict = {}
-    for dirpath, dirnames, filenames in os.walk(str(root)):
-        rel = os.path.relpath(dirpath, str(root))
-        depth = 0 if rel == "." else rel.count(os.sep) + 1
-        dirnames[:] = [] if depth >= 2 else [d for d in dirnames
-                                             if d not in _SKIP_DIRS]
-        for fn in filenames:
-            markers.setdefault(fn.lower(), Path(dirpath) / fn)
-            ext = os.path.splitext(fn)[1].lower()
-            if ext:
-                ext_counts[ext] = ext_counts.get(ext, 0) + 1
-
-    def read(*names) -> str:
-        return "\n".join(_read_text(markers[n]) for n in names
-                         if n in markers).lower()
-
-    if "package.json" in markers:
-        langs.add("javascript")
-        try:
-            pkg = json.loads(_read_text(markers["package.json"]))
-        except json.JSONDecodeError:
-            pkg = {}
-        if not isinstance(pkg, dict):
-            pkg = {}
-        deps: set[str] = set()
-        for section in ("dependencies", "devDependencies", "peerDependencies"):
-            deps.update(pkg.get(section) or {})
-        for dep in ("react", "vue", "next", "express"):
-            if any(d == dep or d.startswith((dep + "/", "@" + dep + "/"))
-                   for d in deps):
-                frameworks.add(dep)
-        if "typescript" in deps:
-            langs.add("typescript")
-    if "pyproject.toml" in markers or "requirements.txt" in markers:
-        langs.add("python")
-        blob = read("pyproject.toml", "requirements.txt")
-        for fw in ("django", "flask", "fastapi", "pytest"):
-            if fw in blob:
-                frameworks.add(fw)
-    if "go.mod" in markers:
-        langs.add("go")
-    if "cargo.toml" in markers:
-        langs.add("rust")
-    if any(n in markers for n in ("pom.xml", "build.gradle", "build.gradle.kts")):
-        langs.add("java")
-        if "spring" in read("pom.xml", "build.gradle", "build.gradle.kts"):
-            frameworks.add("spring")
-    if "gemfile" in markers:
-        langs.add("ruby")
-        if "rails" in read("gemfile"):
-            frameworks.add("rails")
-    if "tsconfig.json" in markers:
-        langs.add("typescript")
-    if "dockerfile" in markers:
-        extras.add("docker")
-    if (root / ".github" / "workflows").is_dir():
-        extras.add("ci")
-    if ext_counts.get(".tf"):
-        extras.add("terraform")
-    for ext, n in ext_counts.items():
-        if n >= 2 and ext in _EXT_LANGS:
-            langs.add(_EXT_LANGS[ext])
-    return {"languages": sorted(langs), "frameworks": sorted(frameworks),
-            "keywords": sorted(langs | frameworks | extras)}
 
 
 def _ai_rank(query: str, scored):

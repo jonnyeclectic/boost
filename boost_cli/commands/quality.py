@@ -185,7 +185,7 @@ def _stack_keywords(cwd: Path) -> set:
     like `testing` or `git` can match even when detect_stack is language-only)."""
     kws: List[str] = []
     try:
-        from .discovery import detect_stack
+        from ..core.stackprobe import detect_stack
         stack = detect_stack(cwd)
         if isinstance(stack, dict):
             kws.extend(str(k) for k in (stack.get("keywords") or []))

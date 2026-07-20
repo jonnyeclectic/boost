@@ -603,13 +603,25 @@ message, so routing it through the helper would change user-facing errors.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Tech-debt</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
         <h3>Single tech-stack prober</h3>
-        <p>Stack detection exists three times — <code>discovery.detect_stack</code>, <code>intelligence._local_stack</code>, <code>quality._STACK_MARKERS</code> (<code>discovery.py:74 · intelligence.py:359 · quality.py:55</code>) — and two already <code>import detect_stack</code> yet still carry a parallel marker table "as a fallback". Consolidate into one core prober.</p>
+        <p>Shipped in <b>#140</b>. The canonical <code>detect_stack</code> prober — a
+~75-line pure function that lived in the <b>command</b> module
+<code>commands/discovery.py</code> yet was imported across the command layer by
+both <code>intelligence</code> and <code>quality</code> — now lives in one place:
+a new pure core module <code>core/stackprobe.py</code> (with its private
+<code>_SKIP_DIRS</code>/<code>_EXT_LANGS</code>/<code>_read_text</code> helpers,
+used nowhere else). Every consumer imports the single core prober;
+<code>discovery</code> re-exports it for compatibility, and the now-dead helpers
++ unused <code>os</code> import were removed from it. Covered by 16 new
+mutation-gated unit tests. The consumer-local enrichment fallbacks
+(<code>_local_stack</code>, <code>_STACK_MARKERS</code>) are intentionally kept —
+they add coarse filesystem signal the language-only prober doesn't.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">prober moved to core</span>
         </div>
       </article>
 

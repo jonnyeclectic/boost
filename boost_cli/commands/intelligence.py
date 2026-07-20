@@ -327,7 +327,7 @@ def _probe_repo(root: Path) -> dict:
 def _stack_from_discovery(root: Path) -> Optional[Tuple[List[str], List[str]]]:
     """Use discovery's shared stack prober when present; normalize its shape."""
     try:
-        from .discovery import detect_stack
+        from ..core.stackprobe import detect_stack
         result = detect_stack(root)
     except Exception:
         return None
