@@ -6,7 +6,7 @@ VENV    := .venv
 PY      := $(VENV)/bin/python
 PYTEST  := $(VENV)/bin/pytest
 
-.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec
+.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec audit
 
 venv:
 	python3 -m venv $(VENV)
@@ -38,6 +38,11 @@ lint:
 	$(VENV)/bin/codespell boost_cli docs README.md
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
+
+# Supply-chain CVE gate: fail on a known OSV/PyPI advisory in the project's
+# dependency closure. Mirrors the pip-audit CI workflow; run before releasing.
+audit:
+	$(VENV)/bin/pip-audit --strict --progress-spinner off .
 
 # Tier 1 retrieval quality gate: golden-set recall@k over the tapped catalog.
 # Deterministic + offline; a release-quality gate, kept separate from `check`.
