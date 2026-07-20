@@ -16,9 +16,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .. import cliparse
-from ..core import (agents, ai, catalog, frontmatter, gitutil, journal,
-                    lockfile, logs, output as out, paths, policy, registry,
-                    staleness, store, util)
+from ..core import (agents, ai, catalog, frontmatter, gitutil, imperative,
+                    journal, lockfile, logs, output as out, paths, policy,
+                    registry, staleness, store, util)
 from ..errors import BoostError
 
 # --- audit: dangerous-content patterns ------------------------------------
@@ -41,8 +41,6 @@ _SEV_ROLE = {"HIGH": "danger", "MED": "warn", "LOW": "muted"}
 
 # --- conflict: normative-rule extraction -----------------------------------
 
-_RULE_RE = re.compile(
-    r"(?i)^\s*(?:[-*+>]|\d+[.)])?\s*(never|always|must\s+not|must|do\s+not|don'?t)\b(.*)$")
 _NEG_MODALS = {"never", "must not", "do not", "don't", "dont"}
 _STOPWORDS = {"the", "a", "an", "to", "of", "and", "in", "for", "with",
               "before", "after", "is", "are", "be", "that", "this", "it",
@@ -834,7 +832,7 @@ def cmd_conflict(argv):
             if str(other) in installed_names and str(other) != name:
                 declared.append((name, str(other)))
         for raw in body.splitlines():
-            m = _RULE_RE.match(raw)
+            m = imperative.RULE_RE.match(raw)
             if not m:
                 continue
             modal = re.sub(r"\s+", " ", m.group(1).lower())

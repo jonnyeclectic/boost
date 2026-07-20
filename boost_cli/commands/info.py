@@ -16,7 +16,8 @@ import webbrowser
 from pathlib import Path
 
 from .. import cliparse
-from ..core import ai, catalog, frontmatter, gitutil, journal, lockfile, logs, paths, registry, store, util
+from ..core import (ai, catalog, frontmatter, gitutil, imperative, journal,
+                    lockfile, logs, paths, registry, store, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -385,7 +386,7 @@ def cmd_explain(argv):
         if not stripped or stripped in seen:
             continue
         is_bullet = bool(re.match(r"^\s*(?:[-*]|\d+\.)\s", line))
-        if (re.match(r"(?i)^(always|never|must|do not)\b", stripped)
+        if (imperative.RULE_RE.match(stripped)
                 or (is_bullet and re.search(r"(?i)\b(always|never)\b", stripped))):
             seen.add(stripped)
             rules.append(stripped)
