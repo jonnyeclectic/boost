@@ -16,6 +16,12 @@ the math, this asks "does the right skill actually come back for a real question
   baseline  --save-baseline pins current scores; later runs flag regressions
   gate      --fail-under floors mean recall@k for CI (a `make eval` target)
 
+Tier 1b (opt-in, offline): --stats runs a paired Student's t-test between the
+engines with `ranx`, so a metric gap is reported as statistically *significant*
+or not — a raw 0.919-vs-0.756 number can't say whether an engine is genuinely
+better or just luckier on 43 queries. Needs the [eval] extra; degrades cleanly
+if `ranx` is absent (never a core dependency).
+
 Tier 2a (LLM, opt-in, key-gated): --rerank measures the *lift* the LLM rerank
 stage (rag.rerank) adds over the raw BM25 order on the same golden set — no
 judge needed, the labels do the grading. Skips cleanly when AI is unavailable,
@@ -25,6 +31,7 @@ Usage:
   python3 scripts/eval_retrieval.py --build            # build index, then eval
   python3 scripts/eval_retrieval.py --save-baseline    # pin a baseline
   python3 scripts/eval_retrieval.py --fail-under 0.85  # CI gate on recall@k
+  python3 scripts/eval_retrieval.py --build --stats    # Tier 1b significance
   python3 scripts/eval_retrieval.py --rerank           # Tier 2a rerank lift
 """
 from __future__ import annotations
@@ -287,6 +294,72 @@ def run_rerank_lift(rows: List[dict], k: int, json_out: bool) -> int:
     return 0
 
 
+# --------------------------------------------------------------- Tier 1b (stats)
+
+def _stats_metrics(k: int) -> List[str]:
+    return ["recall@%d" % k, "hit_rate@1", "mrr", "ndcg@%d" % k]
+
+
+def build_stats_report(per_cases: Dict[str, List[dict]], rows: List[dict],
+                       k: int, order: List[str]):
+    """Compare the engines with `ranx` + a paired Student's t-test; return the
+    ranx Report, or None if unavailable.
+
+    A raw metric gap ("BM25 0.919 vs 0.756") doesn't say whether the engine is
+    actually better or just luckier on 43 queries. The t-test says whether the
+    difference is *significant*. Reuses the already-computed Tier 1 rankings —
+    no re-retrieval. Degrades cleanly when `ranx` is absent (an opt-in [eval]
+    extra, never a core dependency), mirroring boost's offline-first contract.
+    """
+    try:
+        from ranx import Qrels, Run, compare
+    except ImportError:
+        print("\n--stats needs `ranx` — `pip install boost-skill-cli[eval]` "
+              "(or `pip install ranx`); skipping.", file=sys.stderr)
+        return None
+    if len(order) < 2:
+        print("\n--stats needs >=2 engines to compare — skipping.",
+              file=sys.stderr)
+        return None
+
+    qrels = Qrels({"q%d" % i: {n: 1 for n in row["relevant_set"]}
+                   for i, row in enumerate(rows)})
+    runs = []
+    for label in order:
+        run_d: Dict[str, Dict[str, float]] = {}
+        for i, pc in enumerate(per_cases[label]):
+            top = pc["top"]
+            # position-derived descending scores: ranx orders docs by score, so
+            # this reproduces the engine's ranking (the @k metrics depend only
+            # on the order, not the raw retrieval scores).
+            run_d["q%d" % i] = ({n: float(len(top) - p)
+                                 for p, n in enumerate(top)}
+                                if top else {"__none__": 0.0})
+        runs.append(Run(run_d, name=label))
+
+    return compare(qrels, runs, metrics=_stats_metrics(k),
+                   stat_test="student", make_comparable=True)
+
+
+def print_stats_human(report, order: List[str], k: int) -> None:
+    print("\n=== Tier 1b: statistical significance (ranx · paired t-test) ===")
+    print(report)
+    # Plain-language verdict for the best engine vs each other, at p<0.05.
+    d = report.to_dict()
+    rkey = "recall@%d" % k
+    best = max(order, key=lambda m: d[m]["scores"].get(rkey, 0.0))
+    print("\nbest engine: %s" % best)
+    for other in order:
+        if other == best:
+            continue
+        for metric in _stats_metrics(k):
+            p = d[best]["comparisons"][other][metric]
+            wtl = d[best]["win_tie_loss"][other][metric]
+            verdict = "SIGNIFICANT" if p < 0.05 else "not significant"
+            print("  vs %-20s %-12s p=%.4f  %-15s  W/T/L=%d/%d/%d"
+                  % (other, metric, p, verdict, wtl["W"], wtl["T"], wtl["L"]))
+
+
 # --------------------------------------------------------------- main
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -307,6 +380,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--regression-eps", type=float, default=0.02, metavar="E",
                     help="fail if any metric drops > E below the baseline")
     ap.add_argument("--misses", action="store_true", help="list non-#1 cases")
+    ap.add_argument("--stats", action="store_true",
+                    help="Tier 1b: ranx significance test between engines "
+                         "(opt-in [eval] extra; degrades if ranx absent)")
     ap.add_argument("--json", action="store_true", help="machine-readable JSON")
     args = ap.parse_args(argv)
 
@@ -350,15 +426,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not results:
         raise SystemExit("no engines evaluated")
 
+    order = [r["engine"] for r in results]
     if args.json:
-        print(json.dumps({"k": args.k, "results":
-                          [{"engine": r["engine"], **r["agg"]} for r in results]},
-                         indent=2))
+        payload: dict = {"k": args.k, "results":
+                         [{"engine": r["engine"], **r["agg"]} for r in results]}
+        if args.stats:
+            report = build_stats_report(per_cases, rows, args.k, order)
+            if report is not None:
+                payload["significance"] = report.to_dict()
+        print(json.dumps(payload, indent=2, default=str))
     else:
         print_compare(args.k, results)
         if args.misses:
             print_misses(results[-1]["engine"], per_cases[results[-1]["engine"]],
                          args.k)
+        if args.stats:
+            report = build_stats_report(per_cases, rows, args.k, order)
+            if report is not None:
+                print_stats_human(report, order, args.k)
 
     if args.save_baseline:
         save_baseline(args.k, results)
