@@ -2,14 +2,14 @@
 id: clean-env-install-smoke-pip-and-pipx
 board: code
 section: compat
-status: planned
+status: inflight
 category: Testing · Install
 complexity: S
 impact: High
 wow: 4
 note: tests the real artifact
 order: 2
-owner:
+owner: loop/clean-env-install-smoke
 pr:
 title: Clean-env install smoke — pip &amp; <code>pipx</code>
 ---
