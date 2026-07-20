@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>96</b><span>Loop finds</span></div>
+      <div class="stat"><b>97</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -996,6 +996,27 @@ explanations and safety, not better ranking.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">converter = time.gmtime</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Diagnostics · Install engine</span></div>
+        <h3><code>boost doctor</code> checks installed rules and workflows</h3>
+        <p>After rule (<code>#141</code>) and workflow (<code>#150</code>) install landed,
+           <code>boost doctor</code>'s health loop still only walked the lock
+           file's <code>skills</code> — so a rule or workflow whose materialized
+           file a user deleted (or whose <code>CLAUDE.md</code> managed block was
+           hand-removed) went undetected. Extend the doctor loop to verify every
+           recorded rule/workflow materialization is still on disk: a file drop
+           must exist, and a Claude rule's <code>CLAUDE.md</code> must still carry
+           its managed block. A missing materialization is flagged with a
+           <code>boost reinstall</code> hint and flips the verdict, matching how
+           skill-drift is surfaced.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">doctor was skill-only after rule/workflow install</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
