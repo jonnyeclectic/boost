@@ -286,12 +286,19 @@ def cmd_doctor(argv):
     enabled = agents.enabled_agents()
     skill_issues = 0
     for name, entry in sorted(skills.items()):
-        if not store.skill_store_dir(name).is_dir():
+        sdir = store.skill_store_dir(name)
+        if not sdir.is_dir():
             bad("skill %s missing from store — run `boost heal`" % name)
             skill_issues += 1
             continue
         if entry.get("quarantined"):
             continue
+        # tamper detection: the lock file records a sha256 at install time, but
+        # only `boost verify` ever re-checked it — surface content drift here too.
+        locked = entry.get("sha256")
+        if locked and util.sha256_dir(sdir) != locked:
+            bad("skill %s modified since install — run `boost verify`" % name)
+            skill_issues += 1
         for agent in entry.get("agents", []):
             adir = enabled.get(agent)
             if adir is None:

@@ -82,6 +82,14 @@ class TestDoctor:
         assert "no taps configured — add one with `boost tap owner/repo`" in r.out
         assert "0 skills installed · 0 taps synced · 0 broken links" in r.out
 
+    def test_tampered_content_rc1(self, boost, installed):
+        # doctor must re-hash installed skills, not just check they exist:
+        # editing SKILL.md content after install is drift from the lock digest.
+        _tamper("brainstorming")
+        r = boost("doctor", expect=1)
+        assert "skill brainstorming modified since install — run `boost verify`" in r.out
+        assert "need attention" in r.out
+
 
 # ── lint ─────────────────────────────────────────────────────────────────
 
