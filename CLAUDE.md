@@ -32,10 +32,17 @@ BM25 recall is 1.000, so the 0.85 floor has wide margin; regression-vs-baseline
 is relaxed in the gate (`--regression-eps 1`) so upstream repo drift can't flake
 it. Edit `taps.txt` → regenerate `tests/eval/baseline.json`. It runs in CI's
 `lint` job (pure-stdlib BM25, no `ANTHROPIC_API_KEY`; needs network to tap). The
-opt-in evals stay out of `check`: `make eval-ai` / `eval-rec` are key-gated
-(LLM), and `make eval-stats` runs a `ranx` paired-t-test between engines
-(`--stats`; the `[eval]` extra — `pip install -e '.[eval]'` — degrades cleanly
-if absent, and `ranx` is never imported by the CLI or the required gate).
+opt-in evals stay out of `check` and all degrade cleanly:
+- `make eval-ai` / `eval-rec` — key-gated LLM evals (Tier 2a rerank / 2b recommend).
+- `make eval-stats` — Tier 1b `ranx` paired-t-test between engines (`--stats`).
+- `make eval-explain` — Tier 2c `ragas` faithfulness for `boost explain`; needs
+  the `[eval]` extra **and** a judge key (`OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`
+  with `langchain-anthropic`) plus boost AI to generate the explanations.
+
+The `[eval]` extra (`pip install -e '.[eval]'`) carries `ranx` + `ragas`; nothing
+in it is ever imported by the CLI or the required gate. It pins the langchain 0.3
+stack because ragas 0.2.x breaks against langchain ≥1.0 — an isolated cost of the
+ragas dependency.
 
 New/changed core logic needs tests that both cover it *and* kill mutants —
 untested code counts as unkilled mutants, so the mutation gate fails even at 80%
