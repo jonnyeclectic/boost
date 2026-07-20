@@ -763,9 +763,9 @@ class TestMcp:
         shim = str(paths.repo_root() / "boost")
         r = boost("mcp", "register")
         assert "`claude` CLI not found — run this yourself:" in r.out
-        assert ("claude mcp add --scope user "
+        assert ("claude mcp add boost --scope user "
                 "-e OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES -e no_proxy=* "
-                "boost -- %s mcp --stdio" % shim) in r.out
+                "-- %s mcp --stdio" % shim) in r.out
         r = boost("mcp", "unregister")
         assert "claude mcp remove boost" in r.out
         assert journal.events(action="mcp")[0]["subject"] == "unregister"
@@ -785,13 +785,30 @@ class TestMcp:
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
                             fake_run)
         r = boost("mcp", "register")
-        assert calls == [["claude", "mcp", "add", "--scope", "user",
+        assert calls == [["claude", "mcp", "add", "boost", "--scope", "user",
                           "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
                           "-e", "no_proxy=*",
-                          "boost", "--", str(paths.repo_root() / "boost"),
+                          "--", str(paths.repo_root() / "boost"),
                           "mcp", "--stdio"]]
         assert "Added stdio MCP server boost" in r.out
         assert "registered boost as an MCP server (scope: user)" in r.out
+
+    def test_register_names_server_before_env_flags(self, boost, sandbox,
+                                                     monkeypatch):
+        # Regression: `claude`'s `-e` is variadic, so the server name must come
+        # before the first `-e` or it is swallowed as another env var
+        # ("Invalid environment variable format: boost"). Pin name < any `-e`.
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/local/bin/claude"
+                            if c == "claude" else None)
+        calls = []
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: (calls.append(list(cmd)) or _proc(cmd, 0)))
+        boost("mcp", "register")
+        cmd = calls[0]
+        assert cmd[:4] == ["claude", "mcp", "add", "boost"]
+        assert cmd.index("boost") < cmd.index("-e")
 
     def test_register_failure(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",

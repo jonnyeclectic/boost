@@ -925,10 +925,15 @@ def cmd_mcp(argv) -> int:
         # post-fork (CFPreferences / _scproxy proxy lookup). Disabling the
         # fork-safety trap and short-circuiting proxy resolution keeps the
         # host's fork into boost from aborting before our Python ever runs.
-        cmd = ["claude", "mcp", "add", "--scope", "user",
+        #
+        # The server name ("boost") MUST come before the `-e` flags: `claude`'s
+        # `-e` is variadic, so a name placed after it is swallowed as another
+        # env var ("Invalid environment variable format: boost"). Order is
+        # `add <name> [options] -- <command>`.
+        cmd = ["claude", "mcp", "add", "boost", "--scope", "user",
                "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
                "-e", "no_proxy=*",
-               "boost", "--", str(shim), "mcp", "--stdio"]
+               "--", str(shim), "mcp", "--stdio"]
     else:
         cmd = ["claude", "mcp", "remove", "boost"]
 
