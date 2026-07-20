@@ -1,0 +1,38 @@
+name: package-metadata
+
+# Pre-publish validation: build the sdist + wheel and confirm the packaging
+# metadata is sound before it can reach PyPI. The release path otherwise trusts
+# the build blindly — a broken README renders as a broken PyPI page, an empty
+# wheel ships nothing, and thin metadata degrades discoverability.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # setuptools-scm derives the version from git tags/history.
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install build + validation tools
+        run: python -m pip install --upgrade pip build twine check-wheel-contents pyroma
+      - name: Build sdist + wheel
+        run: python -m build
+      - name: twine check (README renders on PyPI)
+        run: twine check --strict dist/*
+      - name: check-wheel-contents (no empty/stray wheel)
+        run: check-wheel-contents dist/*.whl
+      - name: pyroma (metadata completeness)
+        # 8 is today's honest baseline (author-email intentionally omitted);
+        # gate blocks a regression below it.
+        run: pyroma --min 8 dist/*.tar.gz

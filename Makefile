@@ -6,7 +6,7 @@ VENV    := .venv
 PY      := $(VENV)/bin/python
 PYTEST  := $(VENV)/bin/pytest
 
-.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec audit
+.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec audit dist-check
 
 venv:
 	python3 -m venv $(VENV)
@@ -43,6 +43,15 @@ lint:
 # dependency closure. Mirrors the pip-audit CI workflow; run before releasing.
 audit:
 	$(VENV)/bin/pip-audit --strict --progress-spinner off .
+
+# Pre-publish package-metadata gate: build then validate the dist. Mirrors the
+# package-metadata CI workflow; run before releasing.
+dist-check:
+	rm -rf dist
+	$(PY) -m build
+	$(VENV)/bin/twine check --strict dist/*
+	$(VENV)/bin/check-wheel-contents dist/*.whl
+	$(VENV)/bin/pyroma --min 8 dist/*.tar.gz
 
 # Tier 1 retrieval quality gate: golden-set recall@k over the tapped catalog.
 # Deterministic + offline; a release-quality gate, kept separate from `check`.
