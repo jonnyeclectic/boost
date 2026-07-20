@@ -14,6 +14,7 @@ import json
 import re
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Optional, Tuple
 
 from .. import __version__
@@ -68,7 +69,10 @@ def _safe_join_within(base, rel):
     """Resolve base/rel and return it only when contained within base."""
     try:
         base_r = base.resolve(strict=False)
-        candidate = (base_r / rel).resolve(strict=False)
+        rel_p = rel if hasattr(rel, "is_absolute") else __import__("pathlib").Path(rel)
+        if rel_p.is_absolute():
+            return None
+        candidate = (base_r / rel_p).resolve(strict=False)
         candidate.relative_to(base_r)
     except (OSError, ValueError, TypeError):
         return None
@@ -80,8 +84,8 @@ def skill_text(name: str) -> Optional[str]:
     if not SKILL_NAME_RE.fullmatch(name):
         return None
     base = store.skill_store_dir(name)
-    fp = base / "SKILL.md"
-    if _is_within(base, fp) and fp.is_file():
+    fp = _safe_join_within(base, Path("SKILL.md"))
+    if fp is not None and fp.is_file():
         return fp.read_text(encoding="utf-8", errors="replace")
     for e in catalog.find(name):
         try:
