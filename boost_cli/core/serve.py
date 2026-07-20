@@ -59,15 +59,20 @@ def _is_within(base, target) -> bool:
         base_r = base.resolve(strict=False)
         target_r = target.resolve(strict=False)
         target_r.relative_to(base_r)
-        if target_r.exists():
-            target_parent_r = target_r.parent
-            try:
-                target_parent_r.relative_to(base_r)
-            except ValueError:
-                return False
     except (OSError, ValueError):
         return False
     return True
+
+
+def _safe_join_within(base, rel):
+    """Resolve base/rel and return it only when contained within base."""
+    try:
+        base_r = base.resolve(strict=False)
+        candidate = (base_r / rel).resolve(strict=False)
+        candidate.relative_to(base_r)
+    except (OSError, ValueError, TypeError):
+        return None
+    return candidate
 
 
 def skill_text(name: str) -> Optional[str]:
@@ -81,10 +86,12 @@ def skill_text(name: str) -> Optional[str]:
     for e in catalog.find(name):
         try:
             tap_base = registry.get(e["tap"]).path
-            fp = tap_base / e["skill_md"]
+            fp = _safe_join_within(tap_base, e["skill_md"])
         except BoostError:
             continue
-        if _is_within(tap_base, fp) and fp.is_file():
+        if fp is None:
+            continue
+        if fp.is_file():
             return fp.read_text(encoding="utf-8", errors="replace")
     return None
 
