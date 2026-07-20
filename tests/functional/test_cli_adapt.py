@@ -44,3 +44,32 @@ def test_missing_to_flag_errors(boost, installed):
 
 def test_unknown_skill_errors(boost, tapped):
     boost("adapt", "does-not-exist", "--to", "crewai", expect=1)
+
+
+def test_default_model_wires_boost_ai_model(boost, installed):
+    # By default the exported agent is pinned to boost's configured ai.model,
+    # normalized to a LiteLLM provider/model id.
+    r = boost("adapt", installed, "--to", "crewai")
+    assert "from crewai import Agent, LLM" in r.out
+    assert "llm=LLM(model=\"anthropic/" in r.out
+    compile(r.out, "<crewai>", "exec")
+
+
+def test_model_none_opts_out(boost, installed):
+    # `--model none` restores the framework's own default (no LLM wiring).
+    r = boost("adapt", installed, "--to", "crewai", "--model", "none")
+    assert "LLM" not in r.out
+    assert "llm=" not in r.out
+    compile(r.out, "<crewai>", "exec")
+
+
+def test_custom_model_is_used_verbatim(boost, installed):
+    r = boost("adapt", installed, "--to", "agents-sdk", "--model", "openai/gpt-4o")
+    assert 'model=LitellmModel(model="openai/gpt-4o")' in r.out
+    assert "from agents.extensions.models.litellm_model import LitellmModel" in r.out
+    compile(r.out, "<sdk>", "exec")
+
+
+def test_bare_model_gets_anthropic_prefix(boost, installed):
+    r = boost("adapt", installed, "--to", "crewai", "--model", "claude-opus-4-8")
+    assert 'model="anthropic/claude-opus-4-8"' in r.out
