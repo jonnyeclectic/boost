@@ -5,6 +5,7 @@ The whole point of the module is to keep proxy resolution on the pure-env
 (``getproxies()`` / ``getproxies_macosx_sysconf()``), which aborts on the child
 side of a ``fork()``. These tests pin that contract.
 """
+import os
 import urllib.request
 
 import pytest
@@ -83,3 +84,37 @@ class TestUrlopen:
     def test_timeout_is_required(self):
         with pytest.raises(TypeError):
             nethttp.urlopen("http://x.invalid")  # type: ignore[call-arg]
+
+
+class TestHardenForkSafety:
+    def test_seeds_no_proxy_when_no_env_proxy(self, monkeypatch):
+        # No *_proxy vars configured -> the default getproxies() would fall
+        # through to the fork-unsafe macOS sysconf path. harden seeds no_proxy
+        # so getproxies_environment() wins instead.
+        monkeypatch.setattr(urllib.request, "getproxies_environment", dict)
+        monkeypatch.delenv("no_proxy", raising=False)
+        assert nethttp.harden_fork_safety() is True
+        assert os.environ["no_proxy"] == "*"
+
+    def test_respects_existing_proxy_config(self, monkeypatch):
+        # A real proxy is set -> getproxies_environment() already wins and the
+        # sysconf branch is unreachable, so harden must not touch the env.
+        monkeypatch.setattr(urllib.request, "getproxies_environment",
+                            lambda: {"https": "http://proxy.example:8080"})
+        monkeypatch.delenv("no_proxy", raising=False)
+        assert nethttp.harden_fork_safety() is False
+        assert "no_proxy" not in os.environ
+
+    def test_does_not_clobber_existing_no_proxy(self, monkeypatch):
+        # setdefault semantics: a user's own no_proxy value survives untouched.
+        monkeypatch.setattr(urllib.request, "getproxies_environment", dict)
+        monkeypatch.setenv("no_proxy", "example.com")
+        assert nethttp.harden_fork_safety() is True
+        assert os.environ["no_proxy"] == "example.com"
+
+    def test_idempotent(self, monkeypatch):
+        monkeypatch.setattr(urllib.request, "getproxies_environment", dict)
+        monkeypatch.delenv("no_proxy", raising=False)
+        assert nethttp.harden_fork_safety() is True
+        assert nethttp.harden_fork_safety() is True
+        assert os.environ["no_proxy"] == "*"
