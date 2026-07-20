@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>93</b><span>Loop finds</span></div>
+      <div class="stat"><b>94</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1628,6 +1628,29 @@ and the work stays visible.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">OBJC_DISABLE_INITIALIZE_FORK_SAFETY</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · MCP</span></div>
+        <h3>Order the server name before -e flags in `boost mcp register`</h3>
+        <p><code>boost mcp register</code> shelled out to
+<code>claude mcp add --scope user -e OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES -e
+no_proxy=* boost -- …</code> — the <code>-e</code> flags <em>before</em> the
+server name. But <code>claude</code>'s <code>-e</code> is variadic, so it
+swallowed <code>boost</code> as a third env var and aborted with
+<code>Invalid environment variable format: boost</code>, making the one-command
+install path fail outright on macOS. Reordered to
+<code>claude mcp add boost --scope user -e … -- …</code> (the
+<code>add &lt;name&gt; [options] -- &lt;command&gt;</code> form), so the name is
+consumed as the positional before <code>-e</code> can grab it. A regression
+test pins <code>name &lt; first -e</code> so a future reorder can't silently
+re-break it.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">unbreak `boost mcp register`</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
