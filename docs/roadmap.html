@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>103</b><span>Loop finds</span></div>
+      <div class="stat"><b>104</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1414,6 +1414,17 @@ explanations and safety, not better ranking.</p>
           <span class="m">Complexity <b>L</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Interop</span></div>
+        <h3><code>boost run</code> — search → adapt → a live agent doing the task, in one command</h3>
+        <p>The allure ceiling on <code>boost adapt</code> (#146, #163): it stops at <b>source you assemble</b>, and the adapted agent has a brain (prompt) but no <b>hands</b> (tools). Close both. <code>boost run &lt;skill&gt; [target]</code> = adapt → wire a default toolset (file read, ripgrep/shell, web) → execute on boost's model and stream the result. Opt-in like the conformance path (installs the framework + needs a key, so the zero-dep default holds). Two prerequisites ship with it: (1) <b>tool-wiring</b> — emit/attach the tools a skill needs (or declares) so the agent can act, not roleplay; (2) reuse the <a href="../adapters.html">adapt</a> renderer for the agent def. Pairs with <code>[[framework-adapter-multi-agent]]</code> so a skill like <code>rust-review</code> runs as a real crew. This is the screenshot: "one command → an expert agent audits your repo, on Claude, that you never wrote."</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
