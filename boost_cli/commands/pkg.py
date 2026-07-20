@@ -102,7 +102,7 @@ def _warn_secrets(res: store.InstallResult) -> None:
 
 def _report_result(res: store.InstallResult) -> None:
     """The canonical three-line install report."""
-    if res.kind == "rule":
+    if res.kind in ("rule", "workflow"):
         out.ok("materialized → %s" % (" · ".join(res.linked) or "(no enabled agents)"))
         out.ok("lock updated (.skill-lock.json)")
         _warn_injection(res)
@@ -170,10 +170,13 @@ def cmd_install(argv: List[str]) -> int:
     if args.dry_run:
         targets = [a for a in agents.enabled_agents() if not only or a in only]
         for e in entries:
-            if e.get("kind") == "rule":
-                verb = "reinstall" if lockfile.get_rule(e["name"]) else "install"
-                out.info("would %s rule %s v%s from %s" % (verb, e["name"],
-                                                           e["version"], e["tap"]))
+            if e.get("kind") in ("rule", "workflow"):
+                k = e["kind"]
+                seen = (lockfile.get_rule if k == "rule"
+                        else lockfile.get_workflow)(e["name"])
+                verb = "reinstall" if seen else "install"
+                out.info("would %s %s %s v%s from %s" % (verb, k, e["name"],
+                                                         e["version"], e["tap"]))
                 out.info("  materialize → %s" % (" · ".join(targets)
                                                  or "(no enabled agents)"))
                 continue
@@ -202,7 +205,7 @@ def cmd_install(argv: List[str]) -> int:
         results.append(res)
     if results:
         kinds = {r.kind for r in results}
-        noun = "skill" if kinds == {"skill"} else "rule" if kinds == {"rule"} else "item"
+        noun = next(iter(kinds)) if len(kinds) == 1 else "item"
         new = sum(1 for r in results if not r.upgraded)
         parts = []
         if new:
