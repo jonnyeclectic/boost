@@ -1,0 +1,69 @@
+name: eval-explain
+
+# Tier 2c: explain-faithfulness (ragas, LLM-judged). This is a NON-BLOCKING
+# MONITOR — deliberately NOT part of the required PR gate. The metric is
+# LLM-judged (non-deterministic) and costs tokens, so gating merges on it would
+# flake and burn money. It runs on a schedule and on demand, reports the
+# faithfulness number to the run summary, and skips cleanly (green, no-op) when
+# the secrets below are absent (e.g. on fork PRs). Do NOT add it to branch
+# protection's required checks.
+#
+# Required repo secrets (Settings -> Secrets and variables -> Actions):
+#   ANTHROPIC_API_KEY  - generates the explanations (boost's ai.ask API path;
+#                        there is no `claude` CLI on the runner)
+#   OPENAI_API_KEY     - the ragas faithfulness judge (via langchain-openai)
+
+on:
+  workflow_dispatch:            # run manually from the Actions tab
+  schedule:
+    - cron: "0 6 * * 1"         # weekly, Monday 06:00 UTC
+  pull_request:
+    types: [labeled]            # or run on a PR by adding the 'check-explain' label
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-explain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  faithfulness:
+    # schedule/dispatch always run; the pull_request trigger only fires for the
+    # 'check-explain' label so a random label doesn't spend tokens.
+    if: github.event_name != 'pull_request' || github.event.label.name == 'check-explain'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: install boost + the [eval] extra (ragas + pinned langchain)
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -e '.[eval]'
+      - name: tap the pinned corpus (so the golden skills exist)
+        run: BOOST_HOME="$PWD/.eval-home" bash scripts/ensure_eval_corpus.sh
+      - name: run explain-faithfulness (ragas)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # No --fail-under: this is a monitor, not a gate. `|| true` keeps the
+          # job green; the script already exits 0 and prints a hint to stderr
+          # when a key is missing (nothing scored).
+          BOOST_HOME="$PWD/.eval-home" .venv/bin/python scripts/eval_explain.py \
+            --json > explain.json 2> explain.err || true
+          cat explain.err || true
+      - name: report to run summary
+        if: always()
+        run: |
+          if [ -s explain.json ] && .venv/bin/python -c "import json; json.load(open('explain.json'))" 2>/dev/null; then
+            .venv/bin/python -c 'import json; d = json.load(open("explain.json")); print("### Tier 2c — explain faithfulness (ragas)\n\n- **mean faithfulness:** %.3f  (n=%d)" % (d["mean"], d["n"]))' >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Tier 2c — explain faithfulness (ragas)"
+              echo ""
+              echo "_skipped_ — set the \`ANTHROPIC_API_KEY\` and \`OPENAI_API_KEY\` repo secrets to enable."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
