@@ -1712,13 +1712,19 @@ and the work stays visible.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Security · Supply chain</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Supply chain</span></div>
         <h3>Update-diff before apply</h3>
-        <p><code>boost update</code> overwrites installed skills in place. Show a
-           content diff of what an upstream change alters — and require confirmation
-           for anything that touches executable-looking instructions — so a poisoned
-           update is <em>visible</em> instead of silent. The "review the diff" gate,
-           applied to skills.</p>
+        <p>Shipped in <b>#132</b>. <code>boost update</code> no longer overwrites an
+installed skill in place unseen. A new pure core module
+<code>core/updatediff.py</code> diffs the installed tree against the incoming
+source (<code>diff_tree</code>) and flags when the change adds
+<em>executable-looking instructions</em> — shell commands, pipe-to-shell,
+shebangs (<code>touches_executable</code>). When it does,
+<code>cmd_update</code> prints the unified diff and requires confirmation before
+applying, so a poisoned update is <em>visible</em> instead of silent; routine
+version bumps and prose edits still apply quietly. Fully unit-tested and
+mutation-covered, plus functional coverage of the confirm / decline / no-gate
+paths.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
