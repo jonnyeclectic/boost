@@ -584,6 +584,8 @@ class TestBrowse:
     def test_tui_pick_non_skill_does_not_crash(self, boost, tapped, monkeypatch):
         # browse lists rules/workflows too; picking one must not exit the TUI
         # with a fatal Error (regression: `boost browse` crashed on a workflow).
+        # Workflows install now, but a pick whose source can't be read must still
+        # surface a friendly non-fatal notice rather than crash the browser.
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
@@ -593,8 +595,8 @@ class TestBrowse:
         monkeypatch.setattr(discovery, "_browse_tui",
                             lambda curses, entries: workflow)
         r = boost("browse")                       # default expect=0 → no crash
-        assert "cannot install yet" in r.out      # friendly message, not Error:
-        assert "boost search" in r.out            # the hint is shown
+        assert "vanished from tap" in r.out       # friendly message, not Error:
+        assert "boost update" in r.out            # the hint is shown
         assert "installed AGENT-playbook" not in r.out
 
     def test_tui_loop_with_fake_curses(self, boost, tapped):
