@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .. import cliparse
-from ..core import (agents, catalog, gitutil, journal, lockfile, paths,
-                    registry, staleness, store, typosquat, util)
+from ..core import (agents, catalog, gitutil, injectscan, journal, lockfile,
+                    paths, registry, staleness, store, typosquat, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -65,6 +65,23 @@ def _check_agents(names: Optional[List[str]]) -> Optional[List[str]]:
     return names
 
 
+def _warn_injection(res: store.InstallResult) -> None:
+    """Flag prompt-injection / risky-content patterns in the skill just copied.
+
+    boost installs Markdown the agent then executes, so the installed
+    ``SKILL.md`` is scanned (core.injectscan) and any hits are surfaced worst
+    -first. Advisory only — it warns, it never blocks the install.
+    """
+    findings = injectscan.scan_file(res.dest / "SKILL.md")
+    if not findings:
+        return
+    out.warn("%s: %d suspicious pattern%s in SKILL.md (%s) — review before use"
+             % (res.name, len(findings), "" if len(findings) == 1 else "s",
+                injectscan.worst_severity(findings)))
+    for f in findings[:3]:
+        out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
+
+
 def _report_result(res: store.InstallResult) -> None:
     """The canonical three-line install report."""
     out.ok("copied to %s" % _tilde(res.dest))
@@ -75,6 +92,7 @@ def _report_result(res: store.InstallResult) -> None:
     for path in res.conflicts:
         out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
     out.ok("lock updated (.skill-lock.json)")
+    _warn_injection(res)
 
 
 def _boostfile_text(skills: Dict[str, dict], via: str = "boost bundle dump") -> str:
