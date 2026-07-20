@@ -2,7 +2,7 @@
 id: doctor-checks-rules-and-workflows
 board: code
 section: health
-status: inflight
+status: shipped
 category: Diagnostics · Install engine
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note: doctor was skill-only after rule/workflow install
 order: 24
 owner: loop/doctor-all-kinds
-pr:
+pr: 155
 title: <code>boost doctor</code> checks installed rules and workflows
 ---
 After rule (<code>#141</code>) and workflow (<code>#150</code>) install landed,
