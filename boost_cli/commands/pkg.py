@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .. import cliparse
-from ..core import (adapters, agents, catalog, frontmatter, gitutil,
+from ..core import (adapters, agents, catalog, config, frontmatter, gitutil,
                     injectscan, journal, lockfile, paths, registry,
                     secretscan, staleness, store, typosquat, updatediff, util)
 from ..core import output as out
@@ -1020,14 +1020,22 @@ def cmd_adapt(argv: List[str]) -> int:
     ap.add_argument("name", help="skill to adapt")
     ap.add_argument("--to", metavar="FRAMEWORK", required=True,
                     help="target framework: %s" % ", ".join(adapters.formats()))
+    ap.add_argument("--model", metavar="M", default=None,
+                    help="LLM the exported agent runs on (default: boost's "
+                         "ai.model; pass 'none' for the framework's own default)")
     ap.add_argument("-o", "--out", metavar="FILE",
                     help="write to FILE instead of stdout")
     args = ap.parse_args(argv)
     if args.to not in adapters.FORMATS:
         raise BoostError("unknown framework: %s" % args.to,
                         hint="supported: %s" % ", ".join(adapters.formats()))
+    # Default to boost's configured model so exported agents run on the same LLM
+    # boost uses; `--model none` opts out and lets the framework pick.
+    model = args.model if args.model is not None else str(config.get("ai.model") or "")
+    if model.strip().lower() in ("none", "off", ""):
+        model = None
     display, description, body = _resolve_skill_source(args.name)
-    source = adapters.render(args.to, display, description, body)
+    source = adapters.render(args.to, display, description, body, model)
     if args.out:
         dest = paths.expand(args.out)
         try:
@@ -1035,7 +1043,8 @@ def cmd_adapt(argv: List[str]) -> int:
         except OSError as e:
             raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                             hint="check the output path exists and is writable")
-        out.ok("adapted %s → %s (%s)" % (display, _tilde(dest.resolve()), args.to))
+        out.ok("adapted %s → %s (%s · %s)" % (display, _tilde(dest.resolve()),
+                                              args.to, model or "framework default"))
     else:
         sys.stdout.write(source)
     return 0
