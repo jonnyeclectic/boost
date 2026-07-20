@@ -9,17 +9,31 @@ Package name on PyPI is `boost-skill-cli`; the command is `boost`.
 Before calling any change done, run the full gate:
 
 ```bash
-make check          # == lint test smoke mutation
+make check          # == lint eval test smoke mutation
 ```
 
-It is four gates and **all must pass**:
+It is five gates and **all must pass**:
 
 | Gate       | Command                                        | Threshold |
 |------------|------------------------------------------------|-----------|
 | `lint`     | `ruff check boost_cli tests` + `mypy`          | zero errors |
+| `eval`     | `ensure_eval_corpus.sh` + `eval_retrieval.py --build -k 10 --fail-under 0.85` | BM25 recall@k **≥ 0.85** over the pinned corpus |
 | `test`     | `pytest tests/unit tests/functional --cov`     | **80%** coverage (`fail_under = 80`) |
 | `smoke`    | `bash tests/smoke.sh`                           | 0 failed |
 | `mutation` | `python3 scripts/mutation_gate.py --run --min 80` | **80%** of `boost_cli/core` mutants killed |
+
+The `eval` gate is the Tier 1 retrieval-quality check: it runs boost's RAG
+engines over the golden set (`tests/eval/golden.jsonl`) and floors BM25
+recall@k. The golden set grades real catalog items **by name**, so it needs a
+corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
+`tests/eval/taps.txt` (the minimal set covering all golden targets — `boost tap
+--defaults` is NOT enough, it omits every rule/workflow repo). Over that corpus
+BM25 recall is 1.000, so the 0.85 floor has wide margin; regression-vs-baseline
+is relaxed in the gate (`--regression-eps 1`) so upstream repo drift can't flake
+it. Edit `taps.txt` → regenerate `tests/eval/baseline.json`. It runs in CI's
+`lint` job (pure-stdlib BM25, no `ANTHROPIC_API_KEY`; needs network to tap). The
+opt-in Tier 2a/2b evals (`make eval-ai` / `eval-rec`) are key-gated and stay out
+of `check`.
 
 New/changed core logic needs tests that both cover it *and* kill mutants —
 untested code counts as unkilled mutants, so the mutation gate fails even at 80%
