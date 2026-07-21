@@ -2,7 +2,7 @@
 id: package-metadata-validation-twine-check-friends
 board: code
 section: compat
-status: planned
+status: shipped
 category: Quality · Packaging
 complexity: S
 impact: Med
