@@ -2,14 +2,14 @@
 id: secret-scanning-gitleaks-push-protection
 board: code
 section: health
-status: planned
+status: inflight
 category: Security · Secrets
 complexity: S
 impact: Med
 wow: 3
 note: pre-commit-able
 order: 4
-owner:
+owner: loop/gitleaks
 pr:
 title: Secret scanning — <code>gitleaks</code> + push protection
 ---
