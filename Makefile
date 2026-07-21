@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check
+.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli
 
 venv:
 	python3 -m venv $(VENV)
@@ -95,6 +95,24 @@ eval-stats:
 eval-explain:
 	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
 	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_explain.py --fail-under 0.80
+
+# Opt-in Gherkin/BDD suite (tests/bdd) — additive to tests/functional, not a
+# replacement. Needs the [bdd] extra (`pip install -e '.[bdd]'`); not part of
+# `make check`.
+bdd:
+	$(VENV)/bin/behave tests/bdd/features
+
+# Opt-in micro-benchmarks (tests/perf) for perf-sensitive core paths. Needs
+# the [perf] extra (`pip install -e '.[perf]'`); not part of `make check` — a
+# timing regression is informational, not a merge gate.
+bench:
+	$(PYTEST) tests/perf --benchmark-only -q
+
+# Opt-in wall-clock benchmark of the real `boost` binary via hyperfine. Not
+# part of `make check`; degrades cleanly (prints a skip message, exits 0) when
+# hyperfine isn't installed (`brew install hyperfine`).
+bench-cli:
+	@command -v hyperfine >/dev/null 2>&1 && bash scripts/bench_cli.sh || echo "hyperfine not on PATH — install via 'brew install hyperfine', skipping"
 
 # regenerate generated artifacts from their source (registries + roadmap boards)
 generate:

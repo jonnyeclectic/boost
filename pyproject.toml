@@ -55,6 +55,16 @@ eval = [
     "langchain-community<0.4",
     "langchain-openai<1",
 ]
+# Opt-in Gherkin/BDD functional suite (tests/bdd) — reusable Given/When/Then
+# scenarios over the same in-process CLI entrypoint tests/functional drives.
+# Additive to, not a replacement for, the pytest functional suite; not part of
+# `make check`. `pip install -e '.[bdd]'`.
+bdd = ["behave>=1.2.6"]
+# Opt-in micro-benchmarks (tests/perf, `make bench`) for perf-sensitive core
+# paths (BM25 indexing/search, catalog scan). Not part of `make check` — a
+# timing regression shouldn't block a merge the way a correctness gate does.
+# `pip install -e '.[perf]'`.
+perf = ["pytest-benchmark>=4.0"]
 
 [project.scripts]
 boost = "boost_cli.cli:main"
