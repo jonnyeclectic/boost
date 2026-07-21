@@ -569,6 +569,49 @@ class TestRecommend:
 
 # ---------------------------------------------------------------- browse
 
+class _FakeCurses:
+    """Minimal curses stand-in for driving _browse_tui without a real TTY."""
+
+    A_BOLD, A_DIM, A_REVERSE, A_NORMAL = 1, 2, 4, 0
+    KEY_UP, KEY_DOWN, KEY_ENTER, KEY_BACKSPACE = 259, 258, 343, 263
+    ACS_HLINE = ord("-")
+
+    class error(Exception):
+        pass
+
+    def __init__(self, keys):
+        self.keys = list(keys)
+        self.drawn = []
+
+    def curs_set(self, n):
+        raise self.error("no cursor support")
+
+    def timeout(self, ms):
+        pass
+
+    def wrapper(self, fn):
+        fn(self)
+
+    # screen protocol
+    def getmaxyx(self):
+        return (24, 80)
+
+    def erase(self):
+        pass
+
+    def addnstr(self, y, x, s, n, attr=0):
+        self.drawn.append(s)
+
+    def hline(self, *a):
+        pass
+
+    def refresh(self):
+        pass
+
+    def getch(self):
+        return self.keys.pop(0) if self.keys else ord("q")
+
+
 class TestBrowse:
     def test_non_tty_prints_full_catalog(self, boost, tapped):
         r = boost("browse")
@@ -589,8 +632,8 @@ class TestBrowse:
                             types.SimpleNamespace(stdin=tty, stdout=tty))
         monkeypatch.setattr(
             discovery, "_browse_tui",
-            lambda curses, entries: next(e for e in entries
-                                         if e["name"] == "brainstorming"))
+            lambda curses, entries: [next(e for e in entries
+                                          if e["name"] == "brainstorming")])
         r = boost("browse")
         assert "installed brainstorming v1.4.0" in r.out
         assert "linked into: Claude Code, Windsurf, Cursor" in r.out
@@ -618,7 +661,7 @@ class TestBrowse:
         workflow = {"name": "AGENT-playbook", "kind": "workflow",
                     "version": "1.0", "tap": "fixture-tap"}
         monkeypatch.setattr(discovery, "_browse_tui",
-                            lambda curses, entries: workflow)
+                            lambda curses, entries: [workflow])
         r = boost("browse")                       # default expect=0 → no crash
         assert "vanished from tap" in r.out       # friendly message, not Error:
         assert "boost update" in r.out            # the hint is shown
@@ -628,53 +671,45 @@ class TestBrowse:
         from boost_cli.commands import discovery
         from boost_cli.core import catalog
 
-        class FakeCurses:
-            A_BOLD, A_DIM, A_REVERSE, A_NORMAL = 1, 2, 4, 0
-            KEY_UP, KEY_DOWN, KEY_ENTER, KEY_BACKSPACE = 259, 258, 343, 263
-            ACS_HLINE = ord("-")
-
-            class error(Exception):
-                pass
-
-            def __init__(self, keys):
-                self.keys = list(keys)
-                self.drawn = []
-
-            def curs_set(self, n):
-                raise self.error("no cursor support")
-
-            def wrapper(self, fn):
-                fn(self)
-
-            # screen protocol
-            def getmaxyx(self):
-                return (24, 80)
-
-            def erase(self):
-                pass
-
-            def addnstr(self, y, x, s, n, attr=0):
-                self.drawn.append(s)
-
-            def hline(self, *a):
-                pass
-
-            def refresh(self):
-                pass
-
-            def getch(self):
-                return self.keys.pop(0) if self.keys else ord("q")
-
         entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
-        fake = FakeCurses([ord("t"), FakeCurses.KEY_DOWN, 10, FakeCurses.KEY_UP,
-                           FakeCurses.KEY_BACKSPACE, ord("i")])
+        fake = _FakeCurses([ord("t"), _FakeCurses.KEY_DOWN, 10, _FakeCurses.KEY_UP,
+                            _FakeCurses.KEY_BACKSPACE, ord("i")])
         picked = discovery._browse_tui(fake, entries)
-        assert picked["name"] == "brainstorming"
+        # a plain "i" with nothing space-selected installs just the highlighted pick
+        assert [e["name"] for e in picked] == ["brainstorming"]
         # the typed query is echoed after the "❯" prompt
         assert "t" in fake.drawn
         assert any("boost browse" in s for s in fake.drawn)
         # ESC quits without a pick
-        assert discovery._browse_tui(FakeCurses([27]), entries) is None
+        assert discovery._browse_tui(_FakeCurses([27]), entries) is None
+
+    def test_tui_space_selects_multiple_for_batch_install(self, boost, tapped):
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        # alphabetical: brainstorming, commit-messages, cowboy-coding, ...
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        keys = [ord(" "),                                    # check brainstorming
+                _FakeCurses.KEY_DOWN, _FakeCurses.KEY_DOWN,   # -> cowboy-coding
+                ord(" "),                                     # check cowboy-coding
+                ord("i")]                                     # install the batch
+        fake = _FakeCurses(keys)
+        picked = discovery._browse_tui(fake, entries)
+        assert [e["name"] for e in picked] == ["brainstorming", "cowboy-coding"]
+        assert any("2 selected" in s for s in fake.drawn)
+
+    def test_tui_cards_show_type_tap_badges_and_descriptions(self, boost, tapped):
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        fake = _FakeCurses([])  # no keys queued -> one draw, then default "q" quits
+        picked = discovery._browse_tui(fake, entries)
+        assert picked is None
+        assert "[skill]" in fake.drawn
+        assert "[fixture-tap]" in fake.drawn
+        assert "v1.0.2" in fake.drawn          # commit-messages' version
+        assert "Conventional, atomic commit message discipline" in fake.drawn
 
 
 class TestBrowseAurora:
@@ -779,6 +814,69 @@ class TestBrowseAurora:
         assert th["title"] == MonoCurses.A_BOLD
         assert th["sel_bar"] == MonoCurses.A_REVERSE
         assert th["rule"] == [MonoCurses.A_NORMAL] * 3
+
+
+class TestBrowseCards:
+    """Row badges, tap categories, and the boost-explain lazy description
+    fallback that power the browse card list."""
+
+    def test_tap_categories_reads_curated_registry_catalog(self, monkeypatch):
+        from boost_cli.commands import discovery
+        from boost_cli.core import config
+        monkeypatch.setattr(config, "load_registry_catalog", lambda: [
+            {"name": "a/b", "category": "framework"},
+            {"name": "c/d", "category": ""},
+            {"name": "e/f"},
+        ])
+        assert discovery._tap_categories() == {"a/b": "framework"}
+
+    def test_kind_theme_key_maps_known_kinds_and_falls_back(self):
+        from boost_cli.commands import discovery
+        assert discovery._kind_theme_key("skill") == "badge_skill"
+        assert discovery._kind_theme_key("rule") == "badge_rule"
+        assert discovery._kind_theme_key("workflow") == "badge_workflow"
+        assert discovery._kind_theme_key("whatever") == "badge_skill"
+
+    def test_row_badges_order_and_category_only_when_known(self):
+        from boost_cli.commands import discovery
+        e = {"name": "x", "version": "1.0.0", "tap": "a/b", "kind": "rule"}
+        with_category = discovery._row_badges(e, {"a/b": "framework"})
+        assert with_category == [
+            ("[rule]", "badge_rule"), ("v1.0.0", "version"),
+            ("[a/b]", "tap"), ("[framework]", "badge_category")]
+        without_category = discovery._row_badges(e, {})
+        assert without_category == with_category[:3]  # category badge dropped
+
+    def test_entry_source_path_resolves_within_the_tap(self, boost, tapped):
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+        e = next(x for x in catalog.all_entries()
+                 if x["name"] == "commit-messages")
+        path = discovery._entry_source_path(e)
+        assert path is not None and path.is_file()
+        assert path.name == "SKILL.md"
+
+    def test_entry_source_path_none_for_unknown_tap(self):
+        from boost_cli.commands import discovery
+        e = {"name": "x", "tap": "no/such-tap", "skill_md": "skills/x/SKILL.md"}
+        assert discovery._entry_source_path(e) is None
+
+    def test_lazy_description_falls_back_without_ai(self, boost, tapped):
+        # the `sandbox` fixture sets BOOST_NO_AI=1, so ai.available() is False.
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+        e = next(x for x in catalog.all_entries()
+                 if x["name"] == "commit-messages")
+        assert discovery._lazy_description(e) == "no description available"
+
+    def test_lazy_description_uses_ai_when_available(self, boost, tapped, monkeypatch):
+        from boost_cli.commands import discovery
+        from boost_cli.core import ai, catalog
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **k: "Writes tidy commits.\nextra")
+        e = next(x for x in catalog.all_entries()
+                 if x["name"] == "commit-messages")
+        assert discovery._lazy_description(e) == "Writes tidy commits."
 
 
 # ---------------------------------------------------------------- trending

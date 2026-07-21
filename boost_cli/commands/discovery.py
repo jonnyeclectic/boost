@@ -11,12 +11,14 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.parse
 from pathlib import Path
 
 from .. import cliparse, spin
-from ..core import agents, ai, catalog, dense, embed, gitutil, journal, lockfile, paths, rag, registry, store, util
+from ..core import (agents, ai, catalog, config, dense, embed, gitutil,
+                    journal, lockfile, paths, rag, registry, store, util)
 from ..core import output as out
 from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
 from ..errors import BoostError
@@ -451,6 +453,77 @@ def _browse_plain(entries, why: str):
     return 0
 
 
+def _tap_categories() -> dict:
+    """tap name ('owner/repo') -> curated category, from the bundled registry
+    catalog (data/registries.json) — the only place "category" lives; catalog
+    entries themselves carry no category, only their tap does."""
+    return {e["name"]: e["category"] for e in config.load_registry_catalog()
+            if e.get("category")}
+
+
+_KIND_BADGE_KEYS = {"skill": "badge_skill", "rule": "badge_rule",
+                    "workflow": "badge_workflow"}
+
+
+def _kind_theme_key(kind: str) -> str:
+    return _KIND_BADGE_KEYS.get(kind, "badge_skill")
+
+
+def _row_badges(e: dict, categories: dict):
+    """Ordered (text, theme-key) badges for a browse row: kind, version, tap,
+    and — when the tap is one of the curated registries — its category.
+    Most-important-first, so a narrow terminal drops from the tail without
+    losing the essentials (kind and version survive; category goes first)."""
+    badges = [("[%s]" % e.get("kind", "skill"),
+               _kind_theme_key(e.get("kind", "skill"))),
+              ("v" + e["version"], "version"),
+              ("[%s]" % e["tap"], "tap")]
+    category = categories.get(e["tap"])
+    if category:
+        badges.append(("[%s]" % category, "badge_category"))
+    return badges
+
+
+def _desc_key(e: dict):
+    return (e.get("tap", ""), e["name"])
+
+
+def _entry_source_path(e: dict):
+    """On-disk path of the file backing a catalog entry, or None when its tap
+    isn't cloned/known — used to fall back to a `boost explain`-style summary
+    for entries whose frontmatter has no description."""
+    try:
+        tap = registry.get(e["tap"])
+    except BoostError:
+        return None
+    path = tap.path / e.get("skill_md", "")
+    return path if path.is_file() else None
+
+
+def _lazy_description(e: dict) -> str:
+    """A one-line fallback description for an entry with no frontmatter
+    description — the `boost explain` idea, sized for a picker row. Meant to
+    run off the UI thread since it may shell out to `claude`/the Anthropic API."""
+    path = _entry_source_path(e)
+    text = ""
+    if path is not None:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+    if text and ai.available():
+        reply = ai.ask(
+            "In ONE short plain sentence (max 18 words, no markdown), describe "
+            "what this %s named %r does, based on its file:\n\n%s"
+            % (e.get("kind", "skill"), e["name"], text[:4000]),
+            system="You summarize AI coding skills, rules, and workflows in "
+                   "one plain sentence for a picker UI.",
+            max_tokens=60)
+        if reply:
+            return reply.strip().splitlines()[0][:200]
+    return "no description available"
+
+
 # --- Aurora palette for the curses browser -----------------------------------
 # The full-screen browser paints itself in the same Aurora tokens as the rest
 # of the CLI. curses can't reuse the ANSI escapes from core.output, so these
@@ -561,7 +634,10 @@ def _aurora_theme(curses):
          "scroll": curses.A_DIM, "detail_name": curses.A_BOLD,
          "detail_meta": curses.A_DIM, "detail_tag": curses.A_NORMAL,
          "dot_r": curses.A_NORMAL, "dot_y": curses.A_NORMAL,
-         "dot_g": curses.A_NORMAL}
+         "dot_g": curses.A_NORMAL, "check": curses.A_BOLD,
+         "badge_skill": curses.A_NORMAL, "badge_rule": curses.A_NORMAL,
+         "badge_workflow": curses.A_NORMAL, "badge_category": curses.A_NORMAL,
+         "desc": curses.A_DIM}
     if not hasattr(curses, "start_color"):
         return t
     try:
@@ -581,19 +657,49 @@ def _aurora_theme(curses):
               "tap": P("violet"), "rule": [P("cyan"), P("violet"), P("pink")],
               "scroll": P("cyan"), "detail_name": P("cyan", True),
               "detail_tag": P("pink"), "dot_r": P("red"), "dot_y": P("yellow"),
-              "dot_g": P("green")})
+              "dot_g": P("green"), "check": P("green", True),
+              "badge_skill": P("cyan"), "badge_rule": P("violet"),
+              "badge_workflow": P("pink"), "badge_category": P("yellow")})
     return t
 
 
+_NAME_X = 4  # column the name (and everything under it) starts at
+
+
 def _browse_tui(curses, entries):
-    """Run the curses UI. Returns the entry picked for install, or None."""
-    state = {"pick": None}
+    """Run the curses UI. Returns the list of entries picked for install
+    (one or more, via multi-select), or None if the user quit without picking.
+    """
+    state = {"picks": None}
+    categories = _tap_categories()
+    desc_cache: dict = {}
+    loading: set = set()
+
+    def describe(e):
+        """Description text for a row, kicking off a background lazy-load
+        (the `boost explain` fallback) the first time an entry with no
+        frontmatter description is shown — never blocks the draw loop."""
+        if e.get("description"):
+            return e["description"]
+        key = _desc_key(e)
+        if key in desc_cache:
+            return desc_cache[key]
+        if key not in loading:
+            loading.add(key)
+
+            def worker(entry=e, cache_key=key):
+                desc_cache[cache_key] = _lazy_description(entry)
+                loading.discard(cache_key)
+
+            threading.Thread(target=worker, daemon=True).start()
+        return "loading description…"
 
     def ui(scr):
         try:
             curses.curs_set(0)
         except curses.error:
             pass
+        scr.timeout(80)  # short poll so a finished lazy-load redraws promptly
         th = _aurora_theme(curses)
 
         def put(y, x, s, attr=0):  # clip-safe cell writer
@@ -604,6 +710,7 @@ def _browse_tui(curses, entries):
                     pass
 
         filt, sel, detail = "", 0, False
+        selected: set = set()
         while True:
             q = filt.lower()
             matches = [e for e in entries
@@ -627,35 +734,46 @@ def _browse_tui(curses, entries):
                 put(1, 0, "❯", th["prompt"])
                 put(1, 2, filt, th["query"])
                 put(1, 2 + len(filt), "▏", th["prompt"])
-                count = "%d/%d" % (len(matches), len(entries))
+                sel_txt = "%d selected · " % len(selected) if selected else ""
+                count = "%s%d/%d" % (sel_txt, len(matches), len(entries))
                 put(1, max(2 + len(filt) + 2, _w - 1 - len(count)), count,
                     th["count"])
-                put(2, 0, "↑↓ move  ↵ detail  i install  q quit",
+                put(2, 0, "↑↓ move  space select  ↵ detail  i install  q quit",
                     th["help"])
-                rows = max(1, _h - 3 - pane)
+                # each result is a two-row card: name/badges, then description
+                avail = max(0, _h - 3 - pane)
+                rows = max(1, avail // 2)
                 top = max(0, sel - rows + 1)
                 view = matches[top:top + rows]
                 namew = min(max((len(e["name"]) for e in view), default=4),
-                            max(4, _w - 26))
+                            max(8, _w - _NAME_X - 30))
                 bar = _scrollbar(len(matches), rows, top)
                 for i, e in enumerate(view):
-                    y = 3 + i
+                    y = 3 + i * 2
                     chosen = top + i == sel
+                    checked = _desc_key(e) in selected
                     put(y, 0, "▎" if chosen else " ", th["sel_bar"])
-                    put(y, 1, "★" if e.get("curated") else " ", th["star"])
+                    put(y, 1, "✓" if checked else " ", th["check"])
+                    put(y, 2, "★" if e.get("curated") else " ", th["star"])
                     nm = out.truncate(e["name"], namew)
-                    put(y, 3, nm.ljust(namew),
+                    put(y, _NAME_X, nm.ljust(namew),
                         th["sel_name"] if chosen else th["name"])
                     for pos in _match_positions(q, nm.lower()):
-                        put(y, 3 + pos, nm[pos], th["match"])
-                    vx = 3 + namew + 2
-                    put(y, vx, "v" + e["version"], th["version"])
-                    put(y, vx + len(e["version"]) + 3, e["tap"], th["tap"])
+                        put(y, _NAME_X + pos, nm[pos], th["match"])
+                    bx = _NAME_X + namew + 2
+                    for text, tkey in _row_badges(e, categories):
+                        if bx + len(text) > _w - 2:
+                            break
+                        put(y, bx, text, th[tkey])
+                        bx += len(text) + 1
+                    put(y + 1, _NAME_X, out.truncate(describe(e), _w - 1 - _NAME_X),
+                        th["desc"])
                     if bar:
                         bstart, blen = bar
-                        put(y, _w - 2,
-                            "█" if bstart <= i < bstart + blen else "│",
-                            th["scroll"])
+                        thumb = bstart <= i < bstart + blen
+                        ch = "█" if thumb else "│"
+                        put(y, _w - 2, ch, th["scroll"])
+                        put(y + 1, _w - 2, ch, th["scroll"])
                 if pane and matches:
                     e = matches[sel]
                     y0 = _h - pane
@@ -666,7 +784,7 @@ def _browse_tui(curses, entries):
                                      (e.get("meta", {}).get("tags") or []))
                     put(y0 + 1, 1, "%s  v%s" % (e["name"], e["version"]),
                         th["detail_name"])
-                    put(y0 + 2, 1, out.truncate(e["description"] or "", _w - 3),
+                    put(y0 + 2, 1, out.truncate(describe(e), _w - 3),
                         th["name"])
                     put(y0 + 3, 1, "tap %s   dir %s" % (e["tap"], e["rel_dir"]),
                         th["detail_meta"])
@@ -675,12 +793,21 @@ def _browse_tui(curses, entries):
             except curses.error:
                 pass  # terminal too small mid-draw; retry on next key
             key = scr.getch()
+            if key == -1:                                 # poll tick, no key
+                continue
             if key in (ord("q"), 27):                    # q / ESC
                 return
             if key == ord("i") and matches:
-                state["pick"] = matches[sel]
+                state["picks"] = ([e for e in entries if _desc_key(e) in selected]
+                                  if selected else [matches[sel]])
                 return
-            if key == curses.KEY_UP:
+            if key == ord(" ") and matches:
+                k = _desc_key(matches[sel])
+                if k in selected:
+                    selected.discard(k)
+                else:
+                    selected.add(k)
+            elif key == curses.KEY_UP:
                 sel = max(0, sel - 1)
             elif key == curses.KEY_DOWN:
                 sel = min(sel + 1, max(0, len(matches) - 1))
@@ -688,11 +815,11 @@ def _browse_tui(curses, entries):
                 detail = not detail
             elif key in (curses.KEY_BACKSPACE, 127, 8):
                 filt = filt[:-1]
-            elif 32 <= key <= 126:
+            elif 33 <= key <= 126:                        # printable, not space
                 filt += chr(key)
 
     curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
-    return state["pick"]
+    return state["picks"]
 
 
 def cmd_browse(argv):
@@ -712,25 +839,26 @@ def cmd_browse(argv):
     except ImportError:
         return _browse_plain(entries, "curses is unavailable on this Python")
     picked = _browse_tui(curses, entries)
-    if picked is None:
+    if not picked:
         return 0
-    try:
-        res = store.install(picked)
-    except BoostError as e:
-        # browse lists every catalog kind (skills, rules, workflows), but only
-        # skills install; a rule/workflow pick — or an already-installed/pinned
-        # skill — must not exit the interactive TUI with a fatal error.
-        out.warn(e.message)
-        if e.hint:
-            out.info(out.c(e.hint, out.DIM))
-        return 0
-    out.ok("installed %s v%s → %s"
-           % (picked["name"], picked["version"], _tilde(res.dest)))
-    if res.linked:
-        out.info("linked into: "
-                 + ", ".join(agents.display_name(a) for a in res.linked))
-    for conflict in res.conflicts:
-        out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
+    for entry in picked:
+        try:
+            res = store.install(entry)
+        except BoostError as e:
+            # browse lists every catalog kind (skills, rules, workflows), but
+            # only skills install; a rule/workflow pick — or an already-
+            # installed/pinned skill — must not abort the rest of the batch.
+            out.warn(e.message)
+            if e.hint:
+                out.info(out.c(e.hint, out.DIM))
+            continue
+        out.ok("installed %s v%s → %s"
+               % (entry["name"], entry["version"], _tilde(res.dest)))
+        if res.linked:
+            out.info("linked into: "
+                     + ", ".join(agents.display_name(a) for a in res.linked))
+        for conflict in res.conflicts:
+            out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
     return 0
 
 
