@@ -2,14 +2,14 @@
 id: widen-the-ruff-rule-surface-b-sim-c4-perf-ruf
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: Quality · Smell
 complexity: S
 impact: Med
 wow: 3
 note: 0 new deps
 order: 7
-owner:
+owner: loop/widen-ruff
 pr:
 title: Widen the ruff rule surface — <code>B·SIM·C4·PERF·RUF</code>
 ---
