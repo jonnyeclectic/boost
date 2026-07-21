@@ -35,3 +35,23 @@ wheel yet; boost itself supports 3.9–3.14). Clean up with
 > The same import path is exercised in CI by
 > [`.github/workflows/adapter-conformance.yml`](../.github/workflows/adapter-conformance.yml),
 > which installs each real framework and asserts the emitted file instantiates.
+
+## `boost-run-prototype.sh` — a preview of `boost run`
+
+A hand-built preview of the planned [`boost run`](../docs/roadmap.html) feature
+(`boost adapt` gives an agent a *brain*, but no *hands*). It shows the
+"one command → a live agent doing the task" wow, built on today's `boost adapt`:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-... bash examples/boost-run-prototype.sh
+```
+
+1. Authors a `code-reviewer` skill and `boost adapt`s it to the Agents SDK,
+   wired to boost's model (Claude) — **the brain**.
+2. Attaches a `read_file` `@function_tool` — **the hands** the skill needs to act.
+3. `Runner.run`s it against a file with two planted bugs (a `KeyError` and a SQL
+   injection) and prints the agent's actual review.
+
+Everything up to the run is offline; only the final `Runner.run` needs
+`ANTHROPIC_API_KEY`. This is the thinnest slice of what a shipped `boost run`
+would fold into a single command — see the `boost-run-live-agents` roadmap item.
