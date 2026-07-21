@@ -2,7 +2,7 @@
 id: workflow-sast-zizmor
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: Security · CI/CD
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 5
 note: pipx-run
 order: 1
 owner: loop/zizmor-workflow-sast
-pr:
+pr: 176
 title: Workflow SAST — <code>zizmor</code>
 ---
 boost's four workflows embed <code>github-script</code> JavaScript and

@@ -14,11 +14,14 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
-      - uses: actions/setup-python@v6
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
       - name: install linters
@@ -37,6 +40,14 @@ jobs:
         run: |
           curl -sSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar xz actionlint
           ./actionlint -color
+      - name: workflow SAST (zizmor)
+        # boost's workflows embed github-script JS/shell and drive a Trusted-
+        # Publisher release — zizmor statically flags template injection,
+        # unpinned actions, over-broad GITHUB_TOKEN permissions and dangerous
+        # triggers. Accepted findings are documented in .github/zizmor.yml.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pipx run zizmor==1.27.0 .github/workflows
       - name: registries.json is regenerated
         run: python scripts/build_registries.py --check
       - name: roadmap HTML is regenerated
@@ -64,10 +75,11 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         python: ["3.9", "3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
-      - uses: actions/setup-python@v6
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: ${{ matrix.python }}
       - name: git identity (fixture repos)
@@ -112,11 +124,14 @@ jobs:
   mutation:
     # mutmut needs 3.11+; one representative environment keeps CI fast
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
-      - uses: actions/setup-python@v6
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.14"
       - name: git identity (fixture repos)
@@ -138,11 +153,14 @@ jobs:
     # runtime dependency only surface in the built wheel. A merge to main cuts a
     # PyPI release, so build the real wheel + sdist and install what a user gets.
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
-      - uses: actions/setup-python@v5
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
       - name: build wheel + sdist
