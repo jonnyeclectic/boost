@@ -22,7 +22,7 @@ _CSS = Path(__file__).resolve().parents[2] / "style" / "boost.css"
 @pytest.mark.skipif(not _CSS.exists(),
                     reason="style/boost.css not reachable (e.g. mutation sandbox)")
 def test_cli_tokens_match_style_css():
-    text = _CSS.read_text()
+    text = _CSS.read_text(encoding="utf-8")
     for name, rgb in output.TOKENS.items():
         m = re.search(r"--%s:\s*#([0-9a-fA-F]{6})" % name, text)
         assert m, "style/boost.css is missing a --%s token" % name

@@ -269,7 +269,7 @@ def cmd_doctor(argv):
     lp = paths.lockfile_path()
     if lp.exists():
         try:
-            raw = json.loads(lp.read_text())
+            raw = json.loads(lp.read_text(encoding="utf-8"))
             if raw.get("version") != lockfile.SCHEMA_VERSION:
                 bad("lock file schema is v%s, expected v%d"
                     % (raw.get("version"), lockfile.SCHEMA_VERSION))

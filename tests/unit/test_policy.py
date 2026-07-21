@@ -28,12 +28,12 @@ class TestLoad:
 
     def test_corrupt_file_gives_defaults(self, sandbox):
         paths.ensure_dirs()
-        paths.policy_path().write_text("{broken")
+        paths.policy_path().write_text("{broken", encoding="utf-8")
         assert policy.load() == policy.DEFAULTS
 
     def test_user_values_override(self, sandbox):
         paths.ensure_dirs()
-        paths.policy_path().write_text(json.dumps({"pin_only": True}))
+        paths.policy_path().write_text(json.dumps({"pin_only": True}), encoding="utf-8")
         pol = policy.load()
         assert pol["pin_only"] is True
         assert pol["blocked_skills"] == []
@@ -42,14 +42,14 @@ class TestLoad:
 class TestSave:
     def test_extras_dropped_known_keys_kept(self, sandbox):
         policy.save({"pin_only": True, "rogue_key": "x", "another": 1})
-        on_disk = json.loads(paths.policy_path().read_text())
+        on_disk = json.loads(paths.policy_path().read_text(encoding="utf-8"))
         assert set(on_disk) == set(policy.DEFAULTS)
         assert "rogue_key" not in on_disk
         assert on_disk["pin_only"] is True
 
     def test_missing_keys_filled_from_defaults(self, sandbox):
         policy.save({"blocked_skills": ["bad"]})
-        on_disk = json.loads(paths.policy_path().read_text())
+        on_disk = json.loads(paths.policy_path().read_text(encoding="utf-8"))
         assert on_disk["blocked_skills"] == ["bad"]
         assert on_disk["max_skills"] is None
         assert on_disk["require_version"] is False

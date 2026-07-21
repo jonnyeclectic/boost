@@ -157,7 +157,7 @@ def _tap_updated(tap: "registry.Tap") -> str:
         except BoostError:
             pass
     try:
-        data = json.loads(tap.cache_file.read_text())
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
         return util.rel_time(data.get("generated", ""))
     except (OSError, ValueError):
         return "?"

@@ -19,20 +19,20 @@ def _copy_tap(src, dest):
 
 def _bump(tap_dir, skill, old, new):
     md = tap_dir / "skills" / skill / "SKILL.md"
-    md.write_text(md.read_text().replace("version: %s" % old,
-                                         "version: %s" % new))
+    md.write_text(md.read_text(encoding="utf-8").replace("version: %s" % old,
+                                         "version: %s" % new), encoding="utf-8")
     subprocess.run(["git", "-C", str(tap_dir), "commit", "-aqm",
                     "bump %s to %s" % (skill, new)],
                    check=True, capture_output=True)
 
 
 def _lock():
-    return json.loads(paths.lockfile_path().read_text())["skills"]
+    return json.loads(paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
 
 def _tamper(name):
     md = paths.store_dir() / name / "SKILL.md"
-    md.write_text(md.read_text() + "\n- tampered line\n")
+    md.write_text(md.read_text(encoding="utf-8") + "\n- tampered line\n", encoding="utf-8")
 
 
 def _import_skill(boost, tmp_path, name, body, description="a test skill",
@@ -41,7 +41,7 @@ def _import_skill(boost, tmp_path, name, body, description="a test skill",
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text(
         "---\nname: %s\ndescription: %s\n%s---\n\n%s"
-        % (name, description, extra_fm, body))
+        % (name, description, extra_fm, body), encoding="utf-8")
     boost("import", d)
     return d
 
@@ -94,12 +94,12 @@ class TestDoctor:
         from boost_cli.core import lockfile
         rp = paths.home() / ".cursor" / "rules" / "r.mdc"
         rp.parent.mkdir(parents=True)
-        rp.write_text("rule body")
+        rp.write_text("rule body", encoding="utf-8")
         lockfile.set_rule("r", {"kind": "rule", "materializations": [
             {"agent": "cursor", "mode": "file", "path": str(rp)}]})
         wp = paths.home() / ".claude" / "commands" / "w.md"
         wp.parent.mkdir(parents=True)
-        wp.write_text("workflow body")
+        wp.write_text("workflow body", encoding="utf-8")
         lockfile.set_workflow("w", {"kind": "workflow", "slot": "commands",
                                     "materializations": [
                                         {"agent": "claude-code", "path": str(wp)}]})
@@ -120,7 +120,7 @@ class TestDoctor:
         from boost_cli.core import lockfile
         cm = paths.home() / ".claude" / "CLAUDE.md"
         cm.parent.mkdir(parents=True)
-        cm.write_text("# just my own notes, no boost block\n")  # block was stripped
+        cm.write_text("# just my own notes, no boost block\n", encoding="utf-8")  # block was stripped
         lockfile.set_rule("blk", {"kind": "rule", "materializations": [
             {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
         r = boost("doctor", expect=1)
@@ -164,7 +164,7 @@ class TestLint:
     def test_missing_fields_error_rc1_and_json(self, boost, sandbox, tmp_path):
         d = tmp_path / "noname"
         d.mkdir()
-        (d / "SKILL.md").write_text("just a body, no frontmatter\n")
+        (d / "SKILL.md").write_text("just a body, no frontmatter\n", encoding="utf-8")
         boost("import", d)
         r = boost("lint", expect=1)
         assert "error: missing required field: name" in r.out
@@ -219,7 +219,7 @@ class TestAudit:
 
     def test_blocked_skills_policy_hit(self, boost, installed):
         (paths.state_dir() / "policy.json").write_text(
-            json.dumps({"blocked_skills": ["brainstorming"]}))
+            json.dumps({"blocked_skills": ["brainstorming"]}), encoding="utf-8")
         r = boost("audit", expect=1)
         assert "policy-blocked" in r.out
         assert "policy.json" in r.out

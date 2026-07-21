@@ -166,7 +166,7 @@ def rebuild_tap(tap: "registry.Tap") -> List[dict]:
         "generated": util.now_iso(),
         "commit": gitutil.head_commit(tap.path),
         "skills": entries,
-    }, indent=1))
+    }, indent=1), encoding="utf-8")
     # Drop the mtime-keyed cache so a rebuild is visible to an immediately
     # following load even when the filesystem mtime granularity is coarse.
     _ENTRY_CACHE.pop(str(tap.cache_file), None)
@@ -197,7 +197,7 @@ def _cached_tap(tap: "registry.Tap") -> Optional[List[dict]]:
     if cached is not None and cached[0] == stamp:
         return cached[1]
     try:
-        skills = json.loads(p.read_text()).get("skills", [])
+        skills = json.loads(p.read_text(encoding="utf-8")).get("skills", [])
     except (json.JSONDecodeError, OSError):
         _ENTRY_CACHE.pop(key, None)
         return None

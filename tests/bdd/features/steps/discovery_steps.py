@@ -67,11 +67,11 @@ def step_seed_discovery_index(context):
     from boost_cli.core import paths, util
     paths.ensure_dirs()
     (paths.cache_dir() / "discovery.json").write_text(json.dumps(
-        {"generated": util.now_iso(), "github_total": 42, "items": _ITEMS}))
+        {"generated": util.now_iso(), "github_total": 42, "items": _ITEMS}), encoding="utf-8")
 
 
 @given("the discovery index is corrupt")
 def step_corrupt_discovery_index(context):
     from boost_cli.core import paths
     paths.ensure_dirs()
-    (paths.cache_dir() / "discovery.json").write_text("{broken")
+    (paths.cache_dir() / "discovery.json").write_text("{broken", encoding="utf-8")

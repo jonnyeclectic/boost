@@ -27,7 +27,7 @@ def load() -> dict:
     base = dict(DEFAULTS)
     if p.exists():
         try:
-            base.update(json.loads(p.read_text()))
+            base.update(json.loads(p.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError):
             pass
     return base
@@ -36,7 +36,7 @@ def load() -> dict:
 def save(pol: dict) -> None:
     paths.ensure_dirs()
     known = {k: pol.get(k, DEFAULTS[k]) for k in DEFAULTS}
-    paths.policy_path().write_text(json.dumps(known, indent=2) + "\n")
+    paths.policy_path().write_text(json.dumps(known, indent=2) + "\n", encoding="utf-8")
 
 
 def check_install(entry: dict, installed_count: int) -> List[str]:

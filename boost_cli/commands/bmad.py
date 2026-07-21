@@ -366,7 +366,7 @@ def _state_read() -> dict:
     if not p.exists():
         return {"global": {}, "projects": {}}
     try:
-        d = json.loads(p.read_text())
+        d = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {"global": {}, "projects": {}}
     d.setdefault("global", {})
@@ -376,7 +376,7 @@ def _state_read() -> dict:
 
 def _state_write(d: dict) -> None:
     paths.ensure_dirs()
-    _state_path().write_text(json.dumps(d, indent=2) + "\n")
+    _state_path().write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
 
 
 def _proj_key() -> str:

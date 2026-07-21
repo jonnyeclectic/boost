@@ -31,7 +31,7 @@ def test_tap_search_install_doctor_uninstall(boost, fixture_tap_src):
     for agent_dir in (".claude", ".windsurf", ".cursor"):
         link = paths.home() / agent_dir / "skills" / "jira-integration"
         assert link.is_symlink() and link.resolve() == store.resolve()
-    lock = json.loads(paths.lockfile_path().read_text())
+    lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
     assert lock["version"] == 3
     assert "jira-integration" in lock["skills"]
 
@@ -44,7 +44,7 @@ def test_tap_search_install_doctor_uninstall(boost, fixture_tap_src):
     assert not store.exists()
     assert not (paths.home() / ".claude" / "skills" / "jira-integration").exists()
     assert "jira-integration" not in json.loads(
-        paths.lockfile_path().read_text())["skills"]
+        paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
 
 def test_install_unknown_skill_fails_with_hint(boost, tapped):

@@ -59,7 +59,7 @@ def load(scope: str, project_dir: Optional[Path] = None) -> dict:
     if not p.exists():
         return {}
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -78,9 +78,9 @@ def save(scope: str, data: dict, project_dir: Optional[Path] = None) -> None:
         while dest.exists():
             dest = hist / ("%s-%s-%d.json" % (scope, stamp, n))
             n += 1
-        dest.write_text(p.read_text())
+        dest.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
         _prune_history()
-    p.write_text(json.dumps(data, indent=2) + "\n")
+    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _prune_history() -> None:

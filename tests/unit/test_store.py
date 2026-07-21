@@ -51,10 +51,10 @@ class TestInstall:
     def test_happy_path(self, tap, entry):
         src = tap.path / "skills" / "brainstorming"
         (src / ".git").mkdir()
-        (src / ".git" / "config").write_text("junk")
+        (src / ".git" / "config").write_text("junk", encoding="utf-8")
         (src / "__pycache__").mkdir()
-        (src / "__pycache__" / "x.pyc").write_text("junk")
-        (src / ".DS_Store").write_text("junk")
+        (src / "__pycache__" / "x.pyc").write_text("junk", encoding="utf-8")
+        (src / ".DS_Store").write_text("junk", encoding="utf-8")
 
         res = store.install(entry)
 
@@ -187,13 +187,13 @@ class TestInstall:
     def test_preexisting_real_dir_is_conflict_not_clobbered(self, tap, entry):
         blocker = _link("claude-code")
         blocker.mkdir(parents=True)
-        (blocker / "precious.txt").write_text("mine")
+        (blocker / "precious.txt").write_text("mine", encoding="utf-8")
 
         res = store.install(entry)
         assert res.conflicts == [str(blocker)]
         assert res.linked == ["windsurf", "cursor"]
         assert not blocker.is_symlink()
-        assert (blocker / "precious.txt").read_text() == "mine"
+        assert (blocker / "precious.txt").read_text(encoding="utf-8") == "mine"
         assert lockfile.get_skill("brainstorming")["agents"] == ["windsurf", "cursor"]
 
     def test_source_vanished_raises(self, tap, entry):
@@ -221,13 +221,13 @@ class TestInstallFromPath:
     def _src(self, tmp_path, fm, extras=True):
         src = tmp_path / "dir-name-skill"
         src.mkdir()
-        (src / "SKILL.md").write_text(fm + "\n\n# Title\n\nBody line\n")
+        (src / "SKILL.md").write_text(fm + "\n\n# Title\n\nBody line\n", encoding="utf-8")
         if extras:
-            (src / "notes.txt").write_text("extra")
+            (src / "notes.txt").write_text("extra", encoding="utf-8")
             (src / ".git").mkdir()
-            (src / ".git" / "HEAD").write_text("ref")
+            (src / ".git" / "HEAD").write_text("ref", encoding="utf-8")
             (src / "__pycache__").mkdir()
-            (src / "__pycache__" / "x.pyc").write_text("junk")
+            (src / "__pycache__" / "x.pyc").write_text("junk", encoding="utf-8")
         return src
 
     def test_name_from_frontmatter(self, sandbox, tmp_path):
@@ -338,7 +338,7 @@ class TestSyncPlan:
     def test_unmanaged_link_into_store_is_stale(self, brainstorming):
         orphan_store = paths.store_dir() / "orphan"
         orphan_store.mkdir()
-        (orphan_store / "f.txt").write_text("x")
+        (orphan_store / "f.txt").write_text("x", encoding="utf-8")
         link = paths.home() / ".cursor" / "skills" / "orphan"
         link.symlink_to(orphan_store)
         plan = store.sync_plan()
@@ -355,7 +355,7 @@ class TestSyncPlan:
     def test_orphaned_store_dir(self, brainstorming):
         rogue = paths.store_dir() / "rogue"
         rogue.mkdir()
-        (paths.store_dir() / "stray.txt").write_text("not a dir")
+        (paths.store_dir() / "stray.txt").write_text("not a dir", encoding="utf-8")
         plan = store.sync_plan()
         assert plan == {**self.EMPTY, "orphaned_store": ["rogue"]}
 
@@ -431,7 +431,7 @@ class TestCopySkillAtomic:
     def _mkskill(self, root, name, body="v1"):
         d = root / name
         d.mkdir(parents=True)
-        (d / "SKILL.md").write_text(body)
+        (d / "SKILL.md").write_text(body, encoding="utf-8")
         return d
 
     def _leftovers(self, parent, keep):
@@ -440,10 +440,10 @@ class TestCopySkillAtomic:
     def test_fresh_copy(self, tmp_path):
         src = self._mkskill(tmp_path / "src", "sk")
         (src / ".git").mkdir()
-        (src / ".git" / "cfg").write_text("junk")
+        (src / ".git" / "cfg").write_text("junk", encoding="utf-8")
         dest = tmp_path / "store" / "sk"
         store._copy_skill(src, dest)
-        assert (dest / "SKILL.md").read_text() == "v1"
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == "v1"
         assert not (dest / ".git").exists()           # ignore patterns honoured
         assert self._leftovers(dest.parent, "sk") == []   # no temp/backup dirs
 
@@ -453,7 +453,7 @@ class TestCopySkillAtomic:
         store._copy_skill(src1, dest)
         src2 = self._mkskill(tmp_path / "s2", "sk", body="new")
         store._copy_skill(src2, dest)
-        assert (dest / "SKILL.md").read_text() == "new"
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == "new"
         assert self._leftovers(dest.parent, "sk") == []
 
     def test_swap_in_failure_rolls_back_to_original(self, tmp_path, monkeypatch):
@@ -475,7 +475,7 @@ class TestCopySkillAtomic:
         with pytest.raises(OSError, match="swap failed"):
             store._copy_skill(src2, dest)
         # original survives intact, nothing half-swapped, no debris
-        assert (dest / "SKILL.md").read_text() == "original"
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == "original"
         assert self._leftovers(dest.parent, "sk") == []
 
     def test_copytree_failure_preserves_existing(self, tmp_path, monkeypatch):
@@ -489,7 +489,7 @@ class TestCopySkillAtomic:
         monkeypatch.setattr(store.shutil, "copytree", boom)
         with pytest.raises(OSError, match="copy failed"):
             store._copy_skill(tmp_path / "s1" / "sk", dest)
-        assert (dest / "SKILL.md").read_text() == "original"
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == "original"
         assert self._leftovers(dest.parent, "sk") == []
 
 
@@ -497,7 +497,7 @@ def _rule_entry(tap, name="team-conventions", rel="rules/team.mdc"):
     """Write a rule file into the tap clone and return its catalog entry."""
     src = tap.path / rel
     src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text("---\nname: Team Conventions\n---\n\nAlways write tests first.\n")
+    src.write_text("---\nname: Team Conventions\n---\n\nAlways write tests first.\n", encoding="utf-8")
     return {
         "name": name, "kind": "rule", "tap": tap.name, "version": "1.0.0",
         "rel_dir": str(src.parent.relative_to(tap.path)), "skill_md": rel,
@@ -515,7 +515,7 @@ class TestRuleInstall:
         assert set(res.linked) == {"claude-code", "windsurf", "cursor"}
 
         # Claude Code has no rules folder -> managed block in CLAUDE.md.
-        text = self._claude_md().read_text()
+        text = self._claude_md().read_text(encoding="utf-8")
         assert "boost:rule:team-conventions start" in text
         assert "# Team Conventions" in text
         assert "Always write tests first." in text
@@ -524,7 +524,7 @@ class TestRuleInstall:
         # Cursor: verbatim .mdc drop, frontmatter preserved (native metadata).
         cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
         assert cur.is_file()
-        assert "name: Team Conventions" in cur.read_text()
+        assert "name: Team Conventions" in cur.read_text(encoding="utf-8")
 
         # Windsurf: .md drop.
         assert (paths.home() / ".windsurf" / "rules" / "team-conventions.md").is_file()
@@ -540,12 +540,12 @@ class TestRuleInstall:
         store.install(_rule_entry(tap))
         claude_md = self._claude_md()
         # A hand-authored note above our block must survive uninstall.
-        claude_md.write_text("# My own standing notes\n\n" + claude_md.read_text())
+        claude_md.write_text("# My own standing notes\n\n" + claude_md.read_text(encoding="utf-8"), encoding="utf-8")
 
         info = store.uninstall("team-conventions")
         assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor"}
         assert lockfile.get_rule("team-conventions") is None
-        text = claude_md.read_text()
+        text = claude_md.read_text(encoding="utf-8")
         assert "boost:rule" not in text
         assert "# My own standing notes" in text
         assert not (paths.home() / ".cursor" / "rules" / "team-conventions.mdc").exists()
@@ -564,7 +564,7 @@ class TestRuleInstall:
             store.install(entry)
         res = store.install(entry, force=True)
         assert res.upgraded is True
-        assert self._claude_md().read_text().count("boost:rule:team-conventions start") == 1
+        assert self._claude_md().read_text(encoding="utf-8").count("boost:rule:team-conventions start") == 1
 
     def test_only_agents_limits_materialization(self, tap):
         res = store.install(_rule_entry(tap), only_agents=["cursor"])
@@ -585,7 +585,7 @@ def _workflow_entry(tap, name="ship-it", rel="commands/ship.md",
     """Write a workflow file into the tap clone and return its catalog entry."""
     src = tap.path / rel
     src.parent.mkdir(parents=True, exist_ok=True)
-    src.write_text(body)
+    src.write_text(body, encoding="utf-8")
     return {
         "name": name, "kind": "workflow", "tap": tap.name, "version": "1.0.0",
         "rel_dir": str(src.parent.relative_to(tap.path)), "skill_md": rel,
@@ -601,7 +601,7 @@ class TestWorkflowInstall:
         for adir in (".claude", ".windsurf", ".cursor"):
             f = paths.home() / adir / "commands" / "ship-it.md"
             assert f.is_file()
-            assert "Run the release." in f.read_text()  # verbatim drop
+            assert "Run the release." in f.read_text(encoding="utf-8")  # verbatim drop
         rec = lockfile.get_workflow("ship-it")
         assert rec["kind"] == "workflow"
         assert rec["slot"] == "commands"
@@ -670,7 +670,7 @@ class TestSyncMaterializations:
 
     def test_flags_stripped_claude_block(self, tap):
         self._install_rule(tap)
-        (paths.home() / ".claude" / "CLAUDE.md").write_text("# only my notes\n")
+        (paths.home() / ".claude" / "CLAUDE.md").write_text("# only my notes\n", encoding="utf-8")
         assert ("rule", "team-conventions") in \
             store.sync_plan()["missing_materializations"]
 
@@ -717,7 +717,7 @@ class TestInstallScope:
         # Claude -> personal repo file, not ~/.claude/CLAUDE.md
         cm = repo / "CLAUDE.local.md"
         assert cm.is_file()
-        assert "boost:rule:team-conventions start" in cm.read_text()
+        assert "boost:rule:team-conventions start" in cm.read_text(encoding="utf-8")
         assert (repo / ".cursor" / "rules" / "team-conventions.mdc").is_file()
         assert (repo / ".windsurf" / "rules" / "team-conventions.md").is_file()
         assert not (paths.home() / ".claude" / "CLAUDE.md").exists()  # not global

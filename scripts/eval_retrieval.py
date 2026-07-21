@@ -231,7 +231,7 @@ def print_misses(engine: str, per_case: List[dict], k: int) -> None:
 
 def load_baseline() -> Optional[dict]:
     try:
-        return json.loads(BASELINE.read_text())
+        return json.loads(BASELINE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -239,7 +239,7 @@ def load_baseline() -> Optional[dict]:
 def save_baseline(k: int, results: List[dict]) -> None:
     payload = {"k": k, "engines": {r["engine"]: r["agg"]["overall"]
                                    for r in results}}
-    BASELINE.write_text(json.dumps(payload, indent=2) + "\n")
+    BASELINE.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print("\nbaseline written -> %s" % BASELINE.relative_to(ROOT))
 
 

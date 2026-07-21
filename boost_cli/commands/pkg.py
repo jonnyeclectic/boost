@@ -565,7 +565,7 @@ def _bundle_dump(file: Optional[str]) -> int:
         return 0
     dest = paths.expand(file)
     try:
-        dest.write_text(text)
+        dest.write_text(text, encoding="utf-8")
     except OSError as e:
         raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                         hint="check the path exists and is writable")
@@ -589,7 +589,7 @@ def _bundle_install(file: Optional[str]) -> int:
                             hint="point at the Boostfile itself, "
                                  "or use `boost import` for skill directories")
         try:
-            text, label = path.read_text(), str(path)
+            text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
             raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e))
     taps_added = installed_n = present = failed = 0
@@ -873,7 +873,7 @@ def _snapshot_save(label: Optional[str]) -> int:
     manifest = {"id": snap_id, "label": label or "", "created": util.now_iso(),
                 "skills": skill_count}
     (paths.snapshots_dir() / (snap_id + ".json")).write_text(
-        json.dumps(manifest, indent=2) + "\n")
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     journal.log("snapshot", snap_id, label=label)
     out.ok("saved %s (%s, %s)" % (snap_id, _plural(skill_count, "skill"),
                                   util.human_size(tar_path.stat().st_size)))
@@ -893,7 +893,7 @@ def _snapshot_list(as_json: bool) -> int:
         meta = {}
         if side.exists():
             try:
-                meta = json.loads(side.read_text())
+                meta = json.loads(side.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 meta = {}
         snaps.append({"id": snap_id, "created": meta.get("created", ""),

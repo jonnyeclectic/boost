@@ -14,13 +14,13 @@ def write_lines(n, action="noise"):
     lines = [json.dumps({"ts": "2026-01-01T00:00:00Z", "user": "u",
                          "action": action, "subject": "s%d" % i})
              for i in range(n)]
-    paths.pulse_path().write_text("\n".join(lines) + "\n")
+    paths.pulse_path().write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 class TestLog:
     def test_writes_valid_jsonl_with_required_fields(self, sandbox):
         journal.log("install", "brainstorming")
-        lines = paths.pulse_path().read_text().splitlines()
+        lines = paths.pulse_path().read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
         e = json.loads(lines[0])
         assert e["action"] == "install"
@@ -30,19 +30,19 @@ class TestLog:
 
     def test_extra_fields_kept_none_dropped(self, sandbox):
         journal.log("update", "tdd-workflow", version="3.0.1", detail=None)
-        e = json.loads(paths.pulse_path().read_text())
+        e = json.loads(paths.pulse_path().read_text(encoding="utf-8"))
         assert e["version"] == "3.0.1"
         assert "detail" not in e
 
     def test_subject_defaults_to_empty(self, sandbox):
         journal.log("sync")
-        e = json.loads(paths.pulse_path().read_text())
+        e = json.loads(paths.pulse_path().read_text(encoding="utf-8"))
         assert e["subject"] == ""
 
     def test_appends_do_not_clobber(self, sandbox):
         journal.log("a", "1")
         journal.log("b", "2")
-        assert len(paths.pulse_path().read_text().splitlines()) == 2
+        assert len(paths.pulse_path().read_text(encoding="utf-8").splitlines()) == 2
 
 
 class TestEvents:
@@ -100,19 +100,19 @@ class TestRotation:
     def test_log_over_threshold_rotates_to_2500(self, sandbox):
         write_lines(5001)
         journal.log("install", "the-newest")
-        lines = paths.pulse_path().read_text().splitlines()
+        lines = paths.pulse_path().read_text(encoding="utf-8").splitlines()
         assert len(lines) == journal.ROTATE_KEEP == 2500
         assert json.loads(lines[-1])["subject"] == "the-newest"
 
     def test_log_at_threshold_does_not_rotate(self, sandbox):
         write_lines(4999)
         journal.log("install", "s")  # now exactly 5000 lines: no rotation
-        assert len(paths.pulse_path().read_text().splitlines()) == 5000
+        assert len(paths.pulse_path().read_text(encoding="utf-8").splitlines()) == 5000
 
     def test_rotation_keeps_the_tail(self, sandbox):
         write_lines(5001)
         journal.log("install", "tail-marker")
-        first = json.loads(paths.pulse_path().read_text().splitlines()[0])
+        first = json.loads(paths.pulse_path().read_text(encoding="utf-8").splitlines()[0])
         # 5002 total, keep last 2500 -> first kept is index 2502 -> "s2502"
         assert first["subject"] == "s2502"
 
@@ -123,7 +123,7 @@ class TestFallbacks:
             raise KeyError("no login")
         monkeypatch.setattr("boost_cli.core.util.getpass.getuser", no_user)
         journal.log("install", "x")
-        assert json.loads(paths.pulse_path().read_text())["user"] == "unknown"
+        assert json.loads(paths.pulse_path().read_text(encoding="utf-8"))["user"] == "unknown"
 
     def test_maybe_rotate_tolerates_missing_file(self, sandbox):
         assert not paths.pulse_path().exists()

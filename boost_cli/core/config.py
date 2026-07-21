@@ -61,7 +61,7 @@ REGISTRY_CATALOG = paths.package_root() / "data" / "registries.json"
 def load_registry_catalog() -> list:
     """The bundled curated registries, or [] if the data file is missing."""
     try:
-        data = json.loads(REGISTRY_CATALOG.read_text())
+        data = json.loads(REGISTRY_CATALOG.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
     return data.get("registries", [])
@@ -105,7 +105,7 @@ def _read() -> dict:
     if not p.exists():
         return deepcopy(DEFAULTS)
     try:
-        user = json.loads(p.read_text())
+        user = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return deepcopy(DEFAULTS)
     return _merge(DEFAULTS, user)

@@ -78,7 +78,7 @@ class TestReadBody:
         root = tmp_path / "repo"
         (root / "jest").mkdir(parents=True)
         (root / "jest" / "SKILL.md").write_text(
-            "---\nname: jest\nsecretkey: hush\n---\n\nUnit testing for React.\n")
+            "---\nname: jest\nsecretkey: hush\n---\n\nUnit testing for React.\n", encoding="utf-8")
         e = _entry("jest", skill_md="jest/SKILL.md", desc="a runner")
         body = rag.read_body(e, {"acme/skills": root})
         assert body.startswith("jest\na runner")
@@ -114,7 +114,7 @@ def corpus(tmp_path, monkeypatch, sandbox):
     for name, body in items.items():
         (root / name).mkdir(parents=True)
         (root / name / "SKILL.md").write_text(
-            "---\nname: %s\n---\n\n%s\n" % (name, body))
+            "---\nname: %s\n---\n\n%s\n" % (name, body), encoding="utf-8")
         entries.append(_entry(name, skill_md="%s/SKILL.md" % name))
     monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": root})
     monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
@@ -212,7 +212,7 @@ class TestBuildAndRetrieve:
         body = filler + "\n\nThe kubernetes operator reconciles pods."
         (root / "k8s").mkdir(parents=True)
         (root / "k8s" / "SKILL.md").write_text(
-            "---\nname: k8s\n---\n\n%s\n" % body)
+            "---\nname: k8s\n---\n\n%s\n" % body, encoding="utf-8")
         e = _entry("k8s", skill_md="k8s/SKILL.md")
         monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": root})
         monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
@@ -411,7 +411,7 @@ class TestSearchSeam:
             name = "item%d" % i
             (root / name).mkdir(parents=True)
             (root / name / "SKILL.md").write_text(
-                "---\nname: %s\n---\n\ntesting common utility %d\n" % (name, i))
+                "---\nname: %s\n---\n\ntesting common utility %d\n" % (name, i), encoding="utf-8")
             entries.append(_entry(name, skill_md="%s/SKILL.md" % name))
         monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": root})
         monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
@@ -449,7 +449,7 @@ class TestTapPlumbing:
         monkeypatch.setattr(rag.registry, "list_taps", lambda: taps)
         from boost_cli.core import paths
         paths.ensure_dirs()
-        taps[0].cache_file.write_text(json.dumps({"commit": "abc123"}))
+        taps[0].cache_file.write_text(json.dumps({"commit": "abc123"}), encoding="utf-8")
         assert rag._tap_commits() == {"acme__x": "abc123"}
 
     def test_tap_paths_maps_name_to_repo_dir(self, sandbox, monkeypatch):
@@ -469,7 +469,7 @@ class _Cache:
     def __init__(self, text):
         self._text = text
 
-    def read_text(self):
+    def read_text(self, encoding=None):
         if self._text is None:
             raise OSError("no cache file")
         return self._text
@@ -532,7 +532,7 @@ class TestReadBodyHardening:
         paths.ensure_dirs()
         d = paths.repos_dir() / "who__what" / "y"
         d.mkdir(parents=True)
-        (d / "SKILL.md").write_text("---\nname: y\n---\n\nmarmalade toast\n")
+        (d / "SKILL.md").write_text("---\nname: y\n---\n\nmarmalade toast\n", encoding="utf-8")
         e = _entry("y", tap="who/what", skill_md="y/SKILL.md", desc="d")
         body = rag.read_body(e, {})  # empty map -> base None -> repos_dir/<safe>
         assert "marmalade" in body
@@ -575,7 +575,7 @@ class TestMakeDocs:
         root = tmp_path / "repo"
         (root / "a").mkdir(parents=True)
         (root / "a" / "SKILL.md").write_text(
-            "---\nname: a\n---\n\nblueberry pancakes\n")
+            "---\nname: a\n---\n\nblueberry pancakes\n", encoding="utf-8")
         monkeypatch.setattr(rag, "_tap_paths", lambda: {})  # global is empty
         e = _entry("a", skill_md="a/SKILL.md")
         docs = rag._make_docs([e], {"acme/skills": root})
@@ -712,7 +712,7 @@ class TestSavePayload:
              "tf": {"foo": 2}},
         ]
         rag._save(docs, {"x__y": "c1"})
-        raw = json.loads(rag.index_path().read_text())
+        raw = json.loads(rag.index_path().read_text(encoding="utf-8"))
         assert raw["version"] == rag.INDEX_VERSION
         assert raw["engine"] == rag.ENGINE
         assert "generated" in raw
@@ -731,7 +731,7 @@ class TestSavePayload:
 
     def test_empty_docs_avg_len_zero(self, sandbox):
         rag._save([], {})
-        raw = json.loads(rag.index_path().read_text())
+        raw = json.loads(rag.index_path().read_text(encoding="utf-8"))
         assert raw["stats"]["avg_len"] == 0.0
         assert raw["docs"] == []
         assert raw["postings"] == {}
@@ -749,7 +749,7 @@ class TestLoadRaw:
         from boost_cli.core import paths
         paths.ensure_dirs()
         rag.index_path().write_text(json.dumps(
-            {"version": 999, "docs": [1], "postings": {}}))
+            {"version": 999, "docs": [1], "postings": {}}), encoding="utf-8")
         rag._CACHE.clear()
         assert rag._load_raw() is None
 
@@ -773,7 +773,7 @@ class TestLoadRaw:
         p.write_text(json.dumps({
             "version": rag.INDEX_VERSION, "engine": "bm25", "generated": "x",
             "commits": {},
-            "params": {}, "stats": {"docs": 5}, "docs": [], "postings": {}}))
+            "params": {}, "stats": {"docs": 5}, "docs": [], "postings": {}}), encoding="utf-8")
         st = p.stat()
         os.utime(p, (st.st_mtime + 50, st.st_mtime + 50))
         second = rag._load_raw()
@@ -792,7 +792,7 @@ class TestBuildEdge:
         paths.ensure_dirs()
         rag.index_path().write_text(json.dumps(
             {"version": rag.INDEX_VERSION, "docs": [],
-             "postings": {}}))  # no "commits" key
+             "postings": {}}), encoding="utf-8")  # no "commits" key
         rag._CACHE.clear()
         stats = rag.build(entries=entries)  # force=False -> loads the old index
         assert stats["docs"] >= 1
@@ -1018,7 +1018,7 @@ class TestAtomicIndexSave:
         _root, entries = corpus
         rag.build(entries=entries, force=True)
         p = rag.index_path()
-        payload = json.loads(p.read_text())  # parseable ⇒ not truncated
+        payload = json.loads(p.read_text(encoding="utf-8"))  # parseable ⇒ not truncated
         assert payload["docs"] and "postings" in payload
         # atomic_write_text writes to ".<name>.*.tmp" then os.replace — the
         # temp file must not survive a successful save.
@@ -1028,5 +1028,5 @@ class TestAtomicIndexSave:
         _root, entries = corpus
         rag.build(entries=entries, force=True)
         rag.build(entries=entries, force=True)  # second save swaps in place
-        payload = json.loads(rag.index_path().read_text())
+        payload = json.loads(rag.index_path().read_text(encoding="utf-8"))
         assert payload["stats"]["docs"] >= 2

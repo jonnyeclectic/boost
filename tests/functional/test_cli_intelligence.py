@@ -62,7 +62,7 @@ class TestDistill:
                 "tdd-workflow-distilled") in r.out
         assert FALLBACK in r.out
         assert "install it with `boost import ./tdd-workflow-distilled`" in r.out
-        text = (tmp_path / "tdd-workflow-distilled" / "SKILL.md").read_text()
+        text = (tmp_path / "tdd-workflow-distilled" / "SKILL.md").read_text(encoding="utf-8")
         meta, body = frontmatter.parse(text)
         assert meta["name"] == "tdd-workflow-distilled"
         assert meta["version"] == "1.0.0"
@@ -79,7 +79,7 @@ class TestDistill:
                                                            tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         boost("distill", "brainstorming", "commit-messages", "-o", "combo")
-        text = (tmp_path / "combo" / "SKILL.md").read_text()
+        text = (tmp_path / "combo" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["name"] == "combo"
         assert text.count("## Rules") == 1      # exact-duplicate line dropped
         assert text.count("```text") == 1
@@ -88,7 +88,7 @@ class TestDistill:
         r = boost("distill", "tdd-workflow", "commit-messages", "--install")
         assert "installed tdd-workflow-distilled" in r.out
         assert (paths.store_dir() / "tdd-workflow-distilled" / "SKILL.md").is_file()
-        lock = json.loads(paths.lockfile_path().read_text())
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         entry = lock["skills"]["tdd-workflow-distilled"]
         assert entry["tap"] == "local"
         assert entry["version"] == "1.0.0"
@@ -100,7 +100,7 @@ class TestDistill:
                          "- Always do the AI thing.\n```")
         r = boost("distill", "brainstorming", "commit-messages", "-o", "merged-x")
         assert FALLBACK not in r.out
-        text = (tmp_path / "merged-x" / "SKILL.md").read_text()
+        text = (tmp_path / "merged-x" / "SKILL.md").read_text(encoding="utf-8")
         assert "Always do the AI thing." in text
         assert frontmatter.parse(text)[0]["name"] == "merged-x"
 
@@ -127,11 +127,11 @@ class TestDistill:
         monkeypatch.chdir(tmp_path)
         dest = tmp_path / "tdd-workflow-distilled" / "SKILL.md"
         dest.parent.mkdir()
-        dest.write_text("precious")
+        dest.write_text("precious", encoding="utf-8")
         monkeypatch.delenv("BOOST_ASSUME_YES")
         r = boost("distill", "tdd-workflow", "cowboy-coding", expect=1)
         assert "aborted" in r.out
-        assert dest.read_text() == "precious"
+        assert dest.read_text(encoding="utf-8") == "precious"
 
 
 # ---------------------------------------------------------------- simulate
@@ -172,8 +172,8 @@ def py_project(tmp_path):
     proj = tmp_path / "pyproj"
     proj.mkdir()
     (proj / "pyproject.toml").write_text(
-        "[tool.ruff]\nline-length = 88\n[tool.pytest.ini_options]\n")
-    (proj / ".editorconfig").write_text("root = true\n")
+        "[tool.ruff]\nline-length = 88\n[tool.pytest.ini_options]\n", encoding="utf-8")
+    (proj / ".editorconfig").write_text("root = true\n", encoding="utf-8")
     (proj / "tests").mkdir()
     return proj
 
@@ -199,7 +199,7 @@ class TestInfer:
 
     def test_commit_style_freeform(self, boost, sandbox, tmp_path):
         proj = _git_repo(tmp_path / "free", "hello world")
-        (proj / "pyproject.toml").write_text("x = 1\n")
+        (proj / "pyproject.toml").write_text("x = 1\n", encoding="utf-8")
         r = boost("infer", "--path", proj)
         assert ("Commit subjects are freeform (0/1 conventional); keep them "
                 "short and imperative.") in r.out
@@ -209,7 +209,7 @@ class TestInfer:
         r = boost("infer", "--path", py_project, "--name", "My Conventions",
                  "-o", out_file)
         assert "wrote" in r.out
-        meta, _ = frontmatter.parse(out_file.read_text())
+        meta, _ = frontmatter.parse(out_file.read_text(encoding="utf-8"))
         assert meta["name"] == "my-conventions"
         evs = journal.events(action="infer")
         assert evs[0]["subject"] == "my-conventions"
@@ -218,7 +218,7 @@ class TestInfer:
         r = boost("infer", "--path", py_project, "--install")
         assert "installed project-conventions" in r.out
         assert (paths.store_dir() / "project-conventions" / "SKILL.md").is_file()
-        lock = json.loads(paths.lockfile_path().read_text())
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["project-conventions"]["tap"] == "local"
 
     def test_ai_path(self, boost, sandbox, py_project, ai_on):
@@ -258,7 +258,7 @@ class TestAbsorb:
                                              "content": "sure thing"}}))
         lines.append("not json at all")
         lines += [_history_line("ok") for _ in range(5)]  # trivial: too short
-        (hist / "chat.jsonl").write_text("\n".join(lines) + "\n")
+        (hist / "chat.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
         r = boost("absorb")
         assert "recurring patterns from 1 history file(s)" in r.out
         assert "always run the linter before committing" in r.out
@@ -277,7 +277,7 @@ class TestAbsorb:
     def test_no_recurring_patterns(self, boost, sandbox, tmp_path):
         f = tmp_path / "h.jsonl"
         f.write_text("\n".join(_history_line("do the thing number %d ok" % i)
-                               for i in range(5)) + "\n")
+                               for i in range(5)) + "\n", encoding="utf-8")
         r = boost("absorb", "--history", f)
         assert ("no recurring patterns in 1 history file(s) — absorb needs "
                 "the same request 3+ times") in r.out
@@ -285,10 +285,10 @@ class TestAbsorb:
     def test_install(self, boost, sandbox, tmp_path):
         f = tmp_path / "h.jsonl"
         f.write_text("\n".join(
-            [_history_line("please write docstrings for every function")] * 3))
+            [_history_line("please write docstrings for every function")] * 3), encoding="utf-8")
         r = boost("absorb", "--history", f, "--install")
         assert "installed absorbed-patterns" in r.out
-        lock = json.loads(paths.lockfile_path().read_text())
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["absorbed-patterns"]["tap"] == "local"
 
     def test_ai_path(self, boost, sandbox, tmp_path, ai_on):
@@ -296,7 +296,7 @@ class TestAbsorb:
                          "version: 1.0.0\n---\n\n- AI absorbed rule.\n")
         f = tmp_path / "h.jsonl"
         f.write_text("\n".join(
-            [_history_line("please write docstrings for every function")] * 3))
+            [_history_line("please write docstrings for every function")] * 3), encoding="utf-8")
         r = boost("absorb", "--history", f)
         assert "- AI absorbed rule." in r.out
         assert FALLBACK not in r.out
@@ -311,7 +311,7 @@ class TestEvolve:
 
     def test_preview_prints_diff_without_writing(self, boost, installed):
         skill_md = paths.store_dir() / "brainstorming" / "SKILL.md"
-        before = skill_md.read_text()
+        before = skill_md.read_text(encoding="utf-8")
         r = boost("evolve", "brainstorming",
                  "--feedback", "Stop suggesting more than 5 ideas")
         assert "evolving brainstorming" in r.out and "(v1.4.0)" in r.out
@@ -319,22 +319,22 @@ class TestEvolve:
         assert "+## Feedback (" in r.out
         assert "+- Stop suggesting more than 5 ideas." in r.out
         assert "re-run with --apply to write these changes" in r.out
-        assert skill_md.read_text() == before
-        lock = json.loads(paths.lockfile_path().read_text())
+        assert skill_md.read_text(encoding="utf-8") == before
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["brainstorming"]["version"] == "1.4.0"
 
     def test_apply_bumps_patch_and_relocks(self, boost, installed):
-        old_sha = json.loads(paths.lockfile_path().read_text())[
+        old_sha = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))[
             "skills"]["brainstorming"]["sha256"]
         r = boost("evolve", "brainstorming", "--apply",
                  "--feedback", "Cap idea lists at 5; prefer bullet points")
         assert "evolved brainstorming → v1.4.1" in r.out
-        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text()
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
         meta, body = frontmatter.parse(text)
         assert meta["version"] == "1.4.1"
         assert "- Cap idea lists at 5." in body
         assert "- prefer bullet points." in body
-        entry = json.loads(paths.lockfile_path().read_text())[
+        entry = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))[
             "skills"]["brainstorming"]
         assert entry["version"] == "1.4.1"
         assert entry["sha256"] != old_sha
@@ -348,7 +348,7 @@ class TestEvolve:
                          "- Never exceed 5 ideas.\n")
         r = boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
         assert "evolved brainstorming → v1.4.1" in r.out
-        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text()
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(encoding="utf-8")
         assert "Never exceed 5 ideas." in text
         assert frontmatter.parse(text)[0]["version"] == "1.4.1"
 

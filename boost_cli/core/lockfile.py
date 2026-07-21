@@ -29,7 +29,7 @@ def read() -> dict:
     if not p.exists():
         return _skeleton()          # empty: never installed anything yet
     try:
-        lock = json.loads(p.read_text())
+        lock = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         # Corrupt (present but unparseable) is NOT the same as empty: returning
         # a bare skeleton here would let the next write() overwrite the only
@@ -169,7 +169,7 @@ def history_list() -> List[dict]:
     out = []
     for p in _history_files():
         try:
-            data = json.loads(p.read_text())
+            data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
         out.append({
@@ -187,4 +187,4 @@ def history_read(hist_id: str) -> dict:
         from ..errors import BoostError
         raise BoostError("no lock history entry %s" % hist_id,
                         hint="list entries with `boost replay`")
-    return json.loads(p.read_text())
+    return json.loads(p.read_text(encoding="utf-8"))

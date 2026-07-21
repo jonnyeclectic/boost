@@ -18,8 +18,8 @@ def _copy_tap(src, dest):
 def _bump(tap_dir, skill, old, new):
     """Bump a skill's version in a tap repo copy and commit it."""
     md = tap_dir / "skills" / skill / "SKILL.md"
-    md.write_text(md.read_text().replace("version: %s" % old,
-                                         "version: %s" % new))
+    md.write_text(md.read_text(encoding="utf-8").replace("version: %s" % old,
+                                         "version: %s" % new), encoding="utf-8")
     subprocess.run(["git", "-C", str(tap_dir), "commit", "-aqm",
                     "bump %s to %s" % (skill, new)],
                    check=True, capture_output=True)
@@ -47,7 +47,7 @@ class TestTap:
         assert (paths.repos_dir() / "fixture-tap" / "skills" /
                 "brainstorming" / "SKILL.md").is_file()
         assert (paths.cache_dir() / "fixture-tap.json").is_file()
-        cfg = json.loads(paths.config_path().read_text())
+        cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert cfg["taps"][0]["name"] == "fixture-tap"
         assert cfg["taps"][0]["curated"] is False
 
@@ -88,7 +88,7 @@ class TestTap:
                 "Official Anthropic skills") in r.out
         assert ("tapped obra/superpowers (5 skills) — "
                 "Community powerhouse") in r.out
-        cfg = json.loads(paths.config_path().read_text())
+        cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert [t["name"] for t in cfg["taps"]] == [
             t["name"] for t in config.DEFAULT_TAPS]
         assert all(t["curated"] for t in cfg["taps"])
@@ -160,7 +160,7 @@ class TestUntap:
         assert "untapped fixture-tap" in r.out
         assert not clone.exists()
         assert not cache.exists()
-        assert json.loads(paths.config_path().read_text())["taps"] == []
+        assert json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"] == []
 
     def test_clean_untap_no_dependents(self, boost, tapped):
         r = boost("untap", "fixture-tap")
@@ -258,7 +258,7 @@ class TestOutdated:
         d.mkdir()
         (d / "SKILL.md").write_text(
             "---\nname: loc\ndescription: local skill\nversion: 0.1.0\n---\n\n"
-            "# Loc\n")
+            "# Loc\n", encoding="utf-8")
         boost("import", d)
         assert "everything up to date" in boost("outdated").out
 
@@ -269,7 +269,7 @@ class TestOutdated:
     def test_content_change_shows_head_commit(self, boost, installed):
         clone = paths.repos_dir() / "fixture-tap"
         md = clone / "skills" / "brainstorming" / "SKILL.md"
-        md.write_text(md.read_text() + "\nUpstream tweak, same version.\n")
+        md.write_text(md.read_text(encoding="utf-8") + "\nUpstream tweak, same version.\n", encoding="utf-8")
         head = _commit_clone(clone, "content tweak")
         r = boost("outdated")
         assert "1.4.0 (%s)" % head[:7] in r.out

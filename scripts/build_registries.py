@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     fresh = render(payload)
 
     if args.check:
-        current = DEST.read_text() if DEST.exists() else ""
+        current = DEST.read_text(encoding="utf-8") if DEST.exists() else ""
         if current != fresh:
             print(
                 "ERROR: %s is out of date — regenerate it with\n"
@@ -249,7 +249,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     DEST.parent.mkdir(parents=True, exist_ok=True)
-    DEST.write_text(fresh)
+    DEST.write_text(fresh, encoding="utf-8")
     print("wrote %s" % DEST)
     _summary(payload)
     return 0

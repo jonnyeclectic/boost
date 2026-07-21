@@ -34,7 +34,7 @@ def _load_builder():
 def test_registries_json_is_regenerated():
     builder = _load_builder()
     fresh = builder.render(builder.build_payload())
-    committed = _JSON.read_text()
+    committed = _JSON.read_text(encoding="utf-8")
     assert committed == fresh, (
         "boost_cli/data/registries.json is out of date — regenerate with\n"
         "    python3 scripts/build_registries.py\n"

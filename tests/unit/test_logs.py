@@ -23,7 +23,7 @@ def test_file_handler_records_at_debug(env):
     logs.configure()
     logs.get_logger().debug("hello-debug")
     logs.get_logger().info("hello-info")
-    text = logs.log_path().read_text()
+    text = logs.log_path().read_text(encoding="utf-8")
     assert "hello-debug" in text  # file captures DEBUG even with quiet console
     assert "hello-info" in text
     assert "DEBUG" in text and "INFO" in text
@@ -78,7 +78,7 @@ def test_config_level_opts_console_in(env, capsys):
 def test_invocation_is_logged(env):
     logs.configure()
     logs.log_invocation(["install", "foo"])
-    assert "invoke: boost install foo" in logs.log_path().read_text()
+    assert "invoke: boost install foo" in logs.log_path().read_text(encoding="utf-8")
 
 
 def test_invocation_records_pid_ppid_and_interpreter(env):
@@ -88,7 +88,7 @@ def test_invocation_records_pid_ppid_and_interpreter(env):
     import sys
     logs.configure()
     logs.log_invocation(["mcp", "--stdio"])
-    line = logs.log_path().read_text()
+    line = logs.log_path().read_text(encoding="utf-8")
     assert ("pid=%d" % os.getpid()) in line
     assert ("ppid=%d" % os.getppid()) in line
     assert ("py=%s" % sys.executable) in line
@@ -97,7 +97,7 @@ def test_invocation_records_pid_ppid_and_interpreter(env):
 def test_completion_logs_rc_and_duration(env):
     logs.configure()
     logs.log_completion(["count"], 0, 12.7)
-    line = logs.log_path().read_text()
+    line = logs.log_path().read_text(encoding="utf-8")
     assert "done: boost count -> rc=0 in 13ms" in line  # ms rounded
     assert "INFO" in line  # clean exit -> INFO
 
@@ -105,7 +105,7 @@ def test_completion_logs_rc_and_duration(env):
 def test_completion_nonzero_rc_is_warning(env):
     logs.configure()
     logs.log_completion(["install", "nope"], 1, 5.0)
-    line = logs.log_path().read_text()
+    line = logs.log_path().read_text(encoding="utf-8")
     assert "done: boost install nope -> rc=1 in 5ms" in line
     assert "WARNING" in line  # failing run stands out in the trail
 
@@ -117,13 +117,13 @@ def test_crash_report_written_with_context(env):
     except ValueError as e:
         report = logs.write_crash_report(e, ["install", "bad"])
     assert report is not None and report.exists()
-    body = report.read_text()
+    body = report.read_text(encoding="utf-8")
     assert "kaboom" in body
     assert "ValueError" in body
     assert "boost install bad" in body
     assert "traceback:" in body
     # crash is also recorded in the rotating trail
-    assert "crash" in logs.log_path().read_text()
+    assert "crash" in logs.log_path().read_text(encoding="utf-8")
 
 
 def test_crash_report_prune_keeps_recent(env, monkeypatch):
@@ -225,7 +225,7 @@ def test_crash_report_swallows_trail_write_failure(env, monkeypatch):
     report = logs.write_crash_report(ValueError("boom"), ["x"])
     monkeypatch.setattr(logs, "get_logger", lambda: real)   # restore for teardown
     assert report is not None and report.exists()
-    assert "boom" in report.read_text()
+    assert "boom" in report.read_text(encoding="utf-8")
 
 
 def test_crash_report_returns_none_when_file_write_fails(env, monkeypatch):
@@ -267,12 +267,12 @@ def test_prune_swallows_unlink_failure_and_keeps_files(env, monkeypatch):
 
 def test_cli_logs_invocation(boost):
     boost("count")
-    assert "invoke: boost count" in logs.log_path().read_text()
+    assert "invoke: boost count" in logs.log_path().read_text(encoding="utf-8")
 
 
 def test_cli_logs_completion_with_duration(boost):
     boost("count")
-    trail = logs.log_path().read_text()
+    trail = logs.log_path().read_text(encoding="utf-8")
     assert "done: boost count -> rc=0 in" in trail
     assert "ms" in trail  # duration is recorded
 
@@ -282,7 +282,7 @@ def test_cli_crash_still_logs_completion(boost, monkeypatch):
     monkeypatch.setattr(cli, "_dispatch",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     boost("count", expect=70)
-    trail = logs.log_path().read_text()
+    trail = logs.log_path().read_text(encoding="utf-8")
     assert "done: boost count -> rc=70 in" in trail  # finally-block bookend fires
 
 

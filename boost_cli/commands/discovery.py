@@ -252,7 +252,7 @@ def cmd_index(argv):
     paths.ensure_dirs()
     _discovery_path().write_text(json.dumps(
         {"generated": util.now_iso(), "github_total": total, "items": items},
-        indent=1))
+        indent=1), encoding="utf-8")
     repos = len({it["repo"] for it in items})
     out.ok("indexed %d skill files across %d repos (GitHub reports %d total)"
            % (len(items), repos, total))
@@ -325,7 +325,7 @@ def cmd_discover(argv):
                      "gh auth login`), then run `boost index`")
         return 0
     try:
-        data = json.loads(dpath.read_text())
+        data = json.loads(dpath.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         raise BoostError("the discovery index is corrupt",
                         hint="rebuild it with `boost index`")
@@ -979,7 +979,7 @@ def cmd_count(argv):
     dpath = _discovery_path()
     if dpath.exists():
         try:
-            discovery = len(json.loads(dpath.read_text()).get("items") or [])
+            discovery = len(json.loads(dpath.read_text(encoding="utf-8")).get("items") or [])
         except (json.JSONDecodeError, OSError):
             discovery = None
     if args.as_json:
