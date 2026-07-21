@@ -1,0 +1,11 @@
+rules:
+  dangerous-triggers:
+    ignore:
+      # Reacts to `ci` finishing on main to open/update a tracking issue. No
+      # checkout, no build — only reads workflow_run event metadata (sha,
+      # branch, run id) to compose an issue body. Nothing PR-controlled runs.
+      - ci-failure-issue.yml:8
+      # Release pipeline. Explicitly checks out `ref: main` (never the
+      # workflow_run head_sha), so a fork PR can't smuggle code into a run
+      # holding contents:write + PyPI Trusted Publisher OIDC.
+      - publish.yml:19
