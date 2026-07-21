@@ -6,7 +6,7 @@ import re
 import shutil
 import subprocess
 
-from boost_cli.core import config, paths
+from boost_cli.core import config, paths, util
 
 
 def _copy_tap(src, dest):
@@ -208,7 +208,7 @@ class TestTaps:
         assert "~/my-tap" in boost("taps").out
 
     def test_updated_from_cache_then_unknown(self, boost, tapped):
-        shutil.rmtree(paths.repos_dir() / "fixture-tap")   # clone gone
+        util.rmtree(paths.repos_dir() / "fixture-tap")   # clone gone
         r = boost("taps")
         assert "ago" in r.out                    # cache 'generated' age
         assert "1 taps · 5 skills" in r.out      # skills still from the cache

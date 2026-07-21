@@ -16,6 +16,17 @@ import pytest
 from boost_cli.core import output, paths, util
 
 
+def _curses_available() -> bool:
+    """False on Windows: curses isn't in the stdlib there, and boost degrades
+    to the plain-catalog fallback (see cmd_browse) rather than shipping the
+    third-party windows-curses package boost's zero-dependency design avoids."""
+    try:
+        import curses  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _vec_loadable() -> bool:
     """True only if sqlite-vec both imports and loads (see test_dense.py)."""
     try:
@@ -626,6 +637,8 @@ class TestBrowse:
         assert "no skills available to browse" in r.err
 
     def test_tui_pick_installs(self, boost, tapped, monkeypatch):
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
@@ -654,6 +667,8 @@ class TestBrowse:
         # with a fatal Error (regression: `boost browse` crashed on a workflow).
         # Workflows install now, but a pick whose source can't be read must still
         # surface a friendly non-fatal notice rather than crash the browser.
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
@@ -728,6 +743,8 @@ class TestBrowseAurora:
             assert all(0 <= c <= 1000 for c in triple)
 
     def test_nearest_base_covers_every_token(self):
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
         import curses
         from boost_cli.commands import discovery
         from boost_cli.core import output as out

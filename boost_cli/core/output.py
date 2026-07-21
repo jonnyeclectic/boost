@@ -25,6 +25,23 @@ MAGENTA = "\033[35m"
 CYAN = "\033[36m"
 
 
+def harden_console_encoding() -> None:
+    """Reconfigure stdout/stderr to UTF-8.
+
+    boost's own output uses non-ASCII (checkmarks, em dashes, arrows); a
+    console whose codepage isn't UTF-8 — chiefly Windows' legacy codepages —
+    raises UnicodeEncodeError on that output otherwise. reconfigure() is
+    missing on some wrapped/piped streams (e.g. under certain test harnesses),
+    so skip a stream that doesn't have it rather than fail startup over it.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def use_color(stream=None) -> bool:
     # BOOST_COLOR is boost's own explicit override and wins over everything
     # else (most-specific-wins): always/never force it on/off regardless of

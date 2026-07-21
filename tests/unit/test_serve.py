@@ -7,7 +7,10 @@ without binding a port.
 """
 from __future__ import annotations
 
+import errno
 import json
+
+import pytest
 
 from boost_cli.core import serve
 from boost_cli.errors import BoostError
@@ -135,3 +138,51 @@ class TestServePage:
         assert "1 installed · 2 available across 1 taps" in page
         assert 'href="/skill/brainstorming"' in page
         assert "1.4.0" in page
+
+
+class TestServeHttp:
+    """serve_http's OSError -> BoostError translation (no real socket bound)."""
+
+    def _boom(self, exc):
+        def raiser(*_a, **_kw):
+            raise exc
+        return raiser
+
+    def test_addrinuse_is_friendly(self, monkeypatch):
+        e = OSError()
+        e.errno = errno.EADDRINUSE
+        monkeypatch.setattr(serve, "ThreadingHTTPServer", self._boom(e))
+        with pytest.raises(BoostError) as ei:
+            serve.serve_http("127.0.0.1", 1234)
+        assert ei.value.message == "port 1234 is already in use"
+        assert ei.value.hint == "pick another with --port"
+
+    def test_windows_winerror_10013_is_friendly(self, monkeypatch):
+        e = OSError()
+        e.errno = None
+        e.winerror = 10013
+        monkeypatch.setattr(serve, "ThreadingHTTPServer", self._boom(e))
+        monkeypatch.setattr(serve.sys, "platform", "win32")
+        with pytest.raises(BoostError) as ei:
+            serve.serve_http("127.0.0.1", 1234)
+        assert ei.value.message == "port 1234 is already in use"
+
+    def test_winerror_10013_on_non_windows_is_generic(self, monkeypatch):
+        # The 10013 special-case is Windows-only: on any other platform a
+        # winerror attribute would be a genuinely different failure.
+        e = OSError()
+        e.errno = None
+        e.winerror = 10013
+        monkeypatch.setattr(serve, "ThreadingHTTPServer", self._boom(e))
+        monkeypatch.setattr(serve.sys, "platform", "linux")
+        with pytest.raises(BoostError) as ei:
+            serve.serve_http("127.0.0.1", 1234)
+        assert "cannot bind 127.0.0.1:1234" in ei.value.message
+
+    def test_other_oserror_is_generic(self, monkeypatch):
+        e = OSError(13, "Permission denied")
+        monkeypatch.setattr(serve, "ThreadingHTTPServer", self._boom(e))
+        with pytest.raises(BoostError) as ei:
+            serve.serve_http("127.0.0.1", 1234)
+        assert "cannot bind 127.0.0.1:1234" in ei.value.message
+        assert ei.value.hint == "check --host and --port"

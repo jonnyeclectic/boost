@@ -499,7 +499,7 @@ def cmd_audit(argv):
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            rel = str(f.relative_to(sdir))
+            rel = f.relative_to(sdir).as_posix()
             for pat, severity, label in _AUDIT_PATTERNS:
                 for m in pat.finditer(text):
                     line_no = text.count("\n", 0, m.start()) + 1

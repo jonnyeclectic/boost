@@ -43,7 +43,7 @@ def linked_pages(html: str) -> set:
 @pytest.mark.skipif(not _INDEX.exists(),
                     reason="repo-root docs/ not reachable (e.g. mutation sandbox)")
 def test_every_docs_page_is_linked_from_index():
-    linked = linked_pages(_INDEX.read_text())
+    linked = linked_pages(_INDEX.read_text(encoding="utf-8"))
     shipped = {p.name for p in _DOCS.glob("*.html") if p.name != "index.html"}
     orphans = sorted(shipped - linked)
     assert not orphans, (

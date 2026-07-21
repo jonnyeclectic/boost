@@ -152,7 +152,7 @@ def cmd_clean(argv) -> int:
                 if pth.is_symlink() or pth.is_file():
                     pth.unlink()
                 elif pth.is_dir():
-                    shutil.rmtree(pth)
+                    util.rmtree(pth)
             except OSError as e:
                 out.warn("could not remove %s: %s" % (_tilde(pth), e))
                 continue

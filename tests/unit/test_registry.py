@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 
 import pytest
 
-from boost_cli.core import config, gitutil, paths, registry
+from boost_cli.core import config, gitutil, paths, registry, util
 from boost_cli.errors import BoostError
 
 
@@ -191,7 +190,7 @@ class TestUpdate:
     def test_update_clones_missing_tap(self, sandbox, tmp_path):
         origin = _make_repo(tmp_path / "pullme")
         tap = registry.add(str(origin))
-        shutil.rmtree(tap.path)
+        util.rmtree(tap.path)
         assert registry.update("pullme") == {"pullme": "cloned"}
         assert tap.is_cloned
 

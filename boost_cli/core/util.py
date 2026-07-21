@@ -5,12 +5,35 @@ import getpass
 import hashlib
 import os
 import re
+import shutil
+import stat
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
 
 IGNORED = {".git", "__pycache__", ".DS_Store"}
+
+
+def _clear_readonly_and_retry(func, path, _exc) -> None:
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def rmtree(path) -> None:
+    """``shutil.rmtree`` that survives read-only files.
+
+    Git writes objects under ``.git/objects/`` read-only; POSIX still lets the
+    owner unlink a read-only file (permission lives on the directory), but
+    Windows refuses outright. Clear the read-only bit and retry once per
+    failure — ``onexc`` on 3.12+, ``onerror`` below that (both get the same
+    handler; it ignores the exception argument either way).
+    """
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
+    else:
+        shutil.rmtree(str(path), onerror=_clear_readonly_and_retry)
 
 
 def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
@@ -94,7 +117,7 @@ def sha256_dir(path: Path) -> str:
         if p.is_file() and not any(part in IGNORED for part in p.parts)
     )
     for f in files:
-        h.update(str(f.relative_to(root)).encode())
+        h.update(f.relative_to(root).as_posix().encode())
         h.update(b"\0")
         h.update(f.read_bytes())
         h.update(b"\0")

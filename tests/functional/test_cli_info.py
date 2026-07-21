@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+
+import pytest
 
 from boost_cli.core import paths
 
@@ -185,6 +188,8 @@ class TestCat:
 # ── edit ─────────────────────────────────────────────────────────────────
 
 class TestEdit:
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX shebang script isn't directly executable on Windows")
     def test_editor_change_updates_lock_and_warns(self, boost, installed,
                                                   tmp_path, monkeypatch):
         script = tmp_path / "fake-editor.sh"
@@ -203,6 +208,8 @@ class TestEdit:
         assert any(e["subject"] == "brainstorming"
                    for e in _journal_events("edit"))
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX shebang script isn't directly executable on Windows")
     def test_editor_fails_no_lock_change(self, boost, installed, tmp_path,
                                          monkeypatch):
         script = tmp_path / "fail-editor.sh"

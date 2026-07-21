@@ -426,7 +426,7 @@ def uninstall(name: str) -> dict:
     removed_links = unlink_agents(name)
     dest = skill_store_dir(name)
     if dest.exists():
-        shutil.rmtree(dest)
+        util.rmtree(dest)
     lockfile.remove_skill(name)
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed_links, "entry": entry}

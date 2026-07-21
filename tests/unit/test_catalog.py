@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -142,6 +143,8 @@ class TestScanDir:
     def test_empty_tree(self, tmp_path):
         assert catalog.scan_dir(tmp_path) == []
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the owner's own read access on Windows")
     def test_unreadable_skill_md_skipped(self, tmp_path):
         root = tmp_path / "tap"
         write_skill(root / "locked")
@@ -260,6 +263,8 @@ class TestScanRulesAndWorkflows:
         (root / "real" / ".cursorrules").write_text("real rule\n")
         assert [e["name"] for e in catalog.scan_dir(root)] == ["real"]
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the owner's own read access on Windows")
     def test_unreadable_rule_file_skipped(self, tmp_path):
         root = tmp_path / "tap"
         (root / "a").mkdir(parents=True)

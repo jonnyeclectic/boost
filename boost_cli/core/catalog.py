@@ -74,8 +74,8 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
         "tap": tap_name,
         "curated": curated,
         "kind": kind,
-        "rel_dir": str(item_dir.relative_to(root)) if item_dir != root else ".",
-        "skill_md": str(defining_file.relative_to(root)),
+        "rel_dir": item_dir.relative_to(root).as_posix() if item_dir != root else ".",
+        "skill_md": defining_file.relative_to(root).as_posix(),
         "meta": meta,
         # Lowercased substring-search blob, flattened once at index time so
         # search() never re-walks the frontmatter per query (see _search_blob).

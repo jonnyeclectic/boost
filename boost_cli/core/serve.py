@@ -12,6 +12,7 @@ import errno
 import html
 import json
 import re
+import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -168,7 +169,11 @@ def serve_http(host: str, port: int) -> None:
     try:
         httpd = ThreadingHTTPServer((host, port), _CatalogHandler)
     except OSError as e:
-        if e.errno == errno.EADDRINUSE:
+        # Windows can report a bind against an already-LISTENing port as
+        # WinError 10013 (WSAEACCES) rather than EADDRINUSE.
+        if e.errno == errno.EADDRINUSE or (
+            sys.platform == "win32" and getattr(e, "winerror", None) == 10013
+        ):
             raise BoostError("port %d is already in use" % port,
                             hint="pick another with --port")
         raise BoostError("cannot bind %s:%d — %s" % (host, port, e),

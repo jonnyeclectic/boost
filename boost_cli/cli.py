@@ -224,6 +224,7 @@ def _extract_globals(argv: List[str]) -> tuple[dict, List[str]]:
 
 def main(argv: List[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
+    out.harden_console_encoding()
     # Belt-and-suspenders fork safety: a host may fork() into `boost mcp
     # --stdio` without the no_proxy env boost injects at registration, leaving
     # the process one default getproxies() away from a macOS _scproxy SIGABRT.

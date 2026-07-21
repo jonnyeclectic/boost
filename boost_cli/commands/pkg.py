@@ -22,14 +22,7 @@ from ..core import output as out
 from ..errors import BoostError
 
 
-def _tilde(p) -> str:
-    """Contract $HOME to ~ for display (also matches the resolved home,
-    so /private/var vs /var symlinks on macOS still contract)."""
-    s = str(p)
-    for h in (str(paths.home()), str(paths.home().resolve())):
-        if s == h or s.startswith(h + os.sep):
-            return "~" + s[len(h):]
-    return s
+_tilde = paths.tilde
 
 
 def _plural(n: int, word: str) -> str:
@@ -338,7 +331,7 @@ def cmd_sync(argv: List[str]) -> int:
             for name in orphans:
                 target = store.skill_store_dir(name)
                 if target.is_dir():
-                    shutil.rmtree(target)
+                    util.rmtree(target)
                 journal.log("prune", name)
                 pruned.append(name)
     left = [n for n in orphans if n not in pruned]
@@ -950,7 +943,7 @@ def _snapshot_restore(snap_id: str) -> int:
                                  "see `boost snapshot list` for other snapshots")
         for child in root.iterdir():
             if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
+                util.rmtree(child)
             else:
                 child.unlink()
         try:
@@ -1006,7 +999,7 @@ def cmd_export(argv: List[str]) -> int:
                 for name in chosen:
                     sdir = store.skill_store_dir(name)
                     for f in sorted(p for p in sdir.rglob("*") if p.is_file()):
-                        zf.write(str(f), arcname="%s/%s" % (name, f.relative_to(sdir)))
+                        zf.write(str(f), arcname="%s/%s" % (name, f.relative_to(sdir).as_posix()))
         else:
             with tarfile.open(str(dest), "w:gz") as tf:
                 data = manifest.encode()

@@ -112,7 +112,7 @@ def read_tree(path: Path) -> Dict[str, str]:
         if not p.is_file() or any(part in IGNORED for part in p.parts):
             continue
         try:
-            tree[str(p.relative_to(root))] = p.read_text(encoding="utf-8")
+            tree[p.relative_to(root).as_posix()] = p.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue  # binary or unreadable — not an instruction surface
     return tree

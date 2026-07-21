@@ -192,7 +192,7 @@ def _copy_global_skills(modules) -> int:
                 continue
             t = dest / d.name
             if t.exists():
-                shutil.rmtree(t)
+                util.rmtree(t)
             shutil.copytree(d, t)
             n += 1
         return n
@@ -278,7 +278,7 @@ def _disable(scope) -> int:
     for d in sorted(_skills_dir(scope).glob("bmad-*")):
         target = qdir / d.name
         if target.exists():
-            shutil.rmtree(target)
+            util.rmtree(target)
         shutil.move(str(d), str(target))
         moved += 1
     _set_scope_state(scope, startup=False, disabled=True)
@@ -298,7 +298,7 @@ def _enable(scope) -> int:
         for d in sorted(qdir.glob("bmad-*")):
             target = dest / d.name
             if target.exists():
-                shutil.rmtree(target)
+                util.rmtree(target)
             shutil.move(str(d), str(target))
             restored += 1
     _set_scope_state(scope, disabled=False)
