@@ -85,15 +85,18 @@ def skill_text(name: str) -> Optional[str]:
         return None
     base = store.skill_store_dir(name)
     fp = _safe_join_within(base, Path("SKILL.md"))
-    if fp is not None and fp.is_file():
+    if fp is not None and _is_within(base, fp) and fp.is_file():
         return fp.read_text(encoding="utf-8", errors="replace")
     for e in catalog.find(name):
         try:
             tap_base = registry.get(e["tap"]).path
-            fp = _safe_join_within(tap_base, e["skill_md"])
-        except BoostError:
+            rel = Path(e["skill_md"])
+            if rel.is_absolute() or ".." in rel.parts:
+                continue
+            fp = _safe_join_within(tap_base, rel)
+        except (BoostError, TypeError, ValueError):
             continue
-        if fp is None:
+        if fp is None or not _is_within(tap_base, fp):
             continue
         if fp.is_file():
             return fp.read_text(encoding="utf-8", errors="replace")
