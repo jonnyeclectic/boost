@@ -65,10 +65,7 @@ def touches_executable(lines: Iterable[str]) -> bool:
 
 def _added_lines(old: str, new: str) -> List[str]:
     """The right-hand (``+``) lines a unified diff would introduce."""
-    added = []
-    for ln in difflib.ndiff(old.splitlines(), new.splitlines()):
-        if ln.startswith("+ "):
-            added.append(ln[2:])
+    added = [ln[2:] for ln in difflib.ndiff(old.splitlines(), new.splitlines()) if ln.startswith("+ ")]
     return added
 
 

@@ -110,7 +110,7 @@ def handle_request(req: dict, *, version: str,
         except BoostError as e:
             text = "Error: %s" % e.message + ("\nhint: %s" % e.hint if e.hint else "")
             is_err = True
-        except Exception as e:  # noqa: BLE001 — server must not die
+        except Exception as e:
             text, is_err = "Error: %s" % e, True
         if text is None:
             resp["error"] = {"code": -32602, "message": "unknown tool %r" % tool}

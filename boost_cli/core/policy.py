@@ -9,6 +9,7 @@ import json
 from typing import List
 
 from . import config, paths
+import contextlib
 
 DEFAULTS = {
     "blocked_skills": [],      # names never allowed
@@ -26,10 +27,8 @@ def load() -> dict:
     p = paths.policy_path()
     base = dict(DEFAULTS)
     if p.exists():
-        try:
+        with contextlib.suppress(json.JSONDecodeError, OSError):
             base.update(json.loads(p.read_text(encoding="utf-8")))
-        except (json.JSONDecodeError, OSError):
-            pass
     return base
 
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import struct
+from typing import ClassVar
 
 import pytest
 
@@ -137,7 +138,7 @@ class TestReadyGuards:
             con.execute("INSERT INTO meta VALUES (?, ?)", (k, json.dumps(v)))
         if with_chunks:
             con.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, tap TEXT)")
-            for i in range(rows):
+            for _i in range(rows):
                 con.execute("INSERT INTO chunks (tap) VALUES ('t')")
         con.commit()
         return con
@@ -156,7 +157,7 @@ class TestReadyGuards:
     def _use(self, monkeypatch, con):
         monkeypatch.setattr(dense, "_connect", lambda: con)
 
-    _GOOD = {"version": dense.INDEX_VERSION, "provider": "openai", "dim": 3}
+    _GOOD: ClassVar[dict] = {"version": dense.INDEX_VERSION, "provider": "openai", "dim": 3}
 
     def test_true_when_everything_matches(self, wired):
         self._use(wired, self._seed(self._GOOD, rows=1))

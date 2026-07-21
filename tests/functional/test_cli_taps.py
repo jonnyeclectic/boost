@@ -28,7 +28,7 @@ def _bump(tap_dir, skill, old, new):
 def _commit_clone(repo, msg):
     """Commit tracked changes inside a boost-made clone (which has no git
     identity of its own) and return the new HEAD commit."""
-    run = lambda *a: subprocess.run(["git", "-C", str(repo)] + list(a),
+    run = lambda *a: subprocess.run(["git", "-C", str(repo), *list(a)],
                                     check=True, capture_output=True, text=True)
     run("config", "user.email", "t@boost.test")
     run("config", "user.name", "Boost Test")

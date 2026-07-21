@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import paths
+import contextlib
 
 LOGGER_NAME = "boost"
 MAX_BYTES = 1_000_000  # ~1 MB per file …
@@ -117,10 +118,8 @@ def reset() -> None:
     global _configured, _debug_console
     logger = logging.getLogger(LOGGER_NAME)
     for h in list(logger.handlers):
-        try:
+        with contextlib.suppress(Exception):
             h.close()
-        except Exception:
-            pass
         logger.removeHandler(h)
     _configured = False
     _debug_console = False
@@ -236,10 +235,8 @@ def write_crash_report(exc: BaseException, argv: List[str]) -> Optional[Path]:
         "",
     ])
     # Always try to get it into the rotating trail, even if the file write fails.
-    try:
+    with contextlib.suppress(Exception):
         get_logger().error("crash: %s: %s", type(exc).__name__, exc)
-    except Exception:
-        pass
     try:
         paths.logs_dir().mkdir(parents=True, exist_ok=True)
         report = paths.logs_dir() / ("crash-%s.log" % _file_stamp())
@@ -257,7 +254,5 @@ def _prune_crash_reports() -> None:
     except OSError:
         return
     for stale in reports[:-KEEP_CRASH_REPORTS]:
-        try:
+        with contextlib.suppress(OSError):
             stale.unlink()
-        except OSError:
-            pass

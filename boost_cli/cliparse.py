@@ -19,7 +19,7 @@ from .core import output as out
 
 
 class BoostArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str):  # noqa: D401 - argparse hook
+    def error(self, message: str):
         """Print a branded error + dimmed usage, then exit 2 (argparse's code)."""
         out.err(message)
         sys.stderr.write(out.c(self.format_usage(), out.DIM))

@@ -308,7 +308,7 @@ class TestTapCaches:
         assert cache["url"] == tap.url
         assert re.fullmatch(r"[0-9a-f]{40}", cache["commit"])
         assert len(cache["skills"]) == 5
-        jira = [e for e in entries if e["name"] == "jira-integration"][0]
+        jira = next(e for e in entries if e["name"] == "jira-integration")
         assert jira["version"] == "2.1.0"
         assert jira["description"] == "Sync commits and PRs to Jira tickets"
         assert jira["rel_dir"] == "skills/jira-integration"

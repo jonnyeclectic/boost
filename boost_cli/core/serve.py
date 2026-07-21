@@ -22,6 +22,7 @@ from .. import __version__
 from ..errors import BoostError
 from . import catalog, lockfile, registry, store
 from . import output as out
+import contextlib
 
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -156,12 +157,10 @@ class _CatalogHandler(BaseHTTPRequestHandler):
             self._send(status, ctype, body)
         except BrokenPipeError:
             pass
-        except Exception as e:  # noqa: BLE001 — keep the server alive
-            try:
+        except Exception as e:
+            with contextlib.suppress(Exception):
                 self._send(500, "application/json",
                            json.dumps({"error": str(e)}).encode())
-            except Exception:
-                pass
 
 
 def serve_http(host: str, port: int) -> None:
@@ -175,9 +174,9 @@ def serve_http(host: str, port: int) -> None:
             sys.platform == "win32" and getattr(e, "winerror", None) == 10013
         ):
             raise BoostError("port %d is already in use" % port,
-                            hint="pick another with --port")
+                            hint="pick another with --port") from e
         raise BoostError("cannot bind %s:%d — %s" % (host, port, e),
-                        hint="check --host and --port")
+                        hint="check --host and --port") from e
     out.info("⚡ serving skill catalog on http://%s:%d %s"
              % (host, port, out.c("(ctrl-c to stop)", out.DIM)))
     try:

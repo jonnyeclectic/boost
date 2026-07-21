@@ -20,11 +20,11 @@ def run(args: List[str], cwd: Optional[Path] = None, check: bool = True,
                         hint="install git, e.g. `xcode-select --install` or `brew install git`")
     try:
         proc = subprocess.run(
-            ["git"] + args, cwd=str(cwd) if cwd else None,
+            ["git", *args], cwd=str(cwd) if cwd else None,
             capture_output=True, text=True, timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        raise BoostError("git %s timed out after %ds" % (args[0], timeout))
+        raise BoostError("git %s timed out after %ds" % (args[0], timeout)) from None
     if check and proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()
         raise BoostError("git %s failed: %s" % (args[0], detail[-1] if detail else "unknown error"))

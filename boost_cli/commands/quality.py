@@ -96,9 +96,10 @@ def _broken_links() -> List[Path]:
     for adir in agents.enabled_agents().values():
         if not adir.is_dir():
             continue
-        for link in sorted(adir.iterdir()):
-            if link.is_symlink() and not link.exists():
-                broken.append(link)
+        broken.extend(
+            link for link in sorted(adir.iterdir())
+            if link.is_symlink() and not link.exists()
+        )
     return broken
 
 
@@ -353,7 +354,7 @@ def cmd_doctor(argv):
         bad("%d broken symlink%s in agent dirs — run `boost heal`"
             % (len(broken), _s(len(broken))))
 
-    for agent, adir in enabled.items():
+    for adir in enabled.values():
         if adir.is_dir() and not os.access(str(adir), os.W_OK):
             bad("agent dir %s is not writable" % _tilde(adir))
 
@@ -776,10 +777,7 @@ def cmd_heal(argv):
     dry = args.dry_run
     actions: List[str] = []
 
-    wanted = [paths.boost_home(), paths.repos_dir(), paths.cache_dir(),
-              paths.logs_dir(), paths.state_dir(), paths.snapshots_dir(),
-              paths.lock_history_dir(), paths.profiles_dir(),
-              paths.store_dir()] + list(agents.enabled_agents().values())
+    wanted = [paths.boost_home(), paths.repos_dir(), paths.cache_dir(), paths.logs_dir(), paths.state_dir(), paths.snapshots_dir(), paths.lock_history_dir(), paths.profiles_dir(), paths.store_dir(), *list(agents.enabled_agents().values())]
     missing = [d for d in wanted if not d.is_dir()]
     if missing:
         if dry:
@@ -859,9 +857,11 @@ def cmd_conflict(argv):
     for name, _entry in installed:
         meta, body = _read_skill(store.skill_store_dir(name))
         conflicts = meta.get("conflicts") or []
-        for other in (conflicts if isinstance(conflicts, list) else [conflicts]):
-            if str(other) in installed_names and str(other) != name:
-                declared.append((name, str(other)))
+        declared.extend(
+            (name, str(other))
+            for other in (conflicts if isinstance(conflicts, list) else [conflicts])
+            if str(other) in installed_names and str(other) != name
+        )
         for raw in body.splitlines():
             m = imperative.RULE_RE.match(raw)
             if not m:
@@ -879,7 +879,7 @@ def cmd_conflict(argv):
 
     pairs, seen = [], set()
     for da, db in declared:
-        key = tuple(sorted((da, db))) + ("declared",)
+        key = (*tuple(sorted((da, db))), "declared")
         if key in seen:
             continue
         seen.add(key)

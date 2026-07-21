@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from typing import ClassVar
 
 import pytest
 
@@ -308,7 +309,7 @@ class TestUninstall:
 
 
 class TestSyncPlan:
-    EMPTY = {"missing_store": [], "missing_links": [],
+    EMPTY: ClassVar[dict] = {"missing_store": [], "missing_links": [],
              "stale_links": [], "orphaned_store": [],
              "missing_materializations": []}
 

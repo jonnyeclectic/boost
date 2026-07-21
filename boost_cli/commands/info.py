@@ -31,7 +31,7 @@ def _read(p: Path) -> str:
     try:
         return Path(p).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
-        raise BoostError("cannot read %s: %s" % (_tilde(p), e))
+        raise BoostError("cannot read %s: %s" % (_tilde(p), e)) from e
 
 
 def _resolve_skill_md(name: str):
@@ -115,7 +115,7 @@ def _kind_table(heading, items, extra=None):
             row.append(str(e.get(extra[1], "") or ""))
         rows.append(tuple(row))
     if extra:
-        headers = headers + (extra[0],)
+        headers = (*headers, extra[0])
     out.table(rows, headers=headers)
     noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
     print("  " + out.aurora("%d %s%s installed"
@@ -319,10 +319,10 @@ def cmd_edit(argv):
     editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "vi"
     cmd = shlex.split(editor) or ["vi"]   # support EDITOR="code -w" etc.
     try:
-        rc = subprocess.call(cmd + [str(path)])
+        rc = subprocess.call([*cmd, str(path)])
     except OSError as e:
         raise BoostError("cannot launch editor %r: %s" % (editor, e),
-                        hint="set $VISUAL or $EDITOR to a valid command")
+                        hint="set $VISUAL or $EDITOR to a valid command") from e
     if rc != 0:
         out.warn("editor exited with status %d" % rc)
     sha = util.sha256_dir(sdir)
@@ -595,9 +595,11 @@ def cmd_deps(argv):
     unmet, pairs, seen = [], [], set()
     for name in sorted(inst):
         meta = _skill_meta(name) or {}
-        for r in _as_list(meta.get("requires")):
-            if r not in inst:
-                unmet.append({"skill": name, "requires": r})
+        unmet.extend(
+            {"skill": name, "requires": r}
+            for r in _as_list(meta.get("requires"))
+            if r not in inst
+        )
         for c_name in _as_list(meta.get("conflicts")):
             if c_name in inst:
                 key = tuple(sorted((name, c_name)))

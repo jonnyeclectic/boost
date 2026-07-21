@@ -166,7 +166,7 @@ class TestBuildAndRetrieve:
         assert rag.search("anything") is None
 
     def test_build_then_retrieve_ranks_by_body(self, corpus):
-        root, entries = corpus
+        _root, entries = corpus
         stats = rag.build(entries=entries, force=True)
         assert stats["entries"] == 2
         assert stats["docs"] >= 2
@@ -183,7 +183,7 @@ class TestBuildAndRetrieve:
         assert rag.retrieve("the and of", entries=entries) == []
 
     def test_kind_filter(self, corpus):
-        root, entries = corpus
+        _root, entries = corpus
         entries[1]["kind"] = "rule"  # pytest-helper becomes a rule
         rag.build(entries=entries, force=True)
         names = {h["entry"]["name"]
@@ -390,7 +390,7 @@ class TestSearchSeam:
         rag.build(entries=entries, force=True)
         monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
         monkeypatch.setattr(rag.ai, "available", lambda: False)
-        hits, label = rag.search("testing", limit=5)
+        _hits, label = rag.search("testing", limit=5)
         assert label == "BM25 full-content"
 
     def test_search_smart_is_default_and_uses_ai(self, corpus, monkeypatch):

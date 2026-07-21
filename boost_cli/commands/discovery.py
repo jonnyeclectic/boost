@@ -22,6 +22,7 @@ from ..core import (agents, ai, catalog, config, dense, embed, gitutil,
 from ..core import output as out
 from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
 from ..errors import BoostError
+import contextlib
 
 __all__ = ["detect_stack"]
 
@@ -31,7 +32,7 @@ def _positive_int(s: str) -> int:
     try:
         v = int(s)
     except ValueError:
-        raise argparse.ArgumentTypeError("invalid int value: %r" % s)
+        raise argparse.ArgumentTypeError("invalid int value: %r" % s) from None
     if v < 1:
         raise argparse.ArgumentTypeError("must be >= 1")
     return v
@@ -219,7 +220,7 @@ def cmd_index(argv):
                  "search/code?q=filename:SKILL.md&per_page=100&page=%d" % page],
                 capture_output=True, text=True, timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
-            raise BoostError("gh api timed out on page %d" % page, hint=str(e))
+            raise BoostError("gh api timed out on page %d" % page, hint=str(e)) from e
         if proc.returncode != 0:
             tail = "\n".join((proc.stderr or proc.stdout or "").strip()
                              .splitlines()[-3:])
@@ -233,7 +234,7 @@ def cmd_index(argv):
             data = json.loads(proc.stdout)
         except json.JSONDecodeError:
             raise BoostError("gh api returned unparseable JSON",
-                            hint="try `boost index` again, or `gh auth status`")
+                            hint="try `boost index` again, or `gh auth status`") from None
         if page == 1:
             total = int(data.get("total_count") or 0)
         batch = data.get("items") or []
@@ -328,7 +329,7 @@ def cmd_discover(argv):
         data = json.loads(dpath.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         raise BoostError("the discovery index is corrupt",
-                        hint="rebuild it with `boost index`")
+                        hint="rebuild it with `boost index`") from None
     all_items = data.get("items") or []
     tokens = [t.lower() for t in args.query if t.strip()]
     items = [it for it in all_items
@@ -598,7 +599,7 @@ def _aurora_pairs(curses):
     """Allocate Aurora curses colour pairs; token-name -> attr int (0 if none)."""
     names = ("cyan", "violet", "pink", "green", "yellow")
     try:
-        custom = curses.can_change_color() and curses.COLORS >= 16 + len(names)
+        custom = curses.can_change_color() and 16 + len(names) <= curses.COLORS
     except curses.error:
         custom = False
     fg = dict(_nearest_base(curses))
@@ -695,19 +696,15 @@ def _browse_tui(curses, entries):
         return "loading description…"
 
     def ui(scr):
-        try:
+        with contextlib.suppress(curses.error):
             curses.curs_set(0)
-        except curses.error:
-            pass
         scr.timeout(80)  # short poll so a finished lazy-load redraws promptly
         th = _aurora_theme(curses)
 
         def put(y, x, s, attr=0):  # clip-safe cell writer
             if 0 <= y < _h and 0 <= x < _w - 1 and s:
-                try:
+                with contextlib.suppress(curses.error):
                     scr.addnstr(y, x, s, _w - 1 - x, attr)
-                except curses.error:
-                    pass
 
         filt, sel, detail = "", 0, False
         selected: set = set()

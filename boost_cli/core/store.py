@@ -461,7 +461,7 @@ def sync_plan() -> Dict[str, list]:
         for child in store_root.iterdir():
             if child.is_dir() and child.name not in lock:
                 plan["orphaned_store"].append(child.name)
-    for agent, adir in agents.enabled_agents().items():
+    for adir in agents.enabled_agents().values():
         if not adir.is_dir():
             continue
         for link in adir.iterdir():

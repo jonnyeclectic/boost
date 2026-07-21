@@ -22,6 +22,7 @@ from ..core import (ai, catalog, frontmatter, gitutil, imperative, journal,
                     lockfile, paths, store, util)
 from ..core import output as out
 from ..errors import BoostError
+import contextlib
 
 # ---------------------------------------------------------------- helpers
 
@@ -777,9 +778,8 @@ def cmd_context(argv: List[str]) -> int:
         inst = lockfile.installed()
         for name in sorted(_mentioned_skills(state)):
             entry = inst.get(name)
-            if entry and not entry.get("quarantined"):
-                if store.link_agents(name).linked:
-                    restored += 1
+            if entry and not entry.get("quarantined") and store.link_agents(name).linked:
+                restored += 1
         state["enabled"] = False
         _save_state(_CONTEXT_STATE, state)
         journal.log("context", "disable", restored=restored)
@@ -1005,10 +1005,8 @@ def _repo_activity(since: str) -> Tuple[Optional[int], Optional[int]]:
     proc = gitutil.run(["rev-list", "--count", "--since=" + since, "HEAD"],
                        cwd=Path.cwd(), check=False)
     if proc.returncode == 0:
-        try:
+        with contextlib.suppress(ValueError):
             commits = int(proc.stdout.strip() or 0)
-        except ValueError:
-            pass
     proc = gitutil.run(["log", "--name-only", "--since=" + since,
                         "--pretty=format:"], cwd=Path.cwd(), check=False)
     if proc.returncode == 0:

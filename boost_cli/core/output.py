@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import sys
+import contextlib
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -36,10 +37,8 @@ def harden_console_encoding() -> None:
     """
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
-            try:
+            with contextlib.suppress(OSError, ValueError):
                 stream.reconfigure(encoding="utf-8", errors="replace")
-            except (OSError, ValueError):
-                pass
 
 
 def use_color(stream=None) -> bool:
@@ -273,7 +272,7 @@ def panel(lines, title: str | None = None, hue: str = "cyan") -> str:
         lines = [lines]
     widths = [visible_len(x) for x in lines]
     tw = visible_len(title) if title else 0
-    inner = max(widths + [tw + 2])  # a titled rule needs a space each side
+    inner = max([*widths, tw + 2])  # a titled rule needs a space each side
 
     def b(s: str) -> str:
         return aurora(s, hue)

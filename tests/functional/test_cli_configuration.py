@@ -23,8 +23,7 @@ from boost_cli.core import frontmatter, journal, paths, policy, util
 
 
 def _git(cwd, *args):
-    subprocess.run(["git", "-c", "user.email=t@t.test", "-c", "user.name=t"]
-                   + list(args), cwd=str(cwd), check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t.test", "-c", "user.name=t", *list(args)], cwd=str(cwd), check=True, capture_output=True)
 
 
 def _mk_repo(root):
@@ -706,7 +705,7 @@ class TestMcp:
     def test_registry_dispatches_and_lists_all_tools(self, sandbox):
         from boost_cli.commands import configuration
         # tools/list payload and the dispatcher share one registry
-        assert configuration._MCP_TOOLS == configuration.REGISTRY.specs()
+        assert configuration.REGISTRY.specs() == configuration._MCP_TOOLS
         assert "boost_discover_github" in configuration.REGISTRY.names()
         assert configuration._mcp_tool("nonexistent_tool", {}) == (None, False)
 
