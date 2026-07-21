@@ -88,20 +88,22 @@ class TestTilde:
 
     def test_path_under_home_contracts(self, sandbox):
         p = sandbox / "x" / "y"
-        assert paths.tilde(str(p)) == "~" + os.sep + "x" + os.sep + "y"
+        assert paths.tilde(str(p)) == "~/x/y"
 
     def test_sibling_prefix_not_contracted(self, sandbox):
         # regression: /Users/bob-backup must NOT contract to ~-backup when
         # home is /Users/bob. A separator boundary is required, not a bare
         # startswith(home).
         sibling = str(sandbox) + "-backup"
-        assert paths.tilde(sibling) == sibling
+        # tilde() always normalizes separators for display, even for a path
+        # outside $HOME — only the *contraction* is being asserted here.
+        assert paths.tilde(sibling) == sibling.replace(os.sep, "/")
 
     def test_path_outside_home_unchanged(self, sandbox):
         assert paths.tilde("/etc/hosts") == "/etc/hosts"
 
     def test_accepts_path_object(self, sandbox):
-        assert paths.tilde(sandbox / "cache") == "~" + os.sep + "cache"
+        assert paths.tilde(sandbox / "cache") == "~/cache"
 
     def test_resolved_home_contracts_through_symlink(self, tmp_path, monkeypatch):
         # HOME is a symlink; a path expressed against the *resolved* home must
@@ -113,7 +115,7 @@ class TestTilde:
         monkeypatch.setenv("HOME", str(link))
         monkeypatch.delenv("BOOST_HOME", raising=False)
         resolved = str(paths.home().resolve())
-        assert paths.tilde(resolved + os.sep + "sub") == "~" + os.sep + "sub"
+        assert paths.tilde(resolved + os.sep + "sub") == "~/sub"
 
 
 class TestEnsureDirs:

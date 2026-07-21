@@ -230,10 +230,18 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
         return None
     try:
         pool = max(k * _POOL, 200)
-        knn = con.execute(
-            "SELECT rowid, distance FROM vec_chunks "
-            "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-            (mod.serialize_float32(qv[0]), pool)).fetchall()
+        try:
+            knn = con.execute(
+                "SELECT rowid, distance FROM vec_chunks "
+                "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+                (mod.serialize_float32(qv[0]), pool)).fetchall()
+        except sqlite3.OperationalError:
+            # Some sqlite3/sqlite-vec combinations (observed on Windows)
+            # reject this exact query shape ("a LIMIT or 'k = ?' constraint
+            # is required") despite the bound LIMIT above — dense retrieval
+            # is genuinely unusable here, so fall back to BM25 rather than
+            # crash the search command.
+            return None
         if not knn:
             return []
         by_id = {r[0]: (r[1], r[2], r[3], r[4]) for r in con.execute(

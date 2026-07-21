@@ -16,11 +16,16 @@ from boost_cli.core import dense, embed, rag
 
 
 def _vec_loadable() -> bool:
-    """True only if sqlite-vec both imports *and* loads on this interpreter.
+    """True only if sqlite-vec both imports *and* loads on this interpreter,
+    AND can actually run the bound-LIMIT KNN query dense.py issues.
 
     macOS' bundled Python is often built without ``enable_load_extension``, so
-    the package imports but the extension can't load — dense retrieval is then
-    genuinely unavailable and the product degrades to BM25, so we skip here.
+    the package imports but the extension can't load. Some sqlite3/sqlite-vec
+    combinations (seen on Windows CI) load fine but reject a KNN query whose
+    LIMIT is a bound parameter with "a LIMIT or 'k = ?' constraint is
+    required" — a real query, not just vec_version(), is the only way to
+    catch that. Either way dense retrieval is genuinely unavailable here and
+    the product degrades to BM25, so we skip here.
     """
     try:
         import sqlite_vec  # type: ignore
@@ -31,6 +36,13 @@ def _vec_loadable() -> bool:
         con.enable_load_extension(True)
         sqlite_vec.load(con)
         con.execute("select vec_version()").fetchone()
+        con.execute("create virtual table t using vec0(embedding float[3])")
+        con.execute("insert into t(rowid, embedding) values (1, ?)",
+                    (sqlite_vec.serialize_float32([1.0, 0.0, 0.0]),))
+        con.execute(
+            "select rowid, distance from t where embedding match ? "
+            "order by distance limit ?",
+            (sqlite_vec.serialize_float32([1.0, 0.0, 0.0]), 5)).fetchall()
         return True
     except Exception:
         return False
@@ -221,6 +233,29 @@ class TestDenseHardening:
     def test_ready_true_with_single_chunk(self, dense_env):
         dense.build(entries=[_e("solo", "react")], force=True)
         assert dense.ready() is True          # kills a `rows > 1` mutant
+
+    def test_retrieve_none_when_knn_query_unsupported(self, dense_env, monkeypatch):
+        # Some sqlite3/sqlite-vec combinations (observed on Windows) reject
+        # the MATCH+LIMIT query shape outright — retrieve() must degrade to
+        # "fall back to BM25" (None), not crash the search command.
+        dense.build(entries=_ENTRIES, force=True)
+        real_connect = dense._connect
+
+        class _FlakyConnection:
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *args, **kwargs):
+                if "MATCH" in sql:
+                    raise sqlite3.OperationalError(
+                        "a LIMIT or 'k = ?' constraint is required on vec0 knn queries")
+                return self._real.execute(sql, *args, **kwargs)
+
+            def close(self):
+                self._real.close()
+
+        monkeypatch.setattr(dense, "_connect", lambda: _FlakyConnection(real_connect()))
+        assert dense.retrieve("react", entries=_ENTRIES) is None
 
     def test_scores_are_cosine_similarities(self, dense_env):
         dense.build(entries=_ENTRIES, force=True)

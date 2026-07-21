@@ -28,7 +28,9 @@ def _curses_available() -> bool:
 
 
 def _vec_loadable() -> bool:
-    """True only if sqlite-vec both imports and loads (see test_dense.py)."""
+    """True only if sqlite-vec both imports, loads, and can run a bound-LIMIT
+    KNN query (see test_dense.py — some sqlite3/sqlite-vec combinations load
+    fine but reject that query shape)."""
     try:
         import sqlite_vec  # type: ignore
     except ImportError:
@@ -38,6 +40,13 @@ def _vec_loadable() -> bool:
         con.enable_load_extension(True)
         sqlite_vec.load(con)
         con.execute("select vec_version()").fetchone()
+        con.execute("create virtual table t using vec0(embedding float[3])")
+        con.execute("insert into t(rowid, embedding) values (1, ?)",
+                    (sqlite_vec.serialize_float32([1.0, 0.0, 0.0]),))
+        con.execute(
+            "select rowid, distance from t where embedding match ? "
+            "order by distance limit ?",
+            (sqlite_vec.serialize_float32([1.0, 0.0, 0.0]), 5)).fetchall()
         return True
     except Exception:
         return False
