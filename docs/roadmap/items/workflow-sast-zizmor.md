@@ -2,14 +2,14 @@
 id: workflow-sast-zizmor
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: Security · CI/CD
 complexity: S
 impact: High
 wow: 5
 note: pipx-run
 order: 1
-owner:
+owner: loop/zizmor-workflow-sast
 pr:
 title: Workflow SAST — <code>zizmor</code>
 ---
