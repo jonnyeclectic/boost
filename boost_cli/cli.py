@@ -17,6 +17,7 @@ from .core import logs
 from .core import nethttp
 from .core import output as out
 from .errors import BoostError
+import contextlib
 
 # Global flags handled before dispatch, stripped from the command's own argv.
 _GLOBAL_FLAGS = {
@@ -174,7 +175,7 @@ def print_command_help(name: str) -> int:
     meta = resolve(name)
     if not meta:
         return _unknown(name)
-    _group, module, summary = meta
+    _group, _module, summary = meta
     print(out.c("boost %s" % name, out.BOLD) + " — " + summary)
     # delegate to the command's own --help for flags
     return _dispatch(name, ["--help"], soft=True)
@@ -196,7 +197,7 @@ def _unknown(name: str) -> int:
 
 
 def _dispatch(name: str, argv: List[str], soft: bool = False) -> int:
-    group, module, _summary = _BY_NAME[name]
+    _group, module, _summary = _BY_NAME[name]
     mod = importlib.import_module("boost_cli.commands.%s" % module)
     func = getattr(mod, "cmd_%s" % name.replace("-", "_"), None)
     if func is None:
@@ -264,13 +265,11 @@ def main(argv: List[str] | None = None) -> int:
         print()
         return rc
     except BrokenPipeError:
-        try:
+        with contextlib.suppress(Exception):
             sys.stdout.close()
-        except Exception:
-            pass
         rc = 0
         return rc
-    except Exception as e:  # noqa: BLE001 — top-level safety net
+    except Exception as e:
         report = logs.write_crash_report(e, [name, *rest])
         if logs.is_debug():
             raise

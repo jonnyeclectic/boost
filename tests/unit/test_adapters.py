@@ -5,6 +5,7 @@ output is valid Python, so any template mutation (dropped field, swapped kwarg,
 broken escaping) fails a test.
 """
 import ast
+from typing import ClassVar
 
 import pytest
 
@@ -162,7 +163,7 @@ class TestRenderAgentsSdk:
 class TestAdversarialBodiesStayValid:
     """A skill body full of quote/escape hazards must still emit valid Python."""
 
-    HAZARDS = [
+    HAZARDS: ClassVar[list] = [
         'has "double" and \'single\' quotes',
         'triple """ quotes """ inside',
         "trailing backslash \\",

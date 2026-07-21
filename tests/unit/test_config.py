@@ -61,7 +61,7 @@ class TestDeepMerge:
         cfg = config.load()
         assert cfg["agents"]["claude-code"]["enabled"] is False
         assert cfg["extra"] == 1
-        assert config.DEFAULTS == snapshot
+        assert snapshot == config.DEFAULTS
 
 
 class TestSaveRoundtrip:

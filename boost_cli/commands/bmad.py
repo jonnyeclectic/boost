@@ -119,7 +119,7 @@ def _run_installer(directory: Path, modules: str) -> "subprocess.CompletedProces
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise BoostError("bmad install failed: %s" % e,
-                         hint="run it yourself: " + " ".join(cmd))
+                         hint="run it yourself: " + " ".join(cmd)) from e
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()
         raise BoostError(

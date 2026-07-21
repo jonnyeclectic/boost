@@ -12,6 +12,7 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
+import contextlib
 
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
@@ -59,10 +60,8 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
         os.replace(tmp, str(path))
     except BaseException:
         # Never leave a temp turd behind, and never mask the original error.
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 

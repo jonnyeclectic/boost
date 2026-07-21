@@ -255,7 +255,7 @@ def _save(docs: List[dict], commits: Dict[str, str]) -> None:
         "stats": {"docs": len(docs),
                   "avg_len": (total_len / len(docs)) if docs else 0.0},
         "docs": meta_docs,
-        "postings": {t: p for t, p in postings.items()},
+        "postings": dict(postings.items()),
     }
     paths.ensure_dirs()
     p = index_path()
@@ -317,7 +317,7 @@ def ensure() -> bool:
         return False
     try:
         build()
-    except Exception:  # noqa: BLE001 — degrade to heuristic, never crash search
+    except Exception:
         return False
     return ready()
 

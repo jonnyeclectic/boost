@@ -17,8 +17,7 @@ FALLBACK = "using the heuristic fallback"
 
 
 def _git(cwd, *args):
-    subprocess.run(["git", "-c", "user.email=t@t.test", "-c", "user.name=t"]
-                   + list(args), cwd=str(cwd), check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t.test", "-c", "user.name=t", *list(args)], cwd=str(cwd), check=True, capture_output=True)
 
 
 def _git_repo(root, *subjects):

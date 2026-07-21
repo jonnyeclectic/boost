@@ -568,7 +568,7 @@ def _bundle_dump(file: Optional[str]) -> int:
         dest.write_text(text, encoding="utf-8")
     except OSError as e:
         raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
-                        hint="check the path exists and is writable")
+                        hint="check the path exists and is writable") from e
     n_taps = sum(1 for ln in text.splitlines() if ln.startswith("tap "))
     n_skills = sum(1 for ln in text.splitlines() if ln.startswith("skill "))
     out.ok("wrote %s (%s, %s)" % (_tilde(dest), _plural(n_taps, "tap"),
@@ -591,7 +591,7 @@ def _bundle_install(file: Optional[str]) -> int:
         try:
             text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
-            raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e))
+            raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e)) from e
     taps_added = installed_n = present = failed = 0
     have_taps = {t.name for t in registry.list_taps()}
     have_skills = set(lockfile.installed())
@@ -929,18 +929,18 @@ def _snapshot_restore(snap_id: str) -> int:
     # Read the whole archive BEFORE touching the store, so a corrupt
     # snapshot can never leave us with an emptied environment.
     try:
-        tf = tarfile.open(str(tar_path), "r:gz")
+        tf = tarfile.open(str(tar_path), "r:gz")  # noqa: SIM115  (opened in a try to translate the error; used via `with tf:` below)
     except (tarfile.TarError, OSError, EOFError) as e:
         raise BoostError("snapshot %s is unreadable: %s" % (snap_id, e),
                         hint="the store was left untouched — "
-                             "see `boost snapshot list` for other snapshots")
+                             "see `boost snapshot list` for other snapshots") from e
     with tf:
         try:
             members = tf.getmembers()
         except (tarfile.TarError, OSError, EOFError) as e:
             raise BoostError("snapshot %s is corrupt: %s" % (snap_id, e),
                             hint="the store was left untouched — "
-                                 "see `boost snapshot list` for other snapshots")
+                                 "see `boost snapshot list` for other snapshots") from e
         for child in root.iterdir():
             if child.is_dir() and not child.is_symlink():
                 util.rmtree(child)
@@ -1012,7 +1012,7 @@ def cmd_export(argv: List[str]) -> int:
                     tf.add(str(store.skill_store_dir(name)), arcname=name)
     except OSError as e:
         raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
-                        hint="check the output path exists and is writable")
+                        hint="check the output path exists and is writable") from e
     out.ok("exported %s → %s (%s)" % (_plural(len(chosen), "skill"),
                                       _tilde(dest.resolve()),
                                       util.human_size(dest.stat().st_size)))
@@ -1063,7 +1063,7 @@ def cmd_adapt(argv: List[str]) -> int:
             util.atomic_write_text(dest, source)
         except OSError as e:
             raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
-                            hint="check the output path exists and is writable")
+                            hint="check the output path exists and is writable") from e
         out.ok("adapted %s → %s (%s · %s)" % (display, _tilde(dest.resolve()),
                                               args.to, model or "framework default"))
     else:

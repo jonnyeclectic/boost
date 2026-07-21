@@ -107,10 +107,12 @@ def scan_text(text: str) -> List[Finding]:
     """
     findings: List[Finding] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):
-        for rule in RULES:
-            if rule.pattern.search(raw):
-                findings.append(Finding(rule.id, rule.severity, lineno,
-                                        raw.strip()[:200], rule.description))
+        findings.extend(
+            Finding(rule.id, rule.severity, lineno,
+                    raw.strip()[:200], rule.description)
+            for rule in RULES
+            if rule.pattern.search(raw)
+        )
     findings.sort(key=lambda f: (-_SEVERITY_RANK[f.severity], f.line,
                                  f.rule_id))
     return findings

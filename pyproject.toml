@@ -85,10 +85,12 @@ boost_cli = ["data/*.json"]
 target-version = "py39"
 
 [tool.ruff.lint]
-# Turn on flake8-bandit (S) — Python SAST smells ruff's default E/F set is
-# blind to: shell=True, assert-as-runtime-check, tempfile.mktemp, unsafe
-# yaml.load, hardcoded secrets, weak hashing. Zero new tools.
-extend-select = ["S"]
+# Beyond the default E/F set, turn on families that catch real bug, readability
+# and performance smells at zero new-tool cost (ruff already runs in the lint
+# gate): flake8-bandit (S, Python SAST — shell=True, tempfile.mktemp, unsafe
+# yaml.load, weak hashing), flake8-bugbear (B), flake8-simplify (SIM),
+# flake8-comprehensions (C4), perflint (PERF) and Ruff-native (RUF).
+extend-select = ["S", "B", "SIM", "C4", "PERF", "RUF"]
 ignore = [
     # boost is a CLI that shells out to git by design: every subprocess call
     # passes an argument LIST (never a shell string) and resolves `git` via
@@ -99,6 +101,17 @@ ignore = [
     # (logger teardown, corrupt-lock preservation, the crash handler) where a
     # raised exception would be worse than the one being swallowed.
     "S110",  # try-except-pass
+    # Ambiguous-unicode: boost's output is deliberately typographic — em dashes,
+    # arrows (→), middots (·) and the ❯ prompt ornament are the Aurora UI
+    # language (see the BOOST-D design items), not typos to be "corrected".
+    "RUF001",  # ambiguous-unicode-character-string
+    "RUF002",  # ambiguous-unicode-character-docstring
+    "RUF003",  # ambiguous-unicode-character-comment
+    # boost's scan/index/update loops wrap each item in try/except on purpose so
+    # one corrupt file or unreachable tap is skipped, not fatal to the whole
+    # batch. Hoisting the handler out of the loop would trade that resilience
+    # for a negligible per-iteration saving.
+    "PERF203",  # try-except-in-loop
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -246,9 +246,9 @@ class TestTokens:
                 output.rgb(r, g, b) + "x" + output.RESET)
 
     def test_gradient_stops_are_tokens(self):
-        assert output._GRAD_STOPS == (output.TOKENS["cyan"],
+        assert (output.TOKENS["cyan"],
                                       output.TOKENS["violet"],
-                                      output.TOKENS["pink"])
+                                      output.TOKENS["pink"]) == output._GRAD_STOPS
 
 
 class TestGradient:

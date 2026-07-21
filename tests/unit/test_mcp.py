@@ -200,25 +200,25 @@ class TestServeStdio:
         assert code == 0 and resps == []
 
     def test_blank_lines_skipped(self):
-        code, resps = self._run(["", "   ", json.dumps({"id": 1, "method": "ping"})])
+        _code, resps = self._run(["", "   ", json.dumps({"id": 1, "method": "ping"})])
         assert [r["id"] for r in resps] == [1]
 
     def test_notification_produces_no_line(self):
-        code, resps = self._run([
+        _code, resps = self._run([
             json.dumps({"method": "notifications/initialized"}),
             json.dumps({"id": 1, "method": "ping"}),
         ])
         assert len(resps) == 1 and resps[0]["id"] == 1
 
     def test_invalid_json_emits_parse_error(self):
-        code, resps = self._run(["this is not json",
+        _code, resps = self._run(["this is not json",
                                  json.dumps({"id": 2, "method": "ping"})])
         assert resps[0]["error"]["code"] == -32700
         assert resps[0]["id"] is None
         assert resps[1]["id"] == 2
 
     def test_full_sequence_and_version_passthrough(self):
-        code, resps = self._run([
+        _code, resps = self._run([
             json.dumps({"id": 1, "method": "initialize"}),
             json.dumps({"id": 2, "method": "tools/list"}),
             json.dumps({"id": 3, "method": "tools/call",

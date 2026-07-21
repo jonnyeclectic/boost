@@ -1,6 +1,8 @@
 """Unit tests: boost_cli/core/typosquat.py — edit distance & name confusion."""
 from __future__ import annotations
 
+from typing import ClassVar
+
 from boost_cli.core import typosquat
 
 
@@ -45,7 +47,7 @@ class TestEditDistance:
 
 
 class TestConfusableNames:
-    NAMES = ["brainstorm", "brainstorms", "brainstom", "commit", "unrelated"]
+    NAMES: ClassVar[list] = ["brainstorm", "brainstorms", "brainstom", "commit", "unrelated"]
 
     def test_finds_distance_one_only_by_default(self):
         got = typosquat.confusable_names("brainstorm", self.NAMES)

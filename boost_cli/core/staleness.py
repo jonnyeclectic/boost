@@ -35,9 +35,8 @@ def upstream_reason(installed_version: str, latest_version: str,
     """
     if util.semver_gt(latest_version, installed_version):
         return VERSION
-    if tap_head and tap_head != installed_commit:
-        if source_sha is not None and source_sha != installed_sha:
-            return CONTENT
+    if tap_head and tap_head != installed_commit and source_sha is not None and source_sha != installed_sha:
+        return CONTENT
     return None
 
 

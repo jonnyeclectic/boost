@@ -26,6 +26,7 @@ from typing import List, Optional
 
 from . import paths, util
 from ..errors import BoostError
+import contextlib
 
 SCOPES = ("global", "project")
 MARKER = "# boost:"
@@ -87,10 +88,8 @@ def _prune_history() -> None:
     snaps = sorted(_history_dir().glob("*.json"),
                    key=lambda f: (f.stat().st_mtime, f.name))
     for old in snaps[:-HISTORY_KEEP]:
-        try:
+        with contextlib.suppress(OSError):
             old.unlink()
-        except OSError:
-            pass
 
 
 # --------------------------------------------------------------- marker helpers

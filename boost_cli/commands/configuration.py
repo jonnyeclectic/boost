@@ -72,7 +72,7 @@ def cmd_config(argv) -> int:
         except TypeError as e:
             raise BoostError(str(e),
                             hint="the parent key holds a plain value — "
-                                 "`boost config unset` it first")
+                                 "`boost config unset` it first") from e
         val = config.get(args.key)
         journal.log("config", args.key, op="set")
         out.ok("set %s = %s"
@@ -101,25 +101,31 @@ def cmd_clean(argv) -> int:
                    help="also remove snapshots older than 90 days")
     args = p.parse_args(argv)
 
-    items = []  # (path, kind, bytes)
-    for _agent, spec in agents.known_agents().items():
+    items: list[tuple[Path, str, int]] = []  # (path, kind, bytes)
+    for spec in agents.known_agents().values():
         adir = spec["dir"]
         if not adir.is_dir():
             continue
-        for link in sorted(adir.iterdir()):
-            if link.is_symlink() and not link.exists():
-                items.append((link, "broken symlink", 0))
+        items.extend(
+            (link, "broken symlink", 0)
+            for link in sorted(adir.iterdir())
+            if link.is_symlink() and not link.exists()
+        )
 
     configured = {t.safe_name for t in registry.list_taps()}
     if paths.cache_dir().is_dir():
-        for f in sorted(paths.cache_dir().glob("*.json")):
-            if f.stem not in configured:
-                items.append((f, "stale tap cache", f.stat().st_size))
+        items.extend(
+            (f, "stale tap cache", f.stat().st_size)
+            for f in sorted(paths.cache_dir().glob("*.json"))
+            if f.stem not in configured
+        )
 
     if paths.lock_history_dir().is_dir():
         snaps = sorted(paths.lock_history_dir().glob("lock-*.json"))
-        for old in snaps[:-50]:
-            items.append((old, "old lock history", old.stat().st_size))
+        items.extend(
+            (old, "old lock history", old.stat().st_size)
+            for old in snaps[:-50]
+        )
 
     if paths.store_dir().is_dir():
         for pth in sorted(paths.store_dir().rglob("*")):
@@ -442,7 +448,7 @@ def cmd_onboard(argv) -> int:
                                   text=True, timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
             raise BoostError("gh pr create failed: %s" % e,
-                            hint="branch %s is committed — push it and open the PR manually" % branch)
+                            hint="branch %s is committed — push it and open the PR manually" % branch) from e
         if proc.returncode != 0:
             tail = (proc.stderr or proc.stdout or "").strip().splitlines()
             raise BoostError("gh pr create failed: %s" % (tail[-1] if tail else "unknown error"),
@@ -669,7 +675,7 @@ def cmd_schedule(argv) -> int:
                 kept = [ln for ln in lines if not ln.rstrip().endswith(_CRON_MARK)]
                 try:
                     proc = subprocess.run(["crontab", "-"],
-                                          input="\n".join(kept + [entry]) + "\n",
+                                          input="\n".join([*kept, entry]) + "\n",
                                           capture_output=True, text=True, timeout=30)
                 except (OSError, subprocess.TimeoutExpired):
                     proc = None
@@ -943,7 +949,7 @@ def cmd_mcp(argv) -> int:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired) as e:
             raise BoostError("claude mcp %s failed: %s" % (args.action, e),
-                            hint="run it yourself: " + " ".join(cmd))
+                            hint="run it yourself: " + " ".join(cmd)) from e
         for ln in (proc.stdout or "").strip().splitlines():
             out.info(ln)
         if proc.returncode != 0:

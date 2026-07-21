@@ -183,7 +183,7 @@ def _load_profile(name: str) -> dict:
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
-        raise BoostError("profile %s is unreadable: %s" % (name, e))
+        raise BoostError("profile %s is unreadable: %s" % (name, e)) from e
 
 
 def _profile_diff(profile: dict):

@@ -55,8 +55,7 @@ def _vec_loadable() -> bool:
 
 
 def _git(cwd, *args):
-    subprocess.run(["git", "-c", "user.email=t@t.test", "-c", "user.name=t"]
-                   + list(args), cwd=str(cwd), check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t.test", "-c", "user.name=t", *list(args)], cwd=str(cwd), check=True, capture_output=True)
 
 
 def _make_tap(root):

@@ -150,8 +150,7 @@ def dump(meta: dict) -> str:
     for k, v in meta.items():
         if isinstance(v, list):
             lines.append("%s:" % k)
-            for item in v:
-                lines.append("  - %s" % item)
+            lines.extend("  - %s" % item for item in v)
         elif isinstance(v, bool):
             lines.append("%s: %s" % (k, "true" if v else "false"))
         elif v is None:

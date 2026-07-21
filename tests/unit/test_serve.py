@@ -51,7 +51,7 @@ class TestRoute:
 
     def test_installed_json(self, monkeypatch):
         _patch_catalog(monkeypatch, installed={"a": {"version": "1"}})
-        status, ctype, body = serve.route("/installed.json")
+        status, _ctype, body = serve.route("/installed.json")
         assert status == 200
         data = json.loads(body)
         assert data["version"] == 3 and "a" in data["skills"]
@@ -72,7 +72,7 @@ class TestRoute:
 
     def test_skill_invalid_name_404(self, monkeypatch):
         _patch_catalog(monkeypatch)
-        status, ctype, body = serve.route("/skill/bad name!")
+        status, _ctype, body = serve.route("/skill/bad name!")
         assert status == 404
         assert "no skill named" in json.loads(body)["error"]
 
@@ -80,13 +80,13 @@ class TestRoute:
         _patch_catalog(monkeypatch)
         monkeypatch.setattr(serve.store, "skill_store_dir",
                             lambda n: tmp_path / "missing")
-        status, ctype, body = serve.route("/skill/ghost")
+        status, _ctype, body = serve.route("/skill/ghost")
         assert status == 404
         assert json.loads(body)["error"] == "no skill named 'ghost'"
 
     def test_unknown_path_404(self, monkeypatch):
         _patch_catalog(monkeypatch)
-        status, ctype, body = serve.route("/nope")
+        status, _ctype, body = serve.route("/nope")
         assert status == 404
         assert json.loads(body) == {"error": "not found"}
 
