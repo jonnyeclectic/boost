@@ -1,0 +1,17 @@
+# gitleaks configuration — secret-scanning gate (see .github/workflows/ci.yml).
+#
+# Extends gitleaks' upstream default ruleset (which covers cloud keys, tokens,
+# private keys, high-entropy strings, …) and allowlists the one place boost
+# ships *synthetic* secrets on purpose: its own secret-scanner test fixtures.
+# Everything else — source, docs, real history — is scanned unmodified.
+
+title = "boost gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "boost's own secret-scanner tests ship synthetic private keys / tokens by design (they exist to prove core/secretscan.py flags them)"
+paths = [
+    '''tests/unit/test_secretscan\.py''',
+]
