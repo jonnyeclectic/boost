@@ -130,8 +130,10 @@ def main() -> int:
     for name, spec in SKILLS.items():
         d = skills_root / name
         d.mkdir(parents=True, exist_ok=True)
-        (d / "SKILL.md").write_text(spec["frontmatter"] + "\n\n" + spec["body"])
-    (dest / "README.md").write_text("# fixture-tap\n\nSample skills for boost tests.\n")
+        (d / "SKILL.md").write_text(spec["frontmatter"] + "\n\n" + spec["body"],
+                                    encoding="utf-8")
+    (dest / "README.md").write_text("# fixture-tap\n\nSample skills for boost tests.\n",
+                                    encoding="utf-8")
     run = lambda *a: subprocess.run(a, cwd=dest, check=True, capture_output=True)
     run("git", "init", "-q")
     run("git", "config", "user.email", "fixture@boost.test")

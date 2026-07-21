@@ -28,7 +28,7 @@ def test_adapt_writes_file_with_o(boost, installed, tmp_path):
     dest = tmp_path / "out" / "reviewer.py"
     r = boost("adapt", installed, "--to", "crewai", "-o", str(dest))
     assert dest.exists()
-    compile(dest.read_text(), "<crewai>", "exec")
+    compile(dest.read_text(encoding="utf-8"), "<crewai>", "exec")
     assert "adapted" in r.out  # success line
 
 

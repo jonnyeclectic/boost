@@ -69,10 +69,15 @@ jobs:
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write  # coverage badge push (main only)
+    defaults:
+      run:
+        # Windows' default runner shell is pwsh; Git for Windows ships a bash
+        # on PATH, so pin bash everywhere and keep one script per step.
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.9", "3.12", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -86,16 +91,18 @@ jobs:
         run: |
           git config --global user.email ci@boost.test
           git config --global user.name "Boost CI"
+      - name: venv bin dir (Windows uses Scripts/, not bin/)
+        run: echo "VENV_BIN=.venv/$( [ "$RUNNER_OS" = Windows ] && echo Scripts || echo bin )" >> "$GITHUB_ENV"
       - name: install test deps
         run: |
           python -m venv .venv
           # hypothesis powers the property-based parser tests (tests/functional)
-          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis
+          "$VENV_BIN/pip" -q install pytest pytest-cov coverage hypothesis
           # [rag] extra so the opt-in dense backend is exercised (py3-none
           # wheel; falls back to importorskip if a platform lacks it)
-          .venv/bin/pip -q install sqlite-vec || true
+          "$VENV_BIN/pip" -q install sqlite-vec || true
       - name: unit + functional (80% coverage gate)
-        run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=term-missing --cov-report=json -q
+        run: "\"$VENV_BIN/pytest\" tests/unit tests/functional --cov=boost_cli --cov-report=term-missing --cov-report=json -q"
       - name: shell smoke suite (152 checks, sandboxed)
         run: bash tests/smoke.sh | tee /tmp/smoke.out
       - name: job summary (coverage + counts)
@@ -105,7 +112,7 @@ jobs:
             echo "### boost CI — ${{ matrix.os }} · py${{ matrix.python }}"
             echo ""
             if [ -f coverage.json ]; then
-              PCT=$(.venv/bin/python -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'],1))")
+              PCT=$("$VENV_BIN/python" -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'],1))")
               echo "- **Coverage:** ${PCT}% (gate: 80%)"
             fi
             SMOKE=$(grep -Eo '[0-9]+ passed, [0-9]+ failed' /tmp/smoke.out | tail -1 || true)
@@ -114,7 +121,7 @@ jobs:
       - name: publish coverage badge
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && github.ref == 'refs/heads/main'
         run: |
-          PCT=$(.venv/bin/python -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered']))")
+          PCT=$("$VENV_BIN/python" -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered']))")
           mkdir /tmp/badges && cd /tmp/badges
           printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"brightgreen"}\n' "$PCT" > coverage.json
           git init -q -b badges

@@ -10,6 +10,7 @@ import getpass
 import hashlib
 import json
 import stat
+import sys
 
 import pytest
 
@@ -149,7 +150,7 @@ class TestProfile:
         assert "installed tdd-workflow → claude-code · windsurf · cursor" in r.out
         assert "switched to profile daily" in r.out
         assert "tdd-workflow" in json.loads(
-            paths.lockfile_path().read_text())["skills"]
+            paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
     def test_use_sidelines_then_prune_uninstalls_extras(self, boost, tapped):
         boost("install", "brainstorming")
@@ -170,14 +171,14 @@ class TestProfile:
         assert "uninstalled cowboy-coding" in r.out
         assert not (paths.store_dir() / "cowboy-coding").exists()
         assert "cowboy-coding" not in json.loads(
-            paths.lockfile_path().read_text())["skills"]
+            paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
     def test_version_drift_shows_changed(self, boost, installed):
         boost("profile", "save", "pin")
         p = paths.lockfile_path()
-        lock = json.loads(p.read_text())
+        lock = json.loads(p.read_text(encoding="utf-8"))
         lock["skills"]["brainstorming"]["version"] = "0.9.0"
-        p.write_text(json.dumps(lock))
+        p.write_text(json.dumps(lock), encoding="utf-8")
         r = boost("profile", "diff", "pin")
         assert "~ brainstorming" in r.out and "(version differs)" in r.out
         r = boost("profile", "diff", "pin", "--json")
@@ -259,8 +260,10 @@ class TestProtocol:
         r = boost("protocol", "register")
         script = paths.state_dir() / "boost-protocol-handler.sh"
         assert "wrote handler script ~/.boost/state/boost-protocol-handler.sh" in r.out
-        assert script.stat().st_mode & stat.S_IEXEC
-        body = script.read_text()
+        if sys.platform != "win32":
+            # Windows filesystems have no POSIX exec bit for chmod to set.
+            assert script.stat().st_mode & stat.S_IEXEC
+        body = script.read_text(encoding="utf-8")
         assert 'protocol open "$1"' in body
         assert str(paths.repo_root() / "boost") in body
         assert "Automator" in r.out  # macOS guidance
@@ -283,7 +286,7 @@ class TestProtocol:
         desktop = (paths.home() / ".local" / "share" / "applications" /
                    "boost-protocol.desktop")
         assert desktop.exists()
-        assert "x-scheme-handler/boost" in desktop.read_text()
+        assert "x-scheme-handler/boost" in desktop.read_text(encoding="utf-8")
         assert "xdg-mime not found — handler written but not registered" in r.out
         r = boost("protocol", "status")
         assert "boost-protocol.desktop" in r.out
@@ -380,7 +383,7 @@ class TestReplay:
         assert "uninstalled cowboy-coding" in r.out
         assert "restored brainstorming → claude-code · windsurf · cursor" in r.out
         assert "rollback to %s complete" % snap_id in r.out
-        skills = json.loads(paths.lockfile_path().read_text())["skills"]
+        skills = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
         assert sorted(skills) == ["brainstorming", "tdd-workflow"]
         assert (paths.store_dir() / "brainstorming").is_dir()
         assert not (paths.store_dir() / "cowboy-coding").exists()
@@ -397,7 +400,7 @@ class TestReplay:
         r = boost("replay", "rollback", snap_id, expect=1)
         assert "cancelled" in r.out
         assert "cowboy-coding" in json.loads(
-            paths.lockfile_path().read_text())["skills"]
+            paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
     def test_rollback_skill_gone_from_taps(self, boost, tapped, tick_clock):
         boost("install", "brainstorming")

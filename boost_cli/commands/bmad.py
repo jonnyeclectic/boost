@@ -192,7 +192,7 @@ def _copy_global_skills(modules) -> int:
                 continue
             t = dest / d.name
             if t.exists():
-                shutil.rmtree(t)
+                util.rmtree(t)
             shutil.copytree(d, t)
             n += 1
         return n
@@ -278,7 +278,7 @@ def _disable(scope) -> int:
     for d in sorted(_skills_dir(scope).glob("bmad-*")):
         target = qdir / d.name
         if target.exists():
-            shutil.rmtree(target)
+            util.rmtree(target)
         shutil.move(str(d), str(target))
         moved += 1
     _set_scope_state(scope, startup=False, disabled=True)
@@ -298,7 +298,7 @@ def _enable(scope) -> int:
         for d in sorted(qdir.glob("bmad-*")):
             target = dest / d.name
             if target.exists():
-                shutil.rmtree(target)
+                util.rmtree(target)
             shutil.move(str(d), str(target))
             restored += 1
     _set_scope_state(scope, disabled=False)
@@ -366,7 +366,7 @@ def _state_read() -> dict:
     if not p.exists():
         return {"global": {}, "projects": {}}
     try:
-        d = json.loads(p.read_text())
+        d = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {"global": {}, "projects": {}}
     d.setdefault("global", {})
@@ -376,7 +376,7 @@ def _state_read() -> dict:
 
 def _state_write(d: dict) -> None:
     paths.ensure_dirs()
-    _state_path().write_text(json.dumps(d, indent=2) + "\n")
+    _state_path().write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
 
 
 def _proj_key() -> str:

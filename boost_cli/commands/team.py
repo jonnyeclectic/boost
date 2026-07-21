@@ -40,14 +40,14 @@ def _load_cohorts() -> dict:
     if not p.exists():
         return {}
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return {}
 
 
 def _save_cohorts(cohorts: dict) -> None:
     paths.ensure_dirs()
-    _cohorts_path().write_text(json.dumps(cohorts, indent=2) + "\n")
+    _cohorts_path().write_text(json.dumps(cohorts, indent=2) + "\n", encoding="utf-8")
 
 
 def _is_member(user: str, cohort_name: str, percent: int) -> bool:
@@ -181,7 +181,7 @@ def _load_profile(name: str) -> dict:
         raise BoostError("no profile named %s" % name,
                         hint="list profiles with `boost profile list`")
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as e:
         raise BoostError("profile %s is unreadable: %s" % (name, e))
 
@@ -217,7 +217,7 @@ def cmd_profile(argv) -> int:
         profiles = []
         for f in sorted(paths.profiles_dir().glob("*.json")):
             try:
-                data = json.loads(f.read_text())
+                data = json.loads(f.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
             profiles.append({"name": data.get("name", f.stem),
@@ -242,7 +242,7 @@ def cmd_profile(argv) -> int:
                                   "version": e.get("version", "0.0.0")}
                               for n, e in installed.items()}}
         paths.ensure_dirs()
-        _profile_path(args.name).write_text(json.dumps(profile, indent=2) + "\n")
+        _profile_path(args.name).write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         journal.log("profile", args.name, op="save", skills=len(installed))
         out.ok("saved profile %s (%d skills)" % (args.name, len(installed)))
         return 0
@@ -390,7 +390,7 @@ def cmd_protocol(argv) -> int:
         script = _handler_script()
         script.write_text("#!/usr/bin/env bash\n"
                           "# boost:// URL handler — invoked with the URL as $1\n"
-                          'exec "%s" protocol open "$1"\n' % shim)
+                          'exec "%s" protocol open "$1"\n' % shim, encoding="utf-8")
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         out.ok("wrote handler script %s" % _tilde(script))
         if system == "Darwin":
@@ -404,7 +404,7 @@ def cmd_protocol(argv) -> int:
             desktop.parent.mkdir(parents=True, exist_ok=True)
             desktop.write_text("[Desktop Entry]\nType=Application\nName=boost protocol handler\n"
                                "Exec=%s %%u\nMimeType=x-scheme-handler/boost;\nNoDisplay=true\n"
-                               % script)
+                               % script, encoding="utf-8")
             out.ok("wrote %s" % _tilde(desktop))
             if shutil.which("xdg-mime"):
                 import subprocess

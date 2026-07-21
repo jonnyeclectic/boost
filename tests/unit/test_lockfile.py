@@ -17,7 +17,7 @@ def _make_snaps(n):
     d = paths.lock_history_dir()
     names = ["lock-%04dfake.json" % i for i in range(n)]
     for nm in names:
-        (d / nm).write_text("{}")
+        (d / nm).write_text("{}", encoding="utf-8")
     return names
 
 
@@ -30,7 +30,7 @@ class TestRead:
 
     def test_corrupt_file_returns_skeleton(self, sandbox):
         paths.ensure_dirs()
-        paths.lockfile_path().write_text("{definitely not json")
+        paths.lockfile_path().write_text("{definitely not json", encoding="utf-8")
         lock = lockfile.read()
         assert lock["version"] == 3
         assert lock["skills"] == {}
@@ -38,11 +38,11 @@ class TestRead:
     def test_corrupt_file_preserved_as_sidecar(self, sandbox):
         paths.ensure_dirs()
         p = paths.lockfile_path()
-        p.write_text("{definitely not json")
+        p.write_text("{definitely not json", encoding="utf-8")
         lockfile.read()
         backup = p.with_name(p.name + ".corrupt")
         assert backup.exists()
-        assert backup.read_text() == "{definitely not json"
+        assert backup.read_text(encoding="utf-8") == "{definitely not json"
 
     def test_missing_file_leaves_no_sidecar(self, sandbox):
         lockfile.read()
@@ -54,19 +54,19 @@ class TestRead:
         # only surviving copy of the earlier records — they live on in .corrupt.
         paths.ensure_dirs()
         p = paths.lockfile_path()
-        p.write_text('{"skills": {"old": {"version": "1.0"}}, TRAILING GARBAGE')
+        p.write_text('{"skills": {"old": {"version": "1.0"}}, TRAILING GARBAGE', encoding="utf-8")
         lockfile.set_skill("new", {"version": "2.0"})
         assert set(lockfile.installed()) == {"new"}      # skeleton took over
         backup = p.with_name(p.name + ".corrupt")
-        assert '"old"' in backup.read_text()             # but old bytes survive
+        assert '"old"' in backup.read_text(encoding="utf-8")             # but old bytes survive
 
     def test_missing_keys_defaulted(self, sandbox):
         paths.ensure_dirs()
-        paths.lockfile_path().write_text('{"skills": {"a": {}}}')
+        paths.lockfile_path().write_text('{"skills": {"a": {}}}', encoding="utf-8")
         lock = lockfile.read()
         assert lock["version"] == 3
         assert lock["skills"] == {"a": {}}
-        paths.lockfile_path().write_text('{"version": 2}')
+        paths.lockfile_path().write_text('{"version": 2}', encoding="utf-8")
         lock = lockfile.read()
         assert lock["version"] == 2      # preserved, only defaulted when absent
         assert lock["skills"] == {}
@@ -75,7 +75,7 @@ class TestRead:
 class TestWrite:
     def test_write_stamps_version_and_updated(self, sandbox):
         lockfile.write({"version": 99, "skills": {"a": {"version": "1.0"}}})
-        data = json.loads(paths.lockfile_path().read_text())
+        data = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert data["version"] == 3
         assert re.fullmatch(ISO, data["updated"])
         assert data["skills"] == {"a": {"version": "1.0"}}
@@ -83,11 +83,11 @@ class TestWrite:
     def test_first_write_no_snapshot_second_write_one(self, sandbox):
         lockfile.write({"skills": {"a": {}}})
         assert list(paths.lock_history_dir().glob("lock-*.json")) == []
-        first_text = paths.lockfile_path().read_text()
+        first_text = paths.lockfile_path().read_text(encoding="utf-8")
         lockfile.write({"skills": {"a": {}, "b": {}}})
         snaps = list(paths.lock_history_dir().glob("lock-*.json"))
         assert len(snaps) == 1
-        assert snaps[0].read_text() == first_text  # snapshot is the PREVIOUS lock
+        assert snaps[0].read_text(encoding="utf-8") == first_text  # snapshot is the PREVIOUS lock
         assert re.fullmatch(r"lock-\d{8}T\d{6}Z\.json", snaps[0].name)
 
     def test_rapid_writes_each_get_a_snapshot(self, sandbox):
@@ -150,10 +150,10 @@ class TestHistory:
         paths.ensure_dirs()
         d = paths.lock_history_dir()
         (d / "lock-20250101T000000Z.json").write_text(
-            json.dumps({"updated": "u1", "skills": {"a": {}, "b": {}}}))
+            json.dumps({"updated": "u1", "skills": {"a": {}, "b": {}}}), encoding="utf-8")
         (d / "lock-20250102T000000Z.json").write_text(
-            json.dumps({"skills": {"only": {}}}))
-        (d / "lock-19990101T000000Z.json").write_text("corrupt not json")
+            json.dumps({"skills": {"only": {}}}), encoding="utf-8")
+        (d / "lock-19990101T000000Z.json").write_text("corrupt not json", encoding="utf-8")
 
     def test_history_list_shape_and_order(self, sandbox):
         self._seed_history()

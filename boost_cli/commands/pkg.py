@@ -22,14 +22,7 @@ from ..core import output as out
 from ..errors import BoostError
 
 
-def _tilde(p) -> str:
-    """Contract $HOME to ~ for display (also matches the resolved home,
-    so /private/var vs /var symlinks on macOS still contract)."""
-    s = str(p)
-    for h in (str(paths.home()), str(paths.home().resolve())):
-        if s == h or s.startswith(h + os.sep):
-            return "~" + s[len(h):]
-    return s
+_tilde = paths.tilde
 
 
 def _plural(n: int, word: str) -> str:
@@ -338,7 +331,7 @@ def cmd_sync(argv: List[str]) -> int:
             for name in orphans:
                 target = store.skill_store_dir(name)
                 if target.is_dir():
-                    shutil.rmtree(target)
+                    util.rmtree(target)
                 journal.log("prune", name)
                 pruned.append(name)
     left = [n for n in orphans if n not in pruned]
@@ -572,7 +565,7 @@ def _bundle_dump(file: Optional[str]) -> int:
         return 0
     dest = paths.expand(file)
     try:
-        dest.write_text(text)
+        dest.write_text(text, encoding="utf-8")
     except OSError as e:
         raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                         hint="check the path exists and is writable")
@@ -596,7 +589,7 @@ def _bundle_install(file: Optional[str]) -> int:
                             hint="point at the Boostfile itself, "
                                  "or use `boost import` for skill directories")
         try:
-            text, label = path.read_text(), str(path)
+            text, label = path.read_text(encoding="utf-8"), str(path)
         except OSError as e:
             raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e))
     taps_added = installed_n = present = failed = 0
@@ -880,7 +873,7 @@ def _snapshot_save(label: Optional[str]) -> int:
     manifest = {"id": snap_id, "label": label or "", "created": util.now_iso(),
                 "skills": skill_count}
     (paths.snapshots_dir() / (snap_id + ".json")).write_text(
-        json.dumps(manifest, indent=2) + "\n")
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     journal.log("snapshot", snap_id, label=label)
     out.ok("saved %s (%s, %s)" % (snap_id, _plural(skill_count, "skill"),
                                   util.human_size(tar_path.stat().st_size)))
@@ -900,7 +893,7 @@ def _snapshot_list(as_json: bool) -> int:
         meta = {}
         if side.exists():
             try:
-                meta = json.loads(side.read_text())
+                meta = json.loads(side.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 meta = {}
         snaps.append({"id": snap_id, "created": meta.get("created", ""),
@@ -950,7 +943,7 @@ def _snapshot_restore(snap_id: str) -> int:
                                  "see `boost snapshot list` for other snapshots")
         for child in root.iterdir():
             if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
+                util.rmtree(child)
             else:
                 child.unlink()
         try:
@@ -1006,7 +999,7 @@ def cmd_export(argv: List[str]) -> int:
                 for name in chosen:
                     sdir = store.skill_store_dir(name)
                     for f in sorted(p for p in sdir.rglob("*") if p.is_file()):
-                        zf.write(str(f), arcname="%s/%s" % (name, f.relative_to(sdir)))
+                        zf.write(str(f), arcname="%s/%s" % (name, f.relative_to(sdir).as_posix()))
         else:
             with tarfile.open(str(dest), "w:gz") as tf:
                 data = manifest.encode()

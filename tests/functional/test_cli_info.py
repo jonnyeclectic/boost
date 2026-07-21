@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+
+import pytest
 
 from boost_cli.core import paths
 
 
 def _lock():
-    return json.loads(paths.lockfile_path().read_text())["skills"]
+    return json.loads(paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
 
 def _journal_events(action=None):
     out = []
-    for line in paths.pulse_path().read_text().splitlines():
+    for line in paths.pulse_path().read_text(encoding="utf-8").splitlines():
         e = json.loads(line)
         if action is None or e.get("action") == action:
             out.append(e)
@@ -26,7 +29,7 @@ def _skill_dir(tmp_path, name):
     d.mkdir(parents=True)
     (d / "SKILL.md").write_text(
         "---\nname: %s\ndescription: locally imported test skill\n"
-        "version: 0.1.0\n---\n\n# %s\n\nBody.\n" % (name, name))
+        "version: 0.1.0\n---\n\n# %s\n\nBody.\n" % (name, name), encoding="utf-8")
     return d
 
 
@@ -166,7 +169,8 @@ class TestInfo:
 
 class TestCat:
     def test_piped_output_equals_file(self, boost, installed):
-        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text()
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
         r = boost("cat", "brainstorming")
         assert r.out == text                       # not a tty -> raw passthrough
         assert boost("cat", "brainstorming", "--raw").out == text
@@ -185,10 +189,12 @@ class TestCat:
 # ── edit ─────────────────────────────────────────────────────────────────
 
 class TestEdit:
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX shebang script isn't directly executable on Windows")
     def test_editor_change_updates_lock_and_warns(self, boost, installed,
                                                   tmp_path, monkeypatch):
         script = tmp_path / "fake-editor.sh"
-        script.write_text('#!/bin/sh\necho "- extra line" >> "$1"\n')
+        script.write_text('#!/bin/sh\necho "- extra line" >> "$1"\n', encoding="utf-8")
         script.chmod(0o755)
         monkeypatch.setenv("EDITOR", str(script))
         monkeypatch.delenv("VISUAL", raising=False)
@@ -199,14 +205,16 @@ class TestEdit:
         sha_after = _lock()["brainstorming"]["sha256"]
         assert sha_after != sha_before
         assert "- extra line" in (paths.store_dir() / "brainstorming" /
-                                  "SKILL.md").read_text()
+                                  "SKILL.md").read_text(encoding="utf-8")
         assert any(e["subject"] == "brainstorming"
                    for e in _journal_events("edit"))
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX shebang script isn't directly executable on Windows")
     def test_editor_fails_no_lock_change(self, boost, installed, tmp_path,
                                          monkeypatch):
         script = tmp_path / "fail-editor.sh"
-        script.write_text("#!/bin/sh\nexit 1\n")
+        script.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
         script.chmod(0o755)
         monkeypatch.setenv("EDITOR", str(script))
         monkeypatch.delenv("VISUAL", raising=False)
@@ -281,9 +289,9 @@ class TestHome:
     def test_print_github_tree_url_no_browser(self, boost, installed,
                                               monkeypatch):
         # surgically rewrite the tap URL to a GitHub one (clone stays local)
-        cfg = json.loads(paths.config_path().read_text())
+        cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
         cfg["taps"][0]["url"] = "https://github.com/x/y"
-        paths.config_path().write_text(json.dumps(cfg))
+        paths.config_path().write_text(json.dumps(cfg), encoding="utf-8")
         opened = []
         monkeypatch.setattr("boost_cli.commands.info.webbrowser.open",
                             lambda url: opened.append(url))
@@ -293,7 +301,7 @@ class TestHome:
 
     def test_local_tap_prints_path(self, boost, installed, fixture_tap_src):
         r = boost("home", "brainstorming", "--print")
-        assert str(fixture_tap_src.resolve() / "skills" / "brainstorming") in r.out
+        assert (fixture_tap_src.resolve() / "skills" / "brainstorming").as_posix() in r.out
 
     def test_unknown_rc1(self, boost, tapped):
         r = boost("home", "nope", expect=1)

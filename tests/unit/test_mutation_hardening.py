@@ -192,7 +192,7 @@ class TestStoreJournalFields:
     def test_import_event_fields(self, sandbox, tmp_path):
         d = tmp_path / "imp"
         d.mkdir()
-        (d / "SKILL.md").write_text("---\nname: imp\nversion: 0.1.0\n---\nbody")
+        (d / "SKILL.md").write_text("---\nname: imp\nversion: 0.1.0\n---\nbody", encoding="utf-8")
         store.install_from_path(d)
         e = journal.events(1)[0]
         assert e["action"] == "import"
@@ -221,7 +221,7 @@ class TestStoreJournalFields:
         d = tmp_path / "imp2"
         d.mkdir()
         (d / "SKILL.md").write_text(
-            "---\nname: imp2\nversion: 2.5.0\n---\n\n# T\n\nbody text\n")
+            "---\nname: imp2\nversion: 2.5.0\n---\n\n# T\n\nbody text\n", encoding="utf-8")
         store.install_from_path(d, tap_label="side")
         from boost_cli.core import lockfile
         entry = lockfile.get_skill("imp2")
@@ -240,7 +240,7 @@ class TestCatalogDescriptionFallback:
     def test_truncates_at_exactly_160(self, tmp_path):
         d = tmp_path / "long"
         d.mkdir()
-        (d / "SKILL.md").write_text("---\nname: long\n---\n\n" + "x" * 500 + "\n")
+        (d / "SKILL.md").write_text("---\nname: long\n---\n\n" + "x" * 500 + "\n", encoding="utf-8")
         (e,) = catalog.scan_dir(tmp_path, "t")
         assert e["description"] == "x" * 160
 

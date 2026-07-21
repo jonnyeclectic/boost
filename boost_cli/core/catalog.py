@@ -74,8 +74,8 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
         "tap": tap_name,
         "curated": curated,
         "kind": kind,
-        "rel_dir": str(item_dir.relative_to(root)) if item_dir != root else ".",
-        "skill_md": str(defining_file.relative_to(root)),
+        "rel_dir": item_dir.relative_to(root).as_posix() if item_dir != root else ".",
+        "skill_md": defining_file.relative_to(root).as_posix(),
         "meta": meta,
         # Lowercased substring-search blob, flattened once at index time so
         # search() never re-walks the frontmatter per query (see _search_blob).
@@ -166,7 +166,7 @@ def rebuild_tap(tap: "registry.Tap") -> List[dict]:
         "generated": util.now_iso(),
         "commit": gitutil.head_commit(tap.path),
         "skills": entries,
-    }, indent=1))
+    }, indent=1), encoding="utf-8")
     # Drop the mtime-keyed cache so a rebuild is visible to an immediately
     # following load even when the filesystem mtime granularity is coarse.
     _ENTRY_CACHE.pop(str(tap.cache_file), None)
@@ -197,7 +197,7 @@ def _cached_tap(tap: "registry.Tap") -> Optional[List[dict]]:
     if cached is not None and cached[0] == stamp:
         return cached[1]
     try:
-        skills = json.loads(p.read_text()).get("skills", [])
+        skills = json.loads(p.read_text(encoding="utf-8")).get("skills", [])
     except (json.JSONDecodeError, OSError):
         _ENTRY_CACHE.pop(key, None)
         return None

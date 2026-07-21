@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 
 import pytest
 
-from boost_cli.core import config, gitutil, paths, registry
+from boost_cli.core import config, gitutil, paths, registry, util
 from boost_cli.errors import BoostError
 
 
@@ -21,7 +20,7 @@ def _make_repo(path, author="Test Author"):
     _git("init", "-q", cwd=path)
     _git("config", "user.email", "t@test", cwd=path)
     _git("config", "user.name", author, cwd=path)
-    (path / "a.txt").write_text("one\n")
+    (path / "a.txt").write_text("one\n", encoding="utf-8")
     _git("add", "-A", cwd=path)
     _git("commit", "-qm", "add a", cwd=path)
     return path
@@ -161,7 +160,7 @@ class TestAddRemove:
     def test_add_replaces_stale_clone_dir(self, sandbox, fixture_tap_src):
         stale = paths.repos_dir() / "fixture-tap"
         stale.mkdir(parents=True)
-        (stale / "junk.txt").write_text("stale")
+        (stale / "junk.txt").write_text("stale", encoding="utf-8")
         tap = registry.add(str(fixture_tap_src))
         assert not (tap.path / "junk.txt").exists()
         assert (tap.path / "skills" / "brainstorming" / "SKILL.md").is_file()
@@ -175,7 +174,7 @@ class TestAddRemove:
 
     def test_remove_deletes_clone_cache_and_config(self, sandbox, fixture_tap_src):
         tap = registry.add(str(fixture_tap_src))
-        tap.cache_file.write_text("{}")
+        tap.cache_file.write_text("{}", encoding="utf-8")
         removed = registry.remove("fixture-tap")
         assert removed.name == "fixture-tap"
         assert not tap.path.exists()
@@ -191,7 +190,7 @@ class TestUpdate:
     def test_update_clones_missing_tap(self, sandbox, tmp_path):
         origin = _make_repo(tmp_path / "pullme")
         tap = registry.add(str(origin))
-        shutil.rmtree(tap.path)
+        util.rmtree(tap.path)
         assert registry.update("pullme") == {"pullme": "cloned"}
         assert tap.is_cloned
 
@@ -204,7 +203,7 @@ class TestUpdate:
         origin = _make_repo(tmp_path / "pullme")
         tap = registry.add(str(origin))
         before = gitutil.head_commit(tap.path)
-        (origin / "b.txt").write_text("two\n")
+        (origin / "b.txt").write_text("two\n", encoding="utf-8")
         _git("add", "-A", cwd=origin)
         _git("commit", "-qm", "add b", cwd=origin)
         summary = registry.update("pullme")["pullme"]

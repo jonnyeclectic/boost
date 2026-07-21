@@ -122,7 +122,7 @@ def _tap_commits() -> Dict[str, str]:
     for t in registry.list_taps():
         commit = ""
         try:
-            data = json.loads(t.cache_file.read_text())
+            data = json.loads(t.cache_file.read_text(encoding="utf-8"))
             commit = str(data.get("commit") or "")
         except (OSError, json.JSONDecodeError):
             pass
@@ -288,7 +288,7 @@ def _load_raw() -> Optional[dict]:
     if isinstance(cached, tuple) and cached[0] == mtime:
         return cached[1]  # type: ignore[return-value]
     try:
-        data = json.loads(p.read_text())
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict) or data.get("version") != INDEX_VERSION:

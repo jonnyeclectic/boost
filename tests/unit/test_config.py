@@ -19,7 +19,7 @@ class TestLoadDefaults:
 
     def test_corrupt_json_returns_defaults(self, sandbox):
         paths.ensure_dirs()
-        paths.config_path().write_text("{not json!!")
+        paths.config_path().write_text("{not json!!", encoding="utf-8")
         assert config.load() == config.DEFAULTS
 
     def test_default_values(self, sandbox):
@@ -40,7 +40,7 @@ class TestDeepMerge:
     def test_user_override_wins_nested_merge_preserved(self, sandbox):
         paths.ensure_dirs()
         paths.config_path().write_text(json.dumps(
-            {"ai": {"model": "custom-model"}, "telemetry": True}))
+            {"ai": {"model": "custom-model"}, "telemetry": True}), encoding="utf-8")
         cfg = config.load()
         assert cfg["ai"]["model"] == "custom-model"       # override wins
         assert cfg["ai"]["enabled"] is True               # sibling preserved
@@ -50,14 +50,14 @@ class TestDeepMerge:
 
     def test_scalar_replaces_dict(self, sandbox):
         paths.ensure_dirs()
-        paths.config_path().write_text(json.dumps({"serve": "off"}))
+        paths.config_path().write_text(json.dumps({"serve": "off"}), encoding="utf-8")
         assert config.load()["serve"] == "off"
 
     def test_load_does_not_mutate_defaults(self, sandbox):
         snapshot = copy.deepcopy(config.DEFAULTS)
         paths.ensure_dirs()
         paths.config_path().write_text(json.dumps(
-            {"agents": {"claude-code": {"enabled": False}}, "extra": 1}))
+            {"agents": {"claude-code": {"enabled": False}}, "extra": 1}), encoding="utf-8")
         cfg = config.load()
         assert cfg["agents"]["claude-code"]["enabled"] is False
         assert cfg["extra"] == 1
@@ -76,7 +76,7 @@ class TestSaveRoundtrip:
 
     def test_save_writes_json_file(self, sandbox):
         config.save({"a": 1})
-        raw = paths.config_path().read_text()
+        raw = paths.config_path().read_text(encoding="utf-8")
         assert json.loads(raw) == {"a": 1}
         assert raw.endswith("\n")
 
@@ -100,10 +100,10 @@ class TestCaching:
 
     def test_external_write_invalidates_cache(self, sandbox):
         paths.ensure_dirs()
-        paths.config_path().write_text(json.dumps({"serve": {"port": 1}}))
+        paths.config_path().write_text(json.dumps({"serve": {"port": 1}}), encoding="utf-8")
         assert config.get("serve.port") == 1
         # A different size on disk changes the stat stamp -> reload.
-        paths.config_path().write_text(json.dumps({"serve": {"port": 22222}}))
+        paths.config_path().write_text(json.dumps({"serve": {"port": 22222}}), encoding="utf-8")
         assert config.get("serve.port") == 22222
 
     def test_save_visible_to_get(self, sandbox):
@@ -170,7 +170,7 @@ class TestSetValue:
 
     def test_persisted_to_disk(self, sandbox):
         config.set_value("telemetry", "true")
-        on_disk = json.loads(paths.config_path().read_text())
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert on_disk["telemetry"] is True
 
     def test_type_error_when_path_crosses_scalar(self, sandbox):
@@ -184,7 +184,7 @@ class TestUnset:
     def test_present_returns_true_and_persists(self, sandbox):
         config.set_value("custom.flag", "true")
         assert config.unset("custom.flag") is True
-        on_disk = json.loads(paths.config_path().read_text())
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert "flag" not in on_disk.get("custom", {})
         assert config.get("custom.flag") is None
 

@@ -60,14 +60,14 @@ def _load_state(fname: str, default: dict) -> dict:
     if not p.exists():
         return json.loads(json.dumps(default))
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return json.loads(json.dumps(default))
 
 
 def _save_state(fname: str, data: dict) -> None:
     paths.ensure_dirs()
-    (paths.state_dir() / fname).write_text(json.dumps(data, indent=2) + "\n")
+    (paths.state_dir() / fname).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _install_generated(name: str, text: str) -> None:
@@ -75,7 +75,7 @@ def _install_generated(name: str, text: str) -> None:
     with tempfile.TemporaryDirectory(prefix="boost-gen-") as td:
         src = Path(td) / name
         src.mkdir()
-        (src / "SKILL.md").write_text(text)
+        (src / "SKILL.md").write_text(text, encoding="utf-8")
         res = store.install_from_path(src, name=name, tap_label="local")
     out.ok("installed %s → %s" % (name, _tilde(res.dest)))
     if res.linked:
@@ -88,7 +88,7 @@ def _write_generated(dest: Path, text: str) -> bool:
         out.info("aborted — %s left untouched" % _tilde(dest))
         return False
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(text)
+    dest.write_text(text, encoding="utf-8")
     out.ok("wrote %s" % _tilde(dest))
     return True
 
@@ -649,7 +649,7 @@ def cmd_evolve(argv: List[str]) -> int:
     if not args.apply:
         out.info(out.role("re-run with --apply to write these changes", "muted"))
         return 0
-    skill_md.write_text(new)
+    skill_md.write_text(new, encoding="utf-8")
     entry["sha256"] = util.sha256_dir(store.skill_store_dir(args.name))
     entry["updated_at"] = util.now_iso()
     entry["version"] = new_ver

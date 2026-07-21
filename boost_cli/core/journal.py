@@ -31,7 +31,7 @@ def events(n: Optional[int] = None, action: Optional[str] = None,
     if not p.exists():
         return []
     out = []
-    for line in p.read_text().splitlines():
+    for line in p.read_text(encoding="utf-8").splitlines():
         try:
             e = json.loads(line)
         except json.JSONDecodeError:
@@ -55,7 +55,7 @@ def rotation_healthy() -> bool:
 def _maybe_rotate() -> None:
     p = paths.pulse_path()
     try:
-        lines = p.read_text().splitlines()
+        lines = p.read_text(encoding="utf-8").splitlines()
     except OSError:
         return
     if len(lines) > ROTATE_AT:

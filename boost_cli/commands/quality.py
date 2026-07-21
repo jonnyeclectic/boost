@@ -269,7 +269,7 @@ def cmd_doctor(argv):
     lp = paths.lockfile_path()
     if lp.exists():
         try:
-            raw = json.loads(lp.read_text())
+            raw = json.loads(lp.read_text(encoding="utf-8"))
             if raw.get("version") != lockfile.SCHEMA_VERSION:
                 bad("lock file schema is v%s, expected v%d"
                     % (raw.get("version"), lockfile.SCHEMA_VERSION))
@@ -499,7 +499,7 @@ def cmd_audit(argv):
                 text = f.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            rel = str(f.relative_to(sdir))
+            rel = f.relative_to(sdir).as_posix()
             for pat, severity, label in _AUDIT_PATTERNS:
                 for m in pat.finditer(text):
                     line_no = text.count("\n", 0, m.start()) + 1

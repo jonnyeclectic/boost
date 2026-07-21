@@ -34,7 +34,7 @@ def _load_builder():
 def test_roadmap_html_is_regenerated():
     builder = _load_builder()
     path, fresh = builder.build_code()
-    committed = path.read_text()
+    committed = path.read_text(encoding="utf-8")
     assert committed == fresh, (
         "docs/roadmap.html is out of date — regenerate with\n"
         "    python3 scripts/build_roadmap.py\n"
@@ -47,7 +47,7 @@ def test_roadmap_html_is_regenerated():
 def test_design_roadmap_html_is_regenerated():
     builder = _load_builder()
     path, fresh = builder.build_design()
-    committed = path.read_text()
+    committed = path.read_text(encoding="utf-8")
     assert committed == fresh, (
         "docs/design-roadmap.html is out of date — regenerate with\n"
         "    python3 scripts/build_roadmap.py\n"

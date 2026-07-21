@@ -25,7 +25,7 @@ def npx(monkeypatch):
         for name in ("bmad-agent-dev", "bmad-agent-pm", "bmad-help"):
             d = skills / name
             d.mkdir(parents=True, exist_ok=True)
-            (d / "SKILL.md").write_text("---\nname: %s\n---\n" % name)
+            (d / "SKILL.md").write_text("---\nname: %s\n---\n" % name, encoding="utf-8")
         (directory / "_bmad").mkdir(exist_ok=True)
         (directory / "_bmad-output").mkdir(exist_ok=True)
         return types.SimpleNamespace(
@@ -213,7 +213,7 @@ class TestResilience:
     def test_corrupt_state_file_ignored(self, boost, sandbox, proj):
         sp = bmad._state_path()
         sp.parent.mkdir(parents=True, exist_ok=True)
-        sp.write_text("{ not valid json")
+        sp.write_text("{ not valid json", encoding="utf-8")
         r = boost("bmad", "doctor")  # must not crash
         assert "BMAD status" in r.out
 

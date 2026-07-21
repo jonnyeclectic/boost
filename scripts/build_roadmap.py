@@ -83,7 +83,7 @@ def load_items(board: str) -> list[dict]:
     """Load every item for ``board``, sorted by (section, order, id)."""
     items = []
     for path in sorted(ITEMS_DIR.glob("*.md")):
-        meta, body = frontmatter.parse(path.read_text())
+        meta, body = frontmatter.parse(path.read_text(encoding="utf-8"))
         if meta.get("board") != board:
             continue
         meta["body"] = body.strip()
@@ -250,13 +250,13 @@ def render_board(html: str, blocks: dict[str, str]) -> str:
 # --------------------------------------------------------------------------- #
 def build_code() -> tuple[Path, str]:
     items = load_items("code")
-    html = render_board(CODE_HTML.read_text(), code_blocks(items))
+    html = render_board(CODE_HTML.read_text(encoding="utf-8"), code_blocks(items))
     return CODE_HTML, html
 
 
 def build_design() -> tuple[Path, str]:
     items = load_items("design")
-    html = render_board(DESIGN_HTML.read_text(), design_blocks(items))
+    html = render_board(DESIGN_HTML.read_text(encoding="utf-8"), design_blocks(items))
     return DESIGN_HTML, html
 
 
@@ -272,10 +272,10 @@ def main(argv: list[str] | None = None) -> int:
     drift = []
     for path, fresh in targets:
         if args.check:
-            if path.read_text() != fresh:
+            if path.read_text(encoding="utf-8") != fresh:
                 drift.append(path)
         else:
-            path.write_text(fresh)
+            path.write_text(fresh, encoding="utf-8")
             print("wrote %s" % path)
 
     if args.check:

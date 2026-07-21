@@ -34,14 +34,14 @@ class TestLoadSave:
     def test_corrupt_file_is_empty(self, sandbox):
         p = cs.settings_path("global")
         p.parent.mkdir(parents=True)
-        p.write_text("{not json")
+        p.write_text("{not json", encoding="utf-8")
         assert cs.load("global") == {}
 
     def test_save_round_trips(self, sandbox):
         cs.save("global", {"model": "opus"})
         assert cs.load("global") == {"model": "opus"}
         # valid, pretty-printed JSON on disk
-        raw = cs.settings_path("global").read_text()
+        raw = cs.settings_path("global").read_text(encoding="utf-8")
         assert json.loads(raw)["model"] == "opus"
 
     def test_save_snapshots_prior_version(self, sandbox):
@@ -49,7 +49,7 @@ class TestLoadSave:
         cs.save("global", {"v": 2})
         hist = list((paths.state_dir() / "claude-settings-history").glob("global-*.json"))
         assert len(hist) == 1
-        assert json.loads(hist[0].read_text()) == {"v": 1}
+        assert json.loads(hist[0].read_text(encoding="utf-8")) == {"v": 1}
 
 
 # -------------------------------------------------------------------- hook CRUD

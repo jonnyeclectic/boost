@@ -42,7 +42,7 @@ def main() -> int:
         print("mutation gate: no mutation results — run `make mutation`")
         return 2
 
-    s = json.loads(STATS.read_text())
+    s = json.loads(STATS.read_text(encoding="utf-8"))
     denominator = s["total"] - s.get("skipped", 0)
     score = 100.0 * s["killed"] / denominator if denominator else 0.0
     print("mutation gate: %d/%d killed (%.1f%%) — survived %d, no-tests %d, "

@@ -33,7 +33,7 @@ def _mk_repo(root):
     _git(root, "init", "-q")
     _git(root, "config", "user.email", "t@t.test")
     _git(root, "config", "user.name", "t")
-    (root / "README.md").write_text("hi\n")
+    (root / "README.md").write_text("hi\n", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "init")
     return root
@@ -71,7 +71,7 @@ class TestConfig:
     def test_set_nested_persists_to_disk(self, boost, sandbox):
         r = boost("config", "set", "serve.port", "9999")
         assert "set serve.port = 9999" in r.out
-        on_disk = json.loads(paths.config_path().read_text())
+        on_disk = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert on_disk["serve"]["port"] == 9999
         assert boost("config", "get", "serve.port", "--json").out.strip() == "9999"
         r = boost("config", "set", "serve.port", expect=1)
@@ -97,7 +97,7 @@ class TestClean:
         ghost = paths.home() / ".claude" / "skills" / "ghost"
         ghost.symlink_to(paths.home() / "nowhere")
         stale = paths.cache_dir() / "old__tap.json"
-        stale.write_text('{"skills": []}')            # 14 bytes
+        stale.write_text('{"skills": []}', encoding="utf-8")            # 14 bytes
         ds = paths.store_dir() / "brainstorming" / ".DS_Store"
         ds.write_bytes(b"junk12")                     # 6 bytes
 
@@ -127,10 +127,10 @@ class TestClean:
         (pyc / "x.pyc").write_bytes(b"123")
         hist = paths.lock_history_dir()
         for i in range(52):
-            (hist / ("lock-0000%02d.json" % i)).write_text("{}")
+            (hist / ("lock-0000%02d.json" % i)).write_text("{}", encoding="utf-8")
         old_snap = paths.snapshots_dir() / "ancient"
         old_snap.mkdir(parents=True)
-        (old_snap / "f").write_text("x")
+        (old_snap / "f").write_text("x", encoding="utf-8")
         old = time.time() - 91 * 86400
         os.utime(old_snap, (old, old))
         r = boost("clean", "--deep")
@@ -148,7 +148,7 @@ class TestCreate:
         monkeypatch.chdir(tmp_path)
         r = boost("create", "my-skill")
         assert "created" in r.out and "my-skill/SKILL.md" in r.out
-        text = (tmp_path / "my-skill" / "SKILL.md").read_text()
+        text = (tmp_path / "my-skill" / "SKILL.md").read_text(encoding="utf-8")
         meta, body = frontmatter.parse(text)
         assert meta == {"name": "my-skill",
                         "description": "TODO: describe when this skill should trigger",
@@ -169,14 +169,14 @@ class TestCreate:
     def test_description_and_slug(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         boost("create", "My Fancy Skill", "--description", "Does a thing")
-        text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text()
+        text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
 
     def test_install_flag(self, boost, sandbox, tmp_path):
         r = boost("create", "inst-skill", "--dir", tmp_path, "--install")
         assert "installed inst-skill" in r.out
         assert "linked: Claude Code, Windsurf, Cursor" in r.out
-        lock = json.loads(paths.lockfile_path().read_text())
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["inst-skill"]["tap"] == "local"
         assert lock["skills"]["inst-skill"]["version"] == "0.1.0"
 
@@ -259,15 +259,15 @@ class TestOnboard:
         repo.mkdir()
         r = boost("onboard", "--repo", repo)
         assert r.out.count("created") == 3
-        telem = json.loads((repo / ".boost" / "telemetry.json").read_text())
+        telem = json.loads((repo / ".boost" / "telemetry.json").read_text(encoding="utf-8"))
         assert telem["enabled"] is True
         assert telem["share_pulse"] is True
         assert telem["by"] == getpass.getuser()
         yml = (repo / ".github" / "workflows" /
-               "boost-skill-inventory.yml").read_text()
+               "boost-skill-inventory.yml").read_text(encoding="utf-8")
         assert "name: boost skill inventory" in yml
         assert yml.count(".skill-lock.json") >= 2
-        lock = json.loads((repo / ".skill-lock.json").read_text())
+        lock = json.loads((repo / ".skill-lock.json").read_text(encoding="utf-8"))
         assert lock["version"] == 3 and "brainstorming" in lock["skills"]
         assert journal.events(action="onboard")
 
@@ -328,7 +328,7 @@ class TestOnboard:
         r = boost("onboard", "--repo", plain, "--pr", expect=1)
         assert "is not a git repository" in r.err
         dirty = _mk_repo(tmp_path / "dirty")
-        (dirty / "untracked.txt").write_text("x")
+        (dirty / "untracked.txt").write_text("x", encoding="utf-8")
         r = boost("onboard", "--repo", dirty, "--pr", expect=1)
         assert "is not clean" in r.err
 
@@ -405,7 +405,7 @@ class TestScheduleDarwin:
         r = boost("schedule", "enable")
         plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
         assert plist.exists()
-        body = plist.read_text()
+        body = plist.read_text(encoding="utf-8")
         assert "<integer>21600</integer>" in body
         assert "<string>update</string>" in body
         assert "com.boost.sync" in body
@@ -432,7 +432,7 @@ class TestScheduleDarwin:
                             fake_run)
         r = boost("schedule", "enable", "--interval", "daily")
         plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
-        assert "<integer>86400</integer>" in plist.read_text()
+        assert "<integer>86400</integer>" in plist.read_text(encoding="utf-8")
         assert "launchctl load failed: Load failed: 5" in r.out
 
     def test_disable_removes_plist(self, boost, sandbox, monkeypatch):
@@ -681,7 +681,7 @@ class TestMcp:
         assert "Error: no skill named 'ghost' in any tap" in text(13)
         assert by_id[13]["result"]["isError"] is True
 
-        lock = json.loads(paths.lockfile_path().read_text())
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert "brainstorming" in lock["skills"]  # id 8 really installed
 
     def test_boost_search_prefers_full_content_index(self, boost, tapped):

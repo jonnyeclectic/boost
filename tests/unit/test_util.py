@@ -136,7 +136,7 @@ class TestSha256Dir:
         for rel, content in files.items():
             p = root / rel
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(content)
+            p.write_text(content, encoding="utf-8")
 
     def test_empty_dir_is_sha256_of_nothing(self, tmp_path):
         assert util.sha256_dir(tmp_path) == hashlib.sha256().hexdigest()
@@ -153,7 +153,7 @@ class TestSha256Dir:
     def test_content_change_changes_hash(self, tmp_path):
         self._make(tmp_path, {"x.md": "one"})
         before = util.sha256_dir(tmp_path)
-        (tmp_path / "x.md").write_text("two")
+        (tmp_path / "x.md").write_text("two", encoding="utf-8")
         assert util.sha256_dir(tmp_path) != before
 
     def test_rename_changes_hash(self, tmp_path):
@@ -241,9 +241,9 @@ GOOD_BODY = (
 def make_skill(root, text, extra_files=None):
     d = root / "skill"
     d.mkdir(exist_ok=True)
-    (d / "SKILL.md").write_text(text)
+    (d / "SKILL.md").write_text(text, encoding="utf-8")
     for name, content in (extra_files or {}).items():
-        (d / name).write_text(content)
+        (d / name).write_text(content, encoding="utf-8")
     return d
 
 
@@ -382,18 +382,18 @@ class TestAtomicWriteText:
     def test_writes_content(self, tmp_path):
         p = tmp_path / "f.txt"
         util.atomic_write_text(p, "hello")
-        assert p.read_text() == "hello"
+        assert p.read_text(encoding="utf-8") == "hello"
 
     def test_overwrites_existing(self, tmp_path):
         p = tmp_path / "f.txt"
-        p.write_text("old")
+        p.write_text("old", encoding="utf-8")
         util.atomic_write_text(p, "new")
-        assert p.read_text() == "new"
+        assert p.read_text(encoding="utf-8") == "new"
 
     def test_creates_missing_parents(self, tmp_path):
         p = tmp_path / "a" / "b" / "f.txt"
         util.atomic_write_text(p, "deep")
-        assert p.read_text() == "deep"
+        assert p.read_text(encoding="utf-8") == "deep"
 
     def test_leaves_no_temp_files(self, tmp_path):
         util.atomic_write_text(tmp_path / "f.txt", "x")
@@ -408,7 +408,7 @@ class TestAtomicWriteText:
     def test_replace_failure_cleans_temp_and_raises(self, tmp_path, monkeypatch):
         import os as _os
         p = tmp_path / "f.txt"
-        p.write_text("original")
+        p.write_text("original", encoding="utf-8")
 
         def boom(_src, _dst):
             raise OSError("replace failed")
@@ -417,6 +417,6 @@ class TestAtomicWriteText:
         with pytest.raises(OSError, match="replace failed"):
             util.atomic_write_text(p, "new")
         # original untouched, and no temp turd left behind
-        assert p.read_text() == "original"
+        assert p.read_text(encoding="utf-8") == "original"
         leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
         assert leftovers == []

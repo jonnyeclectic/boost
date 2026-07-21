@@ -39,14 +39,18 @@ def tilde(p) -> str:
     directly beneath it (``home + os.sep``). A bare ``startswith(home)`` would
     wrongly turn a sibling like ``/Users/bob-backup`` into ``~-backup``. Both
     the raw and resolved forms of home() are tried so symlinked homes contract.
+
+    Always returns ``/``-separated output (even for a path outside $HOME) so
+    boost's display text is stable across platforms — Windows accepts forward
+    slashes natively, so nothing is lost for a Windows reader either.
     """
     s = str(p)
     for h in (str(home()), str(home().resolve())):
         if s == h:
             return "~"
         if s.startswith(h + os.sep):
-            return "~" + s[len(h):]
-    return s
+            return ("~" + s[len(h):]).replace(os.sep, "/")
+    return s.replace(os.sep, "/")
 
 
 def boost_home() -> Path:

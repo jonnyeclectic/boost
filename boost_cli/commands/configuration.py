@@ -152,7 +152,7 @@ def cmd_clean(argv) -> int:
                 if pth.is_symlink() or pth.is_file():
                     pth.unlink()
                 elif pth.is_dir():
-                    shutil.rmtree(pth)
+                    util.rmtree(pth)
             except OSError as e:
                 out.warn("could not remove %s: %s" % (_tilde(pth), e))
                 continue
@@ -224,7 +224,7 @@ def cmd_create(argv) -> int:
     title = name.replace("-", " ").title()
     target.mkdir(parents=True, exist_ok=True)
     skill_md.write_text(frontmatter.dump(meta) + "\n\n"
-                        + _CREATE_BODY % {"title": title})
+                        + _CREATE_BODY % {"title": title}, encoding="utf-8")
     journal.log("create", name, path=str(target))
     out.ok("created %s" % _tilde(skill_md))
     if args.install:
@@ -426,7 +426,7 @@ def cmd_onboard(argv) -> int:
     for rel, content in files:
         fp = repo / rel
         fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content)
+        fp.write_text(content, encoding="utf-8")
         out.ok("created %s" % _tilde(fp))
     journal.log("onboard", _tilde(repo), pr=args.pr or None)
 
@@ -599,7 +599,7 @@ def cmd_schedule(argv) -> int:
             if plist.exists():
                 present = True
                 m = re.search(r"<key>StartInterval</key>\s*<integer>(\d+)</integer>",
-                              plist.read_text())
+                              plist.read_text(encoding="utf-8"))
                 if m:
                     secs = int(m.group(1))
                     interval = _interval_label(secs)
@@ -641,7 +641,7 @@ def cmd_schedule(argv) -> int:
         if darwin:
             plist = _plist_path()
             plist.parent.mkdir(parents=True, exist_ok=True)
-            plist.write_text(_plist_body(shim, seconds))
+            plist.write_text(_plist_body(shim, seconds), encoding="utf-8")
             out.ok("wrote %s" % _tilde(plist))
             try:
                 subprocess.run(["launchctl", "unload", str(plist)],

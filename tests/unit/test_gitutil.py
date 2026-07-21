@@ -20,7 +20,7 @@ def _make_repo(path, author="Test Author"):
     _git("init", "-q", cwd=path)
     _git("config", "user.email", "t@test", cwd=path)
     _git("config", "user.name", author, cwd=path)
-    (path / "a.txt").write_text("one\n")
+    (path / "a.txt").write_text("one\n", encoding="utf-8")
     _git("add", "-A", cwd=path)
     _git("commit", "-qm", "add a", cwd=path)
     return path
@@ -202,7 +202,7 @@ class TestPull:
         clone = tmp_path / "clone"
         gitutil.clone_shallow(str(origin), clone)
         before = gitutil.head_commit(clone)
-        (origin / "b.txt").write_text("two\n")
+        (origin / "b.txt").write_text("two\n", encoding="utf-8")
         _git("add", "-A", cwd=origin)
         _git("commit", "-qm", "add b", cwd=origin)
 
@@ -270,7 +270,7 @@ class TestLogForPath:
         repo = _make_repo(tmp_path / "repo")
         sub = repo / "b"
         sub.mkdir()
-        (sub / "c.txt").write_text("c\n")
+        (sub / "c.txt").write_text("c\n", encoding="utf-8")
         _git("add", "-A", cwd=repo)
         _git("commit", "-qm", "add c", cwd=repo)
 

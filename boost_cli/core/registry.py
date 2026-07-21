@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import difflib
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 from ..errors import BoostError
-from . import config, gitutil, paths
+from . import config, gitutil, paths, util
 
 
 @dataclass
@@ -40,7 +39,10 @@ def parse_spec(spec: str):
     Accepts: owner/repo | full git URL | existing local path.
     """
     spec = spec.strip().rstrip("/")
-    p = Path(spec).expanduser()
+    # paths.expand(), not Path.expanduser(): expanduser() consults the OS's
+    # own home-dir lookup (USERPROFILE on Windows), which ignores the $HOME
+    # override the whole test suite (and BOOST_HOME sandboxing) relies on.
+    p = paths.expand(spec)
     if p.exists() and p.is_dir():
         return (p.resolve().name, str(p.resolve()))
     if spec.startswith(("http://", "https://", "git@", "ssh://")):
@@ -78,7 +80,7 @@ def add(spec: str, curated: bool = False) -> Tap:
     tap = Tap(name=name, url=url, curated=curated)
     paths.ensure_dirs()
     if tap.path.exists():
-        shutil.rmtree(tap.path)
+        util.rmtree(tap.path)
     gitutil.clone_shallow(url, tap.path)
     cfg = config.load()
     cfg.setdefault("taps", []).append(
@@ -93,7 +95,7 @@ def remove(name: str) -> Tap:
     cfg["taps"] = [t for t in cfg.get("taps", []) if t["name"] != tap.name]
     config.save(cfg)
     if tap.path.exists():
-        shutil.rmtree(tap.path)
+        util.rmtree(tap.path)
     if tap.cache_file.exists():
         tap.cache_file.unlink()
     return tap

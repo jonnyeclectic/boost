@@ -12,6 +12,12 @@ while [ -h "$SOURCE" ]; do
   [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 ROOT="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+# Under Git Bash on Windows, $ROOT is an MSYS path (/d/a/boost/boost); native
+# Windows Python can't resolve that, so convert to a mixed path (D:/a/...)
+# before it's embedded in the -c script below. No-op on Linux/macOS.
+if command -v cygpath >/dev/null 2>&1; then
+  ROOT="$(cygpath -m "$ROOT")"
+fi
 
 find_python() {
   for py in python3 python; do

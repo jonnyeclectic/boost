@@ -16,8 +16,21 @@ import pytest
 from boost_cli.core import output, paths, util
 
 
+def _curses_available() -> bool:
+    """False on Windows: curses isn't in the stdlib there, and boost degrades
+    to the plain-catalog fallback (see cmd_browse) rather than shipping the
+    third-party windows-curses package boost's zero-dependency design avoids."""
+    try:
+        import curses  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _vec_loadable() -> bool:
-    """True only if sqlite-vec both imports and loads (see test_dense.py)."""
+    """True only if sqlite-vec both imports, loads, and can run a bound-LIMIT
+    KNN query (see test_dense.py — some sqlite3/sqlite-vec combinations load
+    fine but reject that query shape)."""
     try:
         import sqlite_vec  # type: ignore
     except ImportError:
@@ -27,6 +40,13 @@ def _vec_loadable() -> bool:
         con.enable_load_extension(True)
         sqlite_vec.load(con)
         con.execute("select vec_version()").fetchone()
+        con.execute("create virtual table t using vec0(embedding float[3])")
+        con.execute("insert into t(rowid, embedding) values (1, ?)",
+                    (sqlite_vec.serialize_float32([1.0, 0.0, 0.0]),))
+        con.execute(
+            "select rowid, distance from t where embedding match ? "
+            "order by distance limit ?",
+            (sqlite_vec.serialize_float32([1.0, 0.0, 0.0]), 5)).fetchall()
         return True
     except Exception:
         return False
@@ -52,7 +72,7 @@ def _make_tap(root):
         d.mkdir(parents=True)
         (d / "SKILL.md").write_text(
             "---\nname: %s\ndescription: %s\nversion: 1.0.0\ntags: %s\n---\n\n"
-            "# %s\n\nBody text.\n" % (name, desc, tags, name))
+            "# %s\n\nBody text.\n" % (name, desc, tags, name), encoding="utf-8")
     _git(root, "init", "-q")
     _git(root, "add", "-A")
     _git(root, "commit", "-qm", "skills")
@@ -220,7 +240,7 @@ class TestIndex:
                 in r.out)
         assert len(seen) == 1
         assert "search/code?q=filename:SKILL.md&per_page=100&page=1" in seen[0]
-        data = json.loads((paths.cache_dir() / "discovery.json").read_text())
+        data = json.loads((paths.cache_dir() / "discovery.json").read_text(encoding="utf-8"))
         assert data["github_total"] == 7
         assert data["items"] == [
             {"repo": "octo/skills", "path": "skills/a/SKILL.md",
@@ -241,7 +261,7 @@ class TestIndex:
                      _gh_item("octo/skills", "b/SKILL.md")])))
         r = boost("index", "--limit", "1")
         assert "indexed 1 skill files across 1 repos" in r.out
-        data = json.loads((paths.cache_dir() / "discovery.json").read_text())
+        data = json.loads((paths.cache_dir() / "discovery.json").read_text(encoding="utf-8"))
         assert len(data["items"]) == 1
 
     def test_gh_failure_on_first_page(self, boost, sandbox, monkeypatch):
@@ -286,7 +306,7 @@ class TestIndex:
         assert "page 2 failed — keeping the 100 items fetched so far" in r.out
         assert "indexed 100 skill files across 100 repos (GitHub reports 250 total)" in r.out
         assert naps == [1]
-        data = json.loads((paths.cache_dir() / "discovery.json").read_text())
+        data = json.loads((paths.cache_dir() / "discovery.json").read_text(encoding="utf-8"))
         assert len(data["items"]) == 100
 
     def test_gh_oserror(self, boost, sandbox, monkeypatch):
@@ -401,7 +421,7 @@ class TestGithubSkillSearch:
 def _write_index(items, total=42):
     paths.ensure_dirs()
     (paths.cache_dir() / "discovery.json").write_text(json.dumps(
-        {"generated": util.now_iso(), "github_total": total, "items": items}))
+        {"generated": util.now_iso(), "github_total": total, "items": items}), encoding="utf-8")
 
 
 _ITEMS = [
@@ -461,7 +481,7 @@ class TestDiscover:
 
     def test_corrupt_index(self, boost, sandbox):
         paths.ensure_dirs()
-        (paths.cache_dir() / "discovery.json").write_text("{broken")
+        (paths.cache_dir() / "discovery.json").write_text("{broken", encoding="utf-8")
         r = boost("discover", expect=1)
         assert "the discovery index is corrupt" in r.err
 
@@ -480,8 +500,8 @@ def react_project(tmp_path):
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / "package.json").write_text(json.dumps(
-        {"dependencies": {"react": "^18.2.0"}}))
-    (proj / "pyproject.toml").write_text("[tool.pytest.ini_options]\naddopts = '-q'\n")
+        {"dependencies": {"react": "^18.2.0"}}), encoding="utf-8")
+    (proj / "pyproject.toml").write_text("[tool.pytest.ini_options]\naddopts = '-q'\n", encoding="utf-8")
     return proj
 
 
@@ -512,17 +532,17 @@ class TestRecommend:
     def test_detect_stack_kitchen_sink(self, boost, stack_tap, tmp_path):
         proj = tmp_path / "kitchen"
         proj.mkdir()
-        (proj / "package.json").write_text("{not json")     # still javascript
-        (proj / "go.mod").write_text("module x\n")
-        (proj / "Cargo.toml").write_text("[package]\n")
-        (proj / "Gemfile").write_text("gem 'rails'\n")
-        (proj / "tsconfig.json").write_text("{}")
-        (proj / "Dockerfile").write_text("FROM scratch\n")
-        (proj / "pom.xml").write_text("<project>org.springframework</project>")
-        (proj / "a.tf").write_text("resource {}\n")
-        (proj / "b.tf").write_text("resource {}\n")
-        (proj / "x.py").write_text("pass\n")
-        (proj / "y.py").write_text("pass\n")
+        (proj / "package.json").write_text("{not json", encoding="utf-8")     # still javascript
+        (proj / "go.mod").write_text("module x\n", encoding="utf-8")
+        (proj / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        (proj / "Gemfile").write_text("gem 'rails'\n", encoding="utf-8")
+        (proj / "tsconfig.json").write_text("{}", encoding="utf-8")
+        (proj / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+        (proj / "pom.xml").write_text("<project>org.springframework</project>", encoding="utf-8")
+        (proj / "a.tf").write_text("resource {}\n", encoding="utf-8")
+        (proj / "b.tf").write_text("resource {}\n", encoding="utf-8")
+        (proj / "x.py").write_text("pass\n", encoding="utf-8")
+        (proj / "y.py").write_text("pass\n", encoding="utf-8")
         (proj / ".github" / "workflows").mkdir(parents=True)
         r = boost("recommend", "--path", proj, "--json")
         stack = json.loads(r.out)["stack"]
@@ -626,6 +646,8 @@ class TestBrowse:
         assert "no skills available to browse" in r.err
 
     def test_tui_pick_installs(self, boost, tapped, monkeypatch):
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
@@ -654,6 +676,8 @@ class TestBrowse:
         # with a fatal Error (regression: `boost browse` crashed on a workflow).
         # Workflows install now, but a pick whose source can't be read must still
         # surface a friendly non-fatal notice rather than crash the browser.
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",
@@ -728,6 +752,8 @@ class TestBrowseAurora:
             assert all(0 <= c <= 1000 for c in triple)
 
     def test_nearest_base_covers_every_token(self):
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
         import curses
         from boost_cli.commands import discovery
         from boost_cli.core import output as out
@@ -930,7 +956,7 @@ class TestTrending:
 
 class TestStats:
     def test_installed_fields(self, boost, installed):
-        lock = json.loads(paths.lockfile_path().read_text())
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         entry = lock["skills"]["brainstorming"]
         r = boost("stats", "brainstorming")
         lines = {l.split()[0]: l for l in r.out.splitlines() if l.strip()}
@@ -947,9 +973,9 @@ class TestStats:
 
     def test_update_available(self, boost, installed):
         p = paths.lockfile_path()
-        lock = json.loads(p.read_text())
+        lock = json.loads(p.read_text(encoding="utf-8"))
         lock["skills"]["brainstorming"]["version"] = "1.0.0"
-        p.write_text(json.dumps(lock))
+        p.write_text(json.dumps(lock), encoding="utf-8")
         r = boost("stats", "brainstorming")
         assert "1.4.0 (update available)" in r.out
 
@@ -1004,7 +1030,7 @@ class TestCount:
 
     def test_corrupt_discovery_counts_as_missing(self, boost, sandbox):
         paths.ensure_dirs()
-        (paths.cache_dir() / "discovery.json").write_text("{oops")
+        (paths.cache_dir() / "discovery.json").write_text("{oops", encoding="utf-8")
         r = boost("count", "--json")
         assert json.loads(r.out) == {"installed": 0, "available": 0,
                                      "taps": 0, "discovery": None}

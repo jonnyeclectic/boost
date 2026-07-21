@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,7 @@ FIXTURE_NAMES = ["brainstorming", "commit-messages", "cowboy-coding",
 def write_skill(dirpath, fm=None, body="Some body line\n"):
     dirpath.mkdir(parents=True, exist_ok=True)
     text = (fm + "\n" if fm else "") + body
-    (dirpath / "SKILL.md").write_text(text)
+    (dirpath / "SKILL.md").write_text(text, encoding="utf-8")
 
 
 def _entry(name, tap, desc="", curated=False, version="1.0.0", meta=None):
@@ -35,7 +36,7 @@ def _fake_taps(*specs):
     config.save(cfg)
     for n, entries in specs:
         registry.Tap(name=n, url="").cache_file.write_text(
-            json.dumps({"skills": entries}))
+            json.dumps({"skills": entries}), encoding="utf-8")
 
 
 class TestScanDir:
@@ -142,6 +143,8 @@ class TestScanDir:
     def test_empty_tree(self, tmp_path):
         assert catalog.scan_dir(tmp_path) == []
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the owner's own read access on Windows")
     def test_unreadable_skill_md_skipped(self, tmp_path):
         root = tmp_path / "tap"
         write_skill(root / "locked")
@@ -165,7 +168,7 @@ class TestScanRulesAndWorkflows:
         root = tmp_path / "tap"
         (root / ".cursor" / "rules").mkdir(parents=True)
         (root / ".cursor" / "rules" / "react.mdc").write_text(
-            "---\ndescription: React best practices\nglobs: '*.tsx'\n---\n\nUse hooks.\n")
+            "---\ndescription: React best practices\nglobs: '*.tsx'\n---\n\nUse hooks.\n", encoding="utf-8")
         (e,) = catalog.scan_dir(root)
         assert e["kind"] == "rule"
         assert e["name"] == "react"
@@ -176,7 +179,7 @@ class TestScanRulesAndWorkflows:
     def test_cursorrules_dotfile_named_after_parent_dir(self, tmp_path):
         root = tmp_path / "tap"
         (root / "nextjs").mkdir(parents=True)
-        (root / "nextjs" / ".cursorrules").write_text("You are a Next.js expert.\n")
+        (root / "nextjs" / ".cursorrules").write_text("You are a Next.js expert.\n", encoding="utf-8")
         (e,) = catalog.scan_dir(root)
         assert e["kind"] == "rule"
         assert e["name"] == "nextjs"
@@ -186,8 +189,8 @@ class TestScanRulesAndWorkflows:
         root = tmp_path / "tap"
         (root / "a").mkdir(parents=True)
         (root / "b").mkdir(parents=True)
-        (root / "a" / ".windsurfrules").write_text("windsurf rule\n")
-        (root / "b" / ".clinerules").write_text("cline rule\n")
+        (root / "a" / ".windsurfrules").write_text("windsurf rule\n", encoding="utf-8")
+        (root / "b" / ".clinerules").write_text("cline rule\n", encoding="utf-8")
         kinds = {e["name"]: e["kind"] for e in catalog.scan_dir(root)}
         assert kinds == {"a": "rule", "b": "rule"}
 
@@ -195,7 +198,7 @@ class TestScanRulesAndWorkflows:
         root = tmp_path / "tap"
         (root / "commands").mkdir(parents=True)
         (root / "commands" / "review.md").write_text(
-            "---\ndescription: Review the diff\n---\n\nDo a review.\n")
+            "---\ndescription: Review the diff\n---\n\nDo a review.\n", encoding="utf-8")
         (e,) = catalog.scan_dir(root)
         assert e["kind"] == "workflow"
         assert e["name"] == "review"
@@ -204,7 +207,7 @@ class TestScanRulesAndWorkflows:
         root = tmp_path / "tap"
         (root / ".claude" / "agents").mkdir(parents=True)
         (root / ".claude" / "agents" / "backend.md").write_text(
-            "---\nname: backend-architect\ndescription: Designs APIs\n---\n\nBody.\n")
+            "---\nname: backend-architect\ndescription: Designs APIs\n---\n\nBody.\n", encoding="utf-8")
         (e,) = catalog.scan_dir(root)
         assert e["kind"] == "workflow"
         assert e["name"] == "backend-architect"
@@ -213,7 +216,7 @@ class TestScanRulesAndWorkflows:
         root = tmp_path / "tap"
         root.mkdir(parents=True)
         (root / "code-reviewer.md").write_text(
-            "---\nname: code-reviewer\ndescription: Reviews code\ntools: Read, Grep\n---\n\nX.\n")
+            "---\nname: code-reviewer\ndescription: Reviews code\ntools: Read, Grep\n---\n\nX.\n", encoding="utf-8")
         (e,) = catalog.scan_dir(root)
         assert e["kind"] == "workflow"
         assert e["name"] == "code-reviewer"
@@ -221,20 +224,20 @@ class TestScanRulesAndWorkflows:
     def test_plain_markdown_and_docs_not_indexed(self, tmp_path):
         root = tmp_path / "tap"
         root.mkdir(parents=True)
-        (root / "README.md").write_text("# Readme\n\nHello.\n")
-        (root / "notes.md").write_text("# Notes\n\nJust prose, no frontmatter.\n")
+        (root / "README.md").write_text("# Readme\n\nHello.\n", encoding="utf-8")
+        (root / "notes.md").write_text("# Notes\n\nJust prose, no frontmatter.\n", encoding="utf-8")
         (root / "commands").mkdir()
-        (root / "commands" / "README.md").write_text("# Commands index\n")
+        (root / "commands" / "README.md").write_text("# Commands index\n", encoding="utf-8")
         assert catalog.scan_dir(root) == []
 
     def test_reference_files_inside_skill_dir_not_double_counted(self, tmp_path):
         root = tmp_path / "tap"
         write_skill(root / "skills" / "s", "---\nname: s\n---")
         # a skill that ships a bundled rule/command as reference material
-        (root / "skills" / "s" / "extra.mdc").write_text("bundled rule\n")
+        (root / "skills" / "s" / "extra.mdc").write_text("bundled rule\n", encoding="utf-8")
         (root / "skills" / "s" / "commands").mkdir()
         (root / "skills" / "s" / "commands" / "helper.md").write_text(
-            "---\ndescription: helper\n---\nx\n")
+            "---\ndescription: helper\n---\nx\n", encoding="utf-8")
         entries = catalog.scan_dir(root)
         assert [e["name"] for e in entries] == ["s"]
         assert entries[0]["kind"] == "skill"
@@ -242,7 +245,7 @@ class TestScanRulesAndWorkflows:
     def test_rule_entry_carries_tap_and_curated(self, tmp_path):
         root = tmp_path / "tap"
         (root / "nextjs").mkdir(parents=True)
-        (root / "nextjs" / ".cursorrules").write_text("Next.js expert.\n")
+        (root / "nextjs" / ".cursorrules").write_text("Next.js expert.\n", encoding="utf-8")
         (e,) = catalog.scan_dir(root, "mytap", curated=True)
         assert e["kind"] == "rule"
         assert e["tap"] == "mytap"
@@ -252,20 +255,22 @@ class TestScanRulesAndWorkflows:
         root = tmp_path / "tap"
         (root / ".git").mkdir(parents=True)
         (root / "sub" / "__pycache__").mkdir(parents=True)
-        (root / ".git" / "hook.mdc").write_text("---\ndescription: x\n---\n")
+        (root / ".git" / "hook.mdc").write_text("---\ndescription: x\n---\n", encoding="utf-8")
         (root / "sub" / "__pycache__" / "commands").mkdir()
         (root / "sub" / "__pycache__" / "commands" / "c.md").write_text(
-            "---\ndescription: y\n---\nx\n")
+            "---\ndescription: y\n---\nx\n", encoding="utf-8")
         (root / "real").mkdir()
-        (root / "real" / ".cursorrules").write_text("real rule\n")
+        (root / "real" / ".cursorrules").write_text("real rule\n", encoding="utf-8")
         assert [e["name"] for e in catalog.scan_dir(root)] == ["real"]
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="chmod can't remove the owner's own read access on Windows")
     def test_unreadable_rule_file_skipped(self, tmp_path):
         root = tmp_path / "tap"
         (root / "a").mkdir(parents=True)
         (root / "b").mkdir(parents=True)
-        (root / "a" / "locked.mdc").write_text("---\ndescription: x\n---\n")
-        (root / "b" / "open.mdc").write_text("---\ndescription: y\n---\n")
+        (root / "a" / "locked.mdc").write_text("---\ndescription: x\n---\n", encoding="utf-8")
+        (root / "b" / "open.mdc").write_text("---\ndescription: y\n---\n", encoding="utf-8")
         (root / "a" / "locked.mdc").chmod(0o000)
         try:
             entries = catalog.scan_dir(root)
@@ -286,9 +291,9 @@ class TestScanRulesAndWorkflows:
         root = tmp_path / "tap"
         write_skill(root / "skills" / "s", "---\nname: s\n---")
         (root / "rules").mkdir()
-        (root / "rules" / "py.mdc").write_text("---\ndescription: python\n---\nx\n")
+        (root / "rules" / "py.mdc").write_text("---\ndescription: python\n---\nx\n", encoding="utf-8")
         (root / "commands").mkdir()
-        (root / "commands" / "ship.md").write_text("---\ndescription: ship it\n---\nx\n")
+        (root / "commands" / "ship.md").write_text("---\ndescription: ship it\n---\nx\n", encoding="utf-8")
         kinds = sorted(e["kind"] for e in catalog.scan_dir(root))
         assert kinds == ["rule", "skill", "workflow"]
 
@@ -298,7 +303,7 @@ class TestTapCaches:
         tap = registry.add(str(fixture_tap_src))
         entries = catalog.rebuild_tap(tap)
         assert [e["name"] for e in entries] == FIXTURE_NAMES
-        cache = json.loads(tap.cache_file.read_text())
+        cache = json.loads(tap.cache_file.read_text(encoding="utf-8"))
         assert cache["tap"] == "fixture-tap"
         assert cache["url"] == tap.url
         assert re.fullmatch(r"[0-9a-f]{40}", cache["commit"])
@@ -319,26 +324,26 @@ class TestTapCaches:
     def test_load_tap_cache_hit_needs_no_clone(self, sandbox):
         paths.ensure_dirs()
         tap = registry.Tap(name="fake", url="")
-        tap.cache_file.write_text(json.dumps({"skills": [{"name": "cached-skill"}]}))
+        tap.cache_file.write_text(json.dumps({"skills": [{"name": "cached-skill"}]}), encoding="utf-8")
         assert catalog.load_tap(tap) == [{"name": "cached-skill"}]
 
     def test_load_tap_rebuild_flag_bypasses_cache(self, sandbox, fixture_tap_src):
         tap = registry.add(str(fixture_tap_src))
-        tap.cache_file.write_text(json.dumps({"skills": [{"name": "stale"}]}))
+        tap.cache_file.write_text(json.dumps({"skills": [{"name": "stale"}]}), encoding="utf-8")
         entries = catalog.load_tap(tap, rebuild=True)
         assert [e["name"] for e in entries] == FIXTURE_NAMES
-        assert "brainstorming" in tap.cache_file.read_text()  # cache rewritten
+        assert "brainstorming" in tap.cache_file.read_text(encoding="utf-8")  # cache rewritten
 
     def test_load_tap_corrupt_cache_rebuilds_when_cloned(self, sandbox, fixture_tap_src):
         tap = registry.add(str(fixture_tap_src))
-        tap.cache_file.write_text("{not json")
+        tap.cache_file.write_text("{not json", encoding="utf-8")
         entries = catalog.load_tap(tap)
         assert [e["name"] for e in entries] == FIXTURE_NAMES
 
     def test_load_tap_corrupt_cache_uncloned_empty(self, sandbox):
         paths.ensure_dirs()
         tap = registry.Tap(name="fake", url="")
-        tap.cache_file.write_text("{not json")
+        tap.cache_file.write_text("{not json", encoding="utf-8")
         assert catalog.load_tap(tap) == []
 
     def test_load_tap_no_cache_uncloned_empty(self, sandbox):
@@ -352,7 +357,7 @@ class TestEntrySetCache:
     def test_unchanged_cache_returns_memoized_object(self, sandbox):
         paths.ensure_dirs()
         tap = registry.Tap(name="fake", url="")
-        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}))
+        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}), encoding="utf-8")
         first = catalog.load_tap(tap)
         second = catalog.load_tap(tap)
         # A cache hit returns the memoized list itself; a re-parse would build a
@@ -363,11 +368,11 @@ class TestEntrySetCache:
     def test_content_change_invalidates_cache(self, sandbox):
         paths.ensure_dirs()
         tap = registry.Tap(name="fake", url="")
-        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}))
+        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}), encoding="utf-8")
         assert catalog.load_tap(tap) == [{"name": "s1"}]
         # New content ⇒ different size ⇒ new stamp ⇒ the cache must re-read.
         tap.cache_file.write_text(
-            json.dumps({"skills": [{"name": "s1"}, {"name": "s2"}]}))
+            json.dumps({"skills": [{"name": "s1"}, {"name": "s2"}]}), encoding="utf-8")
         assert catalog.load_tap(tap) == [{"name": "s1"}, {"name": "s2"}]
 
     def test_rebuild_pops_stale_memo(self, sandbox, fixture_tap_src):
@@ -381,7 +386,7 @@ class TestEntrySetCache:
     def test_missing_cache_file_evicts_stamp(self, sandbox):
         paths.ensure_dirs()
         tap = registry.Tap(name="fake", url="")
-        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}))
+        tap.cache_file.write_text(json.dumps({"skills": [{"name": "s1"}]}), encoding="utf-8")
         assert catalog.load_tap(tap) == [{"name": "s1"}]
         assert str(tap.cache_file) in catalog._ENTRY_CACHE
         tap.cache_file.unlink()
@@ -556,7 +561,7 @@ class TestSearchBlobPrecompute:
 
     def test_make_entry_precomputes_blob(self, tmp_path):
         f = tmp_path / "SKILL.md"
-        f.write_text("body")
+        f.write_text("body", encoding="utf-8")
         e = catalog._make_entry(
             tmp_path, f, "skill", "fallback-name", "tap", False,
             {"tags": ["Kubernetes"]}, "Handles clusters")
