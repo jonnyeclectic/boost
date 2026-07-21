@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>104</b><span>Loop finds</span></div>
+      <div class="stat"><b>105</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1916,6 +1916,27 @@ re-break it.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">keyless OIDC</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Trust · Hallucination guard</span></div>
+        <h3>Runtime hallucination guardrail for <code>boost explain</code></h3>
+        <p>Today the ragas <b>faithfulness</b> check (Tier 2c, <code>scripts/eval_explain.py</code>)
+is <em>eval-time only</em> — an offline monitor that flags when generated
+explanations drift from their <code>SKILL.md</code>, but never intercepts a live
+response. Promote it to a <b>runtime guardrail</b>: score the generated summary
+against the source and, when it falls below a faithfulness threshold, fall back
+to the deterministic extractive summary <code>cmd_explain</code> already ships
+for the no-AI case (description + outline + key rules) — or append a
+low-confidence caveat. Turns "a human notices the drift next week" into "the
+tool refuses to show an ungrounded explanation," closing the gap between
+detecting hallucinations and preventing them.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">faithfulness → extractive fallback</span>
         </div>
       </article>
 
