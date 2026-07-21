@@ -2,14 +2,14 @@
 id: startup-and-import-time-budget-x-importtime
 board: code
 section: compat
-status: planned
+status: inflight
 category: Perf · Startup
 complexity: M
 impact: High
 wow: 4
 note: lazy-import guard
 order: 5
-owner:
+owner: loop/import-budget
 pr:
 title: Startup &amp; import-time budget — <code>-X importtime</code>
 ---
