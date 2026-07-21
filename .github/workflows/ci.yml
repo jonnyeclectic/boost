@@ -52,6 +52,13 @@ jobs:
         run: python scripts/build_registries.py --check
       - name: roadmap HTML is regenerated
         run: python scripts/build_roadmap.py --check
+      # Startup import-time budget: a lazy-import guard. For a CLI, cold-start
+      # latency is the UX; this asserts the heavy/optional stack (sqlite_vec,
+      # embedding/AI SDKs, scientific-python, boost's dense/embed engines)
+      # never loads for common offline commands. Name-based, so it's
+      # deterministic across runners/Python versions — never timing-flaky.
+      - name: startup import-time budget (lazy-import guard)
+        run: python scripts/import_budget.py --list
       # Tier 1 retrieval quality gate: golden-set recall@k over a PINNED corpus.
       # The golden set grades real catalog items by name, so the repos holding
       # them (tests/eval/taps.txt) are tapped first — deterministic given that

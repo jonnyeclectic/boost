@@ -17,7 +17,7 @@ import urllib.parse
 from pathlib import Path
 
 from .. import cliparse, spin
-from ..core import (agents, ai, catalog, config, dense, embed, gitutil,
+from ..core import (agents, ai, catalog, config, gitutil,
                     journal, lockfile, paths, rag, registry, store, util)
 from ..core import output as out
 from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
@@ -165,6 +165,11 @@ def cmd_reindex(argv):
         stats = rag.build(force=args.force)
     dense_stats = None
     if args.dense:
+        # Imported lazily (only on `--dense`) so the optional dense/embedding
+        # stack never loads for the common offline commands this module also
+        # holds — count, stats, trending, plain search. See the import-budget
+        # gate (scripts/import_budget.py).
+        from ..core import embed
         with spin.Spinner("embedding chunks into the dense store"):
             dense_stats = _reindex_dense(args.force)
     if args.as_json:
@@ -192,6 +197,9 @@ def cmd_reindex(argv):
 
 def _reindex_dense(force):
     """Build the dense vector store; returns stats or None when unavailable."""
+    # Local import: the dense/embedding engines are opt-in (`search --dense`),
+    # so they stay out of startup for every other command in this module.
+    from ..core import dense, embed
     if not dense.have_backend() or not embed.available():
         return None
     return dense.build(force=force)

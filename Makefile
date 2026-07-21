@@ -43,6 +43,7 @@ lint:
 	@command -v actionlint >/dev/null 2>&1 && actionlint || echo "actionlint not on PATH — skipping (CI enforces it)"
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
+	$(PY) scripts/import_budget.py
 
 # Supply-chain CVE gate: fail on a known OSV/PyPI advisory in the project's
 # dependency closure. Mirrors the pip-audit CI workflow; run before releasing.
