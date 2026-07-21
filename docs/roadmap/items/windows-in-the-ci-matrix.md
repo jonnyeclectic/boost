@@ -2,14 +2,14 @@
 id: windows-in-the-ci-matrix
 board: code
 section: compat
-status: planned
+status: inflight
 category: Compat · Platform
 complexity: S
 impact: High
 wow: 4
 note: untested OS
 order: 1
-owner:
+owner: loop/windows-ci-matrix
 pr:
 title: Windows in the CI matrix
 ---
