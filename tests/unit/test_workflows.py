@@ -47,3 +47,13 @@ class TestWorkflowTarget:
     def test_uses_configured_skills_dir_parent(self):
         p = workflows.workflow_target(Path("/opt/cursor/skills"), "commands", "x")
         assert p == Path("/opt/cursor/commands/x.md")
+
+    def test_project_scope_lands_under_repo_dotdir(self):
+        p = workflows.workflow_target(Path("/h/.claude/skills"), "commands",
+                                      "ship", base=Path("/repo"))
+        assert p == Path("/repo/.claude/commands/ship.md")
+
+    def test_project_scope_subagent_under_repo(self):
+        p = workflows.workflow_target(Path("/h/.claude/skills"), "agents",
+                                      "rev", base=Path("/repo"))
+        assert p == Path("/repo/.claude/agents/rev.md")

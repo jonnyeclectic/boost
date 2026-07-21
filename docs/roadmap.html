@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>107</b><span>Loop finds</span></div>
+      <div class="stat"><b>108</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -838,6 +838,29 @@ chunks instead cost ~70%.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">close the last skill-only gaps for rules/workflows</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · UX</span></div>
+        <h3><code>boost install --scope user|project</code> for rules/workflows</h3>
+        <p>Rule and workflow install always materialized into user-global agent config
+           (<code>~/.claude/CLAUDE.md</code>, <code>~/.cursor/rules</code>, …), so a
+           rule meant for one repo leaked into every session. Add
+           <code>--scope project</code>: materialize into the current repo instead —
+           <code>&lt;repo&gt;/.cursor/rules/</code>, <code>&lt;repo&gt;/.claude/commands|agents/</code>,
+           and, since Claude reads per-repo memory from the root and has no rules
+           folder, <code>&lt;repo&gt;/CLAUDE.local.md</code> (the personal, git-ignored
+           file). The chosen scope + base dir are recorded in the lock so
+           <code>update</code>/<code>sync</code> re-materialize back into the same
+           repo rather than wherever they happen to run. Default stays
+           <code>--scope user</code> (unchanged behavior). Uninstall already reverses
+           by recorded path, so it works for either scope.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">rules/workflows were user-global only</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

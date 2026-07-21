@@ -118,7 +118,9 @@ def _warn_secrets(res: store.InstallResult) -> None:
 def _report_result(res: store.InstallResult) -> None:
     """The canonical three-line install report."""
     if res.kind in ("rule", "workflow"):
-        out.ok("materialized → %s" % (" · ".join(res.linked) or "(no enabled agents)"))
+        where = " (this repo)" if res.scope == "project" else ""
+        out.ok("materialized%s → %s"
+               % (where, " · ".join(res.linked) or "(no enabled agents)"))
         out.ok("lock updated (.skill-lock.json)")
         _warn_injection(res)
         _warn_secrets(res)
@@ -166,6 +168,9 @@ def cmd_install(argv: List[str]) -> int:
                     help="reinstall even if already installed or pinned")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
+    ap.add_argument("--scope", choices=("user", "project"), default="user",
+                    help="rules/workflows: install into your user config (default) "
+                         "or the current repo (project)")
     ap.add_argument("--dry-run", action="store_true",
                     help="show what would happen without changing anything")
     args = ap.parse_args(argv)
@@ -191,8 +196,10 @@ def cmd_install(argv: List[str]) -> int:
                 seen = (lockfile.get_rule if k == "rule"
                         else lockfile.get_workflow)(e["name"])
                 verb = "reinstall" if seen else "install"
-                out.info("would %s %s %s v%s from %s" % (verb, k, e["name"],
-                                                         e["version"], e["tap"]))
+                where = "into this repo" if args.scope == "project" else "user config"
+                out.info("would %s %s %s v%s from %s (%s)" % (verb, k, e["name"],
+                                                              e["version"], e["tap"],
+                                                              where))
                 out.info("  materialize → %s" % (" · ".join(targets)
                                                  or "(no enabled agents)"))
                 continue
@@ -210,7 +217,7 @@ def cmd_install(argv: List[str]) -> int:
         if multi:
             out.heading("%s v%s (%s)" % (e["name"], e["version"], e["tap"]))
         try:
-            res = store.install(e, force=args.force, only_agents=only)
+            res = store.install(e, force=args.force, only_agents=only, scope=args.scope)
         except BoostError as err:
             if not multi:
                 raise
@@ -414,7 +421,9 @@ def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
         if not changed:
             continue
         try:
-            store.install(entry, force=True)
+            # keep the item where it was installed (user vs a specific repo).
+            store.install(entry, force=True,
+                          scope=lk.get("scope", "user"), base=lk.get("base"))
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             continue

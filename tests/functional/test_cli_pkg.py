@@ -68,6 +68,22 @@ class TestInstall:
         assert "suspicious pattern" in r.out
         assert "in rule content" in r.out              # not "in SKILL.md"
 
+    def test_rule_scope_project_lands_in_repo_not_global(self, boost,
+                                                         fixture_tap_src,
+                                                         tmp_path, monkeypatch):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "sp-tap")
+        _add_and_commit(tap_dir, "rules/team.mdc",
+                        "---\nname: team-rules\n---\n\nAlways TDD.\n", "add rule")
+        boost("tap", tap_dir)
+        repo = tmp_path / "proj"
+        repo.mkdir()
+        monkeypatch.chdir(repo)                         # project scope == cwd
+        r = boost("install", "team-rules", "--scope", "project")
+        assert "materialized (this repo)" in r.out
+        assert (repo / "CLAUDE.local.md").is_file()     # Claude -> personal repo file
+        assert (repo / ".cursor" / "rules" / "team-rules.mdc").is_file()
+        assert not (paths.home() / ".claude" / "CLAUDE.md").exists()  # not global
+
     def test_exact_report_lines(self, boost, tapped):
         r = boost("install", "brainstorming")
         assert "copied to ~/.agents/skills/brainstorming" in r.out
