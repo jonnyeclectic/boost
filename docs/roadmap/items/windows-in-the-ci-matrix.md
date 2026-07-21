@@ -2,7 +2,7 @@
 id: windows-in-the-ci-matrix
 board: code
 section: compat
-status: inflight
+status: shipped
 category: Compat · Platform
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: untested OS
 order: 1
 owner: loop/windows-ci-matrix
-pr:
+pr: 177
 title: Windows in the CI matrix
 ---
 The test matrix runs macOS and Ubuntu only, so
