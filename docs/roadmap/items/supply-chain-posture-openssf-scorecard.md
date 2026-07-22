@@ -2,7 +2,7 @@
 id: supply-chain-posture-openssf-scorecard
 board: code
 section: health
-status: inflight
+status: shipped
 category: Security · Posture
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 4
 note: badge-worthy
 order: 3
 owner: loop/scorecard
-pr:
+pr: 193
 title: Supply-chain posture — OpenSSF Scorecard
 ---
 The Scorecard GitHub Action audits ~18 supply-chain signals weekly —
