@@ -2,15 +2,15 @@
 id: sbom-on-every-release-cyclonedx-syft
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Security · Supply chain
 complexity: S
 impact: Med
 wow: 3
 note: feeds osv-scanner
 order: 4
-owner:
-pr:
+owner: loop/sbom
+pr: 194
 title: SBOM on every release — CycloneDX / Syft
 ---
 Generate a CycloneDX SBOM with the free <code>anchore/sbom-action</code>
