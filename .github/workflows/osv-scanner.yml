@@ -1,0 +1,25 @@
+name: osv-scanner
+
+# OSV-Scanner, PR-diff mode: flags known vulnerabilities in dependencies a PR
+# *introduces*, cross-checked against the OSV database (broader ecosystem
+# coverage than a single-language audit). The SBOM/manifest complement to the
+# pip-audit env scan — one scans the resolved env, the other the manifest.
+#
+# Scoped to pull_request on purpose: it reports only NEW vulns, so it never
+# trips on the accepted, documented old-langchain pin in the `[eval]` extra
+# (ragas requires it — see pyproject.toml). A full-repo scan would; this diffs
+# the PR against its base and only fails on what the PR adds.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}   # granted narrowly per-job below
+
+jobs:
+  scan-pr:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write   # the reusable workflow uploads SARIF to code scanning
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
