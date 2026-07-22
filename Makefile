@@ -14,7 +14,7 @@ EVAL_HOME := $(CURDIR)/.eval-home
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter diff-cover
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter diff-cover vulture xenon
 
 unit:
 	$(PYTEST) tests/unit -q
@@ -46,6 +46,8 @@ lint:
 	$(VENV)/bin/ruff check boost_cli tests
 	$(VENV)/bin/mypy
 	$(VENV)/bin/lint-imports
+	$(VENV)/bin/vulture boost_cli --min-confidence 80
+	$(VENV)/bin/xenon --max-absolute F --max-modules E --max-average B boost_cli
 	$(VENV)/bin/codespell boost_cli docs README.md
 	@command -v actionlint >/dev/null 2>&1 && actionlint || echo "actionlint not on PATH — skipping (CI enforces it)"
 	$(PY) scripts/build_registries.py --check

@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: install linters
-        run: python -m pip -q install ruff mypy codespell import-linter
+        run: python -m pip -q install ruff mypy codespell import-linter vulture xenon
       - name: ruff
         run: ruff check boost_cli tests
       - name: mypy
@@ -42,6 +42,16 @@ jobs:
         # commands/ nor the CLI; commands/ never reaches up into cli. Config +
         # the one allowlisted edge live in pyproject.toml [tool.importlinter].
         run: lint-imports
+      - name: dead-code radar (vulture)
+        # Flag unused imports / unreachable code. min-confidence 80 excludes the
+        # dynamically-dispatched cmd_* functions (called via importlib in cli.py),
+        # so a finding is a real dead-code smell, not a false positive.
+        run: vulture boost_cli --min-confidence 80
+      - name: complexity radar (xenon)
+        # Ratchet cyclomatic complexity: passes today (average is B) and fails if
+        # the codebase's aggregate complexity regresses. Individual grandfathered
+        # blocks are allowed up to F; a module or the average degrading is not.
+        run: xenon --max-absolute F --max-modules E --max-average B boost_cli
       - name: codespell (user-facing text)
         run: codespell boost_cli docs README.md
       - name: secret scan (gitleaks)
