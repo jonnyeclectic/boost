@@ -55,6 +55,8 @@ auto-fixes straight back onto the branch.
 | `ruff check boost_cli tests` | lint, zero findings |
 | `mypy` | type check, zero errors |
 | `lint-imports` | layering: `core/` imports no `commands/`/`cli`; CLI depends inward |
+| `vulture` | dead-code radar: no unused imports / unreachable code (confidence ≥80) |
+| `xenon` | complexity ratchet: aggregate cyclomatic complexity can't regress (avg ≤B) |
 
 ## Ground rules
 
