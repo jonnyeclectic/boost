@@ -26,6 +26,16 @@ import contextlib
 
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+
+def _validated_skill_name(name: str) -> Optional[str]:
+    """Return canonical trusted skill name, else None."""
+    if not isinstance(name, str):
+        return None
+    if not SKILL_NAME_RE.fullmatch(name) or name in {".", ".."}:
+        return None
+    return name
+
+
 _PAGE_CSS = ("body{background:#111;color:#ddd;font-family:ui-monospace,SFMono-Regular,"
              "Menlo,monospace;max-width:720px;margin:2rem auto;padding:0 1rem}"
              "h1{color:#fff;font-size:1.3rem}a{color:#7dc4ff;text-decoration:none}"
@@ -83,13 +93,14 @@ def _safe_join_within(base, rel):
 
 def skill_text(name: str) -> Optional[str]:
     """SKILL.md text for an installed skill, else from a tap. None if unknown."""
-    if not SKILL_NAME_RE.fullmatch(name):
+    trusted_name = _validated_skill_name(name)
+    if trusted_name is None:
         return None
-    base = store.skill_store_dir(name)
+    base = store.skill_store_dir(trusted_name)
     fp = _safe_join_within(base, Path("SKILL.md"))
     if fp is not None and _is_within(base, fp) and fp.is_file():
         return fp.read_text(encoding="utf-8", errors="replace")
-    for e in catalog.find(name):
+    for e in catalog.find(trusted_name):
         try:
             tap_base = registry.get(e["tap"]).path
             rel = Path(e["skill_md"])
