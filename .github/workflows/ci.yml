@@ -249,3 +249,37 @@ jobs:
         run: |
           git fetch --no-tags origin main
           .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=80
+
+  canary:
+    # Allow-failure early-warning leg on the free-threaded (no-GIL) CPython
+    # build: a GIL-removal regression surfaces here before a user on 3.14t hits
+    # it on release day. boost's runtime is stdlib-only, so this should stay
+    # green; `continue-on-error` keeps a red canary from blocking the gate (and
+    # the release) — it's a signal, not a required check. PR-only.
+    name: canary (3.14t free-threaded)
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.14t"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: unit + functional on free-threaded 3.14
+        # Plain pytest (no coverage gate) — this leg is a compatibility signal,
+        # not the coverage/mutation gate. [rag] deps with no free-threaded wheel
+        # importorskip themselves, exactly as on the main matrix.
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis
+          .venv/bin/pip -q install -e .
+          .venv/bin/pytest tests/unit tests/functional -q
