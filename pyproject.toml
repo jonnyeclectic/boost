@@ -122,7 +122,7 @@ ignore = [
 [tool.codespell]
 # Spell-check user-facing text (see `make lint`: boost_cli, docs, README).
 # Generated boards and the setuptools-scm version stub aren't ours to check.
-skip = "docs/roadmap.html,docs/design-roadmap.html,boost_cli/_version.py,*.tar.gz"
+skip = "docs/roadmap.html,docs/design-roadmap.html,docs/commands.html,boost_cli/_version.py,*.tar.gz"
 # Valid English that codespell's dictionary flags as misspellings.
 ignore-words-list = "unparseable,accreting"
 

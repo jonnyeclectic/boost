@@ -2,7 +2,7 @@
 id: command-reference-docs-site
 board: code
 section: docsite
-status: inflight
+status: shipped
 category: Docs · Command reference
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: Read the Docs–style
 order: 10
 owner: loop/cmdref
-pr:
+pr: 187
 title: Command reference documentation site
 ---
 boost has no browsable command reference — help lives only in

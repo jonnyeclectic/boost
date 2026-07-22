@@ -50,6 +50,7 @@ lint:
 	@command -v actionlint >/dev/null 2>&1 && actionlint || echo "actionlint not on PATH — skipping (CI enforces it)"
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
+	$(PY) scripts/build_command_reference.py --check
 	$(PY) scripts/import_budget.py
 
 # Supply-chain CVE gate: fail on a known OSV/PyPI advisory in the project's
@@ -126,6 +127,7 @@ bench-cli:
 generate:
 	$(PY) scripts/build_registries.py
 	$(PY) scripts/build_roadmap.py
+	$(PY) scripts/build_command_reference.py
 
 # regenerate docs/demo.gif (brew install vhs)
 demo:

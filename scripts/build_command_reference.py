@@ -1,0 +1,362 @@
+#!/usr/bin/env python3
+"""Generate ``docs/commands.html`` — the browsable command reference.
+
+Every command is rendered from the CLI's *own* definitions —
+``boost_cli.cli.COMMANDS`` (the single source of truth for name/group/summary)
+plus an introspection of each command's argparse parser — so the reference can
+never drift from the code. Regenerated exactly like the roadmap:
+
+    python3 scripts/build_command_reference.py            # write docs/commands.html
+    python3 scripts/build_command_reference.py --check    # fail (exit 1) on drift
+
+The ``--check`` form runs in CI and in tests/unit/test_command_reference_fresh.py.
+
+Why introspect the parser instead of scraping ``--help`` text: argparse's
+*formatted* help is Python-version-dependent ("optional arguments:" pre-3.10,
+the short/long option layout changed in 3.13), which would make a byte-exact
+drift check flake across the 3.9/3.12/3.14 test matrix. The parser's action
+attributes (``option_strings``, ``help``, ``choices``, ``nargs``) are stable, so
+we read those and do our own formatting.
+"""
+from __future__ import annotations
+
+import argparse
+import contextlib
+import html
+import importlib
+import io
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+# Import boost_cli without an editable install (CI's lint job has none — same as
+# the eval gate's PYTHONPATH=.).
+sys.path.insert(0, str(ROOT))
+
+from boost_cli import cli, cliparse  # noqa: E402  (after sys.path shim)
+
+OUT = ROOT / "docs" / "commands.html"
+
+# Friendly section headings for the CLI's terse group codes; unknown groups fall
+# back to a title-cased code so a newly-added group still renders.
+GROUP_LABELS = {
+    "pkg": "Install &amp; lifecycle",
+    "find": "Find &amp; search",
+    "info": "Inspect &amp; explain",
+    "tap": "Taps &amp; registries",
+    "ai": "AI-assisted",
+    "chk": "Health &amp; integrity",
+    "cfg": "Config &amp; setup",
+    "team": "Team &amp; sharing",
+}
+
+
+def _capture_parser(name: str, module: str):
+    """Return the ArgumentParser a command builds (by spying on cliparse.parser).
+
+    Calls ``cmd_*(["--help"])`` so the command builds its parser and argparse
+    raises SystemExit *before* any command logic runs; the parser it created is
+    recorded by the spy. Output is swallowed — this has no side effects.
+    """
+    fn = "cmd_" + name.replace("-", "_")
+    mod = importlib.import_module("boost_cli.commands.%s" % module)
+    created: list = []
+    real = cliparse.parser
+
+    def spy(*a, **k):
+        p = real(*a, **k)
+        created.append(p)
+        return p
+
+    cliparse.parser = spy
+    try:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            with contextlib.suppress(SystemExit):
+                getattr(mod, fn)(["--help"])
+    finally:
+        cliparse.parser = real
+    return created[0] if created else None  # main parser is created first
+
+
+def _metavar(act) -> str:
+    if act.metavar:
+        return act.metavar
+    if act.choices:
+        return "{%s}" % ",".join(str(c) for c in act.choices)
+    return act.dest.upper() if act.option_strings else act.dest
+
+
+def _positional_syn(act) -> str:
+    mv = _metavar(act)
+    n = act.nargs
+    if n == "?":
+        return "[%s]" % mv
+    if n == "*" or n == argparse.REMAINDER:
+        return "[%s ...]" % mv
+    if n == "+":
+        return "%s [%s ...]" % (mv, mv)
+    if isinstance(n, int):
+        return " ".join([mv] * n)
+    return mv
+
+
+def _visible_actions(parser):
+    """Positional and optional actions worth documenting (drops -h and hidden)."""
+    pos, opt = [], []
+    for act in parser._actions:
+        if isinstance(act, argparse._HelpAction) or act.help == argparse.SUPPRESS:
+            continue
+        (opt if act.option_strings else pos).append(act)
+    return pos, opt
+
+
+def _extract(name: str, group: str, module: str, summary: str) -> dict:
+    parser = _capture_parser(name, module)
+    prog = parser.prog if parser else "boost %s" % name
+    description = (parser.description or "").strip() if parser else ""
+    pos, opt = _visible_actions(parser) if parser else ([], [])
+
+    syn = [prog]
+    for act in opt:
+        flag = act.option_strings[-1]
+        syn.append("[%s]" % (flag if act.nargs == 0 else "%s %s" % (flag, _metavar(act))))
+    for act in pos:
+        syn.append(_positional_syn(act))
+
+    def rows(actions, is_opt):
+        out = []
+        for act in actions:
+            if is_opt:
+                label = ", ".join(act.option_strings)
+                if act.nargs != 0:
+                    label += " " + _metavar(act)
+            else:
+                label = _metavar(act)
+            out.append((label, (act.help or "").strip()))
+        return out
+
+    return {
+        "name": name, "group": group, "summary": summary,
+        # description repeats summary for most commands — only show it if it adds info
+        "description": description if description and description != summary else "",
+        "synopsis": " ".join(syn),
+        "positionals": rows(pos, False),
+        "options": rows(opt, True),
+    }
+
+
+def _grouped() -> list[tuple[str, str, list[dict]]]:
+    order: list[str] = []
+    by_group: dict[str, list[dict]] = {}
+    for name, group, module, summary in cli.COMMANDS:
+        if group not in by_group:
+            by_group[group] = []
+            order.append(group)
+        by_group[group].append(_extract(name, group, module, summary))
+    return [(g, GROUP_LABELS.get(g, g.title()), by_group[g]) for g in order]
+
+
+def _rows_html(rows) -> str:
+    out = []
+    for label, help_ in rows:
+        out.append(
+            '          <div class="arg"><code>%s</code><span>%s</span></div>'
+            % (html.escape(label), html.escape(help_)))
+    return "\n".join(out)
+
+
+def render() -> str:
+    groups = _grouped()
+    total = sum(len(items) for _g, _l, items in groups)
+
+    nav, body = [], []
+    for code, label, items in groups:
+        nav.append('    <div class="group" data-group="%s">' % code)
+        nav.append('      <div class="group-h">%s</div>' % label)
+        body.append('      <h2 class="group-h" id="grp-%s">%s</h2>' % (code, label))
+        for c in items:
+            search = html.escape(
+                (" ".join([c["name"], c["summary"], c["description"]]
+                          + [l for l, _h in c["options"] + c["positionals"]])).lower(),
+                quote=True)
+            nav.append(
+                '      <a class="cmd-link" href="#cmd-%s" data-search="%s">%s</a>'
+                % (c["name"], search, html.escape(c["name"])))
+
+            sec = ['      <section class="cmd" id="cmd-%s" data-search="%s">'
+                   % (c["name"], search)]
+            sec.append('        <h3><span class="cname">%s</span>'
+                       '<span class="gtag">%s</span></h3>' % (html.escape(c["name"]), code))
+            sec.append('        <p class="summary">%s</p>' % html.escape(c["summary"]))
+            sec.append('        <pre class="syn">%s</pre>' % html.escape(c["synopsis"]))
+            if c["description"]:
+                sec.append('        <p class="desc">%s</p>' % html.escape(c["description"]))
+            if c["positionals"]:
+                sec.append('        <div class="args-h">Arguments</div>')
+                sec.append('        <div class="args">')
+                sec.append(_rows_html(c["positionals"]))
+                sec.append('        </div>')
+            if c["options"]:
+                sec.append('        <div class="args-h">Options</div>')
+                sec.append('        <div class="args">')
+                sec.append(_rows_html(c["options"]))
+                sec.append('        </div>')
+            sec.append('      </section>')
+            body.append("\n".join(sec))
+        nav.append('    </div>')
+
+    return _PAGE % {"total": total, "nav": "\n".join(nav), "body": "\n".join(body)}
+
+
+# Aurora theme — tokens mirror docs/index.html so the reference reads as one
+# site. Self-contained inline CSS/JS (the Pages deploy ships static files).
+_PAGE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — command reference</title>
+<link rel="icon" href="data:image/svg+xml,%%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%%3E%%3Crect width='100' height='100' rx='20' fill='%%2307080f'/%%3E%%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%%2322d3ee' text-anchor='middle'%%3E%%E2%%9C%%A6%%3C/text%%3E%%3C/svg%%3E">
+<style>
+  :root {
+    --bg: #07080f; --panel: rgba(255,255,255,.035); --line: rgba(255,255,255,.09);
+    --text: #e9ebf5; --text-2: #a6a9c4; --amber: #22d3ee; --violet: #a855f7;
+    --grad: linear-gradient(96deg,#22d3ee 0%%,#a855f7 52%%,#f472d0 100%%);
+    --mono: ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --sans: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans);
+         font-size: 15px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  a { color: var(--amber); text-decoration: none; }
+  code { font-family: var(--mono); }
+  .wrap { display: flex; max-width: 1200px; margin: 0 auto; }
+  aside { width: 268px; flex: none; border-right: 1px solid var(--line);
+          padding: 22px 16px 40px; position: sticky; top: 0; align-self: flex-start;
+          height: 100vh; overflow-y: auto; }
+  .brand { display: flex; align-items: baseline; gap: 8px; }
+  .brand b { font-family: var(--mono); font-size: 18px; color: var(--amber);
+             letter-spacing: -.02em; }
+  .brand span { font-size: 11px; color: var(--text-2); }
+  .home { display: inline-block; margin: 4px 0 14px; font-size: 12px; color: var(--text-2); }
+  #q { width: 100%%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--line);
+       background: rgba(0,0,0,.25); color: var(--text); font-family: var(--sans);
+       font-size: 13.5px; margin-bottom: 14px; }
+  #q:focus { outline: none; border-color: var(--amber); }
+  .group { margin-bottom: 14px; }
+  .group-h { font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+             letter-spacing: .16em; text-transform: uppercase; color: var(--violet);
+             margin: 0 0 6px; }
+  .cmd-link { display: block; padding: 3px 8px; border-radius: 7px; font-family: var(--mono);
+              font-size: 13px; color: var(--text-2); }
+  .cmd-link:hover { background: var(--panel); color: var(--text); }
+  #nohits { display: none; color: var(--text-2); font-size: 13px; padding: 6px 8px; }
+  main { flex: 1; min-width: 0; padding: 26px 30px 80px; }
+  h1 { font-size: 25px; margin: 0 0 4px; letter-spacing: -.02em; }
+  h1 b { background: var(--grad); -webkit-background-clip: text; background-clip: text;
+         -webkit-text-fill-color: transparent; }
+  .lead { color: var(--text-2); margin: 0 0 8px; font-size: 14px; }
+  .lead b { color: var(--amber); font-family: var(--mono); }
+  main .group-h { margin: 30px 0 12px; font-size: 11px; }
+  section.cmd { border: 1px solid var(--line); border-radius: 13px; background: var(--panel);
+                padding: 16px 18px; margin-bottom: 14px; scroll-margin-top: 16px; }
+  section.cmd h3 { margin: 0 0 6px; display: flex; align-items: center; gap: 10px; }
+  .cname { font-family: var(--mono); font-size: 16px; color: var(--amber); }
+  .gtag { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: .1em;
+          text-transform: uppercase; color: var(--text-2); border: 1px solid var(--line);
+          border-radius: 999px; padding: 2px 8px; }
+  .summary { margin: 0 0 10px; color: #cfd2ea; font-size: 14px; }
+  pre.syn { margin: 0 0 10px; padding: 11px 14px; border-radius: 9px; background: rgba(0,0,0,.32);
+            border: 1px solid var(--line); overflow-x: auto; font-size: 12.5px; color: var(--amber);
+            white-space: pre-wrap; word-break: break-word; }
+  .desc { margin: 0 0 12px; color: var(--text-2); font-size: 13.5px; }
+  .args-h { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .14em;
+            text-transform: uppercase; color: var(--text-2); margin: 12px 0 6px; }
+  .args { display: grid; gap: 6px; }
+  .arg { display: grid; grid-template-columns: minmax(120px, 34%%) 1fr; gap: 14px;
+         align-items: baseline; }
+  .arg code { color: var(--amber); font-size: 12.5px; }
+  .arg span { color: #cdd2ea; font-size: 13.5px; }
+  @media (max-width: 760px) {
+    .wrap { flex-direction: column; } aside { width: auto; height: auto; position: static;
+    border-right: none; border-bottom: 1px solid var(--line); }
+    .arg { grid-template-columns: 1fr; gap: 2px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside>
+    <div class="brand"><b>✦ boost</b><span>commands</span></div>
+    <a class="home" href="index.html">← back to overview</a>
+    <input id="q" type="search" placeholder="Filter %(total)d commands…" autocomplete="off" aria-label="Filter commands">
+%(nav)s
+    <div id="nohits">No commands match.</div>
+  </aside>
+  <main>
+    <h1>boost <b>command reference</b></h1>
+    <p class="lead">All <b>%(total)d</b> commands, generated from the CLI itself —
+       run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
+%(body)s
+  </main>
+</div>
+<script>
+  (function () {
+    var q = document.getElementById('q');
+    var links = [].slice.call(document.querySelectorAll('.cmd-link'));
+    var secs = [].slice.call(document.querySelectorAll('section.cmd'));
+    var groups = [].slice.call(document.querySelectorAll('aside .group'));
+    var nohits = document.getElementById('nohits');
+    function apply() {
+      var t = q.value.toLowerCase().trim(), hits = 0;
+      secs.forEach(function (s) {
+        s.style.display = (!t || s.getAttribute('data-search').indexOf(t) !== -1) ? '' : 'none';
+      });
+      links.forEach(function (a) {
+        var on = !t || a.getAttribute('data-search').indexOf(t) !== -1;
+        a.style.display = on ? '' : 'none';
+        if (on) hits++;
+      });
+      groups.forEach(function (g) {
+        var any = [].slice.call(g.querySelectorAll('.cmd-link'))
+                    .some(function (a) { return a.style.display !== 'none'; });
+        g.style.display = any ? '' : 'none';
+      });
+      nohits.style.display = hits ? 'none' : 'block';
+    }
+    q.addEventListener('input', apply);
+  })();
+</script>
+</body>
+</html>
+"""
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Regenerate the command reference (docs/commands.html).")
+    parser.add_argument(
+        "--check", action="store_true",
+        help="verify committed HTML matches a fresh render; exit 1 on drift.")
+    args = parser.parse_args(argv)
+
+    fresh = render()
+    if args.check:
+        current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
+        if current != fresh:
+            print(
+                "ERROR: docs/commands.html is out of date — regenerate with\n"
+                "    python3 scripts/build_command_reference.py\n"
+                "and commit the result (see CONTRIBUTING.md).",
+                file=sys.stderr)
+            return 1
+        print("command reference is up to date.")
+        return 0
+    OUT.write_text(fresh, encoding="utf-8")
+    print("wrote %s" % OUT)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
