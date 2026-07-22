@@ -17,6 +17,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          # audit: record egress, never block — the runtime signal that
+          # catches a compromised action exfiltrating a token, paired with
+          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
@@ -102,6 +109,14 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.9", "3.12", "3.14"]
     steps:
+      - name: harden runner (egress audit)
+        if: runner.os == 'Linux'   # harden-runner is Linux-only
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          # audit: record egress, never block — the runtime signal that
+          # catches a compromised action exfiltrating a token, paired with
+          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
@@ -156,6 +171,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          # audit: record egress, never block — the runtime signal that
+          # catches a compromised action exfiltrating a token, paired with
+          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
@@ -185,6 +207,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          # audit: record egress, never block — the runtime signal that
+          # catches a compromised action exfiltrating a token, paired with
+          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution
@@ -221,6 +250,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          # audit: record egress, never block — the runtime signal that
+          # catches a compromised action exfiltrating a token, paired with
+          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # full history so origin/main is a real diff base
@@ -263,6 +299,13 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          # audit: record egress, never block — the runtime signal that
+          # catches a compromised action exfiltrating a token, paired with
+          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0    # tags for setuptools-scm version resolution

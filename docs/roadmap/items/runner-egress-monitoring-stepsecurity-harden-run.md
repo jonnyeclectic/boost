@@ -2,15 +2,15 @@
 id: runner-egress-monitoring-stepsecurity-harden-run
 board: code
 section: dx
-status: planned
+status: shipped
 category: Security · CI/CD
 complexity: S
 impact: Med
 wow: 4
 note: runtime + static
 order: 9
-owner:
-pr:
+owner: loop/hardenrunner
+pr: 186
 title: Runner egress monitoring — StepSecurity Harden-Runner
 ---
 Free for public repos, Harden-Runner watches (and can block) unexpected
