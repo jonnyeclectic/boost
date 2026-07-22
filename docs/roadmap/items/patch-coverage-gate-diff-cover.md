@@ -2,15 +2,15 @@
 id: patch-coverage-gate-diff-cover
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Testing · Gap
 complexity: S
 impact: Med
 wow: 2
 note: self-hosted
 order: 8
-owner:
-pr:
+owner: loop/patchcov
+pr: 183
 title: Patch-coverage gate — <code>diff-cover</code>
 ---
 Enforce coverage on the <em>changed lines</em> of each PR — no external

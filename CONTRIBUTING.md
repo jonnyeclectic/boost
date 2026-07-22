@@ -33,6 +33,7 @@ auto-fixes straight back onto the branch.
 | Command | Gate |
 |---|---|
 | `make test` | unit + functional suites, **≥80% line coverage** |
+| `make patch-coverage` | changed-line coverage vs `main`, **≥80% of the diff** (PRs) |
 | `bash tests/smoke.sh` | 152 end-to-end checks through the real `./boost` shim |
 | `make mutation` | mutmut over `boost_cli/core`, **≥80% mutants killed** |
 | `ruff check boost_cli tests` | lint, zero findings |

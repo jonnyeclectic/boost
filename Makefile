@@ -10,11 +10,11 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli
+.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter diff-cover
 
 unit:
 	$(PYTEST) tests/unit -q
@@ -27,6 +27,12 @@ test:
 	$(PYTEST) tests/unit tests/functional --cov=boost_cli --cov-report=term-missing -q
 
 coverage: test
+
+# patch-coverage: gate coverage on the lines THIS branch changed vs main — the
+# same check CI runs on every PR. Needs a diff base, so run it on a branch.
+patch-coverage:
+	$(PYTEST) tests/unit tests/functional --cov=boost_cli --cov-report=xml --cov-fail-under=0 -q
+	$(VENV)/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=80
 
 # shell-level functional suite: drives the real shim end-to-end in a sandbox
 smoke:
