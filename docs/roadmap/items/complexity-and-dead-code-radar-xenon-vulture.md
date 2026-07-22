@@ -2,7 +2,7 @@
 id: complexity-and-dead-code-radar-xenon-vulture
 board: code
 section: health
-status: inflight
+status: shipped
 category: Quality · Smell
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note: commands/ first
 order: 5
 owner: loop/radar
-pr:
+pr: 191
 title: Complexity &amp; dead-code radar — <code>xenon</code> · <code>vulture</code>
 ---
 Gate CI on a maintainability grade with <code>xenon</code> (built on
