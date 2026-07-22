@@ -74,6 +74,11 @@ jobs:
         run: python scripts/build_registries.py --check
       - name: roadmap HTML is regenerated
         run: python scripts/build_roadmap.py --check
+      - name: command reference is regenerated
+        # docs/commands.html is generated from the CLI's own COMMANDS + argparse
+        # parsers, so it can't drift from the code. The script imports boost_cli
+        # via a sys.path shim (no editable install needed, like the eval gate).
+        run: python scripts/build_command_reference.py --check
       # Startup import-time budget: a lazy-import guard. For a CLI, cold-start
       # latency is the UX; this asserts the heavy/optional stack (sqlite_vec,
       # embedding/AI SDKs, scientific-python, boost's dense/embed engines)

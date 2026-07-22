@@ -2,15 +2,15 @@
 id: command-reference-docs-site
 board: code
 section: docsite
-status: planned
+status: shipped
 category: Docs · Command reference
 complexity: M
 impact: High
 wow: 4
 note: Read the Docs–style
 order: 10
-owner:
-pr:
+owner: loop/cmdref
+pr: 187
 title: Command reference documentation site
 ---
 boost has no browsable command reference — help lives only in
