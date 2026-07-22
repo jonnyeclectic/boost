@@ -37,12 +37,18 @@ auto-fixes straight back onto the branch.
 | `make mutation` | mutmut over `boost_cli/core`, **≥80% mutants killed** |
 | `ruff check boost_cli tests` | lint, zero findings |
 | `mypy` | type check, zero errors |
+| `lint-imports` | layering: `core/` imports no `commands/`/`cli`; CLI depends inward |
 
 ## Ground rules
 
 - **Stdlib only** at runtime. No third-party imports in `boost_cli/`.
 - New commands live in `boost_cli/commands/<group>.py` as
   `def cmd_<name>(argv) -> int` and are dispatched lazily from `cli.py`.
+- **Respect the layers** (`cli → commands → core`): `core/` is the engine and
+  must import neither `commands/` nor `cli`; `commands/` must not reach up into
+  `cli`. `import-linter` enforces this — see `[tool.importlinter]` in
+  `pyproject.toml` (the one allowlisted edge is `completions` reading the
+  `COMMANDS` registry).
 - Behavior changes need tests — functional tests drive the CLI in-process via
   `boost_cli.cli.main` (see `tests/conftest.py` for the fixtures).
 - Anything under `boost_cli/core/` is mutation-tested; expect to add unit
