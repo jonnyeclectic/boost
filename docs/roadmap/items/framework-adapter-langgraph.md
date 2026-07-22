@@ -2,7 +2,7 @@
 id: framework-adapter-langgraph
 board: code
 section: dx
-status: planned
+status: inflight
 category: Interop
 complexity: M
 impact: Med
