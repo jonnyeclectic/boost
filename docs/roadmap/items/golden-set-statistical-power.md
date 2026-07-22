@@ -2,7 +2,7 @@
 id: golden-set-statistical-power
 board: code
 section: health
-status: inflight
+status: shipped
 category: Quality · Retrieval eval
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: 43 → deeper, per-kind
 order: 4
 owner: loop/goldenset
-pr:
+pr: 188
 title: Grow &amp; diversify the golden set for statistical power
 ---
 The golden set (<b>43</b> queries / 8 stacks / 7 skills) is small enough that
