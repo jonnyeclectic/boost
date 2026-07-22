@@ -2,14 +2,14 @@
 id: shift-left-gate-pre-commit-pre-commit-ci
 board: code
 section: dx
-status: planned
+status: inflight
 category: DX · Infra
 complexity: S
 impact: High
 wow: 4
 note: auto-fix PRs
 order: 2
-owner:
+owner: loop/pre-commit
 pr:
 title: Shift-left gate — <code>pre-commit</code> + pre-commit.ci
 ---
