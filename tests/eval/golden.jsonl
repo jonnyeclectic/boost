@@ -50,3 +50,53 @@
 {"query": "implement auth0 authentication and configuration", "relevant": ["auth0-expert"], "kind": "workflow", "note": "auth0"}
 {"query": "write modern high quality efficient c++ code", "relevant": ["cpp-expert"], "kind": "workflow", "note": "cpp"}
 {"query": "idiomatic go with concurrency and performance optimization", "relevant": ["go-expert"], "kind": "workflow", "note": "go"}
+
+# --- expanded set: statistical power (per-kind balance, near-miss distractors) ---
+{"query": "design a poster layout on an infinite design canvas", "relevant": ["canvas-design"], "kind": "skill", "note": "infinite canvas design"}
+{"query": "polished frontend visual design and aesthetics for a web app", "relevant": ["frontend-design"], "kind": "skill", "note": "frontend visual design"}
+{"query": "write end-to-end tests for a web application in the browser", "relevant": ["webapp-testing"], "kind": "skill", "note": "web e2e testing"}
+{"query": "create and edit an Excel spreadsheet with formulas", "relevant": ["xlsx"], "kind": "skill", "note": "spreadsheets"}
+{"query": "scaffold a brand new Claude skill from scratch", "relevant": ["skill-creator"], "kind": "skill", "note": "skill authoring"}
+{"query": "generate an animated GIF to post in Slack", "relevant": ["slack-gif-creator"], "kind": "skill", "note": "slack gifs"}
+{"query": "generate a cohesive color theme and design tokens", "relevant": ["theme-factory"], "kind": "skill", "note": "theming"}
+{"query": "build a self-contained interactive web artifact", "relevant": ["web-artifacts-builder"], "kind": "skill", "note": "web artifacts"}
+{"query": "draft an internal company announcement to employees", "relevant": ["internal-comms"], "kind": "skill", "note": "internal comms"}
+{"query": "improve and refine a large language model prompt", "relevant": ["prompt-engineering"], "kind": "skill", "note": "prompt engineering"}
+{"query": "manage the agent's context window and engineer its context", "relevant": ["context-engineering"], "kind": "skill", "note": "context engineering"}
+{"query": "evaluate how well an AI agent performs on tasks", "relevant": ["agent-evaluation"], "kind": "skill", "note": "agent eval"}
+{"query": "use git worktrees to work on parallel branches", "relevant": ["git-worktrees"], "kind": "skill", "note": "git worktrees"}
+{"query": "publish a NuGet package for a .NET library", "relevant": ["nuget-package-publishing"], "kind": "rule", "note": "nuget publishing"}
+{"query": "configure the .NET build with MSBuild targets", "relevant": ["dotnet-build"], "kind": "rule", "note": "dotnet build"}
+{"query": "code-sign .NET assemblies and executables", "relevant": ["code-signing"], "kind": "rule", "note": "code signing"}
+{"query": "set up performance benchmarks for a .NET project", "relevant": ["benchmarking"], "kind": "rule", "note": "benchmarking"}
+{"query": "build a gRPC service in Go with protocol buffers", "relevant": ["go-grpc-service-rule"], "kind": "rule", "note": "go grpc"}
+{"query": "Spring Boot JPA entity and repository best practices", "relevant": ["springboot-jpa-best-practices"], "kind": "rule", "note": "spring jpa"}
+{"query": "Kotlin Spring Boot development conventions", "relevant": ["kotlin-springboot-rules"], "kind": "rule", "note": "kotlin spring"}
+{"query": "MLOps pipeline and machine learning model deployment", "relevant": ["mlops"], "kind": "rule", "note": "mlops"}
+{"query": "computer vision model development guidelines", "relevant": ["computer-vision"], "kind": "rule", "note": "computer vision"}
+{"query": "federated learning model training across devices", "relevant": ["federated-learning"], "kind": "rule", "note": "federated learning"}
+{"query": "deploy AI models to edge devices", "relevant": ["edge-ai"], "kind": "rule", "note": "edge ai"}
+{"query": "robotic process automation guidelines", "relevant": ["rpa"], "kind": "rule", "note": "rpa"}
+{"query": "knowledge graph construction best practices", "relevant": ["knowledge-graph"], "kind": "rule", "note": "knowledge graph"}
+{"query": "photonic neural network hardware acceleration", "relevant": ["photonic-neural-network"], "kind": "rule", "note": "photonic nn"}
+{"query": "build an augmented reality experience", "relevant": ["augmented-reality"], "kind": "rule", "note": "augmented reality"}
+{"query": "ABP framework application development conventions", "relevant": ["abp-framework"], "kind": "rule", "note": "abp framework"}
+{"query": "best practices for backend database interaction", "relevant": ["database-interaction-best-practices"], "kind": "rule", "note": "db interaction"}
+{"query": "Phoenix Elixir docker development setup", "relevant": ["phoenix-docker-setup"], "kind": "rule", "note": "phoenix docker"}
+{"query": "Elixir general software engineering conventions", "relevant": ["elixir-general-engineering-rule"], "kind": "rule", "note": "elixir engineering"}
+{"query": "define protocol buffer message definitions", "relevant": ["protocol-buffer-definitions-rule"], "kind": "rule", "note": "protobuf defs"}
+{"query": "DTO data transfer object naming conventions", "relevant": ["dto-conventions"], "kind": "rule", "note": "dto conventions"}
+{"query": "Spring @RestController endpoint mapping conventions", "relevant": ["restcontroller-conventions"], "kind": "rule", "note": "spring restcontroller"}
+{"query": "get expert help building a Django web application", "relevant": ["django-expert"], "kind": "workflow", "note": "django subagent"}
+{"query": "build a FastAPI backend service", "relevant": ["fastapi-expert"], "kind": "workflow", "note": "fastapi subagent"}
+{"query": "containerize an application with Docker best practices", "relevant": ["docker-expert"], "kind": "workflow", "note": "docker subagent"}
+{"query": "set up a GitHub Actions CI/CD pipeline", "relevant": ["github-actions-expert"], "kind": "workflow", "note": "gh actions subagent"}
+{"query": "build a cross-platform mobile app with Flutter", "relevant": ["flutter-expert"], "kind": "workflow", "note": "flutter subagent"}
+{"query": "write idiomatic, production-ready Go code", "relevant": ["go-expert"], "kind": "workflow", "note": "go subagent"}
+{"query": "write Cypress end-to-end browser tests", "relevant": ["cypress-expert"], "kind": "workflow", "note": "cypress subagent; near-miss vs webapp-testing"}
+{"query": "configure a GitLab CI pipeline", "relevant": ["gitlab-ci-expert"], "kind": "workflow", "note": "gitlab subagent; near-miss vs github-actions"}
+{"query": "build a Fastify Node.js HTTP server", "relevant": ["fastify-expert"], "kind": "workflow", "note": "fastify subagent"}
+{"query": "build a REST API with Express.js", "relevant": ["express-expert"], "kind": "workflow", "note": "express subagent"}
+{"query": "build an Elixir application with OTP", "relevant": ["elixir-expert"], "kind": "workflow", "note": "elixir subagent"}
+{"query": "style a page with modern CSS", "relevant": ["css-expert"], "kind": "workflow", "note": "css subagent"}
+{"query": "query and model data in Cassandra", "relevant": ["cassandra-expert"], "kind": "workflow", "note": "cassandra subagent"}

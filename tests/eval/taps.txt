@@ -2,7 +2,7 @@
 #
 # The golden set (golden.jsonl) grades real catalog items by NAME, so the gate
 # needs the repos that actually contain those items tapped before it can score.
-# This is the minimal set of repos that covers all 44 golden targets across the
+# This is the minimal set of repos that covers all 77 golden targets across the
 # skill / rule / workflow kinds. Over it, BM25 recall@10 == 1.000, so the 0.85
 # floor gate has a wide margin and tolerates upstream drift.
 #
