@@ -2,15 +2,15 @@
 id: sbom-aware-scanning-osv-scanner
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Security · Vuln
 complexity: S
 impact: Med
 wow: 2
 note: OSV-backed
 order: 5
-owner:
-pr:
+owner: loop/osv
+pr: 189
 title: SBOM-aware scanning — <code>osv-scanner</code>
 ---
 Google's <code>osv-scanner</code> cross-checks a lockfile or the SBOM
