@@ -2,7 +2,7 @@
 id: framework-adapter-langgraph
 board: code
 section: dx
-status: planned
+status: shipped
 category: Interop
 complexity: M
 impact: Med
