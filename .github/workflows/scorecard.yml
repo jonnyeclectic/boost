@@ -6,17 +6,16 @@ name: scorecard
 # complement to the per-issue scanners already in CI (CodeQL, zizmor, gitleaks,
 # pip-audit). It reports a score; it does not gate a merge.
 #
-# Runs on PRs so a workflow change that weakens posture shows up before it
-# lands, and on main + weekly where it ALSO publishes the public score badge
-# (a PR run can't publish — it only re-validates that the analysis succeeds).
+# Runs on main + weekly (where it publishes the public score badge), NOT on
+# pull_request: Scorecard's SARIF carries error-level findings for posture gaps
+# boost has by design (e.g. no fuzzing), which code-scanning surfaces as a red
+# `Scorecard` check on every PR — noise, since the score is informational.
 
 on:
   branch_protection_rule:
   schedule:
     - cron: "0 7 * * 1"   # Mondays 07:00 UTC
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
 
 permissions: {}
@@ -44,9 +43,9 @@ jobs:
           results_file: results.sarif
           results_format: sarif
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          # Publish the public score (badge) only from main/schedule; a PR run
-          # can't publish and just proves the analysis still runs clean.
-          publish_results: ${{ github.event_name != 'pull_request' }}
+          # Publish the public score (badge) — all triggers here run on the
+          # default branch context, so publishing is always valid.
+          publish_results: true
       - name: upload SARIF to code scanning
         uses: github/codeql-action/upload-sarif@e0647621c2984b5ed2f768cb892365bf2a616ad1 # v4.37.2
         with:
