@@ -2,14 +2,14 @@
 id: one-command-every-env-nox
 board: code
 section: compat
-status: planned
+status: inflight
 category: Testing · Infra
 complexity: S
 impact: Med
 wow: 2
 note: local == CI
 order: 8
-owner:
+owner: loop/nox
 pr:
 title: One command, every env — <code>nox</code>
 ---
