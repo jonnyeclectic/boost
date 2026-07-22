@@ -2,14 +2,14 @@
 id: runner-egress-monitoring-stepsecurity-harden-run
 board: code
 section: dx
-status: planned
+status: inflight
 category: Security · CI/CD
 complexity: S
 impact: Med
 wow: 4
 note: runtime + static
 order: 9
-owner:
+owner: loop/hardenrunner
 pr:
 title: Runner egress monitoring — StepSecurity Harden-Runner
 ---
