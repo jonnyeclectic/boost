@@ -2,14 +2,14 @@
 id: golden-set-statistical-power
 board: code
 section: health
-status: planned
+status: inflight
 category: Quality · Retrieval eval
 complexity: M
 impact: High
 wow: 4
 note: 43 → deeper, per-kind
 order: 4
-owner:
+owner: loop/goldenset
 pr:
 title: Grow &amp; diversify the golden set for statistical power
 ---
