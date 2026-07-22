@@ -210,3 +210,42 @@ jobs:
           python -m pip -q install pipx
           pipx install dist/*.whl
           "$(pipx environment --value PIPX_BIN_DIR)/boost" --version | grep -Eq '^boost \S+$'
+
+  patch-coverage:
+    # Coverage on the CHANGED lines of a PR: the 93%+ project number can hide a
+    # PR that adds wholly-untested code, so gate the diff itself. Self-hosted —
+    # diff-cover reads a Cobertura coverage.xml the suite emits, no external
+    # service. PR-only: there's nothing to diff a push to main against.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # full history so origin/main is a real diff base
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install test deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install pytest pytest-cov coverage hypothesis diff-cover
+          # [rag] extra so dense.py counts the same lines the matrix does
+          .venv/bin/pip -q install sqlite-vec || true
+      - name: suite -> Cobertura coverage.xml
+        # --cov-fail-under=0: the project 80% gate is the matrix job's to own;
+        # this job gates ONLY the patch. Same suite the matrix runs.
+        run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=xml --cov-fail-under=0 -q
+      - name: diff-cover (changed-line coverage vs main)
+        # 80% of each PR's changed, coverable lines must be tested — pairs with
+        # the project gate so new code can't ride in untested. Tune --fail-under
+        # here. A diff with no Python lines passes (nothing to measure).
+        run: |
+          git fetch --no-tags origin main
+          .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=80
