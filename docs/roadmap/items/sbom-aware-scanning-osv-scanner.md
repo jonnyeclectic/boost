@@ -2,14 +2,14 @@
 id: sbom-aware-scanning-osv-scanner
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: Security · Vuln
 complexity: S
 impact: Med
 wow: 2
 note: OSV-backed
 order: 5
-owner:
+owner: loop/osv
 pr:
 title: SBOM-aware scanning — <code>osv-scanner</code>
 ---
