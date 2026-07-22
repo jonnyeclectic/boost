@@ -1,0 +1,67 @@
+# Shift-left the `make lint` gate to *before* the commit, so ruff / mypy /
+# codespell / whitespace fixes land locally instead of failing in CI.
+#
+#   pip install pre-commit && pre-commit install   # once — hooks then run on `git commit`
+#   pre-commit run --all-files                      # run everything right now
+#
+# pre-commit.ci (free for open source) runs these on every PR and pushes the
+# auto-fixes back onto the branch — see the `ci:` block. Versions below are
+# pinned to match the tools `make lint` runs; bump them together.
+ci:
+  autofix_prs: true
+  autoupdate_schedule: monthly
+  # mypy is a `repo: local` hook that needs the project's venv — pre-commit.ci
+  # builds isolated hook envs and can't provide it, so `make lint` / CI own it.
+  skip: [mypy]
+
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # Whitespace fixers skip the generated boards (build_roadmap.py owns their
+      # bytes — a drift check would fight this hook), the loop-edited roadmap
+      # item data (many parallel branches touch these; a whitespace churn there
+      # means needless merge conflicts) and IDE files under .idea/.
+      - id: trailing-whitespace
+        exclude: &data_and_generated '^(docs/(roadmap|design-roadmap)\.html$|docs/roadmap/items/|\.idea/)'
+      - id: end-of-file-fixer
+        exclude: *data_and_generated
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        exclude: *data_and_generated
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+
+  # Ruff — pinned to the version in `make lint`; reads the same [tool.ruff]
+  # config from pyproject.toml and is scoped to the gate's paths.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(boost_cli|tests)/.*\.py$
+
+  # codespell — same version and [tool.codespell] config (skip / ignore lists)
+  # as `make lint`, scoped to the same targets: boost_cli, docs, README.
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]
+        files: ^(boost_cli/|docs/|README\.md)
+
+  # mypy — run from the project venv so it matches `make lint` exactly
+  # (config drives it: files = ["boost_cli"]). Local so stdlib/editable
+  # resolution is identical; skipped on pre-commit.ci (see `ci.skip`).
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (boost_cli)
+        entry: mypy
+        language: system
+        pass_filenames: false
+        types: [python]

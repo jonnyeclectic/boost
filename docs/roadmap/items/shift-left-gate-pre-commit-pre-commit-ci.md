@@ -2,15 +2,15 @@
 id: shift-left-gate-pre-commit-pre-commit-ci
 board: code
 section: dx
-status: planned
+status: shipped
 category: DX · Infra
 complexity: S
 impact: High
 wow: 4
 note: auto-fix PRs
 order: 2
-owner:
-pr:
+owner: loop/pre-commit
+pr: 181
 title: Shift-left gate — <code>pre-commit</code> + pre-commit.ci
 ---
 A <code>.pre-commit-config.yaml</code> runs ruff, mypy, codespell and the
