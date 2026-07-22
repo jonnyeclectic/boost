@@ -2,15 +2,15 @@
 id: one-command-every-env-nox
 board: code
 section: compat
-status: planned
+status: shipped
 category: Testing · Infra
 complexity: S
 impact: Med
 wow: 2
 note: local == CI
 order: 8
-owner:
-pr:
+owner: loop/nox
+pr: 184
 title: One command, every env — <code>nox</code>
 ---
 A <code>noxfile.py</code> makes the full lint / test / smoke / mutation

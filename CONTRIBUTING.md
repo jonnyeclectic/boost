@@ -13,6 +13,22 @@ make venv          # pytest, coverage, mutmut, ruff, mypy — runtime stays stdl
 Every test runs against a throwaway `$HOME`, so nothing touches your real
 agent configs.
 
+### Reproduce the whole gate — `nox`
+
+[`noxfile.py`](noxfile.py) runs the exact gate the CI jobs run, in isolated
+venvs, across the supported interpreters:
+
+```bash
+pipx install nox        # or: pip install nox
+nox                     # lint + tests on every installed interpreter
+nox -s lint             # one session
+nox -s "tests-3.12"     # tests on a single interpreter
+nox -s smoke -s mutation
+```
+
+Each session installs the same tools and runs the same commands as `make` and
+CI, so "green on my machine" and "green in CI" mean the same thing.
+
 ### Pre-commit hooks (recommended)
 
 Catch the `make lint` findings *before* they reach CI:
