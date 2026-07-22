@@ -13,6 +13,21 @@ make venv          # pytest, coverage, mutmut, ruff, mypy — runtime stays stdl
 Every test runs against a throwaway `$HOME`, so nothing touches your real
 agent configs.
 
+### Pre-commit hooks (recommended)
+
+Catch the `make lint` findings *before* they reach CI:
+
+```bash
+pip install pre-commit && pre-commit install   # once
+pre-commit run --all-files                      # or run everything now
+```
+
+`git commit` then runs ruff, mypy, codespell and the whitespace fixers on your
+staged files. The hooks in [`.pre-commit-config.yaml`](.pre-commit-config.yaml)
+are pinned to the same tool versions the lint gate uses, and
+[pre-commit.ci](https://pre-commit.ci) runs them on every PR and pushes any
+auto-fixes straight back onto the branch.
+
 ## The gates (CI runs all of these)
 
 | Command | Gate |
