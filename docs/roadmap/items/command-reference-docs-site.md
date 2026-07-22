@@ -2,14 +2,14 @@
 id: command-reference-docs-site
 board: code
 section: docsite
-status: planned
+status: inflight
 category: Docs · Command reference
 complexity: M
 impact: High
 wow: 4
 note: Read the Docs–style
 order: 10
-owner:
+owner: loop/cmdref
 pr:
 title: Command reference documentation site
 ---
