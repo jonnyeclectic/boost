@@ -2,14 +2,14 @@
 id: patch-coverage-gate-diff-cover
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: Testing · Gap
 complexity: S
 impact: Med
 wow: 2
 note: self-hosted
 order: 8
-owner:
+owner: loop/patchcov
 pr:
 title: Patch-coverage gate — <code>diff-cover</code>
 ---
