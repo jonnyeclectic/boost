@@ -2,14 +2,14 @@
 id: layering-guard-import-linter
 board: code
 section: dx
-status: planned
+status: inflight
 category: Quality · Architecture
 complexity: M
 impact: Med
 wow: 4
 note: core/ ↛ commands/
 order: 3
-owner:
+owner: loop/layering
 pr:
 title: Layering guard — <code>import-linter</code>
 ---
