@@ -34,6 +34,12 @@ jobs:
           - to: agents-sdk
             pip: openai-agents[litellm]
             module: agents
+          # LangGraph emits a node *factory* (make_<skill>), not a module-level
+          # Agent — so this leg builds a graph from it rather than isinstance-ing
+          # an Agent (see the per-`to` steps below).
+          - to: langgraph
+            pip: langgraph langchain-anthropic
+            module: langgraph
     name: ${{ matrix.to }} accepts boost adapt output
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -68,6 +74,7 @@ jobs:
           echo "----- generated -----"
           cat "$GITHUB_WORKSPACE/agent_out.py"
       - name: import the emitted file and instantiate a live Agent
+        if: matrix.to != 'langgraph'
         run: |
           cd "$GITHUB_WORKSPACE"
           .venv/bin/python - <<'PY'
@@ -76,4 +83,19 @@ jobs:
           a = agent_out.brainstorming
           assert isinstance(a, Agent), "not a real ${{ matrix.module }}.Agent: %r" % type(a)
           print("PASS — ${{ matrix.to }} instantiated", type(a).__module__ + "." + type(a).__name__)
+          PY
+      - name: import the emitted file and build a LangGraph agent
+        if: matrix.to == 'langgraph'
+        env:
+          # construction only — create_react_agent builds the graph without an
+          # API call, so a placeholder key is enough (and nothing is invoked).
+          ANTHROPIC_API_KEY: sk-ant-placeholder-not-called
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          .venv/bin/python - <<'PY'
+          import agent_out  # validates `from langgraph.prebuilt import create_react_agent`
+          from langchain_anthropic import ChatAnthropic
+          graph = agent_out.make_brainstorming(ChatAnthropic(model="claude-haiku-4-5-20251001"))
+          assert hasattr(graph, "invoke"), "factory did not build a runnable graph: %r" % type(graph)
+          print("PASS — langgraph built", type(graph).__module__ + "." + type(graph).__name__)
           PY
