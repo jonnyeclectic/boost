@@ -155,3 +155,24 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
 ]
+
+# import-linter: turn boost's assumed layering into an enforced contract, so a
+# cross-layer import can't silently erode the engine. Run by `make lint`
+# (lint-imports) and the CI lint job. Dev/CI-only — never imported at runtime.
+[tool.importlinter]
+root_package = "boost_cli"
+
+[[tool.importlinter.contracts]]
+name = "boost_cli is layered: cli -> commands -> core"
+type = "layers"
+# Higher layers may import lower ones, never the reverse: core/ (the engine)
+# must import neither commands/ nor the CLI, and commands/ must not reach up
+# into cli. This is the structural rule CLAUDE.md documents — core is the
+# mutation-tested engine, commands/ is thin glue on top of it.
+layers = ["cli", "commands", "core"]
+containers = ["boost_cli"]
+# The one intentional upward edge: `boost completions` reads COMMANDS — the
+# command registry, which lives in cli.py by design (see CLAUDE.md) — to list
+# every command. That single metadata lookup is allowlisted; any other
+# commands -> cli import is still a violation.
+ignore_imports = ["boost_cli.commands.configuration -> boost_cli.cli"]

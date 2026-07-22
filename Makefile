@@ -14,7 +14,7 @@ EVAL_HOME := $(CURDIR)/.eval-home
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter
 
 unit:
 	$(PYTEST) tests/unit -q
@@ -39,6 +39,7 @@ mutation:
 lint:
 	$(VENV)/bin/ruff check boost_cli tests
 	$(VENV)/bin/mypy
+	$(VENV)/bin/lint-imports
 	$(VENV)/bin/codespell boost_cli docs README.md
 	@command -v actionlint >/dev/null 2>&1 && actionlint || echo "actionlint not on PATH — skipping (CI enforces it)"
 	$(PY) scripts/build_registries.py --check
