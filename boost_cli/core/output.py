@@ -419,6 +419,11 @@ def table(rows, headers=None) -> None:
     numeric columns are right-aligned, and when a row would overflow the
     terminal the widest text column is shrunk (its cells clipped with an
     ellipsis) so wide catalogs stay on one line instead of wrapping.
+
+    On a color terminal, columns are joined by a dim ``│`` separator — the
+    terminal cousin of the web stat blocks' hairline borders. Non-color output
+    (pipes, NO_COLOR, tests) keeps the plain two-space gutter byte-for-byte,
+    so scripts that parse table output never see the ornament.
     """
     rows = [[str(x) for x in r] for r in rows]
     all_rows = ([list(map(str, headers))] if headers else []) + rows
@@ -429,17 +434,23 @@ def table(rows, headers=None) -> None:
               for i in range(ncols)]
     numeric = [_numeric_col([r[i] for r in rows if i < len(r)])
                for i in range(ncols)]
-    widths = _fit_widths(widths, numeric, term_width())
+    if use_color():
+        sep, sep_w = " " + DIM + "│" + RESET + " ", 3
+    else:
+        sep, sep_w = "  ", 2
+    widths = _fit_widths(widths, numeric, term_width(), sep=sep_w)
 
     def fmt(cell: str, i: int) -> str:
         cell = _clip_visible(cell, widths[i])
         return _rpad(cell, widths[i]) if numeric[i] else _pad(cell, widths[i])
 
     if headers:
-        line = "  ".join(fmt(str(h), i) for i, h in enumerate(headers))
-        print(c(line.rstrip(), BOLD))
+        # Bold each header cell individually: a whole-line wrap would be
+        # cancelled at the first separator's RESET on color terminals.
+        cells = [c(fmt(str(h), i), BOLD) for i, h in enumerate(headers)]
+        print(sep.join(cells).rstrip())
     for r in rows:
-        print("  ".join(fmt(cell, i) for i, cell in enumerate(r)).rstrip())
+        print(sep.join(fmt(cell, i) for i, cell in enumerate(r)).rstrip())
 
 
 def confirm(prompt: str, default: bool = False) -> bool:
