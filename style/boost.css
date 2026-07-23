@@ -327,6 +327,73 @@ a.cap, a.glass { text-decoration: none; }
 }
 
 /* ============================================================================
+   Site chrome — nav · logo · footer
+
+   The page frame, defined once. Every page used to re-declare this inline and
+   the Design Roadmap declared none at all, so its nav rendered unstyled.
+
+   These are a shared *floor*, not an override: every page links this sheet
+   BEFORE its own <style>, so a page still carrying inline chrome keeps
+   winning at equal specificity. Markup this expects:
+
+     <header>
+       <div class="wrap site-nav">            <!-- or: class="wrap nav" -->
+         <a class="logo" href="."><b>boost</b><span>Section</span></a>
+         <ul><li><a href="#x">X</a></li><li><a class="cta" href=".">Go</a></li></ul>
+       </div>
+     </header>
+   ========================================================================== */
+header {
+  position: sticky; top: 0; z-index: 50;
+  background: var(--panel-solid);
+  border-bottom: 1px solid var(--line);
+}
+
+.site-nav, header .nav {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 18px; padding: 12px 0;
+}
+
+.logo { display: flex; align-items: baseline; gap: 9px; text-decoration: none; }
+.logo b {
+  font-family: var(--mono); font-size: 18px; font-weight: 700;
+  color: var(--cyan); letter-spacing: -.02em;
+}
+.logo span {
+  font-size: 10.5px; letter-spacing: .22em; text-transform: uppercase;
+  color: var(--text-2);
+}
+
+.site-nav ul, header .nav ul {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 18px;
+  list-style: none; margin: 0; padding: 0;
+}
+.site-nav a, header .nav a {
+  color: var(--text-2); text-decoration: none; font-size: 13.5px;
+}
+.site-nav a:hover, header .nav a:hover { color: var(--text); }
+
+/* the one emphasized link in the bar */
+.site-nav a.cta, header .nav a.cta {
+  color: var(--bg); background: var(--grad); font-weight: 700;
+  padding: 7px 14px; border-radius: 999px;
+}
+.site-nav a.cta:hover, header .nav a.cta:hover { color: var(--bg); opacity: .88; }
+
+footer {
+  margin-top: 64px; padding: 28px 0 40px;
+  border-top: 1px solid var(--line);
+  color: var(--text-3); font-size: 13px;
+}
+footer a { color: var(--text-2); text-decoration: none; }
+footer a:hover { color: var(--text); }
+
+@media (max-width: 720px) {
+  .site-nav, header .nav { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .site-nav ul, header .nav ul { gap: 12px; }
+}
+
+/* ============================================================================
    Accessibility — honor reduced-motion, and print cleanly
    ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
