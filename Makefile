@@ -14,7 +14,8 @@ EVAL_HOME := $(CURDIR)/.eval-home
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter diff-cover vulture xenon pyright interrogate
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut hypothesis diff-cover
+	$(VENV)/bin/pip -q install -r requirements/lint-tools.txt   # pinned; CI installs the same set
 
 unit:
 	$(PYTEST) tests/unit -q

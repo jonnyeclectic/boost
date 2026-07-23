@@ -32,7 +32,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: install linters
-        run: python -m pip -q install ruff mypy codespell import-linter vulture xenon pyright interrogate
+        # Pinned (requirements/lint-tools.txt) so an upstream linter release
+        # can't retroactively redden the gate — see that file's header.
+        run: python -m pip -q install -r requirements/lint-tools.txt
       - name: ruff
         run: ruff check boost_cli tests
       - name: mypy
