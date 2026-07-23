@@ -45,6 +45,11 @@ def harden_console_encoding() -> None:
 
 
 def use_color(stream=None) -> bool:
+    """True when ANSI color should be emitted on `stream` (default stdout).
+
+    BOOST_COLOR=always/never is boost's explicit override and beats
+    NO_COLOR, CLICOLOR_FORCE and the TTY check.
+    """
     # BOOST_COLOR is boost's own explicit override and wins over everything
     # else (most-specific-wins): always/never force it on/off regardless of
     # NO_COLOR, CLICOLOR_FORCE or the TTY check. Anything else (incl. "auto")
@@ -63,6 +68,7 @@ def use_color(stream=None) -> bool:
 
 
 def c(text: str, *styles: str) -> str:
+    """Wrap text in the given SGR styles + RESET; plain when color is off."""
     if not styles or not use_color():
         return text
     return "".join(styles) + text + RESET
@@ -193,28 +199,34 @@ def gradient(text: str, stream=None) -> str:
 
 
 def ok(msg: str) -> None:
+    """Print msg as an indented success line with a green check mark."""
     print("  " + role("✓", "success") + " " + msg)
 
 
 def warn(msg: str) -> None:
+    """Print msg as an indented `!` warning line, all in the warn role."""
     print("  " + role("!", "warn") + " " + role(msg, "warn"))
 
 
 def err(msg: str, hint: str | None = None) -> None:
+    """Print `Error: msg` to stderr, plus a dim hint line when given."""
     print(c("Error: ", RED, BOLD) + msg, file=sys.stderr)
     if hint:
         print(c("  hint: " + hint, DIM), file=sys.stderr)
 
 
 def info(msg: str = "") -> None:
+    """Print msg indented two spaces; a blank line when msg is empty."""
     print("  " + msg if msg else "")
 
 
 def dim(msg: str) -> None:
+    """Print msg in the muted role (dim when color is on)."""
     print(role(msg, "muted"))
 
 
 def heading(msg: str) -> None:
+    """Print a bold section header led by the accent `==>` marker."""
     # Brand the section marker in the accent role (Aurora cyan — truecolor,
     # 16-color fallback, plain under NO_COLOR) so every command's headers read
     # as one system.
@@ -333,6 +345,7 @@ def meter(fraction: float, width: int = 4) -> str:
 
 
 def kv(key: str, value: str, width: int = 14) -> None:
+    """Print an indented key/value line: dim key padded to width, then value."""
     print("  " + c(key.ljust(width), DIM) + str(value))
 
 
@@ -454,6 +467,11 @@ def table(rows, headers=None) -> None:
 
 
 def confirm(prompt: str, default: bool = False) -> bool:
+    """Ask a yes/no question and return the answer as a bool.
+
+    BOOST_ASSUME_YES or --yes/-y force True; non-TTY stdin and an empty
+    answer return `default`; EOF or Ctrl-C returns False.
+    """
     if os.environ.get("BOOST_ASSUME_YES") or "--yes" in sys.argv or "-y" in sys.argv:
         return True
     if not sys.stdin.isatty():

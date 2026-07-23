@@ -35,10 +35,12 @@ def _load():
 
 
 def have_backend() -> bool:
+    """True when the ``sqlite-vec`` backend (the ``[rag]`` extra) imports."""
     return _load() is not None
 
 
 def db_path() -> Path:
+    """Path of the vector store: ``rag_vectors.sqlite`` in the cache dir."""
     return paths.cache_dir() / "rag_vectors.sqlite"
 
 

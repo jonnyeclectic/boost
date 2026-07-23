@@ -14,7 +14,7 @@ EVAL_HOME := $(CURDIR)/.eval-home
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter diff-cover vulture xenon pyright
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter diff-cover vulture xenon pyright interrogate
 
 unit:
 	$(PYTEST) tests/unit -q
@@ -49,12 +49,14 @@ lint:
 	$(VENV)/bin/lint-imports
 	$(VENV)/bin/vulture boost_cli --min-confidence 80
 	$(VENV)/bin/xenon --max-absolute F --max-modules E --max-average B boost_cli
+	$(VENV)/bin/interrogate boost_cli/core
 	$(VENV)/bin/codespell boost_cli docs README.md
 	@command -v actionlint >/dev/null 2>&1 && actionlint || echo "actionlint not on PATH — skipping (CI enforces it)"
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
 	$(PY) scripts/build_command_reference.py --check
 	$(PY) scripts/import_budget.py
+	$(PY) scripts/perf_gate.py
 
 # Supply-chain CVE gate: fail on a known OSV/PyPI advisory in the project's
 # dependency closure. Mirrors the pip-audit CI workflow; run before releasing.

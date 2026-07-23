@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: install linters
-        run: python -m pip -q install ruff mypy codespell import-linter vulture xenon pyright
+        run: python -m pip -q install ruff mypy codespell import-linter vulture xenon pyright interrogate
       - name: ruff
         run: ruff check boost_cli tests
       - name: mypy
@@ -57,6 +57,11 @@ jobs:
         # the codebase's aggregate complexity regresses. Individual grandfathered
         # blocks are allowed up to F; a module or the average degrading is not.
         run: xenon --max-absolute F --max-modules E --max-average B boost_cli
+      - name: docstring coverage (interrogate)
+        # core/ is the contract-heavy engine; hold its docstring floor at 90%
+        # (98.5% when this landed) so new public functions ship documented.
+        # Flags/carve-outs: [tool.interrogate] in pyproject.
+        run: interrogate boost_cli/core
       - name: codespell (user-facing text)
         run: codespell boost_cli docs README.md
       - name: secret scan (gitleaks)
@@ -101,6 +106,13 @@ jobs:
       # deterministic across runners/Python versions — never timing-flaky.
       - name: startup import-time budget (lazy-import guard)
         run: python scripts/import_budget.py --list
+      # Performance-regression gate: complexity scaling, not wall-clock
+      # baselines. Times scan/BM25-build/retrieve at 64 vs 512 synthetic items
+      # and fails when the big/small ratio exceeds 3x-of-linear — an O(n²)
+      # slip lands at ~64x and is caught decisively, while runner speed
+      # cancels out of the ratio. Pure stdlib, same PYTHONPATH shim as eval.
+      - name: perf gate (scaling ratios)
+        run: PYTHONPATH=. python scripts/perf_gate.py -v
       # Tier 1 retrieval quality gate: golden-set recall@k over a PINNED corpus.
       # The golden set grades real catalog items by name, so the repos holding
       # them (tests/eval/taps.txt) are tapped first — deterministic given that

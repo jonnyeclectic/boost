@@ -20,6 +20,7 @@ from pathlib import Path
 
 
 def home() -> Path:
+    """Resolve the user's home directory, preferring the ``HOME`` env var."""
     return Path(os.environ.get("HOME") or str(Path.home()))
 
 
@@ -54,39 +55,48 @@ def tilde(p) -> str:
 
 
 def boost_home() -> Path:
+    """Resolve boost's state root: ``$BOOST_HOME`` if set, else ``~/.boost``."""
     override = os.environ.get("BOOST_HOME")
     return Path(override) if override else home() / ".boost"
 
 
 def repos_dir() -> Path:
+    """Return the directory holding shallow clones of tapped registries."""
     return boost_home() / "repos"
 
 
 def cache_dir() -> Path:
+    """Return the directory holding JSON catalogs built from tapped repos."""
     return boost_home() / "cache"
 
 
 def logs_dir() -> Path:
+    """Return the directory holding diagnostic logs and crash reports."""
     return boost_home() / "logs"
 
 
 def state_dir() -> Path:
+    """Return the state directory (pins, tags, policy, profiles, pulse)."""
     return boost_home() / "state"
 
 
 def snapshots_dir() -> Path:
+    """Return the directory for ``snap-*`` store snapshot tarballs."""
     return state_dir() / "snapshots"
 
 
 def lock_history_dir() -> Path:
+    """Return the directory of timestamped ``lock-*.json`` lockfile copies."""
     return state_dir() / "lock-history"
 
 
 def profiles_dir() -> Path:
+    """Return the directory holding saved team profiles as JSON."""
     return state_dir() / "profiles"
 
 
 def config_path() -> Path:
+    """Return the path of boost's ``config.json``."""
     return boost_home() / "config.json"
 
 
@@ -97,14 +107,17 @@ def store_dir() -> Path:
 
 
 def lockfile_path() -> Path:
+    """Return the path of the v3 lock file inside the canonical store."""
     return store_dir() / ".skill-lock.json"
 
 
 def pulse_path() -> Path:
+    """Return the path of the append-only pulse event feed (JSONL)."""
     return state_dir() / "pulse.jsonl"
 
 
 def policy_path() -> Path:
+    """Return the path of the policy rules file, ``policy.json``."""
     return state_dir() / "policy.json"
 
 
@@ -130,6 +143,7 @@ def launcher() -> Path:
 
 
 def ensure_dirs() -> None:
+    """Create every directory boost writes into (idempotent)."""
     for d in (
         boost_home(), repos_dir(), cache_dir(), logs_dir(), state_dir(),
         snapshots_dir(), lock_history_dir(), profiles_dir(), store_dir(),

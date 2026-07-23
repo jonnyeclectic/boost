@@ -12,24 +12,29 @@ from . import config, gitutil, paths, util
 
 @dataclass
 class Tap:
+    """One configured tap: name, source URL, and derived on-disk paths."""
     name: str          # "anthropics/skills" or a short alias
     url: str           # https URL or local path
     curated: bool = False
 
     @property
     def safe_name(self) -> str:
+        """Filesystem-safe name: `/` replaced with `__`."""
         return self.name.replace("/", "__")
 
     @property
     def path(self) -> Path:
+        """Local clone directory under `~/.boost/repos/`."""
         return paths.repos_dir() / self.safe_name
 
     @property
     def cache_file(self) -> Path:
+        """Catalog JSON path under `~/.boost/cache/`."""
         return paths.cache_dir() / (self.safe_name + ".json")
 
     @property
     def is_cloned(self) -> bool:
+        """True if the tap's clone directory exists on disk."""
         return self.path.is_dir()
 
 
@@ -56,6 +61,10 @@ def parse_spec(spec: str):
 
 
 def list_taps() -> List[Tap]:
+    """Configured taps from config.json.
+
+    Malformed config or entries read as no taps, never raise.
+    """
     # `or []`, not just the get() default: config.get returns the default only
     # when the key is ABSENT, so a config.json carrying `"taps": null` (or any
     # non-list scalar) would otherwise reach the comprehension and raise
@@ -69,6 +78,10 @@ def list_taps() -> List[Tap]:
 
 
 def get(name: str) -> Tap:
+    """Look up a tap by name, safe_name, or bare repo name.
+
+    Raises BoostError (with a did-you-mean hint) if none match.
+    """
     taps = list_taps()
     for t in taps:
         if t.name == name or t.safe_name == name or t.name.split("/")[-1] == name:
@@ -80,6 +93,10 @@ def get(name: str) -> Tap:
 
 
 def add(spec: str, curated: bool = False) -> Tap:
+    """Parse `spec`, shallow-clone it, and record the tap in config.
+
+    Raises BoostError if a tap with that name is already configured.
+    """
     name, url = parse_spec(spec)
     for existing in list_taps():
         if existing.name == name:
@@ -98,6 +115,10 @@ def add(spec: str, curated: bool = False) -> Tap:
 
 
 def remove(name: str) -> Tap:
+    """Deregister a tap and delete its clone and cache file.
+
+    Returns the removed Tap; raises BoostError if it does not exist.
+    """
     tap = get(name)
     cfg = config.load()
     cfg["taps"] = [t for t in cfg.get("taps", []) if t["name"] != tap.name]

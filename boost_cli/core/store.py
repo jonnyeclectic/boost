@@ -19,6 +19,7 @@ from . import agents, journal, lockfile, paths, policy, registry, util
 
 @dataclass
 class InstallResult:
+    """Outcome of one install: dest, linked agents, conflicts, kind."""
     name: str
     dest: Path
     linked: List[str] = field(default_factory=list)
@@ -34,12 +35,20 @@ class InstallResult:
 
 
 def skill_store_dir(name: str) -> Path:
+    """Resolve ``name`` to its dir under the canonical store.
+
+    Raises BoostError unless the name is a safe path component.
+    """
     if not re.fullmatch(r"[A-Za-z0-9._-]+", name) or name in {".", ".."}:
         raise BoostError("invalid skill name %r" % name)
     return paths.store_dir() / name
 
 
 def installed() -> dict:
+    """Return the lock file's installed skills as {name: entry}.
+
+    Skills only; rules/workflows live in their own lock sections.
+    """
     return lockfile.installed()
 
 
@@ -74,6 +83,10 @@ def link_agents(name: str, only: Optional[List[str]] = None) -> InstallResult:
 
 
 def unlink_agents(name: str) -> List[str]:
+    """Remove the ``name`` symlink from every enabled agent dir.
+
+    Returns the agents unlinked; non-symlink files are left alone.
+    """
     removed = []
     for agent, adir in agents.enabled_agents().items():
         link = adir / name
@@ -413,6 +426,11 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
 
 
 def uninstall(name: str) -> dict:
+    """Uninstall ``name`` whatever its kind (skill, rule, workflow).
+
+    Reverses everything the install wrote and drops the lock entry;
+    returns {name, unlinked, entry}. Raises BoostError if not installed.
+    """
     entry = lockfile.get_skill(name)
     if not entry:
         rule = lockfile.get_rule(name)
