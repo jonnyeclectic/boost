@@ -1,0 +1,21 @@
+# Pinned lint toolchain — the single source of truth for the versions CI's
+# `lint` job and local `make lint` both install.
+#
+# Why pin: these tools were installed UNPINNED (`pip install ruff mypy …`), so
+# every CI run pulled the latest release. When ruff 0.16.0 shipped it began
+# flagging rule families this repo deliberately does not select (UP/BLE/PLW —
+# ~1100 findings of exactly the pyupgrade-style churn the roadmap already
+# declined), turning the lint gate red on every open PR and on main, with no
+# code change. A lint gate whose meaning can shift out from under you on an
+# upstream release is not a gate. Pinning here freezes the ruleset to a known
+# state; upgrades become a deliberate, reviewable bump of this file.
+#
+# Keep in lockstep with the Makefile `venv` target — both install from here.
+ruff==0.15.22
+mypy==2.3.0
+codespell==2.4.3
+import-linter==2.13
+vulture==2.16
+xenon==0.9.3
+pyright==1.1.411
+interrogate==1.7.0

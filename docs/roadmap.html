@@ -118,7 +118,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>110</b><span>Loop finds</span></div>
+      <div class="stat"><b>111</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1464,6 +1464,31 @@ improvement is real (or isn't)."</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">PR decoration</span>
+        </div>
+      </article>
+
+      <article class="cap rcard">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Reproducibility</span></div>
+        <h3>Pin the lint toolchain so a release can't redden the gate</h3>
+        <p>The <code>lint</code> job installed its tools unpinned
+           (<code>pip install ruff mypy …</code>), so every run pulled the latest
+           release. When <code>ruff 0.16.0</code> shipped it began flagging rule
+           families this repo deliberately does not select
+           (<code>UP</code>/<code>BLE</code>/<code>PLW</code> — ~1100 findings of
+           exactly the pyupgrade-style churn the roadmap already declined),
+           turning the gate red on every open PR and on <code>main</code> with no
+           code change. A gate whose meaning can shift out from under you on an
+           upstream release is not a gate. Froze the eight lint tools to their
+           known-good versions in one <code>requirements/lint-tools.txt</code>
+           that both CI and the Makefile install from, so upgrades become a
+           deliberate, reviewable bump. (The broader runtime/build reproducibility
+           story is the <code>uv.lock</code> item; this is the lint-gate slice
+           that was actively on fire.)</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">unpinned ruff 0.16 reddened every PR</span>
         </div>
       </article>
 
