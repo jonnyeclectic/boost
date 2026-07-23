@@ -311,7 +311,7 @@ code_reviewer = <span class="fn">Agent</span>(
 boost adapt code-reviewer --to crewai -o reviewer.py
 
 <span class="c"># 2 — in a throwaway venv, install the framework and load it</span>
-python3 -m venv /tmp/crew && /tmp/crew/bin/pip install <span class="s">"crewai[anthropic]"</span>
+python3 -m venv /tmp/crew &amp;&amp; /tmp/crew/bin/pip install <span class="s">"crewai[anthropic]"</span>
 /tmp/crew/bin/python -c <span class="s">"import reviewer; print(reviewer.code_reviewer.role, reviewer.code_reviewer.llm.model)"</span>
 <span class="c"># → code-reviewer claude-haiku-4-5-20251001   ✦ imported, instantiated, on boost's model</span></pre>
       <p class="sec-sub" style="margin-top:22px"><b>Runs on boost's model by default.</b> With no
