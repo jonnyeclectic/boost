@@ -602,15 +602,54 @@ class TestTableColor:
         import re
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
         # a colored cell must not push the next column out of alignment
+        # (color mode joins columns with the dim │ separator)
         output.table([[output.aurora("ab", "cyan"), "x"], ["cd", "y"]])
         vis = [re.sub(r"\x1b\[[0-9;]*m", "", ln)
                for ln in capsys.readouterr().out.splitlines()]
-        assert vis == ["ab  x", "cd  y"]
+        assert vis == ["ab │ x", "cd │ y"]
 
     def test_header_row_is_bold_when_forced(self, capsys, monkeypatch):
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
         output.table([["x", "1"]], headers=["NAME", "N"])
         assert capsys.readouterr().out.startswith("\033[1mNAME")
+
+    def test_every_header_cell_is_bold(self, capsys, monkeypatch):
+        # A whole-line BOLD wrap would be cancelled by the separator's RESET;
+        # each header cell must carry its own bold instead.
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        output.table([["x", "y"]], headers=["AA", "BB"])
+        header = capsys.readouterr().out.splitlines()[0]
+        assert header.count(output.BOLD) == 2
+        assert "\033[1mAA" in header and "\033[1mBB" in header
+
+    def test_separator_is_dim_pipe_in_color_mode(self, capsys, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        output.table([("a", "b")])
+        out = capsys.readouterr().out
+        assert " " + output.DIM + "│" + output.RESET + " " in out
+
+    def test_no_separator_glyph_when_color_off(self, capsys, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.delenv("CLICOLOR_FORCE", raising=False)
+        output.table([("a", "b"), ("cc", "d")], headers=["X", "Y"])
+        out = capsys.readouterr().out
+        assert "│" not in out                       # plain two-space gutter,
+        assert out == "X   Y\na   b\ncc  d\n"       # byte-identical to before
+
+    def test_separator_width_counts_in_fit_budget(self, capsys, monkeypatch):
+        import os as _os
+        import re
+        # 3 columns of visible width 4 + two 3-wide separators = 18 > 17,
+        # so exactly one text column must shrink; with the old 2-wide gutter
+        # (total 16) nothing would shrink. Proves sep=3 reaches _fit_widths.
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setattr(output.shutil, "get_terminal_size",
+                            lambda fb: _os.terminal_size((17, 24)))
+        output.table([("aaaa", "bbbb", "cccc")])
+        vis = re.sub(r"\x1b\[[0-9;]*m", "",
+                     capsys.readouterr().out.splitlines()[0])
+        assert len(vis.rstrip()) <= 17
+        assert "…" in vis                            # a cell was clipped
 
 
 class TestTable:
