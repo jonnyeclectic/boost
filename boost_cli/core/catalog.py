@@ -102,6 +102,11 @@ def _classify_workflow(path: Path, meta: dict) -> bool:
 
 
 def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> List[dict]:
+    """Walk `root` and index every skill/rule/workflow into entry dicts.
+
+    Files inside a SKILL.md dir belong to that skill, never re-indexed;
+    output is sorted by (skill_md, name) regardless of walk order.
+    """
     root = Path(root)
     entries: List[dict] = []
     skill_dirs: Set[Path] = set()
@@ -155,6 +160,11 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> List
 
 
 def rebuild_tap(tap: "registry.Tap") -> List[dict]:
+    """Rescan a cloned tap and rewrite its JSON cache file -> entries.
+
+    Raises BoostError when the tap is not cloned; also drops the
+    in-process entry cache so an immediate load sees the rebuild.
+    """
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
@@ -206,6 +216,11 @@ def _cached_tap(tap: "registry.Tap") -> Optional[List[dict]]:
 
 
 def load_tap(tap: "registry.Tap", rebuild: bool = False) -> List[dict]:
+    """Return a tap's entries, from the mtime-keyed cache when fresh.
+
+    `rebuild=True` or a missing/corrupt cache forces a rescan; an
+    uncloned tap yields `[]`.
+    """
     if not rebuild:
         cached = _cached_tap(tap)
         if cached is not None:
@@ -216,6 +231,7 @@ def load_tap(tap: "registry.Tap", rebuild: bool = False) -> List[dict]:
 
 
 def all_entries() -> List[dict]:
+    """Return the entries of every configured tap, concatenated."""
     out: List[dict] = []
     for tap in registry.list_taps():
         out.extend(load_tap(tap))

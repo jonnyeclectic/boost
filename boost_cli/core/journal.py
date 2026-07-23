@@ -14,6 +14,10 @@ ROTATE_KEEP = 2500
 
 
 def log(action: str, subject: str = "", **fields) -> None:
+    """Append one event line to the pulse feed, rotating when oversized.
+
+    None-valued keyword fields are dropped from the record.
+    """
     paths.ensure_dirs()
     event = {"ts": util.now_iso(), "user": util.user(), "action": action,
              "subject": subject}
@@ -46,6 +50,7 @@ def events(n: Optional[int] = None, action: Optional[str] = None,
 
 
 def rotation_healthy() -> bool:
+    """True when the pulse feed is absent or at most ROTATE_AT lines long."""
     p = paths.pulse_path()
     if not p.exists():
         return True
