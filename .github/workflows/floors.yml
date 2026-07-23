@@ -1,0 +1,63 @@
+name: floors
+
+# Lowest-version resolution: CI everywhere else installs the NEWEST compatible
+# dependencies, so the lower bounds declared in pyproject.toml are never
+# actually exercised — "works here, breaks on the floor we advertise" ships
+# silently. This job resolves the extras with uv's lowest-direct strategy,
+# installs exactly the declared floors (sqlite-vec==0.1.6, behave==1.2.6,
+# pytest-benchmark==4.0) on the oldest supported Python (3.9), and runs the
+# unit + functional suites against that combination. If it goes red, the fix
+# is raising the floor in pyproject.toml — in the very PR that broke it.
+#
+# Path-filtered to dependency-declaration changes; also weekly, because a
+# floor can rot from the outside (a yanked release, a new transitive pin).
+
+on:
+  push:
+    branches: [main]
+    paths: ["pyproject.toml", ".github/workflows/floors.yml"]
+  pull_request:
+    paths: ["pyproject.toml", ".github/workflows/floors.yml"]
+  schedule:
+    - cron: "0 6 * * 3"   # Wednesdays 06:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  lowest:
+    name: suite on declared floors (py3.9)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.9"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: resolve the declared floors (uv lowest-direct)
+        run: |
+          python -m pip -q install uv
+          uv pip compile pyproject.toml --extra rag --extra bdd --extra perf \
+            --resolution lowest-direct -o requirements-lowest.txt
+          echo "----- resolved floors -----"
+          grep -E '^[a-z]' requirements-lowest.txt
+      - name: install floors + boost, run the suite against them
+        run: |
+          python -m venv .venv
+          # The floors under test come from the compile; the test harness itself
+          # (pytest & co) is not a declared dependency, so it installs at newest.
+          .venv/bin/pip -q install -r requirements-lowest.txt
+          .venv/bin/pip -q install -e . pytest pytest-cov coverage hypothesis
+          .venv/bin/pytest tests/unit tests/functional -q

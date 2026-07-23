@@ -20,18 +20,25 @@ API_URL = "https://api.anthropic.com/v1/messages"
 
 
 def enabled() -> bool:
+    """Return True when `ai.enabled` is on and BOOST_NO_AI is unset."""
     return bool(config.get("ai.enabled", True)) and not os.environ.get("BOOST_NO_AI")
 
 
 def available() -> bool:
+    """Return True when AI is enabled and a backend exists: the `claude`
+
+    CLI on PATH or ANTHROPIC_API_KEY set.
+    """
     return enabled() and (has_cli() or bool(os.environ.get("ANTHROPIC_API_KEY")))
 
 
 def has_cli() -> bool:
+    """Return True when the `claude` CLI is on PATH."""
     return shutil.which("claude") is not None
 
 
 def fallback_note() -> str:
+    """Return the one-line hint shown when a command degrades to heuristics."""
     return ("AI features need the `claude` CLI on PATH or ANTHROPIC_API_KEY set "
             "— using the heuristic fallback")
 

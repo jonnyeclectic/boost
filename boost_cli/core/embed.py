@@ -29,6 +29,7 @@ _DIMS = {VOYAGE_MODEL: 1024, OPENAI_MODEL: 1536}
 
 
 def enabled() -> bool:
+    """True unless the ``BOOST_NO_EMBED`` kill-switch is set."""
     return not os.environ.get("BOOST_NO_EMBED")
 
 
@@ -44,10 +45,12 @@ def provider() -> Optional[str]:
 
 
 def available() -> bool:
+    """True when embeddings are enabled and a provider key is present."""
     return provider() is not None
 
 
 def model() -> Optional[str]:
+    """The active provider's model name, or None when unconfigured."""
     p = provider()
     if p == "voyage":
         return VOYAGE_MODEL
@@ -57,11 +60,16 @@ def model() -> Optional[str]:
 
 
 def dimension() -> Optional[int]:
+    """Output vector dimension of the active model, or None when
+
+    unconfigured. Stored in the index so a model switch forces a rebuild.
+    """
     m = model()
     return _DIMS.get(m) if m is not None else None
 
 
 def fallback_note() -> str:
+    """The one-line hint shown when dense search degrades to BM25."""
     return ("dense search needs the `rag` extra and VOYAGE_API_KEY or "
             "OPENAI_API_KEY — using the BM25 full-content engine")
 

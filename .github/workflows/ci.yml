@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: install linters
-        run: python -m pip -q install ruff mypy codespell import-linter vulture xenon pyright
+        run: python -m pip -q install ruff mypy codespell import-linter vulture xenon pyright interrogate
       - name: ruff
         run: ruff check boost_cli tests
       - name: mypy
@@ -57,6 +57,11 @@ jobs:
         # the codebase's aggregate complexity regresses. Individual grandfathered
         # blocks are allowed up to F; a module or the average degrading is not.
         run: xenon --max-absolute F --max-modules E --max-average B boost_cli
+      - name: docstring coverage (interrogate)
+        # core/ is the contract-heavy engine; hold its docstring floor at 90%
+        # (98.5% when this landed) so new public functions ship documented.
+        # Flags/carve-outs: [tool.interrogate] in pyproject.
+        run: interrogate boost_cli/core
       - name: codespell (user-facing text)
         run: codespell boost_cli docs README.md
       - name: secret scan (gitleaks)

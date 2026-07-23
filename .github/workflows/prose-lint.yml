@@ -1,0 +1,39 @@
+name: prose-lint
+
+# Vale over the contributor-facing Markdown surfaces (the same set
+# markdownlint covers structurally). Two enforcement layers:
+#   1. Vale.Spelling + the boost vocabulary (.vale/styles/config/vocabularies/
+#      boost/accept.txt) — catches future typos codespell's dictionary misses,
+#      without nagging on the project's 72 accepted technical terms.
+#   2. boost.Terminology — canonical casing for product names (GitHub, PyPI,
+#      macOS, CrewAI, ...) in prose. Code spans/fences are never checked.
+# Config: .vale.ini at the repo root. Run locally:
+#   vale README.md CONTRIBUTING.md SECURITY.md CLAUDE.md docs/*.md
+
+on:
+  push:
+    branches: [main]
+    paths: ["**/*.md", ".vale.ini", ".vale/**", ".github/workflows/prose-lint.yml"]
+  pull_request:
+    paths: ["**/*.md", ".vale.ini", ".vale/**", ".github/workflows/prose-lint.yml"]
+
+permissions: {}
+
+jobs:
+  vale:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: vale (pinned binary)
+        # Same pinned-release pattern as the gitleaks/actionlint lint steps.
+        run: |
+          curl -sSL https://github.com/errata-ai/vale/releases/download/v3.13.0/vale_3.13.0_Linux_64-bit.tar.gz | tar xz vale
+          ./vale README.md CONTRIBUTING.md SECURITY.md CLAUDE.md docs/DEBUGGING.md docs/rag-architecture.md examples/README.md style/README.md

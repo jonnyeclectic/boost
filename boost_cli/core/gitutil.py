@@ -10,11 +10,17 @@ from ..errors import BoostError
 
 
 def has_git() -> bool:
+    """Return True when a `git` executable is on PATH."""
     return shutil.which("git") is not None
 
 
 def run(args: List[str], cwd: Optional[Path] = None, check: bool = True,
         timeout: int = 300) -> subprocess.CompletedProcess:
+    """Run `git *args` with captured text output; return the CompletedProcess.
+
+    Raises BoostError if git is missing, on timeout, or (when `check`)
+    on nonzero exit.
+    """
     if not has_git():
         raise BoostError("git is required but was not found on PATH",
                         hint="install git, e.g. `xcode-select --install` or `brew install git`")
@@ -38,6 +44,10 @@ _UNSAFE_TRANSPORTS = ("ext::", "file::", "fd::")
 
 
 def clone_shallow(url: str, dest: Path) -> None:
+    """Shallow-clone (`--depth 1`) `url` into `dest`, creating parent dirs.
+
+    Raises BoostError for unsafe remote-helper transports like `ext::`.
+    """
     if url.lstrip().lower().startswith(_UNSAFE_TRANSPORTS):
         raise BoostError(
             "refusing to clone via unsafe git transport: %s" % url,
@@ -61,11 +71,13 @@ def pull(repo: Path) -> str:
 
 
 def head_commit(repo: Path) -> str:
+    """Return the full HEAD commit hash of `repo`, or "" if unresolvable."""
     proc = run(["-C", str(repo), "rev-parse", "HEAD"], check=False)
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
 def remote_url(repo: Path) -> str:
+    """Return the URL of `repo`'s `origin` remote, or "" if it has none."""
     proc = run(["-C", str(repo), "remote", "get-url", "origin"], check=False)
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
@@ -78,4 +90,5 @@ def log_for_path(repo: Path, rel_path: str = ".", n: int = 20) -> List[str]:
 
 
 def is_repo(path: Path) -> bool:
+    """Return True when `path` contains a `.git` entry."""
     return (Path(path) / ".git").exists()
