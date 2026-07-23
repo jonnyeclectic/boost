@@ -62,6 +62,8 @@ tracebacks
 unkilled
 unstaged
 untap
+vendored
+vendoring
 venv
 venvs
 Weaviate

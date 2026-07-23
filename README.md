@@ -123,7 +123,7 @@ boost list --local                    # just what this repo carries
 boost uninstall code-review --local
 ```
 
-A `--local` install writes **real directories** into the repo's own agent dirs
+A `--local` install writes **real directories** into the repo's own agent config
 and records them in a committable per-repo lock:
 
 ```text
