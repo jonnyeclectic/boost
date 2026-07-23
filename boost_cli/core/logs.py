@@ -67,6 +67,7 @@ def _file_stamp() -> str:
 
 
 def log_path() -> Path:
+    """Return the rotating diagnostic log's path (``~/.boost/logs/boost.log``)."""
     return paths.logs_dir() / "boost.log"
 
 
@@ -105,6 +106,7 @@ def _file_enabled() -> bool:
 
 
 def get_logger() -> logging.Logger:
+    """Return the shared ``boost`` logger; :func:`configure` attaches handlers."""
     return logging.getLogger(LOGGER_NAME)
 
 

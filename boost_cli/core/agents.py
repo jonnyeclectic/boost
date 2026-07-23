@@ -21,13 +21,16 @@ def known_agents() -> Dict[str, dict]:
 
 
 def enabled_agents() -> Dict[str, Path]:
+    """{name: dir Path} for just the agents whose "enabled" flag is true."""
     return {n: s["dir"] for n, s in known_agents().items() if s["enabled"]}
 
 
 def display_name(agent: str) -> str:
+    """`claude-code` -> "Claude Code"; unknown names pass through unchanged."""
     return DISPLAY.get(agent, agent)
 
 
 def ensure_agent_dirs() -> None:
+    """Create every enabled agent's skills dir (`mkdir -p`, idempotent)."""
     for d in enabled_agents().values():
         d.mkdir(parents=True, exist_ok=True)

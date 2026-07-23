@@ -124,18 +124,25 @@ def _cached() -> dict:
 
 
 def load() -> dict:
+    """Return a deep copy of the merged config, safe for callers to mutate."""
     # A defensive copy so callers can mutate the result (set_value/unset do)
     # without corrupting the shared cache.
     return deepcopy(_cached())
 
 
 def save(cfg: dict) -> None:
+    """Atomically write `cfg` to `~/.boost/config.json`, creating dirs first."""
     paths.ensure_dirs()
     util.atomic_write_text(
         paths.config_path(), json.dumps(cfg, indent=2, sort_keys=False) + "\n")
 
 
 def get(dotted: str, default=None):
+    """Look up a dotted key (`ai.model`) in the merged config.
+
+    
+    Returns a deep copy of the value, or `default` if any part is missing.
+    """
     node = _cached()
     for part in dotted.split("."):
         if not isinstance(node, dict) or part not in node:
@@ -162,6 +169,7 @@ def set_value(dotted: str, raw: str) -> None:
 
 
 def unset(dotted: str) -> bool:
+    """Delete a dotted key and save; True if removed, False (no write) if absent."""
     cfg = load()
     node: Any = cfg
     parts = dotted.split(".")

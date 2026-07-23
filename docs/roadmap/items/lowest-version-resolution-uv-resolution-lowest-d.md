@@ -2,15 +2,15 @@
 id: lowest-version-resolution-uv-resolution-lowest-d
 board: code
 section: compat
-status: planned
+status: shipped
 category: Testing · Deps
 complexity: S
 impact: Med
 wow: 3
 note: honours declared floors
 order: 3
-owner:
-pr:
+owner: loop/uvfloor
+pr: 204
 title: Lowest-version resolution — <code>uv --resolution lowest-direct</code>
 ---
 CI always installs the <em>newest</em> compatible dependencies, so the

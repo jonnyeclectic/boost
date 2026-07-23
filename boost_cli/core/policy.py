@@ -24,6 +24,10 @@ DEFAULTS = {
 
 
 def load() -> dict:
+    """Return the effective policy: DEFAULTS overlaid with policy.json.
+
+    A missing or unparseable file silently yields the defaults.
+    """
     p = paths.policy_path()
     base = dict(DEFAULTS)
     if p.exists():
@@ -33,6 +37,10 @@ def load() -> dict:
 
 
 def save(pol: dict) -> None:
+    """Write `pol` to policy.json, restricted to the known DEFAULTS keys.
+
+    Missing keys are filled from DEFAULTS; unknown keys are dropped.
+    """
     paths.ensure_dirs()
     known = {k: pol.get(k, DEFAULTS[k]) for k in DEFAULTS}
     paths.policy_path().write_text(json.dumps(known, indent=2) + "\n", encoding="utf-8")

@@ -1,0 +1,52 @@
+name: theme-lint
+
+# Lint the shared theme assets — style/boost.css (stylelint) and
+# style/boost.js (eslint). The stylesheet is the single source of the Aurora
+# design system (docs pages + the token-parity test build on it), so a syntax
+# slip or inconsistent notation propagates everywhere at once.
+#
+# Config notes (.stylelintrc.json): extends stylelint-config-standard with the
+# file's deliberate idioms switched off —
+#   - compact multi-declaration lines + section-comment organization
+#     (single-line-max-declarations, *-empty-line-before, duplicate/descending
+#     selectors: the sheet is organized by concern-section on purpose);
+#   - -webkit- prefixes (Safari still needs them for backdrop-filter and
+#     background-clip: text);
+#   - classic media-query prefix notation is ENFORCED ("prefix") rather than
+#     range syntax, which older Safari silently ignores;
+#   - value-keyword-case off so font names keep conventional casing
+#     (BlinkMacSystemFont, SFMono-Regular).
+# Everything else — modern color notation, shorthand hex, real syntax errors,
+# duplicate properties — is enforced.
+
+on:
+  push:
+    branches: [main]
+    paths: ["style/**", ".stylelintrc.json", "eslint.config.mjs", ".github/workflows/theme-lint.yml"]
+  pull_request:
+    paths: ["style/**", ".stylelintrc.json", "eslint.config.mjs", ".github/workflows/theme-lint.yml"]
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: install linters (pinned)
+        run: npm install --no-save --no-audit --no-fund stylelint@16 stylelint-config-standard@36 eslint@9
+      - name: stylelint (style/boost.css)
+        run: ./node_modules/.bin/stylelint "style/**/*.css"
+      - name: eslint (style/boost.js)
+        run: ./node_modules/.bin/eslint style/

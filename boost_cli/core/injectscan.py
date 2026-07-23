@@ -23,6 +23,11 @@ _SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
 
 
 class Rule(NamedTuple):
+    """One curated detection pattern applied per line of scanned text.
+
+    ``id`` is stable for callers/tests to key on; ``severity`` is one
+    of "high", "medium", or "low".
+    """
     id: str
     severity: str
     pattern: "re.Pattern[str]"
@@ -30,6 +35,10 @@ class Rule(NamedTuple):
 
 
 class Finding(NamedTuple):
+    """One rule match on one line of scanned text.
+
+    ``line`` is 1-based; ``snippet`` is the offending line, trimmed.
+    """
     rule_id: str
     severity: str
     line: int          # 1-based line number the pattern matched on
