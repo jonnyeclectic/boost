@@ -124,7 +124,8 @@ boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ## 75 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see
-[`docs/overview.html`](docs/overview.html).
+[`docs/index.html`](docs/index.html), and for every flag of every command see
+[`docs/commands.html`](docs/commands.html).
 
 | Group | Commands |
 |---|---|
