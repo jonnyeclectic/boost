@@ -2,15 +2,15 @@
 id: prose-and-terminology-linting-vale
 board: code
 section: docsite
-status: planned
+status: shipped
 category: Quality · Content
 complexity: S
 impact: Low
 wow: 2
 note: house style
 order: 6
-owner:
-pr:
+owner: loop/vale
+pr: 206
 title: Prose &amp; terminology linting — <code>vale</code>
 ---
 <code>vale</code> enforces a consistent voice across the README and docs

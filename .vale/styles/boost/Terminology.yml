@@ -1,0 +1,17 @@
+extends: substitution
+message: "Use '%s' instead of '%s'."
+level: error
+ignorecase: false
+# Canonical casing for names that appear in boost's prose. Scope is text only —
+# Vale never looks inside code spans or fences, so `github.com/...` URLs and
+# shell examples are unaffected.
+swap:
+  '\bGithub\b': GitHub
+  '\bgithub\b(?!\.com)': GitHub
+  '\bPypi\b': PyPI
+  '\bpypi\b(?!\.org)': PyPI
+  '\bMacos\b': macOS
+  '\bMacOS\b': macOS
+  '\bCrewai\b': CrewAI
+  '\bLanggraph\b': LangGraph
+  '\bjavascript\b': JavaScript
