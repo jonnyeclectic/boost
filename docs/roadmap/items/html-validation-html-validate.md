@@ -2,14 +2,14 @@
 id: html-validation-html-validate
 board: code
 section: docsite
-status: planned
+status: inflight
 category: Quality · Docs
 complexity: S
 impact: Med
 wow: 3
 note: hand-authored HTML
 order: 4
-owner:
+owner: loop/htmlvalidate
 pr:
 title: HTML validation — <code>html-validate</code>
 ---
