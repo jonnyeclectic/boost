@@ -2,14 +2,14 @@
 id: promote-nav-footer-into-the-shared-style-system
 board: code
 section: dx
-status: planned
+status: inflight
 category: DX · Design system
 complexity: S
 impact: Med
 wow: 3
 note: <code>style/boost.css</code>
 order: 1
-owner:
+owner: loop/theme
 pr:
 title: Promote nav / footer into the shared style system
 ---
