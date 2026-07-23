@@ -2,15 +2,15 @@
 id: runtime-explain-faithfulness-guardrail
 board: code
 section: trust
-status: planned
+status: shipped
 category: Trust · Hallucination guard
 complexity: M
 impact: Med
 wow: 4
 note: faithfulness → extractive fallback
 order: 4
-owner:
-pr:
+owner: loop/faithful
+pr: 218
 title: Runtime hallucination guardrail for <code>boost explain</code>
 ---
 Today the ragas <b>faithfulness</b> check (Tier 2c, <code>scripts/eval_explain.py</code>)

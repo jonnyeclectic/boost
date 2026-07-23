@@ -16,9 +16,9 @@ import webbrowser
 from pathlib import Path
 
 from .. import cliparse
-from ..core import (ai, catalog, frontmatter, gitutil, imperative, integrity,
-                    journal, lockfile, logs, paths, projectlock, registry,
-                    scopes, store, util)
+from ..core import (ai, catalog, config, faithfulness, frontmatter, gitutil,
+                    imperative, integrity, journal, lockfile, logs, paths,
+                    projectlock, registry, scopes, store, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -429,6 +429,29 @@ def cmd_preview(argv):
     return 0
 
 
+_FAITHFULNESS_MIN_KEY = "ai.explain_faithfulness_min"
+_FAITHFULNESS_DEFAULT = 0.5
+
+
+def _faithfulness_threshold() -> float:
+    """The minimum faithfulness score an AI explanation must clear (config-tunable).
+
+    Clamped to [0, 1]; a malformed config value falls back to the default rather
+    than disabling the guardrail with, say, a negative threshold.
+    """
+    raw = config.get(_FAITHFULNESS_MIN_KEY, _FAITHFULNESS_DEFAULT)
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return _FAITHFULNESS_DEFAULT
+    return min(1.0, max(0.0, val))
+
+
+def _explanation_is_faithful(reply: str, source: str) -> bool:
+    """True if ``reply`` is grounded enough in ``source`` to show as-is."""
+    return faithfulness.score(reply, source) >= _faithfulness_threshold()
+
+
 def cmd_explain(argv):
     ap = cliparse.parser(prog="boost explain",
                                  description="Explain what a skill does in plain English")
@@ -442,10 +465,18 @@ def cmd_explain(argv):
             "AI coding-agent skill makes the agent do differently and when it "
             "triggers:\n\n" + text,
             system="You summarize agent skills for developers. Be concrete and brief.")
-        if reply:
+        if reply and _explanation_is_faithful(reply, text):
             _print_wrapped(reply)
             return 0
-    out.warn(ai.fallback_note())
+        if reply:
+            # The model answered, but the summary named specifics the SKILL.md
+            # never does — the shape of a fabricated capability. Refuse to show
+            # it and fall through to the grounded extractive summary below.
+            out.warn("AI explanation looked ungrounded (%s) — showing the "
+                     "extractive summary instead"
+                     % ", ".join(faithfulness.ungrounded_terms(reply, text)[:4]))
+    else:
+        out.warn(ai.fallback_note())
     meta, body = frontmatter.parse(text)
     desc = str(meta.get("description") or "").strip()
     if desc:
