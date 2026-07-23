@@ -400,7 +400,14 @@ def project_sync_apply(plan: Dict[str, list], base=None) -> List[str]:
     resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
     if resolved_base is None:
         return actions
-    for name in sorted({n for n, _agent in plan.get("missing", [])}):
+    # Group by skill, but keep WHICH agents are missing: these directories are
+    # committed files a team edits in place, so repairing one agent must not
+    # re-copy over the others. Re-installing the whole skill would silently
+    # revert a teammate's edit to a file they had checked in.
+    wanted: Dict[str, list] = {}
+    for name, agent in plan.get("missing", []):
+        wanted.setdefault(name, []).append(agent)
+    for name in sorted(wanted):
         entry = projectlock.get_skill(resolved_base, name) or {}
         tap_name = entry.get("tap")
         if tap_name and tap_name != "local":
@@ -410,7 +417,7 @@ def project_sync_apply(plan: Dict[str, list], base=None) -> List[str]:
                            if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
                 if matches:
                     install(matches[0], force=True, scope=scopes.SCOPE_PROJECT,
-                            base=resolved_base)
+                            base=resolved_base, only_agents=wanted[name])
                     actions.append("re-materialized %s from %s" % (name, tap_name))
                     continue
             except BoostError:

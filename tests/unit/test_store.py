@@ -1105,3 +1105,34 @@ class TestProjectSkills:
         with pytest.raises(BoostError) as err:
             store.install(_workflow_entry(tap), scope="project")
         assert "no project here" in err.value.message
+
+    # ── sync must not revert committed edits ─────────────────────────────
+
+    def test_sync_repairs_only_the_agents_that_are_missing(self, entry, tmp_path):
+        """The sharpest failure mode this feature has.
+
+        Project skill dirs are COMMITTED files that a team edits in place. If
+        repairing one agent's missing directory re-installed the whole skill,
+        `boost sync` would silently revert a teammate's checked-in edit to a
+        different agent's copy — data loss in a git working tree, from a
+        command whose whole job is "make it match the lock".
+
+        Scenario: the team edits the committed .claude copy; .cursor is
+        gitignored, so a fresh clone lacks it; someone runs `boost sync`.
+        """
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        claude_md = repo / ".claude" / "skills" / "brainstorming" / "SKILL.md"
+        claude_md.write_text("---\nname: brainstorming\n---\nTEAM EDIT\n",
+                             encoding="utf-8")
+        shutil.rmtree(repo / ".cursor" / "skills" / "brainstorming")
+
+        plan = store.project_sync_plan(base=str(repo))
+        assert plan["missing"] == [("brainstorming", "cursor")]
+        store.project_sync_apply(plan, base=str(repo))
+
+        assert "TEAM EDIT" in claude_md.read_text(encoding="utf-8")
+        assert (repo / ".cursor" / "skills" / "brainstorming" / "SKILL.md").is_file()
+        # and the lock still describes all three
+        assert len(projectlock.get_skill(repo, "brainstorming")
+                   ["materializations"]) == 3
