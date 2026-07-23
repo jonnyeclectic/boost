@@ -259,6 +259,46 @@ class TestExplain:
         assert ("• Always produce at least 12 raw ideas before clustering."
                 in r.out)
 
+    def test_faithful_ai_reply_is_shown(self, boost, installed, monkeypatch):
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        # A grounded summary — its specifics ("clustering", "diverge") come
+        # straight from brainstorming's SKILL.md.
+        monkeypatch.setattr(ai, "ask", lambda *a, **k:
+                            "The agent runs a diverge then cluster then converge "
+                            "flow, never critiquing during diverge.")
+        r = boost("explain", "brainstorming")
+        assert "diverge then cluster then converge" in r.out
+        assert "ungrounded" not in r.out
+        assert "Key rules:" not in r.out          # showed the AI reply, no fallback
+
+    def test_ungrounded_ai_reply_falls_back_to_extractive(self, boost, installed,
+                                                          monkeypatch):
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        # A fabricated summary naming tools the skill never mentions.
+        monkeypatch.setattr(ai, "ask", lambda *a, **k:
+                            "Deploys via `kubectl apply` to K8S and posts to "
+                            "`slack-notify` with --webhook.")
+        r = boost("explain", "brainstorming", expect=0)
+        assert "ungrounded" in r.out              # the guardrail spoke
+        assert "kubectl" in r.out                 # names an offending term
+        # and it showed the grounded extractive summary instead
+        assert "Key rules:" in r.out
+        assert "• Never critique during the diverge phase." in r.out
+
+    def test_threshold_config_can_relax_the_guardrail(self, boost, installed,
+                                                      monkeypatch):
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **k:
+                            "Runs `kubectl apply` with --webhook.")
+        # Threshold 0 → nothing is ever "too ungrounded", so the AI reply shows.
+        boost("config", "set", "ai.explain_faithfulness_min", "0")
+        r = boost("explain", "brainstorming")
+        assert "kubectl apply" in r.out
+        assert "Key rules:" not in r.out
+
 
 # ── log ──────────────────────────────────────────────────────────────────
 
