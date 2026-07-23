@@ -2,14 +2,14 @@
 id: build-provenance-slsa-attestations
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: Security · Supply chain
 complexity: S
 impact: Med
 wow: 4
 note: SLSA build L2
 order: 3
-owner:
+owner: loop/slsa
 pr:
 title: Build provenance — SLSA attestations
 ---
