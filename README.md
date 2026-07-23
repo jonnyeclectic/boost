@@ -110,6 +110,44 @@ GitHub registries  ──boost update──▶  ~/.boost/repos/    (shallow clon
                    ────symlinks───▶  ~/.claude/skills/  ~/.windsurf/skills/  ~/.cursor/skills/
 ```
 
+### User scope vs project scope
+
+That's the default — **user scope**, the skills you want everywhere. The other
+half is the npm `--save` half: skills a *team* agrees on, which belong in the
+repo where they can be reviewed in a PR and arrive with a `git clone`.
+
+```bash
+boost install code-review --local     # into THIS repo (= --scope project)
+boost install code-review             # into your user config (default)
+boost list --local                    # just what this repo carries
+boost uninstall code-review --local
+```
+
+A `--local` install writes **real directories** into the repo's own agent dirs
+and records them in a committable per-repo lock:
+
+```text
+<repo>/.claude/skills/<name>/     real copies, not symlinks
+<repo>/.cursor/skills/<name>/
+<repo>/.boost/skill-lock.json     commit this — it's what teammates clone
+```
+
+Real copies, deliberately: a symlink into *your* `~/.agents/skills` is a
+dangling pointer on anyone else's machine, so committing one would ship
+something that only works on the author's laptop. The two scopes use separate
+lock files, so vendoring a skill into a repo never fights with the copy you use
+everywhere — and `boost install --local` run from `src/deep/nested` walks up to
+the repo root rather than scattering a `.claude/` three directories down.
+
+After a fresh clone, `boost sync` re-materializes anything the project lock
+records but the checkout is missing — the lock stores repo-relative paths, so it
+works from whatever directory your teammate cloned into. It never deletes a
+skill directory boost didn't write, and it won't overwrite a hand-written
+`.claude/skills/<name>/` unless you pass `--force`.
+
+`boost update` covers user scope only for now; to refresh a vendored skill use
+`boost install <skill> --local --force`.
+
 ## The usual workflow
 
 ```bash

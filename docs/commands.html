@@ -80,8 +80,8 @@
     <input id="q" type="search" placeholder="Filter 76 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
-      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --dry-run name">install</a>
-      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  name">uninstall</a>
+      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run name">install</a>
+      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local name">uninstall</a>
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only tap">update</a>
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill or all skills (force)  --all name">reinstall</a>
@@ -108,7 +108,7 @@
     </div>
     <div class="group" data-group="info">
       <div class="group-h">Inspect &amp; explain</div>
-      <a class="cmd-link" href="#cmd-list" data-search="list list installed skills list installed skills, rules and workflows --tag tag --json">list</a>
+      <a class="cmd-link" href="#cmd-list" data-search="list list installed skills list installed skills, rules and workflows --tag tag --local --json">list</a>
       <a class="cmd-link" href="#cmd-info" data-search="info show detailed info about a skill  --json name">info</a>
       <a class="cmd-link" href="#cmd-cat" data-search="cat print a skill or rule&#x27;s contents  --raw name">cat</a>
       <a class="cmd-link" href="#cmd-edit" data-search="edit open a skill&#x27;s skill.md in your editor  name">edit</a>
@@ -185,10 +185,10 @@
     <p class="lead">All <b>76</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
-      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --dry-run name">
+      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run name">
         <h3><span class="cname">install</span><span class="gtag">pkg</span></h3>
         <p class="summary">Install a skill from a tap registry</p>
-        <pre class="syn">boost install [--force] [--agent A] [--scope {user,project}] [--dry-run] NAME [NAME ...]</pre>
+        <pre class="syn">boost install [--force] [--agent A] [--scope {user,project}] [--local] [--global] [--dry-run] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>skill name, optionally qualified as tap:skill</span></div>
@@ -197,17 +197,23 @@
         <div class="args">
           <div class="arg"><code>--force</code><span>reinstall even if already installed or pinned</span></div>
           <div class="arg"><code>--agent A</code><span>link only into this agent (repeatable)</span></div>
-          <div class="arg"><code>--scope {user,project}</code><span>rules/workflows: install into your user config (default) or the current repo (project)</span></div>
+          <div class="arg"><code>--scope {user,project}</code><span>install into your user config (default) or the current repo (project)</span></div>
+          <div class="arg"><code>--local</code><span>into this repo, committable (= --scope project)</span></div>
+          <div class="arg"><code>--global</code><span>into your user config (= --scope user, default)</span></div>
           <div class="arg"><code>--dry-run</code><span>show what would happen without changing anything</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  name">
+      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local name">
         <h3><span class="cname">uninstall</span><span class="gtag">pkg</span></h3>
         <p class="summary">Remove an installed skill, rule, workflow, or config</p>
-        <pre class="syn">boost uninstall NAME [NAME ...]</pre>
+        <pre class="syn">boost uninstall [--local] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span></span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--local</code><span>remove from this repo rather than your user config</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json">
@@ -445,14 +451,15 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-info">Inspect &amp; explain</h2>
-      <section class="cmd" id="cmd-list" data-search="list list installed skills list installed skills, rules and workflows --tag tag --json">
+      <section class="cmd" id="cmd-list" data-search="list list installed skills list installed skills, rules and workflows --tag tag --local --json">
         <h3><span class="cname">list</span><span class="gtag">info</span></h3>
         <p class="summary">List installed skills</p>
-        <pre class="syn">boost list [--tag TAG] [--json]</pre>
+        <pre class="syn">boost list [--tag TAG] [--local] [--json]</pre>
         <p class="desc">List installed skills, rules and workflows</p>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--tag TAG</code><span>only show skills carrying this tag</span></div>
+          <div class="arg"><code>--local</code><span>only the skills installed into this repo</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>

@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..errors import BoostError
-from . import agents, journal, lockfile, paths, policy, registry, util
+from . import (agents, journal, lockfile, paths, policy, projectlock, registry,
+               scopes, util)
 
 
 @dataclass
@@ -133,12 +134,13 @@ def _copy_skill(src: Path, dest: Path) -> None:
 
 def _resolve_base(scope: str, base) -> Optional[Path]:
     """Directory a project-scoped install materializes under (the repo), or None
-    for user scope. An explicit ``base`` (e.g. from a lock record on update/sync)
-    wins so a re-materialization lands where the original install did, not in
-    whatever the current working directory happens to be."""
-    if base:
-        return Path(base)
-    return Path.cwd() if scope == "project" else None
+    for user scope.
+
+    Delegates to :func:`scopes.resolve_base`, which walks up for the nearest
+    project root — running this from ``src/deep/nested`` must write into the
+    repo, not scatter a ``.claude/`` three directories down.
+    """
+    return scopes.resolve_base(scope, base)
 
 
 def install(entry: dict, force: bool = False,
@@ -146,10 +148,11 @@ def install(entry: dict, force: bool = False,
             scope: str = "user", base=None) -> InstallResult:
     """Install a catalog entry. Raises BoostError on policy block or conflict.
 
-    ``scope`` is ``"user"`` (default — the agent's user config dirs) or
-    ``"project"`` (the current repo). Skills ignore scope (they always live in
-    the canonical store); rules/workflows honor it.
+    ``scope`` is ``"user"`` (default — the canonical store, symlinked into the
+    agent's user config dirs) or ``"project"`` (real directories inside the
+    current repo). Every kind honors it.
     """
+    scopes.check_scope(scope)
     kind = entry.get("kind", "skill")
     if kind == "rule":
         return _install_rule(entry, force=force, only_agents=only_agents,
@@ -161,6 +164,9 @@ def install(entry: dict, force: bool = False,
         raise BoostError(
             "%s is a %s, which boost does not know how to install" % (entry["name"], kind),
             hint="known kinds: skill, rule, workflow")
+    if scope == scopes.SCOPE_PROJECT:
+        return _install_project_skill(entry, force=force, only_agents=only_agents,
+                                      base=base)
     name = entry["name"]
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
@@ -201,6 +207,202 @@ def install(entry: dict, force: bool = False,
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
     return res
+
+
+def _install_project_skill(entry: dict, force: bool = False,
+                           only_agents: Optional[List[str]] = None,
+                           base=None) -> InstallResult:
+    """Materialize a skill into the repo itself, once per enabled agent.
+
+    Unlike a user install there is no canonical store and no symlink. Each agent
+    gets a real copy at ``<repo>/.claude/skills/<name>`` so the tree can be
+    committed and a teammate's ``git clone`` brings the skill with it — a
+    symlink pointing into *this* machine's ``~/.agents/skills`` would arrive
+    dangling. The cost is duplication across agent dirs, which is the right
+    trade: repos are cheap, and a checked-in file that only works on the author's
+    laptop is worse than no file at all.
+
+    The record goes in the project's own lock, never the user's.
+    """
+    from . import gitutil
+    name = entry["name"]
+    resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    if resolved_base is None:                     # unreachable via resolve_base
+        raise BoostError("could not resolve a project directory for %s" % name)
+
+    existing = projectlock.get_skill(resolved_base, name)
+    if existing and not force:
+        raise BoostError(
+            "%s is already installed in this project (v%s)"
+            % (name, existing.get("version")),
+            hint="`boost reinstall %s --local` to force" % name)
+
+    violations = policy.check_install(entry, len(projectlock.installed(resolved_base)))
+    if violations:
+        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
+                        hint="inspect with `boost policy list`")
+
+    src = source_dir_for(entry)
+    targets = [(agent, scopes.skill_target(skills_dir, name, base=resolved_base))
+               for agent, skills_dir in agents.enabled_agents().items()
+               if not only_agents or agent in only_agents]
+
+    # Refuse to clobber a directory boost did not put there. In user scope the
+    # store is boost's alone, but here the destination is inside someone's repo
+    # — a same-named hand-written skill is a real possibility, and overwriting
+    # it would destroy uncommitted work with no warning.
+    if not existing:
+        squatters = [str(d) for _agent, d in targets if d.exists()]
+        if squatters and not force:
+            raise BoostError(
+                "%s already exists in this project and boost did not install it: %s"
+                % (name, ", ".join(sorted(squatters))),
+                hint="move it aside, or `boost install %s --local --force` to "
+                     "overwrite it" % name)
+
+    materializations: List[dict] = []
+    linked: List[str] = []
+    first: Optional[Path] = None
+    for agent, dest in targets:
+        _copy_skill(src, dest)
+        # Relative, because this record is committed and read on machines where
+        # the absolute path does not exist.
+        materializations.append(
+            {"agent": agent, "path": scopes.relative_to_base(resolved_base, dest)})
+        linked.append(agent)
+        if first is None:
+            first = dest
+
+    if first is None:
+        raise BoostError("no enabled agents to install %s into" % name,
+                        hint="enable one with `boost config`")
+
+    # A filtered reinstall (`--force --agent cursor`) refreshes only the agents
+    # it names. Carrying the untouched ones forward keeps the lock describing
+    # everything that is actually on disk — dropping them would leave real
+    # directories in the repo that no record claims, so uninstall would skip
+    # them and sync would call them orphans.
+    kept = [m for m in (existing or {}).get("materializations") or []
+            if m.get("agent") not in linked]
+    materializations.extend(kept)
+    all_agents = linked + [m["agent"] for m in kept if m.get("agent")]
+
+    now = util.now_iso()
+    tap = registry.get(entry["tap"])
+    projectlock.set_skill(resolved_base, name, {
+        "kind": "skill",
+        "version": entry.get("version", "0.0.0"),
+        "tap": entry["tap"],
+        "source_dir": entry.get("rel_dir", "."),
+        "commit": gitutil.head_commit(tap.path),
+        "sha256": util.sha256_dir(first),
+        "scope": scopes.SCOPE_PROJECT,
+        "installed_at": (existing or {}).get("installed_at", now),
+        "updated_at": now,
+        "agents": all_agents,
+        "materializations": materializations,
+    })
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"),
+                scope=scopes.SCOPE_PROJECT)
+
+    res = InstallResult(name=name, dest=first, kind="skill")
+    res.linked = linked
+    res.upgraded = existing is not None
+    res.scope = scopes.SCOPE_PROJECT
+    res.score, _ = util.score_skill(first)
+    return res
+
+
+def uninstall_project(name: str, base=None) -> dict:
+    """Remove a project-scoped skill: its per-agent copies and its lock entry.
+
+    Every recorded path is re-derived and checked to sit inside the project
+    before it is deleted (:func:`scopes.contains`) — the lock is a committed file
+    anyone with merge rights can edit, so a path out of it is input, not truth.
+    """
+    resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    entry = projectlock.get_skill(resolved_base, name) if resolved_base else None
+    if not entry:
+        raise BoostError("%s is not installed in this project" % name,
+                        hint="see what is with `boost list --local`")
+    removed: List[str] = []
+    for m in entry.get("materializations") or []:
+        path = scopes.resolve_in_base(resolved_base, m.get("path"))
+        if path is None or not path.is_dir():
+            continue          # refused or already gone — nothing was removed
+        util.rmtree(path)
+        if m.get("agent"):
+            removed.append(m["agent"])
+    projectlock.remove_skill(resolved_base, name)
+    journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
+    return {"name": name, "unlinked": removed, "entry": entry,
+            "scope": scopes.SCOPE_PROJECT, "base": str(resolved_base)}
+
+
+def project_sync_plan(base=None) -> Dict[str, list]:
+    """Compare the project lock against what is actually on disk.
+
+    Returns ``{missing, orphaned}``: lock entries whose directory is gone, and
+    skill directories under the project's agent dirs that no lock entry claims.
+    A teammate who clones the repo has the files but may be missing one an
+    ``update`` added, so this is the repair list for a shared checkout.
+    """
+    plan: Dict[str, list] = {"missing": [], "orphaned": []}
+    resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    # No lock file means this directory does not use project scope at all. Bail
+    # before the orphan scan, or every repo with a hand-written
+    # ``.claude/skills/`` would be told it has "unclaimed" directories and
+    # `boost sync` could never report a clean tree.
+    if resolved_base is None or not projectlock.exists(resolved_base):
+        return plan
+    lock = projectlock.installed(resolved_base)
+    for name, entry in lock.items():
+        for m in entry.get("materializations") or []:
+            path = scopes.resolve_in_base(resolved_base, m.get("path"))
+            if path is None or not path.is_dir():
+                plan["missing"].append((name, m.get("agent", "?")))
+    for skills_dir in agents.enabled_agents().values():
+        root = scopes.agent_root(skills_dir, resolved_base) / Path(skills_dir).name
+        if not root.is_dir():
+            continue
+        for child in sorted(root.iterdir()):
+            if child.is_dir() and child.name not in lock:
+                plan["orphaned"].append(str(child))
+    return plan
+
+
+def project_sync_apply(plan: Dict[str, list], base=None) -> List[str]:
+    """Re-materialize the project skills :func:`project_sync_plan` found missing.
+
+    Orphans are reported but never deleted: an unclaimed directory in someone's
+    repo is far more likely to be a hand-written skill than boost's litter, and
+    a package manager that silently removes files it did not write is one nobody
+    should run in their working tree.
+    """
+    actions: List[str] = []
+    resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
+    if resolved_base is None:
+        return actions
+    for name in sorted({n for n, _agent in plan.get("missing", [])}):
+        entry = projectlock.get_skill(resolved_base, name) or {}
+        tap_name = entry.get("tap")
+        if tap_name and tap_name != "local":
+            try:
+                from . import catalog
+                matches = [e for e in catalog.find(name)
+                           if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
+                if matches:
+                    install(matches[0], force=True, scope=scopes.SCOPE_PROJECT,
+                            base=resolved_base)
+                    actions.append("re-materialized %s from %s" % (name, tap_name))
+                    continue
+            except BoostError:
+                pass
+        actions.append("%s is missing from the project but its source is gone — "
+                       "run `boost update` or reinstall" % name)
+    if actions:
+        journal.log("sync", "%d project fixes" % len(actions))
+    return actions
 
 
 def _install_rule(entry: dict, force: bool = False,
@@ -439,6 +641,12 @@ def uninstall(name: str) -> dict:
         workflow = lockfile.get_workflow(name)
         if workflow:
             return _uninstall_workflow(name, workflow)
+        # Nothing at user scope — but the caller may be standing in a repo that
+        # has it installed locally, and "X is not installed" would be a plain
+        # falsehood there. Only ever acts on a name the project lock records.
+        pbase = scopes.project_root()
+        if pbase is not None and projectlock.get_skill(pbase, name):
+            return uninstall_project(name, base=pbase)
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     removed_links = unlink_agents(name)

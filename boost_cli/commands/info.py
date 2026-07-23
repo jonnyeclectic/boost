@@ -17,7 +17,8 @@ from pathlib import Path
 
 from .. import cliparse
 from ..core import (ai, catalog, frontmatter, gitutil, imperative, journal,
-                    lockfile, logs, paths, registry, store, util)
+                    lockfile, logs, paths, projectlock, registry, scopes, store,
+                    util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -127,21 +128,30 @@ def cmd_list(argv):
     ap = cliparse.parser(prog="boost list",
                                  description="List installed skills, rules and workflows")
     ap.add_argument("--tag", help="only show skills carrying this tag")
+    ap.add_argument("--local", action="store_true",
+                    help="only the skills installed into this repo")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
     skills = lockfile.installed()
     rules = lockfile.installed_rules()
     workflows = lockfile.installed_workflows()
+    # Project skills live in the repo's own lock, never the user's — read it
+    # separately so a checkout's committed skills show up alongside yours.
+    pbase = scopes.project_root()
+    project = projectlock.installed(pbase) if pbase is not None else {}
+    if args.local:
+        skills, rules, workflows = {}, {}, {}
     if args.tag:
         # Tags are a skill-only concept, so --tag narrows to skills.
         want = args.tag.lstrip("#")
         skills = {n: e for n, e in skills.items() if want in (e.get("tags") or [])}
-        rules, workflows = {}, {}
+        rules, workflows, project = {}, {}, {}
     if args.json:
-        print(json.dumps({"skills": skills, "rules": rules, "workflows": workflows},
+        print(json.dumps({"skills": skills, "rules": rules,
+                          "workflows": workflows, "project": project},
                          indent=2, sort_keys=True))
         return 0
-    if not skills and not rules and not workflows:
+    if not skills and not rules and not workflows and not project:
         print(out.empty_state(
             "no skills installed"
             + (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""),
@@ -165,6 +175,15 @@ def cmd_list(argv):
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"))
         print("  " + out.aurora("%d skill%s installed"
                                 % (len(rows), "" if len(rows) == 1 else "s"), "cyan"))
+    if project:
+        out.heading("project skills (%s)" % paths.tilde(pbase))
+        rows = [(name, e.get("version", "?"), e.get("tap", "?"),
+                 "·".join(a.split("-")[0] for a in e.get("agents") or []))
+                for name, e in sorted(project.items())]
+        out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS"))
+        print("  " + out.role("committed with the repo — %s/%s"
+                              % (projectlock.LOCK_DIRNAME,
+                                 projectlock.LOCK_FILENAME), "muted"))
     if rules:
         _kind_table("installed rules", rules)
     if workflows:
@@ -180,6 +199,11 @@ def cmd_info(argv):
     args = ap.parse_args(argv)
     name = args.name
     lock = lockfile.get_skill(name)
+    # A project-scoped skill is installed — just not at user scope. Without this
+    # `boost info` would call it "not installed" while it sits in the repo, and
+    # the install banner's own "next: boost info <name>" would lead nowhere.
+    pbase = scopes.project_root()
+    plock = projectlock.get_skill(pbase, name) if pbase is not None else None
     if lock:
         matches = catalog.find(name)
         same_tap = [e for e in matches if e["tap"] == lock.get("tap")]
@@ -189,6 +213,12 @@ def cmd_info(argv):
 
     sdir = store.skill_store_dir(name)
     skill_dir = sdir if lock and sdir.is_dir() else None
+    if skill_dir is None and plock:
+        for m in plock.get("materializations") or []:
+            cand = scopes.resolve_in_base(pbase, m.get("path"))
+            if cand is not None and cand.is_dir():
+                skill_dir = cand
+                break
     if skill_dir is None and cat:
         try:
             skill_dir = store.source_dir_for(cat)
@@ -207,8 +237,9 @@ def cmd_info(argv):
     if args.json:
         print(json.dumps({
             "name": name, "description": desc,
-            "installed": lock, "latest": (cat or {}).get("version"),
-            "tap": (lock or cat or {}).get("tap"),
+            "installed": lock, "project": plock,
+            "latest": (cat or {}).get("version"),
+            "tap": (lock or plock or cat or {}).get("tap"),
             "store": str(sdir) if lock and sdir.is_dir() else None,
             "quality": score, "size": size, "files": files,
         }, indent=2))
@@ -227,6 +258,8 @@ def cmd_info(argv):
         latest = str((cat or {}).get("version") or "")
         if cat and latest != str(lock.get("version", "?")):
             badges.append(out.badge("update available", "yellow"))
+    elif plock:
+        badges.append(out.badge("installed in this project", "green"))
     else:
         badges.append(out.badge("not installed", "cyan"))
     tapname = (lock or cat or {}).get("tap")
