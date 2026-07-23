@@ -81,10 +81,12 @@ def _recover_x(y: int, sign: int):
 
 
 # Base point B (RFC 8032 §5.1). Its y is on the curve by construction, so
-# _recover_x always returns an int here — asserted so the invariant is explicit.
+# _recover_x always returns an int here; the guard makes that invariant explicit
+# (and narrows the type) without an assert, which the SAST lint rules forbid.
 _By = (4 * pow(5, _P - 2, _P)) % _P
 _Bx = _recover_x(_By, 0)
-assert _Bx is not None, "edwards25519 base point is off the curve"
+if _Bx is None:  # pragma: no cover - unreachable: B is on the curve
+    raise RuntimeError("edwards25519 base point is off the curve")
 _B = (_Bx, _By, 1, (_Bx * _By) % _P)
 
 

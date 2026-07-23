@@ -45,7 +45,7 @@ class Result:
     """Outcome of verifying one tap clone."""
     status: str
     key_name: Optional[str] = None
-    key_id: Optional[str] = None
+    fingerprint: Optional[str] = None   # public 8-byte key id, hex — not secret
     trusted_comment: Optional[str] = None
     detail: str = ""
 
@@ -97,7 +97,7 @@ def add_trusted_key(name: str, public_key_text: str) -> dict:
     import base64
     record = {
         "name": name,
-        "key_id": minisign.key_id_hex(pk.key_id),
+        "fingerprint": minisign.key_id_hex(pk.key_id),
         "key": base64.b64encode(pk.key_id + pk.key).decode("ascii"),
     }
     keys = [k for k in trusted_keys() if k.get("name") != name]
@@ -155,8 +155,8 @@ def verify_dir(clone: Path) -> Result:
     for name, pk in _public_keys():
         if minisign.verify(pk, message, sig):
             return Result(VERIFIED, key_name=name,
-                          key_id=minisign.key_id_hex(pk.key_id),
+                          fingerprint=minisign.key_id_hex(pk.key_id),
                           trusted_comment=sig.trusted_comment)
-    return Result(UNTRUSTED, key_id=minisign.key_id_hex(sig.key_id),
+    return Result(UNTRUSTED, fingerprint=minisign.key_id_hex(sig.key_id),
                   trusted_comment=sig.trusted_comment,
                   detail="no trusted key verifies this signature")

@@ -13,7 +13,7 @@ def test_empty_store_reads_as_no_keys(sandbox):
 def test_add_and_list_trusted_key(sandbox, signer):
     rec = provenance.add_trusted_key("acme", signer.public_key_text())
     assert rec["name"] == "acme"
-    assert rec["key_id"] == "1122334455667788"
+    assert rec["fingerprint"] == "1122334455667788"
     names = [k["name"] for k in provenance.trusted_keys()]
     assert names == ["acme"]
 
@@ -82,7 +82,7 @@ def test_verified_with_trusted_key(sandbox, signer, tmp_path):
     signer.write_signed(clone, manifest=b"boost-tap v1\n")
     r = provenance.verify_dir(clone)
     assert r.ok and r.status == provenance.VERIFIED
-    assert r.key_name == "acme" and r.key_id == "1122334455667788"
+    assert r.key_name == "acme" and r.fingerprint == "1122334455667788"
 
 
 def test_verified_prehashed_manifest(sandbox, signer, tmp_path):
@@ -99,7 +99,7 @@ def test_untrusted_when_key_not_registered(sandbox, signer, tmp_path):
     signer.write_signed(clone)                    # signed, but no key added
     r = provenance.verify_dir(clone)
     assert r.status == provenance.UNTRUSTED and not r.ok
-    assert r.key_id == "1122334455667788"         # still reports whose key
+    assert r.fingerprint == "1122334455667788"    # still reports whose key
 
 
 def test_untrusted_when_content_tampered(sandbox, signer, tmp_path):

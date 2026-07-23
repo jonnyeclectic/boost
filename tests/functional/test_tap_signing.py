@@ -44,7 +44,7 @@ def test_trust_add_list_remove(boost, tmp_path, signer):
     assert "acme" in boost("trust").out
     data = json.loads(boost("trust", "--json").out)
     assert [k["name"] for k in data["trusted_keys"]] == ["acme"]
-    assert data["trusted_keys"][0]["key_id"] == "1122334455667788"
+    assert data["trusted_keys"][0]["fingerprint"] == "1122334455667788"
     boost("trust", "remove", "acme")
     assert "acme" not in boost("trust", "--json").out
 

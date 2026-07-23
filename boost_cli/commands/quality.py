@@ -1193,7 +1193,7 @@ def cmd_trust(argv) -> int:
                     if key_path.is_file() else args.key)
         rec = provenance.add_trusted_key(args.name, key_text)
         journal.log("trust", args.name, op="add-key")
-        out.ok("trusted key %s (%s)" % (rec["name"], rec["key_id"]))
+        out.ok("trusted key %s (%s)" % (rec["name"], rec["fingerprint"]))
         return 0
 
     if args.action == "remove":
@@ -1228,15 +1228,16 @@ def cmd_trust(argv) -> int:
     taps = _tap_provenance_rows()
     if args.json:
         print(json.dumps({
-            "trusted_keys": [{"name": k["name"], "key_id": k.get("key_id", "")}
+            "trusted_keys": [{"name": k["name"],
+                              "fingerprint": k.get("fingerprint", "")}
                              for k in keys],
             "taps": [_result_json(n, r) for n, r in taps],
         }, indent=2))
         return 0
     out.heading("trusted keys")
     if keys:
-        out.table([(k["name"], k.get("key_id", "?")) for k in keys],
-                  headers=("NAME", "KEY ID"))
+        out.table([(k["name"], k.get("fingerprint", "?")) for k in keys],
+                  headers=("NAME", "FINGERPRINT"))
     else:
         out.dim("  none — add one with `boost trust add <name> <key>`")
     print()
@@ -1246,7 +1247,7 @@ def cmd_trust(argv) -> int:
 
 def _result_json(tap_name: str, r: "provenance.Result") -> dict:
     return {"tap": tap_name, "status": r.status, "key_name": r.key_name,
-            "key_id": r.key_id, "trusted_comment": r.trusted_comment}
+            "fingerprint": r.fingerprint, "trusted_comment": r.trusted_comment}
 
 
 def _print_provenance(results) -> None:
