@@ -191,3 +191,19 @@ containers = ["boost_cli"]
 # every command. That single metadata lookup is allowlisted; any other
 # commands -> cli import is still a violation.
 ignore_imports = ["boost_cli.commands.configuration -> boost_cli.cli"]
+
+# interrogate: docstring-coverage floor for the engine. core/ is the
+# mutation-tested, contract-heavy layer — a public function without a word of
+# explanation is a review smell, and this keeps the floor from eroding as the
+# engine grows (measured 98.5% when the gate landed; the floor leaves headroom
+# for genuinely-self-evident helpers). Same private/dunder carve-outs as the
+# rest of the gate. Dev/CI-only.
+[tool.interrogate]
+paths = ["boost_cli/core"]
+fail-under = 90
+ignore-init-method = true
+ignore-init-module = true
+ignore-magic = true
+ignore-private = true
+ignore-semiprivate = true
+ignore-nested-functions = true

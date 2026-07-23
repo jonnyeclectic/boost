@@ -25,6 +25,11 @@ def _skeleton() -> dict:
 
 
 def read() -> dict:
+    """Load the lock file, guaranteeing skills/rules/workflows keys.
+
+    Missing file -> empty skeleton; a corrupt file is preserved as
+    ``<lock>.corrupt`` before falling back to the skeleton.
+    """
     p = paths.lockfile_path()
     if not p.exists():
         return _skeleton()          # empty: never installed anything yet
@@ -65,6 +70,11 @@ def _preserve_corrupt(p) -> None:
 
 
 def write(lock: dict) -> None:
+    """Snapshot the existing lock to history, then write ``lock`` atomically.
+
+    Stamps ``version``/``updated`` on ``lock`` in place and prunes
+    history to the newest HISTORY_KEEP snapshots.
+    """
     paths.ensure_dirs()
     p = paths.lockfile_path()
     if p.exists():
@@ -96,16 +106,19 @@ def _prune_history() -> None:
 
 
 def get_skill(name: str) -> Optional[dict]:
+    """Return the lock entry for skill ``name``, or None if not installed."""
     return read()["skills"].get(name)
 
 
 def set_skill(name: str, entry: dict) -> None:
+    """Insert or replace the lock entry for skill ``name`` and persist."""
     lock = read()
     lock["skills"][name] = entry
     write(lock)
 
 
 def remove_skill(name: str) -> bool:
+    """Drop skill ``name`` from the lock; return True if it was present."""
     lock = read()
     if name in lock["skills"]:
         del lock["skills"][name]
@@ -115,20 +128,24 @@ def remove_skill(name: str) -> bool:
 
 
 def installed() -> dict:
+    """Return the name -> entry mapping of installed skills."""
     return read()["skills"]
 
 
 def get_rule(name: str) -> Optional[dict]:
+    """Return the lock entry for rule ``name``, or None if not installed."""
     return read()["rules"].get(name)
 
 
 def set_rule(name: str, entry: dict) -> None:
+    """Insert or replace the lock entry for rule ``name`` and persist."""
     lock = read()
     lock["rules"][name] = entry
     write(lock)
 
 
 def remove_rule(name: str) -> bool:
+    """Drop rule ``name`` from the lock; return True if it was present."""
     lock = read()
     if name in lock["rules"]:
         del lock["rules"][name]
@@ -138,20 +155,24 @@ def remove_rule(name: str) -> bool:
 
 
 def installed_rules() -> dict:
+    """Return the name -> entry mapping of installed rules."""
     return read()["rules"]
 
 
 def get_workflow(name: str) -> Optional[dict]:
+    """Return the lock entry for workflow ``name``, or None if not installed."""
     return read()["workflows"].get(name)
 
 
 def set_workflow(name: str, entry: dict) -> None:
+    """Insert or replace the lock entry for workflow ``name`` and persist."""
     lock = read()
     lock["workflows"][name] = entry
     write(lock)
 
 
 def remove_workflow(name: str) -> bool:
+    """Drop workflow ``name`` from the lock; return True if it was present."""
     lock = read()
     if name in lock["workflows"]:
         del lock["workflows"][name]
@@ -161,6 +182,7 @@ def remove_workflow(name: str) -> bool:
 
 
 def installed_workflows() -> dict:
+    """Return the name -> entry mapping of installed workflows."""
     return read()["workflows"]
 
 
@@ -182,6 +204,10 @@ def history_list() -> List[dict]:
 
 
 def history_read(hist_id: str) -> dict:
+    """Return the parsed lock snapshot for history entry ``hist_id``.
+
+    Raises BoostError (with a `boost replay` hint) if no such entry.
+    """
     p = paths.lock_history_dir() / ("lock-%s.json" % hist_id)
     if not p.exists():
         from ..errors import BoostError

@@ -2,15 +2,15 @@
 id: docstring-coverage-interrogate
 board: code
 section: dx
-status: planned
+status: shipped
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: keeps core/ documented
 order: 5
-owner:
-pr:
+owner: loop/interrogate
+pr: 205
 title: Docstring coverage — <code>interrogate</code>
 ---
 Gate CI below a docstring-coverage threshold so the engine stays

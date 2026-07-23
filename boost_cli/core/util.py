@@ -66,6 +66,7 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
 
 
 def now_iso() -> str:
+    """Return UTC now as ``'2026-07-16T01:00:00Z'`` (what ``rel_time`` parses)."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -95,6 +96,10 @@ def rel_time(iso: str) -> str:
 
 
 def human_size(n: int) -> str:
+    """Format a byte count for humans: ``1536`` -> ``'1.5KB'``.
+
+    Whole bytes (``'512B'``), one decimal above; never goes past GB.
+    """
     size = float(n)
     for unit in ("B", "KB", "MB", "GB"):
         if size < 1024 or unit == "GB":
@@ -104,6 +109,7 @@ def human_size(n: int) -> str:
 
 
 def slugify(name: str) -> str:
+    """Lowercase ``name`` into a ``[a-z0-9-]`` slug; empty result -> ``'skill'``."""
     return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or "skill"
 
 
@@ -124,15 +130,21 @@ def sha256_dir(path: Path) -> str:
 
 
 def dir_size(path: Path) -> int:
+    """Sum the byte size of every regular file under ``path``, recursively."""
     return sum(p.stat().st_size for p in Path(path).rglob("*") if p.is_file())
 
 
 def semver_tuple(v: str):
+    """Coerce ``v`` to a 3-int tuple: ``'1.2'`` -> ``(1, 2, 0)``.
+
+    First three digit runs, zero-padded; ``None`` or junk -> ``(0, 0, 0)``.
+    """
     parts = re.findall(r"\d+", str(v or "0"))[:3]
     return tuple(int(p) for p in parts) + (0,) * (3 - len(parts))
 
 
 def semver_gt(a: str, b: str) -> bool:
+    """Return ``True`` when version ``a`` is strictly newer than ``b``."""
     return semver_tuple(a) > semver_tuple(b)
 
 

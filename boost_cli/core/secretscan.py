@@ -19,6 +19,11 @@ _SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
 
 
 class Rule(NamedTuple):
+    """One compiled secret-shape detection rule (regex plus severity).
+
+    ``group`` is the capture group holding the secret value to redact
+    (0 = the whole match).
+    """
     id: str
     severity: str
     pattern: "re.Pattern[str]"
@@ -27,6 +32,11 @@ class Rule(NamedTuple):
 
 
 class Finding(NamedTuple):
+    """One redacted secret hit produced by a scan.
+
+    ``line`` is 1-based; ``snippet`` is the offending line with the
+    secret masked, so the raw value is never echoed.
+    """
     rule_id: str
     severity: str
     line: int           # 1-based line number
