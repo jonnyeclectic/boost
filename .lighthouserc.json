@@ -1,11 +1,11 @@
 {
   "ci": {
     "collect": {
-      "startServerCommand": "python3 -m http.server 8099 --directory docs --bind 127.0.0.1",
+      "startServerCommand": "python3 -m http.server 8099 --bind 127.0.0.1",
       "startServerReadyPattern": "Serving HTTP",
       "url": [
-        "http://127.0.0.1:8099/index.html",
-        "http://127.0.0.1:8099/roadmap.html"
+        "http://127.0.0.1:8099/docs/index.html",
+        "http://127.0.0.1:8099/docs/roadmap.html"
       ],
       "numberOfRuns": 3,
       "settings": {
