@@ -33,6 +33,7 @@ is relaxed in the gate (`--regression-eps 1`) so upstream repo drift can't flake
 it. Edit `taps.txt` → regenerate `tests/eval/baseline.json`. It runs in CI's
 `lint` job (pure-stdlib BM25, no `ANTHROPIC_API_KEY`; needs network to tap). The
 opt-in evals stay out of `check` and all degrade cleanly:
+
 - `make eval-ai` / `eval-rec` — key-gated LLM evals (Tier 2a rerank / 2b recommend).
 - `make eval-stats` — Tier 1b `ranx` paired-t-test between engines (`--stats`).
 - `make eval-explain` — Tier 2c `ragas` faithfulness for `boost explain`; needs

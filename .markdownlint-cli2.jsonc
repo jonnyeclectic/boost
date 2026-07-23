@@ -1,0 +1,32 @@
+// markdownlint-cli2 — consistency for every contributor-facing Markdown
+// surface (README, CLAUDE.md, CONTRIBUTING, SECURITY, docs/*.md, examples,
+// style). Run locally with:
+//   npx --yes markdownlint-cli2@0.18.1
+// CI: .github/workflows/markdownlint.yml (path-filtered).
+{
+  "globs": ["**/*.md"],
+  "ignores": [
+    ".venv/**",
+    "node_modules/**",
+    "mutants/**",
+    ".eval-home/**",
+    // Agent-harness config (skills/commands), not contributor documentation.
+    ".claude/**",
+    // Roadmap item bodies are HTML-in-Markdown card copy rendered by
+    // build_roadmap.py, not standalone documents — heading/inline-HTML
+    // document rules don't apply to them.
+    "docs/roadmap/items/**"
+  ],
+  "config": {
+    // Long lines are fine: prose wraps in the viewer, and tables/links often
+    // can't be split without hurting readability.
+    "MD013": false,
+    // Inline HTML is deliberate (badges, <details>, <img> sizing in README).
+    "MD033": false,
+    // The README opens with a centered logo block, not an H1.
+    "MD041": false,
+    // "boost — Homebrew for AI coding skills." style headings end with
+    // punctuation on purpose; it's the product tagline idiom.
+    "MD026": false
+  }
+}
