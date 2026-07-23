@@ -28,8 +28,9 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write   # create the tag + GitHub Release
-  id-token: write   # OIDC for PyPI Trusted Publishing
+  contents: write      # create the tag + GitHub Release
+  id-token: write      # OIDC for PyPI Trusted Publishing
+  attestations: write  # sign SLSA build-provenance for the dist artifacts
 
 jobs:
   release:
@@ -63,6 +64,18 @@ jobs:
           python -m pip -q install build twine
           python -m build
           twine check dist/*
+
+      - name: attest build provenance (SLSA)
+        # A cryptographically signed, verifiable record of WHICH workflow built
+        # WHICH artifact from WHICH commit, layered on top of PyPI Trusted
+        # Publishing. Consumers can then run
+        #   gh attestation verify <file> --repo jonnyeclectic/boost
+        # on the wheel/sdist they installed. No paid signing service. Runs after
+        # `twine check` so only a valid dist is ever attested, and before the
+        # PyPI upload so the exact bytes that get published are the ones signed.
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: "dist/*"
 
       - name: smoke-test the wheel
         run: |
