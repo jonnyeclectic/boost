@@ -17,8 +17,8 @@ from typing import List, Optional, Tuple
 
 from .. import cliparse
 from ..core import (agents, ai, catalog, frontmatter, gitutil, imperative,
-                    journal, lockfile, logs, output as out, paths, policy,
-                    registry, staleness, store, util)
+                    integrity, journal, lockfile, logs, output as out, paths,
+                    policy, registry, staleness, store, util)
 from ..errors import BoostError
 
 # --- audit: dangerous-content patterns ------------------------------------
@@ -549,17 +549,20 @@ def cmd_verify(argv):
     for name, entry in _iter_installed(args.names or None):
         missing_fields = [f for f in ("version", "tap", "sha256", "installed_at")
                           if not entry.get(f)]
-        sdir = store.skill_store_dir(name)
-        if not sdir.is_dir():
-            status = "missing"
-        elif util.sha256_dir(sdir) != entry.get("sha256"):
-            status = "modified"
-        else:
-            status = "ok"
+        # Digest check lives in core.integrity now (the same call the read
+        # commands enforce with), so verify reports exactly what enforcement
+        # acts on. An UNLOCKED entry has no digest to compare — surface it as a
+        # missing field rather than a false "ok".
+        status = integrity.status(name, entry)
+        if status == integrity.STATUS_UNLOCKED and "sha256" not in missing_fields:
+            missing_fields.append("sha256")
+        commit_pin = integrity.commit_status(name, entry)
         results.append({"name": name, "status": status,
-                        "missing_fields": missing_fields})
+                        "missing_fields": missing_fields,
+                        "commit_pin": commit_pin})
 
-    bad = [r for r in results if r["status"] != "ok" or r["missing_fields"]]
+    bad = [r for r in results if r["status"] != "ok" or r["missing_fields"]
+           or r["commit_pin"] == integrity.STATUS_MODIFIED]
     if args.json:
         print(json.dumps({"skills": results, "failed": len(bad)}))
         return 1 if bad else 0
@@ -568,12 +571,19 @@ def cmd_verify(argv):
         out.info("no skills installed")
         return 0
     width = max(len(r["name"]) for r in results)
-    status_role = {"ok": "success", "modified": "warn", "missing": "danger"}
+    status_role = {"ok": "success", "modified": "warn", "missing": "danger",
+                   "unlocked": "warn"}
     for r in results:
-        note = ("  missing lock fields: " + ", ".join(r["missing_fields"])
-                if r["missing_fields"] else "")
+        bits = []
+        if r["missing_fields"]:
+            bits.append("missing lock fields: " + ", ".join(r["missing_fields"]))
+        if r["commit_pin"] == integrity.STATUS_OK:
+            bits.append("commit-pinned")
+        elif r["commit_pin"] == integrity.STATUS_MODIFIED:
+            bits.append("commit pin DRIFTED")
+        note = ("  " + " · ".join(bits)) if bits else ""
         print("  %s  %s%s" % (r["name"].ljust(width),
-                              out.role(r["status"], status_role[r["status"]]),
+                              out.role(r["status"], status_role.get(r["status"], "warn")),
                               out.role(note, "muted")))
     if bad:
         out.warn("%d of %d skill%s failed verification"

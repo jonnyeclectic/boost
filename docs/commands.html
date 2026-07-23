@@ -88,7 +88,7 @@
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  {dump,install} file">bundle</a>
       <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">import</a>
       <a class="cmd-link" href="#cmd-migrate" data-search="migrate migrate skills between agents or from skills cli  --from agent --to agent --from-skills-cli --path dir">migrate</a>
-      <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill to its current version  name">pin</a>
+      <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill to its current version  --commit name">pin</a>
       <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill to update again  name">unpin</a>
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json {save,list,restore} label|id">snapshot</a>
       <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip name">export</a>
@@ -290,13 +290,17 @@
           <div class="arg"><code>--path DIR</code><span>Skills CLI directory (default ~/.skills)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-pin" data-search="pin pin a skill to its current version  name">
+      <section class="cmd" id="cmd-pin" data-search="pin pin a skill to its current version  --commit name">
         <h3><span class="cname">pin</span><span class="gtag">pkg</span></h3>
         <p class="summary">Pin a skill to its current version</p>
-        <pre class="syn">boost pin NAME</pre>
+        <pre class="syn">boost pin [--commit] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span></span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--commit</code><span>also freeze the exact source commit (integrity pin)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-unpin" data-search="unpin allow a pinned skill to update again  name">

@@ -16,9 +16,9 @@ from typing import Dict, List, Optional
 
 from .. import cliparse
 from ..core import (adapters, agents, catalog, config, frontmatter, gitutil,
-                    injectscan, journal, lockfile, paths, projectlock, registry,
-                    scopes, secretscan, staleness, store, typosquat, updatediff,
-                    util)
+                    injectscan, integrity, journal, lockfile, paths, projectlock,
+                    registry, scopes, secretscan, staleness, store, typosquat,
+                    updatediff, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -865,8 +865,17 @@ def cmd_pin(argv: List[str]) -> int:
     ap = cliparse.parser(prog="boost pin",
                                  description="Pin a skill to its current version")
     ap.add_argument("name", metavar="NAME")
+    ap.add_argument("--commit", action="store_true",
+                    help="also freeze the exact source commit (integrity pin)")
     args = ap.parse_args(argv)
-    return _set_pin(args.name, True)
+    rc = _set_pin(args.name, True)
+    entry = lockfile.get_skill(args.name)
+    if rc == 0 and args.commit and entry is not None:
+        commit = integrity.set_commit_pin(args.name, entry)
+        journal.log("pin-commit", args.name, commit=commit)
+        out.ok("commit-pinned %s at %s" % (args.name, commit[:12]))
+        out.dim("  `boost verify` fails if the recorded commit ever moves off it")
+    return rc
 
 
 def cmd_unpin(argv: List[str]) -> int:
@@ -874,6 +883,11 @@ def cmd_unpin(argv: List[str]) -> int:
                                  description="Allow a pinned skill to update again")
     ap.add_argument("name", metavar="NAME")
     args = ap.parse_args(argv)
+    # Releasing the version pin releases the commit pin with it — a commit pin
+    # only makes sense while the skill is otherwise frozen.
+    entry = lockfile.get_skill(args.name)
+    if entry and integrity.clear_commit_pin(args.name, entry):
+        out.dim("  released the commit pin too")
     return _set_pin(args.name, False)
 
 

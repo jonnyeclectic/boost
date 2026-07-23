@@ -16,9 +16,9 @@ import webbrowser
 from pathlib import Path
 
 from .. import cliparse
-from ..core import (ai, catalog, frontmatter, gitutil, imperative, journal,
-                    lockfile, logs, paths, projectlock, registry, scopes, store,
-                    util)
+from ..core import (ai, catalog, frontmatter, gitutil, imperative, integrity,
+                    journal, lockfile, logs, paths, projectlock, registry,
+                    scopes, store, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -42,6 +42,10 @@ def _resolve_skill_md(name: str):
     """
     lock = lockfile.get_skill(name)
     if lock:
+        # The single place skill content is served from — so it is the single
+        # place to refuse serving a tree that has drifted from its locked digest
+        # (a no-op unless enforcement is switched on).
+        integrity.enforce(name, lock)
         p = store.skill_store_dir(name) / "SKILL.md"
         if p.exists():
             return p, lock, None

@@ -2160,17 +2160,26 @@ paths.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Integrity</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Integrity</span></div>
         <h3>Lockfile enforcement &amp; commit pinning</h3>
-        <p>Promote the recorded <code>sha256</code> from a note to a rule: refuse to
-           load a skill whose content has drifted from the lockfile, and let users
-           pin a skill to an exact commit. The enforcement layer that makes the
-           <code>verify</code> digest binding rather than advisory.</p>
+        <p>Promoted the recorded <code>sha256</code> from a note to a rule. The check
+           moved into <code>core/integrity.py</code> (where the mutation gate
+           covers it), and every command that serves a skill's content routes
+           through one resolver that now refuses a tree whose bytes have drifted
+           from the lock — a tamper tripwire at the point of use, since boost
+           can't police what the <em>agent</em> loads but can refuse to hand you
+           a skill that no longer matches what you reviewed. Opt-in
+           (<code>config security.enforce_digest</code>, default off) so it never
+           surprises an existing setup; <code>verify</code> reports drift either
+           way. Commit pinning rides alongside: <code>boost pin &lt;skill&gt;
+           --commit</code> freezes the exact source commit, and
+           <code>verify</code> flags it if the recorded commit ever moves off the
+           pin.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">pin to commit</span>
+          <span class="m">digest binding at load, opt-in</span>
         </div>
       </article>
 
