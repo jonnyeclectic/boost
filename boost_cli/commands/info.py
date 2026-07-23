@@ -16,9 +16,10 @@ import webbrowser
 from pathlib import Path
 
 from .. import cliparse
-from ..core import (ai, catalog, config, faithfulness, frontmatter, gitutil,
-                    imperative, integrity, journal, lockfile, logs, paths,
-                    projectlock, registry, scopes, store, util)
+from ..core import (ai, capabilities, catalog, config, faithfulness,
+                    frontmatter, gitutil, imperative, integrity, journal,
+                    lockfile, logs, paths, projectlock, registry, scopes, store,
+                    util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -230,9 +231,14 @@ def cmd_info(argv):
             skill_dir = None
     desc = str((cat or {}).get("description") or "")
     meta = {}
+    skill_text = ""
     if skill_dir and (skill_dir / "SKILL.md").exists():
-        meta, _body = frontmatter.parse(_read(skill_dir / "SKILL.md"))
+        skill_text = _read(skill_dir / "SKILL.md")
+        meta, _body = frontmatter.parse(skill_text)
         desc = desc or str(meta.get("description") or "")
+    declared_caps = sorted(capabilities.declared(meta))
+    detected_extra = sorted(capabilities.detect(skill_text)
+                            - set(declared_caps)) if skill_text else []
     score = size = files = None
     if skill_dir:
         score, _notes = util.score_skill(skill_dir)
@@ -242,6 +248,7 @@ def cmd_info(argv):
         print(json.dumps({
             "name": name, "description": desc,
             "installed": lock, "project": plock,
+            "capabilities": declared_caps, "detected_capabilities": detected_extra,
             "latest": (cat or {}).get("version"),
             "tap": (lock or plock or cat or {}).get("tap"),
             "store": str(sdir) if lock and sdir.is_dir() else None,
@@ -308,6 +315,13 @@ def cmd_info(argv):
             out.kv("tags", " ".join("#" + t for t in lock["tags"]))
     elif _as_list(meta.get("tags")):
         out.kv("tags", " ".join("#" + t for t in _as_list(meta.get("tags"))))
+    if declared_caps:
+        out.kv("capabilities", ", ".join(declared_caps))
+    if detected_extra:
+        # What the content shows but the author didn't declare — the
+        # under-declaration signal a reviewer wants to see.
+        out.kv("detected", out.role(", ".join(detected_extra) + "  (not declared)",
+                                    "warn"))
     if score is not None:
         out.kv("quality", "%d/100" % score)
         out.kv("size", util.human_size(size))

@@ -20,6 +20,11 @@ DEFAULTS = {
     "min_quality_score": 0,    # enforced by `boost audit`, advisory at install
     "max_skills": None,        # cap on installed count
     "pin_only": False,         # block installs/updates entirely (frozen env)
+    # Least-privilege: capability names (network/shell/filesystem) a skill may
+    # not expect. A DECLARED denied capability always blocks; a merely DETECTED
+    # one blocks only with enforce_detected_capabilities on (fuzzy, opt-in).
+    "denied_capabilities": [],
+    "enforce_detected_capabilities": False,
 }
 
 
@@ -68,3 +73,22 @@ def check_install(entry: dict, installed_count: int) -> List[str]:
     if pol["max_skills"] is not None and installed_count >= int(pol["max_skills"]):
         v.append("max_skills limit (%s) reached" % pol["max_skills"])
     return v
+
+
+def check_capabilities(meta: dict, text: str) -> List[str]:
+    """Return capability-policy violations for a skill (empty = allowed).
+
+    Separate from :func:`check_install` because it needs the skill's CONTENT,
+    which the caller only has after resolving the source — check_install runs on
+    the catalog entry alone. Honors the same ``policy_enforce`` master switch.
+    """
+    if not config.get("policy_enforce", True):
+        return []
+    from . import capabilities
+    pol = load()
+    denied = {str(c).strip().lower() for c in pol["denied_capabilities"]}
+    if not denied:
+        return []
+    return capabilities.violations(
+        capabilities.declared(meta), capabilities.detect(text),
+        denied, bool(pol["enforce_detected_capabilities"]))

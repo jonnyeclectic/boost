@@ -2,15 +2,15 @@
 id: capability-manifest-and-least-privilege-policy
 board: code
 section: trust
-status: planned
+status: shipped
 category: Security · Policy
 complexity: L
 impact: Med
 wow: 4
 note: builds on policy.py
 order: 8
-owner:
-pr:
+owner: loop/caps
+pr: 219
 title: Capability manifest &amp; least-privilege policy
 ---
 Extend the existing <code>policy.py</code> so a skill declares the
