@@ -2,15 +2,15 @@
 id: performance-regression-gate-pytest-benchmark
 board: code
 section: dx
-status: planned
+status: shipped
 category: Testing · Perf
 complexity: M
 impact: Med
 wow: 3
 note: scan &amp; registry
 order: 6
-owner:
-pr:
+owner: loop/perfgate
+pr: 207
 title: Performance-regression gate — <code>pytest-benchmark</code>
 ---
 Benchmark the hot paths — a catalog scan over a large skills tree, a

@@ -101,6 +101,13 @@ jobs:
       # deterministic across runners/Python versions — never timing-flaky.
       - name: startup import-time budget (lazy-import guard)
         run: python scripts/import_budget.py --list
+      # Performance-regression gate: complexity scaling, not wall-clock
+      # baselines. Times scan/BM25-build/retrieve at 64 vs 512 synthetic items
+      # and fails when the big/small ratio exceeds 3x-of-linear — an O(n²)
+      # slip lands at ~64x and is caught decisively, while runner speed
+      # cancels out of the ratio. Pure stdlib, same PYTHONPATH shim as eval.
+      - name: perf gate (scaling ratios)
+        run: PYTHONPATH=. python scripts/perf_gate.py -v
       # Tier 1 retrieval quality gate: golden-set recall@k over a PINNED corpus.
       # The golden set grades real catalog items by name, so the repos holding
       # them (tests/eval/taps.txt) are tapped first — deterministic given that
