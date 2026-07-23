@@ -1,0 +1,11 @@
+# Links lychee should not fetch.
+#
+# The docs are the GitHub Pages site rooted at docs/, so every asset and
+# cross-page link is checked as a real file path — nothing is excluded for
+# convenience. These two entries are unavoidable:
+
+# Local dev server referenced in `boost serve` documentation examples.
+^https?://(localhost|127\.0\.0\.1)(:\d+)?
+
+# Example/placeholder hosts in configuration snippets (not real endpoints).
+^https?://(example\.(com|org)|your-org)

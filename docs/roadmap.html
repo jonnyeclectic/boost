@@ -1451,7 +1451,7 @@ improvement is real (or isn't)."</p>
       <article class="cap rcard">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop</span></div>
         <h3><code>boost adapt</code> — render a skill as another framework's agent source</h3>
-        <p>boost only installs skills as files for editor agents (Claude Code, Cursor, Windsurf); CrewAI / OpenAI-Agents-SDK apps can't consume them — an agent there is a value built in source. <code>boost adapt &lt;skill&gt; --to crewai|agents-sdk</code> renders one <code>SKILL.md</code> into each framework's native <code>Agent(...)</code> as a deterministic, zero-dependency string transform (<code>core/adapters.py</code>). Strings emit via <code>json.dumps</code> so any body (quotes, <code>"""</code>, unicode) stays valid Python; 97.6% mutation kill. Docs: <a href="../adapters.html">adapters.html</a>.</p>
+        <p>boost only installs skills as files for editor agents (Claude Code, Cursor, Windsurf); CrewAI / OpenAI-Agents-SDK apps can't consume them — an agent there is a value built in source. <code>boost adapt &lt;skill&gt; --to crewai|agents-sdk</code> renders one <code>SKILL.md</code> into each framework's native <code>Agent(...)</code> as a deterministic, zero-dependency string transform (<code>core/adapters.py</code>). Strings emit via <code>json.dumps</code> so any body (quotes, <code>"""</code>, unicode) stays valid Python; 97.6% mutation kill. Docs: <a href="adapters.html">adapters.html</a>.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med-High</b></span>
@@ -1462,7 +1462,7 @@ improvement is real (or isn't)."</p>
       <article class="cap rcard">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop</span></div>
         <h3><code>boost adapt --to langgraph</code> — third framework renderer</h3>
-        <p>Extend <code>boost adapt</code> (shipped in #146) with a LangGraph target. Unlike CrewAI / Agents-SDK, a LangGraph agent isn't one <code>Agent(...)</code> constructor — the skill body is the system prompt of a node bound into a <code>StateGraph</code>. Add a <code>render_langgraph</code> to <code>core/adapters.py</code> emitting a node factory (prebuilt <code>create_react_agent</code>, or a prompt-carrying node) + its <code>FORMATS</code> row, with byte-exact golden + <code>compile()</code> tests. Then add a <code>langgraph</code> leg to <code>.github/workflows/adapter-conformance.yml</code> (pip install langgraph, import the emitted file). Follows the pattern in <a href="../adapters.html">adapters.html</a>: one <code>render_*</code> fn + registry row + golden test + one matrix line.</p>
+        <p>Extend <code>boost adapt</code> (shipped in #146) with a LangGraph target. Unlike CrewAI / Agents-SDK, a LangGraph agent isn't one <code>Agent(...)</code> constructor — the skill body is the system prompt of a node bound into a <code>StateGraph</code>. Add a <code>render_langgraph</code> to <code>core/adapters.py</code> emitting a node factory (prebuilt <code>create_react_agent</code>, or a prompt-carrying node) + its <code>FORMATS</code> row, with byte-exact golden + <code>compile()</code> tests. Then add a <code>langgraph</code> leg to <code>.github/workflows/adapter-conformance.yml</code> (pip install langgraph, import the emitted file). Follows the pattern in <a href="adapters.html">adapters.html</a>: one <code>render_*</code> fn + registry row + golden test + one matrix line.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -1473,7 +1473,7 @@ improvement is real (or isn't)."</p>
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Interop</span></div>
         <h3><code>boost adapt</code> — multi-agent skills → crews/graphs, not one Agent</h3>
-        <p>Today <code>boost adapt</code> (#146, #163) projects a skill into a <b>single</b> framework Agent carrying its instructions/role/model — but a skill can declare tools and a whole subagent graph (e.g. <code>rust-review</code> = worker + dedup-judge + fp-judge). Adapt the richer structure: emit a CrewAI <code>Crew</code> (agents + tasks) or a LangGraph <code>StateGraph</code> when a skill's frontmatter/plugin dir declares subagents, and surface declared tools as stubs. Scope: detect subagent/tool declarations in <code>SKILL.md</code>/<code>plugins/*/agents/*.md</code>; add a crew/graph renderer path in <code>core/adapters.py</code> (single-Agent stays the default for flat skills); golden + <code>compile()</code> tests + a conformance leg. Turns "one skill → one agent" into "one skill → a runnable multi-agent workflow." See <a href="../adapters.html">adapters.html</a>.</p>
+        <p>Today <code>boost adapt</code> (#146, #163) projects a skill into a <b>single</b> framework Agent carrying its instructions/role/model — but a skill can declare tools and a whole subagent graph (e.g. <code>rust-review</code> = worker + dedup-judge + fp-judge). Adapt the richer structure: emit a CrewAI <code>Crew</code> (agents + tasks) or a LangGraph <code>StateGraph</code> when a skill's frontmatter/plugin dir declares subagents, and surface declared tools as stubs. Scope: detect subagent/tool declarations in <code>SKILL.md</code>/<code>plugins/*/agents/*.md</code>; add a crew/graph renderer path in <code>core/adapters.py</code> (single-Agent stays the default for flat skills); golden + <code>compile()</code> tests + a conformance leg. Turns "one skill → one agent" into "one skill → a runnable multi-agent workflow." See <a href="adapters.html">adapters.html</a>.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -1484,7 +1484,7 @@ improvement is real (or isn't)."</p>
       <article class="cap rcard">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Interop</span></div>
         <h3><code>boost run</code> — search → adapt → a live agent doing the task, in one command</h3>
-        <p>The allure ceiling on <code>boost adapt</code> (#146, #163): it stops at <b>source you assemble</b>, and the adapted agent has a brain (prompt) but no <b>hands</b> (tools). Close both. <code>boost run &lt;skill&gt; [target]</code> = adapt → wire a default toolset (file read, ripgrep/shell, web) → execute on boost's model and stream the result. Opt-in like the conformance path (installs the framework + needs a key, so the zero-dep default holds). Two prerequisites ship with it: (1) <b>tool-wiring</b> — emit/attach the tools a skill needs (or declares) so the agent can act, not roleplay; (2) reuse the <a href="../adapters.html">adapt</a> renderer for the agent def. Pairs with <code>[[framework-adapter-multi-agent]]</code> so a skill like <code>rust-review</code> runs as a real crew. This is the screenshot: "one command → an expert agent audits your repo, on Claude, that you never wrote." <b>Working preview:</b> <code>examples/boost-run-prototype.sh</code> already does this by hand (adapt → wire a read_file tool → <code>Runner.run</code> on a file with planted bugs).</p>
+        <p>The allure ceiling on <code>boost adapt</code> (#146, #163): it stops at <b>source you assemble</b>, and the adapted agent has a brain (prompt) but no <b>hands</b> (tools). Close both. <code>boost run &lt;skill&gt; [target]</code> = adapt → wire a default toolset (file read, ripgrep/shell, web) → execute on boost's model and stream the result. Opt-in like the conformance path (installs the framework + needs a key, so the zero-dep default holds). Two prerequisites ship with it: (1) <b>tool-wiring</b> — emit/attach the tools a skill needs (or declares) so the agent can act, not roleplay; (2) reuse the <a href="adapters.html">adapt</a> renderer for the agent def. Pairs with <code>[[framework-adapter-multi-agent]]</code> so a skill like <code>rust-review</code> runs as a real crew. This is the screenshot: "one command → an expert agent audits your repo, on Claude, that you never wrote." <b>Working preview:</b> <code>examples/boost-run-prototype.sh</code> already does this by hand (adapt → wire a read_file tool → <code>Runner.run</code> on a file with planted bugs).</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -1573,7 +1573,7 @@ and the work stays visible.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Docs</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Docs</span></div>
         <h3>Broken-link &amp; anchor checking — <code>lychee</code></h3>
         <p>Fast, free link checker over the README and <code>docs/*.html</code>:
            verifies external URLs (GitHub, PyPI), asset paths
@@ -1675,7 +1675,7 @@ and the work stays visible.</p>
       <article class="cap rcard">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Discoverability</span></div>
         <h3>Surface every <code>docs/*.html</code> page from the main page</h3>
-        <p><a href="make-the-roadmaps-discoverable.html">Making the roadmaps discoverable</a>
+        <p><a href="roadmap.html">Making the roadmaps discoverable</a>
            put both boards in the Visual Guide nav, but the same gap remains for
            the rest of <code>docs/*.html</code>: <code>mcp-hub.html</code> is
            reachable only if you already know the URL — nothing on
@@ -1874,7 +1874,7 @@ and the work stays visible.</p>
       <article class="cap rcard">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compatibility · macOS</span></div>
         <h3>Self-harden every boost process against the macOS fork-safety abort</h3>
-        <p>The launch-env fix (<a href="#mcp-launch-objc-fork-safety">#119</a>) only
+        <p>The launch-env fix (<a href="https://github.com/jonnyeclectic/boost/pull/119">#119</a>) only
            protects hosts that register boost <em>through boost</em>, which
            injects <code>no_proxy=*</code>. A host that <code>fork()</code>s into
            <code>boost mcp --stdio</code> from a stale or hand-written config —
@@ -1887,7 +1887,7 @@ and the work stays visible.</p>
            <code>getproxies()</code> short-circuits on
            <code>getproxies_environment()</code> and never consults
            SystemConfiguration. Belt-and-suspenders atop the
-           <code>nethttp</code> opener (<a href="#fork-safe-network-proxy-handler">#115</a>).</p>
+           <code>nethttp</code> opener (<a href="https://github.com/jonnyeclectic/boost/pull/115">#115</a>).</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

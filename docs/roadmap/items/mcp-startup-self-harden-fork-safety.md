@@ -13,7 +13,7 @@ owner: loop/mcp-startup-fork-safety
 pr: 162
 title: Self-harden every boost process against the macOS fork-safety abort
 ---
-The launch-env fix (<a href="#mcp-launch-objc-fork-safety">#119</a>) only
+The launch-env fix (<a href="https://github.com/jonnyeclectic/boost/pull/119">#119</a>) only
            protects hosts that register boost <em>through boost</em>, which
            injects <code>no_proxy=*</code>. A host that <code>fork()</code>s into
            <code>boost mcp --stdio</code> from a stale or hand-written config —
@@ -26,4 +26,4 @@ The launch-env fix (<a href="#mcp-launch-objc-fork-safety">#119</a>) only
            <code>getproxies()</code> short-circuits on
            <code>getproxies_environment()</code> and never consults
            SystemConfiguration. Belt-and-suspenders atop the
-           <code>nethttp</code> opener (<a href="#fork-safe-network-proxy-handler">#115</a>).
+           <code>nethttp</code> opener (<a href="https://github.com/jonnyeclectic/boost/pull/115">#115</a>).

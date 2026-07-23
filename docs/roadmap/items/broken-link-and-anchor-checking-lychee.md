@@ -2,15 +2,15 @@
 id: broken-link-and-anchor-checking-lychee
 board: code
 section: docsite
-status: planned
+status: shipped
 category: Quality · Docs
 complexity: S
 impact: Med
 wow: 3
 note: URLs + anchors
 order: 5
-owner:
-pr:
+owner: loop/lychee
+pr: 210
 title: Broken-link &amp; anchor checking — <code>lychee</code>
 ---
 Fast, free link checker over the README and <code>docs/*.html</code>:
