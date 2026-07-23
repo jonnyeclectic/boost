@@ -7,10 +7,15 @@ name: lighthouse
 # turns that quality into four numbers that can't silently regress as the Aurora
 # theme evolves, and fails the build when one drops below budget.
 #
-# Budgets live in .lighthouserc.json (categories:* minScore). They were
-# calibrated from the first real CI run and floored a little below it — the same
-# "measure, then floor with margin" approach perf_gate uses — so ordinary theme
-# work doesn't flake the gate but a genuine regression trips it.
+# Budgets live in .lighthouserc.json (categories:* minScore), asserted on the
+# median of 3 runs. They were calibrated from a real CI run — both pages score
+# accessibility 100, seo 100, best-practices 96, performance ~99-100 (a single
+# sample dips into the 80s under runner load, which the median absorbs) — and
+# each floor sits below its real score with margin: the same "measure, then
+# floor" approach perf_gate uses, so ordinary theme work doesn't flake the gate
+# but a genuine regression trips it. Performance gets the widest margin (0.85)
+# because it is the noisiest; accessibility and SEO the tightest (0.95) because
+# they are stable and a regression there is a real defect on the storefront.
 #
 # The two hand-authored, highest-traffic pages are audited: the landing page and
 # the code roadmap. Served over a throwaway localhost static server (no network),

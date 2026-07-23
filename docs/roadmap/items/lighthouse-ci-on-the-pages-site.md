@@ -7,7 +7,7 @@ category: Docs · Perf
 complexity: M
 impact: High
 wow: 5
-note: 4 score budgets
+note: 4 budgets + 3 real a11y fixes
 order: 2
 owner: loop/lighthouse
 pr: 214
@@ -17,8 +17,11 @@ title: Lighthouse CI on the Pages site
            and <code>roadmap.html</code> on performance, accessibility,
            best-practices and SEO on every deploy, and fails the build against
            budgets. Turns the marketing surface's quality into four numbers that can't
-           silently regress as the Aurora theme evolves — budgets calibrated
-           from the first CI run and floored with margin, the same way
-           <code>perf_gate</code> sets its thresholds. Also filled the one real
-           gap the audit named up front: <code>index.html</code> was missing a
-           <code>meta description</code>.
+           silently regress as the Aurora theme evolves — four floors (a11y and
+           SEO 0.95, best-practices 0.90, the noisier performance 0.85) asserted
+           on the median of three runs, calibrated below the real scores with
+           margin the same way <code>perf_gate</code> sets its thresholds. And,
+           as every checker on this repo has, it found real defects on the
+           storefront: muted text at <code>3.9:1</code> contrast (below WCAG AA),
+           an <code>h2 → h4</code> heading skip, and colour-only footer links —
+           all fixed, so both pages now score <code>100</code> on accessibility.
