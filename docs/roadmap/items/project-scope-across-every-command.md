@@ -2,15 +2,15 @@
 id: project-scope-across-every-command
 board: code
 section: internals
-status: planned
+status: shipped
 category: Install engine · Scope
 complexity: M
 impact: Med
 wow: 2
 note: update/audit/doctor are user-scope only
 order: 23
-owner:
-pr:
+owner: loop/scopewide
+pr: 217
 title: Teach the rest of the CLI about project scope
 ---
 Workspace scope shipped in <a href="https://github.com/jonnyeclectic/boost/pull/212">#212</a>
@@ -27,6 +27,8 @@ Workspace scope shipped in <a href="https://github.com/jonnyeclectic/boost/pull/
            of health while N third-party skills sit in the repo being loaded by
            every agent on the team. That last one is the real prize: vendored
            skills are exactly the ones a security review should be looking at,
-           because they arrive by PR and run on everyone's machine. Wants a
-           shared "resolve this name at either scope" helper rather than 70
-           separate patches.
+           because they arrive by PR and run on everyone's machine. Shipped the governance slice — the real prize — via a shared
+           integrity.project_skills() / project_status() pair: verify and
+           doctor now check project-scoped skills' committed digests the same
+           way they do user-scope ones, so a drifted vendored skill is flagged
+           instead of silently trusted.

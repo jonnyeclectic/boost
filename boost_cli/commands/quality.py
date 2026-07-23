@@ -310,6 +310,26 @@ def cmd_doctor(argv):
         out.ok("%d skill%s present in store with agent links"
                % (len(skills), _s(len(skills))))
 
+    # Project-scoped skills committed into THIS repo — the governance blind spot
+    # #212 left open. They don't touch the user store, so the loop above never
+    # saw them; a vendored third-party skill that has drifted from its committed
+    # digest is exactly what a health check should surface.
+    pbase, pskills = integrity.project_skills()
+    proj_issues = 0
+    for name, entry in sorted(pskills.items()):
+        st = integrity.project_status(entry, pbase)
+        if st == integrity.STATUS_MISSING:
+            bad("project skill %s is in .boost but its files are gone — "
+                "run `boost sync`" % name)
+            proj_issues += 1
+        elif st == integrity.STATUS_MODIFIED:
+            bad("project skill %s modified since install — "
+                "run `boost verify`" % name)
+            proj_issues += 1
+    if pskills and not proj_issues:
+        out.ok("%d project skill%s intact in %s"
+               % (len(pskills), _s(len(pskills)), paths.tilde(pbase)))
+
     # Rules and workflows don't live in the store — they materialize into agent
     # dirs (a file drop, or a CLAUDE.md managed block). Health = every recorded
     # materialization is still on disk; a deleted file means the install rotted.
@@ -545,8 +565,20 @@ def cmd_verify(argv):
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
+    # A named skill may be installed at user OR project scope. Validate against
+    # both up front so `boost verify <vendored-skill>` doesn't wrongly error
+    # "not installed", and only hand user-scope names to _iter_installed.
+    pbase, pskills = integrity.project_skills()
+    if args.names:
+        unknown = [n for n in args.names
+                   if n not in lockfile.installed() and n not in pskills]
+        if unknown:
+            raise BoostError("not installed: %s" % ", ".join(unknown),
+                            hint="see what is with `boost list`")
+    user_names = [n for n in (args.names or []) if n in lockfile.installed()]
+
     results = []
-    for name, entry in _iter_installed(args.names or None):
+    for name, entry in _iter_installed(user_names or (None if not args.names else [])):
         missing_fields = [f for f in ("version", "tap", "sha256", "installed_at")
                           if not entry.get(f)]
         # Digest check lives in core.integrity now (the same call the read
@@ -557,9 +589,23 @@ def cmd_verify(argv):
         if status == integrity.STATUS_UNLOCKED and "sha256" not in missing_fields:
             missing_fields.append("sha256")
         commit_pin = integrity.commit_status(name, entry)
-        results.append({"name": name, "status": status,
+        results.append({"name": name, "status": status, "scope": "user",
                         "missing_fields": missing_fields,
                         "commit_pin": commit_pin})
+
+    # Vendored, project-scoped skills live in the repo's own lock, not the user's
+    # — and they are exactly the ones worth verifying, since they arrive by PR
+    # and run on every teammate. (pbase/pskills resolved above.)
+    for name, entry in sorted(pskills.items()):
+        if args.names and name not in args.names:
+            continue
+        status = integrity.project_status(entry, pbase)
+        missing_fields = [f for f in ("version", "tap", "sha256", "installed_at")
+                          if not entry.get(f)]
+        if status == integrity.STATUS_UNLOCKED and "sha256" not in missing_fields:
+            missing_fields.append("sha256")
+        results.append({"name": name, "status": status, "scope": "project",
+                        "missing_fields": missing_fields, "commit_pin": None})
 
     bad = [r for r in results if r["status"] != "ok" or r["missing_fields"]
            or r["commit_pin"] == integrity.STATUS_MODIFIED]
@@ -575,6 +621,8 @@ def cmd_verify(argv):
                    "unlocked": "warn"}
     for r in results:
         bits = []
+        if r.get("scope") == "project":
+            bits.append("project")
         if r["missing_fields"]:
             bits.append("missing lock fields: " + ", ".join(r["missing_fields"]))
         if r["commit_pin"] == integrity.STATUS_OK:

@@ -212,3 +212,56 @@ def test_sync_reports_but_never_deletes_an_unclaimed_dir(boost, tapped, repo):
     assert "unclaimed" in res.out
     boost("sync")
     assert (mine / "SKILL.md").is_file(), "deleted a file boost did not write"
+
+
+# ── governance commands see project skills (project-scope-across-every-command) ──
+
+def test_verify_sees_a_project_skill(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    res = boost("verify")
+    assert "brainstorming" in res.out and "project" in res.out
+
+
+def test_verify_flags_a_tampered_project_skill(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md").write_text(
+        "EVIL\n", encoding="utf-8")
+    res = boost("verify", expect=1)
+    assert "modified" in res.out
+    assert "failed verification" in (res.out + res.err)
+
+
+def test_verify_json_tags_scope(boost, tapped, repo):
+    import json as _json
+    boost("install", "brainstorming", "--local")
+    data = _json.loads(boost("verify", "--json").out)
+    scopes_seen = {r["scope"] for r in data["skills"]}
+    assert scopes_seen == {"project"}
+
+
+def test_verify_named_project_skill_does_not_error_not_installed(boost, tapped,
+                                                                repo):
+    # The bug this closes: a vendored skill named explicitly used to hit the
+    # user-lock-only validation and wrongly report "not installed".
+    boost("install", "brainstorming", "--local")
+    res = boost("verify", "brainstorming")
+    assert "brainstorming" in res.out
+
+
+def test_verify_unknown_name_still_errors(boost, tapped, repo):
+    res = boost("verify", "no-such-skill", expect=1)
+    assert "not installed" in (res.out + res.err)
+
+
+def test_doctor_flags_a_tampered_project_skill(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md").write_text(
+        "EVIL\n", encoding="utf-8")
+    res = boost("doctor", expect=1)
+    assert "project skill brainstorming modified" in res.out
+
+
+def test_doctor_reports_intact_project_skills(boost, tapped, repo):
+    boost("install", "brainstorming", "--local")
+    res = boost("doctor")
+    assert "project skill" in res.out and "intact" in res.out
