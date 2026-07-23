@@ -13,7 +13,7 @@ owner:
 pr:
 title: Teach the rest of the CLI about project scope
 ---
-Workspace scope shipped in <a href="https://github.com/jonnyeclectic/boost/pull/211">#211</a>
+Workspace scope shipped in <a href="https://github.com/jonnyeclectic/boost/pull/212">#212</a>
            — <code>install --local</code>, <code>list --local</code>,
            <code>uninstall --local</code>, <code>info</code> and
            <code>sync</code> all understand the per-repo lock. The other ~70

@@ -10,7 +10,7 @@ wow: 4
 note: --local, committable repo lock
 order: 22
 owner: loop/workspace
-pr: 211
+pr: 212
 title: Workspace scope — <code>boost install --local</code> into the project
 ---
 boost was user-global by construction: one store at
