@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>boost — RAG retrieval & the MCP hub (Phases 1–3)</title>
+<title>boost — RAG retrieval &amp; the MCP hub (Phases 1–3)</title>
 <meta name="description" content="How boost's MCP tool layer became an extensible registry: architecture, sequence diagrams, and a simple-vs-deep cheat sheet for the Phase-3 hub and its first reach-out tool, boost_discover_github.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
 <!-- Shared Aurora design system. Recolour everything by editing style/boost.css. -->
@@ -701,7 +701,7 @@ _MCP_TOOLS = REGISTRY.specs()       <span class="cm"># list stays in sync</span>
       <div class="window reveal" style="margin-top:36px;">
         <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
           <div class="bar-title">your_new_tool.py</div></div>
-        <pre><span class="tv">def</span> _tool_x(args):                       <span class="cm"># fn(args) -> (text, is_error)</span>
+        <pre><span class="tv">def</span> _tool_x(args):                       <span class="cm"># fn(args) -&gt; (text, is_error)</span>
     <span class="tv">if</span> <span class="tv">not</span> _dependency_available():
         <span class="tv">return</span> <span class="tok">"needs &lt;dep&gt; — here's how to get it"</span>, <span class="tv">True</span>   <span class="cm"># degrade</span>
     <span class="tv">return</span> _do_the_work(args), <span class="tv">False</span>

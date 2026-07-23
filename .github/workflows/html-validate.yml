@@ -1,0 +1,38 @@
+name: html-validate
+
+# Structural validation of the hand-authored docs/*.html (and the generated
+# boards). The guide and roadmaps are HTML whose tags are balanced by eye today;
+# this is the automated version of that manual sanity check — it catches
+# unclosed elements, duplicate ids, invalid nesting and unencoded &/</> before
+# they ship a subtly broken layout. Config: .htmlvalidate.json at the repo root
+# (stylistic rules the Aurora pages use on purpose — inline styles, lowercase
+# <!doctype> — are turned off there; only correctness is enforced).
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**.html", ".htmlvalidate.json", ".github/workflows/html-validate.yml"]
+  pull_request:
+    paths: ["docs/**.html", ".htmlvalidate.json", ".github/workflows/html-validate.yml"]
+
+permissions: {}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: html-validate (structural, config-driven)
+        # Pinned major; the repo-root .htmlvalidate.json is auto-discovered.
+        run: npx --yes html-validate@9 "docs/*.html"

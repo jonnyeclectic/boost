@@ -2,7 +2,7 @@
 id: html-validation-html-validate
 board: code
 section: docsite
-status: inflight
+status: shipped
 category: Quality · Docs
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: hand-authored HTML
 order: 4
 owner: loop/htmlvalidate
-pr:
+pr: 199
 title: HTML validation — <code>html-validate</code>
 ---
 The guide and roadmap are hand-authored HTML whose tags are balanced by
