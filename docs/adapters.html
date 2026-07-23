@@ -38,6 +38,8 @@
   table.map td.sdk  code  { color: var(--green); }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 30px; }
   @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  /* narrow screens: the mapping table scrolls inside itself (visual_check) */
+  @media (max-width: 760px) { table.map { display: block; overflow-x: auto; } }
   .panel { border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 8px;
            background: var(--panel); }
   .panel h3 { font-size: 16px; margin: 0 0 4px; }

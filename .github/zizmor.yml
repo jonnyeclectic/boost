@@ -16,3 +16,6 @@ rules:
       # a lockfile would exist solely for this one step). The job holds only
       # contents:read and its output gates nothing but itself.
       - theme-lint.yml:48
+      # Same shape: pinned puppeteer-core from tests/visual/package.json,
+      # --no-save on an ephemeral runner, contents:read only.
+      - visual.yml:38

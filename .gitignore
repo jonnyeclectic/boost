@@ -230,3 +230,6 @@ mutants/
 
 # sandboxed boost home for the Tier 1 eval corpus (`make eval` taps here)
 .eval-home/
+tests/visual/node_modules/
+tests/visual/out/
+tests/visual/package-lock.json

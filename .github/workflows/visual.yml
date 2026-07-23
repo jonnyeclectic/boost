@@ -1,0 +1,47 @@
+name: visual
+
+# Visual-regression sweep: load each hand-authored docs page in headless
+# Chrome at 5 responsive breakpoints and assert the invariants a CSS slip
+# actually breaks — no horizontal overflow, the Aurora stylesheet applied,
+# the content chrome present. This is the check that caught three real
+# mobile-overflow bugs (a bare table on eval + adapters, a grid min-width
+# blowout on mcp-hub) when it landed. Screenshots upload on failure.
+# Harness: tests/visual/visual_check.mjs (puppeteer-core over pipe transport).
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**.html", "style/**", "tests/visual/**", ".github/workflows/visual.yml"]
+  pull_request:
+    paths: ["docs/**.html", "style/**", "tests/visual/**", ".github/workflows/visual.yml"]
+
+permissions: {}
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: install harness deps (pinned)
+        working-directory: tests/visual
+        run: npm install --no-save --no-audit --no-fund
+      - name: render sweep (system Chrome)
+        # ubuntu-latest images ship google-chrome stable at /usr/bin.
+        run: node tests/visual/visual_check.mjs
+      - name: upload screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: visual-sweep-screenshots
+          path: tests/visual/out/
