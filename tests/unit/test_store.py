@@ -1,6 +1,7 @@
 """Unit tests: boost_cli/core/store.py — install/uninstall/link/sync (no CLI)."""
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from typing import ClassVar
@@ -707,8 +708,31 @@ class TestInstallScope:
     def test_resolve_base(self):
         from pathlib import Path as P
         assert store._resolve_base("user", None) is None
-        assert store._resolve_base("project", None) == P.cwd()
         assert store._resolve_base("project", "/x") == P("/x")
+
+    def test_resolve_base_delegates_the_walk_up_to_scopes(self, monkeypatch):
+        """Project scope must resolve the REPO, not the cwd.
+
+        This used to be a bare ``Path.cwd()``, so ``boost install --local`` from
+        ``src/deep/nested`` scattered a ``.claude/`` three levels below the repo
+        root. The walk-up itself is ``scopes``' job and is tested there against
+        real directory trees; what ``store`` owns is *delegating* to it, which
+        is what this pins. (Asserting the walk-up here would need a chdir, and a
+        unit test that chdirs breaks mutmut's instrumentation — it resolves
+        ``boost_cli`` relative to the working directory.)
+        """
+        from pathlib import Path as P
+
+        from boost_cli.core import scopes
+        seen = {}
+
+        def fake(scope, base=None, start=None):
+            seen["args"] = (scope, base)
+            return P("/sentinel-root")
+
+        monkeypatch.setattr(scopes, "resolve_base", fake)
+        assert store._resolve_base("project", None) == P("/sentinel-root")
+        assert seen["args"] == ("project", None)
 
     def test_rule_project_scope_materializes_under_base(self, tap, tmp_path):
         repo = tmp_path / "repo"
@@ -749,3 +773,418 @@ class TestInstallScope:
         assert not (repo / ".cursor" / "rules" / "team-conventions.mdc").exists()
         assert not (repo / "CLAUDE.local.md").exists()  # held only our block
         assert lockfile.get_rule("team-conventions") is None
+
+
+class TestProjectSkills:
+    """Skills installed into the repo itself (`boost install --local`).
+
+    These drive ``store`` directly rather than through the CLI, so the mutation
+    gate — which runs only ``tests/unit`` — actually exercises them. The
+    end-to-end behavior has its own coverage in
+    ``tests/functional/test_workspace_scope.py``.
+    """
+
+    @staticmethod
+    def _repo(tmp_path, name="proj"):
+        repo = tmp_path / name
+        (repo / ".git").mkdir(parents=True)
+        return repo
+
+    def _install(self, entry, tmp_path, name="proj", **kw):
+        repo = self._repo(tmp_path, name)
+        res = store.install(entry, scope="project", base=str(repo), **kw)
+        return repo, res
+
+    # ── install ──────────────────────────────────────────────────────────
+
+    def test_materializes_real_dirs_under_the_repo(self, entry, tmp_path):
+        repo, res = self._install(entry, tmp_path)
+        assert res.scope == "project" and res.kind == "skill"
+        for agent, dotdir in AGENT_DIRS.items():
+            d = repo / dotdir / "skills" / "brainstorming"
+            assert (d / "SKILL.md").is_file()
+            # A symlink into ~/.agents/skills dangles on a teammate's machine.
+            assert not d.is_symlink()
+            assert agent in res.linked
+
+    def test_leaves_the_canonical_store_and_user_lock_alone(self, entry, tmp_path):
+        self._install(entry, tmp_path)
+        assert not (paths.store_dir() / "brainstorming").exists()
+        assert lockfile.get_skill("brainstorming") is None
+
+    def test_records_the_project_lock_not_the_user_one(self, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        assert rec["scope"] == "project"
+        assert rec["kind"] == "skill"
+        assert rec["version"] == "1.4.0"
+        assert rec["tap"] == "fixture-tap"
+        assert rec["agents"] == ["claude-code", "windsurf", "cursor"]
+        assert len(rec["materializations"]) == 3
+        assert re.match(ISO, rec["installed_at"])
+        assert re.match(ISO, rec["updated_at"])
+        assert rec["sha256"] and rec["commit"]
+
+    def test_result_carries_a_quality_score(self, entry, tmp_path):
+        _repo, res = self._install(entry, tmp_path)
+        assert res.score > 0
+        assert not res.upgraded
+
+    def test_only_agents_narrows_the_materialization(self, entry, tmp_path):
+        repo, res = self._install(entry, tmp_path, only_agents=["cursor"])
+        assert res.linked == ["cursor"]
+        assert (repo / ".cursor" / "skills" / "brainstorming").is_dir()
+        assert not (repo / ".claude" / "skills" / "brainstorming").exists()
+
+    def test_a_second_install_is_refused_without_force(self, entry, tmp_path):
+        repo = self._repo(tmp_path)
+        store.install(entry, scope="project", base=str(repo))
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(repo))
+        assert "already installed in this project" in err.value.message
+        assert "--local" in err.value.hint
+
+    def test_force_reinstalls_and_marks_upgraded(self, entry, tmp_path):
+        repo = self._repo(tmp_path)
+        store.install(entry, scope="project", base=str(repo))
+        res = store.install(entry, scope="project", base=str(repo), force=True)
+        assert res.upgraded is True
+        assert (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md").is_file()
+
+    def test_reinstall_preserves_the_original_installed_at(self, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo = self._repo(tmp_path)
+        store.install(entry, scope="project", base=str(repo))
+        first = projectlock.get_skill(repo, "brainstorming")["installed_at"]
+        store.install(entry, scope="project", base=str(repo), force=True)
+        assert projectlock.get_skill(repo, "brainstorming")["installed_at"] == first
+
+    def test_policy_blocks_a_project_install_too(self, entry, tmp_path):
+        # Vendoring into a repo is not an escape hatch around policy.
+        policy.save({"blocked_skills": ["brainstorming"]})
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(tmp_path / "p"))
+        assert err.value.message == ("policy blocks installing brainstorming: "
+                                     "skill 'brainstorming' is on the blocklist")
+        assert not (tmp_path / "p" / ".claude").exists()
+
+    def test_an_unknown_scope_is_rejected(self, entry):
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="galaxy")
+        assert "unknown scope" in err.value.message
+
+    def test_no_enabled_agents_is_an_error_not_a_silent_noop(self, entry, tmp_path,
+                                                             monkeypatch):
+        from boost_cli.core import agents as agents_mod
+        monkeypatch.setattr(agents_mod, "enabled_agents", dict)
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(tmp_path / "p"))
+        assert "no enabled agents" in err.value.message
+
+    # ── uninstall ────────────────────────────────────────────────────────
+
+    def test_uninstall_project_removes_dirs_and_record(self, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        info = store.uninstall_project("brainstorming", base=str(repo))
+        assert info["scope"] == "project"
+        assert sorted(info["unlinked"]) == ["claude-code", "cursor", "windsurf"]
+        assert info["base"] == str(repo)
+        for dotdir in AGENT_DIRS.values():
+            assert not (repo / dotdir / "skills" / "brainstorming").exists()
+        assert projectlock.get_skill(repo, "brainstorming") is None
+
+    def test_uninstall_project_errors_when_not_installed(self, tap, tmp_path):
+        with pytest.raises(BoostError) as err:
+            store.uninstall_project("brainstorming", base=str(self._repo(tmp_path)))
+        assert "not installed in this project" in err.value.message
+        assert "--local" in err.value.hint
+
+    def test_uninstall_refuses_a_path_outside_the_project(self, entry, tmp_path):
+        """The lock is committed, so its paths are input — never trusted."""
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        victim = tmp_path / "not-the-repo"
+        victim.mkdir()
+        (victim / "keep.txt").write_text("precious", encoding="utf-8")
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["materializations"] = [{"agent": "claude-code", "path": str(victim)}]
+        projectlock.set_skill(repo, "brainstorming", rec)
+        store.uninstall_project("brainstorming", base=str(repo))
+        assert (victim / "keep.txt").is_file()
+        assert victim.is_dir()
+
+    def test_uninstall_refuses_the_project_root_itself(self, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["materializations"] = [{"agent": "claude-code", "path": str(repo)}]
+        projectlock.set_skill(repo, "brainstorming", rec)
+        store.uninstall_project("brainstorming", base=str(repo))
+        assert repo.is_dir(), "deleted the whole repo"
+
+    # ── sync ─────────────────────────────────────────────────────────────
+
+    def test_sync_plan_is_empty_when_everything_is_present(self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        assert store.project_sync_plan(base=str(repo)) == \
+            {"missing": [], "orphaned": []}
+
+    def test_sync_plan_reports_a_missing_dir(self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+        plan = store.project_sync_plan(base=str(repo))
+        assert plan["missing"] == [("brainstorming", "claude-code")]
+
+    def test_sync_plan_reports_an_unclaimed_dir(self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        mine = repo / ".claude" / "skills" / "hand-written"
+        mine.mkdir(parents=True)
+        assert [p for p in store.project_sync_plan(base=str(repo))["orphaned"]
+                if p.endswith("hand-written")]
+
+    def test_sync_apply_rematerializes_what_is_missing(self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+        plan = store.project_sync_plan(base=str(repo))
+        actions = store.project_sync_apply(plan, base=str(repo))
+        assert any("re-materialized brainstorming" in a for a in actions)
+        assert (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md").is_file()
+
+    def test_sync_apply_never_deletes_an_unclaimed_dir(self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        mine = repo / ".claude" / "skills" / "hand-written"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("mine\n", encoding="utf-8")
+        plan = store.project_sync_plan(base=str(repo))
+        store.project_sync_apply(plan, base=str(repo))
+        assert (mine / "SKILL.md").is_file()
+
+    def test_sync_apply_is_a_noop_with_nothing_to_do(self, entry, tmp_path):
+        repo, _ = self._install(entry, tmp_path)
+        assert store.project_sync_apply(
+            store.project_sync_plan(base=str(repo)), base=str(repo)) == []
+
+    def test_sync_apply_reports_when_the_source_is_gone(self, entry, tmp_path):
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["tap"] = "local"          # nothing to re-fetch from
+        projectlock.set_skill(repo, "brainstorming", rec)
+        actions = store.project_sync_apply(
+            store.project_sync_plan(base=str(repo)), base=str(repo))
+        assert any("source is gone" in a for a in actions)
+
+    # ── the committed-lock contract ──────────────────────────────────────
+
+    def test_lock_paths_are_relative_so_another_clone_can_read_them(self, entry,
+                                                                    tmp_path):
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        paths_rec = sorted(m["path"] for m in rec["materializations"])
+        assert paths_rec == [".claude/skills/brainstorming",
+                             ".cursor/skills/brainstorming",
+                             ".windsurf/skills/brainstorming"]
+        # Nothing machine-specific: this file is committed and read elsewhere.
+        for p in paths_rec:
+            assert not p.startswith("/") and str(tmp_path) not in p
+
+    def test_sync_reads_the_lock_from_a_different_clone_path(self, entry, tmp_path):
+        """Simulates the teammate: same lock, different absolute directory."""
+        repo, _ = self._install(entry, tmp_path)
+        clone = tmp_path / "their-clone"
+        shutil.copytree(repo, clone)
+        shutil.rmtree(clone / ".claude" / "skills" / "brainstorming")
+        plan = store.project_sync_plan(base=str(clone))
+        assert plan["missing"] == [("brainstorming", "claude-code")]
+        store.project_sync_apply(plan, base=str(clone))
+        assert (clone / ".claude" / "skills" / "brainstorming" / "SKILL.md").is_file()
+
+    def test_an_empty_recorded_path_is_refused_not_resolved_to_the_repo(
+            self, entry, tmp_path):
+        """``Path(base) / "" == base`` — so a missing key must not reach rmtree."""
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        rec = projectlock.get_skill(repo, "brainstorming")
+        rec["materializations"] = [{"agent": "claude-code", "path": ""}]
+        projectlock.set_skill(repo, "brainstorming", rec)
+        info = store.uninstall_project("brainstorming", base=str(repo))
+        assert repo.is_dir(), "deleted the project root"
+        assert info["unlinked"] == []
+
+    def test_uninstall_only_reports_agents_it_actually_removed(self, entry,
+                                                              tmp_path):
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        shutil.rmtree(repo / ".cursor" / "skills" / "brainstorming")
+        info = store.uninstall_project("brainstorming", base=str(repo))
+        # cursor's dir was already gone — claiming to have removed it would be
+        # a lie in the CLI's own summary line.
+        assert sorted(info["unlinked"]) == ["claude-code", "windsurf"]
+        assert projectlock.get_skill(repo, "brainstorming") is None
+
+    # ── conflicts and partial reinstalls ─────────────────────────────────
+
+    def test_refuses_to_clobber_a_hand_written_skill_dir(self, entry, tmp_path):
+        repo = self._repo(tmp_path)
+        mine = repo / ".claude" / "skills" / "brainstorming"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("my own work\n", encoding="utf-8")
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(repo))
+        assert "boost did not install it" in err.value.message
+        assert "--force" in err.value.hint
+        assert (mine / "SKILL.md").read_text(encoding="utf-8") == "my own work\n"
+
+    def test_force_overwrites_a_hand_written_dir_when_asked(self, entry, tmp_path):
+        repo = self._repo(tmp_path)
+        mine = repo / ".claude" / "skills" / "brainstorming"
+        mine.mkdir(parents=True)
+        (mine / "SKILL.md").write_text("my own work\n", encoding="utf-8")
+        store.install(entry, scope="project", base=str(repo), force=True)
+        assert "my own work" not in (mine / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_filtered_reinstall_keeps_the_other_agents_in_the_lock(self, entry,
+                                                                  tmp_path):
+        """Otherwise the untouched copies become records nobody claims."""
+        from boost_cli.core import projectlock
+        repo = self._repo(tmp_path)
+        store.install(entry, scope="project", base=str(repo))
+        store.install(entry, scope="project", base=str(repo), force=True,
+                      only_agents=["cursor"])
+        rec = projectlock.get_skill(repo, "brainstorming")
+        assert sorted(rec["agents"]) == ["claude-code", "cursor", "windsurf"]
+        assert len(rec["materializations"]) == 3
+        # And uninstall still reverses every one of them.
+        store.uninstall_project("brainstorming", base=str(repo))
+        for dotdir in AGENT_DIRS.values():
+            assert not (repo / dotdir / "skills" / "brainstorming").exists()
+
+    # ── sync stays quiet where project scope is not in use ───────────────
+
+    def test_sync_plan_is_empty_without_a_project_lock(self, tap, tmp_path):
+        """A repo with hand-written skills but no project lock is not "unclaimed"."""
+        repo = self._repo(tmp_path)
+        mine = repo / ".claude" / "skills" / "hand-written"
+        mine.mkdir(parents=True)
+        assert store.project_sync_plan(base=str(repo)) == \
+            {"missing": [], "orphaned": []}
+
+    # ── no project here ──────────────────────────────────────────────────
+
+    def test_project_install_in_bare_home_is_refused(self, entry, monkeypatch):
+        """$HOME with no repo above it is not a project.
+
+        Materializing there would write to ~/.claude/skills — user scope's own
+        directories — so the two scopes would silently be the same place.
+
+        Points HOME at the cwd rather than chdir'ing into a fake home: the
+        condition under test is "cwd resolves to no project base", and a unit
+        test that chdirs breaks mutmut's instrumentation.
+        """
+        monkeypatch.setenv("HOME", os.getcwd())
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project")
+        assert err.value.message == \
+            "there is no project here to install brainstorming into"
+        assert "drop --local" in err.value.hint
+
+    def test_project_rule_in_bare_home_is_refused_not_silently_global(
+            self, tap, monkeypatch):
+        """Rules took this path before too — and reported "this repo" while
+        writing to ~/.claude/CLAUDE.md."""
+        entry = _rule_entry(tap)
+        monkeypatch.setenv("HOME", os.getcwd())
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project")
+        assert "no project here" in err.value.message
+
+    def test_project_workflow_in_bare_home_is_refused(self, tap, monkeypatch):
+        entry = _workflow_entry(tap)
+        monkeypatch.setenv("HOME", os.getcwd())
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project")
+        assert "no project here" in err.value.message
+
+    # ── sync must not revert committed edits ─────────────────────────────
+
+    def test_sync_repairs_only_the_agents_that_are_missing(self, entry, tmp_path):
+        """The sharpest failure mode this feature has.
+
+        Project skill dirs are COMMITTED files that a team edits in place. If
+        repairing one agent's missing directory re-installed the whole skill,
+        `boost sync` would silently revert a teammate's checked-in edit to a
+        different agent's copy — data loss in a git working tree, from a
+        command whose whole job is "make it match the lock".
+
+        Scenario: the team edits the committed .claude copy; .cursor is
+        gitignored, so a fresh clone lacks it; someone runs `boost sync`.
+        """
+        from boost_cli.core import projectlock
+        repo, _ = self._install(entry, tmp_path)
+        claude_md = repo / ".claude" / "skills" / "brainstorming" / "SKILL.md"
+        claude_md.write_text("---\nname: brainstorming\n---\nTEAM EDIT\n",
+                             encoding="utf-8")
+        shutil.rmtree(repo / ".cursor" / "skills" / "brainstorming")
+
+        plan = store.project_sync_plan(base=str(repo))
+        assert plan["missing"] == [("brainstorming", "cursor")]
+        store.project_sync_apply(plan, base=str(repo))
+
+        assert "TEAM EDIT" in claude_md.read_text(encoding="utf-8")
+        assert (repo / ".cursor" / "skills" / "brainstorming" / "SKILL.md").is_file()
+        # and the lock still describes all three
+        assert len(projectlock.get_skill(repo, "brainstorming")
+                   ["materializations"]) == 3
+
+
+class TestCopySkillBackupCleanup:
+    """_copy_skill's staging cleanup, when what it displaces is a symlink."""
+
+    def test_a_displaced_symlink_leaves_no_litter(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        real = tmp_path / "real"
+        real.mkdir()
+        dest = tmp_path / "dest"
+        dest.symlink_to(real)
+
+        store._copy_skill(src, dest)
+
+        assert (dest / "SKILL.md").is_file() and not dest.is_symlink()
+        # rmtree() raises on a symlink and ignore_errors swallows it, so the
+        # .tmpXXXX.old staging link used to survive forever — one dangling
+        # pointer per reinstall, accumulating in the user's agent dirs.
+        leftovers = [p.name for p in tmp_path.iterdir() if ".old" in p.name]
+        assert leftovers == [], "left staging litter: %s" % leftovers
+
+    def test_a_dangling_symlink_is_replaced_too(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        dest = tmp_path / "dest"
+        dest.symlink_to(tmp_path / "nowhere")   # exists() is False for this
+
+        store._copy_skill(src, dest)
+
+        assert (dest / "SKILL.md").is_file() and not dest.is_symlink()
+        assert [p.name for p in tmp_path.iterdir() if ".old" in p.name] == []
+
+    def test_a_real_directory_is_still_replaced_cleanly(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("new\n", encoding="utf-8")
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        (dest / "SKILL.md").write_text("old\n", encoding="utf-8")
+        (dest / "gone.md").write_text("stale\n", encoding="utf-8")
+
+        store._copy_skill(src, dest)
+
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == "new\n"
+        assert not (dest / "gone.md").exists()   # a swap, not a merge
+        assert [p.name for p in tmp_path.iterdir() if ".old" in p.name] == []

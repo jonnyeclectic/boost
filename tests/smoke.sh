@@ -97,6 +97,22 @@ run "snapshot list"          0 ./boost snapshot list
 run "uninstall"              0 ./boost uninstall cowboy-coding
 run "conflict now clean"     0 ./boost conflict
 
+echo "== workspace scope (--local)"
+# A throwaway repo, so the local install has a real project root to walk up to.
+PROJ="$SB/proj"; mkdir -p "$PROJ/.git" "$PROJ/src/deep"
+run "install --local"        0 bash -c 'cd "$0" && "'"$ROOT"'/boost" install tdd-workflow --local' "$PROJ"
+run "local copy is real"     0 test -f "$PROJ/.claude/skills/tdd-workflow/SKILL.md"
+run "local copy not a link"  1 test -L "$PROJ/.claude/skills/tdd-workflow"
+run "project lock written"   0 test -f "$PROJ/.boost/skill-lock.json"
+run "walk-up from a subdir"  0 bash -c 'cd "$0/src/deep" && "'"$ROOT"'/boost" install cowboy-coding --local' "$PROJ"
+run "landed at the root"     0 test -d "$PROJ/.claude/skills/cowboy-coding"
+run "no stray subdir store"  1 test -d "$PROJ/src/deep/.claude"
+run "list --local"           0 bash -c 'cd "$0" && "'"$ROOT"'/boost" list --local' "$PROJ"
+run "dup --local fails"      1 bash -c 'cd "$0" && "'"$ROOT"'/boost" install tdd-workflow --local' "$PROJ"
+run "uninstall --local"      0 bash -c 'cd "$0" && "'"$ROOT"'/boost" uninstall tdd-workflow --local' "$PROJ"
+run "local copy is gone"     1 test -d "$PROJ/.claude/skills/tdd-workflow"
+run "user copy untouched"    0 test -d "$HOME/.agents/skills/tdd-workflow"
+
 echo "== intelligence (heuristic fallbacks)"
 run "simulate"               0 ./boost simulate tdd-workflow
 run "distill (print)"        0 bash -c 'cd "$0" && "'"$ROOT"'/boost" distill brainstorming commit-messages -o merged-skill' "$SB"

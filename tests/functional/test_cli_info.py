@@ -48,10 +48,12 @@ class TestList:
     def test_json_pure_with_fields(self, boost, installed):
         r = boost("list", "--json")
         data = json.loads(r.out)
-        # structured by kind so rules/workflows show up too (not just skills).
-        assert set(data) == {"skills", "rules", "workflows"}
+        # structured by kind so rules/workflows show up too (not just skills),
+        # plus "project" for anything installed into the current repo.
+        assert set(data) == {"skills", "rules", "workflows", "project"}
         assert list(data["skills"]) == ["brainstorming"]
         assert data["rules"] == {} and data["workflows"] == {}
+        assert data["project"] == {}
         e = data["skills"]["brainstorming"]
         assert e["version"] == "1.4.0"
         assert e["tap"] == "fixture-tap"

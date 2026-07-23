@@ -16,8 +16,9 @@ from typing import Dict, List, Optional
 
 from .. import cliparse
 from ..core import (adapters, agents, catalog, config, frontmatter, gitutil,
-                    injectscan, journal, lockfile, paths, registry,
-                    secretscan, staleness, store, typosquat, updatediff, util)
+                    injectscan, journal, lockfile, paths, projectlock, registry,
+                    scopes, secretscan, staleness, store, typosquat, updatediff,
+                    util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -118,6 +119,18 @@ def _report_result(res: store.InstallResult) -> None:
         _warn_injection(res)
         _warn_secrets(res)
         return
+    if res.scope == scopes.SCOPE_PROJECT:
+        # No canonical store and no symlinks — a real copy per agent, so the
+        # report says "copied into" for each rather than "copied … then linked".
+        out.ok("copied into this repo → %s"
+               % (" · ".join(res.linked) or "(no enabled agents)"))
+        out.ok("project lock updated (%s/%s)"
+               % (projectlock.LOCK_DIRNAME, projectlock.LOCK_FILENAME))
+        out.dim("  commit %s/ to share these with the team"
+                % projectlock.LOCK_DIRNAME)
+        _warn_injection(res)
+        _warn_secrets(res)
+        return
     out.ok("copied to %s" % _tilde(res.dest))
     if res.linked:
         out.ok("linked → %s" % " · ".join(res.linked))
@@ -161,12 +174,20 @@ def cmd_install(argv: List[str]) -> int:
                     help="reinstall even if already installed or pinned")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
-    ap.add_argument("--scope", choices=("user", "project"), default="user",
-                    help="rules/workflows: install into your user config (default) "
-                         "or the current repo (project)")
+    scope_g = ap.add_mutually_exclusive_group()
+    scope_g.add_argument("--scope", choices=scopes.SCOPES, default=None,
+                         help="install into your user config (default) or the "
+                              "current repo (project)")
+    scope_g.add_argument("--local", dest="scope", action="store_const",
+                         const=scopes.SCOPE_PROJECT,
+                         help="into this repo, committable (= --scope project)")
+    scope_g.add_argument("--global", dest="scope", action="store_const",
+                         const=scopes.SCOPE_USER,
+                         help="into your user config (= --scope user, default)")
     ap.add_argument("--dry-run", action="store_true",
                     help="show what would happen without changing anything")
     args = ap.parse_args(argv)
+    args.scope = args.scope or scopes.SCOPE_USER
     only = _check_agents(args.agent)
     multi = len(args.names) > 1
     entries, failed = [], 0
@@ -183,7 +204,23 @@ def cmd_install(argv: List[str]) -> int:
 
     if args.dry_run:
         targets = [a for a in agents.enabled_agents() if not only or a in only]
+        pbase = scopes.resolve_base(args.scope)
+        if args.scope == scopes.SCOPE_PROJECT and pbase is None:
+            raise BoostError(
+                "there is no project here to install into",
+                hint="cd into a repo, or drop --local to install for your user")
         for e in entries:
+            if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":
+                seen = projectlock.get_skill(pbase, e["name"])
+                out.info("would %s %s v%s from %s into %s"
+                         % ("reinstall" if seen else "install", e["name"],
+                            e["version"], e["tap"], _tilde(pbase)))
+                for agent_name, sdir in agents.enabled_agents().items():
+                    if only and agent_name not in only:
+                        continue
+                    out.info("  copy  → %s"
+                             % _tilde(scopes.skill_target(sdir, e["name"], base=pbase)))
+                continue
             if e.get("kind") in ("rule", "workflow"):
                 k = e["kind"]
                 seen = (lockfile.get_rule if k == "rule"
@@ -253,12 +290,17 @@ def cmd_uninstall(argv: List[str]) -> int:
         prog="boost uninstall",
         description="Remove an installed skill, rule, workflow, or config")
     ap.add_argument("names", nargs="+", metavar="NAME")
+    ap.add_argument("--local", dest="scope", action="store_const",
+                    const=scopes.SCOPE_PROJECT, default=None,
+                    help="remove from this repo rather than your user config")
     args = ap.parse_args(argv)
     removed, failed = 0, 0
     for name in args.names:
-        dest = store.skill_store_dir(name)
         try:
-            info = store.uninstall(name)
+            if args.scope == scopes.SCOPE_PROJECT:
+                info = store.uninstall_project(name)
+            else:
+                info = store.uninstall(name)
         except BoostError as err:
             if len(args.names) == 1:
                 raise
@@ -266,8 +308,15 @@ def cmd_uninstall(argv: List[str]) -> int:
             failed += 1
             continue
         if info["unlinked"]:
-            out.ok("unlinked ← %s" % " · ".join(info["unlinked"]))
-        out.ok("removed %s" % _tilde(dest))
+            verb = "removed from" if info.get("scope") == scopes.SCOPE_PROJECT \
+                else "unlinked ←"
+            out.ok("%s %s" % (verb, " · ".join(info["unlinked"])))
+        # Report where it actually went, not where a user-scope install would
+        # have put it — a project skill never touches the canonical store.
+        if info.get("scope") == scopes.SCOPE_PROJECT:
+            out.ok("removed from %s" % _tilde(info.get("base", "this repo")))
+        else:
+            out.ok("removed %s" % _tilde(store.skill_store_dir(name)))
         removed += 1
     if removed:
         lines = ["Uninstalled %s" % _plural(removed, "skill")]
@@ -299,14 +348,25 @@ def cmd_sync(argv: List[str]) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
     plan = store.sync_plan()
+    # A checkout can be missing skills its project lock records — that is the
+    # normal state right after `git clone` — so sync repairs the repo too.
+    pplan = store.project_sync_plan()
 
     if args.diff:
         if args.json:
-            print(json.dumps(plan, indent=2))
+            print(json.dumps(dict(plan, project=pplan), indent=2))
             return 0
-        if not any(plan.values()):
+        if not any(plan.values()) and not any(pplan.values()):
             out.ok("everything in sync")
             return 0
+        if pplan["missing"]:
+            out.heading("missing from this project (%d)" % len(pplan["missing"]))
+            for name, agent in pplan["missing"]:
+                out.info("%s → %s" % (name, agent))
+        if pplan["orphaned"]:
+            out.heading("unclaimed project skill dirs (%d)" % len(pplan["orphaned"]))
+            for item in pplan["orphaned"]:
+                out.info(_tilde(item))
         for key, label in _PLAN_LABELS:
             if not plan[key]:
                 continue
@@ -320,7 +380,7 @@ def cmd_sync(argv: List[str]) -> int:
                     out.info(_tilde(item))
         return 0
 
-    actions = store.sync_apply(plan)
+    actions = store.sync_apply(plan) + store.project_sync_apply(pplan)
     orphans = plan["orphaned_store"]
     pruned = []
     if args.prune and orphans:

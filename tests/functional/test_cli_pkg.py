@@ -648,7 +648,8 @@ class TestSyncJson:
         plan = json.loads(boost("sync", "--diff", "--json").out)
         assert plan == {"missing_store": [], "missing_links": [],
                         "stale_links": [], "orphaned_store": [],
-                        "missing_materializations": []}
+                        "missing_materializations": [],
+                        "project": {"missing": [], "orphaned": []}}
         data = json.loads(boost("sync", "--json").out)
         assert data == {"actions": [], "pruned": [], "orphaned_store": []}
 
