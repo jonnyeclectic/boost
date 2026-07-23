@@ -205,6 +205,10 @@ def cmd_install(argv: List[str]) -> int:
     if args.dry_run:
         targets = [a for a in agents.enabled_agents() if not only or a in only]
         pbase = scopes.resolve_base(args.scope)
+        if args.scope == scopes.SCOPE_PROJECT and pbase is None:
+            raise BoostError(
+                "there is no project here to install into",
+                hint="cd into a repo, or drop --local to install for your user")
         for e in entries:
             if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":
                 seen = projectlock.get_skill(pbase, e["name"])

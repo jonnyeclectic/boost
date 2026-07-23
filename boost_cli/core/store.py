@@ -143,6 +143,23 @@ def _resolve_base(scope: str, base) -> Optional[Path]:
     return scopes.resolve_base(scope, base)
 
 
+def _require_project_base(scope: str, base, what: str) -> Optional[Path]:
+    """``_resolve_base``, but a project scope that resolves to nothing is fatal.
+
+    ``resolve_base`` returns ``None`` for project scope in ``$HOME`` with no
+    repo above it. Passing that through would quietly materialize into the
+    user's own config while the CLI reported "this repo" — the two scopes
+    silently becoming one place, which is the outcome the split exists to
+    prevent. Refuse instead.
+    """
+    resolved = _resolve_base(scope, base)
+    if scope == scopes.SCOPE_PROJECT and resolved is None:
+        raise BoostError(
+            "there is no project here to install %s into" % what,
+            hint="cd into a repo, or drop --local to install for your user")
+    return resolved
+
+
 def install(entry: dict, force: bool = False,
             only_agents: Optional[List[str]] = None,
             scope: str = "user", base=None) -> InstallResult:
@@ -226,9 +243,9 @@ def _install_project_skill(entry: dict, force: bool = False,
     """
     from . import gitutil
     name = entry["name"]
-    resolved_base = _resolve_base(scopes.SCOPE_PROJECT, base)
-    if resolved_base is None:                     # unreachable via resolve_base
-        raise BoostError("could not resolve a project directory for %s" % name)
+    resolved_base = _require_project_base(scopes.SCOPE_PROJECT, base, name)
+    if resolved_base is None:             # _require_project_base already raised
+        raise BoostError("there is no project here to install %s into" % name)
 
     existing = projectlock.get_skill(resolved_base, name)
     if existing and not force:
@@ -440,7 +457,7 @@ def _install_rule(entry: dict, force: bool = False,
     meta, body = frontmatter.parse(raw)
     claude_body = rules.render_claude_body(str(meta.get("name") or name), body)
 
-    resolved_base = _resolve_base(scope, base)
+    resolved_base = _require_project_base(scope, base, "rule %s" % name)
     paths.ensure_dirs()
     materializations: List[dict] = []
     linked: List[str] = []
@@ -538,7 +555,7 @@ def _install_workflow(entry: dict, force: bool = False,
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
 
-    resolved_base = _resolve_base(scope, base)
+    resolved_base = _require_project_base(scope, base, "workflow %s" % name)
     paths.ensure_dirs()
     materializations: List[dict] = []
     linked: List[str] = []

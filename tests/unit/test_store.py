@@ -1071,3 +1071,37 @@ class TestProjectSkills:
         mine.mkdir(parents=True)
         assert store.project_sync_plan(base=str(repo)) == \
             {"missing": [], "orphaned": []}
+
+    # ── no project here ──────────────────────────────────────────────────
+
+    def test_project_install_in_bare_home_is_refused(self, entry, sandbox,
+                                                     monkeypatch):
+        """$HOME with no repo above it is not a project.
+
+        Materializing there would write to ~/.claude/skills — user scope's own
+        directories — so the two scopes would silently be the same place.
+        """
+        monkeypatch.chdir(sandbox)
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project")
+        assert err.value.message == \
+            "there is no project here to install brainstorming into"
+        assert "drop --local" in err.value.hint
+        assert not (sandbox / ".claude" / "skills" / "brainstorming").exists()
+
+    def test_project_rule_in_bare_home_is_refused_not_silently_global(
+            self, tap, sandbox, monkeypatch):
+        """Rules took this path before too — and reported "this repo" while
+        writing to ~/.claude/CLAUDE.md."""
+        monkeypatch.chdir(sandbox)
+        with pytest.raises(BoostError) as err:
+            store.install(_rule_entry(tap), scope="project")
+        assert "no project here" in err.value.message
+        assert not (sandbox / ".claude" / "CLAUDE.md").exists()
+
+    def test_project_workflow_in_bare_home_is_refused(self, tap, sandbox,
+                                                      monkeypatch):
+        monkeypatch.chdir(sandbox)
+        with pytest.raises(BoostError) as err:
+            store.install(_workflow_entry(tap), scope="project")
+        assert "no project here" in err.value.message
