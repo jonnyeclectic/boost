@@ -1,0 +1,17 @@
+{
+  "$schema": "https://html-validate.org/schemas/config.json",
+  "extends": ["html-validate:recommended"],
+  "rules": {
+    "no-inline-style": "off",
+    "doctype-style": "off",
+    "void-style": "off",
+    "no-trailing-whitespace": "off",
+    "attr-quotes": "off",
+    "prefer-tbody": "off",
+    "long-title": "off",
+    "svg-focusable": "off",
+    "wcag/h37": "off",
+    "wcag/h63": "off",
+    "no-implicit-button-type": "off"
+  }
+}
