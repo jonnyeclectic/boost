@@ -2,7 +2,7 @@
 id: build-provenance-slsa-attestations
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: Security · Supply chain
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 4
 note: SLSA build L2
 order: 3
 owner: loop/slsa
-pr:
+pr: 200
 title: Build provenance — SLSA attestations
 ---
 <code>actions/attest-build-provenance</code> emits a cryptographically
