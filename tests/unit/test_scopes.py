@@ -284,3 +284,41 @@ def test_contains_fails_closed_when_resolution_errors(tmp_path, monkeypatch):
 
     monkeypatch.setattr(scopes, "Path", ExplodingPath)
     assert scopes.contains(tmp_path, tmp_path / "x") is False
+
+
+# ── ensure_in_base: the write guard ──────────────────────────────────────
+
+def test_ensure_in_base_returns_the_path_when_inside(tmp_path):
+    dest = tmp_path / ".claude" / "skills" / "x"
+    assert scopes.ensure_in_base(tmp_path, dest) == Path(dest)
+
+
+def test_ensure_in_base_raises_on_a_plain_escape(tmp_path):
+    (tmp_path / "repo").mkdir()
+    with pytest.raises(BoostError) as err:
+        scopes.ensure_in_base(tmp_path / "repo", tmp_path / "elsewhere" / "x")
+    assert "outside this project" in err.value.message
+
+
+def test_ensure_in_base_raises_when_a_symlinked_dir_escapes(tmp_path):
+    """The write-side attack contains() is reused for: an agent dir committed as
+    a symlink pointing outside the repo, targeting a NEW leaf that does not yet
+    exist — so nothing but the containment check can catch it."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".claude").mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (repo / ".claude" / "skills").symlink_to(outside, target_is_directory=True)
+    # repo/.claude/skills/authorized_keys resolves to outside/authorized_keys.
+    dest = repo / ".claude" / "skills" / "authorized_keys"
+    with pytest.raises(BoostError):
+        scopes.ensure_in_base(repo, dest)
+
+
+def test_ensure_in_base_allows_a_real_nested_dir(tmp_path):
+    # A legitimate project dir, even several levels deep, must pass untouched.
+    repo = tmp_path / "repo"
+    (repo / ".claude" / "skills").mkdir(parents=True)
+    dest = repo / ".claude" / "skills" / "ok"
+    assert scopes.ensure_in_base(repo, dest) == Path(dest)
