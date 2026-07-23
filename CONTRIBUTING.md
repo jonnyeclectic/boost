@@ -54,6 +54,7 @@ auto-fixes straight back onto the branch.
 | `make mutation` | mutmut over `boost_cli/core`, **≥80% mutants killed** |
 | `ruff check boost_cli tests` | lint, zero findings |
 | `mypy` | type check, zero errors |
+| `pyright` | second type checker over `core/` — None-flow & narrowing, zero errors |
 | `lint-imports` | layering: `core/` imports no `commands/`/`cli`; CLI depends inward |
 | `vulture` | dead-code radar: no unused imports / unreachable code (confidence ≥80) |
 | `xenon` | complexity ratchet: aggregate cyclomatic complexity can't regress (avg ≤B) |

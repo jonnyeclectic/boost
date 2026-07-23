@@ -194,6 +194,8 @@ def _delete_taps(con: sqlite3.Connection, taps: List[str]) -> None:
 def _embed_and_store(con: sqlite3.Connection, entries: List[dict],
                      tap_paths: Optional[Dict[str, Path]]) -> int:
     mod = _load()
+    if mod is None:          # [rag] extra absent — nothing to serialize into
+        return 0             # (callers fall back to BM25; see module docstring)
     rows: List[Tuple[dict, int, str]] = []   # (entry, chunk_ix, text)
     for e in entries:
         for ci, text in enumerate(_chunk_texts(e, tap_paths)):
@@ -226,7 +228,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
         return None
     mod = _load()
     con = _connect()
-    if con is None:
+    if con is None or mod is None:
         return None
     try:
         pool = max(k * _POOL, 200)
