@@ -2,15 +2,15 @@
 id: reconcile-the-theme-drift
 board: code
 section: next
-status: next
+status: shipped
 category: Design
 complexity: M
 impact: Med
 wow: 3
 note: 
 order: 3
-owner:
-pr:
+owner: loop/themedrift
+pr: 208
 title: Reconcile the theme drift
 ---
 <code>docs/index.html</code> inlines its own amber/orange palette
