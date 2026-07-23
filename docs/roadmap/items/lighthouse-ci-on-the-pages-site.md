@@ -2,14 +2,14 @@
 id: lighthouse-ci-on-the-pages-site
 board: code
 section: docsite
-status: planned
+status: inflight
 category: Docs · Perf
 complexity: M
 impact: High
 wow: 5
 note: 4 score budgets
 order: 2
-owner:
+owner: loop/lighthouse
 pr:
 title: Lighthouse CI on the Pages site
 ---
