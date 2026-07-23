@@ -189,12 +189,17 @@ def contains(base, path) -> bool:
     in a way the user-scope store's never are: anyone who can land a PR can edit
     them. Every removal is therefore re-derived and checked against the base
     before it happens, so a doctored record cannot walk boost out of the project.
+
+    Fails closed on every error. ``commonpath`` raises ``ValueError`` for paths
+    with no common root — on Windows that is any two different drives, so a repo
+    on ``C:`` weighed against a record pointing at ``D:`` would otherwise crash
+    out of the delete guard rather than answer "outside".
     """
     try:
         base_r = Path(base).resolve()
         path_r = Path(path).resolve()
-    except OSError:
+        if base_r == path_r:
+            return False
+        return os.path.commonpath([str(base_r), str(path_r)]) == str(base_r)
+    except (OSError, ValueError):
         return False
-    if base_r == path_r:
-        return False
-    return os.path.commonpath([str(base_r), str(path_r)]) == str(base_r)

@@ -249,6 +249,20 @@ def test_contains_false_for_an_absolute_elsewhere(tmp_path):
     assert scopes.contains(tmp_path, Path("/etc/passwd")) is False
 
 
+def test_contains_fails_closed_when_paths_share_no_root(tmp_path, monkeypatch):
+    """``commonpath`` raises ValueError for paths with no common root.
+
+    On Windows that is any two different drives — a repo on ``C:`` weighed
+    against a lock record pointing at ``D:``. Simulated here so the guard is
+    covered on every platform, not just the one that can produce it naturally.
+    """
+    def boom(paths):
+        raise ValueError("Paths don't have the same drive")
+
+    monkeypatch.setattr(scopes.os.path, "commonpath", boom)
+    assert scopes.contains(tmp_path, tmp_path / "x") is False
+
+
 def test_contains_fails_closed_when_resolution_errors(tmp_path, monkeypatch):
     """An unresolvable path must read as "outside", never as "inside".
 
