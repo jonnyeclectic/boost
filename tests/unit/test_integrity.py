@@ -166,3 +166,64 @@ def test_commit_enforcement_off_by_default_does_not_block_drift(installed):
     entry["commit"] = "0" * 40
     lockfile.set_skill(installed, entry)
     integrity.enforce(installed)          # commit enforcement off — must not raise
+
+
+class TestProjectScope:
+    """integrity over project-scoped skills (committed into a repo, not the store)."""
+
+    @staticmethod
+    def _repo(tmp_path):
+        repo = tmp_path / "repo"
+        (repo / ".git").mkdir(parents=True)
+        return repo
+
+    def _install_local(self, sandbox, fixture_tap_src, tmp_path):
+        t = registry.add(str(fixture_tap_src))
+        catalog.rebuild_tap(t)
+        repo = self._repo(tmp_path)
+        store.install(catalog.resolve_one("brainstorming"),
+                      scope="project", base=str(repo))
+        from boost_cli.core import projectlock
+        return repo, projectlock.get_skill(repo, "brainstorming")
+
+    def test_project_status_ok(self, sandbox, fixture_tap_src, tmp_path):
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        assert integrity.project_status(entry, repo) == integrity.STATUS_OK
+
+    def test_project_status_modified(self, sandbox, fixture_tap_src, tmp_path):
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md").write_text(
+            "EVIL\n", encoding="utf-8")
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MODIFIED
+
+    def test_project_status_missing_when_dirs_gone(self, sandbox, fixture_tap_src,
+                                                   tmp_path):
+        from boost_cli.core import util
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        for m in entry["materializations"]:
+            util.rmtree(repo / m["path"])
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+
+    def test_project_status_unlocked_without_a_digest(self, sandbox,
+                                                      fixture_tap_src, tmp_path):
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        entry = dict(entry)
+        del entry["sha256"]
+        assert integrity.project_status(entry, repo) == integrity.STATUS_UNLOCKED
+
+    def test_project_status_ignores_an_escaping_materialization(self, sandbox,
+                                                               fixture_tap_src,
+                                                               tmp_path):
+        # A doctored committed lock pointing outside the repo must not be hashed
+        # (resolve_in_base refuses it) — so it reads as MISSING, never OK.
+        repo, entry = self._install_local(sandbox, fixture_tap_src, tmp_path)
+        entry = dict(entry)
+        entry["materializations"] = [{"agent": "claude-code", "path": "../../etc"}]
+        assert integrity.project_status(entry, repo) == integrity.STATUS_MISSING
+
+    def test_project_skills_none_outside_a_repo(self, sandbox, monkeypatch):
+        # Patch the resolver rather than chdir'ing — a unit test that chdirs
+        # breaks mutmut's instrumentation (it resolves boost_cli off the cwd).
+        monkeypatch.setattr(integrity.scopes, "project_root", lambda *a, **k: None)
+        base, skills = integrity.project_skills()
+        assert base is None and skills == {}

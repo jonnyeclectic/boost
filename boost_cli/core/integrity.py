@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..errors import BoostError
-from . import config, lockfile, paths, util
+from . import config, lockfile, paths, projectlock, scopes, util
 
 STATUS_OK = "ok"
 STATUS_MODIFIED = "modified"     # on-disk content no longer matches the lock
@@ -60,6 +60,45 @@ def status(name: str, entry: Optional[dict] = None) -> str:
     if not recorded:
         return STATUS_UNLOCKED
     return STATUS_OK if util.sha256_dir(sdir) == recorded else STATUS_MODIFIED
+
+
+def project_status(entry: dict, base) -> str:
+    """Classify a project-scoped skill's integrity against its per-repo lock.
+
+    A project install has no canonical store — it materializes real directories
+    into the repo, recorded (relative, committable) in the project lock with one
+    ``sha256`` taken at install. The check re-derives each materialization path
+    under ``base`` (refusing any that escapes, via
+    :func:`scopes.resolve_in_base`), hashes the first that is present, and
+    compares. Vendored third-party skills are exactly the ones a review should
+    watch — they arrive by PR and run on every teammate's machine — so ``doctor``
+    and ``verify`` need to see drift here the same way they do at user scope.
+    """
+    recorded = entry.get("sha256")
+    present = None
+    for m in entry.get("materializations") or []:
+        path = scopes.resolve_in_base(base, m.get("path"))
+        if path is not None and path.is_dir():
+            present = path
+            break
+    if present is None:
+        return STATUS_MISSING
+    if not recorded:
+        return STATUS_UNLOCKED
+    return STATUS_OK if util.sha256_dir(present) == recorded else STATUS_MODIFIED
+
+
+def project_skills():
+    """(base, {name: entry}) for the current repo's project-scoped skills.
+
+    ``(None, {})`` when not inside a project — the single place the rest of the
+    CLI asks "does this working directory have committed skills?", so a command
+    can fold them into whatever it already does for user-scope skills.
+    """
+    base = scopes.project_root()
+    if base is None:
+        return None, {}
+    return base, projectlock.installed(base)
 
 
 def commit_status(name: str, entry: Optional[dict] = None) -> Optional[str]:

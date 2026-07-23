@@ -236,7 +236,8 @@ class TestVerify:
         assert "lock file integrity OK" in r.out
         data = json.loads(boost("verify", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "status": "ok",
-                                    "missing_fields": [], "commit_pin": None}],
+                                    "scope": "user", "missing_fields": [],
+                                    "commit_pin": None}],
                         "failed": 0}
 
     def test_tampered_modified_rc1(self, boost, installed):
