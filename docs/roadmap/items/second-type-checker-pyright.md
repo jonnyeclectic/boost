@@ -2,14 +2,14 @@
 id: second-type-checker-pyright
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: Testing · Type
 complexity: M
 impact: Med
 wow: 3
 note: editor-parity
 order: 6
-owner:
+owner: loop/pyright
 pr:
 title: Second type checker — <code>pyright</code>
 ---
