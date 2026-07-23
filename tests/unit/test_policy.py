@@ -24,6 +24,7 @@ class TestLoad:
             "blocked_skills": [], "blocked_taps": [], "allowed_taps": [],
             "require_description": False, "require_version": False,
             "min_quality_score": 0, "max_skills": None, "pin_only": False,
+            "denied_capabilities": [], "enforce_detected_capabilities": False,
         }
 
     def test_corrupt_file_gives_defaults(self, sandbox):

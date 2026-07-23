@@ -149,6 +149,28 @@ def _remove_backup(backup: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
+def _enforce_capability_policy(name: str, skill_md: Path) -> None:
+    """Raise if the skill's declared/detected capabilities are denied by policy.
+
+    Runs on the skill's own SKILL.md before it is copied anywhere — a skill is a
+    bundle of instructions the agent will execute, and least-privilege means the
+    user's policy can refuse one that expects a capability they don't grant. A
+    no-op unless the policy names a denied capability.
+    """
+    from . import frontmatter
+    try:
+        raw = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    meta, _body = frontmatter.parse(raw)
+    caps = policy.check_capabilities(meta, raw)
+    if caps:
+        raise BoostError(
+            "policy blocks installing %s: %s" % (name, "; ".join(caps)),
+            hint="relax it with `boost policy` (denied_capabilities), or "
+                 "install a skill that needs less")
+
+
 def _resolve_base(scope: str, base) -> Optional[Path]:
     """Directory a project-scoped install materializes under (the repo), or None
     for user scope.
@@ -215,6 +237,7 @@ def install(entry: dict, force: bool = False,
                         hint="inspect with `boost policy list`")
 
     src = source_dir_for(entry)
+    _enforce_capability_policy(name, src / "SKILL.md")
     dest = skill_store_dir(name)
     paths.ensure_dirs()
     _copy_skill(src, dest)
@@ -277,6 +300,7 @@ def _install_project_skill(entry: dict, force: bool = False,
                         hint="inspect with `boost policy list`")
 
     src = source_dir_for(entry)
+    _enforce_capability_policy(name, src / "SKILL.md")
     targets = [(agent, scopes.skill_target(skills_dir, name, base=resolved_base))
                for agent, skills_dir in agents.enabled_agents().items()
                if not only_agents or agent in only_agents]
