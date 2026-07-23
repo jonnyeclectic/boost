@@ -1560,13 +1560,17 @@ and the work stays visible.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Docs · Perf</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Perf</span></div>
         <h3>Lighthouse CI on the Pages site</h3>
         <p><code>treosh/lighthouse-ci-action</code> scores <code>index.html</code>
            and <code>roadmap.html</code> on performance, accessibility,
            best-practices and SEO on every deploy, and fails the build against
-           budgets. Turns the marketing surface's quality into a number that can't
-           silently regress as the Aurora theme evolves.</p>
+           budgets. Turns the marketing surface's quality into four numbers that can't
+           silently regress as the Aurora theme evolves — budgets calibrated
+           from the first CI run and floored with margin, the same way
+           <code>perf_gate</code> sets its thresholds. Also filled the one real
+           gap the audit named up front: <code>index.html</code> was missing a
+           <code>meta description</code>.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>

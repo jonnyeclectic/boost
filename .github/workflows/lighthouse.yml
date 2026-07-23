@@ -1,0 +1,56 @@
+name: lighthouse
+
+# Lighthouse CI on the Pages site. The docs are boost's storefront — the first
+# thing a visitor sees — and nothing in the gate measured them as a USER's
+# browser would: html-validate checks markup, the visual sweep checks layout,
+# but neither scores performance, accessibility, best-practices or SEO. This
+# turns that quality into four numbers that can't silently regress as the Aurora
+# theme evolves, and fails the build when one drops below budget.
+#
+# Budgets live in .lighthouserc.json (categories:* minScore). They were
+# calibrated from the first real CI run and floored a little below it — the same
+# "measure, then floor with margin" approach perf_gate uses — so ordinary theme
+# work doesn't flake the gate but a genuine regression trips it.
+#
+# The two hand-authored, highest-traffic pages are audited: the landing page and
+# the code roadmap. Served over a throwaway localhost static server (no network),
+# three runs each so a noisy single sample can't redden a PR.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/index.html"
+      - "docs/roadmap.html"
+      - "style/**"
+      - ".lighthouserc.json"
+      - ".github/workflows/lighthouse.yml"
+  pull_request:
+    paths:
+      - "docs/index.html"
+      - "docs/roadmap.html"
+      - "style/**"
+      - ".lighthouserc.json"
+      - ".github/workflows/lighthouse.yml"
+
+permissions: {}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@3e7e23fb74242897f95c0ba9cabad3d0227b9b18 # 12.6.2
+        with:
+          configPath: ./.lighthouserc.json
+          uploadArtifacts: true
+          temporaryPublicStorage: false
