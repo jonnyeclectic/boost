@@ -2,15 +2,15 @@
 id: markdown-consistency-markdownlint-cli2
 board: code
 section: docsite
-status: planned
+status: shipped
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: every .md
 order: 7
-owner:
-pr:
+owner: loop/mdlint
+pr: 201
 title: Markdown consistency — <code>markdownlint-cli2</code>
 ---
 Lint every Markdown surface — README, <code>CLAUDE.md</code>,

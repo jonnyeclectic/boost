@@ -8,7 +8,8 @@ through the MCP server — without breaking boost's zero-dependency posture.
 
 ## 1. Goals & non-goals
 
-**Goals**
+### Goals
+
 1. **Natural-language retrieval.** An agent asks "best skill for testing a React app" and boost returns a
    semantically-ranked shortlist with reasons — not just keyword hits.
 2. **Full-content search.** Rank over the *whole* skill/rule/workflow body, not only the frontmatter
@@ -18,7 +19,8 @@ through the MCP server — without breaking boost's zero-dependency posture.
 4. **MCP-hub extensibility.** Position the MCP server to later call out to GitHub, a database, and other
    dependencies as drop-in tools.
 
-**Non-goals**
+### Non-goals
+
 - Forcing FastAPI/django (the MCP transport is stdio JSON-RPC, not HTTP — a web framework has nothing to
   serve here).
 - Making a vector database or `langchain` a *required* runtime dependency.
@@ -124,6 +126,7 @@ and `commits`.
 **No third-party imports. Stays green through `make check`.**
 
 ### 6a. Engine — `boost_cli/core/rag.py`
+
 Pure-Python **BM25** over the chunk corpus (BM25 subsumes TF-IDF and handles document-length
 normalization, which matters when bodies vary from 3 lines to 300). Sparse term vectors are a legitimate
 "vector" retrieval — we get semantic *recall breadth* from full-text coverage, and the LLM rerank
@@ -133,6 +136,7 @@ Scoring is standard BM25 (`k1≈1.2`, `b≈0.75`). At ~9k items / tens of thousa
 dict-of-postings scan — comfortably sub-second per query in Python.
 
 ### 6b. Two-stage pipeline — upgrade `boost_search` / `catalog.search` **in place**
+
 No parallel MCP tool (per decision). The upgraded flow:
 
 1. **Retrieve** top-N (~60) candidate entries via `Retriever.query(task, k=60, kind=?)`.
@@ -148,12 +152,14 @@ No parallel MCP tool (per decision). The upgraded flow:
 `cmd_search` (`_ai_rank`, `discovery.py:150`) is folded into / superseded by this path.
 
 ### 6c. New command — `boost reindex`
+
 Register `("reindex", "find", "discovery", "Build/refresh the full-content search index")` in the
 `COMMANDS` table (`boost_cli/cli.py:48`) and add `cmd_reindex(argv)` in `discovery.py`. It calls
 `rag.build(catalog.all_entries())`, honoring commit-keyed incremental refresh, and prints doc/entry
 counts. The search path also lazily triggers a refresh when it detects a tap commit newer than the index.
 
 ### 6d. Tests & gates (Phase 1)
+
 - `tests/unit/test_rag.py` — chunking, BM25 scoring, incremental refresh, degradation paths. Because
   `rag.py` lives in `core/`, it is **mutation-gated at 80%** (`scripts/mutation_gate.py`) — write tests
   that pin the scoring math and the fallback branches.
@@ -179,6 +185,7 @@ rag = [ "..." ]   # dense-embedding + vector-store stack
 ```
 
 A second `Retriever` implementation (`engine="dense"`) that:
+
 - **Embeds** each chunk into a dense vector — via a local model or an embeddings API over `urllib`
   (note: Anthropic exposes **no** embeddings endpoint; the API options are Voyage AI, which Anthropic
   recommends, or OpenAI). API keys follow the `core/ai.py` env-var convention.

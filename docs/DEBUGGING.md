@@ -25,7 +25,7 @@ a run that looked completely normal.
 
 Every invocation appends to a rotating log file:
 
-```
+```text
 ~/.boost/logs/boost.log        # current file (rotates at ~1 MB)
 ~/.boost/logs/boost.log.1      # … up to 3 older files (~4 MB ceiling total)
 ```
@@ -47,7 +47,7 @@ Every invocation is bookended by two lines — an `invoke:` at the start and a
 the trail doubles as a lightweight timing record. A failing run logs its `done:`
 line at `WARNING`, so it stands out when you scan the log:
 
-```
+```text
 … INFO    boost: invoke: boost install brainstorming
 … INFO    boost: done: boost install brainstorming -> rc=0 in 214ms
 … WARNING boost: done: boost install missing -> rc=1 in 48ms
@@ -93,7 +93,7 @@ print a clean one-line message and hint), boost:
 
 A crash report bundles everything needed to reproduce or file a bug:
 
-```
+```text
 boost crash report
 ==================
 time:     2026-07-18T05:23:14Z

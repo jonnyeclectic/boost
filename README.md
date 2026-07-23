@@ -102,7 +102,7 @@ installed skills into one canonical store, and then symlinks them out to
 whichever agents you've got — all of it tracked in a lock file so state
 stays reproducible.
 
-```
+```text
 GitHub registries  ──boost update──▶  ~/.boost/repos/    (shallow clones)
                                      ~/.boost/cache/    (JSON catalogs)
                    ──boost install─▶  ~/.agents/skills/ (canonical store)
