@@ -13,7 +13,7 @@ owner: loop/docs-discoverable
 pr: 128
 title: Surface every <code>docs/*.html</code> page from the main page
 ---
-<a href="make-the-roadmaps-discoverable.html">Making the roadmaps discoverable</a>
+<a href="roadmap.html">Making the roadmaps discoverable</a>
            put both boards in the Visual Guide nav, but the same gap remains for
            the rest of <code>docs/*.html</code>: <code>mcp-hub.html</code> is
            reachable only if you already know the URL — nothing on

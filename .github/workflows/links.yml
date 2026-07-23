@@ -1,0 +1,59 @@
+name: links
+
+# Broken-link & anchor checking over the README and the docs site. A dead link
+# on the landing page is the first broken promise a visitor sees, and the
+# generated roadmap boards are especially easy to break — their links come from
+# item-file card copy, so a bad href hides in a small Markdown file and only
+# surfaces in the rendered HTML.
+#
+# Two passes:
+#   * lychee — external URLs (GitHub, PyPI, docs sites) + local file paths,
+#     with caching and retries so a flaky third-party host doesn't redden a PR.
+#   * a stdlib anchor pass — in-page and cross-page #fragments, which lychee
+#     does not resolve for local HTML.
+# Scheduled weekly too: external links rot without anyone touching the repo.
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", "README.md", ".lycheeignore", ".github/workflows/links.yml"]
+  pull_request:
+    paths: ["docs/**", "README.md", ".lycheeignore", ".github/workflows/links.yml"]
+  schedule:
+    - cron: "0 8 * * 4"   # Thursdays 08:00 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: restore lychee cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .lycheecache
+          key: lychee-${{ github.sha }}
+          restore-keys: lychee-
+      - name: lychee (URLs + local paths)
+        uses: lycheeverse/lychee-action@82202e5e9c2f4ef1a55a3d02563e1cb6041e5332 # v2.4.1
+        with:
+          args: >-
+            --cache --max-cache-age 1d --no-progress
+            --accept 200,206,403,429
+            --max-retries 3
+            README.md docs/*.html
+          fail: true
+      - name: anchors (in-page + cross-page fragments)
+        # lychee resolves URL fragments for remote pages but not for local HTML,
+        # and the roadmap boards are exactly where a dangling #anchor hides.
+        run: python3 scripts/check_anchors.py
