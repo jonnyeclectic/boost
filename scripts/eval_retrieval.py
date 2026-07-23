@@ -18,9 +18,10 @@ the math, this asks "does the right skill actually come back for a real question
 
 Tier 1b (opt-in, offline): --stats runs a paired Student's t-test between the
 engines with `ranx`, so a metric gap is reported as statistically *significant*
-or not — a raw 0.919-vs-0.756 number can't say whether an engine is genuinely
-better or just luckier on 43 queries. Needs the [eval] extra; degrades cleanly
-if `ranx` is absent (never a core dependency).
+or not — a raw recall-vs-recall number can't say whether an engine is genuinely
+better or just luckier on the golden set. Needs the [eval] extra; degrades
+cleanly if `ranx` is absent (never a core dependency). A scheduled CI monitor
+(.github/workflows/eval-stats.yml) runs this and reports each metric's p-value.
 
 Tier 2a (LLM, opt-in, key-gated): --rerank measures the *lift* the LLM rerank
 stage (rag.rerank) adds over the raw BM25 order on the same golden set — no
