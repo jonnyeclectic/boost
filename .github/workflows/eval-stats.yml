@@ -1,0 +1,68 @@
+name: eval-stats
+
+# Tier 1b: retrieval-significance monitor (ranx paired t-test, `--stats`).
+#
+# The required PR gate floors BM25 recall@k (deterministic, pure-stdlib). This
+# is the complementary question that floor can't answer: is one engine's lead
+# over another *statistically significant*, or just numerically higher on the
+# golden set? A NON-BLOCKING monitor — it runs on a schedule and on demand,
+# reports each metric's p-value to the run summary, and never gates a merge.
+# Unlike eval-explain it needs NO secrets: BM25 + the ranx t-test are fully
+# offline, so it always runs (given network to tap the pinned corpus).
+#
+# Do NOT add this to branch protection's required checks.
+
+on:
+  workflow_dispatch:            # run manually from the Actions tab
+  schedule:
+    - cron: "0 6 * * 2"         # weekly, Tuesday 06:00 UTC (a day off eval-explain)
+  pull_request:
+    types: [labeled]            # or run on a PR by adding the 'check-stats' label
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-stats-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  significance:
+    # schedule/dispatch always run; the pull_request trigger only fires for the
+    # 'check-stats' label so a random label doesn't spend a CI minute.
+    if: github.event_name != 'pull_request' || github.event.label.name == 'check-stats'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: git identity (fixture repos)
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install boost + the [eval] extra (ranx)
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -e '.[eval]'
+      - name: tap the pinned corpus (so the golden skills exist)
+        run: BOOST_HOME="$PWD/.eval-home" bash scripts/ensure_eval_corpus.sh
+      - name: run the significance test (ranx)
+        run: |
+          # No fail-under: a monitor, not a gate. The script exits 0 and prints
+          # a hint when ranx is somehow absent (nothing to compare).
+          BOOST_HOME="$PWD/.eval-home" .venv/bin/python scripts/eval_retrieval.py \
+            --build -k 10 --stats --json > stats.json 2> stats.err || true
+          cat stats.err || true
+      - name: report to run summary
+        if: always()
+        run: .venv/bin/python scripts/eval_stats_summary.py stats.json >> "$GITHUB_STEP_SUMMARY"

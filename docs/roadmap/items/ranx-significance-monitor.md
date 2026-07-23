@@ -2,7 +2,7 @@
 id: ranx-significance-monitor
 board: code
 section: health
-status: inflight
+status: shipped
 category: Quality · Retrieval eval
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: p-value, not point delta
 order: 5
 owner: loop/evalstats
-pr:
+pr: 198
 title: Significance-tracked engine comparison (ranx monitor)
 ---
 Tier 1b (the <code>ranx</code> paired t-test, <code>--stats</code>) only runs on
