@@ -860,6 +860,31 @@ class TestProjectSkills:
         store.install(entry, scope="project", base=str(repo), force=True)
         assert projectlock.get_skill(repo, "brainstorming")["installed_at"] == first
 
+    def test_symlinked_agent_dir_cannot_escape_the_repo(self, entry, tmp_path):
+        """A committed ``.claude/skills`` symlink pointing outside the repo must
+        not let the install write on the far side.
+
+        The attack: a hostile clone ships an agent dir as a symlink to, say,
+        ``~/.ssh``; ``_copy_skill`` would then ``mkdir``/``os.replace`` through
+        it and land outside the project. Guarded by ``scopes.ensure_in_base``
+        before any write. Uses a fresh skill name so the squatter check (which
+        only fires on an existing path) is not what does the blocking.
+        """
+        repo = self._repo(tmp_path)
+        outside = tmp_path / "outside"          # stands in for ~/.ssh
+        outside.mkdir()
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "skills").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(repo))
+        assert "outside this project" in err.value.message
+        # Nothing written through the symlink, and the all-or-nothing pre-check
+        # means the other agents' in-repo dirs stay untouched too.
+        assert list(outside.iterdir()) == []
+        assert not (repo / ".windsurf" / "skills" / "brainstorming").exists()
+        assert not (repo / ".cursor" / "skills" / "brainstorming").exists()
+
     def test_policy_blocks_a_project_install_too(self, entry, tmp_path):
         # Vendoring into a repo is not an escape hatch around policy.
         policy.save({"blocked_skills": ["brainstorming"]})

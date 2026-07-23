@@ -281,6 +281,15 @@ def _install_project_skill(entry: dict, force: bool = False,
                for agent, skills_dir in agents.enabled_agents().items()
                if not only_agents or agent in only_agents]
 
+    # Refuse to write through a symlink that leaves the repo. An agent dir like
+    # ``.claude/skills`` is committed, so a hostile clone can ship it as a
+    # symlink to ``~/.ssh`` and the copy below would land on the far side.
+    # Checked for every target up front — before existence, force, or any write
+    # — so a single escaping dir aborts the whole install rather than writing
+    # part of it outside the project first.
+    for _agent, dest in targets:
+        scopes.ensure_in_base(resolved_base, dest)
+
     # Refuse to clobber a directory boost did not put there. In user scope the
     # store is boost's alone, but here the destination is inside someone's repo
     # — a same-named hand-written skill is a real possibility, and overwriting
@@ -492,6 +501,11 @@ def _install_rule(entry: dict, force: bool = False,
         if only_agents and agent not in only_agents:
             continue
         mode, path = rules.rule_target(agent, skills_dir, name, base=resolved_base)
+        # Project scope writes into the repo, so a committed agent dir could be
+        # a symlink escaping it (see scopes.ensure_in_base). User scope writes
+        # into the user's own ~/.claude, which they control — nothing to guard.
+        if resolved_base is not None:
+            scopes.ensure_in_base(resolved_base, path)
         path.parent.mkdir(parents=True, exist_ok=True)
         if mode == rules.MODE_CLAUDE:
             current = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -591,6 +605,11 @@ def _install_workflow(entry: dict, force: bool = False,
         if only_agents and agent not in only_agents:
             continue
         path = workflows.workflow_target(skills_dir, slot, name, base=resolved_base)
+        # Project scope writes into the repo; a committed agent dir could be a
+        # symlink escaping it (see scopes.ensure_in_base). User scope writes into
+        # the user's own ~/.claude, which they control — nothing to guard.
+        if resolved_base is not None:
+            scopes.ensure_in_base(resolved_base, path)
         path.parent.mkdir(parents=True, exist_ok=True)
         util.atomic_write_text(path, raw)
         materializations.append({"agent": agent, "slot": slot, "path": str(path)})

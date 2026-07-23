@@ -203,3 +203,27 @@ def contains(base, path) -> bool:
         return os.path.commonpath([str(base_r), str(path_r)]) == str(base_r)
     except (OSError, ValueError):
         return False
+
+
+def ensure_in_base(base, path):
+    """Raise if ``path`` would resolve outside ``base`` — the guard before any
+    project-scope WRITE, the mirror of :func:`contains` before every delete.
+
+    A project destination is built from directory names committed in the repo
+    (``.claude/skills`` and its per-agent siblings). A hostile repo can ship one
+    of those as a symlink pointing outside the tree — at ``~/.ssh``, say — and
+    the ``mkdir(parents=True)`` + ``os.replace`` that materializes a skill would
+    then run on the far side, escaping the project entirely. The squatter check
+    (refuse to overwrite a path boost did not create) does not stop this:
+    dropping a *new* name like ``authorized_keys`` collides with nothing, and
+    ``--force`` waives it regardless. ``contains`` resolves symlinks on both
+    ends, so re-deriving containment here — before the write, independent of
+    existence or force — is the boundary that actually holds. Returns ``path``
+    so a caller can wrap the target inline.
+    """
+    if not contains(base, path):
+        raise BoostError(
+            "refusing to install %s: it resolves outside this project" % path,
+            hint="a directory such as .claude/skills in this repo is a symlink "
+                 "pointing outside it — remove or replace it, then reinstall")
+    return Path(path)
