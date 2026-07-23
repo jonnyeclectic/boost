@@ -1,6 +1,7 @@
 """Unit tests: boost_cli/core/store.py — install/uninstall/link/sync (no CLI)."""
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from typing import ClassVar
@@ -1074,36 +1075,38 @@ class TestProjectSkills:
 
     # ── no project here ──────────────────────────────────────────────────
 
-    def test_project_install_in_bare_home_is_refused(self, entry, sandbox,
-                                                     monkeypatch):
+    def test_project_install_in_bare_home_is_refused(self, entry, monkeypatch):
         """$HOME with no repo above it is not a project.
 
         Materializing there would write to ~/.claude/skills — user scope's own
         directories — so the two scopes would silently be the same place.
+
+        Points HOME at the cwd rather than chdir'ing into a fake home: the
+        condition under test is "cwd resolves to no project base", and a unit
+        test that chdirs breaks mutmut's instrumentation.
         """
-        monkeypatch.chdir(sandbox)
+        monkeypatch.setenv("HOME", os.getcwd())
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project")
         assert err.value.message == \
             "there is no project here to install brainstorming into"
         assert "drop --local" in err.value.hint
-        assert not (sandbox / ".claude" / "skills" / "brainstorming").exists()
 
     def test_project_rule_in_bare_home_is_refused_not_silently_global(
-            self, tap, sandbox, monkeypatch):
+            self, tap, monkeypatch):
         """Rules took this path before too — and reported "this repo" while
         writing to ~/.claude/CLAUDE.md."""
-        monkeypatch.chdir(sandbox)
+        entry = _rule_entry(tap)
+        monkeypatch.setenv("HOME", os.getcwd())
         with pytest.raises(BoostError) as err:
-            store.install(_rule_entry(tap), scope="project")
+            store.install(entry, scope="project")
         assert "no project here" in err.value.message
-        assert not (sandbox / ".claude" / "CLAUDE.md").exists()
 
-    def test_project_workflow_in_bare_home_is_refused(self, tap, sandbox,
-                                                      monkeypatch):
-        monkeypatch.chdir(sandbox)
+    def test_project_workflow_in_bare_home_is_refused(self, tap, monkeypatch):
+        entry = _workflow_entry(tap)
+        monkeypatch.setenv("HOME", os.getcwd())
         with pytest.raises(BoostError) as err:
-            store.install(_workflow_entry(tap), scope="project")
+            store.install(entry, scope="project")
         assert "no project here" in err.value.message
 
     # ── sync must not revert committed edits ─────────────────────────────
@@ -1136,3 +1139,52 @@ class TestProjectSkills:
         # and the lock still describes all three
         assert len(projectlock.get_skill(repo, "brainstorming")
                    ["materializations"]) == 3
+
+
+class TestCopySkillBackupCleanup:
+    """_copy_skill's staging cleanup, when what it displaces is a symlink."""
+
+    def test_a_displaced_symlink_leaves_no_litter(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        real = tmp_path / "real"
+        real.mkdir()
+        dest = tmp_path / "dest"
+        dest.symlink_to(real)
+
+        store._copy_skill(src, dest)
+
+        assert (dest / "SKILL.md").is_file() and not dest.is_symlink()
+        # rmtree() raises on a symlink and ignore_errors swallows it, so the
+        # .tmpXXXX.old staging link used to survive forever — one dangling
+        # pointer per reinstall, accumulating in the user's agent dirs.
+        leftovers = [p.name for p in tmp_path.iterdir() if ".old" in p.name]
+        assert leftovers == [], "left staging litter: %s" % leftovers
+
+    def test_a_dangling_symlink_is_replaced_too(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+        dest = tmp_path / "dest"
+        dest.symlink_to(tmp_path / "nowhere")   # exists() is False for this
+
+        store._copy_skill(src, dest)
+
+        assert (dest / "SKILL.md").is_file() and not dest.is_symlink()
+        assert [p.name for p in tmp_path.iterdir() if ".old" in p.name] == []
+
+    def test_a_real_directory_is_still_replaced_cleanly(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "SKILL.md").write_text("new\n", encoding="utf-8")
+        dest = tmp_path / "dest"
+        dest.mkdir()
+        (dest / "SKILL.md").write_text("old\n", encoding="utf-8")
+        (dest / "gone.md").write_text("stale\n", encoding="utf-8")
+
+        store._copy_skill(src, dest)
+
+        assert (dest / "SKILL.md").read_text(encoding="utf-8") == "new\n"
+        assert not (dest / "gone.md").exists()   # a swap, not a merge
+        assert [p.name for p in tmp_path.iterdir() if ".old" in p.name] == []

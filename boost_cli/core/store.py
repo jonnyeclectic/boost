@@ -117,18 +117,35 @@ def _copy_skill(src: Path, dest: Path) -> None:
         shutil.copytree(
             src, staged, dirs_exist_ok=True,
             ignore=shutil.ignore_patterns(".git", "__pycache__", ".DS_Store"))
-        if dest.exists():
+        # is_symlink() as well as exists(): a dangling symlink is still
+        # something in the way that has to be moved aside.
+        if dest.exists() or dest.is_symlink():
             backup = staged.with_name(staged.name + ".old")
             os.replace(dest, backup)      # move the old copy aside (atomic)
         os.replace(staged, dest)          # swap the new copy in (atomic)
     except BaseException:
-        if backup is not None and not dest.exists():
+        if backup is not None and not (dest.exists() or dest.is_symlink()):
             os.replace(backup, dest)      # swap-in failed: restore the original
         shutil.rmtree(staged, ignore_errors=True)
-        if backup is not None and backup.exists():
-            shutil.rmtree(backup, ignore_errors=True)
+        if backup is not None and (backup.exists() or backup.is_symlink()):
+            _remove_backup(backup)
         raise
     if backup is not None:
+        _remove_backup(backup)
+
+
+def _remove_backup(backup: Path) -> None:
+    """Delete a moved-aside copy, whatever kind of thing it is.
+
+    ``shutil.rmtree`` on a symlink raises, and with ``ignore_errors=True`` it
+    fails silently — so when the displaced ``dest`` was a symlink rather than a
+    real directory, the ``.<name>.tmpXXXX.old`` staging link was left behind
+    forever. Harmless-looking, but it accumulates in the user's agent dirs and
+    every one of them is a dangling pointer.
+    """
+    if backup.is_symlink():
+        backup.unlink(missing_ok=True)
+    else:
         shutil.rmtree(backup, ignore_errors=True)
 
 
@@ -455,6 +472,10 @@ def _install_rule(entry: dict, force: bool = False,
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
 
+    # Cheap precondition, checked before any tap or filesystem work: if there
+    # is nowhere to put this, say so immediately.
+    resolved_base = _require_project_base(scope, base, "rule %s" % name)
+
     tap = registry.get(entry["tap"])
     src = tap.path / entry.get("skill_md", "")
     if not src.is_file():
@@ -464,7 +485,6 @@ def _install_rule(entry: dict, force: bool = False,
     meta, body = frontmatter.parse(raw)
     claude_body = rules.render_claude_body(str(meta.get("name") or name), body)
 
-    resolved_base = _require_project_base(scope, base, "rule %s" % name)
     paths.ensure_dirs()
     materializations: List[dict] = []
     linked: List[str] = []
@@ -553,6 +573,8 @@ def _install_workflow(entry: dict, force: bool = False,
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
 
+    resolved_base = _require_project_base(scope, base, "workflow %s" % name)
+
     tap = registry.get(entry["tap"])
     source_rel = entry.get("skill_md", "")
     src = tap.path / source_rel
@@ -562,7 +584,6 @@ def _install_workflow(entry: dict, force: bool = False,
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
 
-    resolved_base = _require_project_base(scope, base, "workflow %s" % name)
     paths.ensure_dirs()
     materializations: List[dict] = []
     linked: List[str] = []
