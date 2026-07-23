@@ -2,7 +2,7 @@
 id: promote-nav-footer-into-the-shared-style-system
 board: code
 section: dx
-status: inflight
+status: shipped
 category: DX · Design system
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: <code>style/boost.css</code>
 order: 1
 owner: loop/theme
-pr:
+pr: 197
 title: Promote nav / footer into the shared style system
 ---
 Canonical <code>style/boost.css</code> ships tokens + primitives but
