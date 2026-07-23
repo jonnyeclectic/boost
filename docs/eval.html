@@ -98,6 +98,9 @@
   footer p { color: var(--text-3); font-size: 13px; }
   footer a { color: var(--sky); text-decoration: none; }
 
+  /* narrow screens: the contract table scrolls inside itself instead of
+     widening the document (caught by tests/visual/visual_check.mjs) */
+  @media (max-width: 760px) { table.contract { display: block; overflow-x: auto; } }
   @media (max-width: 820px) {
     .cheat { grid-template-columns: 1fr; }
     .cheat .col-head.tech { margin-top: 8px; }

@@ -1,0 +1,7 @@
+{
+  "name": "boost-visual-check",
+  "private": true,
+  "description": "Headless-Chrome render sweep for the docs pages (see visual_check.mjs)",
+  "type": "module",
+  "dependencies": { "puppeteer-core": "24.23.0" }
+}
