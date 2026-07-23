@@ -121,6 +121,11 @@ def policy_path() -> Path:
     return state_dir() / "policy.json"
 
 
+def trusted_keys_path() -> Path:
+    """Return the path of the trusted signing-keys store, ``trusted_keys.json``."""
+    return state_dir() / "trusted_keys.json"
+
+
 def package_root() -> Path:
     """The installed boost_cli package directory (holds bundled data/)."""
     return Path(__file__).resolve().parent.parent

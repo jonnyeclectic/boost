@@ -53,9 +53,15 @@ def clone_shallow(url: str, dest: Path) -> None:
             "refusing to clone via unsafe git transport: %s" % url,
             hint="use an https://, ssh://, or git@ remote")
     dest.parent.mkdir(parents=True, exist_ok=True)
+    # `-c core.autocrlf=false`: check out tap content byte-for-byte. On Windows
+    # the default `autocrlf=true` rewrites LF->CRLF on checkout, which would
+    # change the bytes of a signed manifest (core.provenance) and any content we
+    # digest for integrity — so a tap that verifies on Linux would fail on
+    # Windows. Forcing it off makes a clone identical across platforms.
     # `--` ends option parsing so a URL beginning with `-` cannot be read as a
     # git flag — argument-injection defense-in-depth beside registry.parse_spec.
-    run(["clone", "--depth", "1", "--quiet", "--", url, str(dest)], timeout=600)
+    run(["clone", "--depth", "1", "--quiet", "-c", "core.autocrlf=false",
+         "-c", "core.eol=lf", "--", url, str(dest)], timeout=600)
 
 
 def pull(repo: Path) -> str:

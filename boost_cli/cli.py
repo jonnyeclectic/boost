@@ -1,4 +1,4 @@
-"""boost CLI dispatcher — 75 commands across 8 groups.
+"""boost CLI dispatcher — 77 commands across 8 groups.
 
 Each command lives in boost_cli/commands/<module>.py as
     def cmd_<name_with_underscores>(argv: list[str]) -> int
@@ -98,7 +98,7 @@ COMMANDS = [
     ("context",     "ai", "intelligence", "Branch-aware skill activation"),
     ("focus",       "ai", "intelligence", "Temporarily prioritize skills for a work session"),
     ("impact",      "ai", "intelligence", "Measure a skill's influence on code quality"),
-    # Quality & Health (14)
+    # Quality & Health (15)
     ("doctor",      "chk", "quality", "Check installation health & report issues"),
     ("lint",        "chk", "quality", "Validate SKILL.md frontmatter & quality"),
     ("audit",       "chk", "quality", "Check installed skills against a safety blocklist"),
@@ -113,6 +113,7 @@ COMMANDS = [
     ("changelog",   "chk", "quality", "Show a skill's upstream change history"),
     ("attest",      "chk", "quality", "Display/verify the install record for skills"),
     ("health",      "chk", "quality", "Dashboard of skill-environment health"),
+    ("trust",       "chk", "quality", "Manage signing keys & verify tap provenance"),
     # Configuration (12)
     ("config",      "cfg", "configuration", "Display or modify boost configuration"),
     ("clean",       "cfg", "configuration", "Clear stale caches & broken symlinks"),

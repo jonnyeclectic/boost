@@ -159,7 +159,7 @@ boost doctor               # sanity check: broken links, lock drift, stale taps
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ```
 
-## 75 commands, organized into 8 groups
+## 77 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see
 [`docs/index.html`](docs/index.html), and for every flag of every command see
@@ -172,7 +172,7 @@ boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 | **Skill Information** | list · info · cat · edit · preview · explain · log · home · deps · tag |
 | **Registry (Taps)** | tap · untap · taps · outdated |
 | **Intelligence** | distill · simulate · infer · absorb · evolve · context · focus · impact |
-| **Quality & Health** | doctor · lint · audit · verify · drift · test · fingerprint · quarantine · decay · heal · conflict · changelog · attest · health |
+| **Quality & Health** | doctor · lint · audit · verify · drift · test · fingerprint · quarantine · decay · heal · conflict · changelog · attest · health · trust |
 | **Configuration** | config · clean · create · policy · onboard · completions · schedule · serve · mcp · hooks · bmad · self-update |
 | **Team & Collaboration** | cohort · profile · protocol · pulse · replay · who |
 

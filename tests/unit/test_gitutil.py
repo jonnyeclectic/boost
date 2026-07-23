@@ -145,7 +145,8 @@ class TestCloneAndInspect:
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("git@example:x.git", tmp_path / "d")
         (args, kw), = calls
-        assert args == ["clone", "--depth", "1", "--quiet", "--",
+        assert args == ["clone", "--depth", "1", "--quiet",
+                        "-c", "core.autocrlf=false", "-c", "core.eol=lf", "--",
                         "git@example:x.git", str(tmp_path / "d")]
         assert kw.get("timeout") == 600     # long clone timeout, not the 300 default
 

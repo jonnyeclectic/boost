@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..errors import BoostError
-from . import config, gitutil, paths, util
+from . import config, gitutil, paths, policy, util
 
 
 @dataclass
@@ -107,6 +107,13 @@ def add(spec: str, curated: bool = False) -> Tap:
     if tap.path.exists():
         util.rmtree(tap.path)
     gitutil.clone_shallow(url, tap.path)
+    problems = policy.check_tap_signing(tap.path)
+    if problems:
+        util.rmtree(tap.path)  # leave no half-added tap behind
+        raise BoostError(
+            "tap %s failed provenance policy: %s" % (name, "; ".join(problems)),
+            hint="add its key with `boost trust add <name> <key>`, "
+                 "or relax `boost policy set require_signed_taps false`")
     cfg = config.load()
     cfg.setdefault("taps", []).append(
         {"name": name, "url": url, "curated": curated})
