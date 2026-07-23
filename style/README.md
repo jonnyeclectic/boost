@@ -11,7 +11,7 @@ gated behind `prefers-reduced-motion`.
 
 Open [`demo.html`](demo.html) to see the whole system on one page.
 
-```
+```text
 style/
 ├── boost.css     the design system — tokens, atmosphere, primitives, a11y
 ├── boost.js      two progressive enhancements: cursor glow + reveal-on-scroll

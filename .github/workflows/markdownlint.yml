@@ -1,0 +1,37 @@
+name: markdownlint
+
+# Consistency for every contributor-facing Markdown surface — README,
+# CLAUDE.md, CONTRIBUTING, SECURITY, docs/*.md, examples, style. Heading
+# order, list/fence hygiene, labeled code fences. Config (and the rules boost
+# deliberately relaxes — line length, inline HTML) lives in
+# .markdownlint-cli2.jsonc at the repo root; run the same check locally with
+#   npx --yes markdownlint-cli2@0.18.1
+
+on:
+  push:
+    branches: [main]
+    paths: ["**/*.md", ".markdownlint-cli2.jsonc", ".github/workflows/markdownlint.yml"]
+  pull_request:
+    paths: ["**/*.md", ".markdownlint-cli2.jsonc", ".github/workflows/markdownlint.yml"]
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: markdownlint (config-driven)
+        # Pinned version; the repo-root .markdownlint-cli2.jsonc is auto-found.
+        run: npx --yes markdownlint-cli2@0.18.1
