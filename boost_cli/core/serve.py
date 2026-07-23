@@ -151,8 +151,12 @@ def route(path: str) -> Tuple[int, str, bytes]:
 class _CatalogHandler(BaseHTTPRequestHandler):
     server_version = "boost/" + __version__
 
-    def log_message(self, fmt, *args):  # logged in _send instead
-        pass
+    # `fmt`, not the base class's `format`: the stdlib only ever calls this
+    # positionally, and `format` would shadow the builtin (and read as an
+    # unused variable to vulture). The name-mismatch override warning is
+    # cosmetic here, so it's suppressed at the line rather than repo-wide.
+    def log_message(self, fmt, *args):  # pyright: ignore[reportIncompatibleMethodOverride]
+        pass  # request logging happens in _send instead
 
     def _send(self, status: int, ctype: str, body: bytes) -> None:
         self.send_response(status)

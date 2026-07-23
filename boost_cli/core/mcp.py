@@ -115,9 +115,12 @@ def handle_request(req: dict, *, version: str,
         if text is None:
             resp["error"] = {"code": -32602, "message": "unknown tool %r" % tool}
         else:
-            resp["result"] = {"content": [{"type": "text", "text": text}]}
+            # Annotated: the literal alone infers a list-only value type, so
+            # adding the `isError` bool below would be a type error.
+            result: dict = {"content": [{"type": "text", "text": text}]}
             if is_err:
-                resp["result"]["isError"] = True
+                result["isError"] = True
+            resp["result"] = result
     else:
         resp["error"] = {"code": -32601, "message": "method not found: %s" % method}
     return resp

@@ -56,8 +56,16 @@ def parse_spec(spec: str):
 
 
 def list_taps() -> List[Tap]:
+    # `or []`, not just the get() default: config.get returns the default only
+    # when the key is ABSENT, so a config.json carrying `"taps": null` (or any
+    # non-list scalar) would otherwise reach the comprehension and raise
+    # TypeError. A malformed config should read as "no taps", never crash every
+    # command that lists them.
+    taps = config.get("taps", []) or []
+    if not isinstance(taps, list):
+        return []
     return [Tap(name=t["name"], url=t.get("url", ""), curated=bool(t.get("curated")))
-            for t in config.get("taps", [])]
+            for t in taps if isinstance(t, dict) and t.get("name")]
 
 
 def get(name: str) -> Tap:

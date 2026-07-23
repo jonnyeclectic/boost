@@ -115,6 +115,32 @@ class TestListAndGet:
     def test_list_taps_empty_by_default(self, sandbox):
         assert registry.list_taps() == []
 
+    def test_list_taps_survives_null_taps_key(self, sandbox):
+        """`"taps": null` must read as "no taps", not crash every command.
+
+        config.get returns its default only when the key is ABSENT, so an
+        explicit null reached the comprehension and raised TypeError
+        ('NoneType' object is not iterable) — found by pyright, not mypy.
+        """
+        cfg = config.load()
+        cfg["taps"] = None
+        config.save(cfg)
+        assert registry.list_taps() == []
+
+    @pytest.mark.parametrize("bogus", ["not-a-list", 42, {"name": "x"}])
+    def test_list_taps_ignores_non_list_taps(self, sandbox, bogus):
+        cfg = config.load()
+        cfg["taps"] = bogus
+        config.save(cfg)
+        assert registry.list_taps() == []
+
+    def test_list_taps_skips_malformed_entries(self, sandbox):
+        """A junk element must not take down the whole listing."""
+        cfg = config.load()
+        cfg["taps"] = [{"name": "good", "url": "https://x"}, "junk", {}, None]
+        config.save(cfg)
+        assert [t.name for t in registry.list_taps()] == ["good"]
+
     def test_get_exact_name(self, sandbox):
         self._seed()
         assert registry.get("owner/repo").name == "owner/repo"

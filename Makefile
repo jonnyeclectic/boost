@@ -14,7 +14,7 @@ EVAL_HOME := $(CURDIR)/.eval-home
 
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter diff-cover vulture xenon
+	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut ruff mypy codespell hypothesis import-linter diff-cover vulture xenon pyright
 
 unit:
 	$(PYTEST) tests/unit -q
@@ -45,6 +45,7 @@ mutation:
 lint:
 	$(VENV)/bin/ruff check boost_cli tests
 	$(VENV)/bin/mypy
+	$(VENV)/bin/pyright
 	$(VENV)/bin/lint-imports
 	$(VENV)/bin/vulture boost_cli --min-confidence 80
 	$(VENV)/bin/xenon --max-absolute F --max-modules E --max-average B boost_cli

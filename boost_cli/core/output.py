@@ -36,9 +36,12 @@ def harden_console_encoding() -> None:
     so skip a stream that doesn't have it rather than fail startup over it.
     """
     for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
+        # getattr, not hasattr+call: same guard, but it also gives the type
+        # checkers a concrete optional to narrow (TextIO has no `reconfigure`).
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
             with contextlib.suppress(OSError, ValueError):
-                stream.reconfigure(encoding="utf-8", errors="replace")
+                reconfigure(encoding="utf-8", errors="replace")
 
 
 def use_color(stream=None) -> bool:
