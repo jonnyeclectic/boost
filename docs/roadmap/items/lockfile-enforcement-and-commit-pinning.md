@@ -2,14 +2,14 @@
 id: lockfile-enforcement-and-commit-pinning
 board: code
 section: trust
-status: planned
+status: inflight
 category: Security · Integrity
 complexity: S
 impact: Med
 wow: 3
 note: pin to commit
 order: 7
-owner:
+owner: loop/integrity
 pr:
 title: Lockfile enforcement &amp; commit pinning
 ---
