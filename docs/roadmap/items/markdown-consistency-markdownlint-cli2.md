@@ -2,14 +2,14 @@
 id: markdown-consistency-markdownlint-cli2
 board: code
 section: docsite
-status: planned
+status: inflight
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: every .md
 order: 7
-owner:
+owner: loop/mdlint
 pr:
 title: Markdown consistency — <code>markdownlint-cli2</code>
 ---
