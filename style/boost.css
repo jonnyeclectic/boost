@@ -26,7 +26,7 @@
   --line-hi:     rgb(255 255 255 / 22%);
   --text:        #e9ebf5;
   --text-2:      #9298b0;
-  --text-3:      #676d86;
+  --text-3:      #767c96;   /* muted; ≥4.5:1 on --bg (WCAG AA) — was #676d86 (3.9:1) */
 
   /* --- the triad: the whole identity lives in these three --- */
   --cyan:        #22d3ee;   /* primary accent */
@@ -385,7 +385,10 @@ footer {
   border-top: 1px solid var(--line);
   color: var(--text-3); font-size: 13px;
 }
-footer a { color: var(--text-2); text-decoration: none; }
+/* Underlined, not colour-only: a link inside footer prose must be
+   distinguishable without relying on colour (WCAG 1.4.1 / Lighthouse
+   link-in-text-block). */
+footer a { color: var(--text-2); text-decoration: underline; }
 footer a:hover { color: var(--text); }
 
 @media (max-width: 720px) {
