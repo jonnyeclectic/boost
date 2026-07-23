@@ -2,14 +2,14 @@
 id: ranx-significance-monitor
 board: code
 section: health
-status: planned
+status: inflight
 category: Quality · Retrieval eval
 complexity: S
 impact: Med
 wow: 3
 note: p-value, not point delta
 order: 5
-owner:
+owner: loop/evalstats
 pr:
 title: Significance-tracked engine comparison (ranx monitor)
 ---
