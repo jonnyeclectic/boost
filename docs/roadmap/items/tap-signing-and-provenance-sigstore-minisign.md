@@ -2,14 +2,14 @@
 id: tap-signing-and-provenance-sigstore-minisign
 board: code
 section: trust
-status: planned
+status: inflight
 category: Security · Provenance
 complexity: M
 impact: Med
 wow: 4
 note: keyless OIDC
 order: 3
-owner:
+owner: loop/tapsig
 pr:
 title: Tap signing &amp; provenance — Sigstore / minisign
 ---
