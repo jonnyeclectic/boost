@@ -25,6 +25,7 @@ class TestLoad:
             "require_description": False, "require_version": False,
             "min_quality_score": 0, "max_skills": None, "pin_only": False,
             "denied_capabilities": [], "enforce_detected_capabilities": False,
+            "require_signed_taps": False,
         }
 
     def test_corrupt_file_gives_defaults(self, sandbox):
@@ -150,3 +151,43 @@ class TestCheckInstall:
     def test_missing_entry_fields_tolerated(self, sandbox):
         set_policy(blocked_skills=["x"], blocked_taps=["y"])
         assert policy.check_install({}, 0) == []
+
+
+class TestCheckTapSigning:
+    def test_off_by_default(self, sandbox, tmp_path):
+        clone = tmp_path / "c"
+        clone.mkdir()
+        assert policy.check_tap_signing(clone) == []
+
+    def test_required_but_unsigned_violates(self, sandbox, tmp_path):
+        set_policy(require_signed_taps=True)
+        clone = tmp_path / "c"
+        clone.mkdir()
+        v = policy.check_tap_signing(clone)
+        assert len(v) == 1 and "unsigned" in v[0] and "trusted signature" in v[0]
+
+    def test_required_and_verified_passes(self, sandbox, tmp_path, signer):
+        from boost_cli.core import provenance
+        set_policy(require_signed_taps=True)
+        provenance.add_trusted_key("acme", signer.public_key_text())
+        clone = tmp_path / "c"
+        clone.mkdir()
+        signer.write_signed(clone)
+        assert policy.check_tap_signing(clone) == []
+
+    def test_required_but_untrusted_key_violates(self, sandbox, tmp_path, signer):
+        set_policy(require_signed_taps=True)
+        clone = tmp_path / "c"
+        clone.mkdir()
+        signer.write_signed(clone)                 # signed, key not trusted
+        v = policy.check_tap_signing(clone)
+        assert len(v) == 1 and "no trusted key" in v[0]
+
+    def test_master_switch_bypasses(self, sandbox, tmp_path):
+        set_policy(require_signed_taps=True)
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        clone = tmp_path / "c"
+        clone.mkdir()
+        assert policy.check_tap_signing(clone) == []

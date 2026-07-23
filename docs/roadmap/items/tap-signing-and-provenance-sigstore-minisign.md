@@ -2,7 +2,7 @@
 id: tap-signing-and-provenance-sigstore-minisign
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Security · Provenance
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 4
 note: keyless OIDC
 order: 3
 owner: loop/tapsig
-pr:
+pr: 220
 title: Tap signing &amp; provenance — Sigstore / minisign
 ---
 A tap records its <code>commit</code> today but offers no cryptographic

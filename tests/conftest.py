@@ -90,6 +90,85 @@ def fixture_tap_src(tmp_path_factory):
     return dest
 
 
+class _MinisignSigner:
+    """A deterministic minisign signer for tests, built on boost's own Ed25519.
+
+    boost ships verify-only (:mod:`boost_cli.core.ed25519`); tests need to *make*
+    signatures, so this reconstructs the signing half from the same primitives.
+    Its correctness is not assumed — the RFC 8032 vectors in ``test_ed25519``
+    prove verify, and a signer whose output that proven verifier accepts is by
+    definition producing valid signatures. Seeded, so every run is identical.
+    """
+
+    def __init__(self, seed: bytes = b"\x07" * 32,
+                 key_id: bytes = bytes.fromhex("1122334455667788")):
+        from boost_cli.core import ed25519 as e
+        self._e = e
+        self.seed = seed
+        self.key_id = key_id
+        a, self._prefix = self._expand(seed)
+        self._a = a
+        self.public = self._compress(e._point_mul(a, e._B))
+
+    def _expand(self, seed):
+        h = self._e._sha512(seed)
+        a = int.from_bytes(h[:32], "little")
+        a &= (1 << 254) - 8
+        a |= (1 << 254)
+        return a, h[32:]
+
+    def _compress(self, point):
+        e = self._e
+        x, y, z, _ = point
+        zi = pow(z, e._P - 2, e._P)
+        x = (x * zi) % e._P
+        y = (y * zi) % e._P
+        return (y | ((x & 1) << 255)).to_bytes(32, "little")
+
+    def sign_raw(self, message: bytes) -> bytes:
+        """A 64-byte Ed25519 signature of ``message`` under the fixture key."""
+        e = self._e
+        cap_a = self._compress(e._point_mul(self._a, e._B))
+        r = e._sha512_modl(self._prefix + message)
+        cap_r = self._compress(e._point_mul(r, e._B))
+        h = e._sha512_modl(cap_r + cap_a + message)
+        s = (r + h * self._a) % e._L
+        return cap_r + s.to_bytes(32, "little")
+
+    def public_key_text(self, comment: str = "test key") -> str:
+        import base64
+        line = base64.b64encode(b"Ed" + self.key_id + self.public).decode()
+        return "untrusted comment: %s\n%s\n" % (comment, line)
+
+    def signature_text(self, content: bytes, prehash: bool = False,
+                       trusted_comment: str = "timestamp:1\tfile:tap.manifest") -> str:
+        import base64
+        import hashlib
+        algorithm = b"ED" if prehash else b"Ed"
+        signed = (hashlib.blake2b(content, digest_size=64).digest()
+                  if prehash else content)
+        blob = algorithm + self.key_id + self.sign_raw(signed)
+        global_sig = self.sign_raw(self.sign_raw(signed) + trusted_comment.encode())
+        return ("untrusted comment: signature\n%s\ntrusted comment: %s\n%s\n"
+                % (base64.b64encode(blob).decode(), trusted_comment,
+                   base64.b64encode(global_sig).decode()))
+
+    def write_signed(self, clone, manifest: bytes = b"boost-tap v1\n",
+                     prehash: bool = False) -> None:
+        """Write ``.boost/tap.manifest`` + ``.minisig`` under ``clone``."""
+        from boost_cli.core import provenance
+        (clone / ".boost").mkdir(parents=True, exist_ok=True)
+        (clone / provenance.SIGNED_FILE).write_bytes(manifest)
+        (clone / provenance.SIGNATURE_FILE).write_text(
+            self.signature_text(manifest, prehash=prehash), encoding="utf-8")
+
+
+@pytest.fixture()
+def signer():
+    """A deterministic minisign signer (see :class:`_MinisignSigner`)."""
+    return _MinisignSigner()
+
+
 @pytest.fixture()
 def tapped(boost, fixture_tap_src):
     """Sandbox with the fixture tap added. Returns the tap's source path."""

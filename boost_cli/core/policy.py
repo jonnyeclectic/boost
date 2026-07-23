@@ -25,6 +25,9 @@ DEFAULTS = {
     # one blocks only with enforce_detected_capabilities on (fuzzy, opt-in).
     "denied_capabilities": [],
     "enforce_detected_capabilities": False,
+    # Provenance: when true, a tap must carry a signature from a trusted key
+    # (see core.provenance) before it can be added.
+    "require_signed_taps": False,
 }
 
 
@@ -92,3 +95,30 @@ def check_capabilities(meta: dict, text: str) -> List[str]:
     return capabilities.violations(
         capabilities.declared(meta), capabilities.detect(text),
         denied, bool(pol["enforce_detected_capabilities"]))
+
+
+def check_tap_signing(clone_dir) -> List[str]:
+    """Return provenance violations for a tap clone (empty = allowed).
+
+    No-op unless ``require_signed_taps`` is on. When on, anything short of a
+    signature from a trusted key (:func:`core.provenance.verify_dir`) is a
+    violation, worded with the reason so ``boost tap`` can explain the refusal.
+    Honors the ``policy_enforce`` master switch.
+    """
+    if not config.get("policy_enforce", True):
+        return []
+    pol = load()
+    if not pol["require_signed_taps"]:
+        return []
+    from . import provenance
+    result = provenance.verify_dir(clone_dir)
+    if result.ok:
+        return []
+    reason = {
+        provenance.UNSIGNED: "tap is unsigned",
+        provenance.UNTRUSTED: "tap is signed but by no trusted key",
+        provenance.INVALID: "tap signature is invalid",
+    }.get(result.status, "tap is not verified")
+    if result.detail:
+        reason += " (%s)" % result.detail
+    return [reason + ", and policy requires a trusted signature"]

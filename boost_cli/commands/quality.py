@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 from .. import cliparse
 from ..core import (agents, ai, catalog, frontmatter, gitutil, imperative,
                     integrity, journal, lockfile, logs, output as out, paths,
-                    policy, registry, staleness, store, util)
+                    policy, provenance, registry, staleness, store, util)
 from ..errors import BoostError
 
 # --- audit: dangerous-content patterns ------------------------------------
@@ -1150,3 +1150,114 @@ def cmd_health(argv):
     else:
         print("  " + out.role("● healthy", "success"))
     return 0
+
+
+# --- trust: signing keys & tap provenance ---------------------------------
+
+_PROVENANCE_STYLE = {
+    provenance.VERIFIED: "success",
+    provenance.UNTRUSTED: "warn",
+    provenance.INVALID: "err",
+    provenance.UNSIGNED: "muted",
+}
+
+
+def _tap_provenance_rows():
+    """(tap_name, Result) for every cloned tap, sorted by name."""
+    return [(tap.name, provenance.verify_dir(tap.path))
+            for tap in sorted(registry.list_taps(), key=lambda t: t.name)
+            if tap.is_cloned]
+
+
+def cmd_trust(argv) -> int:
+    """boost trust [list|add NAME KEY|remove NAME|verify [TAP]] [--json]"""
+    p = cliparse.parser(
+        prog="boost trust",
+        description="Manage signing keys & verify tap provenance")
+    p.add_argument("action", nargs="?", default="list",
+                   choices=("list", "add", "remove", "verify"),
+                   help="what to do (default: list)")
+    p.add_argument("name", nargs="?",
+                   help="key name (add/remove) or tap name (verify)")
+    p.add_argument("key", nargs="?",
+                   help="with add: a minisign .pub file or its base64 line")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    args = p.parse_args(argv)
+
+    if args.action == "add":
+        if not args.name or not args.key:
+            raise BoostError("trust add requires NAME and KEY",
+                             hint="`boost trust add acme ./acme.pub`")
+        key_path = paths.expand(args.key)
+        key_text = (key_path.read_text(encoding="utf-8")
+                    if key_path.is_file() else args.key)
+        rec = provenance.add_trusted_key(args.name, key_text)
+        journal.log("trust", args.name, op="add-key")
+        out.ok("trusted key %s (%s)" % (rec["name"], rec["key_id"]))
+        return 0
+
+    if args.action == "remove":
+        if not args.name:
+            raise BoostError("trust remove requires a NAME")
+        if not provenance.remove_trusted_key(args.name):
+            raise BoostError("no trusted key named %r" % args.name)
+        journal.log("trust", args.name, op="remove-key")
+        out.ok("removed trusted key %s" % args.name)
+        return 0
+
+    if args.action == "verify":
+        if args.name:
+            tap = registry.get(args.name)
+            if not tap.is_cloned:
+                raise BoostError("tap %s is not cloned" % tap.name,
+                                 hint="`boost update %s`" % tap.name)
+            results = [(tap.name, provenance.verify_dir(tap.path))]
+        else:
+            results = _tap_provenance_rows()
+        if args.json:
+            print(json.dumps([_result_json(n, r) for n, r in results], indent=2))
+        else:
+            _print_provenance(results)
+        # A specific tap must verify; a full sweep only alarms on tampering.
+        if args.name:
+            return 0 if results and results[0][1].ok else 1
+        return 1 if any(r.status == provenance.INVALID for _n, r in results) else 0
+
+    # list
+    keys = provenance.trusted_keys()
+    taps = _tap_provenance_rows()
+    if args.json:
+        print(json.dumps({
+            "trusted_keys": [{"name": k["name"], "key_id": k.get("key_id", "")}
+                             for k in keys],
+            "taps": [_result_json(n, r) for n, r in taps],
+        }, indent=2))
+        return 0
+    out.heading("trusted keys")
+    if keys:
+        out.table([(k["name"], k.get("key_id", "?")) for k in keys],
+                  headers=("NAME", "KEY ID"))
+    else:
+        out.dim("  none — add one with `boost trust add <name> <key>`")
+    print()
+    _print_provenance(taps)
+    return 0
+
+
+def _result_json(tap_name: str, r: "provenance.Result") -> dict:
+    return {"tap": tap_name, "status": r.status, "key_name": r.key_name,
+            "key_id": r.key_id, "trusted_comment": r.trusted_comment}
+
+
+def _print_provenance(results) -> None:
+    """Render a tap-provenance table (name, coloured status, key/detail)."""
+    out.heading("tap provenance")
+    if not results:
+        out.dim("  no cloned taps")
+        return
+    rows = []
+    for name, r in results:
+        note = r.key_name or r.detail or ""
+        rows.append((name, out.role(r.status, _PROVENANCE_STYLE.get(r.status, "muted")),
+                     note))
+    out.table(rows, headers=("TAP", "PROVENANCE", "KEY / DETAIL"))

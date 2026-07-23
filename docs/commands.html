@@ -77,7 +77,7 @@
   <aside>
     <div class="brand"><b>✦ boost</b><span>commands</span></div>
     <a class="home" href="index.html">← back to overview</a>
-    <input id="q" type="search" placeholder="Filter 76 commands…" autocomplete="off" aria-label="Filter commands">
+    <input id="q" type="search" placeholder="Filter 77 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run name">install</a>
@@ -153,6 +153,7 @@
       <a class="cmd-link" href="#cmd-changelog" data-search="changelog show a skill&#x27;s upstream change history  -n n name">changelog</a>
       <a class="cmd-link" href="#cmd-attest" data-search="attest display/verify the install record for skills  --verify --json name">attest</a>
       <a class="cmd-link" href="#cmd-health" data-search="health dashboard of skill-environment health ">health</a>
+      <a class="cmd-link" href="#cmd-trust" data-search="trust manage signing keys &amp; verify tap provenance  --json {list,add,remove,verify} name key">trust</a>
     </div>
     <div class="group" data-group="cfg">
       <div class="group-h">Config &amp; setup</div>
@@ -182,7 +183,7 @@
   </aside>
   <main>
     <h1>boost <b>command reference</b></h1>
-    <p class="lead">All <b>76</b> commands, generated from the CLI itself —
+    <p class="lead">All <b>77</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
       <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run name">
@@ -877,6 +878,21 @@
         <h3><span class="cname">health</span><span class="gtag">chk</span></h3>
         <p class="summary">Dashboard of skill-environment health</p>
         <pre class="syn">boost health</pre>
+      </section>
+      <section class="cmd" id="cmd-trust" data-search="trust manage signing keys &amp; verify tap provenance  --json {list,add,remove,verify} name key">
+        <h3><span class="cname">trust</span><span class="gtag">chk</span></h3>
+        <p class="summary">Manage signing keys &amp; verify tap provenance</p>
+        <pre class="syn">boost trust [--json] [{list,add,remove,verify}] [name] [key]</pre>
+        <div class="args-h">Arguments</div>
+        <div class="args">
+          <div class="arg"><code>{list,add,remove,verify}</code><span>what to do (default: list)</span></div>
+          <div class="arg"><code>name</code><span>key name (add/remove) or tap name (verify)</span></div>
+          <div class="arg"><code>key</code><span>with add: a minisign .pub file or its base64 line</span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
+        </div>
       </section>
       <h2 class="group-h" id="grp-cfg">Config &amp; setup</h2>
       <section class="cmd" id="cmd-config" data-search="config display or modify boost configuration  --json {list,get,set,unset} key value">
