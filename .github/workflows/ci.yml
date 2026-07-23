@@ -32,11 +32,16 @@ jobs:
         with:
           python-version: "3.12"
       - name: install linters
-        run: python -m pip -q install ruff mypy codespell import-linter vulture xenon
+        run: python -m pip -q install ruff mypy codespell import-linter vulture xenon pyright
       - name: ruff
         run: ruff check boost_cli tests
       - name: mypy
         run: mypy
+      - name: pyright (second type checker)
+        # Independent inference over boost_cli/core — catches the None-flow and
+        # narrowing bugs mypy's config lets slide (it found the `"taps": null`
+        # crash in registry.list_taps()). Config: [tool.pyright] in pyproject.
+        run: pyright
       - name: layering (import-linter)
         # Enforce the architecture contract: core/ (the engine) imports neither
         # commands/ nor the CLI; commands/ never reaches up into cli. Config +

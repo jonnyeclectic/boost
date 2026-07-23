@@ -2,7 +2,7 @@
 id: second-type-checker-pyright
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: Testing · Type
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: editor-parity
 order: 6
 owner: loop/pyright
-pr:
+pr: 196
 title: Second type checker — <code>pyright</code>
 ---
 Run Microsoft's <code>pyright</code> alongside mypy. Its independent
