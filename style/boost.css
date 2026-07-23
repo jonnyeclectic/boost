@@ -10,7 +10,7 @@
 
    Usage:
      <link rel="stylesheet" href="boost.css">
-     <script src="boost.js" defer></script>   <!-- cursor glow + scroll reveal -->
+     <script src="boost.js" defer></script>   (cursor glow + scroll reveal)
 
    The interactions (cursor-follow spotlight, reveal-on-scroll) are progressive
    enhancement — the page is fully styled and legible with JS disabled.
@@ -19,11 +19,11 @@
 :root {
   /* --- ground & ink --- */
   --bg:          #07080f;   /* near-black page ground */
-  --panel:       rgba(255,255,255,.035);
+  --panel:       rgb(255 255 255 / 3.5%);
   --panel-solid: #0f1120;
-  --line:        rgba(255,255,255,.09);
-  --line-soft:   rgba(255,255,255,.05);
-  --line-hi:     rgba(255,255,255,.22);
+  --line:        rgb(255 255 255 / 9%);
+  --line-soft:   rgb(255 255 255 / 5%);
+  --line-hi:     rgb(255 255 255 / 22%);
   --text:        #e9ebf5;
   --text-2:      #9298b0;
   --text-3:      #676d86;
@@ -88,9 +88,9 @@ body::before {
   content: "";
   position: fixed; inset: -25vmax; z-index: 0; pointer-events: none;
   background:
-    radial-gradient(38vmax 38vmax at 12% 6%,   rgba(34,211,238,.20), transparent 60%),
-    radial-gradient(34vmax 34vmax at 90% 16%,  rgba(168,85,247,.18), transparent 60%),
-    radial-gradient(30vmax 30vmax at 62% 104%, rgba(244,114,208,.14), transparent 62%);
+    radial-gradient(38vmax 38vmax at 12% 6%,   rgb(34 211 238 / 20%), transparent 60%),
+    radial-gradient(34vmax 34vmax at 90% 16%,  rgb(168 85 247 / 18%), transparent 60%),
+    radial-gradient(30vmax 30vmax at 62% 104%, rgb(244 114 208 / 14%), transparent 62%);
   filter: blur(34px) saturate(135%);
   animation: aurora-drift 42s ease-in-out infinite;
   will-change: transform;
@@ -99,11 +99,11 @@ body::after {
   content: "";
   position: fixed; inset: 0; z-index: 0; pointer-events: none;
   background-image:
-    linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
+    linear-gradient(rgb(255 255 255 / 2.8%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 2.8%) 1px, transparent 1px);
   background-size: 46px 46px;
-  -webkit-mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.3) 60%, rgba(0,0,0,.1) 100%);
-          mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.3) 60%, rgba(0,0,0,.1) 100%);
+  -webkit-mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgb(0 0 0 / 30%) 60%, rgb(0 0 0 / 10%) 100%);
+          mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgb(0 0 0 / 30%) 60%, rgb(0 0 0 / 10%) 100%);
 }
 @keyframes aurora-drift {
   0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
@@ -139,7 +139,7 @@ body::after {
   color: var(--text-2); font-size: 17.5px; text-wrap: balance;
 }
 .sec-sub code {
-  color: var(--cyan); background: rgba(34,211,238,.1);
+  color: var(--cyan); background: rgb(34 211 238 / 10%);
   padding: 1px 7px; border-radius: 6px; font-size: .88em;
 }
 
@@ -155,9 +155,9 @@ body::after {
 .badge {
   display: inline-flex; align-items: center; gap: 8px;
   font-family: var(--mono); font-size: 12.5px; color: #c9e9f5;
-  border: 1px solid rgba(34,211,238,.4); border-radius: 999px;
+  border: 1px solid rgb(34 211 238 / 40%); border-radius: 999px;
   padding: 7px 16px;
-  background: rgba(34,211,238,.07);
+  background: rgb(34 211 238 / 7%);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 }
 .badge::before {
@@ -184,11 +184,11 @@ body::after {
 .btn-grad {
   color: #05141a;
   background: linear-gradient(96deg, var(--cyan), var(--violet));
-  box-shadow: 0 8px 30px rgba(34,211,238,.32);
+  box-shadow: 0 8px 30px rgb(34 211 238 / 32%);
 }
-.btn-grad:hover { box-shadow: 0 12px 40px rgba(168,85,247,.5); }
+.btn-grad:hover { box-shadow: 0 12px 40px rgb(168 85 247 / 50%); }
 .btn-ghost { color: var(--text); border-color: var(--line); background: var(--panel); }
-.btn-ghost:hover { border-color: rgba(255,255,255,.2); }
+.btn-ghost:hover { border-color: rgb(255 255 255 / 20%); }
 
 /* ============================================================================
    Stat cards
@@ -228,14 +228,14 @@ a.cap, a.glass { text-decoration: none; }
   width: 46px; height: 46px; border-radius: 13px;
   display: flex; align-items: center; justify-content: center;
   font-size: 21px; margin-bottom: 20px;
-  background: var(--ic-bg, rgba(255,255,255,.06)); color: var(--ic-fg, var(--text));
+  background: var(--ic-bg, rgb(255 255 255 / 6%)); color: var(--ic-fg, var(--text));
   border: 1px solid var(--line-soft);
 }
 .cap h3 { font-size: 19.5px; font-weight: 750; letter-spacing: -.01em; }
 .cap p  { font-size: 14.5px; color: var(--text-2); margin-top: 10px; }
 .cap .tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
 .cap .tags code, .chip {
-  font-size: 12px; color: #d5d5e2; background: rgba(255,255,255,.06);
+  font-size: 12px; color: #d5d5e2; background: rgb(255 255 255 / 6%);
   border: 1px solid var(--line-soft); border-radius: 7px; padding: 3px 9px;
 }
 .cap .more { margin-top: auto; padding-top: 16px; font-size: 13.5px; font-weight: 650; color: var(--cyan); }
@@ -244,12 +244,12 @@ a.cap, a.glass { text-decoration: none; }
    Terminal window — for showing off commands / code
    ========================================================================== */
 .window {
-  background: var(--term-bg); border: 1px solid rgba(255,255,255,.12);
-  border-radius: 12px; box-shadow: 0 24px 70px rgba(0,0,0,.5); overflow: hidden;
+  background: var(--term-bg); border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 12px; box-shadow: 0 24px 70px rgb(0 0 0 / 50%); overflow: hidden;
 }
 .window .bar {
   display: flex; align-items: center; height: 38px; padding: 0 14px;
-  background: var(--term-bar); border-bottom: 1px solid rgba(0,0,0,.25);
+  background: var(--term-bar); border-bottom: 1px solid rgb(0 0 0 / 25%);
 }
 .window .dots { display: flex; gap: 7px; }
 .window .dots i { width: 12px; height: 12px; border-radius: 50%; }
@@ -265,7 +265,7 @@ a.cap, a.glass { text-decoration: none; }
   font-family: var(--mono); font-size: 13.5px; line-height: 1.75; color: #dcdcf0;
 }
 /* syntax token colors for use inside .window pre */
-.tp   { color: #8888aa; }               /* prompt $ */
+.tp   { color: #88a; }               /* prompt $ */
 .tv   { color: #7ee787; font-weight: 700; }  /* command name */
 .tc   { color: var(--yellow); font-weight: 700; }  /* subcommand */
 .tok  { color: var(--green); }          /* success check */
@@ -290,14 +290,14 @@ a.cap, a.glass { text-decoration: none; }
   content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
   pointer-events: none; opacity: 0; transition: opacity .35s ease;
   background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 50%),
-              rgba(34,211,238,.16), rgba(168,85,247,.10) 42%, transparent 70%);
+              rgb(34 211 238 / 16%), rgb(168 85 247 / 10%) 42%, transparent 70%);
 }
 .glass:hover, .cap:hover, .stat:hover {
   transform: translateY(-4px);
   border-color: var(--line-hi);
-  background: rgba(255,255,255,.06);
-  box-shadow: 0 22px 60px -22px rgba(168,85,247,.5),
-              inset 0 0 0 1px rgba(34,211,238,.12);
+  background: rgb(255 255 255 / 6%);
+  box-shadow: 0 22px 60px -22px rgb(168 85 247 / 50%),
+              inset 0 0 0 1px rgb(34 211 238 / 12%);
 }
 .glass:hover::before, .cap:hover::before, .stat:hover::before { opacity: 1; }
 
@@ -305,7 +305,7 @@ a.cap, a.glass { text-decoration: none; }
 .window { transition: box-shadow .35s ease, transform .3s ease; }
 .window:hover {
   transform: translateY(-3px);
-  box-shadow: 0 30px 80px -24px rgba(34,211,238,.4), 0 24px 70px rgba(0,0,0,.5);
+  box-shadow: 0 30px 80px -24px rgb(34 211 238 / 40%), 0 24px 70px rgb(0 0 0 / 50%);
 }
 
 /* ============================================================================
@@ -333,11 +333,11 @@ a.cap, a.glass { text-decoration: none; }
    the Design Roadmap declared none at all, so its nav rendered unstyled.
 
    These are a shared *floor*, not an override: every page links this sheet
-   BEFORE its own <style>, so a page still carrying inline chrome keeps
+   BEFORE its own style block, so a page still carrying inline chrome keeps
    winning at equal specificity. Markup this expects:
 
      <header>
-       <div class="wrap site-nav">            <!-- or: class="wrap nav" -->
+       <div class="wrap site-nav">            (or: class="wrap nav")
          <a class="logo" href="."><b>boost</b><span>Section</span></a>
          <ul><li><a href="#x">X</a></li><li><a class="cta" href=".">Go</a></li></ul>
        </div>
