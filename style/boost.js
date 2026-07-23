@@ -15,7 +15,7 @@
   // no-JS visitors with permanently-invisible content).
   document.documentElement.classList.add("js");
 
-  var reduce = window.matchMedia &&
+  const reduce = window.matchMedia &&
                window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
   function ready(fn) {
@@ -25,11 +25,11 @@
 
   ready(function () {
     // ---- reveal on scroll ----
-    var revealables = document.querySelectorAll(".reveal");
+    const revealables = document.querySelectorAll(".reveal");
     if (reduce || !("IntersectionObserver" in window)) {
       revealables.forEach(function (el) { el.classList.add("in"); });
     } else {
-      var io = new IntersectionObserver(function (entries) {
+      const io = new IntersectionObserver(function (entries) {
         entries.forEach(function (en) {
           if (en.isIntersecting) {
             en.target.classList.add("in");
@@ -43,10 +43,10 @@
     // ---- cursor-following spotlight ----
     // Pointer position is written as element-local pixels into --mx / --my,
     // which the radial-gradient in boost.css reads.
-    var glassy = document.querySelectorAll(".glass, .cap, .stat, .window");
+    const glassy = document.querySelectorAll(".glass, .cap, .stat, .window");
     glassy.forEach(function (el) {
       el.addEventListener("pointermove", function (e) {
-        var r = el.getBoundingClientRect();
+        const r = el.getBoundingClientRect();
         el.style.setProperty("--mx", (e.clientX - r.left) + "px");
         el.style.setProperty("--my", (e.clientY - r.top) + "px");
       });

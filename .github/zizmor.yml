@@ -9,3 +9,10 @@ rules:
       # workflow_run head_sha), so a fork PR can't smuggle code into a run
       # holding contents:write + PyPI Trusted Publisher OIDC.
       - publish.yml:19
+  adhoc-packages:
+    ignore:
+      # Lint-only env on an ephemeral runner: major-pinned linters installed
+      # with --no-save into an empty checkout (boost ships no package.json —
+      # a lockfile would exist solely for this one step). The job holds only
+      # contents:read and its output gates nothing but itself.
+      - theme-lint.yml:48

@@ -2,15 +2,15 @@
 id: theme-asset-linting-stylelint-eslint
 board: code
 section: docsite
-status: planned
+status: shipped
 category: Quality · Style
 complexity: S
 impact: Med
 wow: 2
 note: shared blast radius
 order: 8
-owner:
-pr:
+owner: loop/themelint
+pr: 203
 title: Theme-asset linting — <code>stylelint</code> + <code>eslint</code>
 ---
 The shared <code>style/boost.css</code> and <code>boost.js</code> theme
