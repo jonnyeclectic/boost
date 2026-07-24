@@ -10,7 +10,7 @@ wow: 4
 note: the Homebrew move
 order: 45
 owner: loop/install-deps
-pr:
+pr: 227
 title: <code>boost install</code> resolves a skill's <code>requires:</code> closure
 ---
 Skills already declare relationships in frontmatter (<code>requires:</code> /
