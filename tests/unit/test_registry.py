@@ -207,6 +207,19 @@ class TestAddRemove:
         assert not tap.cache_file.exists()
         assert config.get("taps") == []
 
+    def test_remove_only_drops_the_named_tap(self, sandbox):
+        # Removing one of several taps must leave the others in config. Pins the
+        # `cfg["taps"] = [t ... if t["name"] != tap.name]` rewrite and its
+        # `config.save(cfg)` — a wrong key, empty default, or save(None) would
+        # blow away the survivors instead of keeping them.
+        cfg = config.load()
+        cfg["taps"] = [{"name": "one", "url": "u1", "curated": False},
+                       {"name": "two", "url": "u2", "curated": False},
+                       {"name": "three", "url": "u3", "curated": False}]
+        config.save(cfg)
+        registry.remove("two")
+        assert [t["name"] for t in config.get("taps")] == ["one", "three"]
+
     def test_remove_unknown_raises(self, sandbox):
         with pytest.raises(BoostError):
             registry.remove("nope")
