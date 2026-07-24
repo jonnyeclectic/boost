@@ -108,6 +108,18 @@ class TestHandleRequest:
         assert resp["result"]["capabilities"] == {"tools": {}}
         assert resp["result"]["serverInfo"] == {"name": "boost", "version": "9.9.9"}
 
+    def test_initialize_returns_server_instructions(self):
+        # MCP hosts load `instructions` into the agent's context — this is where
+        # boost earns the "search before reinventing" reflex.
+        resp = mcp.handle_request({"id": 1, "method": "initialize"},
+                                  version="9.9.9", registry=_reg_with())
+        instr = resp["result"]["instructions"]
+        assert instr == mcp.INSTRUCTIONS
+        low = instr.lower()
+        assert "before you author" in low          # the trigger moment
+        assert "boost_search" in instr             # the concrete first action
+        assert "already exists" in low             # the "don't reinvent" frame
+
     def test_protocol_version_constant(self):
         assert mcp.PROTOCOL_VERSION == "2024-11-05"
 

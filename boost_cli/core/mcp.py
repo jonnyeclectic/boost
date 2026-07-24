@@ -80,6 +80,24 @@ class Registry:
 # testable; serve_stdio only adds the newline-delimited stdin/stdout loop.
 PROTOCOL_VERSION = "2024-11-05"
 
+# Server-level guidance returned in the `initialize` result. MCP hosts load this
+# into the model's context, so it is boost's one chance to tell an agent WHEN it
+# is relevant — the difference between a search tool that sits unused and one an
+# agent reaches for before reinventing a skill. Framed by the agent's trigger
+# ("about to author reusable instructions"), not boost's nouns.
+INSTRUCTIONS = (
+    "boost is a package manager for AI-agent skills: reusable, version-tracked "
+    "capabilities (skills, rules, slash-commands, subagents) from curated "
+    "registries. BEFORE you author a new skill, subagent, slash-command, rule, "
+    "or any reusable block of agent instructions — or when the user describes a "
+    "repeatable workflow (\"set up code review\", \"add a commit convention\") — "
+    "call boost_search FIRST to check whether a vetted one already exists. "
+    "Installing beats hand-writing: an installed skill is version-pinned, wired "
+    "into every agent on this machine, policy-governed, and shareable with the "
+    "team. Typical flow: boost_search -> boost_info -> boost_install. Only build "
+    "from scratch when a search turns up nothing relevant."
+)
+
 
 def handle_request(req: dict, *, version: str,
                    registry: "Registry") -> Optional[dict]:
@@ -97,7 +115,8 @@ def handle_request(req: dict, *, version: str,
     if method == "initialize":
         resp["result"] = {"protocolVersion": PROTOCOL_VERSION,
                           "capabilities": {"tools": {}},
-                          "serverInfo": {"name": "boost", "version": version}}
+                          "serverInfo": {"name": "boost", "version": version},
+                          "instructions": INSTRUCTIONS}
     elif method == "ping":
         resp["result"] = {}
     elif method == "tools/list":

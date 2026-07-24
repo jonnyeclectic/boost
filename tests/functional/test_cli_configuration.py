@@ -709,6 +709,19 @@ class TestMcp:
         assert "boost_discover_github" in configuration.REGISTRY.names()
         assert configuration._mcp_tool("nonexistent_tool", {}) == (None, False)
 
+    def test_tool_descriptions_are_intent_framed(self, sandbox):
+        # the descriptions must tell an agent WHEN to reach for boost (before
+        # reinventing), not just what each tool does — the discoverability fix.
+        from boost_cli.commands import configuration
+        specs = {s["name"]: s["description"].lower()
+                 for s in configuration.REGISTRY.specs()}
+        assert "first stop before writing" in specs["boost_search"]
+        assert "reinvent" in specs["boost_search"]
+        # install points back at the search that should precede it
+        assert "boost_search" in specs["boost_install"]
+        # info is framed as the vet-before-install step
+        assert "before" in specs["boost_info"] and "install" in specs["boost_info"]
+
     def test_discover_github_missing_gh_degrades(self, sandbox, monkeypatch):
         from boost_cli.commands import configuration
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
