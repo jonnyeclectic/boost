@@ -844,6 +844,12 @@ class TestConfirm:
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
         assert output.confirm("go?", default=False) is False
 
+    def test_default_is_false_when_unspecified(self, monkeypatch):
+        # safety: with no explicit default, an unattended (non-tty) confirm must
+        # NOT proceed — pins the `default: bool = False` signature default.
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.confirm("delete everything?") is False
+
     def _tty(self, monkeypatch, answer):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
         prompts = []
