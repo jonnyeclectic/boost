@@ -2,14 +2,14 @@
 id: framework-adapter-multi-agent
 board: code
 section: dx
-status: planned
+status: inflight
 category: Interop
 complexity: L
 impact: Med
 wow: 4
 note: 
 order: 42
-owner: 
+owner: loop/adapt-multi-agent
 pr: 
 title: <code>boost adapt</code> — multi-agent skills → crews/graphs, not one Agent
 ---
