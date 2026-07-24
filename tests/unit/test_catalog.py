@@ -287,6 +287,26 @@ class TestScanRulesAndWorkflows:
         # a bare prompt .md with no dir marker and no subagent frontmatter
         assert catalog._classify_workflow(Path("prompts/idea.md"), {}) is False
 
+    def test_classify_workflow_signature_needs_name_and_description(self):
+        # Outside a workflow dir, the frontmatter signature requires BOTH a name
+        # AND a description AND a workflow meta key. (Pins the `and` between
+        # name/description — an `or` would classify a name-only file.)
+        loose = Path("prompts/agent.md")
+        full = {"name": "a", "description": "d", "tools": ["x"]}
+        assert catalog._classify_workflow(loose, full) is True
+        assert catalog._classify_workflow(loose, {"name": "a", "tools": ["x"]}) is False
+        assert catalog._classify_workflow(
+            loose, {"description": "d", "tools": ["x"]}) is False
+
+    def test_classify_workflow_signature_needs_a_workflow_meta_key(self):
+        # name+description alone do NOT make a loose .md a workflow — it needs one
+        # of the subagent/slash-command keys. (Pins `WORKFLOW_META_KEYS & set` —
+        # a `|` would make the set truthy for any frontmatter.)
+        loose = Path("prompts/agent.md")
+        assert catalog._classify_workflow(loose, {"name": "a", "description": "d"}) is False
+        assert catalog._classify_workflow(
+            loose, {"name": "a", "description": "d", "model": "opus"}) is True
+
     def test_mixed_kinds_all_present(self, tmp_path):
         root = tmp_path / "tap"
         write_skill(root / "skills" / "s", "---\nname: s\n---")
@@ -445,6 +465,16 @@ class TestResolveOne:
         assert ei.value.message == "no skill named 'brainstorm' in any tap"
         assert ei.value.hint == "closest matches: brainstorming"
 
+    def test_miss_hint_caps_at_three_joined_by_comma(self, sandbox):
+        # Five near-matches, but the hint lists exactly the top THREE, comma-
+        # joined. (Pins `search(name)[:3]` and the `", "` join separator.)
+        _fake_taps(("t", [_entry("planner-%d" % i, "t") for i in range(5)]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("planner")
+        listed = ei.value.hint.replace("closest matches: ", "").split(", ")
+        assert len(listed) == 3
+        assert all(n.startswith("planner-") for n in listed)
+
     def test_miss_no_close_match_no_hint(self, sandbox):
         _fake_taps(("t", [_entry("brainstorming", "t")]))
         with pytest.raises(BoostError) as ei:
@@ -524,6 +554,16 @@ class TestSearchRanking:
         e = _entry("x", "t", meta={"requires": [{"skill": "planning"}]})
         assert [(m["name"], s) for m, s in catalog.search("planning", entries=[e])] \
             == [("x", 2)]
+
+    def test_desc_bonus_adds_to_name_score_not_replaces(self):
+        # An entry that matches BOTH the name and the description must accrue the
+        # description bonus (+30) ON TOP of the name-tier score, never reset to
+        # it. name "fmt-tool" starts-with "fmt" (+80) + token "fmt" in name (+12)
+        # + desc "a fmt helper" contains "fmt" (+30) + token in desc (+6) + token
+        # in blob (+2) = 130. (Pins `score += 30`, not `score = 30`.)
+        e = _entry("fmt-tool", "t", desc="a fmt helper")
+        assert [(m["name"], s) for m, s in catalog.search("fmt", entries=[e])] \
+            == [("fmt-tool", 130)]
 
 
 class TestMetaText:
