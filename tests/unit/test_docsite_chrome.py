@@ -167,6 +167,20 @@ def test_shared_sheet_gives_nav_links_a_touch_target():
         "style/boost.css no longer gives small-screen nav links a 40px tap target")
 
 
+def test_shared_sheet_uses_modern_color_notation():
+    """stylelint-config-standard's notation rules, checked in the always-run suite.
+
+    theme-lint.yml only fires on ``style/**`` changes and needs npm, so a
+    legacy ``rgba(r, g, b, .08)`` slipped into an otherwise uniformly modern
+    sheet reaches CI before anything else notices.
+    """
+    legacy = re.findall(r"\b(?:rgba|hsla)\([^)]*\)", _CSS.read_text(encoding="utf-8"))
+    assert not legacy, (
+        "style/boost.css uses legacy color notation (%s) — the sheet is "
+        "uniformly `rgb(r g b / n%%)`, and stylelint's color-function-notation "
+        "and alpha-value-notation rules require it" % ", ".join(legacy))
+
+
 def test_only_the_nav_header_is_sticky_chrome():
     """A page's hero must not be a second bare <header>.
 

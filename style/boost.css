@@ -400,7 +400,7 @@ footer .foot-brand b { font-family: var(--mono); font-weight: 700; color: var(--
 footer .foot-note { margin-top: 9px; font-size: 13px; color: var(--text-3); text-align: center; }
 footer .foot-note code {
   font-size: .92em; color: var(--sky);
-  background: rgba(34, 211, 238, .08);
+  background: rgb(34 211 238 / 8%);
   border: 1px solid var(--line-soft); border-radius: 6px; padding: 2px 8px;
 }
 footer .foot-links {
