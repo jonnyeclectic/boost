@@ -2,14 +2,14 @@
 id: finish-mutation-hardening-across-core
 board: code
 section: planned
-status: planned
+status: inflight
 category: Testing
 complexity: L
 impact: Med
 wow: 2
 note: ~146 survivors
 order: 1
-owner:
+owner: loop/mutation-hardening
 pr:
 title: Finish mutation hardening across <code>core/</code>
 ---
