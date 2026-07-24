@@ -2,14 +2,14 @@
 id: boost-run-live-agents
 board: code
 section: dx
-status: planned
+status: inflight
 category: Interop
 complexity: L
 impact: High
 wow: 5
 note: 
 order: 43
-owner: 
+owner: loop/boost-run
 pr: 
 title: <code>boost run</code> — search → adapt → a live agent doing the task, in one command
 ---
