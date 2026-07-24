@@ -642,9 +642,9 @@ they add coarse filesystem signal the language-only prober doesn't.</p>
       </article>
 
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Maintainability</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Maintainability</span></div>
         <h3>Split oversized command modules</h3>
-        <p><code>quality.py</code> (14 cmds / 1,051 lines) mixes audit regexes, conflict NLP, decay scoring, fingerprinting and a health dashboard; <code>intelligence.py</code> and <code>configuration.py</code> are similarly overloaded. Split along cohesive seams to shrink blast radius and sharpen mutation-gate targeting.</p>
+        <p><code>quality.py</code> (15 cmds / 1,264 lines) mixes audit regexes, conflict NLP, decay scoring, fingerprinting, a health dashboard and tap-provenance; <code>intelligence.py</code> and <code>configuration.py</code> are similarly overloaded. Split along cohesive seams to shrink blast radius. First seam (this PR): lift the installed-skill safety &amp; integrity commands — <code>audit</code>, <code>verify</code>, <code>attest</code>, <code>quarantine</code> — into <code>commands/safety.py</code>, with the two shared helpers in <code>commands/_common.py</code>; <code>quality.py</code> drops from 1,264 to ~955 lines. Tap-side <code>trust</code> and the health/diagnostics set stay put.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m">Impact <b>Med</b></span>

@@ -67,7 +67,8 @@ class TestCommandTable:
     def test_expected_module_set(self):
         modules = {m for _n, _g, m, _s in cli.COMMANDS}
         assert modules == {"pkg", "discovery", "info", "taps", "intelligence",
-                           "quality", "configuration", "team", "hooks", "bmad"}
+                           "quality", "safety", "configuration", "team",
+                           "hooks", "bmad"}
 
     @pytest.mark.parametrize(
         "name,group,module",
