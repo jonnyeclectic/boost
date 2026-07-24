@@ -159,7 +159,7 @@ boost doctor               # sanity check: broken links, lock drift, stale taps
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ```
 
-## 77 commands, organized into 8 groups
+## 78 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see
 [`docs/index.html`](docs/index.html), and for every flag of every command see
@@ -167,7 +167,7 @@ boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 
 | Group | Commands |
 |---|---|
-| **Package Management** | install · uninstall · sync · update · reinstall · bundle · import · migrate · pin · unpin · snapshot · export |
+| **Package Management** | install · uninstall · sync · update · reinstall · bundle · import · migrate · pin · unpin · snapshot · export · adapt · run |
 | **Discovery & Search** | search · reindex · discover · recommend · browse · index · trending · stats · count |
 | **Skill Information** | list · info · cat · edit · preview · explain · log · home · deps · tag |
 | **Registry (Taps)** | tap · untap · taps · outdated |

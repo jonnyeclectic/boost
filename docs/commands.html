@@ -77,7 +77,7 @@
   <aside>
     <div class="brand"><b>✦ boost</b><span>commands</span></div>
     <a class="home" href="index.html">← back to overview</a>
-    <input id="q" type="search" placeholder="Filter 77 commands…" autocomplete="off" aria-label="Filter commands">
+    <input id="q" type="search" placeholder="Filter 78 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run name">install</a>
@@ -93,6 +93,7 @@
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json {save,list,restore} label|id">snapshot</a>
       <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip name">export</a>
       <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">adapt</a>
+      <a class="cmd-link" href="#cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent --model m --print -o, --out file name target">run</a>
     </div>
     <div class="group" data-group="find">
       <div class="group-h">Find &amp; search</div>
@@ -183,7 +184,7 @@
   </aside>
   <main>
     <h1>boost <b>command reference</b></h1>
-    <p class="lead">All <b>77</b> commands, generated from the CLI itself —
+    <p class="lead">All <b>78</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
       <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run name">
@@ -355,6 +356,23 @@
           <div class="arg"><code>--to FRAMEWORK</code><span>target framework: agents-sdk, crewai, langgraph</span></div>
           <div class="arg"><code>--model M</code><span>LLM the exported agent runs on (default: boost&#x27;s ai.model; pass &#x27;none&#x27; for the framework&#x27;s own default)</span></div>
           <div class="arg"><code>-o, --out FILE</code><span>write to FILE instead of stdout</span></div>
+        </div>
+      </section>
+      <section class="cmd" id="cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent --model m --print -o, --out file name target">
+        <h3><span class="cname">run</span><span class="gtag">pkg</span></h3>
+        <p class="summary">Adapt a skill, wire tools &amp; run it as a live agent</p>
+        <pre class="syn">boost run [--model M] [--print] [--out FILE] name [target]</pre>
+        <p class="desc">Adapt a skill, wire default tools &amp; run it as a live agent</p>
+        <div class="args-h">Arguments</div>
+        <div class="args">
+          <div class="arg"><code>name</code><span>skill to run</span></div>
+          <div class="arg"><code>target</code><span>file or directory for the agent to work on (default: .)</span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--model M</code><span>LLM to run on (default: boost&#x27;s ai.model; &#x27;none&#x27; for the SDK&#x27;s own default)</span></div>
+          <div class="arg"><code>--print</code><span>print the generated runner script instead of executing it</span></div>
+          <div class="arg"><code>-o, --out FILE</code><span>with --print: write the runner to FILE</span></div>
         </div>
       </section>
       <h2 class="group-h" id="grp-find">Find &amp; search</h2>
