@@ -82,6 +82,12 @@ class TestCycles:
         r = resolve.resolve(["a"], _graph({"a": ["a"]}))
         assert r.order == ["a"]
 
+    def test_self_require_alongside_real_dep_keeps_the_dep(self):
+        # a requires [a, b] — the self-entry is skipped but must NOT abort the
+        # loop, so b is still pulled in. (Pins `continue`, not `break`.)
+        r = resolve.resolve(["a"], _graph({"a": ["a", "b"]}))
+        assert r.order == ["b", "a"]
+
     def test_three_node_cycle_terminates(self):
         r = resolve.resolve(["a"], _graph({"a": ["b"], "b": ["c"], "c": ["a"]}))
         assert sorted(r.order) == ["a", "b", "c"]
@@ -104,6 +110,14 @@ class TestUnresolved:
         r = resolve.resolve(["a", "b"], _graph({"a": ["x"], "b": ["x"]}),
                             known=lambda n: n in ("a", "b"))
         assert r.unresolved == ["x"]
+
+    def test_unknown_dep_does_not_skip_a_later_known_dep(self):
+        # a requires [ghost, b]; ghost is unknown -> recorded, but b (listed
+        # after it) must still be pulled in. (Pins `continue`, not `break`.)
+        r = resolve.resolve(["a"], _graph({"a": ["ghost", "b"]}),
+                            known=lambda n: n != "ghost")
+        assert r.unresolved == ["ghost"]
+        assert r.order == ["b", "a"]
 
 
 class TestConflicts:
@@ -128,6 +142,15 @@ class TestConflicts:
         r = resolve.resolve(["a"], _graph({}),
                             conflicts_of=lambda n: ["a"])
         assert r.conflicts == []
+
+    def test_self_conflict_does_not_skip_a_real_conflict(self):
+        # a's conflict list is [a, b]: the self-entry is skipped but must not
+        # abort the scan, so the real conflict with installed b still fires.
+        # (Pins `continue`, not `break`.)
+        r = resolve.resolve(["a"], _graph({}),
+                            conflicts_of=lambda n: ["a", "b"] if n == "a" else [],
+                            installed=frozenset({"b"}))
+        assert ("a", "b") in r.conflicts
 
     def test_conflict_pair_deduped(self):
         r = resolve.resolve(["a"], _graph({"a": ["b"]}),
