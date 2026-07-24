@@ -214,3 +214,81 @@ FORMATS.update({
     "agents-sdk": render_agents_sdk,
     "langgraph": render_langgraph,
 })
+
+
+# A default read-only toolset appended to the adapted agent so it can *act*,
+# not roleplay. Emitted as text (never imported here) — the framework only loads
+# when the generated runner is executed. `chr(10)` avoids escaping newlines in
+# this template; the inner `%s`/`%d` are runtime formatting in the emitted code
+# and must NOT be touched by render_runner's `%` on _RUNNER_MAIN alone.
+_RUNNER_TOOLS = '''
+# --- boost run: default read-only tools (the agent's hands) ---
+import pathlib as _boost_pl
+from agents import Runner as _boost_Runner, function_tool as _boost_tool
+
+
+@_boost_tool
+def read_file(path: str) -> str:
+    """Read a UTF-8 text file and return its first ~16000 characters."""
+    return _boost_pl.Path(path).read_text(encoding="utf-8", errors="replace")[:16000]
+
+
+@_boost_tool
+def list_dir(path: str = ".") -> str:
+    """List a directory's entries, one per line (directories end with /)."""
+    entries = sorted(p.name + ("/" if p.is_dir() else "")
+                     for p in _boost_pl.Path(path).iterdir())
+    return chr(10).join(entries)
+
+
+@_boost_tool
+def grep(pattern: str, path: str = ".") -> str:
+    """Case-insensitive substring search across text files under path."""
+    root = _boost_pl.Path(path)
+    files = [root] if root.is_file() else [p for p in root.rglob("*") if p.is_file()]
+    hits = []
+    for _f in files[:500]:
+        try:
+            _text = _f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for _i, _line in enumerate(_text.splitlines(), 1):
+            if pattern.lower() in _line.lower():
+                hits.append("%s:%d: %s" % (_f, _i, _line.strip()[:200]))
+                if len(hits) >= 200:
+                    return chr(10).join(hits)
+    return chr(10).join(hits) or "no matches"
+'''
+
+_RUNNER_MAIN = '''
+# --- boost run: wire the tools onto the adapted agent and execute ---
+_boost_agent = Agent(name=_boost_brain.name, instructions=_boost_brain.instructions,
+                     model=getattr(_boost_brain, "model", None),
+                     tools=[read_file, list_dir, grep])
+print(_boost_Runner.run_sync(_boost_agent, %s).final_output)
+'''
+
+
+def render_runner(name: str, description: str, body: str,
+                  model: Optional[str] = None, target: Optional[str] = None) -> str:
+    """A self-contained OpenAI Agents SDK *runner* for ``boost run``.
+
+    The adapted agent (its brain — instructions + model, via
+    :func:`render_agents_sdk`) plus a default read-only toolset (its hands) and a
+    ``Runner.run_sync`` call on a prompt built from ``target``. Like the rest of
+    this module it imports no framework — the text only needs to ``compile()``;
+    ``boost run`` either prints it (``--print``) or executes it where the SDK is
+    installed.
+    """
+    brain = render_agents_sdk(name, description, body, model)
+    # Capture the adapted agent under a reserved name *before* the tool defs — a
+    # skill literally named `grep`/`read-file`/`list-dir` normalizes (_ident) to
+    # a tool identifier, and the emitted `def grep(...)` would otherwise rebind
+    # (clobber) the brain. `_boost_*` names never collide: _ident strips the
+    # leading underscore, so no skill name maps onto them.
+    capture = "\n_boost_brain = %s\n" % _ident(name)
+    tgt = _clean(target or "")
+    where = "`" + tgt + "`" if tgt else "the current directory (`.`)"
+    prompt = ("Apply your instructions to %s. Use the read_file, list_dir, and "
+              "grep tools to inspect it, then produce your output." % where)
+    return brain + capture + _RUNNER_TOOLS + (_RUNNER_MAIN % _py_str(prompt))

@@ -1,4 +1,4 @@
-"""boost CLI dispatcher — 77 commands across 8 groups.
+"""boost CLI dispatcher — 78 commands across 8 groups.
 
 Each command lives in boost_cli/commands/<module>.py as
     def cmd_<name_with_underscores>(argv: list[str]) -> int
@@ -49,7 +49,7 @@ GROUPS = {
 # (name, group, module, summary) — the single source of truth for the
 # command surface. docs/overview.html mirrors this list.
 COMMANDS = [
-    # Package Management (13)
+    # Package Management (14)
     ("install",     "pkg", "pkg", "Install a skill from a tap registry"),
     ("uninstall",   "pkg", "pkg", "Remove an installed skill, rule, workflow, or config"),
     ("sync",        "pkg", "pkg", "Reconcile installed skills & symlinks against the lock file"),
@@ -63,6 +63,7 @@ COMMANDS = [
     ("snapshot",    "pkg", "pkg", "Save & restore whole skill environments"),
     ("export",      "pkg", "pkg", "Package skills as shareable zip/tar archives"),
     ("adapt",       "pkg", "pkg", "Render a skill as another framework's agent source (CrewAI, Agents SDK)"),
+    ("run",         "pkg", "run", "Adapt a skill, wire tools & run it as a live agent"),
     # Discovery & Search (9)
     ("search",      "find", "discovery", "Search skills across tap registries (AI-ranked)"),
     ("reindex",     "find", "discovery", "Build/refresh the full-content search index"),
