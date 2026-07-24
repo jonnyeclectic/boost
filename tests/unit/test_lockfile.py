@@ -182,3 +182,33 @@ class TestHistory:
             lockfile.history_read("20990101T000000Z")
         assert ei.value.message == "no lock history entry 20990101T000000Z"
         assert ei.value.hint == "list entries with `boost replay`"
+
+    def test_history_list_skips_corrupt_without_stopping(self, sandbox):
+        # a corrupt snapshot that sorts BEFORE a valid one must be skipped, not
+        # halt the scan — pins the `continue` (a `break` would drop the later
+        # valid entry). The seed in _seed_history can't catch this because its
+        # corrupt file is newest, hence last.
+        paths.ensure_dirs()
+        d = paths.lock_history_dir()
+        (d / "lock-20200101T000000Z.json").write_text("not json", encoding="utf-8")
+        (d / "lock-20200102T000000Z.json").write_text(
+            json.dumps({"updated": "v", "skills": {"x": {}}}), encoding="utf-8")
+        assert [e["id"] for e in lockfile.history_list()] == ["20200102T000000Z"]
+
+
+class TestRulesAndWorkflows:
+    def test_rule_roundtrip_and_remove(self, sandbox):
+        lockfile.set_rule("r", {"v": "1"})
+        assert lockfile.get_rule("r") == {"v": "1"}
+        assert lockfile.installed_rules() == {"r": {"v": "1"}}
+        assert lockfile.remove_rule("r") is True       # present -> True
+        assert lockfile.get_rule("r") is None
+        assert lockfile.remove_rule("r") is False       # absent -> False
+
+    def test_workflow_roundtrip_and_remove(self, sandbox):
+        lockfile.set_workflow("w", {"v": "2"})
+        assert lockfile.get_workflow("w") == {"v": "2"}
+        assert lockfile.installed_workflows() == {"w": {"v": "2"}}
+        assert lockfile.remove_workflow("w") is True    # present -> True
+        assert lockfile.get_workflow("w") is None
+        assert lockfile.remove_workflow("w") is False    # absent -> False

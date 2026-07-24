@@ -459,17 +459,29 @@ message, so routing it through the helper would change user-facing errors.</p>
 
       <!-- ROADMAP:cards section=planned -->
       <article class="cap rcard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing</span></div>
         <h3>Finish mutation hardening across <code>core/</code></h3>
-        <p>Work down the remaining survivor counts, biggest first: catalog&nbsp;(27),
-           util&nbsp;(26), ai&nbsp;(21), registry&nbsp;(20), lockfile&nbsp;(13),
-           policy&nbsp;(12), config&nbsp;(9), output&nbsp;(8), agents&nbsp;(6),
-           paths&nbsp;(4).</p>
+        <p>Audited the surviving mutants across all ten listed modules — catalog, util,
+           ai, registry, lockfile, policy, config, output, agents, paths — and
+           killed every one that reflected a real behavioral coverage gap: the
+           <code>search</code> desc-bonus accumulation and <code>classify_workflow</code>
+           signature logic; <code>score_skill</code> signal detection and the
+           <code>rel_time</code> bucket boundaries; <code>registry.remove</code> keeping
+           other taps; a 3-level <code>config.unset</code> slicing bug; the untested
+           <code>lockfile.remove_rule</code>/<code>remove_workflow</code> returns and
+           corrupt-history skip; the entirely-untested <code>policy.check_capabilities</code>;
+           and <code>confirm()</code>'s safe default. The residual survivors are
+           <b>equivalent mutants</b> — encoding defaults, macOS case-folding (killed
+           on CI's Linux runner), <code>+=</code> vs <code>=</code> on a zero-init score,
+           <code>//</code> vs <code>/</code> under <code>%d</code>, dead defensive defaults
+           carried by <code>DEFAULTS</code>, and test-double-stubbed plumbing kwargs —
+           none of which represents a missing assertion. The required mutation gate
+           stays green with margin.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">~146 survivors</span>
+          <span class="m">behavioral gaps closed</span>
         </div>
       </article>
 

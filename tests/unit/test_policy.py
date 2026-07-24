@@ -153,6 +153,41 @@ class TestCheckInstall:
         assert policy.check_install({}, 0) == []
 
 
+class TestCheckCapabilities:
+    def test_declared_denied_capability_violates(self, sandbox):
+        set_policy(denied_capabilities=["network"])
+        v = policy.check_capabilities({"capabilities": ["network"]}, "body")
+        assert v == ["declares the 'network' capability, denied by policy"]
+
+    def test_declared_but_not_denied_is_allowed(self, sandbox):
+        set_policy(denied_capabilities=["shell"])
+        assert policy.check_capabilities({"capabilities": ["network"]}, "body") == []
+
+    def test_empty_denylist_short_circuits(self, sandbox):
+        # no denied capabilities -> allowed regardless of what the skill declares
+        set_policy(denied_capabilities=[])
+        assert policy.check_capabilities({"capabilities": ["network", "shell"]}, "x") == []
+
+    def test_master_switch_bypasses(self, sandbox):
+        set_policy(denied_capabilities=["network"])
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        assert policy.check_capabilities({"capabilities": ["network"]}, "body") == []
+
+    def test_detected_only_needs_strict_flag(self, sandbox):
+        # a body that *looks* like it uses the network but doesn't declare it:
+        # denied, yet only enforced when enforce_detected_capabilities is on.
+        body = "import requests\nrequests.get('https://example.com')\n"
+        set_policy(denied_capabilities=["network"],
+                   enforce_detected_capabilities=False)
+        assert policy.check_capabilities({}, body) == []
+        set_policy(denied_capabilities=["network"],
+                   enforce_detected_capabilities=True)
+        v = policy.check_capabilities({}, body)
+        assert v == ["looks like it uses 'network' (detected), denied by policy"]
+
+
 class TestCheckTapSigning:
     def test_off_by_default(self, sandbox, tmp_path):
         clone = tmp_path / "c"

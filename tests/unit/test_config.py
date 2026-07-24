@@ -80,6 +80,15 @@ class TestSaveRoundtrip:
         assert json.loads(raw) == {"a": 1}
         assert raw.endswith("\n")
 
+    def test_save_is_pretty_printed_and_preserves_key_order(self, sandbox):
+        # 2-space indent and insertion order (sort_keys=False) — the config file
+        # is human-edited, so it must stay readable and stable, not compacted or
+        # alphabetized. Pins indent=2 and sort_keys=False.
+        config.save({"zeta": 1, "alpha": 2})
+        raw = paths.config_path().read_text(encoding="utf-8")
+        assert '\n  "zeta": 1' in raw                 # 2-space indent, not compact
+        assert raw.index('"zeta"') < raw.index('"alpha"')   # insertion, not sorted
+
 
 class TestCaching:
     def test_reads_only_once_when_file_unchanged(self, sandbox, monkeypatch):
@@ -197,6 +206,15 @@ class TestUnset:
     def test_absent_returns_false(self, sandbox):
         assert config.unset("never.was.here") is False
         assert config.unset("absent_top") is False
+
+    def test_unset_deeply_nested_key_targets_the_leaf(self, sandbox):
+        # a 3-level key exercises the parent-walk `parts[:-1]` and leaf `parts[-1]`
+        # correctly — a 2-level key can't tell them from `parts[:1]` / `parts[1]`.
+        cfg = config.load()
+        cfg["deep"] = {"mid": {"leaf": 1, "keep": 2}}
+        config.save(cfg)
+        assert config.unset("deep.mid.leaf") is True
+        assert config.load()["deep"]["mid"] == {"keep": 2}   # only leaf removed
 
     def test_path_through_scalar_returns_false(self, sandbox):
         assert config.unset("ai.model.sub") is False

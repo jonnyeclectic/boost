@@ -143,6 +143,19 @@ class TestRepoRoot:
         assert root == Path(paths.__file__).resolve().parent.parent.parent
 
 
+class TestPackageAndStatePaths:
+    def test_package_root_is_the_boost_cli_dir(self):
+        root = paths.package_root()
+        assert root.name == "boost_cli"
+        assert (root / "core" / "paths.py").is_file()
+        assert root == Path(paths.__file__).resolve().parent.parent
+
+    def test_trusted_keys_path_name_and_location(self, sandbox):
+        p = paths.trusted_keys_path()
+        assert p.name == "trusted_keys.json"
+        assert p.parent == paths.state_dir()
+
+
 class TestLauncher:
     def test_prefers_console_script_on_path(self, monkeypatch):
         monkeypatch.setattr("boost_cli.core.paths.shutil.which",
