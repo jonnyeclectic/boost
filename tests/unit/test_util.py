@@ -73,6 +73,22 @@ class TestRelTime:
     def test_55_days_is_seven_weeks(self):
         assert util.rel_time(iso_ago(55 * 86400)) == "7w ago"
 
+    def test_exactly_60_seconds_rolls_to_minutes(self):
+        # the seconds bucket is `secs < 60`; at 60 it must roll to minutes.
+        # (Pins the 60 boundary literal — a 61 would keep it "60s ago".)
+        assert util.rel_time(iso_ago(60)) == "1m ago"
+
+    def test_exactly_3600_seconds_rolls_to_hours(self):
+        # the minutes bucket is `secs < 3600`; at one hour it rolls to hours.
+        # (Pins the 3600 boundary — a 3601 would say "60m ago".)
+        assert util.rel_time(iso_ago(3600)) == "1h ago"
+
+    def test_60_days_is_absolute_date_not_weeks(self):
+        # past the `secs < 604800 * 8` (eight-week) cutoff, output is a date, not
+        # "8w ago". (Pins the *8 multiplier — a *9 would extend weeks to 60 days.)
+        then = datetime.now(timezone.utc) - timedelta(days=60)
+        assert util.rel_time(then.strftime(ISO_FMT)) == then.strftime("%Y-%m-%d")
+
     def test_100_days_is_absolute_date(self):
         then = datetime.now(timezone.utc) - timedelta(days=100)
         assert util.rel_time(then.strftime(ISO_FMT)) == then.strftime("%Y-%m-%d")
@@ -376,6 +392,62 @@ class TestScoreSkill:
         assert len(text) == 48_000
         d = make_skill(tmp_path, text)
         assert util.score_skill(d) == (95, [])
+
+    def test_48001_chars_is_penalized(self, tmp_path):
+        # one char over the 48_000 cutoff (`> 48_000`) crosses into the penalty;
+        # pins the boundary against a `> 48_001` off-by-one.
+        base = full_text()
+        text = base + "P" * (48_001 - len(base))
+        assert len(text) == 48_001
+        d = make_skill(tmp_path, text)
+        score, notes = util.score_skill(d)
+        assert score == 85
+        assert "very large SKILL.md (>48KB) — consider splitting" in notes
+
+    def test_heading_on_a_later_line_still_counts(self, tmp_path):
+        # the heading probe uses re.MULTILINE, so a heading below the first line
+        # must still register (no "no markdown headings" note). Pins re.M — a
+        # dropped flag would only match a heading at the very start of the body.
+        body = ("Intro prose that runs on for a while so the body clears the two "
+                "hundred character minimum comfortably and then some more.\n\n"
+                "## Later Heading\n\n- a bullet keeps the examples check happy.\n")
+        d = make_skill(tmp_path, full_text(body=body))
+        _score, notes = util.score_skill(d)
+        assert "no markdown headings in body" not in notes
+
+    def test_code_fence_alone_satisfies_examples(self, tmp_path):
+        # a ``` fence with NO numbered list and NO bullet must satisfy the
+        # examples check. Pins the leading `"```" in body or ...` term (an `and`
+        # or a corrupted literal would demand a list too).
+        body = ("# Heading\n\nProse padding to exceed two hundred characters so the "
+                "length bonus applies and nothing else trips a note here today.\n\n"
+                "```bash\necho hello\n```\n")
+        d = make_skill(tmp_path, full_text(body=body))
+        _score, notes = util.score_skill(d)
+        assert "no examples, steps, or code blocks" not in notes
+
+    def test_numbered_list_below_first_line_satisfies_examples(self, tmp_path):
+        # a numbered list (not on the first line, no fence, no bullet) satisfies
+        # the examples check via re.MULTILINE. Pins the `^\d+\. ` probe + its flag.
+        body = ("# Heading\n\nSome prose padding to comfortably exceed the two "
+                "hundred character minimum for the length bonus to apply now.\n\n"
+                "1. The first and only concrete step in this body.\n")
+        d = make_skill(tmp_path, full_text(body=body))
+        _score, notes = util.score_skill(d)
+        assert "no examples, steps, or code blocks" not in notes
+
+    def test_license_file_on_disk_adds_five_over_a_plain_extra(self, tmp_path):
+        # a LICENSE *file* (not just frontmatter) earns the license +5 on top of
+        # the extras +5 any sidecar earns. Isolating vs a plain extra pins the
+        # "LICENSE" filename literal against a corrupted/renamed check.
+        # minimal bodies keep both scores well below the 100 cap so the +5 shows
+        (tmp_path / "a").mkdir()
+        (tmp_path / "b").mkdir()
+        licensed = make_skill(tmp_path / "a", "hi",
+                              extra_files={"LICENSE": "MIT\n"})
+        plain = make_skill(tmp_path / "b", "hi",
+                          extra_files={"notes.md": "x\n"})
+        assert util.score_skill(licensed)[0] - util.score_skill(plain)[0] == 5
 
 
 class TestAtomicWriteText:
