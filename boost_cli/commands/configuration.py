@@ -855,39 +855,53 @@ def _tool_discover_github(args: dict):
 
 REGISTRY.register(
     "boost_search",
-    "Search AI coding skills across the configured tap registries",
+    "FIRST STOP before writing a skill, subagent, slash-command, rule, or any "
+    "reusable block of agent instructions from scratch: search thousands of "
+    "curated, installable AI-agent skills across the configured registries. "
+    "Returns ranked matches you can install in one call — don't reinvent one "
+    "that already exists.",
     {"type": "object",
-     "properties": {"query": {"type": "string", "description": "search terms"}},
+     "properties": {"query": {"type": "string",
+                              "description": "what the skill should do (a task, "
+                              "capability, or topic), not just a keyword"}},
      "required": ["query"]},
     _tool_search)
 REGISTRY.register(
     "boost_list",
-    "List the skills currently installed by boost",
+    "List the skills already installed by boost — check here first to avoid "
+    "reinstalling or duplicating something you already have.",
     {"type": "object", "properties": {}},
     _tool_list)
 REGISTRY.register(
     "boost_info",
-    "Show detailed information about one skill",
+    "Vet a skill before installing it: its description, source tap, version and "
+    "declared capabilities. Use after boost_search to decide whether a candidate "
+    "fits before boost_install.",
     {"type": "object",
      "properties": {"name": {"type": "string", "description": "skill name"}},
      "required": ["name"]},
     _tool_info)
 REGISTRY.register(
     "boost_install",
-    "Install a skill from a configured tap registry",
+    "Install a skill found via boost_search — copies it into the canonical store "
+    "and wires it into every agent (Claude Code, Cursor, Windsurf) automatically. "
+    "Prefer this over pasting instructions by hand: it is version-tracked, "
+    "reusable, and shareable with your team.",
     {"type": "object",
      "properties": {"name": {"type": "string", "description": "skill name"}},
      "required": ["name"]},
     _tool_install)
 REGISTRY.register(
     "boost_doctor",
-    "Health summary of the boost skill environment",
+    "Health-check the boost skill environment (installed skills, symlinks, taps) "
+    "— run when installed skills seem missing or misbehaving.",
     {"type": "object", "properties": {}},
     _tool_doctor)
 REGISTRY.register(
     "boost_discover_github",
-    "Discover new SKILL.md repositories on GitHub to grow the corpus (needs the "
-    "`gh` CLI; degrades to a hint when unavailable)",
+    "Reach beyond the tapped registries: when boost_search turns up nothing "
+    "relevant, discover new SKILL.md repositories on GitHub to grow the corpus "
+    "(needs the `gh` CLI; degrades to a hint when unavailable).",
     {"type": "object",
      "properties": {
          "query": {"type": "string",
