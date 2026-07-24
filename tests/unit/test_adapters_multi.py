@@ -48,6 +48,12 @@ class TestParseTools:
         # `***` -> "" after _ident; must not leak an empty identifier
         assert adapters.parse_tools({"tools": ["***", "grep"]}) == ["grep"]
 
+    def test_empty_parts_skipped_not_terminating(self):
+        # a blank entry must be *skipped* (continue), not end the scan (break),
+        # so a later real tool still lands
+        assert adapters.parse_tools({"tools": ["", "grep"]}) == ["grep"]
+        assert adapters.parse_tools({"tools": "  grep"}) == ["grep"]
+
     def test_non_string_list_entries_coerced(self):
         assert adapters.parse_tools({"tools": [123, "grep"]}) == ["s_123", "grep"]
 
@@ -85,6 +91,7 @@ class TestDiscoverSubagents:
         # sorted by path: judge.md before reviewer.md
         assert [s.name for s in specs] == ["judge", "reviewer"]
         assert specs[0].instructions == "J"
+        assert specs[0].description == "Judges"      # description carried, not None
 
     def test_subagents_dir_also_matches(self, tmp_path):
         _skill(tmp_path, {"a.md": "---\nname: a\ndescription: x\n---\nB\n"},
@@ -113,13 +120,21 @@ class TestDiscoverSubagents:
         assert [s.name for s in adapters.discover_subagents(tmp_path)] == ["ok"]
 
     def test_skill_md_never_a_subagent(self, tmp_path):
-        # even a SKILL.md placed under agents/ is excluded by name
-        _skill(tmp_path)
-        d = tmp_path / "agents"
-        d.mkdir()
-        (d / "SKILL.md").write_text(
-            "---\nname: nested\ndescription: d\n---\nB\n", encoding="utf-8")
-        assert adapters.discover_subagents(tmp_path) == []
+        # even a SKILL.md placed under agents/ is excluded by name — and being
+        # skipped must not abort the walk (SKILL.md sorts before reviewer.md)
+        _skill(tmp_path, {
+            "SKILL.md": "---\nname: nested\ndescription: d\n---\nB\n",
+            "reviewer.md": "---\nname: reviewer\ndescription: R\n---\nB\n",
+        })
+        assert [s.name for s in adapters.discover_subagents(tmp_path)] == ["reviewer"]
+
+    def test_non_agent_file_skipped_without_aborting_walk(self, tmp_path):
+        # a stray root-level .md (sorts before agents/) is not under a subagent
+        # dir -> skipped; the later real agent must still be found
+        _skill(tmp_path, {"reviewer.md": "---\nname: reviewer\ndescription: R\n---\nB\n"})
+        (tmp_path / "AAA.md").write_text(
+            "---\nname: stray\ndescription: doc\n---\nB\n", encoding="utf-8")
+        assert [s.name for s in adapters.discover_subagents(tmp_path)] == ["reviewer"]
 
     def test_commands_dir_not_treated_as_subagent(self, tmp_path):
         (tmp_path / "SKILL.md").write_text("---\nname: wf\ndescription: t\n---\n", encoding="utf-8")
@@ -244,8 +259,14 @@ class TestRenderCrew:
         src = adapters.render_crew("wf", "d", CREW)
         assert '@tool("read_file")' in src
         assert "def read_file(argument: str) -> str:" in src
-        assert "TODO: implement the read_file tool (declared by the skill)." in src
+        # quoted docstring pinned exactly (a wrapped literal would shift the quote)
+        assert '"TODO: implement the read_file tool (declared by the skill)."' in src
         assert 'raise NotImplementedError("boost adapt: implement the \'read_file\' tool")' in src
+
+    def test_tool_stubs_separated_cleanly(self):
+        # two stubs joined by a blank line — no marker injected into the source
+        src = adapters.render_crew("wf", "d", TWO_TOOL)
+        assert 'tool")\n\n@tool("grep")' in src
 
     def test_output_compiles(self):
         for model in (None, "claude-opus-4-8"):
@@ -316,6 +337,10 @@ class TestRenderGraph:
         assert "@tool\ndef read_file(argument: str) -> str:" in src
         no_tools = adapters.render_graph("wf", "d", [_spec("a"), _spec("b")])
         assert "from langchain_core.tools import tool" not in no_tools
+
+    def test_langchain_tool_stubs_separated_cleanly(self):
+        src = adapters.render_graph("wf", "d", TWO_TOOL)
+        assert 'tool")\n\n@tool\ndef grep' in src   # clean blank-line separator
 
     def test_output_compiles(self):
         for model in (None, "openai/gpt-4o"):
