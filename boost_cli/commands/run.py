@@ -66,10 +66,10 @@ def cmd_run(argv: List[str]) -> int:
             sys.stdout.write(runner)
         return 0
 
-    # Execution is opt-in: the SDK (with the litellm extra) must be importable
-    # and a key present. Importing LitellmModel validates the whole
-    # `openai-agents[litellm]` install in one go. Note: this is the top-level
-    # `agents` SDK, not boost's core.agents (which is why cmd_run lives here).
+    # Execution is opt-in: the SDK (with the litellm extra) must be importable.
+    # Importing LitellmModel validates the whole `openai-agents[litellm]` install
+    # in one go. This is the top-level `agents` SDK, not boost's core.agents
+    # (which is why cmd_run lives in its own module).
     try:
         from agents.extensions.models.litellm_model import (  # type: ignore  # noqa: F401
             LitellmModel,
@@ -79,17 +79,30 @@ def cmd_run(argv: List[str]) -> int:
             "boost run needs the OpenAI Agents SDK to execute the agent",
             hint='pip install "openai-agents[litellm]"  — or `boost run %s '
                  '--print` to emit the runner without running it' % args.name) from e
-    if model and model.strip().lower().startswith(("claude", "anthropic")) \
-            and not os.environ.get("ANTHROPIC_API_KEY"):
+    return _execute(runner, display, model, args.target)  # pragma: no cover
+
+
+def _execute(runner: str, display: str, model, target) -> int:  # pragma: no cover
+    """Run the generated runner in a child process (needs the SDK + a key).
+
+    Exercised end-to-end by ``examples/boost-run-prototype.sh``, not the unit
+    suite — the framework and a provider key are never present in CI, so this is
+    excluded from coverage rather than faked.
+    """
+    # Check the provider key against how the runner ACTUALLY routes the model
+    # (adapters._litellm_model sends a bare id to `anthropic/`), not the raw id —
+    # otherwise `--model gpt-4o` would skip the check yet still hit Anthropic.
+    routed = adapters._litellm_model(model) if model else ""
+    if routed.startswith("anthropic/") and not os.environ.get("ANTHROPIC_API_KEY"):
         raise BoostError(
             "boost run needs ANTHROPIC_API_KEY to call %s" % model,
             hint="export ANTHROPIC_API_KEY=sk-ant-…  — or use `--print`")
 
     out.info("running %s%s on %s …"
-             % (display, " (%s)" % model if model else "", args.target or "."))
+             % (display, " (%s)" % model if model else "", target or "."))
     # Execute the runner in a child process so the SDK never loads into boost's
     # own (stdlib-only) process; sys.executable is the interpreter that just
-    # imported `agents`, so it has the SDK too.
+    # imported the SDK, so it has it too.
     with tempfile.NamedTemporaryFile("w", suffix="_boost_run.py", delete=False,
                                      encoding="utf-8") as fh:
         fh.write(runner)

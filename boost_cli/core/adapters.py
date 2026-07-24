@@ -262,7 +262,6 @@ def grep(pattern: str, path: str = ".") -> str:
 
 _RUNNER_MAIN = '''
 # --- boost run: wire the tools onto the adapted agent and execute ---
-_boost_brain = next(v for v in list(globals().values()) if isinstance(v, Agent))
 _boost_agent = Agent(name=_boost_brain.name, instructions=_boost_brain.instructions,
                      model=getattr(_boost_brain, "model", None),
                      tools=[read_file, list_dir, grep])
@@ -282,8 +281,14 @@ def render_runner(name: str, description: str, body: str,
     installed.
     """
     brain = render_agents_sdk(name, description, body, model)
+    # Capture the adapted agent under a reserved name *before* the tool defs — a
+    # skill literally named `grep`/`read-file`/`list-dir` normalizes (_ident) to
+    # a tool identifier, and the emitted `def grep(...)` would otherwise rebind
+    # (clobber) the brain. `_boost_*` names never collide: _ident strips the
+    # leading underscore, so no skill name maps onto them.
+    capture = "\n_boost_brain = %s\n" % _ident(name)
     tgt = _clean(target or "")
     where = "`" + tgt + "`" if tgt else "the current directory (`.`)"
     prompt = ("Apply your instructions to %s. Use the read_file, list_dir, and "
               "grep tools to inspect it, then produce your output." % where)
-    return brain + _RUNNER_TOOLS + (_RUNNER_MAIN % _py_str(prompt))
+    return brain + capture + _RUNNER_TOOLS + (_RUNNER_MAIN % _py_str(prompt))

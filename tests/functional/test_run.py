@@ -38,6 +38,15 @@ def test_run_target_reaches_the_prompt(boost, installed):
     assert "`src/app.py`" in r.out
 
 
+def test_run_print_o_write_error_is_a_clean_boosterror(boost, installed, tmp_path):
+    # a path whose parent is a file (not a dir) makes the write fail with an
+    # OSError, which must surface as a BoostError, not a traceback.
+    blocker = tmp_path / "afile"
+    blocker.write_text("x", encoding="utf-8")
+    r = boost("run", installed, "--print", "-o", str(blocker / "nested.py"), expect=1)
+    assert "cannot write" in (r.out + r.err).lower()
+
+
 def test_run_without_framework_degrades_cleanly(boost, installed):
     # openai-agents is not installed in CI: execution must raise a helpful
     # BoostError (exit 1), never a traceback.
