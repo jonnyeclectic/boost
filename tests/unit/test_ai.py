@@ -202,7 +202,9 @@ class TestAskApi:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sekret")
         captured = _with_api(monkeypatch, {"content": [{"type": "text", "text": "x"}]})
         assert ai.ask("p") == "x"
-        assert "system" not in json.loads(captured["req"].data.decode())
+        body = json.loads(captured["req"].data.decode())
+        assert "system" not in body
+        assert body["max_tokens"] == 1500   # the ask() default budget (pins 1500)
 
     def test_api_urlerror_returns_none(self, ai_on, monkeypatch):
         _without_cli(monkeypatch)
@@ -226,6 +228,7 @@ class TestAskAuthor:
         assert ai.ask_author("p", system="s") == "authored"
         assert calls[0]["cmd"][2:4] == ["--model", AUTHOR_MODEL]
         assert calls[0]["cmd"][-2:] == ["--append-system-prompt", "s"]
+        assert calls[0]["input"] == "p"   # the prompt is forwarded, not dropped
         assert calls[0]["timeout"] == 240
 
     def test_author_api_max_tokens(self, ai_on, monkeypatch):
