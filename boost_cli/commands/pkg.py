@@ -1093,9 +1093,15 @@ def cmd_export(argv: List[str]) -> int:
     return 0
 
 
-def _resolve_skill_source(name: str):
-    """(display_name, description, body) for a skill — installed store first,
-    then any tap clone. Raises BoostError if the name resolves nowhere."""
+def _resolve_skill(name: str):
+    """(display, description, body, skill_md_path, meta) for a skill.
+
+    Resolves the installed store first, then any tap clone, and returns the
+    SKILL.md path + parsed frontmatter alongside the display fields so callers
+    that need the skill's directory (e.g. subagent discovery for multi-agent
+    adaptation) don't re-resolve. Raises BoostError if the name resolves
+    nowhere.
+    """
     p = store.skill_store_dir(name) / "SKILL.md"
     if not p.exists():
         entry = catalog.resolve_one(name)   # raises BoostError if unknown
@@ -1105,7 +1111,14 @@ def _resolve_skill_source(name: str):
                             hint="refresh the tap with `boost update`")
     meta, body = frontmatter.parse(p.read_text(encoding="utf-8", errors="replace"))
     display = str(meta.get("name") or name).strip() or name
-    return display, str(meta.get("description") or "").strip(), body
+    return display, str(meta.get("description") or "").strip(), body, p, meta
+
+
+def _resolve_skill_source(name: str):
+    """(display_name, description, body) for a skill — the text-only view of
+    :func:`_resolve_skill`, used where the skill's directory isn't needed."""
+    display, description, body, _p, _meta = _resolve_skill(name)
+    return display, description, body
 
 
 def cmd_adapt(argv: List[str]) -> int:
@@ -1129,8 +1142,26 @@ def cmd_adapt(argv: List[str]) -> int:
     model = args.model if args.model is not None else str(config.get("ai.model") or "")
     if model.strip().lower() in ("none", "off", ""):
         model = None
-    display, description, body = _resolve_skill_source(args.name)
-    source = adapters.render(args.to, display, description, body, model)
+    display, description, body, skill_md, meta = _resolve_skill(args.name)
+    # A skill that declares subagents projects to a runnable multi-agent
+    # workflow (a CrewAI Crew / LangGraph StateGraph) when the target supports
+    # one; flat skills — and multi-agent targets without a crew path — keep the
+    # single-Agent render.
+    subagents = adapters.discover_subagents(skill_md.parent)
+    crew_size = 0
+    if subagents and adapters.supports_multi(args.to):
+        primary = adapters.AgentSpec(display, description, body,
+                                     adapters.parse_tools(meta))
+        source = adapters.render_multi(args.to, display, description,
+                                       [primary, *subagents], model)
+        crew_size = len(subagents) + 1
+    else:
+        if subagents:
+            sys.stderr.write(
+                "note: %s declares %d subagent(s); %s has no crew/graph path, "
+                "so only its primary agent was rendered.\n"
+                % (display, len(subagents), args.to))
+        source = adapters.render(args.to, display, description, body, model)
     if args.out:
         dest = paths.expand(args.out)
         try:
@@ -1138,8 +1169,9 @@ def cmd_adapt(argv: List[str]) -> int:
         except OSError as e:
             raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                             hint="check the output path exists and is writable") from e
+        shape = "crew of %d" % crew_size if crew_size else args.to
         out.ok("adapted %s → %s (%s · %s)" % (display, _tilde(dest.resolve()),
-                                              args.to, model or "framework default"))
+                                              shape, model or "framework default"))
     else:
         sys.stdout.write(source)
     return 0

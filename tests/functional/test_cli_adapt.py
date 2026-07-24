@@ -73,3 +73,58 @@ def test_custom_model_is_used_verbatim(boost, installed):
 def test_bare_model_gets_anthropic_prefix(boost, installed):
     r = boost("adapt", installed, "--to", "crewai", "--model", "claude-opus-4-8")
     assert 'model="anthropic/claude-opus-4-8"' in r.out
+
+
+# --- multi-agent skills: crew / graph -------------------------------------
+
+def _add_subagents(installed):
+    """Drop two subagents next to the installed skill's SKILL.md."""
+    from boost_cli.core import store
+    agents = store.skill_store_dir(installed) / "agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / "reviewer.md").write_text(
+        "---\nname: reviewer\ndescription: Reviews the diff\ntools: [read_file, grep]\n"
+        "---\nReview carefully.\n", encoding="utf-8")
+    (agents / "judge.md").write_text(
+        "---\nname: judge\ndescription: Judges findings\n---\nJudge fairly.\n",
+        encoding="utf-8")
+
+
+def test_multi_agent_skill_renders_crew(boost, installed):
+    _add_subagents(installed)
+    r = boost("adapt", installed, "--to", "crewai", "--model", "none")
+    # primary + two subagents, assembled into a sequential Crew
+    assert "from crewai import Agent, Crew, Process, Task" in r.out
+    assert "brainstorming = Agent(" in r.out
+    assert "reviewer = Agent(" in r.out and "judge = Agent(" in r.out
+    assert "process=Process.sequential," in r.out
+    # a declared tool surfaces as a stub
+    assert '@tool("read_file")' in r.out
+    compile(r.out, "<crew>", "exec")
+
+
+def test_multi_agent_skill_renders_graph(boost, installed):
+    _add_subagents(installed)
+    r = boost("adapt", installed, "--to", "langgraph", "--model", "none")
+    assert "def build_brainstorming(model):" in r.out
+    assert "create_react_agent(model" in r.out
+    assert "builder.add_edge(START, " in r.out
+    compile(r.out, "<graph>", "exec")
+
+
+def test_multi_agent_writes_crew_of_n_summary(boost, installed, tmp_path):
+    _add_subagents(installed)
+    dest = tmp_path / "crew.py"
+    r = boost("adapt", installed, "--to", "crewai", "--model", "none", "-o", str(dest))
+    assert "crew of 3" in r.out          # primary + 2 subagents
+    compile(dest.read_text(encoding="utf-8"), "<crew>", "exec")
+
+
+def test_multi_agent_target_without_crew_falls_back_with_note(boost, installed):
+    _add_subagents(installed)
+    r = boost("adapt", installed, "--to", "agents-sdk", "--model", "none")
+    # agents-sdk has no crew path -> single Agent, subagents dropped with a note
+    assert "brainstorming = Agent(" in r.out
+    assert "reviewer = Agent(" not in r.out
+    assert "declares 2 subagent" in r.err
+    compile(r.out, "<sdk>", "exec")
