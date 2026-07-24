@@ -72,3 +72,10 @@ class TestEnsureAgentDirs:
         assert (sandbox / ".claude" / "skills").is_dir()
         assert (sandbox / ".windsurf" / "skills").is_dir()
         assert not (sandbox / ".cursor" / "skills").exists()
+
+    def test_is_idempotent_when_dirs_exist(self, sandbox):
+        # a second call over already-existing dirs must not raise — pins
+        # exist_ok=True (a False/dropped flag would raise FileExistsError).
+        agents.ensure_agent_dirs()
+        agents.ensure_agent_dirs()
+        assert (sandbox / ".claude" / "skills").is_dir()
