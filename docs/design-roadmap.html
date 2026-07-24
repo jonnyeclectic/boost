@@ -100,8 +100,8 @@
 
   .no-results { text-align: center; color: var(--text-2); padding: 70px 0 30px; display: none; }
 
-  .foot-note { max-width: 780px; margin: 70px auto 0; text-align: center; font-size: 13.5px; color: var(--text-3); line-height: 1.6; }
-  .foot-note code { color: var(--yellow); }
+  .page-note { max-width: 780px; margin: 70px auto 0; text-align: center; font-size: 13.5px; color: var(--text-3); line-height: 1.6; }
+  .page-note code { color: var(--yellow); }
 
   @media (max-width: 860px) {
     .stats { grid-template-columns: repeat(2, 1fr); }
@@ -111,17 +111,18 @@
 </head>
 <body>
 
-<header>
-  <div class="wrap nav">
-    <a class="logo" href="./index.html"><b>boost</b><span>Design Roadmap</span></a>
+<header id="top">
+  <div class="wrap site-nav">
+    <a class="logo" href="index.html"><b>boost</b><span>Design Roadmap</span></a>
     <ul>
-      <li><a href="#color">Color</a></li>
-      <li><a href="#layout">Layout</a></li>
-      <li><a href="#motion">Motion</a></li>
-      <li><a href="#commands">Commands</a></li>
-      <li><a href="#system">System</a></li>
-      <li><a href="./roadmap.html">Engineering →</a></li>
-      <li><a class="cta" href="./index.html">← Visual Guide</a></li>
+      <li><a href="index.html">Guide</a></li>
+      <li><a href="commands.html">Commands</a></li>
+      <li><a href="roadmap.html">Roadmap</a></li>
+      <li><a href="#top" aria-current="page">Design</a></li>
+      <li><a href="mcp-hub.html">MCP Hub</a></li>
+      <li><a href="eval.html">Evaluation</a></li>
+      <li><a href="adapters.html">Adapters</a></li>
+      <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
     </ul>
   </div>
 </header>
@@ -231,7 +232,7 @@
       <div class="rcards">
 
         <!-- ROADMAP:cards track=color -->
-<article class="ritem" data-track="color" data-impact="high">
+<article class="ritem" id="BOOST-D01" data-track="color" data-impact="high">
   <div class="ritem-top"><span class="rid">BOOST-D01</span><span class="rstatus done">Shipped</span></div>
   <h4>24-bit Aurora palette in <code>output.py</code></h4>
   <p>The whole CLI runs on eight legacy SGR codes (<code>RED</code>…<code>CYAN</code>) that don't match the brand at all — the front door paints section headers in generic <code>[33m</code> yellow. Add truecolor <code>rgb()</code> helpers mapping the exact web tokens: cyan <b>#22d3ee</b>, violet <b>#a855f7</b>, pink <b>#f472d0</b>, green <b>#4ade80</b>, yellow <b>#facc15</b>, plus <code>--text</code>/<code>--text-3</code> greys. One map recolors everything.</p>
@@ -239,7 +240,7 @@
   <div class="rref"><code>core/output.py:15–38</code></div>
 </article>
 
-<article class="ritem" data-track="color" data-impact="high">
+<article class="ritem" id="BOOST-D02" data-track="color" data-impact="high">
   <div class="ritem-top"><span class="rid">BOOST-D02</span><span class="rstatus done">Shipped</span></div>
   <h4>Terminal capability detection &amp; graceful degradation</h4>
   <p><code>use_color()</code> is binary — color or nothing. Add a tier ladder: <b>truecolor</b> (<code>COLORTERM=truecolor/24bit</code>) → <b>256</b> → <b>16</b> → <b>none</b>, so the Aurora tokens snap to the nearest available color instead of vanishing. Keep the existing <code>NO_COLOR</code> honor, add a <code>BOOST_COLOR=always/auto/never</code> override, and treat <code>TERM=dumb</code> as none.</p>
@@ -247,7 +248,7 @@
   <div class="rref"><code>core/output.py:26–38</code></div>
 </article>
 
-<article class="ritem" data-track="color" data-impact="med">
+<article class="ritem" id="BOOST-D03" data-track="color" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D03</span><span class="rstatus done">Shipped</span></div>
   <h4>Gradient text renderer — the signature move</h4>
   <p>The brand <em>is</em> the cyan→violet→pink <code>--grad</code>. Interpolate it per-character across a string so headings, the <code>boost</code> wordmark and hero counts shimmer in the terminal exactly like the web hero. A pure-Python lerp over the three stops; falls back to a single accent color when truecolor is unavailable.</p>
@@ -255,7 +256,7 @@
   <div class="rref"><code>core/output.py · new gradient()</code></div>
 </article>
 
-<article class="ritem" data-track="color" data-impact="med">
+<article class="ritem" id="BOOST-D04" data-track="color" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D04</span><span class="rstatus done">Shipped</span></div>
   <h4>Semantic color roles, not raw codes</h4>
   <p>Commands scattered <code>out.c(x, out.YELLOW)</code> and <code>out.GREEN</code> literally throughout the command layer, so a palette change meant a repo-wide sweep. Now a single <code>ROLES</code> table in <code>output.py</code> maps six named roles — <code>accent</code>, <code>brand</code>, <code>success</code>, <code>warn</code>, <code>danger</code>, <code>muted</code> — resolved through the Aurora palette (truecolor → 16-color → plain), and <code>out.role(text, name)</code> paints by intent. Every color call site across all eight command groups now reads as meaning, not mechanics; brand hues (accent/success/warn) upgraded from flat 16-color to on-theme truecolor in the process. Re-theming is a one-file edit.</p>
@@ -280,7 +281,7 @@
       <div class="rcards">
 
         <!-- ROADMAP:cards track=layout -->
-<article class="ritem" data-track="layout" data-impact="high">
+<article class="ritem" id="BOOST-D05" data-track="layout" data-impact="high">
   <div class="ritem-top"><span class="rid">BOOST-D05</span><span class="rstatus done">Shipped</span></div>
   <h4>Fix <code>search</code>: truncate &amp; width-clamp results</h4>
   <p>Today <code>boost search</code> is the worst screen in the app: a single result can dump a <b>2,000-character description with literal, unrendered <code>\\n\\n</code> escapes</b>, while names are padded to a fixed 30 columns that waste half the row. Clamp each row to the live terminal width, collapse whitespace/escape artifacts, and ellipsize. This one fix turns a wall of noise into a scannable list.</p>
@@ -288,7 +289,7 @@
   <div class="rref"><code>commands/discovery.py · search</code></div>
 </article>
 
-<article class="ritem" data-track="layout" data-impact="med">
+<article class="ritem" id="BOOST-D06" data-track="layout" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D06</span><span class="rstatus done">Shipped</span></div>
   <h4>Glass-panel box primitives</h4>
   <p>The web system frames everything in rounded glass; the CLI frames nothing. Add rounded box-drawing primitives (<code>╭─╮ │ ╰─╯</code>) with dim <code>--line</code> borders and an optional title, mirroring the web <code>.glass</code>/<code>.window</code> surfaces. Reusable chrome for <code>doctor</code>, <code>info</code>, <code>snapshot</code> and success summaries.</p>
@@ -296,7 +297,7 @@
   <div class="rref"><code>core/output.py · new panel()</code></div>
 </article>
 
-<article class="ritem" data-track="layout" data-impact="med">
+<article class="ritem" id="BOOST-D07" data-track="layout" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D07</span><span class="rstatus done">Shipped</span></div>
   <h4>Relevance visualization in search</h4>
   <p>Results are "ranked by heuristic relevance" but the ranking is invisible — every row looks equal. Render a tiny gradient relevance bar or score glyph per hit and visually separate <b>curated</b> from GitHub-wide matches, so the eye lands on the best result first.</p>
@@ -304,7 +305,7 @@
   <div class="rref"><code>commands/discovery.py · search</code></div>
 </article>
 
-<article class="ritem" data-track="layout" data-impact="med">
+<article class="ritem" id="BOOST-D08" data-track="layout" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D08</span><span class="rstatus done">Shipped</span></div>
   <h4>Width-aware, right-aligned tables</h4>
   <p><code>table()</code> is a naive <code>ljust</code> that ignores terminal width and left-aligns numeric columns. Make it width-aware (shrink the widest text column to fit), right-align counts with tabular figures, and add dim column separators — matching the web's <code>font-variant-numeric: tabular-nums</code> stat blocks.</p>
@@ -312,7 +313,7 @@
   <div class="rref"><code>core/output.py · table()</code></div>
 </article>
 
-<article class="ritem" data-track="layout" data-impact="med">
+<article class="ritem" id="BOOST-D09" data-track="layout" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D09</span><span class="rstatus done">Shipped</span></div>
   <h4>Terminal-window chrome for <code>preview</code> / <code>cat</code></h4>
   <p>The web guide renders skills inside a titled window with traffic-light dots (<code>.window .dots</code>). Give <code>preview</code>/<code>cat</code> the same treatment: a titled frame with the skill name in the bar, so a rendered <code>SKILL.md</code> in the terminal matches the screenshots on the site.</p>
@@ -320,7 +321,7 @@
   <div class="rref"><code>commands/info.py · preview/cat</code></div>
 </article>
 
-<article class="ritem" data-track="layout" data-impact="high">
+<article class="ritem" id="BOOST-D23" data-track="layout" data-impact="high">
   <div class="ritem-top"><span class="rid">BOOST-D23</span><span class="rstatus done">Shipped</span></div>
   <h4><code>trending</code> had the same overflow as <code>search</code></h4>
   <p>Grading the un-touched commands surfaced a sibling of D05: <code>boost trending</code> piped raw catalog descriptions straight into <code>table()</code>, so a single 300-char description blew the table across the pane. Fixed by clipping each description through <code>out.truncate()</code> to the width left after the name/installs/last columns — the same helper the search fix introduced.</p>
@@ -328,7 +329,7 @@
   <div class="rref"><code>commands/discovery.py · cmd_trending</code></div>
 </article>
 
-<article class="ritem" data-track="layout" data-impact="med">
+<article class="ritem" id="BOOST-D24" data-track="layout" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D24</span><span class="rstatus done">Shipped</span></div>
   <h4>Width-aware shared <code>table()</code></h4>
   <p><code>out.table()</code> backs ~28 call sites, and several overflowed: <code>taps</code> padded the NAME column to the widest repo (<code>K-Dense-AI/claude-scientific-skills</code> = 44 cols) and then printed full URLs, so wide catalogs wrapped. Now <code>table()</code> is width-aware itself — when a row would exceed the terminal it shrinks the widest <b>text</b> column and clips its cells with an ellipsis (ANSI-aware, so colored cells keep their color and close cleanly), while <b>numeric</b> columns are right-aligned like tabular figures and never truncated. Narrow tables render byte-identical to before; the logic only engages on overflow or multi-row number columns. Delivered test-first: dedicated unit coverage for <code>_numeric_col</code>, <code>_clip_visible</code>, <code>_fit_widths</code>, and the integrated render keeps the mutation gate green.</p>
@@ -353,7 +354,7 @@
       <div class="rcards">
 
         <!-- ROADMAP:cards track=motion -->
-<article class="ritem" data-track="motion" data-impact="high">
+<article class="ritem" id="BOOST-D10" data-track="motion" data-impact="high">
   <div class="ritem-top"><span class="rid">BOOST-D10</span><span class="rstatus done">Shipped</span></div>
   <h4>Braille spinner for network waits</h4>
   <p>Network-bound commands — <code>search</code> (AI rank), <code>tap</code> clone, <code>discover</code>, <code>index</code> — currently freeze silently while they work. Add a lightweight braille-dot spinner (<code>⠋⠙⠹⠸…</code>) tinted with the Aurora accent, auto-suppressed on non-TTY and under <code>NO_COLOR</code>. The single biggest "feels fast" upgrade.</p>
@@ -361,7 +362,7 @@
   <div class="rref"><code>core/output.py · new spinner()</code></div>
 </article>
 
-<article class="ritem" data-track="motion" data-impact="med">
+<article class="ritem" id="BOOST-D11" data-track="motion" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D11</span><span class="rstatus done">Shipped</span></div>
   <h4>Determinate progress bars for batch ops</h4>
   <p>Multi-item commands — <code>reindex</code>, <code>update</code>, <code>sync</code>, <code>snapshot</code> restore — give no sense of "how far in." Add a gradient-filled progress bar (<code>N/total</code> + ETA) for anything looping over a known count, so long operations read as intentional rather than hung.</p>
@@ -369,7 +370,7 @@
   <div class="rref"><code>core/output.py · new progress()</code></div>
 </article>
 
-<article class="ritem" data-track="motion" data-impact="med">
+<article class="ritem" id="BOOST-D12" data-track="motion" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D12</span><span class="rstatus proposed">Proposed</span></div>
   <h4>Stream search hits as they rank</h4>
   <p><code>search</code> computes the full ranking, then prints the whole list at once — the terminal sits blank, then floods. Stream the top hits as they're scored so the first result paints almost immediately. Perceived latency drops even when total time is unchanged.</p>
@@ -377,7 +378,7 @@
   <div class="rref"><code>commands/discovery.py · search</code></div>
 </article>
 
-<article class="ritem" data-track="motion" data-impact="low">
+<article class="ritem" id="BOOST-D13" data-track="motion" data-impact="low">
   <div class="ritem-top"><span class="rid">BOOST-D13</span><span class="rstatus done">Shipped</span></div>
   <h4>Framed success summary with next step</h4>
   <p><code>ok()</code> prints a lone green check, then the command just ends. After <code>install</code>/<code>uninstall</code>, close with a small framed confirmation — what changed, where it landed, and the obvious next step (<code>boost info &lt;skill&gt;</code>) — so a completed action feels finished, not dropped.</p>
@@ -402,7 +403,7 @@
       <div class="rcards">
 
         <!-- ROADMAP:cards track=commands -->
-<article class="ritem" data-track="commands" data-impact="med">
+<article class="ritem" id="BOOST-D14" data-track="commands" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D14</span><span class="rstatus done">Shipped</span></div>
   <h4>Front door: gradient wordmark + section glyphs</h4>
   <p>The <code>boost</code> home screen is the first thing everyone sees. Today the wordmark is plain bold and every group header is the same generic yellow. Paint the <code>boost</code> wordmark with the Aurora gradient and give each command group a colored bullet/glyph keyed to a brand hue — turning a flat list into a branded index.</p>
@@ -410,7 +411,7 @@
   <div class="rref"><code>commands/info.py · help renderer</code></div>
 </article>
 
-<article class="ritem" data-track="commands" data-impact="med">
+<article class="ritem" id="BOOST-D15" data-track="commands" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D15</span><span class="rstatus done">Shipped</span></div>
   <h4><code>doctor</code> as a health dashboard</h4>
   <p><code>doctor</code> is an undifferentiated wall of green checks — no hierarchy, no headline. Reframe it as a panel with a verdict line (<code>● Healthy</code> in green / <code>● Attention</code> in amber), grouped checks, dim sub-detail, and severity color so a problem actually stands out instead of hiding among the ✓s.</p>
@@ -418,7 +419,7 @@
   <div class="rref"><code>commands/quality.py · doctor</code></div>
 </article>
 
-<article class="ritem" data-track="commands" data-impact="med">
+<article class="ritem" id="BOOST-D16" data-track="commands" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D16</span><span class="rstatus done">Shipped</span></div>
   <h4><code>info</code> skill identity card</h4>
   <p><code>info</code> lists <code>kv()</code> pairs as flat dim labels. Promote it to a framed identity card: gradient skill name, status badges (<b>installed</b> / <b>pinned</b> / tap origin) styled like the web <code>.badge</code> pills, then the metadata — a real "detail view," not a key-value dump.</p>
@@ -426,7 +427,7 @@
   <div class="rref"><code>commands/info.py:177+</code></div>
 </article>
 
-<article class="ritem" data-track="commands" data-impact="low">
+<article class="ritem" id="BOOST-D17" data-track="commands" data-impact="low">
   <div class="ritem-top"><span class="rid">BOOST-D17</span><span class="rstatus done">Shipped</span></div>
   <h4><code>list</code> polish — chips &amp; aligned counts</h4>
   <p><code>list</code> already uses a nice <code>·</code> agent separator; take it further. Color the agent names as small chips, right-align the count footer with tabular figures, and add a dim header rule so the table reads as a designed object rather than raw columns.</p>
@@ -434,7 +435,7 @@
   <div class="rref"><code>commands/info.py:130–131</code></div>
 </article>
 
-<article class="ritem" data-track="commands" data-impact="low">
+<article class="ritem" id="BOOST-D18" data-track="commands" data-impact="low">
   <div class="ritem-top"><span class="rid">BOOST-D18</span><span class="rstatus done">Shipped</span></div>
   <h4>Consistent empty-states &amp; hint styling</h4>
   <p>Empty and hint lines are ad-hoc — <code>info</code>'s "no skills installed" hint is a hand-rolled <code>DIM</code> string. Standardize a single empty-state affordance (muted icon + one-line guidance + suggested command) and a single hint style, applied everywhere, so guidance always looks the same.</p>
@@ -442,7 +443,7 @@
   <div class="rref"><code>commands/info.py:117–119 · core/output.py</code></div>
 </article>
 
-<article class="ritem" data-track="commands" data-impact="med">
+<article class="ritem" id="BOOST-D25" data-track="commands" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D25</span><span class="rstatus done">Shipped</span></div>
   <h4>Branded usage &amp; error output</h4>
   <p>Grading confirmed this hits <b>every command with a required argument</b> — <code>boost uninstall</code>, <code>boost snapshot</code> and more all dump raw, unstyled <code>argparse</code>: a multi-line usage block with a bare <code>error:</code>, nothing like the branded top-level dispatch (which already routes through <code>Error:</code> + a difflib "did you mean"). The durable fix is a shared <code>BoostArgumentParser</code> subclass whose <code>error()</code>/usage route through the Aurora output layer, adopted across the ~50 per-command parsers — a broad, test-first sweep, so logged rather than rushed.</p>
@@ -450,7 +451,7 @@
   <div class="rref"><code>cliparse.py (BoostArgumentParser) · all 10 command files</code></div>
 </article>
 
-<article class="ritem" data-track="commands" data-impact="high">
+<article class="ritem" id="BOOST-D26" data-track="commands" data-impact="high">
   <div class="ritem-top"><span class="rid">BOOST-D26</span><span class="rstatus done">Shipped</span></div>
   <h4><code>browse</code> — Aurora the full-screen TUI</h4>
   <p>The interactive <code>browse</code> pane was the <b>last off-theme surface</b>: a curses screen drawn in raw <code>A_BOLD</code>/<code>A_DIM</code>/<code>A_REVERSE</code> — zero brand color while every other command spoke Aurora. Rebuilt it as a first-class TUI: a macOS <b>titlebar</b> (traffic-light dots + <code>boost browse</code> wordmark under a cyan→violet→pink gradient rule), an <code>❯</code> chevron prompt with a live <code>▏</code> caret, <b>fuzzy-match highlighting</b> (matched chars glow pink as you type), a cyan selection bar, yellow curated <code>★</code>, violet tap labels, a right-edge scrollbar, and a gradient-topped detail pane with <code>#tag</code> chips. Colors come from the single-source <code>out.TOKENS</code> via <code>init_color</code> — parity-locked to <code>style/boost.css</code> — and degrade truecolor → 8-color → monochrome. Stdlib only. With this, <b>every boost command is on-theme</b>.</p>
@@ -474,7 +475,7 @@
       <div class="rcards">
 
         <!-- ROADMAP:cards track=system -->
-<article class="ritem" data-track="system" data-impact="med">
+<article class="ritem" id="BOOST-D19" data-track="system" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D19</span><span class="rstatus done">Shipped</span></div>
   <h4>Resolve theme drift: <code>style/</code> vs <code>docs/style/</code></h4>
   <p>Two copies of <code>boost.css</code> have <b>diverged</b>: the root <code>style/</code> uses a cyan→violet→pink gradient (<code>--violet #a855f7</code>), while <code>docs/style/</code> uses an orange→pink→violet one (<code>--violet #a78bfa</code>). Same brand, two looks. Pick <code>style/</code> as canonical and make <code>docs/style/</code> a generated copy or symlink so the portfolio, roadmaps and CLI can't drift again.</p>
@@ -482,7 +483,7 @@
   <div class="rref"><code>style/boost.css · docs/style/boost.css</code></div>
 </article>
 
-<article class="ritem" data-track="system" data-impact="med">
+<article class="ritem" id="BOOST-D20" data-track="system" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D20</span><span class="rstatus done">Shipped</span></div>
   <h4>Single source of design tokens (web ↔ CLI)</h4>
   <p><b>Done:</b> the CLI palette is now single-sourced — one <code>output.TOKENS</code> dict holds every Aurora RGB triple, and the gradient, brand tints and badges all <em>derive</em> from it (previously cyan/violet/pink were re-typed across <code>_AURORA</code> and <code>_GRAD_STOPS</code>). A test locks the contract so a stray hex can't drift. <b>Remaining:</b> lift <code>TOKENS</code> into a shared <code>tokens.json</code> and generate <em>both</em> the CSS custom properties and this map from it, so the site and the terminal move in lockstep. <b>Shipped as enforcement instead of generation:</b> a unit test parses <code>style/boost.css</code> and asserts every <code>--token</code> matches <code>output.TOKENS</code>, so a hex changed in one place and not the other fails CI — the same guarantee without rewriting the hand-authored stylesheet.</p>
@@ -490,7 +491,7 @@
   <div class="rref"><code>core/output.py TOKENS · style/boost.css · future build_tokens.py</code></div>
 </article>
 
-<article class="ritem" data-track="system" data-impact="med">
+<article class="ritem" id="BOOST-D21" data-track="system" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D21</span><span class="rstatus done">Shipped</span></div>
   <h4>Scripted demo recording (VHS / asciinema)</h4>
   <p>There's a <code>docs/demo.tape</code> + <code>demo.gif</code>, but no repeatable way to re-record once the aesthetic changes — and <code>tmux</code> isn't even installed in the dev box. Add a <code>make demo</code> that drives a scripted session (VHS tape or asciinema, optionally split-pane via tmux) and refreshes the GIF, so the README and portfolio always show the current look.</p>
@@ -498,7 +499,7 @@
   <div class="rref"><code>docs/demo.tape · Makefile</code></div>
 </article>
 
-<article class="ritem" data-track="system" data-impact="med">
+<article class="ritem" id="BOOST-D22" data-track="system" data-impact="med">
   <div class="ritem-top"><span class="rid">BOOST-D22</span><span class="rstatus done">Shipped</span></div>
   <h4>README / portfolio terminal parity</h4>
   <p>The web <code>.window</code> mock shows an <em>idealized</em> boost session — gradient prompt, clean checks — that the real CLI doesn't yet produce. Once D01–D15 land, update the mock (and README code blocks) to mirror the true output 1:1, so every screenshot is honest and the brand reads identically across web, README and terminal.</p>
@@ -514,7 +515,7 @@
 
   </div>
 
-  <p class="foot-note">
+  <p class="page-note">
     A living document — each loop iteration drives the real CLI, grades it against
     <code>style/boost.css</code>, and files what it finds here. Sibling to the
     <a href="./roadmap.html" style="color:var(--sky)">Engineering Roadmap</a>.
@@ -522,6 +523,28 @@
   </p>
 
 </main>
+
+<footer>
+  <div class="wrap">
+    <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
+    <nav class="foot-links" aria-label="Documentation">
+      <a href="index.html">Guide</a>
+      <a href="commands.html">Commands</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="#top" aria-current="page">Design</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a href="eval.html">Evaluation</a>
+      <a href="adapters.html">Adapters</a>
+    </nav>
+    <p class="foot-legal">
+      <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+      <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+      <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+      Released under the GPL-3.0 license
+    </p>
+  </div>
+</footer>
 
 <script>
   // Filter board by track + impact (mirrors roadmap.html behavior)

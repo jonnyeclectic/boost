@@ -12,19 +12,6 @@
 <style>
   /* Roadmap-specific layout — built only on boost.css :root tokens so the
      page recolours with the rest of the system. No new palette. */
-  .topbar {
-    position: sticky; top: 0; z-index: 20;
-    display: flex; align-items: center; gap: 18px;
-    padding: 14px 24px; margin-bottom: 8px;
-    background: rgba(7,8,15,.72);
-    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
-    border-bottom: 1px solid var(--line);
-  }
-  .topbar .logo { font-weight: 800; letter-spacing: -.02em; font-size: 18px; text-decoration: none; }
-  .topbar .logo span { color: var(--text-3); font-weight: 600; margin-left: 8px; font-size: 13px; }
-  .topbar nav { margin-left: auto; display: flex; gap: 20px; }
-  .topbar nav a { color: var(--text-2); text-decoration: none; font-size: 14px; font-weight: 600; }
-  .topbar nav a:hover { color: var(--text); }
 
   .hero { text-align: center; padding: 56px 0 20px; }
   .hero .badge { margin-bottom: 22px; }
@@ -72,27 +59,30 @@
   .legend { display: flex; flex-wrap: wrap; gap: 12px 26px; margin-top: 26px; justify-content: center; color: var(--text-2); font-size: 13px; }
   .legend .k { display: inline-flex; align-items: center; gap: 8px; }
 
-  footer { text-align: center; padding: 60px 0 48px; color: var(--text-3); font-size: 13px; }
-  footer a { color: var(--cyan); text-decoration: underline; }
 
-  @media (max-width: 560px) { .topbar nav { display: none; } }
 </style>
 </head>
 <body>
 
-<div class="topbar">
-  <a class="logo" href="index.html">boost<span>Roadmap</span></a>
-  <nav>
-    <a href="index.html">Visual guide</a>
-    <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a>
-    <a href="https://github.com/jonnyeclectic/boost">GitHub</a>
-    <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a>
-  </nav>
-</div>
+<header id="top">
+  <div class="wrap site-nav">
+    <a class="logo" href="index.html"><b>boost</b><span>Roadmap</span></a>
+    <ul>
+      <li><a href="index.html">Guide</a></li>
+      <li><a href="commands.html">Commands</a></li>
+      <li><a href="#top" aria-current="page">Roadmap</a></li>
+      <li><a href="design-roadmap.html">Design</a></li>
+      <li><a href="mcp-hub.html">MCP Hub</a></li>
+      <li><a href="eval.html">Evaluation</a></li>
+      <li><a href="adapters.html">Adapters</a></li>
+      <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
+    </ul>
+  </div>
+</header>
 
 <div class="wrap">
 
-  <header class="hero">
+  <div class="hero">
     <span class="badge">living document · updated by the quality loop</span>
     <h1>The <span class="grad-text">boost</span> roadmap</h1>
     <p>Every finding from the autonomous quality loop lands here — what shipped,
@@ -109,7 +99,7 @@
       <span class="k"><span class="pill next">Next</span> triaged, starting soon</span>
       <span class="k"><span class="pill planned">Planned</span> on the list</span>
     </div>
-  </header>
+  </div>
 
   <!-- ================= SNAPSHOT ================= -->
   <section class="block reveal">
@@ -118,7 +108,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>115</b><span>Loop finds</span></div>
+      <div class="stat"><b>116</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -132,7 +122,7 @@
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=shipped -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="atomic-corruption-safe-lock-file-writes">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Correctness · Robustness</span></div>
         <h3>Atomic, corruption-safe lock-file writes</h3>
         <p>Shipped in <b>#65</b> (this card lingered as "next" after the fact).
@@ -149,7 +139,7 @@ concurrent write can no longer drop every prior install record.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="github-pages-deploy-is-broken-every-push">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · Infra</span></div>
         <h3>GitHub Pages deploy is broken every push</h3>
         <p>Fixed by <b>#60</b>: the bogus <code>mutants/None</code> gitlink (a stray mutmut
@@ -167,7 +157,7 @@ publishes from the repo root.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mutation-hardening-core-store-py">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Bug</span></div>
         <h3>Mutation hardening — <code>core/store.py</code></h3>
         <p>Cut mutmut survivors 54&nbsp;→&nbsp;29 and uncovered a latent
@@ -182,7 +172,7 @@ publishes from the repo root.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mutation-hardening-core-gitutil-py">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing</span></div>
         <h3>Mutation hardening — <code>core/gitutil.py</code></h3>
         <p>35&nbsp;→&nbsp;1 survivor via argv-assertion tests that record the exact
@@ -197,7 +187,7 @@ publishes from the repo root.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="untrack-generated-build-noise">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Hygiene · DX</span></div>
         <h3>Untrack generated build noise</h3>
         <p>Shipped in <b>#60</b>. The generated <code>mutants/**</code>,
@@ -212,7 +202,7 @@ no longer churn every diff or force path-scoped <code>git add</code>s.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="browse-crashes-selecting-a-rule-or-workflow">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · UX</span></div>
         <h3><code>browse</code> crashes when you pick a rule or workflow</h3>
         <p><code>cmd_browse</code> lists <em>every</em> catalog entry — skills, rules
@@ -234,7 +224,7 @@ regression test that picks a workflow and asserts no fatal exit.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="consolidate-skill-staleness-drift-logic-into-cor">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Correctness</span></div>
         <h3>Consolidate skill-staleness / drift logic into core</h3>
         <p>The "is this skill outdated" decision — <code>semver_gt</code> → commit compare → <code>sha256_dir</code> vs lock — was reimplemented nearly verbatim in <code>cmd_update</code>, <code>cmd_outdated</code> and <code>_drift_status</code> — three copies of core business logic that would drift apart. It now lives in one place: <code>core/staleness.py</code> exposes two <b>pure</b> (I/O-free) decisions — <code>upstream_reason()</code> (the version→commit→content ladder rendered by <code>cmd_update</code>/<code>cmd_outdated</code>) and <code>drift_state()</code> (the store/local-edits/upstream ladder rendered by <code>_drift_status</code>). The commands became thin renderers; behavior is byte-for-byte preserved and the new module is fully unit-tested (every branch pinned, all mutants killed).</p>
@@ -246,7 +236,7 @@ regression test that picks a workflow and asserts no fatal exit.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mutation-hardening-core-frontmatter-py">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing</span></div>
         <h3>Mutation hardening — <code>core/frontmatter.py</code></h3>
         <p>34&nbsp;→&nbsp;11 survivors with exact-equality tests, replacing
@@ -261,7 +251,7 @@ regression test that picks a workflow and asserts no fatal exit.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="extension-free-tests-core-dense-py">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Coverage</span></div>
         <h3>Extension-free tests — <code>core/dense.py</code></h3>
         <p>The dense-vector RAG backend's whole test module is
@@ -280,7 +270,7 @@ regression test that picks a workflow and asserts no fatal exit.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="crash-recorder-error-paths-core-logs-py">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Resilience</span></div>
         <h3>Crash-recorder error paths — <code>core/logs.py</code></h3>
         <p>The black-box diagnostic logger swallows every filesystem/handler
@@ -298,7 +288,7 @@ regression test that picks a workflow and asserts no fatal exit.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="extract-mcp-http-servers-out-of-configuration-py">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
         <h3>Extract MCP + HTTP servers out of <code>configuration.py</code></h3>
         <p>~200 lines implementing a full HTTP catalog server <b>and</b> a JSON-RPC 2.0 MCP
@@ -320,7 +310,7 @@ by new unit tests covering every branch.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="autonomous-ship-workflow-and-isolated-worktree">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Infra · DX</span></div>
         <h3>Autonomous ship-workflow &amp; isolated worktree</h3>
         <p>The loop now runs commit → PR → green CI → squash-merge → release in a
@@ -334,7 +324,7 @@ by new unit tests covering every branch.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="fix-self-update-version-detection-dead-branch">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Correctness</span></div>
         <h3>Fix <code>self-update</code> version detection (dead branch)</h3>
         <p><code>boost self-update</code> greped <code>__init__.py</code> for a
@@ -355,7 +345,7 @@ by new unit tests covering every branch.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="end-of-options-guard-on-git-commands">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security</span></div>
         <h3>End-of-options <code>--</code> guard on git commands</h3>
         <p><code>clone_shallow</code> passed the clone URL as a positional with no
@@ -377,7 +367,7 @@ by new unit tests covering every branch.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="invocation-pid-logging-for-crash-correlation">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Observability · Diagnostics</span></div>
         <h3>Crash-correlation breadcrumbs in the invocation log</h3>
         <p>A native abort (e.g. a macOS Obj-C fork-safety <code>SIGABRT</code>) kills the
@@ -396,7 +386,7 @@ by new unit tests covering every branch.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="reuse-helpers-kill-minor-dead-work">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
         <h3>Reuse helpers; kill minor dead work</h3>
         <p>Shipped in <b>#126</b>. The byte-identical <code>_user()</code> getpass helper —
@@ -431,7 +421,7 @@ message, so routing it through the helper would change user-facing errors.</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=next -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="reconcile-the-theme-drift">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Design</span></div>
         <h3>Reconcile the theme drift</h3>
         <p><code>docs/index.html</code> inlines its own amber/orange palette
@@ -458,7 +448,7 @@ message, so routing it through the helper would change user-facing errors.</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=planned -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="finish-mutation-hardening-across-core">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing</span></div>
         <h3>Finish mutation hardening across <code>core/</code></h3>
         <p>Audited the surviving mutants across all ten listed modules — catalog, util,
@@ -485,7 +475,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="bring-commands-under-mutation-testing">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Gap</span></div>
         <h3>Bring <code>commands/</code> under mutation testing</h3>
         <p>The ~5,000-line CLI command layer has <strong>zero</strong> mutation
@@ -498,7 +488,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="visual-regression-pass-on-the-guide">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Design · QA</span></div>
         <h3>Visual regression pass on the guide</h3>
         <p>Drive <code>docs/index.html</code> in a real browser across breakpoints
@@ -511,7 +501,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="refresh-the-marketing-surface">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Marketing</span></div>
         <h3>Refresh the marketing surface</h3>
         <p>Re-record <code>docs/demo.gif</code> from <code>demo.tape</code> against
@@ -537,7 +527,7 @@ message, so routing it through the helper would change user-facing errors.</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=internals -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="memoize-config-load-in-process">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance</span></div>
         <h3>Memoize <code>config.load()</code> in-process</h3>
         <p>Every <code>config.get()</code> re-reads <code>config.json</code> and runs a recursive <code>deepcopy</code> of <code>DEFAULTS</code> (<code>core/config.py:80–102</code>). It's called all over hot paths — <code>ai.enabled</code>, per-skill <code>enabled_agents</code> in sync loops, log-level and policy checks — so one command triggers <b>dozens of full reads + deep-copies</b>. Cache the load, invalidate on <code>save</code>.</p>
@@ -548,7 +538,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="atomic-skill-install-temp-dir-swap">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness</span></div>
         <h3>Atomic skill install (temp-dir swap)</h3>
         <p>Already shipped: <code>core/store.py</code>'s <code>_copy_skill</code> stages the
@@ -564,7 +554,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="one-shared-atomic-write-helper">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Robustness</span></div>
         <h3>One shared atomic-write helper</h3>
         <p><code>journal._maybe_rotate</code> is a racy read-modify-write that concurrent appends can truncate mid-line; <code>rag._save</code> and <code>config.save</code> repeat the non-atomic pattern (<code>journal.py:63 · rag.py:252 · config.py:93</code>). Factor a single <code>atomic_write</code> into <code>core</code> and route all four through it.</p>
@@ -575,7 +565,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="unify-tilde-two-copies-have-a-boundary-bug">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Correctness</span></div>
         <h3>Unify <code>_tilde()</code> — two copies have a boundary bug</h3>
         <p>Eight command modules each define <code>_tilde</code>; the <code>quality</code> and <code>intelligence</code> versions use <code>startswith(home)</code> with no separator check (<code>quality.py:78</code>), so <code>/Users/bob-backup</code> wrongly contracts to <code>~-backup</code>. Collapse to one helper in <code>core/paths</code>.</p>
@@ -586,7 +576,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="cache-the-catalog-entry-set-across-rag-queries">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance</span></div>
         <h3>Cache the catalog entry-set across RAG queries</h3>
         <p><code>rag.retrieve()</code> calls <code>all_entries()</code>, which reads &amp; <code>json.loads</code> <b>every tap cache on every search</b> to build the live map (<code>rag.py:323 · catalog.py:166–181</code>) — the BM25 index is mtime-cached, the entry set is not. Memoize the entry set on cache mtime the same way.</p>
@@ -597,7 +587,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="stop-re-serializing-entry-meta-on-every-search">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance</span></div>
         <h3>Stop re-serializing entry meta on every search</h3>
         <p><code>catalog.search</code> computes <code>json.dumps(meta).lower()</code> for <b>every entry on every query</b> just to substring-match (<code>catalog.py:222</code>). Precompute a lowercased search blob at index time, or match structured fields directly.</p>
@@ -608,7 +598,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="prune-ignored-dirs-during-scan-dir-walk">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance</span></div>
         <h3>Prune ignored dirs during <code>scan_dir</code> walk</h3>
         <p>Two full <code>rglob</code> passes descend <b>into</b> <code>.git</code>/<code>node_modules</code> and only filter afterward, and the skill-dir membership test is O(files × skill_dirs) (<code>catalog.py:106,119–123</code>). Switch to an <code>os.walk</code> that prunes ignored dirs in place; index skill dirs in a set.</p>
@@ -619,7 +609,7 @@ message, so routing it through the helper would change user-facing errors.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="single-tech-stack-prober">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
         <h3>Single tech-stack prober</h3>
         <p>Shipped in <b>#140</b>. The canonical <code>detect_stack</code> prober — a
@@ -642,7 +632,7 @@ they add coarse filesystem signal the language-only prober doesn't.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="single-imperative-rule-extractor">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
         <h3>Single imperative-rule extractor</h3>
         <p>Three separate regexes scan SKILL.md bodies for "Always / Never / Must / Do&nbsp;not" lines across <code>cmd_explain</code>, <code>simulate</code> and <code>conflict</code> (<code>info.py:363 · intelligence.py:254 · quality.py:822</code>) — same concept, three implementations. Extract one shared <code>core</code> extractor.</p>
@@ -653,7 +643,7 @@ they add coarse filesystem signal the language-only prober doesn't.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="split-oversized-command-modules">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Maintainability</span></div>
         <h3>Split oversized command modules</h3>
         <p><code>quality.py</code> (15 cmds / 1,264 lines) mixes audit regexes, conflict NLP, decay scoring, fingerprinting, a health dashboard and tap-provenance; <code>intelligence.py</code> and <code>configuration.py</code> are similarly overloaded. Split along cohesive seams to shrink blast radius. First seam (this PR): lift the installed-skill safety &amp; integrity commands — <code>audit</code>, <code>verify</code>, <code>attest</code>, <code>quarantine</code> — into <code>commands/safety.py</code>, with the two shared helpers in <code>commands/_common.py</code>; <code>quality.py</code> drops from 1,264 to ~955 lines. Tap-side <code>trust</code> and the health/diagnostics set stay put.</p>
@@ -664,7 +654,7 @@ they add coarse filesystem signal the language-only prober doesn't.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="robust-tag-argument-parsing">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Maintainability</span></div>
         <h3>Robust <code>tag</code> argument parsing</h3>
         <p>Because <code>-tag</code> looks like an option, <code>cmd_tag</code> calls <code>parse_known_args</code> then re-walks raw <code>argv</code> to reorder tokens (<code>info.py:575–584</code>) — fragile enough that the comment calls it "defensive". Replace with a positional-only sub-parser or an explicit <code>--add/--remove</code> design.</p>
@@ -675,7 +665,7 @@ they add coarse filesystem signal the language-only prober doesn't.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="localize-the-stored-bm25-snippet">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt · RAG</span></div>
         <h3>Localize the stored BM25 snippet</h3>
         <p><code>_make_docs</code> stored <code>piece[:200]</code> — the head of the best
@@ -698,7 +688,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="frontmatter-scalar-over-coercion">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Correctness</span></div>
         <h3>Frontmatter scalar over-coercion</h3>
         <p>Already shipped: <code>core/frontmatter._scalar</code> coerces only the YAML 1.2
@@ -713,7 +703,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="rule-install-native-materialization">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · Rules</span></div>
         <h3>Rule install — materialize rules into each agent's native format</h3>
         <p>Today <code>store.install</code> refuses every non-skill kind
@@ -738,7 +728,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="workflow-install-native-materialization">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · Workflows</span></div>
         <h3>Workflow install — drop commands/subagents into each agent's native dir</h3>
         <p>After rules landed (<code>#141</code>), <code>store.install</code> still refused
@@ -761,7 +751,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="workspace-scope-install">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · Scope</span></div>
         <h3>Workspace scope — <code>boost install --local</code> into the project</h3>
         <p>boost was user-global by construction: one store at
@@ -793,7 +783,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="list-rules-and-workflows">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · UX</span></div>
         <h3><code>boost list</code> shows installed rules and workflows</h3>
         <p>Rule (<code>#141</code>) and workflow (<code>#150</code>) install landed, but
@@ -816,7 +806,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="project-scope-across-every-command">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · Scope</span></div>
         <h3>Teach the rest of the CLI about project scope</h3>
         <p>Workspace scope shipped in <a href="https://github.com/jonnyeclectic/boost/pull/212">#212</a>
@@ -846,7 +836,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="update-refreshes-rules-and-workflows">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · UX</span></div>
         <h3><code>boost update</code> refreshes installed rules and workflows</h3>
         <p>After rule (<code>#141</code>) and workflow (<code>#150</code>) install landed,
@@ -867,7 +857,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="scan-and-sync-rules-and-workflows">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · Safety</span></div>
         <h3>Scan and <code>sync</code> rules/workflows like skills</h3>
         <p>Two skill-only gaps remained after rule (<code>#141</code>) / workflow
@@ -890,7 +880,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="install-scope-user-or-project">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Install engine · UX</span></div>
         <h3><code>boost install --scope user|project</code> for rules/workflows</h3>
         <p>Rule and workflow install always materialized into user-global agent config
@@ -927,7 +917,7 @@ chunks instead cost ~70%.</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=health -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="security-linting-bandit-via-ruff-s-rules">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Vuln</span></div>
         <h3>Security linting — <code>bandit</code> via ruff <code>S</code> rules</h3>
         <p>Turn on the <em>flake8-bandit</em> (<code>S</code>) rule family already
@@ -945,7 +935,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="dependency-cve-gate-pip-audit">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Supply chain</span></div>
         <h3>Dependency CVE gate — <code>pip-audit</code></h3>
         <p>PyPA's <code>pip-audit</code> fails CI when a resolved dependency
@@ -962,7 +952,7 @@ chunks instead cost ~70%.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="retrieval-quality-eval-harness">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Retrieval eval</span></div>
         <h3>Retrieval-quality eval harness (Tier&nbsp;1 + rerank lift)</h3>
         <p>Boost's unit tests prove the retrieval math is <em>arithmetically</em> correct,
@@ -997,7 +987,7 @@ explanations and safety, not better ranking.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="supply-chain-posture-openssf-scorecard">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Posture</span></div>
         <h3>Supply-chain posture — OpenSSF Scorecard</h3>
         <p>The Scorecard GitHub Action audits ~18 supply-chain signals weekly —
@@ -1014,7 +1004,7 @@ explanations and safety, not better ranking.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="golden-set-statistical-power">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Retrieval eval</span></div>
         <h3>Grow &amp; diversify the golden set for statistical power</h3>
         <p>The golden set (<b>43</b> queries / 8 stacks / 7 skills) is small enough that
@@ -1035,7 +1025,7 @@ harness.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="secret-scanning-gitleaks-push-protection">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Secrets</span></div>
         <h3>Secret scanning — <code>gitleaks</code> + push protection</h3>
         <p>Scan the full history and every PR diff for leaked tokens, keys and
@@ -1051,7 +1041,7 @@ harness.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="complexity-and-dead-code-radar-xenon-vulture">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Smell</span></div>
         <h3>Complexity &amp; dead-code radar — <code>xenon</code> · <code>vulture</code></h3>
         <p>Gate CI on a maintainability grade with <code>xenon</code> (built on
@@ -1067,7 +1057,7 @@ harness.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="ranx-significance-monitor">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Retrieval eval</span></div>
         <h3>Significance-tracked engine comparison (ranx monitor)</h3>
         <p>Tier 1b (the <code>ranx</code> paired t-test, <code>--stats</code>) only runs on
@@ -1087,7 +1077,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="quality-dashboard-sonarcloud-free-for-oss">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Platform</span></div>
         <h3>Quality dashboard — SonarCloud (free for OSS)</h3>
         <p>SonarCloud is free for public repos and layers bugs, code smells,
@@ -1103,7 +1093,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="property-based-tests-hypothesis-on-the-parsers">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Bug</span></div>
         <h3>Property-based tests — <code>hypothesis</code> on the parsers</h3>
         <p>Generate adversarial inputs against <code>core/frontmatter</code> and
@@ -1120,7 +1110,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="coverage-guided-fuzzing-atheris-oss-fuzz">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Bug</span></div>
         <h3>Coverage-guided fuzzing — <code>atheris</code> / OSS-Fuzz</h3>
         <p>Google's <code>atheris</code> fuzzes the frontmatter and registry
@@ -1136,7 +1126,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="fork-safe-network-proxy-handler">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Reliability · Network</span></div>
         <h3>Fork-safe network layer — explicit <code>ProxyHandler</code></h3>
         <p><code>core/ai.py</code> and <code>core/embed.py</code> call
@@ -1158,7 +1148,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="log-timestamps-mislabeled-utc">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Observability · Diagnostics</span></div>
         <h3>Log timestamps are local time mislabeled <code>Z</code></h3>
         <p><code>core/logs.py</code> builds the <code>logging.Formatter</code> with
@@ -1179,7 +1169,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="doctor-checks-rules-and-workflows">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Diagnostics · Install engine</span></div>
         <h3><code>boost doctor</code> checks installed rules and workflows</h3>
         <p>After rule (<code>#141</code>) and workflow (<code>#150</code>) install landed,
@@ -1214,7 +1204,7 @@ improvement is real (or isn't)."</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=pipeline -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="workflow-sast-zizmor">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · CI/CD</span></div>
         <h3>Workflow SAST — <code>zizmor</code></h3>
         <p>boost's four workflows embed <code>github-script</code> JavaScript and
@@ -1231,7 +1221,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="workflow-linting-actionlint">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · CI/CD</span></div>
         <h3>Workflow linting — <code>actionlint</code></h3>
         <p>Catches GitHub Actions YAML bugs before they fail a live release:
@@ -1247,7 +1237,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="build-provenance-slsa-attestations">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Supply chain</span></div>
         <h3>Build provenance — SLSA attestations</h3>
         <p><code>actions/attest-build-provenance</code> emits a cryptographically
@@ -1263,7 +1253,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="sbom-on-every-release-cyclonedx-syft">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Supply chain</span></div>
         <h3>SBOM on every release — CycloneDX / Syft</h3>
         <p>Generate a CycloneDX SBOM with the free <code>anchore/sbom-action</code>
@@ -1279,7 +1269,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="sbom-aware-scanning-osv-scanner">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Vuln</span></div>
         <h3>SBOM-aware scanning — <code>osv-scanner</code></h3>
         <p>Google's <code>osv-scanner</code> cross-checks a lockfile or the SBOM
@@ -1294,7 +1284,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="second-type-checker-pyright">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Type</span></div>
         <h3>Second type checker — <code>pyright</code></h3>
         <p>Run Microsoft's <code>pyright</code> alongside mypy. Its independent
@@ -1310,7 +1300,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="widen-the-ruff-rule-surface-b-sim-c4-perf-ruf">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Smell</span></div>
         <h3>Widen the ruff rule surface — <code>B·SIM·C4·PERF·RUF</code></h3>
         <p>Beyond the <code>S</code> security family (round 1), enable
@@ -1327,7 +1317,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="patch-coverage-gate-diff-cover">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Gap</span></div>
         <h3>Patch-coverage gate — <code>diff-cover</code></h3>
         <p>Enforce coverage on the <em>changed lines</em> of each PR — no external
@@ -1356,7 +1346,7 @@ improvement is real (or isn't)."</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=dx -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="promote-nav-footer-into-the-shared-style-system">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">DX · Design system</span></div>
         <h3>Promote nav / footer into the shared style system</h3>
         <p>Canonical <code>style/boost.css</code> ships tokens + primitives but
@@ -1373,7 +1363,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="shift-left-gate-pre-commit-pre-commit-ci">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">DX · Infra</span></div>
         <h3>Shift-left gate — <code>pre-commit</code> + pre-commit.ci</h3>
         <p>A <code>.pre-commit-config.yaml</code> runs ruff, mypy, codespell and the
@@ -1389,7 +1379,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="layering-guard-import-linter">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Architecture</span></div>
         <h3>Layering guard — <code>import-linter</code></h3>
         <p>Enforce the architecture boost already assumes: <code>core/</code> must
@@ -1405,7 +1395,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="typo-detection-codespell">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Docs</span></div>
         <h3>Typo detection — <code>codespell</code></h3>
         <p>Cheap, high-signal for a project this documentation-heavy: scan the
@@ -1420,7 +1410,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="docstring-coverage-interrogate">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Docs</span></div>
         <h3>Docstring coverage — <code>interrogate</code></h3>
         <p>Gate CI below a docstring-coverage threshold so the engine stays
@@ -1435,7 +1425,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="performance-regression-gate-pytest-benchmark">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Perf</span></div>
         <h3>Performance-regression gate — <code>pytest-benchmark</code></h3>
         <p>Benchmark the hot paths — a catalog scan over a large skills tree, a
@@ -1450,7 +1440,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="modernization-smells-refurb-pyupgrade">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Smell</span></div>
         <h3>Modernization smells — <code>refurb</code> + <code>pyupgrade</code></h3>
         <p><code>refurb</code>'s unique <code>FURB</code> checks flag dated idioms
@@ -1465,7 +1455,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="coverage-dashboard-codecov-free-for-oss">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Platform</span></div>
         <h3>Coverage dashboard — Codecov (free for OSS)</h3>
         <p>Upgrade the homegrown coverage badge to Codecov's PR diff-coverage
@@ -1481,7 +1471,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="pin-the-lint-toolchain">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Reproducibility</span></div>
         <h3>Pin the lint toolchain so a release can't redden the gate</h3>
         <p>The <code>lint</code> job installed its tools unpinned
@@ -1506,7 +1496,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="runner-egress-monitoring-stepsecurity-harden-run">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · CI/CD</span></div>
         <h3>Runner egress monitoring — StepSecurity Harden-Runner</h3>
         <p>Free for public repos, Harden-Runner watches (and can block) unexpected
@@ -1522,7 +1512,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="framework-adapters-boost-adapt">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop</span></div>
         <h3><code>boost adapt</code> — render a skill as another framework's agent source</h3>
         <p>boost only installs skills as files for editor agents (Claude Code, Cursor, Windsurf); CrewAI / OpenAI-Agents-SDK apps can't consume them — an agent there is a value built in source. <code>boost adapt &lt;skill&gt; --to crewai|agents-sdk</code> renders one <code>SKILL.md</code> into each framework's native <code>Agent(...)</code> as a deterministic, zero-dependency string transform (<code>core/adapters.py</code>). Strings emit via <code>json.dumps</code> so any body (quotes, <code>"""</code>, unicode) stays valid Python; 97.6% mutation kill. Docs: <a href="adapters.html">adapters.html</a>.</p>
@@ -1533,7 +1523,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="framework-adapter-langgraph">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop</span></div>
         <h3><code>boost adapt --to langgraph</code> — third framework renderer</h3>
         <p>Extend <code>boost adapt</code> (shipped in #146) with a LangGraph target. Unlike CrewAI / Agents-SDK, a LangGraph agent isn't one <code>Agent(...)</code> constructor — the skill body is the system prompt of a node bound into a <code>StateGraph</code>. Add a <code>render_langgraph</code> to <code>core/adapters.py</code> emitting a node factory (prebuilt <code>create_react_agent</code>, or a prompt-carrying node) + its <code>FORMATS</code> row, with byte-exact golden + <code>compile()</code> tests. Then add a <code>langgraph</code> leg to <code>.github/workflows/adapter-conformance.yml</code> (pip install langgraph, import the emitted file). Follows the pattern in <a href="adapters.html">adapters.html</a>: one <code>render_*</code> fn + registry row + golden test + one matrix line.</p>
@@ -1544,7 +1534,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="framework-adapter-multi-agent">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop</span></div>
         <h3><code>boost adapt</code> — multi-agent skills → crews/graphs, not one Agent</h3>
         <p>Today <code>boost adapt</code> (#146, #163) projects a skill into a <b>single</b> framework Agent carrying its instructions/role/model — but a skill can declare tools and a whole subagent graph (e.g. <code>rust-review</code> = worker + dedup-judge + fp-judge). Adapt the richer structure: emit a CrewAI <code>Crew</code> (agents + tasks) or a LangGraph <code>StateGraph</code> when a skill's frontmatter/plugin dir declares subagents, and surface declared tools as stubs. Scope: detect subagent/tool declarations in <code>SKILL.md</code>/<code>plugins/*/agents/*.md</code>; add a crew/graph renderer path in <code>core/adapters.py</code> (single-Agent stays the default for flat skills); golden + <code>compile()</code> tests + a conformance leg. Turns "one skill → one agent" into "one skill → a runnable multi-agent workflow." See <a href="adapters.html">adapters.html</a>.</p>
@@ -1555,7 +1545,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="boost-run-live-agents">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop</span></div>
         <h3><code>boost run</code> — search → adapt → a live agent doing the task, in one command</h3>
         <p>The allure ceiling on <code>boost adapt</code> (#146, #163): it stops at <b>source you assemble</b>, and the adapted agent has a brain (prompt) but no <b>hands</b> (tools). Close both. <code>boost run &lt;skill&gt; [target]</code> = adapt → wire a default toolset (file read, ripgrep/shell, web) → execute on boost's model and stream the result. Opt-in like the conformance path (installs the framework + needs a key, so the zero-dep default holds). Two prerequisites ship with it: (1) <b>tool-wiring</b> — emit/attach the tools a skill needs (or declares) so the agent can act, not roleplay; (2) reuse the <a href="adapters.html">adapt</a> renderer for the agent def. Pairs with <code>[[framework-adapter-multi-agent]]</code> so a skill like <code>rust-review</code> runs as a real crew. This is the screenshot: "one command → an expert agent audits your repo, on Claude, that you never wrote." <b>Working preview:</b> <code>examples/boost-run-prototype.sh</code> already does this by hand (adapt → wire a read_file tool → <code>Runner.run</code> on a file with planted bugs).</p>
@@ -1566,7 +1556,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mcp-search-before-reinventing">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop · Adoption</span></div>
         <h3>MCP — make agents search boost before reinventing a skill</h3>
         <p>The boost MCP server returned no <code>initialize</code> <code>instructions</code> and described its tools by boost's nouns (<em>"Search AI coding skills across the configured tap registries"</em>), so an agent mid-task never mapped <em>"I'll write a code-review workflow"</em> onto <em>"search boost first"</em> — and reinvented the wheel. Add server-level <code>instructions</code> (the field MCP hosts load into the agent's context) framed by the agent's trigger — <em>before you author a reusable skill / rule / subagent, call <code>boost_search</code> FIRST</em> — and rewrite the six tool descriptions to lead with that trigger and a "don't reinvent one that already exists" frame. Follow-up: a self-bootstrapping <code>boost-first</code> meta-skill that <code>boost mcp register</code> / <code>onboard</code> offers to install.</p>
@@ -1578,7 +1568,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="install-resolves-skill-dependencies">
         <div class="head"><span class="pill inflight">In flight</span><span class="cat">Core · Package manager</span></div>
         <h3><code>boost install</code> resolves a skill's <code>requires:</code> closure</h3>
         <p>Skills already declare relationships in frontmatter (<code>requires:</code> /
@@ -1604,7 +1594,7 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mcp-aware-skills">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Interop · MCP</span></div>
         <h3>MCP-aware skills — declare and wire an <code>.mcp.json</code> on install</h3>
         <p>Mining boost's catalog surfaces a recurring shape: skills that only work paired
@@ -1639,7 +1629,7 @@ improvement is real (or isn't)."</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=docsite -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="make-the-roadmaps-discoverable">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Discoverability</span></div>
         <h3>Make the roadmaps discoverable</h3>
         <p>The living roadmaps were unreachable unless you knew the URL:
@@ -1657,7 +1647,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="lighthouse-ci-on-the-pages-site">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Perf</span></div>
         <h3>Lighthouse CI on the Pages site</h3>
         <p><code>treosh/lighthouse-ci-action</code> scores <code>index.html</code>
@@ -1680,7 +1670,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="accessibility-audit-pa11y-ci-axe-core">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · A11y</span></div>
         <h3>Accessibility audit — <code>pa11y-ci</code> / axe-core</h3>
         <p>Run WCAG checks over the rendered pages: colour contrast, focus order,
@@ -1696,7 +1686,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="html-validation-html-validate">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Docs</span></div>
         <h3>HTML validation — <code>html-validate</code></h3>
         <p>The guide and roadmap are hand-authored HTML whose tags are balanced by
@@ -1712,7 +1702,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="broken-link-and-anchor-checking-lychee">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Docs</span></div>
         <h3>Broken-link &amp; anchor checking — <code>lychee</code></h3>
         <p>Fast, free link checker over the README and <code>docs/*.html</code>:
@@ -1733,7 +1723,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="prose-and-terminology-linting-vale">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Content</span></div>
         <h3>Prose &amp; terminology linting — <code>vale</code></h3>
         <p><code>vale</code> enforces a consistent voice across the README and docs
@@ -1749,7 +1739,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="markdown-consistency-markdownlint-cli2">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Docs</span></div>
         <h3>Markdown consistency — <code>markdownlint-cli2</code></h3>
         <p>Lint every Markdown surface — README, <code>CLAUDE.md</code>,
@@ -1765,7 +1755,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="theme-asset-linting-stylelint-eslint">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Style</span></div>
         <h3>Theme-asset linting — <code>stylelint</code> + <code>eslint</code></h3>
         <p>The shared <code>style/boost.css</code> and <code>boost.js</code> theme
@@ -1781,7 +1771,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="post-deploy-smoke-headless-load-check">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Docs</span></div>
         <h3>Post-deploy smoke — headless load check</h3>
         <p>After each Pages deploy, headless-load the guide and roadmap and assert
@@ -1797,7 +1787,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="command-reference-docs-site">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Command reference</span></div>
         <h3>Command reference documentation site</h3>
         <p>boost has no browsable command reference — help lives only in
@@ -1817,7 +1807,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="surface-every-docs-page-from-the-guide">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Discoverability</span></div>
         <h3>Surface every <code>docs/*.html</code> page from the main page</h3>
         <p><a href="roadmap.html">Making the roadmaps discoverable</a>
@@ -1836,7 +1826,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mcp-hub-diagram-node-text-overflow">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Visual polish</span></div>
         <h3>Fix overflowing node text in the RAG diagram (<code>mcp-hub.html</code>)</h3>
         <p>On the Fig 2 RAG-pipeline diagram, the <code>read_body → chunk</code> node
@@ -1851,6 +1841,43 @@ and the work stays visible.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">read_body→chunk node clips its 3rd line</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="docsite-chrome-and-content-audit">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Design system</span></div>
+        <h3>Docsite audit — stale counts, dev-noise footers, and a nav that breaks on mobile</h3>
+        <p><a href="#promote-nav-footer-into-the-shared-style-system">Promoting the chrome</a>
+into <code>style/boost.css</code> gave the docsite <code>.site-nav</code> and
+<code>footer</code> primitives, but nothing adopted them: three pages still had
+<b>no nav at all</b> (<code>eval</code>, <code>adapters</code>,
+<code>mcp-hub</code>), <code>commands.html</code> had neither nav nor footer,
+and <code>design-roadmap.html</code> had <b>no footer</b>. Alongside that,
+<b>stale content</b> — the Visual Guide advertised <b>&ldquo;73 commands&rdquo;</b>
+in three places while <code>cli.py</code>'s <code>COMMANDS</code> held <b>78</b>,
+its embedded array missing <code>adapt</code>, <code>run</code>,
+<code>trust</code>, <code>hooks</code> and <code>bmad</code> — and
+<b>unprofessional footers</b>: four pages signed off with &ldquo;Styled with the
+shared Aurora design system&rdquo; over a raw <code>../style/boost.css</code>
+link, the roadmap credited &ldquo;the boost quality loop&rdquo;, and the MCP Hub
+listed three internal PR numbers.
+<b>Shipped:</b> every page now carries the same nav and the same footer &mdash;
+brand line, install line, the page index, GitHub/PyPI/Portfolio and the licence,
+and nothing else. The command inventory is regenerated from <code>COMMANDS</code>.
+On phones the link row drops to its own full-width line and scrolls with
+40&nbsp;px tap targets (WCAG&nbsp;2.5.5) and a faded trailing edge, replacing
+both <code>roadmap.html</code>'s <code>display:none</code> below 560&nbsp;px
+&mdash; which deleted the nav outright &mdash; and the column stack that turned
+fourteen links into six rows of sticky header. Two latent bugs fell out:
+<code>roadmap.html</code>'s hero was a second bare <code>&lt;header&gt;</code>, so
+it silently inherited the shared sheet's sticky chrome, and generated cards had
+no <code>id</code>, so no item could link another. Locked by
+<code>tests/unit/test_docsite_chrome.py</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">7 pages · one nav, one footer</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -1868,7 +1895,7 @@ and the work stays visible.</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=compat -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="windows-in-the-ci-matrix">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compat · Platform</span></div>
         <h3>Windows in the CI matrix</h3>
         <p>The test matrix runs macOS and Ubuntu only, so
@@ -1884,7 +1911,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="clean-env-install-smoke-pip-and-pipx">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Install</span></div>
         <h3>Clean-env install smoke — pip &amp; <code>pipx</code></h3>
         <p>Every gate runs against an editable <code>pip install -e .</code>, which
@@ -1901,7 +1928,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="lowest-version-resolution-uv-resolution-lowest-d">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Deps</span></div>
         <h3>Lowest-version resolution — <code>uv --resolution lowest-direct</code></h3>
         <p>CI always installs the <em>newest</em> compatible dependencies, so the
@@ -1916,7 +1943,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="pre-release-python-canary-3-14t-free-threaded">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compat · Python</span></div>
         <h3>Pre-release Python canary — 3.14t free-threaded</h3>
         <p>An allow-failure matrix leg on Python pre-releases and the free-threaded
@@ -1931,7 +1958,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="startup-and-import-time-budget-x-importtime">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Perf · Startup</span></div>
         <h3>Startup &amp; import-time budget — <code>-X importtime</code></h3>
         <p>For a CLI, cold-start latency <em>is</em> the UX — every command pays it.
@@ -1946,7 +1973,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="package-metadata-validation-twine-check-friends">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Packaging</span></div>
         <h3>Package-metadata validation — <code>twine check</code> + friends</h3>
         <p>Before every publish, <code>twine check</code> confirms the long
@@ -1962,7 +1989,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="hash-pinned-reproducible-toolchain-uv-lock">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Repro</span></div>
         <h3>Hash-pinned, reproducible toolchain — <code>uv.lock</code></h3>
         <p>Pin the dev and CI toolchain with a hash-locked <code>uv.lock</code> (or
@@ -1978,7 +2005,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="one-command-every-env-nox">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Infra</span></div>
         <h3>One command, every env — <code>nox</code></h3>
         <p>A <code>noxfile.py</code> makes the full lint / test / smoke / mutation
@@ -1994,7 +2021,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mcp-launch-objc-fork-safety">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compatibility · macOS</span></div>
         <h3>Harden <code>boost mcp</code> launch against macOS Obj-C fork aborts</h3>
         <p>On macOS, a host that spawns <code>boost mcp --stdio</code> via <code>fork()</code>
@@ -2016,7 +2043,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mcp-startup-self-harden-fork-safety">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compatibility · macOS</span></div>
         <h3>Self-harden every boost process against the macOS fork-safety abort</h3>
         <p>The launch-env fix (<a href="https://github.com/jonnyeclectic/boost/pull/119">#119</a>) only
@@ -2041,7 +2068,7 @@ and the work stays visible.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="mcp-register-names-server-before-env">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · MCP</span></div>
         <h3>Order the server name before -e flags in `boost mcp register`</h3>
         <p><code>boost mcp register</code> shelled out to
@@ -2078,7 +2105,7 @@ re-break it.</p>
     <div class="rgrid">
 
       <!-- ROADMAP:cards section=trust -->
-      <article class="cap rcard">
+      <article class="cap rcard" id="prompt-injection-scanning-of-skill-markdown">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Content</span></div>
         <h3>Prompt-injection scanning of skill Markdown</h3>
         <p>The highest-signal gap: boost installs Markdown an agent then <em>executes</em>,
@@ -2095,7 +2122,7 @@ re-break it.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="integrity-verification-boost-verify">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Integrity</span></div>
         <h3>Integrity verification — <code>boost verify</code></h3>
         <p>The lockfile already records a <code>sha256</code> per install via
@@ -2112,7 +2139,7 @@ re-break it.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="tap-signing-and-provenance-sigstore-minisign">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Provenance</span></div>
         <h3>Tap signing &amp; provenance — Sigstore / minisign</h3>
         <p>A tap records its <code>commit</code> today but offers no cryptographic
@@ -2128,7 +2155,7 @@ re-break it.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="runtime-explain-faithfulness-guardrail">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Trust · Hallucination guard</span></div>
         <h3>Runtime hallucination guardrail for <code>boost explain</code></h3>
         <p>Today the ragas <b>faithfulness</b> check (Tier 2c, <code>scripts/eval_explain.py</code>)
@@ -2149,7 +2176,7 @@ detecting hallucinations and preventing them.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="typosquat-and-name-confusion-detection">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Registry</span></div>
         <h3>Typosquat &amp; name-confusion detection</h3>
         <p>The classic package-manager attack: a skill named one edit-distance from
@@ -2165,7 +2192,7 @@ detecting hallucinations and preventing them.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="update-diff-before-apply">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Supply chain</span></div>
         <h3>Update-diff before apply</h3>
         <p>Shipped in <b>#132</b>. <code>boost update</code> no longer overwrites an
@@ -2187,7 +2214,7 @@ paths.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="project-scope-symlink-escape-on-write">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Integrity</span></div>
         <h3>Project scope — refuse to write through an escaping symlink</h3>
         <p>Workspace scope (<a href="https://github.com/jonnyeclectic/boost/pull/212">#212</a>)
@@ -2216,7 +2243,7 @@ paths.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="secret-and-pii-scanning-of-installed-skills">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Secrets</span></div>
         <h3>Secret &amp; PII scanning of installed skills</h3>
         <p>Point the round-2 secret scanners (<code>gitleaks</code>/<code>trufflehog</code>)
@@ -2232,7 +2259,7 @@ paths.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="lockfile-enforcement-and-commit-pinning">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Integrity</span></div>
         <h3>Lockfile enforcement &amp; commit pinning</h3>
         <p>Promoted the recorded <code>sha256</code> from a note to a rule. The check
@@ -2256,7 +2283,7 @@ paths.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="capability-manifest-and-least-privilege-policy">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Policy</span></div>
         <h3>Capability manifest &amp; least-privilege policy</h3>
         <p>Extend the existing <code>policy.py</code> so a skill declares the
@@ -2272,7 +2299,7 @@ paths.</p>
         </div>
       </article>
 
-      <article class="cap rcard">
+      <article class="cap rcard" id="installed-skill-trust-audit">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Trust · Health</span></div>
         <h3><code>boost audit --skills</code> — a trust/staleness report for installed skills</h3>
         <p><code>boost audit</code> today gates CVEs in boost's <em>own</em> Python dependencies,
@@ -2297,13 +2324,30 @@ paths.</p>
     </div>
   </section>
 
-  <footer>
-    <p>Maintained by the boost quality loop · themed with
-       <a href="../style/boost.css">style/boost.css</a> ·
-       <a href="index.html">visual guide</a></p>
-  </footer>
 
 </div>
+
+<footer>
+  <div class="wrap">
+    <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
+    <nav class="foot-links" aria-label="Documentation">
+      <a href="index.html">Guide</a>
+      <a href="commands.html">Commands</a>
+      <a href="#top" aria-current="page">Roadmap</a>
+      <a href="design-roadmap.html">Design</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a href="eval.html">Evaluation</a>
+      <a href="adapters.html">Adapters</a>
+    </nav>
+    <p class="foot-legal">
+      <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+      <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+      <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+      Released under the GPL-3.0 license
+    </p>
+  </div>
+</footer>
 
 <script src="../style/boost.js" defer></script>
 </body>

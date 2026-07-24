@@ -117,7 +117,9 @@ def render_code_card(item: dict) -> str:
     stars = "★" * _as_int(item.get("wow"), 0)
     note = item.get("note")
     lines = [
-        '      <article class="cap rcard">',
+        # The item id doubles as the card's anchor, so one item can link
+        # another (`<a href="#other-id">`) and a card can be deep-linked.
+        '      <article class="cap rcard" id="%s">' % item.get("id", ""),
         '        <div class="head"><span class="pill %s">%s</span>'
         '<span class="cat">%s</span></div>' % (status, label, item.get("category", "")),
         "        <h3>%s</h3>" % item.get("title", ""),
@@ -170,8 +172,8 @@ def render_design_card(item: dict) -> str:
     wow = _as_int(item.get("wow"), 0)
     stars = "★" * wow + "☆" * (5 - wow)
     lines = [
-        '<article class="ritem" data-track="%s" data-impact="%s">'
-        % (item.get("track", ""), impact),
+        '<article class="ritem" id="%s" data-track="%s" data-impact="%s">'
+        % (item.get("id", ""), item.get("track", ""), impact),
         '  <div class="ritem-top"><span class="rid">%s</span>'
         '<span class="rstatus %s">%s</span></div>'
         % (item.get("id", ""), status, DESIGN_STATUS[status]),

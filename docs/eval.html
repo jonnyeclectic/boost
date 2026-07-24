@@ -93,10 +93,6 @@
 
   .term-wrap { max-width: 820px; margin: 40px auto 0; }
 
-  footer { margin-top: 96px; border-top: 1px solid var(--line-soft);
-           padding: 36px 0 56px; text-align: center; }
-  footer p { color: var(--text-3); font-size: 13px; }
-  footer a { color: var(--sky); text-decoration: none; }
 
   /* narrow screens: the contract table scrolls inside itself instead of
      widening the document (caught by tests/visual/visual_check.mjs) */
@@ -109,7 +105,23 @@
 </head>
 <body>
 
-<main>
+<header>
+  <div class="wrap site-nav">
+    <a class="logo" href="index.html"><b>boost</b><span>Evaluation</span></a>
+    <ul>
+      <li><a href="index.html">Guide</a></li>
+      <li><a href="commands.html">Commands</a></li>
+      <li><a href="roadmap.html">Roadmap</a></li>
+      <li><a href="design-roadmap.html">Design</a></li>
+      <li><a href="mcp-hub.html">MCP Hub</a></li>
+      <li><a href="#top" aria-current="page">Evaluation</a></li>
+      <li><a href="adapters.html">Adapters</a></li>
+      <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="top">
   <!-- ===== hero ===== -->
   <div class="wrap hero">
     <p class="crumbs"><a href="index.html">boost</a> / docs / evaluation system</p>
@@ -457,17 +469,30 @@
     </div>
   </section>
 
-  <footer>
-    <div class="wrap">
-      <p>boost — a Homebrew for AI coding skills. ·
-        <a href="index.html">Home</a> · <a href="mcp-hub.html">RAG &amp; the MCP hub</a> ·
-        <a href="roadmap.html">Roadmap</a></p>
-      <p style="margin-top:8px">Source: <code>scripts/eval_retrieval.py</code>,
-        <code>scripts/eval_recommend.py</code>, <code>scripts/eval_explain.py</code>,
-        <code>tests/eval/</code></p>
-    </div>
-  </footer>
 </main>
+
+<footer>
+  <div class="wrap">
+    <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
+    <nav class="foot-links" aria-label="Documentation">
+      <a href="index.html">Guide</a>
+      <a href="commands.html">Commands</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="design-roadmap.html">Design</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a href="#top" aria-current="page">Evaluation</a>
+      <a href="adapters.html">Adapters</a>
+    </nav>
+    <p class="foot-legal">
+      <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+      <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+      <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+      Released under the GPL-3.0 license
+    </p>
+  </div>
+</footer>
+
 
 <script src="../style/boost.js" defer></script>
 </body>
