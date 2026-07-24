@@ -427,7 +427,9 @@ class TestContext:
 class TestFocus:
     def test_focus_sidelines_others(self, boost, tapped):
         boost("install", "brainstorming")
-        boost("install", "jira-integration")
+        # --no-deps: this test wants exactly two installed skills; without it,
+        # jira-integration would also pull in its `requires: commit-messages`.
+        boost("install", "jira-integration", "--no-deps")
         r = boost("focus", "brainstorming")
         assert "focus: brainstorming" in r.out
         assert "(other 1 skills sidelined)" in r.out

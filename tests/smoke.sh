@@ -42,7 +42,10 @@ run "outdated (clean)"       0 ./boost outdated
 echo "== everyday loop"
 run "search jira"            0 ./boost search jira
 run "install brainstorming"  0 ./boost install brainstorming
-run "install jira-integration" 0 ./boost install jira-integration
+# --no-deps: install each fixture skill independently. jira-integration declares
+# `requires: commit-messages`, which install now resolves — without this the
+# separate `install commit-messages` below would hit the already-installed path.
+run "install jira-integration" 0 ./boost install jira-integration --no-deps
 run "install commit-messages"  0 ./boost install commit-messages
 run "install tdd-workflow"     0 ./boost install tdd-workflow
 run "install cowboy-coding"    0 ./boost install cowboy-coding

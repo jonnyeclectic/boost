@@ -17,8 +17,8 @@ from typing import Dict, List, Optional
 from .. import cliparse
 from ..core import (adapters, agents, catalog, config, frontmatter, gitutil,
                     injectscan, integrity, journal, lockfile, paths, projectlock,
-                    registry, scopes, secretscan, staleness, store, typosquat,
-                    updatediff, util)
+                    registry, resolve, scopes, secretscan, staleness, store,
+                    typosquat, updatediff, util)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -163,6 +163,56 @@ def _boostfile_text(skills: Dict[str, dict], via: str = "boost bundle dump") -> 
     return "\n".join(lines) + "\n"
 
 
+def _rel_list(meta: dict, key: str) -> List[str]:
+    """A skill's `requires:`/`conflicts:` frontmatter as a clean name list."""
+    val = (meta or {}).get(key)
+    if val in (None, "", False):
+        return []
+    if isinstance(val, list):
+        return [str(x).strip() for x in val if str(x).strip()]
+    return [s.strip() for s in str(val).split(",") if s.strip()]
+
+
+def _skill_relations(name: str, key: str) -> List[str]:
+    """`requires:`/`conflicts:` for a skill by name, from its catalog entry."""
+    matches = catalog.find(name)
+    if not matches:
+        return []
+    return _rel_list(matches[0].get("meta") or {}, key)
+
+
+def _expand_dependencies(entries: List[dict]) -> "tuple[List[dict], resolve.Resolution]":
+    """Grow the requested entries into their full `requires:` closure.
+
+    Returns ``(ordered_entries, resolution)`` — the entries to install in
+    dependency-first order (roots plus any pulled-in dependencies that are not
+    already installed), and the :class:`resolve.Resolution` carrying what was
+    added, any advisory conflicts, and unresolved (dangling) requirements.
+    """
+    installed = frozenset(lockfile.installed())
+    res = resolve.resolve(
+        [e["name"] for e in entries],
+        lambda n: _skill_relations(n, "requires"),
+        lambda n: _skill_relations(n, "conflicts"),
+        installed=installed,
+        known=lambda n: bool(catalog.find(n)),
+    )
+    by_name = {e["name"]: e for e in entries}
+    ordered: List[dict] = []
+    for name in res.order:
+        if name in by_name:
+            ordered.append(by_name[name])
+            continue
+        try:
+            ordered.append(catalog.resolve_one(name))
+        except BoostError:
+            # A dep that resolves nowhere unambiguously is reported via
+            # res.unresolved; skip it here rather than abort the whole install.
+            if name not in res.unresolved:
+                res.unresolved.append(name)
+    return ordered, res
+
+
 # ── install ──────────────────────────────────────────────────────────────
 
 def cmd_install(argv: List[str]) -> int:
@@ -186,6 +236,8 @@ def cmd_install(argv: List[str]) -> int:
                          help="into your user config (= --scope user, default)")
     ap.add_argument("--dry-run", action="store_true",
                     help="show what would happen without changing anything")
+    ap.add_argument("--no-deps", action="store_true",
+                    help="install only the named skills, not their `requires:`")
     args = ap.parse_args(argv)
     args.scope = args.scope or scopes.SCOPE_USER
     only = _check_agents(args.agent)
@@ -201,6 +253,25 @@ def cmd_install(argv: List[str]) -> int:
             failed += 1
 
     _warn_confusions(entries)
+
+    # Grow the request into its `requires:` closure (deps installed first),
+    # unless the caller opted out. Only skills carry dependency frontmatter;
+    # rules/workflows pass through unchanged.
+    if not args.no_deps and entries:
+        entries, dep_res = _expand_dependencies(entries)
+        if dep_res.added:
+            out.info("pulling in %s required by your selection: %s"
+                     % (_plural(len(dep_res.added), "dependency"),
+                        ", ".join(dep_res.added)))
+        for name in dep_res.unresolved:
+            out.warn("required skill %r is in no tap — skipped "
+                     "(install it manually or `boost tap` its source)" % name)
+        for skill, clash in dep_res.conflicts:
+            out.warn("%s declares a conflict with %s (also present)" % (skill, clash))
+        # Pulling in dependencies can turn a single-name request into a multi-item
+        # install (per-item headings); it must never *lower* multi (e.g. when an
+        # unknown co-requested name was dropped), so OR rather than reassign.
+        multi = multi or len(entries) > 1
 
     if args.dry_run:
         targets = [a for a in agents.enabled_agents() if not only or a in only]
