@@ -47,7 +47,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def _index() -> str:
-    return _INDEX.read_text()
+    return _INDEX.read_text(encoding="utf-8")
 
 
 def _embedded_commands(html: str) -> "list[tuple[str, str, str]]":
@@ -92,20 +92,20 @@ def test_index_command_groups_match_the_cli():
 @pytest.mark.parametrize("page", _NAV_PAGES)
 def test_every_page_has_the_shared_nav(page):
     """style/boost.css documents two accepted forms: .site-nav or .nav."""
-    html = (_DOCS / page).read_text()
+    html = (_DOCS / page).read_text(encoding="utf-8")
     assert 'class="wrap site-nav"' in html or 'class="wrap nav"' in html, (
         "%s does not use the shared nav chrome from style/boost.css" % page)
 
 
 @pytest.mark.parametrize("page", _PAGES)
 def test_every_page_has_a_footer(page):
-    assert "<footer>" in (_DOCS / page).read_text(), "%s has no footer" % page
+    assert "<footer>" in (_DOCS / page).read_text(encoding="utf-8"), "%s has no footer" % page
 
 
 @pytest.mark.parametrize("page", _PAGES)
 def test_no_page_is_an_orphan(page):
     """Every page links every other page, so a new page can't ship unreachable."""
-    html = (_DOCS / page).read_text()
+    html = (_DOCS / page).read_text(encoding="utf-8")
     for other in _PAGES:
         if other == page:
             continue
@@ -117,7 +117,7 @@ def test_no_page_is_an_orphan(page):
 @pytest.mark.parametrize("page", _PAGES)
 def test_footers_carry_no_internal_noise(page):
     """Footers are user-facing: no stylesheet links, PR numbers, or build chatter."""
-    html = (_DOCS / page).read_text()
+    html = (_DOCS / page).read_text(encoding="utf-8")
     foot = html[html.index("<footer>"):]
     for noise in ("style/boost.css", "/pull/", "quality loop", "Styled with"):
         assert noise not in foot, (
@@ -132,21 +132,20 @@ def _hidden_nav_rules(html: str) -> "list[str]":
     row scrolls without a visible bar. ``.topbar nav { display: none }``, which
     is what roadmap.html shipped below 560px, is not.
     """
-    hits = []
-    for style in re.findall(r"<style>(.*?)</style>", html, re.S):
-        for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", style):
-            if not re.search(r"display:\s*none", body):
-                continue
-            for one in sel.split(","):
-                if re.search(r"(^|[\s>+~])(nav|\.[\w-]*nav)$", one.strip()):
-                    hits.append("%s{%s}" % (one.strip(), body.strip()))
-    return hits
+    return [
+        "%s{%s}" % (one.strip(), body.strip())
+        for style in re.findall(r"<style>(.*?)</style>", html, re.S)
+        for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", style)
+        if re.search(r"display:\s*none", body)
+        for one in sel.split(",")
+        if re.search(r"(^|[\s>+~])(nav|\.[\w-]*nav)$", one.strip())
+    ]
 
 
 @pytest.mark.parametrize("page", _NAV_PAGES)
 def test_nav_links_stay_reachable_on_small_screens(page):
     """No page may hide its nav outright at a breakpoint (roadmap.html once did)."""
-    hidden = _hidden_nav_rules((_DOCS / page).read_text())
+    hidden = _hidden_nav_rules((_DOCS / page).read_text(encoding="utf-8"))
     assert not hidden, (
         "%s hides its nav (%s) — the shared .site-nav scrolls instead, so links "
         "stay reachable on a phone" % (page, "; ".join(hidden)))
@@ -162,7 +161,7 @@ def test_the_hidden_nav_detector_actually_detects():
 
 def test_shared_sheet_gives_nav_links_a_touch_target():
     """The small-screen rules are what make a 14-link bar usable on a phone."""
-    css = _CSS.read_text()
+    css = _CSS.read_text(encoding="utf-8")
     mobile = css[css.index("@media (max-width: 720px)"):]
     assert "min-height: 40px" in mobile, (
         "style/boost.css no longer gives small-screen nav links a 40px tap target")
@@ -176,10 +175,22 @@ def test_only_the_nav_header_is_sticky_chrome():
     roadmap.html did exactly that.
     """
     for page in _NAV_PAGES:
-        html = (_DOCS / page).read_text()
-        assert html.count("<header") == html.count('<header id="top">') + \
-            html.count("<header>"), page
+        html = (_DOCS / page).read_text(encoding="utf-8")
         opens = re.findall(r"<header[^>]*>", html)
         assert len(opens) == 1, (
             "%s has %d <header> elements (%s) — only the nav may be one, or it "
             "inherits the shared sticky chrome" % (page, len(opens), opens))
+
+
+@pytest.mark.parametrize("page", _PAGES)
+def test_no_duplicate_element_ids(page):
+    """html-validate's no-dup-id, checked in-suite so it fails before CI does.
+
+    Adding an anchor to a page that already carries one is easy to miss: the
+    footer's own `#top` self-link keeps working either way, and only the
+    validate job notices.
+    """
+    html = (_DOCS / page).read_text(encoding="utf-8")
+    ids = re.findall(r'\sid="([^"]+)"', html)
+    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    assert not dupes, "%s repeats id(s): %s" % (page, ", ".join(dupes))
