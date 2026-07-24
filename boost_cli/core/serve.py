@@ -20,7 +20,7 @@ from typing import Optional, Tuple
 
 from .. import __version__
 from ..errors import BoostError
-from . import catalog, lockfile, registry, store
+from . import catalog, lockfile, logs, registry, store
 from . import output as out
 import contextlib
 
@@ -173,9 +173,16 @@ class _CatalogHandler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
         except Exception as e:
+            # Never leak internal exception detail (filesystem paths, state) to
+            # the HTTP client — it reaches remote callers when the server is
+            # exposed with `--host 0.0.0.0`. Log the specifics server-side and
+            # return a generic body.
+            logs.get_logger().warning("serve: %s %s failed: %s: %s",
+                                      self.command, self.path,
+                                      type(e).__name__, e)
             with contextlib.suppress(Exception):
                 self._send(500, "application/json",
-                           json.dumps({"error": str(e)}).encode())
+                           json.dumps({"error": "internal server error"}).encode())
 
 
 def serve_http(host: str, port: int) -> None:

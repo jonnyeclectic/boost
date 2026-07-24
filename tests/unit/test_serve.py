@@ -186,3 +186,39 @@ class TestServeHttp:
             serve.serve_http("127.0.0.1", 1234)
         assert "cannot bind 127.0.0.1:1234" in ei.value.message
         assert ei.value.hint == "check --host and --port"
+
+
+class TestDoGetErrorHandling:
+    def test_unexpected_error_body_is_generic_detail_logged(self, monkeypatch):
+        # A crash in routing must NOT ship the exception text (which can carry
+        # filesystem paths / internal state) to the HTTP client — the client
+        # gets a generic body, the specifics go to the server-side log.
+        handler = serve._CatalogHandler.__new__(serve._CatalogHandler)
+        handler.command = "GET"
+        handler.path = "/catalog.json"
+        sent = {}
+        monkeypatch.setattr(handler, "_send", lambda status, ctype, body:
+                            sent.update(status=status, ctype=ctype, body=body))
+        logged = []
+        monkeypatch.setattr(serve.logs, "get_logger",
+                            lambda: type("L", (), {"warning": lambda _s, *a: logged.append(a)})())
+
+        def boom(_path):
+            raise RuntimeError("/Users/secret/leaked/path.json missing")
+        monkeypatch.setattr(serve, "route", boom)
+
+        handler.do_GET()
+
+        assert sent["status"] == 500
+        assert json.loads(sent["body"]) == {"error": "internal server error"}
+        assert b"secret" not in sent["body"]                 # nothing leaked to client
+        assert any("secret/leaked" in str(a) for a in logged)  # detail kept server-side
+
+    def test_broken_pipe_is_swallowed(self, monkeypatch):
+        # a client that hangs up mid-response must not crash the handler
+        handler = serve._CatalogHandler.__new__(serve._CatalogHandler)
+        handler.command = "GET"
+        handler.path = "/"
+        monkeypatch.setattr(serve, "route",
+                            lambda _p: (_ for _ in ()).throw(BrokenPipeError()))
+        handler.do_GET()   # must not raise
