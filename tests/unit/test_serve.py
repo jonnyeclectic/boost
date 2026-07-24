@@ -186,3 +186,62 @@ class TestServeHttp:
             serve.serve_http("127.0.0.1", 1234)
         assert "cannot bind 127.0.0.1:1234" in ei.value.message
         assert ei.value.hint == "check --host and --port"
+
+
+class TestDoGetErrorHandling:
+    def test_success_path_forwards_routed_response(self, monkeypatch):
+        # do_GET must route THIS request's path and send the routed triple
+        # verbatim — pins route(self.path) and _send(status, ctype, body).
+        handler = serve._CatalogHandler.__new__(serve._CatalogHandler)
+        handler.command = "GET"
+        handler.path = "/catalog.json"
+        sent = {}
+        monkeypatch.setattr(handler, "_send", lambda status, ctype, body:
+                            sent.update(status=status, ctype=ctype, body=body))
+        # echo the path back so a route(None) mutant crashes instead of matching
+        monkeypatch.setattr(serve, "route",
+                            lambda p: (200, "text/plain", p.encode()))
+        handler.do_GET()
+        assert (sent["status"], sent["ctype"]) == (200, "text/plain")
+        assert sent["body"] == b"/catalog.json"
+
+    def test_unexpected_error_body_is_generic_detail_logged(self, monkeypatch):
+        # A crash in routing must NOT ship the exception text (which can carry
+        # filesystem paths / internal state) to the HTTP client — the client
+        # gets a generic body, the specifics go to the server-side log.
+        handler = serve._CatalogHandler.__new__(serve._CatalogHandler)
+        handler.command = "GET"
+        handler.path = "/catalog.json"
+        sent = {}
+        monkeypatch.setattr(handler, "_send", lambda status, ctype, body:
+                            sent.update(status=status, ctype=ctype, body=body))
+        logged = []
+        monkeypatch.setattr(serve.logs, "get_logger",
+                            lambda: type("L", (), {"warning": lambda _s, *a: logged.append(a)})())
+
+        def boom(_path):
+            raise RuntimeError("/Users/secret/leaked/path.json missing")
+        monkeypatch.setattr(serve, "route", boom)
+
+        handler.do_GET()
+
+        assert sent["status"] == 500
+        assert sent["ctype"] == "application/json"           # JSON body, JSON type
+        assert json.loads(sent["body"]) == {"error": "internal server error"}
+        assert b"secret" not in sent["body"]                 # nothing leaked to client
+        # detail kept server-side, with the request context in the log record
+        assert logged, "the failure must be logged server-side"
+        record = logged[0]
+        assert record[0].startswith("serve:")                # format string intact
+        assert record[1] == "GET" and record[2] == "/catalog.json"  # command, path
+        assert record[3] == "RuntimeError"                   # exception type name arg
+        assert "secret/leaked" in str(record[-1])            # the exception itself
+
+    def test_broken_pipe_is_swallowed(self, monkeypatch):
+        # a client that hangs up mid-response must not crash the handler
+        handler = serve._CatalogHandler.__new__(serve._CatalogHandler)
+        handler.command = "GET"
+        handler.path = "/"
+        monkeypatch.setattr(serve, "route",
+                            lambda _p: (_ for _ in ()).throw(BrokenPipeError()))
+        handler.do_GET()   # must not raise
