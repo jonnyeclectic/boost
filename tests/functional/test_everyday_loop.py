@@ -19,7 +19,9 @@ def test_tap_search_install_doctor_uninstall(boost, fixture_tap_src):
     assert "jira-integration" in r.out
     assert "ranked by full-content BM25" in r.out
 
-    r = boost("install", "jira-integration")
+    # --no-deps keeps this a single-skill lifecycle (doctor asserts "1 skill");
+    # jira-integration otherwise pulls in its `requires: commit-messages`.
+    r = boost("install", "jira-integration", "--no-deps")
     assert "copied to" in r.out
     assert "linked → claude-code · windsurf · cursor" in r.out
     assert "lock updated (.skill-lock.json)" in r.out

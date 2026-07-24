@@ -116,6 +116,29 @@ class TestInstall:
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not paths.lockfile_path().exists()
 
+    def test_installs_declared_requires_closure(self, boost, tapped):
+        # jira-integration declares `requires: [commit-messages]` in the fixture;
+        # installing it must pull in the dependency, dependency-first.
+        r = boost("install", "jira-integration")
+        assert "pulling in 1 dependency" in r.out
+        assert "commit-messages" in r.out
+        assert "Installed 2 new skills" in r.out
+        assert "commit-messages" in _lock() and "jira-integration" in _lock()
+        assert (paths.store_dir() / "commit-messages" / "SKILL.md").is_file()
+
+    def test_no_deps_installs_only_named(self, boost, tapped):
+        r = boost("install", "jira-integration", "--no-deps")
+        assert "pulling in" not in r.out
+        assert "Installed 1 new skill" in r.out
+        assert "jira-integration" in _lock()
+        assert "commit-messages" not in _lock()          # dep NOT pulled in
+
+    def test_already_installed_dependency_not_repulled(self, boost, tapped):
+        boost("install", "commit-messages")              # dep present first
+        r = boost("install", "jira-integration")
+        assert "pulling in" not in r.out                 # nothing to add
+        assert "Installed 1 new skill" in r.out          # only jira is new
+
     def test_agent_flag_links_only_claude(self, boost, tapped):
         r = boost("install", "brainstorming", "--agent", "claude-code")
         assert "linked → claude-code" in r.out

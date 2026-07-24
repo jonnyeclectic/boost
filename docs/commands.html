@@ -80,7 +80,7 @@
     <input id="q" type="search" placeholder="Filter 78 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
-      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run name">install</a>
+      <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run --no-deps name">install</a>
       <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local name">uninstall</a>
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only tap">update</a>
@@ -187,10 +187,10 @@
     <p class="lead">All <b>78</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
-      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run name">
+      <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run --no-deps name">
         <h3><span class="cname">install</span><span class="gtag">pkg</span></h3>
         <p class="summary">Install a skill from a tap registry</p>
-        <pre class="syn">boost install [--force] [--agent A] [--scope {user,project}] [--local] [--global] [--dry-run] NAME [NAME ...]</pre>
+        <pre class="syn">boost install [--force] [--agent A] [--scope {user,project}] [--local] [--global] [--dry-run] [--no-deps] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>skill name, optionally qualified as tap:skill</span></div>
@@ -203,6 +203,7 @@
           <div class="arg"><code>--local</code><span>into this repo, committable (= --scope project)</span></div>
           <div class="arg"><code>--global</code><span>into your user config (= --scope user, default)</span></div>
           <div class="arg"><code>--dry-run</code><span>show what would happen without changing anything</span></div>
+          <div class="arg"><code>--no-deps</code><span>install only the named skills, not their `requires:`</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local name">
