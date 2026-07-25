@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli fuzz
+.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli fuzz post-deploy
 
 # Every tool comes from a hash-pinned requirements/*.txt — the same files CI
 # installs (see scripts/lock_toolchain.py). pip enforces the hashes, so a dev
@@ -154,6 +154,16 @@ fuzz:
 		$(PY) tests/fuzz/$$t.py tests/fuzz/corpus/$${t#fuzz_} \
 			-max_total_time=$(FUZZ_SECONDS) -artifact_prefix=/tmp/ || exit 1; \
 	done
+
+# Health check for the PUBLISHED docs site: every page 200, every local asset and
+# internal link resolves, and (with Chrome) no console errors or failed runtime
+# requests. Not part of `make check` — it needs the network and the live deploy;
+# the post-deploy workflow runs it after Pages republishes.
+# BOOST_SITE=http://localhost:8000/ make post-deploy   to check a local serve.
+BOOST_SITE ?= https://jonnyeclectic.github.io/boost/
+post-deploy:
+	$(PY) scripts/post_deploy_smoke.py --base-url "$(BOOST_SITE)" -v
+	@command -v node >/dev/null 2>&1 && BOOST_SITE="$(BOOST_SITE)" node tests/visual/console_check.mjs || echo "node not on PATH — skipping the console check (CI runs it)"
 
 # regenerate generated artifacts from their source (registries + roadmap boards)
 generate:
