@@ -2,7 +2,7 @@
 id: hash-pinned-reproducible-toolchain-uv-lock
 board: code
 section: compat
-status: inflight
+status: shipped
 category: Security · Repro
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: supply-chain repro
 order: 7
 owner: loop/hashed-toolchain
-pr:
+pr: 234
 title: Hash-pinned, reproducible toolchain — <code>requirements/*.txt</code>
 ---
 Every dev/CI tool was resolved at install time, so two runs of the same gate could
