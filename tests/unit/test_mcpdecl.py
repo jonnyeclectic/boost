@@ -297,7 +297,7 @@ class TestMergeInto:
         assert doc["keepMe"] == 1
 
     def test_non_dict_existing_reads_as_empty(self):
-        doc, added = mcpdecl.merge_into("garbage", self._rows("gh"), "sk")
+        _doc, added = mcpdecl.merge_into("garbage", self._rows("gh"), "sk")
         assert added == ["gh"]
 
 
