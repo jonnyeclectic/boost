@@ -8,11 +8,19 @@
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![License](https://img.shields.io/github/license/jonnyeclectic/boost)](LICENSE)
 
-**boost** is a CLI that finds, installs, and keeps track of AI coding skills
-pulled from GitHub-hosted registries, then hooks them straight into
-**Claude Code, Windsurf, and Cursor** in one pass. Instead of hand-copying
-skill files into three different agent folders and hoping you remember to
-update all of them, you run one command.
+**Homebrew for AI coding skills.** boost finds, installs, and version-tracks
+skills from GitHub-hosted registries — and wires each one into **Claude Code,
+Windsurf, and Cursor** in a single pass.
+
+```bash
+pipx install boost-skill-cli
+boost tap --defaults          # 5 curated registries
+boost search tdd              # full-content BM25 over every skill
+boost install tdd-workflow    # → every agent, version-pinned, one lock file
+```
+
+No more copying `SKILL.md` into three agent folders and forgetting which one is
+stale. The default install is **zero-dependency** — pure stdlib, no build step.
 
 <p align="center">
   <img src="docs/demo.gif" alt="boost demo: tap a registry, search for a skill, install it into every agent, then run doctor" width="820">
@@ -273,9 +281,9 @@ Three layers, all enforced (`make check` runs the full set; CI runs the same thi
 
 | Layer | What it does | Gate |
 |---|---|---|
-| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 72 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
-| `make smoke` | `tests/smoke.sh` — 152 checks run through the actual `./boost` shim (`--online` also hits real registries) | all pass |
-| `make mutation` | [mutmut] mutates `boost_cli/core` (~2,600 mutants) and reruns the unit suite against each one | **≥80% killed** (`scripts/mutation_gate.py`) |
+| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 78 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
+| `make smoke` | `tests/smoke.sh` — 170 checks run through the actual `./boost` shim (`--online` also hits real registries) | all pass |
+| `make mutation` | [mutmut] mutates `boost_cli/core` (~9,900 mutants) and reruns the unit suite against each one | **≥80% killed** (`scripts/mutation_gate.py`) |
 
 Dev setup: `make venv` (pulls in pytest, coverage, mutmut — the shipped
 runtime itself stays dependency-free). Every test run uses a throwaway
