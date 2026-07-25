@@ -109,7 +109,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>141</b><span>Loop finds</span></div>
+      <div class="stat"><b>142</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1445,6 +1445,38 @@ exactly what the gate is supposed to catch.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">doctor was skill-only after rule/workflow install</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="rel-time-tests-race-the-wall-clock">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Flaky test</span></div>
+        <h3><code>rel_time</code> tests race the wall clock and flake on a loaded runner</h3>
+        <p><code>TestRelTime</code> builds its input with
+<code>iso_ago(n) = (now() - n).strftime("%Y-%m-%dT%H:%M:%SZ")</code>, which
+<b>truncates sub-second precision</b>, then asserts on
+<code>util.rel_time()</code> calling <code>now()</code> a second time. The elapsed
+delta is therefore <code>n + frac(first_now) + runtime</code>, and
+<code>rel_time</code> floors it — so whenever
+<code>frac(first_now) + runtime &ge; 1.0</code> the bucket is one higher than the
+test expects. Observed failing on <code>tests (ubuntu-latest, 3.14)</code>:
+<code>assert '31s ago' == '30s ago'</code>.
+The off-by-one cases are the mild ones. <code>iso_ago(59)</code> and
+<code>iso_ago(59 * 60)</code> sit <b>directly on a bucket boundary</b>, so the same
+race flips <code>"59s ago"</code> to <code>"1m ago"</code> and
+<code>"59m ago"</code> to <code>"1h ago"</code> — a different unit, not a
+neighbouring number. Every assertion in the class shares the window; it is
+narrow on a quiet machine and widens with runner load, which is why it reads as
+random redness rather than a broken test.
+Fix by giving the test a fixed clock — monkeypatch
+<code>util.datetime</code> (or inject a <code>now</code> seam into
+<code>rel_time</code>) so both reads come from one frozen instant, and the
+boundary cases become exact rather than probabilistic. Freezing is preferable to
+widening the assertions: the boundaries are precisely the behaviour worth pinning.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">caught red on CI, 3.14</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
