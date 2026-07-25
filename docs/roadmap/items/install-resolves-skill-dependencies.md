@@ -2,7 +2,7 @@
 id: install-resolves-skill-dependencies
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Core · Package manager
 complexity: M
 impact: High
