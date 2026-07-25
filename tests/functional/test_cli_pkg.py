@@ -887,3 +887,154 @@ class TestSnapshotEdges:
         assert "the store was left untouched" in r.err
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
         assert _lock()["brainstorming"]["version"] == "1.4.0"
+
+
+# ── MCP-aware skills ─────────────────────────────────────────────────────
+
+def _mcp_skill_dir(tmp_path, name="mcp-skill", decl="github, playwright",
+                   sidecar=None):
+    """A skill that declares MCP servers, optionally with a bundled sidecar."""
+    d = tmp_path / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: %s\ndescription: a skill that needs an MCP server to work\n"
+        "version: 0.1.0\nmcp: %s\n---\n\n# %s\n\nBody.\n" % (name, decl, name),
+        encoding="utf-8")
+    if sidecar is not None:
+        (d / ".mcp.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    return d
+
+
+class TestMcpAwareSkills:
+    def test_declaration_is_surfaced_on_install(self, boost, sandbox, tmp_path):
+        d = _mcp_skill_dir(tmp_path)
+        r = boost("import", d)
+        assert "mcp-skill needs 2 MCP servers to work" in r.out
+        assert "github" in r.out and "playwright" in r.out
+        # name-only declarations carry no command, so boost must not offer to run
+        # anything — it tells the user to install them instead.
+        assert "no command declared" in r.out
+        assert "install these yourself" in r.out
+
+    def test_singular_wording_for_one_server(self, boost, sandbox, tmp_path):
+        d = _mcp_skill_dir(tmp_path, decl="github")
+        r = boost("import", d)
+        assert "needs 1 MCP server to work" in r.out
+
+    def test_no_declaration_stays_silent(self, boost, sandbox, tmp_path):
+        d = _skill_dir(tmp_path, "plain-skill")
+        r = boost("import", d)
+        assert "MCP server" not in r.out
+
+    def test_sidecar_spec_is_offered_and_registered(self, boost, sandbox,
+                                                    tmp_path, monkeypatch):
+        calls = []
+
+        class _Proc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/claude")
+        monkeypatch.setattr("subprocess.run",
+                            lambda argv, **kw: calls.append(argv) or _Proc())
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx",
+                                               "args": ["-y", "srv"]}}})
+        # BOOST_ASSUME_YES (set by the sandbox fixture) accepts the prompt.
+        r = boost("import", d)
+        assert "registered MCP server github" in r.out
+        assert calls == [["claude", "mcp", "add", "github", "--scope", "user",
+                          "--", "npx", "-y", "srv"]]
+
+    def test_declining_leaves_the_skill_installed(self, boost, sandbox,
+                                                  tmp_path, monkeypatch):
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/claude")
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx"}}})
+        r = boost("import", d)
+        # non-TTY stdin makes confirm() return its default, which is False here
+        assert "skipped" in r.out
+        assert "mcp-skill" in _lock()
+
+    def test_missing_claude_cli_prints_the_command(self, boost, sandbox,
+                                                   tmp_path, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda n: None)
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx"}}})
+        r = boost("import", d)
+        assert "`claude` CLI not found" in r.out
+        assert "claude mcp add github" in r.out
+        assert "mcp-skill" in _lock()          # still installed
+
+    def test_failed_registration_is_not_fatal(self, boost, sandbox, tmp_path,
+                                              monkeypatch):
+        class _Proc:
+            returncode = 1
+            stdout = ""
+            stderr = "boom\n"
+
+        monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/claude")
+        monkeypatch.setattr("subprocess.run", lambda argv, **kw: _Proc())
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx"}}})
+        r = boost("import", d)
+        assert "could not register github: boom" in r.out
+        assert "mcp-skill" in _lock()          # the install still stands
+
+    def test_malformed_sidecar_degrades_to_the_names(self, boost, sandbox,
+                                                     tmp_path):
+        d = _mcp_skill_dir(tmp_path, decl="github")
+        (d / ".mcp.json").write_text("{not json", encoding="utf-8")
+        r = boost("import", d)
+        # the requirement is still reported; only the spec is lost
+        assert "needs 1 MCP server to work" in r.out
+        assert "no command declared" in r.out
+
+    def test_info_reports_declared_servers(self, boost, sandbox, tmp_path):
+        boost("import", _mcp_skill_dir(tmp_path))
+        r = boost("info", "mcp-skill")
+        assert "mcp servers" in r.out
+        assert "github" in r.out and "playwright" in r.out
+
+    def test_info_json_lists_declared_servers(self, boost, sandbox, tmp_path):
+        boost("import", _mcp_skill_dir(tmp_path))
+        data = json.loads(boost("info", "mcp-skill", "--json").out)
+        assert data["mcp_servers"] == ["github", "playwright"]
+
+    def test_info_json_is_empty_without_a_declaration(self, boost, sandbox,
+                                                      tmp_path):
+        boost("import", _skill_dir(tmp_path, "plain-skill"))
+        data = json.loads(boost("info", "plain-skill", "--json").out)
+        assert data["mcp_servers"] == []
+
+    def test_no_mcp_suppresses_the_offer(self, boost, sandbox, tmp_path,
+                                        fixture_tap_src, monkeypatch):
+        # --no-mcp lives on `install`, so exercise it through a tap install of a
+        # declaring skill rather than through `import`.
+        tap = tmp_path / "mcp-tap"
+        shutil.copytree(fixture_tap_src, tap)
+        skill = tap / "skills" / "needs-mcp"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: needs-mcp\ndescription: needs an MCP server to do its job\n"
+            "version: 1.0.0\nmcp: github\n---\n\n# needs-mcp\n\nBody.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap), "add", "-A"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap), "commit", "-qm", "add needs-mcp"],
+                       check=True, capture_output=True)
+        boost("tap", tap)
+
+        r = boost("install", "needs-mcp", "--no-mcp")
+        assert "MCP server" not in r.out
+        monkeypatch.delenv("BOOST_NO_MCP_OFFER", raising=False)
+
+        boost("uninstall", "needs-mcp")
+        r = boost("install", "needs-mcp")
+        assert "needs-mcp needs 1 MCP server to work" in r.out

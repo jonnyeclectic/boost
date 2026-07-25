@@ -5,6 +5,7 @@ install():  copy skill dir from a tap clone -> store, symlink into every
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -33,6 +34,10 @@ class InstallResult:
     # CLAUDE.md block), not a SKILL.md tree — carry the raw source so the caller
     # scans exactly what it installed instead of a non-existent SKILL.md.
     scan_text: Optional[str] = None
+    # MCP servers the skill declares (mcpdecl.servers_for rows). Detected here
+    # but never acted on: core stays non-interactive, so the command layer owns
+    # the offer to register them — same split as `conflicts` and `score`.
+    mcp_servers: List[dict] = field(default_factory=list)
 
 
 def skill_store_dir(name: str) -> Path:
@@ -149,6 +154,28 @@ def _remove_backup(backup: Path) -> None:
         shutil.rmtree(backup, ignore_errors=True)
 
 
+def declared_mcp_servers(skill_dir) -> List[dict]:
+    """MCP servers an installed skill declares — ``mcpdecl.servers_for`` rows.
+
+    Reads the installed copy's ``SKILL.md`` frontmatter and its bundled
+    ``.mcp.json`` sidecar, if either is present. Best-effort by design: an
+    unreadable file yields no rows rather than failing an install that has
+    otherwise already succeeded.
+    """
+    from . import frontmatter, mcpdecl
+    skill_dir = Path(skill_dir)
+    meta: dict = {}
+    with contextlib.suppress(OSError):
+        text = (skill_dir / "SKILL.md").read_text(encoding="utf-8",
+                                                  errors="replace")
+        meta, _body = frontmatter.parse(text)
+    sidecar = None
+    with contextlib.suppress(OSError):
+        sidecar = (skill_dir / mcpdecl.SIDECAR).read_text(encoding="utf-8",
+                                                          errors="replace")
+    return mcpdecl.servers_for(meta, sidecar)
+
+
 def _enforce_capability_policy(name: str, skill_md: Path) -> None:
     """Raise if the skill's declared/detected capabilities are denied by policy.
 
@@ -245,6 +272,7 @@ def install(entry: dict, force: bool = False,
     res = link_agents(name, only=only_agents)
     res.upgraded = existing is not None
     res.score, _ = util.score_skill(dest)
+    res.mcp_servers = declared_mcp_servers(dest)
 
     tap = registry.get(entry["tap"])
     from . import gitutil
@@ -696,6 +724,7 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
     _copy_skill(src_dir, dest)
     res = link_agents(name, only=only_agents)
     res.score, _ = util.score_skill(dest)
+    res.mcp_servers = declared_mcp_servers(dest)
     now = util.now_iso()
     existing = lockfile.get_skill(name)
     lockfile.set_skill(name, {

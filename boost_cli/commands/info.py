@@ -239,6 +239,7 @@ def cmd_info(argv):
     declared_caps = sorted(capabilities.declared(meta))
     detected_extra = sorted(capabilities.detect(skill_text)
                             - set(declared_caps)) if skill_text else []
+    mcp_servers = store.declared_mcp_servers(skill_dir) if skill_dir else []
     score = size = files = None
     if skill_dir:
         score, _notes = util.score_skill(skill_dir)
@@ -249,6 +250,7 @@ def cmd_info(argv):
             "name": name, "description": desc,
             "installed": lock, "project": plock,
             "capabilities": declared_caps, "detected_capabilities": detected_extra,
+            "mcp_servers": [r["name"] for r in mcp_servers],
             "latest": (cat or {}).get("version"),
             "tap": (lock or plock or cat or {}).get("tap"),
             "store": str(sdir) if lock and sdir.is_dir() else None,
@@ -322,6 +324,10 @@ def cmd_info(argv):
         # under-declaration signal a reviewer wants to see.
         out.kv("detected", out.role(", ".join(detected_extra) + "  (not declared)",
                                     "warn"))
+    if mcp_servers:
+        # A skill that needs an MCP server is useless without it, so this belongs
+        # next to capabilities: both answer "what does this expect of my setup?"
+        out.kv("mcp servers", ", ".join(r["name"] for r in mcp_servers))
     if score is not None:
         out.kv("quality", "%d/100" % score)
         out.kv("size", util.human_size(size))
