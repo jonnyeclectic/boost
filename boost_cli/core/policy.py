@@ -37,7 +37,7 @@ def load() -> dict:
     A missing or unparseable file silently yields the defaults.
     """
     p = paths.policy_path()
-    base = dict(DEFAULTS)
+    base = DEFAULTS.copy()
     if p.exists():
         with contextlib.suppress(json.JSONDecodeError, OSError):
             base.update(json.loads(p.read_text(encoding="utf-8")))

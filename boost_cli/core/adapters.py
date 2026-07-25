@@ -26,7 +26,7 @@ from . import frontmatter
 
 # Public: the format id shown in `--to`/errors -> its renderer.
 # Populated at the bottom once the render_* functions are defined.
-FORMATS: Dict[str, "Callable[..., str]"] = {}
+FORMATS: Dict[str, Callable[..., str]] = {}
 
 # Subagent (crew member) directories: a Markdown file under one of these, at any
 # depth beneath a skill, is one of the skill's subagents — so both a flat
@@ -401,10 +401,8 @@ def render_crew(workflow: str, description: str, specs: List[AgentSpec],
 
     parts = [_crew_header("crewai", workflow, description), "\n".join(imports) + "\n", "\n"]
     if tools:
-        parts.append("\n".join(_tool_stub(t, "@tool(%s)" % _py_str(t)) for t in tools))
-        parts.append("\n")
-    parts.append("\n".join(blocks))
-    parts.append("\n" + crew)
+        parts.extend(("\n".join(_tool_stub(t, "@tool(%s)" % _py_str(t)) for t in tools), "\n"))
+    parts.extend(("\n".join(blocks), "\n" + crew))
     return "".join(parts)
 
 
@@ -439,25 +437,22 @@ def render_graph(workflow: str, description: str, specs: List[AgentSpec],
         for ident, spec in zip(idents, specs))
     lines.append("")
     for ident in idents:
-        lines.append("    def %s_node(state):" % ident)
-        lines.append("        return {\"messages\": %s.invoke(state)[\"messages\"]}" % ident)
-    lines.append("")
-    lines.append("    builder = StateGraph(MessagesState)")
+        lines.extend(("    def %s_node(state):" % ident,
+                      "        return {\"messages\": %s.invoke(state)[\"messages\"]}" % ident))
+    lines.extend(("", "    builder = StateGraph(MessagesState)"))
     lines.extend("    builder.add_node(%s, %s_node)" % (_py_str(ident), ident)
                  for ident in idents)
     prev = "START"
     for ident in idents:
         lines.append("    builder.add_edge(%s, %s)" % (prev, _py_str(ident)))
         prev = _py_str(ident)
-    lines.append("    builder.add_edge(%s, END)" % prev)
-    lines.append("    return builder.compile()")
+    lines.extend(("    builder.add_edge(%s, END)" % prev, "    return builder.compile()"))
     factory = "def build_%s(%s):\n%s\n" % (_ident(workflow), sig, "\n".join(lines))
 
     parts = [_crew_header("langgraph", workflow, description),
              "\n".join(imports) + "\n", "\n", prompts, "\n"]
     if tools:
-        parts.append("\n".join(_tool_stub(t, "@tool") for t in tools))
-        parts.append("\n\n")
+        parts.extend(("\n".join(_tool_stub(t, "@tool") for t in tools), "\n\n"))
     parts.append(factory)
     return "".join(parts)
 
@@ -465,7 +460,7 @@ def render_graph(workflow: str, description: str, specs: List[AgentSpec],
 # Multi-agent (crew/graph) renderers, keyed by the same format id as FORMATS.
 # A format absent here has no multi-agent path; the command layer falls back to
 # the single-agent renderer (flattening the skill to its primary agent).
-MULTI_FORMATS: Dict[str, "Callable[..., str]"] = {
+MULTI_FORMATS: Dict[str, Callable[..., str]] = {
     "crewai": render_crew,
     "langgraph": render_graph,
 }

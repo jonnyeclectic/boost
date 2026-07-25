@@ -346,7 +346,9 @@ def meter(fraction: float, width: int = 4) -> str:
 
 def kv(key: str, value: str, width: int = 14) -> None:
     """Print an indented key/value line: dim key padded to width, then value."""
-    print("  " + c(key.ljust(width), DIM) + str(value))
+    # The str() is NOT redundant despite the annotation: callers pass raw ints
+    # (e.g. `boost impact` prints files_touched), which would raise TypeError.
+    print("  " + c(key.ljust(width), DIM) + str(value))  # noqa: FURB123
 
 
 def _pad(cell: str, width: int) -> str:

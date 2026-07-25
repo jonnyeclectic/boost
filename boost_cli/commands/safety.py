@@ -23,7 +23,7 @@ from ._common import _iter_installed, _s
 _AUDIT_PATTERNS = [
     (re.compile(r"(?:curl|wget)[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b"),
      "HIGH", "remote-exec"),
-    (re.compile(r"rm\s+-(?:rf|fr)\s+(?:/|~)(?=[\s'\";`)]|$)", re.M),
+    (re.compile(r"rm\s+-(?:rf|fr)\s+(?:/|~)(?=[\s'\";`)]|$)", re.MULTILINE),
      "HIGH", "destructive"),
     (re.compile(r"base64\s+(?:-d|-D|--decode)\b[^\n]*\|\s*(?:ba|z)?sh\b"),
      "HIGH", "obfuscated-exec"),

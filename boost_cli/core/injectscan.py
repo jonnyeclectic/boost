@@ -30,7 +30,7 @@ class Rule(NamedTuple):
     """
     id: str
     severity: str
-    pattern: "re.Pattern[str]"
+    pattern: re.Pattern[str]
     description: str
 
 
@@ -46,7 +46,7 @@ class Finding(NamedTuple):
     description: str
 
 
-def _rx(pattern: str) -> "re.Pattern[str]":
+def _rx(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern, re.IGNORECASE)
 
 

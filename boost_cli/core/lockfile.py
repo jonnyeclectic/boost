@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from contextlib import suppress
 from typing import List, Optional
 
 from . import paths, util
@@ -60,13 +61,11 @@ def _preserve_corrupt(p) -> None:
         shutil.copy(p, backup)
     except OSError:
         backup = None
-    try:
+    with suppress(Exception):
         from . import logs
         logs.get_logger().warning(
             "lock file %s is corrupt; preserved %s and continuing with an "
             "empty lock", p, backup or "(backup failed)")
-    except Exception:
-        pass
 
 
 def write(lock: dict) -> None:

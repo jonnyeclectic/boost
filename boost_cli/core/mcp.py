@@ -61,7 +61,7 @@ class Registry:
 
     def names(self) -> List[str]:
         """Registered tool names, in registration order."""
-        return list(self._order)
+        return self._order.copy()
 
     def has(self, name: str) -> bool:
         return name in self._handlers
@@ -100,7 +100,7 @@ INSTRUCTIONS = (
 
 
 def handle_request(req: dict, *, version: str,
-                   registry: "Registry") -> Optional[dict]:
+                   registry: Registry) -> Optional[dict]:
     """Map one parsed JSON-RPC request to its response dict.
 
     Returns ``None`` for a notification (a request with no ``id``) — the caller
@@ -145,7 +145,7 @@ def handle_request(req: dict, *, version: str,
     return resp
 
 
-def serve_stdio(registry: "Registry", *, version: str,
+def serve_stdio(registry: Registry, *, version: str,
                 stdin=None, stdout=None) -> int:
     """Newline-delimited JSON-RPC 2.0 MCP server on stdin/stdout.
 

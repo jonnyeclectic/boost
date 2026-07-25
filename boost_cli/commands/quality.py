@@ -11,7 +11,9 @@ import hashlib
 import json
 import os
 import re
+from contextlib import suppress
 from datetime import datetime, timedelta, timezone
+from itertools import starmap
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -150,13 +152,11 @@ def _stack_keywords(cwd: Path) -> set:
     detect_stack keywords, enriched with coarse filesystem markers (so tags
     like `testing` or `git` can match even when detect_stack is language-only)."""
     kws: List[str] = []
-    try:
+    with suppress(Exception):
         from ..core.stackprobe import detect_stack
         stack = detect_stack(cwd)
         if isinstance(stack, dict):
             kws.extend(str(k) for k in (stack.get("keywords") or []))
-    except Exception:
-        pass
     for marker, words in _STACK_MARKERS:
         if (Path(cwd) / marker).exists():
             kws.extend(words)
@@ -906,7 +906,7 @@ def cmd_trust(argv) -> int:
         else:
             results = _tap_provenance_rows()
         if args.json:
-            print(json.dumps([_result_json(n, r) for n, r in results], indent=2))
+            print(json.dumps(list(starmap(_result_json, results)), indent=2))
         else:
             _print_provenance(results)
         # A specific tap must verify; a full sweep only alarms on tampering.
@@ -922,7 +922,7 @@ def cmd_trust(argv) -> int:
             "trusted_keys": [{"name": k["name"],
                               "fingerprint": k.get("fingerprint", "")}
                              for k in keys],
-            "taps": [_result_json(n, r) for n, r in taps],
+            "taps": list(starmap(_result_json, taps)),
         }, indent=2))
         return 0
     out.heading("trusted keys")
@@ -936,7 +936,7 @@ def cmd_trust(argv) -> int:
     return 0
 
 
-def _result_json(tap_name: str, r: "provenance.Result") -> dict:
+def _result_json(tap_name: str, r: provenance.Result) -> dict:
     return {"tap": tap_name, "status": r.status, "key_name": r.key_name,
             "fingerprint": r.fingerprint, "trusted_comment": r.trusted_comment}
 

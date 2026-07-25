@@ -15,7 +15,8 @@ rule.
 from __future__ import annotations
 
 import re
-from typing import List, Match, Optional
+from typing import List, Optional
+from re import Match
 
 # An "always / never / must (not) / do not / don't" line, optionally preceded by
 # a list marker. Group 1 = the modal, group 2 = everything after it.

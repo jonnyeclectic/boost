@@ -461,7 +461,7 @@ def project_sync_apply(plan: Dict[str, list], base=None) -> List[str]:
         entry = projectlock.get_skill(resolved_base, name) or {}
         tap_name = entry.get("tap")
         if tap_name and tap_name != "local":
-            try:
+            try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
                 from . import catalog
                 matches = [e for e in catalog.find(name)
                            if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
@@ -829,7 +829,7 @@ def sync_apply(plan: Dict[str, list]) -> List[str]:
         tap_name = entry.get("tap")
         restored = False
         if tap_name and tap_name != "local":
-            try:
+            try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
                 from . import catalog
                 matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
                 if matches:
@@ -846,7 +846,7 @@ def sync_apply(plan: Dict[str, list]) -> List[str]:
         entry = getter(name) or {}
         tap_name = entry.get("tap")
         if tap_name and tap_name != "local":
-            try:
+            try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
                 from . import catalog
                 matches = [e for e in catalog.find(name)
                            if e["tap"] == tap_name and e.get("kind", "skill") == kind]

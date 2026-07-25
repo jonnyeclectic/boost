@@ -119,7 +119,7 @@ def reset() -> None:
     """
     global _configured, _debug_console
     logger = logging.getLogger(LOGGER_NAME)
-    for h in list(logger.handlers):
+    for h in logger.handlers.copy():
         with contextlib.suppress(Exception):
             h.close()
         logger.removeHandler(h)
@@ -152,7 +152,7 @@ def configure(verbose: bool = False, debug: bool = False,
 
     # File handler — always DEBUG, best-effort (never break the CLI over a log).
     if _file_enabled():
-        try:
+        with contextlib.suppress(OSError):
             paths.logs_dir().mkdir(parents=True, exist_ok=True)
             fh = logging.handlers.RotatingFileHandler(
                 log_path(), maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT,
@@ -161,8 +161,6 @@ def configure(verbose: bool = False, debug: bool = False,
             fh.setLevel(logging.DEBUG)
             fh.setFormatter(fmt)
             logger.addHandler(fh)
-        except OSError:
-            pass
 
     # Console handler — only attached when something should surface on stderr.
     level = _console_level(verbose, debug, quiet)
@@ -202,7 +200,7 @@ def log_completion(argv: List[str], rc: int, elapsed_ms: float) -> None:
 def _boost_version() -> str:
     try:
         from .. import __version__
-        return str(__version__)
+        return __version__
     except Exception:
         return "unknown"
 

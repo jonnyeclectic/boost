@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from contextlib import suppress
 
 from .. import cliparse, spin
 from ..core import catalog, config, gitutil, journal, lockfile, paths, registry, staleness, store, util
@@ -145,17 +146,15 @@ def cmd_untap(argv) -> int:
     return 0
 
 
-def _tap_updated(tap: "registry.Tap") -> str:
+def _tap_updated(tap: registry.Tap) -> str:
     """Last-commit date of a tap clone, else the cache's generated age."""
     if tap.is_cloned:
-        try:
+        with suppress(BoostError):
             # --date=short --format=%cd == %cs, but works on git < 2.21 too
             proc = gitutil.run(["-C", str(tap.path), "log", "-1",
                                 "--date=short", "--format=%cd"], check=False)
             if proc.returncode == 0 and proc.stdout.strip():
                 return proc.stdout.strip()
-        except BoostError:
-            pass
     try:
         data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
         return util.rel_time(data.get("generated", ""))

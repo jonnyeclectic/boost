@@ -1,4 +1,5 @@
 """boost — Homebrew for AI coding skills."""
+from contextlib import suppress
 
 
 def _detect_version() -> str:
@@ -8,17 +9,13 @@ def _detect_version() -> str:
     package metadata, then a git-checkout fallback (stdlib only, so the
     dependency-free runtime stays intact), then a sentinel.
     """
-    try:
+    with suppress(Exception):
         from ._version import version as scm_version
         return scm_version
-    except Exception:
-        pass
-    try:
+    with suppress(Exception):
         from importlib.metadata import version as dist_version
         return dist_version("boost-skill-cli")
-    except Exception:
-        pass
-    try:
+    with suppress(Exception):
         import subprocess
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent
@@ -28,8 +25,6 @@ def _detect_version() -> str:
         described = proc.stdout.strip()
         if proc.returncode == 0 and described:
             return described.lstrip("v")
-    except Exception:
-        pass
     return "0.0.0+unknown"
 
 

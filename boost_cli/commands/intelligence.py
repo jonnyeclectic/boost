@@ -418,7 +418,7 @@ def _commit_rule(style: Tuple[int, int]) -> str:
 def _infer_ai(name: str, root: Path, facts: dict) -> Optional[str]:
     listing = ", ".join(sorted(p.name for p in root.iterdir()
                                if not p.name.startswith("."))[:30])
-    detected = dict(facts)
+    detected = facts.copy()
     if detected.get("commit_style"):
         detected["commit_style"] = _commit_rule(detected["commit_style"])
     reply = ai.ask_author(

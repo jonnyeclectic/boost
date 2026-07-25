@@ -116,7 +116,7 @@ def remove_trusted_key(name: str) -> bool:
     return True
 
 
-def _public_keys() -> List["tuple"]:
+def _public_keys() -> List[tuple]:
     """Trusted keys as ``(name, minisign.PublicKey)`` pairs, skipping any junk."""
     import base64
     out = []

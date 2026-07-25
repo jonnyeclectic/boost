@@ -19,3 +19,10 @@ vulture==2.16
 xenon==0.9.3
 pyright==1.1.411
 interrogate==1.7.0
+# refurb: modernization smells. ruff ports only a handful of the FURB checks
+# (FURB167 alone fires here); refurb's own mypy-backed analysis found 70 in
+# boost_cli — contextlib.suppress candidates, redundant list()/dict()/str()
+# casts, `x or ""` on a value that is already non-optional. Runs on the lint
+# job's Python 3.12; it needs >=3.10 itself, which is why it is a lint-only
+# tool and never a runtime dependency. Reuses the mypy pinned above.
+refurb==2.3.1

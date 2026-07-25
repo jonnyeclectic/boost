@@ -112,8 +112,7 @@ def add_hook(scope: str, event: str, name: str, command: str,
              project_dir: Optional[Path] = None) -> None:
     """Idempotently install a boost-managed hook (replaces same-named entry)."""
     data = load(scope, project_dir)
-    hooks = data.setdefault("hooks", {})
-    event_list = hooks.setdefault(event, [])
+    event_list = data.setdefault("hooks", {}).setdefault(event, [])
     # Drop any prior entry we own with this name so re-adding is idempotent.
     _strip(event_list, name)
     block: dict = {}

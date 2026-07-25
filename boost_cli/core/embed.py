@@ -89,12 +89,12 @@ def embed(texts: List[str], input_type: Optional[str] = None,
     if not texts:
         return []
     if p == "voyage":
-        body = {"input": list(texts), "model": VOYAGE_MODEL}
+        body = {"input": texts.copy(), "model": VOYAGE_MODEL}
         if input_type:
             body["input_type"] = input_type
         return _vectors(_post(VOYAGE_URL, os.environ["VOYAGE_API_KEY"],
                               body, timeout), len(texts))
-    body = {"input": list(texts), "model": OPENAI_MODEL}
+    body = {"input": texts.copy(), "model": OPENAI_MODEL}
     return _vectors(_post(OPENAI_URL, os.environ["OPENAI_API_KEY"],
                           body, timeout), len(texts))
 

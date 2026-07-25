@@ -2,15 +2,15 @@
 id: modernization-smells-refurb-pyupgrade
 board: code
 section: dx
-status: planned
+status: shipped
 category: Quality · Smell
 complexity: S
 impact: Low
 wow: 2
 note: respects 3.9 floor
 order: 7
-owner:
-pr:
+owner: loop/modernization-smells
+pr: 232
 title: Modernization smells — <code>refurb</code> + <code>pyupgrade</code>
 ---
 <code>refurb</code>'s unique <code>FURB</code> checks flag dated idioms

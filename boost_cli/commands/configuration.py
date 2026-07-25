@@ -793,8 +793,8 @@ def _tool_info(args: dict):
     if src.get("description"):
         lines.append("description: %s" % src["description"])
     if entry:
-        lines.append("installed: yes (%s)" % entry.get("installed_at", "?"))
-        lines.append("agents: %s" % (", ".join(entry.get("agents") or []) or "none"))
+        lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
+                      "agents: %s" % (", ".join(entry.get("agents") or []) or "none")))
         if entry.get("pinned"):
             lines.append("pinned: yes")
     else:

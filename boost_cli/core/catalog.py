@@ -18,6 +18,7 @@ that ship in the same GitHub registries:
 from __future__ import annotations
 
 import json
+import operator
 import os
 import re
 from pathlib import Path
@@ -155,11 +156,11 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> List
             entries.append(_make_entry(root, path, kind, default,
                                        tap_name, curated, meta, body))
 
-    entries.sort(key=lambda e: (e["skill_md"], e["name"]))
+    entries.sort(key=operator.itemgetter("skill_md", "name"))
     return entries
 
 
-def rebuild_tap(tap: "registry.Tap") -> List[dict]:
+def rebuild_tap(tap: registry.Tap) -> List[dict]:
     """Rescan a cloned tap and rewrite its JSON cache file -> entries.
 
     Raises BoostError when the tap is not cloned; also drops the
@@ -192,7 +193,7 @@ def rebuild_tap(tap: "registry.Tap") -> List[dict]:
 _ENTRY_CACHE: Dict[str, Tuple[Tuple[int, int], List[dict]]] = {}
 
 
-def _cached_tap(tap: "registry.Tap") -> Optional[List[dict]]:
+def _cached_tap(tap: registry.Tap) -> Optional[List[dict]]:
     """Memoized ``skills`` for a tap's cache file, or ``None`` to force a
     rebuild (file missing, unreadable, or corrupt JSON)."""
     p = tap.cache_file
@@ -215,7 +216,7 @@ def _cached_tap(tap: "registry.Tap") -> Optional[List[dict]]:
     return skills
 
 
-def load_tap(tap: "registry.Tap", rebuild: bool = False) -> List[dict]:
+def load_tap(tap: registry.Tap, rebuild: bool = False) -> List[dict]:
     """Return a tap's entries, from the mtime-keyed cache when fresh.
 
     `rebuild=True` or a missing/corrupt cache forces a rescan; an
@@ -244,8 +245,8 @@ def find(name: str, tap: Optional[str] = None) -> List[dict]:
         tap, name = name.rsplit(":", 1)
     matches = [e for e in all_entries() if e["name"] == name]
     if tap:
-        matches = [e for e in matches if e["tap"] == tap or
-                   e["tap"].split("/")[-1] == tap]
+        matches = [e for e in matches
+                   if tap in (e["tap"], e["tap"].split("/")[-1])]
     return matches
 
 
@@ -293,7 +294,9 @@ def _search_blob(name: str, description: str, meta) -> str:
     """The full lowercased substring-search text for an entry: its name,
     description and flattened frontmatter. Built once at index time and cached
     on the entry as ``search_blob`` so search() never rebuilds it per query."""
-    return " ".join([name.lower(), (description or "").lower(), _meta_text(meta)])
+    # `or ""` is load-bearing despite the `str` annotation: search() calls this
+    # with e.get("description", ""), which yields None when the key holds None.
+    return " ".join([name.lower(), (description or "").lower(), _meta_text(meta)])  # noqa: FURB143
 
 
 def search(query: str, entries: Optional[List[dict]] = None):

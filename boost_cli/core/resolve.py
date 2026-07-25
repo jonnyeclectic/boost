@@ -21,7 +21,8 @@ plain graph work.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Callable, FrozenSet, List, Optional, Tuple
+from collections.abc import Sequence
 
 __all__ = ["Resolution", "resolve"]
 
@@ -53,7 +54,7 @@ class Resolution:
 
 def _norm(names: Sequence[str]) -> List[str]:
     """De-dupe a name sequence preserving first-seen order."""
-    seen: List[str] = []
+    seen: List[str] = []  # noqa: FURB138  the guard below reads `seen` itself — not expressible as a comprehension
     for n in names:
         if n and n not in seen:
             seen.append(n)

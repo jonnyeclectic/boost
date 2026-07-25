@@ -20,7 +20,8 @@ import math
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Tuple
+from collections.abc import Sequence
 
 try:  # TypedDict lives in typing on 3.9+, kept optional for safety
     from typing import TypedDict
@@ -127,7 +128,7 @@ def _tap_commits() -> Dict[str, str]:
         except (OSError, json.JSONDecodeError):
             pass
         if not commit and t.is_cloned:
-            commit = gitutil.head_commit(t.path) or ""
+            commit = gitutil.head_commit(t.path)
         commits[t.safe_name] = commit
     return commits
 
@@ -177,7 +178,7 @@ def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
                 "n": e["name"], "t": e["tap"], "k": e.get("kind", "skill"),
                 "c": ci, "l": sum(tf.values()),
                 "snip": piece[:SNIP_STORE].strip(),  # windowed at retrieve time
-                "tf": dict(tf),
+                "tf": dict(tf),  # noqa: FURB123  tf is a defaultdict; .copy() would keep the factory
             })
     return docs
 
@@ -194,11 +195,9 @@ def _postings_to_doc_tf(raw: dict) -> Dict[int, Dict[str, int]]:
 def _kept_docs(raw: dict, keep_safe: set) -> List[dict]:
     """Recover cached docs (with term freqs) for taps that did not change."""
     doc_tf = _postings_to_doc_tf(raw)
-    kept: List[dict] = []
-    for doc_id, meta in enumerate(raw.get("docs", [])):
-        if meta["t"].replace("/", "__") in keep_safe:
-            kept.append({**meta, "tf": doc_tf.get(doc_id, {})})
-    return kept
+    return [{**meta, "tf": doc_tf.get(doc_id, {})}
+            for doc_id, meta in enumerate(raw.get("docs", []))
+            if meta["t"].replace("/", "__") in keep_safe]
 
 
 def build(entries: Optional[List[dict]] = None, force: bool = False) -> dict:
@@ -390,10 +389,10 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
         if prev is None or score > prev[0]:
             best[key] = (score, d["snip"])
     ranked = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0][0]))
-    hits: List[Hit] = []
-    for (name, tap), (score, snip) in ranked[:k]:
-        hits.append({"entry": live[(name, tap)], "score": score,
-                     "snippet": _passage(snip, terms)})  # type: ignore[typeddict-item]
+    hits: List[Hit] = [
+        {"entry": live[(name, tap)], "score": score,
+         "snippet": _passage(snip, terms)}  # type: ignore[typeddict-item]
+        for (name, tap), (score, snip) in ranked[:k]]
     return hits
 
 
@@ -457,7 +456,7 @@ def search(query: str, limit: int = 10, kind: Optional[str] = None,
 
 
 def _json_array(text):
-    m = re.search(r"\[.*\]", text or "", re.S)
+    m = re.search(r"\[.*\]", text or "", re.DOTALL)
     if not m:
         return None
     try:

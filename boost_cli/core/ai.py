@@ -111,7 +111,9 @@ def _ask_api(prompt: str, system: Optional[str], model: str,
 
 def extract_markdown(text: str) -> str:
     """Strip a ```markdown fence if the model wrapped its answer in one."""
-    t = (text or "").strip()
+    # `or ""`: callers hand this a model reply, which is None when the call
+    # failed — tolerating None here is tested behavior, not dead defense.
+    t = (text or "").strip()  # noqa: FURB143
     if t.startswith("```"):
         lines = t.splitlines()
         if lines[0].startswith("```"):

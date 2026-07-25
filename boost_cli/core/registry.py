@@ -84,7 +84,7 @@ def get(name: str) -> Tap:
     """
     taps = list_taps()
     for t in taps:
-        if t.name == name or t.safe_name == name or t.name.split("/")[-1] == name:
+        if name in (t.name, t.safe_name, t.name.split("/")[-1]):
             return t
     close = difflib.get_close_matches(name, [t.name for t in taps], n=1)
     raise BoostError("no such tap: %s" % name,

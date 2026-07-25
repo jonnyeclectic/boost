@@ -69,7 +69,10 @@ def load_registry_catalog() -> list:
 
 def _merge(base: dict, override: dict) -> dict:
     out = deepcopy(base)
-    for k, v in (override or {}).items():
+    # `or {}`: the only caller feeds this json.loads() of config.json, so a file
+    # holding `null` (or `[]`, or any falsy scalar) arrives here as a non-dict —
+    # a malformed config must read as "no overrides", never crash the CLI.
+    for k, v in (override or {}).items():  # noqa: FURB143
         if isinstance(v, dict) and isinstance(out.get(k), dict):
             out[k] = _merge(out[k], v)
         else:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import operator
 import re
 import shutil
 import subprocess
@@ -43,7 +44,7 @@ _tilde = paths.tilde
 
 def _json_array(text):
     """Best-effort extraction of the first JSON array in an AI reply."""
-    m = re.search(r"\[.*\]", text or "", re.S)
+    m = re.search(r"\[.*\]", text or "", re.DOTALL)
     if not m:
         return None
     try:
@@ -108,7 +109,7 @@ def cmd_search(argv):
     else:
         scored = catalog.search(query)
     if args.as_json:
-        print(json.dumps([dict(e, score=s) for e, s in scored[:args.limit]]))
+        print(json.dumps([e | {"score": s} for e, s in scored[:args.limit]]))
         return 0
     if not scored:
         out.info("no matches for %r" % query)
@@ -412,7 +413,7 @@ def cmd_recommend(argv):
                     key=lambda r: (-r["score"], r["entry"]["name"]))
     if args.as_json:
         print(json.dumps({"stack": stack, "recommendations": [
-            dict(r["entry"], score=r["score"], because=sorted(r["because"]))
+            r["entry"] | {"score": r["score"], "because": sorted(r["because"])}
             for r in ranked[:args.limit]]}))
         return 0
     line = "stack: " + (", ".join(stack["languages"]) or "unknown")
@@ -833,7 +834,7 @@ def cmd_browse(argv):
         prog="boost browse",
         description="Interactive full-screen TUI with fuzzy search")
     p.parse_args(argv)
-    entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+    entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
     if not entries:
         raise BoostError("no skills available to browse",
                         hint="add registries with `boost tap --defaults`")
@@ -886,7 +887,7 @@ def cmd_trending(argv):
         descw = max(out.term_width() - 24, 24)  # reserve name + version columns
         out.table([(e["name"], "v" + e["version"],
                     out.truncate(e["description"], descw))
-                   for e in sorted(curated, key=lambda e: e["name"])[:args.limit]])
+                   for e in sorted(curated, key=operator.itemgetter("name"))[:args.limit]])
         return 0
     agg = {}
     for ev in evs:  # most-recent-first, so first ts per subject is the latest
@@ -924,13 +925,11 @@ def cmd_stats(argv):
     latest = cat["version"] if cat else None
     upstream = None
     if cat:
-        try:
+        with contextlib.suppress(BoostError):
             tap = registry.get(cat["tap"])
             if tap.is_cloned:
                 lines = gitutil.log_for_path(tap.path, cat["rel_dir"], n=1)
                 upstream = lines[0] if lines else None
-        except BoostError:
-            pass
     sdir = store.skill_store_dir(name)
     size = util.dir_size(sdir) if lock and sdir.is_dir() else None
     if args.as_json:

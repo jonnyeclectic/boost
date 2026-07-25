@@ -58,10 +58,8 @@ def salient_terms(s: str) -> Set[str]:
             tok = tok.strip("`.,:;()[]{}\"'")
             if tok:
                 out.add(tok.lower())
-    for m in _CODEISH.findall(s):
-        out.add(m.lower())
-    for m in _FLAG.findall(s):
-        out.add(m.lower())
+    out.update(m.lower() for m in _CODEISH.findall(s))
+    out.update(m.lower() for m in _FLAG.findall(s))
     for m in _ACRONYM.findall(s):
         if m not in _STOP_ACRONYMS:
             out.add(m.lower())
