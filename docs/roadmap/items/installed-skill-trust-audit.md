@@ -2,7 +2,7 @@
 id: installed-skill-trust-audit
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Trust · Health
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: audit what you run
 order: 47
 owner: loop/trust-audit
-pr:
+pr: 233
 title: <code>boost audit --skills</code> — a trust/staleness report for installed skills
 ---
 boost already computes every individual trust signal, each in its own command:
