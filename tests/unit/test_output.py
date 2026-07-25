@@ -898,3 +898,33 @@ class TestConfirm:
         output.confirm("Proceed", default=True)
         output.confirm("Proceed", default=False)
         assert prompts == ["Proceed [Y/n] ", "Proceed [y/N] "]
+
+
+class TestRoleNamesAreReal:
+    """Every semantic role name the command layer uses must exist in ROLES.
+
+    `out.role()` indexes ROLES *after* the color-off early return, so a typo'd
+    role name is invisible with NO_COLOR (which conftest sets for the whole
+    suite) and a KeyError on a real terminal. That is exactly how
+    `provenance.INVALID -> "err"` survived in quality.py: reachable only with
+    color on, and nothing here ever turned color on.
+    """
+
+    def _assert_renders(self, names):
+        for name in sorted(set(names)):
+            assert name in output.ROLES, "unknown role %r" % name
+            # render it for real with color forced on — the KeyError path
+            os.environ["BOOST_COLOR"] = "always"
+            try:
+                assert output.role("x", name)
+            finally:
+                os.environ.pop("BOOST_COLOR", None)
+
+    def test_provenance_style_roles_exist(self):
+        from boost_cli.commands import quality
+        self._assert_renders(quality._PROVENANCE_STYLE.values())
+
+    def test_audit_severity_roles_exist(self):
+        from boost_cli.commands import safety
+        self._assert_renders(safety._SEV_ROLE.values())
+        self._assert_renders(safety._TRUST_ROLE.values())

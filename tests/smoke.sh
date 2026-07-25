@@ -76,6 +76,8 @@ run "drift"                  0 ./boost drift
 run "test"                   0 ./boost test
 run "fingerprint"            0 ./boost fingerprint
 run "audit (fixture clean)"  0 ./boost audit
+# the fixture tap is unsigned -> one LOW finding, which must still exit 0
+run "audit --skills"         0 ./boost audit --skills
 run "conflict finds pair"    1 ./boost conflict
 run "changelog"              0 ./boost changelog brainstorming
 run "attest"                 0 ./boost attest

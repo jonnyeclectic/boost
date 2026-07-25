@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from contextlib import suppress
 
 from .. import cliparse
-from ..core import integrity, journal, lockfile
+from ..core import catalog, frontmatter, gitutil, integrity, journal, lockfile
 from ..core import output as out
-from ..core import policy, store, util
+from ..core import policy, provenance, registry, staleness, store, trustaudit, util
 from ..errors import BoostError
 from ._common import _iter_installed, _s
 
@@ -42,7 +44,13 @@ def cmd_audit(argv):
         prog="boost audit",
         description="Check installed skills against a safety blocklist")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--skills", action="store_true",
+                    help="trust/staleness report for installed skills instead "
+                         "of the content scan")
     args = ap.parse_args(argv)
+
+    if args.skills:
+        return _trust_audit(args.json)
 
     pol = policy.load()
     installed = _iter_installed()
@@ -108,6 +116,154 @@ def cmd_audit(argv):
              % (counts["HIGH"], counts["MED"], counts["LOW"],
                 len(installed), _s(len(installed))))
     return 1 if counts["HIGH"] or counts["MED"] else 0
+
+
+# --- audit --skills: trust & staleness across the whole installed set ------
+#
+# The signals already existed, one per command: `trust` reports tap signing,
+# `outdated` reports drift vs the tap, `deps` shows the conflicts: graph. This
+# gathers all three over the installed set and hands the decision to
+# core/trustaudit.py, which is where every branch of it is unit-tested.
+
+_TRUST_ROLE = {trustaudit.HIGH: "danger", trustaudit.MED: "warn",
+               trustaudit.LOW: "muted"}
+
+
+def _tap_age_days(tap):
+    """Days since a tap clone's last commit, or ``None`` when unknowable."""
+    try:
+        proc = gitutil.run(["-C", str(tap.path), "log", "-1", "--format=%ct"],
+                           check=False)
+    except BoostError:
+        return None
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return None
+    try:
+        committed = int(proc.stdout.strip())
+    except ValueError:
+        return None
+    return max(0, int((time.time() - committed) // 86400))
+
+
+def _tap_signals(tap_name, cache):
+    """``(provenance status, age in days, HEAD commit)`` for a tap, memoized.
+
+    A tap boost cannot read — unknown name, never cloned — yields
+    ``(None, None, "")``, which ``trustaudit`` renders as "signature cannot be
+    checked" rather than silently passing.
+    """
+    if tap_name not in cache:
+        try:
+            tap = registry.get(tap_name)
+        except BoostError:
+            cache[tap_name] = (None, None, "")
+        else:
+            cache[tap_name] = ((provenance.verify_dir(tap.path).status,
+                                _tap_age_days(tap), gitutil.head_commit(tap.path))
+                               if tap.is_cloned else (None, None, ""))
+    return cache[tap_name]
+
+
+def _upstream_reason(name, lk, tap_name, head):
+    """``staleness.upstream_reason`` for one installed skill, or ``None``.
+
+    Same signal-gathering order as ``cmd_outdated`` so the two commands can
+    never disagree about whether a skill is behind its tap.
+    """
+    matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
+    if not matches:
+        return None
+    entry = matches[0]
+    latest = str(entry.get("version") or "0.0.0")
+    installed_v = str(lk.get("version") or "0.0.0")
+    src_sha = None
+    if not util.semver_gt(latest, installed_v) and head and head != lk.get("commit"):
+        try:
+            src_sha = util.sha256_dir(store.source_dir_for(entry))
+        except BoostError:
+            return None  # source checkout is gone; `verify` owns that finding
+    return staleness.upstream_reason(installed_v, latest, lk.get("commit", ""),
+                                     head, lk.get("sha256", ""), src_sha)
+
+
+def _installed_conflicts(names):
+    """A ``conflicts_of`` callable reading each installed skill's own copy.
+
+    Reads the store copy rather than the catalog on purpose: the audit is about
+    what is *installed*, which can be an older revision than the tap now
+    advertises.
+    """
+    cache: dict = {}
+
+    def conflicts_of(name):
+        if name not in cache:
+            meta: dict = {}
+            # unreadable store copy: `verify` owns that finding, not this
+            with suppress(OSError, BoostError):
+                text = (store.skill_store_dir(name) / "SKILL.md").read_text(
+                    encoding="utf-8", errors="replace")
+                meta, _body = frontmatter.parse(text)
+            cache[name] = trustaudit.relation_list(meta, "conflicts")
+        return cache[name]
+
+    return conflicts_of
+
+
+def _trust_audit(as_json: bool) -> int:
+    """`boost audit --skills` — one trust-health answer for the installed set."""
+    installed = dict(_iter_installed())
+    peers: dict = {}
+    for name, peer in trustaudit.conflict_pairs(list(installed),
+                                                _installed_conflicts(installed)):
+        peers.setdefault(name, []).append(peer)
+
+    taps: dict = {}
+    findings: dict = {}
+    for name, lk in sorted(installed.items()):
+        tap_name = str(lk.get("tap") or "local")
+        is_local = tap_name == "local"
+        status, age, head = ((None, None, "") if is_local
+                             else _tap_signals(tap_name, taps))
+        rows = trustaudit.skill_findings(
+            is_local=is_local, provenance_status=status, tap_age_days=age,
+            upstream_reason=(None if is_local
+                             else _upstream_reason(name, lk, tap_name, head)),
+            conflicts_with=peers.get(name, ()))
+        if rows:
+            findings[name] = rows
+
+    counts = trustaudit.count_severities(findings)
+    rc = trustaudit.exit_code(counts)
+    if as_json:
+        print(json.dumps({"skills_scanned": len(installed),
+                          "findings": findings, "counts": counts}, indent=2))
+        return rc
+    return _render_trust_audit(installed, findings, counts, rc)
+
+
+def _render_trust_audit(installed, findings, counts, rc: int) -> int:
+    """Human rendering for `boost audit --skills`."""
+    total = len(installed)
+    out.heading("trust audit — %d skill%s" % (total, _s(total)))
+    if not total:
+        out.info("nothing installed yet — `boost install <skill>` to start")
+        return rc
+    if not findings:
+        out.ok("all %d installed skill%s signed, current and conflict-free"
+               % (total, _s(total)))
+        return rc
+    for name in sorted(findings):
+        print("  " + out.c(name, out.BOLD))
+        for f in findings[name]:
+            print("    %s %s  %s"
+                  % (out.role(f["severity"].ljust(4), _TRUST_ROLE[f["severity"]]),
+                     f["label"], out.role(f["detail"], "muted")))
+    print()
+    out.verdict(trustaudit.is_healthy(counts),
+                "%d high · %d medium · %d low across %d of %d skill%s"
+                % (counts[trustaudit.HIGH], counts[trustaudit.MED],
+                   counts[trustaudit.LOW], len(findings), total, _s(total)))
+    return rc
 
 
 def cmd_verify(argv):

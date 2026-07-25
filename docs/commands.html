@@ -161,7 +161,7 @@
       <div class="group-h">Health &amp; integrity</div>
       <a class="cmd-link" href="#cmd-doctor" data-search="doctor check installation health &amp; report issues ">doctor</a>
       <a class="cmd-link" href="#cmd-lint" data-search="lint validate skill.md frontmatter &amp; quality  --tap tap --min n --json name">lint</a>
-      <a class="cmd-link" href="#cmd-audit" data-search="audit check installed skills against a safety blocklist  --json">audit</a>
+      <a class="cmd-link" href="#cmd-audit" data-search="audit check installed skills against a safety blocklist  --json --skills">audit</a>
       <a class="cmd-link" href="#cmd-verify" data-search="verify validate skill quality &amp; lock-file integrity  --json name">verify</a>
       <a class="cmd-link" href="#cmd-drift" data-search="drift detect installed skills diverging from source  --json name">drift</a>
       <a class="cmd-link" href="#cmd-test" data-search="test validate installed skills against quality checks  name">test</a>
@@ -790,13 +790,14 @@
           <div class="arg"><code>--json</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-audit" data-search="audit check installed skills against a safety blocklist  --json">
+      <section class="cmd" id="cmd-audit" data-search="audit check installed skills against a safety blocklist  --json --skills">
         <h3><span class="cname">audit</span><span class="gtag">chk</span></h3>
         <p class="summary">Check installed skills against a safety blocklist</p>
-        <pre class="syn">boost audit [--json]</pre>
+        <pre class="syn">boost audit [--json] [--skills]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--json</code><span></span></div>
+          <div class="arg"><code>--skills</code><span>trust/staleness report for installed skills instead of the content scan</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-verify" data-search="verify validate skill quality &amp; lock-file integrity  --json name">

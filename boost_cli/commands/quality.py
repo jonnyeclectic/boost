@@ -848,7 +848,10 @@ def cmd_health(argv):
 _PROVENANCE_STYLE = {
     provenance.VERIFIED: "success",
     provenance.UNTRUSTED: "warn",
-    provenance.INVALID: "err",
+    # "danger", not "err": out.role() looks the name up in output.ROLES, which
+    # has no "err" key — so an invalid tap signature raised KeyError on any
+    # color terminal. The suite never caught it because conftest sets NO_COLOR.
+    provenance.INVALID: "danger",
     provenance.UNSIGNED: "muted",
 }
 
