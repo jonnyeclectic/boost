@@ -1,0 +1,83 @@
+name: sonarcloud
+
+# SonarCloud analysis — bugs, code smells, security hotspots, duplication and a
+# coverage overlay in one dashboard, with a pass/fail quality gate decorating
+# each PR. Free for public repositories.
+#
+# NON-BLOCKING, and inert until onboarded. Two things are needed, both outside
+# this repo:
+#
+#   1. Import the repo at https://sonarcloud.io (Analysis Method: GitHub Actions).
+#   2. Add the generated token as the SONAR_TOKEN repo secret.
+#
+# Until then every job here skips — `if` reads the token through env, because a
+# secret cannot be referenced directly in an `if`. That makes this file a no-op
+# rather than a permanently-red check.
+#
+# Settings live in sonar-project.properties. Do NOT add this to branch
+# protection's required checks: boost's own gates (ruff, mypy, pyright, vulture,
+# xenon, refurb, the coverage floors, the mutation gate) are the authoritative
+# ones and all run offline. Sonar is the cross-cutting VIEW over them — valuable
+# for spotting trends, wrong as a thing that can block a merge on somebody
+# else's uptime.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sonarcloud-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read    # PR decoration
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Sonar attributes issues to authors and needs history for new-code
+          # detection; a shallow clone makes both wrong.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: install test deps
+        # Hash-pinned, same file the patch-coverage job uses.
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -r requirements/coverage-tools.txt
+          .venv/bin/pip -q install sqlite-vec || true
+      - name: suite -> Cobertura coverage.xml
+        # Sonar reads a report; it does not run the tests. --cov-fail-under=0
+        # because the coverage FLOOR is ci.yml's to enforce, not this job's.
+        run: .venv/bin/pytest tests/unit tests/functional --cov=boost_cli --cov-report=xml --cov-fail-under=0 -q
+      - name: SonarCloud scan
+        if: env.SONAR_TOKEN != ''
+        continue-on-error: true
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+      - name: note when the scan was skipped
+        if: env.SONAR_TOKEN == ''
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          echo "SONAR_TOKEN is not set — SonarCloud analysis skipped." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "To enable: import the repo at https://sonarcloud.io (Analysis Method:" >> "$GITHUB_STEP_SUMMARY"
+          echo "GitHub Actions), then add the generated token as the SONAR_TOKEN secret." >> "$GITHUB_STEP_SUMMARY"
+          echo "Project settings live in sonar-project.properties." >> "$GITHUB_STEP_SUMMARY"

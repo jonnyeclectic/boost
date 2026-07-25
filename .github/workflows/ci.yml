@@ -364,6 +364,24 @@ jobs:
         run: |
           git fetch --no-tags origin main
           .venv/bin/diff-cover coverage.xml --compare-branch=origin/main --fail-under=80
+      - name: upload to Codecov (optional)
+        # The hosted counterpart to the diff-cover gate above: same coverage.xml,
+        # but Codecov turns it into PR diff-coverage comments, a file sunburst and
+        # a trend line over time. The gate stays local and authoritative —
+        # codecov.yml sets informational: true, so Codecov never fails a build.
+        #
+        # Degrades to a no-op until someone adds CODECOV_TOKEN: `if` reads it via
+        # env (a secret is not usable directly in an `if`), so with no secret the
+        # step is skipped rather than failing. continue-on-error as well, because
+        # a third-party uploader being down must never redden boost's CI.
+        if: env.CODECOV_TOKEN != ''
+        continue-on-error: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
 
   canary:
     # Allow-failure early-warning leg on the free-threaded (no-GIL) CPython

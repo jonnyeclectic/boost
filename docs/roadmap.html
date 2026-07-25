@@ -1308,13 +1308,20 @@ improvement is real (or isn't)."</p>
       </article>
 
       <article class="cap rcard" id="quality-dashboard-sonarcloud-free-for-oss">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Platform</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Platform</span></div>
         <h3>Quality dashboard — SonarCloud (free for OSS)</h3>
-        <p>SonarCloud is free for public repos and layers bugs, code smells,
-           security hotspots, duplication and a coverage overlay into one
-           dashboard, decorating each PR with a pass/fail quality gate. The
-           single highest-signal freemium add — one external surface that unifies
-           everything else in this section.</p>
+        <p>One external surface over everything the offline gates measure separately: bugs, code
+           smells, security hotspots, duplication and a coverage overlay, decorating each PR
+           with a quality gate. Free for public repos. Settings live in
+           <code>sonar-project.properties</code> — <code>boost_cli</code> as sources with
+           <code>tests</code> declared separately (so the suite's asserts do not score as
+           duplication), the generated version stub and boards excluded, coverage read from
+           the Cobertura report CI already emits rather than re-running the suite.
+           Non-blocking and inert until onboarded: without <code>SONAR_TOKEN</code> the job
+           skips and writes what to do into the run summary, so a skipped run explains
+           itself instead of looking broken. Not added to required checks — boost's own
+           gates stay authoritative because they run offline and a contributor can
+           reproduce them.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -1912,13 +1919,18 @@ self-merge intact. Decide before adding more concurrent loops, not after.</p>
       </article>
 
       <article class="cap rcard" id="coverage-dashboard-codecov-free-for-oss">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Platform</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Testing · Platform</span></div>
         <h3>Coverage dashboard — Codecov (free for OSS)</h3>
-        <p>Upgrade the homegrown coverage badge to Codecov's PR diff-coverage
-           comments, file sunburst and trend graph — free for public repos. The
-           hosted counterpart to the self-contained <code>diff-cover</code> gate:
-           one enforces patch coverage in CI, the other visualizes the trend over
-           time.</p>
+        <p>The self-contained <code>diff-cover</code> gate enforces patch coverage in CI; this is
+           its hosted counterpart — the same <code>coverage.xml</code> the gate already
+           reads, turned into PR diff-coverage comments, a file sunburst and a trend line
+           over time. Wired into the existing <code>patch-coverage</code> job (no second
+           test run) and <em>deliberately non-blocking</em>: <code>codecov.yml</code> marks
+           every status <code>informational</code>, because boost already enforces coverage
+           twice offline and a merge should never hinge on a third party's uptime. Inert
+           until a <code>CODECOV_TOKEN</code> secret exists — the step's <code>if</code>
+           reads the token through <code>env</code> (a secret cannot be referenced directly
+           in an <code>if</code>), so with no secret it skips rather than fails.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
