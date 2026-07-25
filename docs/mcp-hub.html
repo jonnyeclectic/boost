@@ -18,7 +18,12 @@
              text-wrap: balance; margin-top: 24px; }
   .hero p.lede { max-width: 680px; margin-top: 24px; font-size: 18.5px; color: var(--text-2); }
   .crumbs { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); margin-bottom: 4px; }
-  .crumbs a { color: var(--sky); text-decoration: none; }
+  /* Underlined, not colour-only: --sky on --text-3 is 2.47:1, under the 3:1
+     WCAG 1.4.1 needs to distinguish a link from its surrounding text by
+     colour alone. The underline is the non-colour cue (same pattern as
+     `footer a` in boost.css). Caught by the axe-core sweep. */
+  .crumbs a { color: var(--sky); text-decoration: underline;
+              text-underline-offset: 2px; text-decoration-thickness: 1px; }
   .stats { margin-top: 58px; }
 
   /* Diagram frame: a glass surface that scrolls its own wide SVG (body never scrolls X). */
