@@ -2,7 +2,7 @@
 id: accessibility-audit-pa11y-ci-axe-core
 board: code
 section: docsite
-status: inflight
+status: shipped
 category: Quality · A11y
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 4
 note: WCAG AA
 order: 3
 owner: loop/a11y-audit
-pr:
+pr: 243
 title: Accessibility audit — <code>pa11y-ci</code> / axe-core
 ---
 WCAG 2.1 AA over every docs page, in two halves. <code>scripts/a11y_check.py</code>
