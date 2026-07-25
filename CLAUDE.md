@@ -4,6 +4,36 @@ boost is a "Homebrew for AI coding skills": a Python CLI (`boost_cli`) that find
 installs, and governs the skill/rule/workflow files that AI coding agents run on.
 Package name on PyPI is `boost-skill-cli`; the command is `boost`.
 
+## Common commands
+
+```bash
+make venv                                      # .venv from the hash-pinned requirements/*.txt
+.venv/bin/pytest tests/unit/test_catalog.py -q                    # one test file
+.venv/bin/pytest tests/unit/test_catalog.py::test_scan_dir -q     # one test
+.venv/bin/pytest tests/functional -q -k install                   # functional tests matching "install"
+make lint                                      # the whole static tier — see the recipe, it is 18 commands
+make test                                      # unit + functional with 80% coverage gate
+make check                                     # the full required gate — see table below
+
+# run boost itself against a disposable HOME (never your real ~/.boost):
+export HOME=/tmp/boost-sandbox && mkdir -p $HOME
+python3 tests/make_fixture.py /tmp/fixture-tap
+./boost tap /tmp/fixture-tap
+./boost install brainstorming
+./boost doctor
+```
+
+`make venv` installs from `requirements/*.txt`, which are hash-pinned and are the
+same files CI installs (`scripts/lock_toolchain.py --check` gates them against
+drift) — so a dev venv and a runner resolve to identical bytes. Don't `pip
+install` a lint or test tool by hand; add it to the right requirements file and
+regenerate the lock, or `make lint` passes for you and fails in CI.
+
+The functional/unit `sandbox` fixture (`tests/conftest.py`) also sets
+`BOOST_NO_AI=1` and `BOOST_ASSUME_YES=1` so tests are deterministic and never
+block on a confirm prompt or a real AI call — override explicitly in a test
+that means to exercise the AI or confirmation path.
+
 ## The one gate that matters
 
 Before calling any change done, run the full gate:
@@ -124,9 +154,57 @@ Both boards are data-driven: `docs/roadmap.html` from `board: code` items and
 into the per-track sections; the filter JS and counters are computed). Same rule
 for both — edit items, run `build_roadmap.py`, never touch the HTML by hand.
 
+## Architecture
+
+**CLI dispatch.** `boost_cli/cli.py` holds `COMMANDS`, the single
+source-of-truth list of `(name, group, module, summary)` for all 78 commands.
+Each command is implemented as `def cmd_<name_with_underscores>(argv) -> int`
+inside `boost_cli/commands/<module>.py`, and `_dispatch` imports that module
+lazily on invocation — so `boost --help` stays instant and command modules are
+decoupled from each other. To add a command: add a row to `COMMANDS`, add the
+`cmd_*` function to the named module, and it's live. `docs/commands.html` is
+**generated** from `COMMANDS` by `scripts/build_command_reference.py`, so a new
+row means regenerating it (`make generate`) or the `--check` gate fails.
+
+**commands/ vs core/.** `boost_cli/commands/` is thin CLI glue — argument
+parsing, output formatting, calling into `core/`. `boost_cli/core/` is the
+actual engine (catalog scanning, install/link logic, the lock file, registries,
+search) and is what the mutation gate targets — put behavior there, not in
+the command layer, so it's covered by both the unit suite and mutation
+testing.
+
+**Storage layout**, all resolved at call time from `$HOME` (or `$BOOST_HOME`)
+in `boost_cli/core/paths.py`, which is what makes `HOME=<tempdir>` sandboxing
+work in tests and the dev loop:
+
+```text
+~/.boost/repos/     shallow git clones of tapped registries
+~/.boost/cache/     JSON catalogs built from SKILL.md/rule/workflow frontmatter
+~/.boost/logs/      rotating diagnostic log + crash reports
+~/.boost/state/     pins, tags, policy, profiles, pulse feed, snapshots
+~/.boost/config.json
+~/.agents/skills/                canonical store — single source of truth for installed skills
+~/.agents/skills/.skill-lock.json   v3 lock file
+~/.claude/skills/  ~/.windsurf/skills/  ~/.cursor/skills/   symlinked out from the canonical store
+```
+
+`core/catalog.scan_dir` walks a tap's clone and classifies each file into one
+of the three item kinds (see Non-obvious rules above); `core/store.py` owns
+install, uninstall and sync — copying into the canonical store, symlinking into
+each agent's skills dir, and updating the lock file.
+
+**Search has two engines**, both in `core/`: `rag.py` is the always-on,
+zero-dependency BM25 engine (full-content index, auto-builds on first
+search — this is what the required `eval` gate floors at recall@k ≥ 0.85).
+`dense.py` is optional dense/vector retrieval behind the `[rag]` extra plus
+an embeddings key (`VOYAGE_API_KEY`/`OPENAI_API_KEY`); it's used when both
+are present and falls back to BM25 otherwise. `core/ai.py` wraps the
+opt-in LLM-assisted paths (`search --smart`, `explain`, `distill`, `infer`,
+`absorb`, `evolve`, `simulate`, …), shelling out to the `claude` CLI or
+`ANTHROPIC_API_KEY` when available and degrading to heuristics when not.
+
 ## Layout
 
-- `boost_cli/commands/` — CLI command groups   · `boost_cli/core/` — engine (the mutation-gated code)
 - `boost_cli/data/` — shipped catalog data (generated)   · `scripts/` — build/gate tooling
 - `tests/unit`, `tests/functional`, `tests/smoke.sh` — the three test tiers
-- `docs/` — `overview.html` (visual guide), `DEBUGGING.md`; `roadmap.html` is generated from `docs/roadmap/items/*.md` (see above)
+- `docs/` — `index.html` (visual guide), `commands.html` (every flag, generated), `DEBUGGING.md`; `roadmap.html` is generated from `docs/roadmap/items/*.md` (see above)
