@@ -121,8 +121,35 @@ class TestMutationHardening:
         assert s("0") == 0
         assert s("-3") == -3
         assert s("0.0") == 0.0
-        assert s("1e3") == 1000.0
         assert s("1.2.3") == "1.2.3"     # not a float
+
+    def test_scalar_coerces_only_when_lossless(self):
+        # A number is coerced only when str() gives back exactly what the author
+        # wrote. `1e3` would round-trip as "1000.0", so it stays text — the same
+        # rule that keeps `version: 1.10` from silently becoming 1.1.
+        s = frontmatter._scalar
+        assert s("1e3") == "1e3"
+        assert s("1E3") == "1E3"
+        assert s("+5") == "+5"           # str(5) is "5", not "+5"
+        assert s("1_000") == "1_000"     # int() accepts it, str() does not emit it
+
+    def test_scalar_preserves_lossy_version_strings(self):
+        # The bug this rule exists for: float("1.10") is 1.1, so boost read a
+        # skill published at 1.10 as 1.1, decided 1.1 < 1.9, and never offered
+        # the update. Leading zeros corrupt identically.
+        s = frontmatter._scalar
+        assert s("1.10") == "1.10"
+        assert s("1.50") == "1.50"
+        assert s("007") == "007"
+        assert s("00") == "00"
+
+    def test_scalar_still_coerces_the_lossless_cases(self):
+        # The narrowing must not turn every number into a string — plain
+        # integers and canonical floats still come back as numbers.
+        s = frontmatter._scalar
+        assert s("42") == 42 and isinstance(s("42"), int)
+        assert s("1.0") == 1.0 and isinstance(s("1.0"), float)
+        assert s(" 42 ") == 42           # surrounding whitespace is stripped first
 
     def test_split_commas_quoted_commas(self):
         meta, _ = frontmatter.parse('---\ntags: [a, "b, c", d]\n---\n')

@@ -48,10 +48,26 @@ def _scalar(raw: str):
         return False
     if low == "null" or s == "~":
         return None
+    # Numbers are coerced ONLY when the coercion is lossless — that is, when
+    # str() of the result gives back exactly what the author wrote. A number
+    # whose text carries information the numeric type cannot hold stays a
+    # string, because every consumer of frontmatter (`version`, tags, names)
+    # reads these values back as text.
+    #
+    # This is not hypothetical. `version: 1.10` is ten patch releases past 1.1,
+    # but float("1.10") is 1.1 and str(1.1) is "1.1" — so boost read a skill
+    # published at 1.10 as 1.1, decided 1.1 < 1.9, and never offered the update.
+    # `boost outdated` reported "everything up to date" while the tap was nine
+    # releases ahead. Leading zeros (`007` -> 7) and exponents (`1e5` -> 100000.0)
+    # corrupt the same way. Found by the parser fuzz harness (tests/fuzz/).
     with suppress(ValueError):
-        return int(s)
+        n = int(s)
+        if str(n) == s:
+            return n
     with suppress(ValueError):
-        return float(s)
+        f = float(s)
+        if str(f) == s:
+            return f
     return s
 
 

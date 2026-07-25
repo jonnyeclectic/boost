@@ -1,0 +1,89 @@
+name: fuzz
+
+# Coverage-guided fuzzing of boost's hand-rolled parsers (atheris / libFuzzer).
+#
+# The required gate proves the parsers handle the inputs someone thought to write
+# down. This mines the ones nobody did: atheris instruments the bytecode and
+# evolves inputs toward uncovered branches, which is how `version: 1.10` parsing
+# as the float 1.1 was found — a skill published at 1.10 read as older than 1.9
+# and was never offered as an update.
+#
+# NON-BLOCKING, on a schedule: a fuzzer is a search, not a pass/fail gate, and a
+# timed run is not reproducible enough to sit in front of a merge. The cheap,
+# deterministic half — every seed through every invariant — runs in the normal
+# unit suite (tests/unit/test_fuzz_targets.py), so the harnesses cannot rot
+# unnoticed between scheduled runs.
+#
+# A crash is uploaded as an artifact AND fails this run, so the scheduled-failure
+# alert fires. Do NOT add this to branch protection's required checks.
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds to fuzz each target"
+        required: false
+        default: "300"
+  schedule:
+    - cron: "0 4 * * 6"         # weekly, Saturday 04:00 UTC
+  pull_request:
+    types: [labeled]            # or run on a PR by adding the 'check-fuzz' label
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    # Only on the label, the schedule, or a manual run — never on every PR.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.label.name == 'check-fuzz'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_frontmatter, fuzz_registry]
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          # atheris publishes manylinux wheels for cp312/cp313/cp314 only, so
+          # this job is Linux-and-3.12+ by construction. No clang needed.
+          python-version: "3.12"
+      - name: install atheris
+        run: python -m pip -q install atheris==3.1.0
+      - name: fuzz ${{ matrix.target }}
+        env:
+          SECONDS_TO_FUZZ: ${{ github.event.inputs.seconds || '300' }}
+        run: |
+          set -o pipefail
+          mkdir -p artifacts
+          kind="${{ matrix.target }}"
+          kind="${kind#fuzz_}"
+          # -artifact_prefix: libFuzzer writes any crashing input here, so a
+          # failure ships the exact reproducer rather than just a stack trace.
+          python "tests/fuzz/${{ matrix.target }}.py" \
+            "tests/fuzz/corpus/$kind" \
+            -max_total_time="$SECONDS_TO_FUZZ" \
+            -artifact_prefix=artifacts/ \
+            -print_final_stats=1 2>&1 | tee "artifacts/$kind.log"
+      - name: upload crashers
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: artifacts/
+          retention-days: 30
