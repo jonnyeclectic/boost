@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli
+.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli fuzz
 
 # Every tool comes from a hash-pinned requirements/*.txt — the same files CI
 # installs (see scripts/lock_toolchain.py). pip enforces the hashes, so a dev
@@ -139,6 +139,20 @@ bench:
 # hyperfine isn't installed (`brew install hyperfine`).
 bench-cli:
 	@command -v hyperfine >/dev/null 2>&1 && bash scripts/bench_cli.sh || echo "hyperfine not on PATH — install via 'brew install hyperfine', skipping"
+
+# Opt-in coverage-guided fuzzing of the hand-rolled parsers (atheris/libFuzzer).
+# Not part of `make check` — a fuzzer is a search, not a pass/fail gate; the
+# scheduled `fuzz` workflow owns the long runs. Each target degrades cleanly to
+# a seed-corpus pass when atheris is absent (it ships manylinux wheels only), and
+# the seed pass also runs in the normal unit suite so the harnesses can't rot.
+# FUZZ_SECONDS=60 make fuzz   to run longer.
+FUZZ_SECONDS ?= 30
+fuzz:
+	@for t in fuzz_frontmatter fuzz_registry; do \
+		echo "== $$t"; \
+		$(PY) tests/fuzz/$$t.py tests/fuzz/corpus/$${t#fuzz_} \
+			-max_total_time=$(FUZZ_SECONDS) -artifact_prefix=/tmp/ || exit 1; \
+	done
 
 # regenerate generated artifacts from their source (registries + roadmap boards)
 generate:
