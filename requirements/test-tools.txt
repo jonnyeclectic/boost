@@ -3,10 +3,12 @@
 # Edit requirements/test-tools.in, then run:
 #     python3 scripts/lock_toolchain.py
 #
-# Resolved for Python 3.9, universally (markers cover every OS and interpreter). Every artifact is sha256-pinned, and pip
-# enforces those hashes on install (any hash implies --require-hashes),
-# so a yanked or tampered transitive dependency fails the install
-# instead of silently changing the build.
+# Resolved universally from Python 3.9 — environment markers cover every
+# OS and interpreter, so this file is byte-identical wherever it is
+# regenerated. Every artifact is sha256-pinned, and pip enforces those
+# hashes on install (any hash implies --require-hashes), so a yanked or
+# tampered transitive dependency fails the install instead of silently
+# changing the build.
 attrs==26.1.0 ; python_full_version < '3.10' \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309 \
     --hash=sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32

@@ -3,10 +3,12 @@
 # Edit requirements/lint-tools.in, then run:
 #     python3 scripts/lock_toolchain.py
 #
-# Resolved for Python 3.12. Every artifact is sha256-pinned, and pip
-# enforces those hashes on install (any hash implies --require-hashes),
-# so a yanked or tampered transitive dependency fails the install
-# instead of silently changing the build.
+# Resolved universally from Python 3.12 — environment markers cover every
+# OS and interpreter, so this file is byte-identical wherever it is
+# regenerated. Every artifact is sha256-pinned, and pip enforces those
+# hashes on install (any hash implies --require-hashes), so a yanked or
+# tampered transitive dependency fails the install instead of silently
+# changing the build.
 ast-serialize==0.6.0 \
     --hash=sha256:0067b25fce104eaae5b88383de9ab803faeb671831e14ca698b771b356e2600f \
     --hash=sha256:085de7f62dc9cc247eb01e965a362707d1d90b1d89a82c5bf78301a60a3c417b \
@@ -160,6 +162,7 @@ colorama==0.4.6 \
     --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
     --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
     # via
+    #   click
     #   interrogate
     #   radon
 grimp==3.15 \
@@ -271,7 +274,7 @@ interrogate==1.7.0 \
     --hash=sha256:a320d6ec644dfd887cc58247a345054fc4d9f981100c45184470068f4b3719b0 \
     --hash=sha256:b13ff4dd8403369670e2efe684066de9fcb868ad9d7f2b4095d8112142dc9d12
     # via -r requirements/lint-tools.in
-librt==0.13.0 \
+librt==0.13.0 ; platform_python_implementation != 'PyPy' \
     --hash=sha256:05d96b80b95d3a2721b619f8982b8558848b04875bb4772fd54842b59f61dd97 \
     --hash=sha256:0763ca2ab66058174f9dee426dc64f5e0a89c24a7df8d3fe3f1836c04e25de4b \
     --hash=sha256:091b60a4d2174fc1ec5c34cdc0b72efb6224753d76b7da61ebeab7a191aec8bd \

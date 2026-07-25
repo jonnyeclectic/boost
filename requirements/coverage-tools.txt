@@ -3,10 +3,12 @@
 # Edit requirements/coverage-tools.in, then run:
 #     python3 scripts/lock_toolchain.py
 #
-# Resolved for Python 3.12. Every artifact is sha256-pinned, and pip
-# enforces those hashes on install (any hash implies --require-hashes),
-# so a yanked or tampered transitive dependency fails the install
-# instead of silently changing the build.
+# Resolved universally from Python 3.12 — environment markers cover every
+# OS and interpreter, so this file is byte-identical wherever it is
+# regenerated. Every artifact is sha256-pinned, and pip enforces those
+# hashes on install (any hash implies --require-hashes), so a yanked or
+# tampered transitive dependency fails the install instead of silently
+# changing the build.
 chardet==7.4.3 \
     --hash=sha256:0ac3bf11c645734a1701a3804e43eabd98851838192267d08c353a834ab79fea \
     --hash=sha256:1173b74051570cf08099d7429d92e4882d375ad4217f92a6e5240ccfb26f231e \
@@ -45,6 +47,10 @@ chardet==7.4.3 \
     --hash=sha256:dc50f28bad067393cce0af9091052c3b8df7a23115afd8ba7b2e0947f0cef1f8 \
     --hash=sha256:e1b98790c284ff813f18f7cf7de5f05ea2435a080030c7f1a8318f3a4f80b131
     # via diff-cover
+colorama==0.4.6 ; sys_platform == 'win32' \
+    --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
+    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
+    # via pytest
 coverage==7.15.2 \
     --hash=sha256:075560438765b7a2ef43bf7aa7758661b53d889df47f062a31bda6c1ade553a2 \
     --hash=sha256:0901cfe6c13bcd2302da4f83e884555d2a22bda6e4c476f09ef204ba20ca536e \
