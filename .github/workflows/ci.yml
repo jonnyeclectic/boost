@@ -114,6 +114,13 @@ jobs:
         run: |
           python -m pip -q install uv
           python scripts/lock_toolchain.py --check
+      - name: accessibility gate (WCAG 2.1 AA)
+        # Structural WCAG failures decidable from the markup (lang, alt, link and
+        # button names, duplicate ids, heading order) plus the 1.4.3 contrast
+        # ratios computed from the Aurora tokens themselves. Pure stdlib, so it
+        # runs here rather than needing Node/Chrome; the axe-core sweep in
+        # tests/visual covers what needs a live DOM.
+        run: python scripts/a11y_check.py -v
       - name: command reference is regenerated
         # docs/commands.html is generated from the CLI's own COMMANDS + argparse
         # parsers, so it can't drift from the code. The script imports boost_cli

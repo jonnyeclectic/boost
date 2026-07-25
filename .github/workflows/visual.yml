@@ -39,6 +39,15 @@ jobs:
       - name: render sweep (system Chrome)
         # ubuntu-latest images ship google-chrome stable at /usr/bin.
         run: node tests/visual/visual_check.mjs
+      - name: axe-core sweep (WCAG 2.1 A/AA)
+        # The half of the a11y audit that needs a live DOM: contrast as
+        # RENDERED (text over the glass panels and the gradient, which no
+        # token-pair table can predict), ARIA validity against the computed
+        # tree, landmarks, focusable-but-hidden elements. The markup-decidable
+        # half is scripts/a11y_check.py in the required lint job.
+        # `if: always()` so a render failure doesn't hide an a11y failure.
+        if: always()
+        run: node tests/visual/a11y_check.mjs
       - name: upload screenshots on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
