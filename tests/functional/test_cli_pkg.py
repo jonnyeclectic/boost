@@ -1014,7 +1014,7 @@ class TestMcpAwareSkills:
         assert data["mcp_servers"] == []
 
     def test_no_mcp_suppresses_the_offer(self, boost, sandbox, tmp_path,
-                                        fixture_tap_src, monkeypatch):
+                                        fixture_tap_src):
         # --no-mcp lives on `install`, so exercise it through a tap install of a
         # declaring skill rather than through `import`.
         tap = tmp_path / "mcp-tap"
@@ -1033,8 +1033,19 @@ class TestMcpAwareSkills:
 
         r = boost("install", "needs-mcp", "--no-mcp")
         assert "MCP server" not in r.out
-        monkeypatch.delenv("BOOST_NO_MCP_OFFER", raising=False)
 
+        # --no-mcp must not outlive its own invocation. boost runs in-process
+        # under the MCP server and this harness, so when the flag travelled as
+        # an unscoped os.environ write it stuck for the life of the process and
+        # silently suppressed the offer for every later install.
         boost("uninstall", "needs-mcp")
         r = boost("install", "needs-mcp")
         assert "needs-mcp needs 1 MCP server to work" in r.out
+
+    def test_env_var_suppresses_the_offer(self, boost, sandbox, tmp_path,
+                                         monkeypatch):
+        # BOOST_NO_MCP_OFFER is the documented escape hatch for agents that never
+        # want the prompt. Unlike --no-mcp, boost only ever reads it.
+        monkeypatch.setenv("BOOST_NO_MCP_OFFER", "1")
+        r = boost("import", _mcp_skill_dir(tmp_path))
+        assert "MCP server" not in r.out
