@@ -64,6 +64,14 @@ jobs:
         # (98.5% when this landed) so new public functions ship documented.
         # Flags/carve-outs: [tool.interrogate] in pyproject.
         run: interrogate boost_cli/core
+      - name: modernization smells (refurb)
+        # refurb's mypy-backed FURB checks catch the dated idioms ruff's ported
+        # subset misses — try/except/pass that wants contextlib.suppress,
+        # redundant list()/dict()/str() casts, `x or ""` on an already
+        # non-optional value. ruff carries the pyupgrade (UP) half of this gate;
+        # the three PEP 585/604 rules stay ignored while the floor is 3.9
+        # (rationale in pyproject.toml [tool.ruff.lint]).
+        run: refurb boost_cli
       - name: codespell (user-facing text)
         run: codespell boost_cli docs README.md
       - name: secret scan (gitleaks)

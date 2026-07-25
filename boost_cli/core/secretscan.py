@@ -26,7 +26,7 @@ class Rule(NamedTuple):
     """
     id: str
     severity: str
-    pattern: "re.Pattern[str]"
+    pattern: re.Pattern[str]
     group: int          # capture group holding the secret value to redact
     description: str
 
@@ -44,7 +44,7 @@ class Finding(NamedTuple):
     description: str
 
 
-def _rx(pattern: str, flags: int = 0) -> "re.Pattern[str]":
+def _rx(pattern: str, flags: int = 0) -> re.Pattern[str]:
     return re.compile(pattern, flags)
 
 

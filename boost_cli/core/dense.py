@@ -272,8 +272,8 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
         if prev is None or score > prev[0]:
             best[key] = (score, snip)
     ranked = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0][0]))
-    hits: List[Hit] = []
-    for (name, tap), (score, snip) in ranked[:k]:
-        hits.append({"entry": live[(name, tap)], "score": score,
-                     "snippet": snip})  # type: ignore[typeddict-item]
+    hits: List[Hit] = [
+        {"entry": live[(name, tap)], "score": score,
+         "snippet": snip}  # type: ignore[typeddict-item]
+        for (name, tap), (score, snip) in ranked[:k]]
     return hits

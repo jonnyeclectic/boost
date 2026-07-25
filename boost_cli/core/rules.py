@@ -41,7 +41,7 @@ def markers(name: str) -> Tuple[str, str]:
 
 
 def rule_target(agent: str, skills_dir: Path, name: str,
-                base: "Optional[Path]" = None) -> Tuple[str, Path]:
+                base: Optional[Path] = None) -> Tuple[str, Path]:
     """Where rule ``name`` materializes for ``agent``.
 
     Returns ``(mode, path)``: ``MODE_CLAUDE`` writes/merges a CLAUDE.md;

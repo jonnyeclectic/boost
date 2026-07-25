@@ -20,6 +20,7 @@ someone's diff.
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from pathlib import Path
 from typing import Optional
 
@@ -72,11 +73,9 @@ def read(base) -> dict:
 
 def _preserve_corrupt(p: Path) -> None:
     """Copy an unparseable lock aside as ``.corrupt``; never raise."""
-    try:
+    with suppress(OSError):
         import shutil
         shutil.copy(p, p.with_name(p.name + ".corrupt"))
-    except OSError:
-        pass
 
 
 def write(base, lock: dict) -> None:

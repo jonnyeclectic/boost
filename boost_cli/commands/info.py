@@ -495,7 +495,7 @@ def cmd_explain(argv):
     desc = str(meta.get("description") or "").strip()
     if desc:
         _print_wrapped(desc)
-    headings = re.findall(r"^(#{1,6})\s+(.*)$", body, re.M)
+    headings = re.findall(r"^(#{1,6})\s+(.*)$", body, re.MULTILINE)
     if headings:
         print()
         out.info(out.c("Outline:", out.BOLD))

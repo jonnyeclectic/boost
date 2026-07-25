@@ -61,7 +61,7 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     except BaseException:
         # Never leave a temp turd behind, and never mask the original error.
         with contextlib.suppress(OSError):
-            os.unlink(tmp)
+            Path(tmp).unlink()
         raise
 
 
@@ -191,11 +191,12 @@ def score_skill(skill_dir: Path) -> Tuple[int, List[str]]:
         score += 15
     else:
         notes.append("body is short (<200 chars)")
-    if re.search(r"^#{1,3} ", body, re.M):
+    if re.search(r"^#{1,3} ", body, re.MULTILINE):
         score += 10
     else:
         notes.append("no markdown headings in body")
-    if "```" in body or re.search(r"^\d+\. ", body, re.M) or re.search(r"^- ", body, re.M):
+    if ("```" in body or re.search(r"^\d+\. ", body, re.MULTILINE)
+            or re.search(r"^- ", body, re.MULTILINE)):
         score += 10  # concrete steps or examples
     else:
         notes.append("no examples, steps, or code blocks")

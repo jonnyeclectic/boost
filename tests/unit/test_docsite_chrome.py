@@ -50,7 +50,7 @@ def _index() -> str:
     return _INDEX.read_text(encoding="utf-8")
 
 
-def _embedded_commands(html: str) -> "list[tuple[str, str, str]]":
+def _embedded_commands(html: str) -> list[tuple[str, str, str]]:
     """The ``const COMMANDS = [...]`` rows the Commands section renders from."""
     start = html.index("const COMMANDS = [")
     end = html.index("];", start)
@@ -125,7 +125,7 @@ def test_footers_carry_no_internal_noise(page):
             % (page, noise))
 
 
-def _hidden_nav_rules(html: str) -> "list[str]":
+def _hidden_nav_rules(html: str) -> list[str]:
     """CSS rules that hide the nav element itself (not a descendant of it).
 
     ``header .nav ul::-webkit-scrollbar { display: none }`` is deliberate — the

@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 from typing import List
 
 from .. import cliparse
@@ -111,6 +112,6 @@ def _execute(runner: str, display: str, model, target) -> int:  # pragma: no cov
         proc = subprocess.run([sys.executable, runner_path])
     finally:
         with contextlib.suppress(OSError):
-            os.unlink(runner_path)
+            Path(runner_path).unlink()
     journal.log("run", display)
     return proc.returncode

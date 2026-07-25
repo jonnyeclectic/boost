@@ -475,7 +475,7 @@ class TestAtomicWriteText:
     def test_honours_encoding(self, tmp_path):
         p = tmp_path / "f.txt"
         util.atomic_write_text(p, "café", encoding="utf-8")
-        assert p.read_bytes() == "café".encode("utf-8")
+        assert p.read_bytes() == "café".encode()
 
     def test_replace_failure_cleans_temp_and_raises(self, tmp_path, monkeypatch):
         import os as _os

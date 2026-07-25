@@ -33,7 +33,7 @@ class Spinner:
         return (out.color_level(s) > 0
                 and hasattr(s, "isatty") and s.isatty())
 
-    def __enter__(self) -> "Spinner":
+    def __enter__(self) -> Spinner:
         if self.active():
             self._thread = threading.Thread(target=self._spin, daemon=True)
             self._thread.start()

@@ -2,14 +2,14 @@
 id: modernization-smells-refurb-pyupgrade
 board: code
 section: dx
-status: planned
+status: inflight
 category: Quality · Smell
 complexity: S
 impact: Low
 wow: 2
 note: respects 3.9 floor
 order: 7
-owner:
+owner: loop/modernization-smells
 pr:
 title: Modernization smells — <code>refurb</code> + <code>pyupgrade</code>
 ---

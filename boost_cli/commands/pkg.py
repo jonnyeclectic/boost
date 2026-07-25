@@ -165,7 +165,7 @@ def _boostfile_text(skills: Dict[str, dict], via: str = "boost bundle dump") -> 
 
 def _rel_list(meta: dict, key: str) -> List[str]:
     """A skill's `requires:`/`conflicts:` frontmatter as a clean name list."""
-    val = (meta or {}).get(key)
+    val = meta.get(key)
     if val in (None, "", False):
         return []
     if isinstance(val, list):
@@ -181,7 +181,7 @@ def _skill_relations(name: str, key: str) -> List[str]:
     return _rel_list(matches[0].get("meta") or {}, key)
 
 
-def _expand_dependencies(entries: List[dict]) -> "tuple[List[dict], resolve.Resolution]":
+def _expand_dependencies(entries: List[dict]) -> tuple[List[dict], resolve.Resolution]:
     """Grow the requested entries into their full `requires:` closure.
 
     Returns ``(ordered_entries, resolution)`` — the entries to install in
@@ -391,7 +391,7 @@ def cmd_uninstall(argv: List[str]) -> int:
         removed += 1
     if removed:
         lines = ["Uninstalled %s" % _plural(removed, "skill")]
-        if removed == 1 and len(args.names) == 1:
+        if removed == 1 == len(args.names):
             lines.append(out.role("next: boost list", "muted"))
         print(out.panel(lines, title="removed", hue="pink"))
     return 1 if failed else 0
@@ -425,7 +425,7 @@ def cmd_sync(argv: List[str]) -> int:
 
     if args.diff:
         if args.json:
-            print(json.dumps(dict(plan, project=pplan), indent=2))
+            print(json.dumps(plan | {"project": pplan}, indent=2))
             return 0
         if not any(plan.values()) and not any(pplan.values()):
             out.ok("everything in sync")

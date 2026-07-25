@@ -89,8 +89,15 @@ target-version = "py39"
 # and performance smells at zero new-tool cost (ruff already runs in the lint
 # gate): flake8-bandit (S, Python SAST — shell=True, tempfile.mktemp, unsafe
 # yaml.load, weak hashing), flake8-bugbear (B), flake8-simplify (SIM),
-# flake8-comprehensions (C4), perflint (PERF) and Ruff-native (RUF).
-extend-select = ["S", "B", "SIM", "C4", "PERF", "RUF"]
+# flake8-comprehensions (C4), perflint (PERF), pyupgrade (UP) and Ruff-native
+# (RUF). UP is pyupgrade, ported into ruff — it holds the line on dated idioms
+# as they are written, rather than letting them accrete (see the ignore block
+# for the four rules the >=3.9 runtime floor does not allow).
+extend-select = ["S", "B", "SIM", "C4", "PERF", "RUF", "UP"]
+# refurb runs as its own lint step and its suppressions are written the same
+# way (`# noqa: FURB143`). Declaring the prefix as external stops RUF102 from
+# reading another linter's codes as typos and deleting the suppression.
+external = ["FURB"]
 ignore = [
     # boost is a CLI that shells out to git by design: every subprocess call
     # passes an argument LIST (never a shell string) and resolves `git` via
@@ -112,6 +119,24 @@ ignore = [
     # batch. Hoisting the handler out of the loop would trade that resilience
     # for a negligible per-iteration saving.
     "PERF203",  # try-except-in-loop
+    # pyupgrade (UP), minus the rules the >=3.9 floor does not actually allow.
+    # 60 of boost's 63 modules carry `from __future__ import annotations`, so
+    # these read as safe — but the future import only defers evaluation, it does
+    # not make the syntax legal. The moment anything evaluates an annotation
+    # (`typing.get_type_hints`, a dataclass/CLI introspection helper, a plain
+    # `eval`), a PEP 604 union is a TypeError on 3.9. ruff agrees: at
+    # `target-version = "py39"` it classifies all three fixes as *unsafe*.
+    # Revisit as one deliberate sweep if and when the floor moves to 3.10.
+    "UP006",  # non-pep585-annotation   (List[x]  -> list[x])
+    "UP035",  # deprecated-import       (typing.List and friends)
+    "UP045",  # non-pep604-annotation-optional  (Optional[x] -> x | None)
+    # printf-formatting is this codebase's house style across ~860 call sites.
+    # The rewrite is an unsafe fix (`%` and `format` differ on tuples and on
+    # types with a custom `__format__`), it would rewrite nearly every file —
+    # obliterating blame and conflicting with every branch in flight — and it
+    # is the exact churn requirements/lint-tools.txt was pinned to keep out of
+    # the gate. Declined on purpose, not overlooked.
+    "UP031",  # printf-string-formatting
 ]
 
 [tool.ruff.lint.per-file-ignores]

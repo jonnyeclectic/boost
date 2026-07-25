@@ -30,7 +30,7 @@ from typing import List, Set
 NETWORK = "network"
 SHELL = "shell"
 FILESYSTEM = "filesystem"
-KNOWN: "tuple[str, ...]" = (NETWORK, SHELL, FILESYSTEM)
+KNOWN: tuple[str, ...] = (NETWORK, SHELL, FILESYSTEM)
 
 # Aliases an author might write for a bucket, folded to the canonical name.
 _ALIASES = {
@@ -60,7 +60,8 @@ _TELLS = {
         r"\bwrite_text\b", r"\bopen\([^)]*['\"][wa]", r"\brmdir\b",
     ],
 }
-_COMPILED = {cap: [re.compile(p, re.I) for p in pats] for cap, pats in _TELLS.items()}
+_COMPILED = {cap: [re.compile(p, re.IGNORECASE) for p in pats]
+             for cap, pats in _TELLS.items()}
 
 
 def declared(meta: dict) -> Set[str]:
@@ -79,7 +80,7 @@ def unknown(meta: dict) -> Set[str]:
 
 
 def _raw(meta: dict):
-    val = (meta or {}).get("capabilities")
+    val = meta.get("capabilities")
     if val in (None, "", False):
         return []
     if isinstance(val, list):

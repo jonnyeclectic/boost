@@ -13,6 +13,7 @@ Supports the subset actually used by skill files:
 """
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import Tuple
 
 
@@ -47,14 +48,10 @@ def _scalar(raw: str):
         return False
     if low == "null" or s == "~":
         return None
-    try:
+    with suppress(ValueError):
         return int(s)
-    except ValueError:
-        pass
-    try:
+    with suppress(ValueError):
         return float(s)
-    except ValueError:
-        pass
     return s
 
 

@@ -27,6 +27,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 from .. import cliparse
@@ -110,7 +111,7 @@ def _require_npx() -> None:
             hint="install Node.js 20.12+ (e.g. `brew install node`), then retry")
 
 
-def _run_installer(directory: Path, modules: str) -> "subprocess.CompletedProcess":
+def _run_installer(directory: Path, modules: str) -> subprocess.CompletedProcess:
     cmd = ["npx", "--yes", "bmad-method@latest", "install",
            "--yes", "--directory", str(directory),
            "--tools", "claude-code", "--modules", modules,
@@ -136,7 +137,7 @@ def _whoami() -> str:
 
 
 def _parse_version(text: str) -> str:
-    m = re.search(r"v(\d+\.\d+\.\d+)", text or "")
+    m = re.search(r"v(\d+\.\d+\.\d+)", text)
     return m.group(1) if m else "unknown"
 
 
@@ -225,11 +226,9 @@ def _startup(value, scope) -> int:
 def _orient(scope) -> int:
     """SessionStart hook target: print orientation iff enabled (else silent)."""
     scope = scope or "project"
-    try:
+    with suppress(Exception):  # a hook must never break the session
         if _get_scope_state(scope).get("startup"):
             print(ORIENT)
-    except Exception:
-        pass  # a hook must never break the session
     return 0
 
 

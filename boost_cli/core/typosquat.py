@@ -8,6 +8,7 @@ a user asked for, so a command can warn before installing a look-alike.
 """
 from __future__ import annotations
 
+import operator
 from typing import List
 
 
@@ -60,7 +61,7 @@ def confusable_names(name: str, candidates, max_distance: int = 1) -> List[str]:
         if 1 <= d <= max_distance:
             hits.append((d, cand))
             seen.add(low)
-    hits.sort(key=lambda t: (t[0], t[1]))
+    hits.sort(key=operator.itemgetter(0, 1))
     return [c for _d, c in hits]
 
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import suppress
 from pathlib import Path
 from typing import Optional
 
@@ -100,11 +101,9 @@ def resolve_base(scope: str, base=None, start=None) -> Optional[Path]:
     if found is not None:
         return found
     here = Path(start) if start is not None else Path.cwd()
-    try:
+    with suppress(OSError):
         if here.resolve() == Path(paths.home()).resolve():
             return None
-    except OSError:
-        pass
     return here
 
 
@@ -138,7 +137,10 @@ def skill_target(skills_dir, name: str, base=None) -> Path:
     carried over from the configured path, so a non-standard ``skills`` folder
     name survives into the project.
     """
-    if not _SAFE_NAME.fullmatch(name or "") or name in {".", ".."}:
+    # `name or ""` is load-bearing: a name can arrive as None from a committed
+    # lock record, and fullmatch(None) raises TypeError instead of the BoostError
+    # this path-safety guard exists to raise.
+    if not _SAFE_NAME.fullmatch(name or "") or name in {".", ".."}:  # noqa: FURB143
         raise BoostError("invalid skill name %r" % name)
     skills_dir = Path(skills_dir)
     return agent_root(skills_dir, base) / skills_dir.name / name
