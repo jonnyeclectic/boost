@@ -11,6 +11,15 @@ on:
   # push to main. Enabling the queue itself is a repo Setting (see CONTRIBUTING).
   merge_group:
 
+# Least-privilege default for any job that doesn't declare its own block. Every
+# job below currently does — and a job-level block REPLACES this one rather than
+# merging with it — so this changes no job's effective token today. It is the
+# floor for the next job someone adds, and it satisfies Scorecard's
+# TokenPermissions check, which scores a workflow 0 for having no top-level
+# default at all.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest

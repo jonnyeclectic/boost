@@ -109,7 +109,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>143</b><span>Loop finds</span></div>
+      <div class="stat"><b>145</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1723,6 +1723,68 @@ path is never used — that fixes the behaviour without satisfying Dependabot's 
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">dismissed as tolerable risk, 2026-07-25</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="scorecard-findings-triage">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <h3>OpenSSF Scorecard's 15 findings, triaged into three piles</h3>
+        <p>Scorecard files into the same code-scanning inbox as CodeQL, so its findings read like
+code defects and get ignored alongside the false positives. They are not defects — they
+are <b>posture metrics</b>, and they must not be dismissed as "false positive" the way the
+<code>serve.py</code> traversal alerts legitimately were, because that misrepresents the
+repo's security posture. Triaged 2026-07-25:
+<b>Fixed</b> — <code>TokenPermissions</code> #26/#27/#28: <code>ci</code>,
+<code>codeql</code> and <code>adapter-conformance</code> had no top-level
+<code>permissions:</code> block at all, scoring 0. Added <code>contents: read</code> as the
+least-privilege default.
+<b>Intentional, leave</b> — <code>TokenPermissions</code> #39/#37/#25/#24:
+<code>publish.yml</code> needs <code>contents: write</code> to create the release and tag,
+<code>osv-scanner</code> needs <code>security-events: write</code> to upload SARIF, and
+<code>ci.yml</code>'s <code>tests</code> job needs <code>contents: write</code> for the
+coverage-badge push. "Fixing" these breaks the release pipeline. They should be
+<b>dismissed as used-in-tests/acceptable-risk with a reason</b>, not left open to rot the list.
+<b>Not code-fixable</b> — <code>MaintainedID</code> is repository age; <code>CodeReviewID</code>
+counts approved changesets and is structurally 0 while loops self-merge;
+<code>CIIBestPracticesID</code> is an opt-in badge programme; the four
+<code>PinnedDependencies</code> hits are <code>npx</code> and <code>pip</code> invocations
+inside steps, not actions, so SHA-pinning does not apply to them as written.
+<code>BranchProtectionID</code> is tracked separately in
+<a href="#main-has-no-branch-protection">its own card</a> — it is a workflow decision, not a
+config oversight.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">15 open · 3 fixed, 4 intentional, 5 not code-fixable</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="main-has-no-branch-protection">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release safety</span></div>
+        <h3><code>main</code> has no branch protection, so the release rules are honour-system</h3>
+        <p><code>GET /branches/main/protection</code> returns <b>"Branch not protected"</b>. Scorecard
+flags it (<code>BranchProtectionID</code>, score 0), but the sharper way to see it is this:
+CLAUDE.md says <i>"never merge onto a red release"</i> and <i>"every merge to main cuts a
+PyPI release"</i> — and <b>nothing enforces either</b>. A merge with a red gate succeeds
+silently, and the release workflow then ships that commit to PyPI. The rule exists only in
+the head of whoever is merging.
+This is a <b>decision, not a bug</b>, which is why it is filed rather than fixed. Requiring
+status checks would have stopped the exact situation that occurred on
+2026-07-25, when three PRs sat red on a <code>lock_toolchain --check</code> failure that
+belonged to none of them. But protection cuts both ways here: the repo's whole working model
+is parallel <code>loop/*</code> branches opening and merging their own PRs, so
+<b>"require pull request reviews"</b> would deadlock every loop (there is no second
+reviewer), and that same absence is what keeps <code>CodeReviewID</code> pinned at 0/30.
+The shape that fits: require <b>status checks</b> to pass (at minimum <code>ci / lint</code>
+and <code>ci / tests</code>) and require branches to be up to date, but do <b>not</b>
+require reviews. That enforces the release rule that actually matters while leaving
+self-merge intact. Decide before adding more concurrent loops, not after.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">nothing enforces the red-merge rule</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
