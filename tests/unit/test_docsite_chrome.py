@@ -251,6 +251,25 @@ def test_only_the_nav_header_is_sticky_chrome():
 
 
 @pytest.mark.parametrize("page", _PAGES)
+def test_generic_elements_with_aria_label_declare_a_role(page):
+    """html-validate's aria-label-misuse, checked in-suite so it fails first.
+
+    ``aria-label`` is only meaningful on an element whose role supports a
+    name — a bare ``<div aria-label="...">`` is invalid, and a screen reader
+    ignores the label. ``<div class="pills" role="tablist">`` is the correct
+    shape; the carousel shipped two divs without one.
+    """
+    html = (_DOCS / page).read_text(encoding="utf-8")
+    bad = [
+        tag for tag in re.findall(r"<(?:div|span)\b[^>]*>", html)
+        if "aria-label=" in tag and not re.search(r'\brole="[^"]+"', tag)
+    ]
+    assert not bad, (
+        "%s labels a generic element with no role: %s — add the role whose "
+        "name the label provides" % (page, [t[:90] for t in bad]))
+
+
+@pytest.mark.parametrize("page", _PAGES)
 def test_no_duplicate_element_ids(page):
     """html-validate's no-dup-id, checked in-suite so it fails before CI does.
 
