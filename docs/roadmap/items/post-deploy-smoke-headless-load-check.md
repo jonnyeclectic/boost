@@ -2,7 +2,7 @@
 id: post-deploy-smoke-headless-load-check
 board: code
 section: docsite
-status: inflight
+status: shipped
 category: Testing · Docs
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: catches red deploys
 order: 9
 owner: loop/post-deploy-smoke
-pr:
+pr: 244
 title: Post-deploy smoke — headless load check
 ---
 Every other docs gate runs against the working tree — <code>html-validate</code> and
