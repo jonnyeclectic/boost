@@ -1,0 +1,17 @@
+# Declared release/audit toolchain — the tools `make audit` and `make dist-check`
+# invoke, mirroring the pip-audit and package-metadata CI workflows.
+#
+# EDIT THIS FILE, then run `python3 scripts/lock_toolchain.py` to regenerate the
+# hash-pinned `release-tools.txt` beside it.
+#
+# `make venv` never installed these, so both targets failed on a fresh checkout
+# until you worked out by hand which tool was missing. They are pinned here for
+# the same reason as everything else: a `twine check --strict` or `pyroma`
+# release gate whose verdict changes on an upstream release is not a gate.
+#
+# Resolved for Python 3.12.
+build
+twine
+check-wheel-contents
+pyroma
+pip-audit

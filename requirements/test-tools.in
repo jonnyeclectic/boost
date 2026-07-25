@@ -1,0 +1,16 @@
+# Declared test toolchain — what CI's `tests` matrix installs.
+#
+# EDIT THIS FILE, then run `python3 scripts/lock_toolchain.py` to regenerate the
+# hash-pinned `test-tools.txt` beside it.
+#
+# Resolved UNIVERSALLY from the >=3.9 floor, so one file covers the whole
+# 3 OS x 3 Python matrix. uv emits environment markers per interpreter, which
+# means 3.12/3.14 still get current pytest while 3.9 gets the last release that
+# supported it — locking does not drag modern Pythons back to the floor's
+# versions. Left unpinned here on purpose: the resolver picks the newest release
+# valid for each interpreter, and `lock_toolchain.py` is when that choice gets
+# made and reviewed.
+pytest
+pytest-cov
+coverage
+hypothesis

@@ -31,22 +31,33 @@ nox.options.error_on_missing_interpreters = False
 
 @nox.session
 def lint(session: nox.Session) -> None:
-    """ruff + mypy + import-linter + codespell + the generated-file drift checks."""
-    session.install("ruff", "mypy", "codespell", "import-linter")
+    """Every linter and generated-file drift check `make lint` and CI run."""
+    # The same hash-pinned set CI's lint job installs, so this session can't
+    # drift from the real gate the way a hand-listed set did.
+    session.install("-r", "requirements/lint-tools.txt")
+    session.install("uv")  # lock_toolchain.py's resolver
     session.install("-e", ".")
     session.run("ruff", "check", "boost_cli", "tests")
     session.run("mypy")
+    session.run("pyright")
     session.run("lint-imports")
+    session.run("vulture", "boost_cli", "--min-confidence", "80")
+    session.run("xenon", "--max-absolute", "F", "--max-modules", "E",
+                "--max-average", "B", "boost_cli")
+    session.run("interrogate", "boost_cli/core")
+    session.run("refurb", "boost_cli")
     session.run("codespell", "boost_cli", "docs", "README.md")
     session.run("python", "scripts/build_registries.py", "--check")
     session.run("python", "scripts/build_roadmap.py", "--check")
+    session.run("python", "scripts/build_command_reference.py", "--check")
+    session.run("python", "scripts/lock_toolchain.py", "--check")
     session.run("python", "scripts/import_budget.py")
 
 
 @nox.session(python=PYTHONS)
 def tests(session: nox.Session) -> None:
     """Unit + functional suites with the 80% line-coverage gate."""
-    session.install("pytest", "pytest-cov", "coverage", "hypothesis")
+    session.install("-r", "requirements/test-tools.txt")
     session.install("-e", ".")
     session.run(
         "pytest", "tests/unit", "tests/functional",
@@ -64,6 +75,6 @@ def smoke(session: nox.Session) -> None:
 @nox.session
 def mutation(session: nox.Session) -> None:
     """Mutation testing over boost_cli/core with the 80% kill gate."""
-    session.install("mutmut", "pytest", "pytest-cov", "coverage", "hypothesis")
+    session.install("-r", "requirements/mutation-tools.txt")
     session.install("-e", ".")
     session.run("python", "scripts/mutation_gate.py", "--run", "--min", "80")

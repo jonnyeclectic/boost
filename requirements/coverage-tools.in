@@ -1,0 +1,11 @@
+# Declared patch-coverage toolchain — what CI's `patch-coverage` job installs.
+#
+# EDIT THIS FILE, then run `python3 scripts/lock_toolchain.py` to regenerate the
+# hash-pinned `coverage-tools.txt` beside it.
+#
+# Self-contained for the same reason as mutation-tools.in: one hashed file per
+# consumer, never two layered at install time.
+#
+# Resolved for Python 3.12 — the version CI's patch-coverage job pins.
+-r test-tools.in
+diff-cover

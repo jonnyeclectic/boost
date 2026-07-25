@@ -7,11 +7,30 @@ so contributing is mostly about keeping the quality gates green.
 
 ```bash
 git clone https://github.com/jonnyeclectic/boost && cd boost
-make venv          # pytest, coverage, mutmut, ruff, mypy — runtime stays stdlib-only
+make venv          # every gate tool, hash-pinned — runtime stays stdlib-only
 ```
 
 Every test runs against a throwaway `$HOME`, so nothing touches your real
 agent configs.
+
+### The toolchain is hash-pinned
+
+`make venv` and every CI job install from the generated
+[`requirements/*.txt`](requirements/), which pin an exact version **and every
+artifact's sha256** for the full transitive closure — pip enforces those hashes,
+so a yanked or tampered dependency fails the install instead of silently
+changing a build. Your venv and the CI runner get identical bytes.
+
+To change a tool, edit the `.in` file and regenerate:
+
+```bash
+python3 scripts/lock_toolchain.py            # rewrite the .txt files
+python3 scripts/lock_toolchain.py --upgrade  # re-resolve to newest allowed
+python3 scripts/lock_toolchain.py --check    # what `make lint` runs
+```
+
+Commit both the `.in` and the regenerated `.txt`; a stale lock fails `make lint`.
+Regenerating needs `uv` (installed by `make venv`); *installing* never does.
 
 ### Reproduce the whole gate — `nox`
 
@@ -58,6 +77,8 @@ auto-fixes straight back onto the branch.
 | `lint-imports` | layering: `core/` imports no `commands/`/`cli`; CLI depends inward |
 | `vulture` | dead-code radar: no unused imports / unreachable code (confidence ≥80) |
 | `xenon` | complexity ratchet: aggregate cyclomatic complexity can't regress (avg ≤B) |
+| `refurb boost_cli` | modernization smells the ruff families miss, zero findings |
+| `scripts/lock_toolchain.py --check` | the hash-pinned toolchain matches its `.in` declarations |
 
 ## Ground rules
 

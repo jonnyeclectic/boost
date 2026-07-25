@@ -12,10 +12,18 @@ EVAL_HOME := $(CURDIR)/.eval-home
 
 .PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli
 
+# Every tool comes from a hash-pinned requirements/*.txt — the same files CI
+# installs (see scripts/lock_toolchain.py). pip enforces the hashes, so a dev
+# venv and a CI runner resolve to identical bytes. mutation-tools.txt is a
+# superset of test-tools.txt, so installing it alone covers both; the two are
+# never layered because pip enforces hashes across the whole resolution.
 venv:
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip -q install pytest pytest-cov coverage mutmut hypothesis diff-cover
-	$(VENV)/bin/pip -q install -r requirements/lint-tools.txt   # pinned; CI installs the same set
+	$(VENV)/bin/pip -q install -r requirements/mutation-tools.txt
+	$(VENV)/bin/pip -q install -r requirements/coverage-tools.txt
+	$(VENV)/bin/pip -q install -r requirements/lint-tools.txt
+	$(VENV)/bin/pip -q install -r requirements/release-tools.txt
+	$(VENV)/bin/pip -q install uv     # regenerates the locks; not itself locked
 
 unit:
 	$(PYTEST) tests/unit -q
@@ -57,6 +65,7 @@ lint:
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
 	$(PY) scripts/build_command_reference.py --check
+	$(PY) scripts/lock_toolchain.py --check
 	$(PY) scripts/import_budget.py
 	$(PY) scripts/perf_gate.py
 	$(PY) scripts/check_anchors.py
