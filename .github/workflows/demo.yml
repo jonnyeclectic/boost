@@ -1,0 +1,81 @@
+name: demo
+
+# Re-record docs/demo.gif from docs/demo.tape whenever the CLI it demonstrates
+# changes, and open a PR with the new recording.
+#
+# The GIF is the first thing anyone sees in the README, and it is a build output
+# of the tape — but recording it needed `brew install vhs` on someone's laptop,
+# so in practice it drifted: a merged PR had to fix it for showing `./boost`
+# instead of `boost`, long after that changed. A generated artifact whose
+# regeneration is manual is one nobody regenerates.
+#
+# This is NOT a `--check` drift gate like the other generated files. A GIF is
+# a video encode: two runs of the same tape differ byte-for-byte (timing jitter,
+# frame quantisation), so "is it stale?" is not decidable by comparison. Instead
+# the recording is automated and proposed as a PR, which a human can eyeball —
+# the right shape for an artifact whose correctness is visual.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      # The tape itself, and the surfaces whose output it shows.
+      - "docs/demo.tape"
+      - "boost_cli/cli.py"
+      - "boost_cli/core/output.py"
+      - "boost_cli/commands/discovery.py"
+      - "boost_cli/commands/pkg.py"
+      - "boost_cli/commands/quality.py"
+      - ".github/workflows/demo.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: demo
+  cancel-in-progress: true
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write        # push the recording branch
+      pull-requests: write   # open the PR carrying it
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: record docs/demo.gif
+        # vhs drives a real PTY through ttyd and encodes with ffmpeg; the action
+        # brings both. The tape sets its own throwaway $HOME, so the recording
+        # never touches the runner's state.
+        uses: charmbracelet/vhs-action@59641cdc7fadf3978db65eb8c6937ea2752f4ec3 # v2.1.0
+        with:
+          path: docs/demo.tape
+      - name: open a PR if the recording changed
+        # A GIF re-encode always differs byte-for-byte, so `git diff --quiet` is
+        # not a meaningful staleness test — this always has something to push,
+        # and the PR is where a human decides whether it looks right.
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: docs/demo.gif
+          branch: bot/demo-gif
+          delete-branch: true
+          commit-message: "docs(demo): re-record demo.gif against the current CLI"
+          title: "docs(demo): re-record demo.gif against the current CLI"
+          body: |
+            Automated re-recording of `docs/demo.gif` from `docs/demo.tape`,
+            triggered because the CLI surfaces it demonstrates changed.
+
+            A GIF re-encode always differs byte-for-byte, so this PR existing
+            does **not** mean the demo was wrong — open the file and check that
+            what it shows still matches what `boost` does. Close it if not.

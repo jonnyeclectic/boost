@@ -16,7 +16,7 @@ rules:
       # workflow_run head_sha), and everything it runs comes from that checkout
       # against a fixed public URL. It also cannot be reached from a fork:
       # pages-build-deployment only fires on a real deploy of this repo.
-      - post-deploy.yml:22
+      - post-deploy.yml:21
   adhoc-packages:
     ignore:
       # Lint-only env on an ephemeral runner: major-pinned linters installed
