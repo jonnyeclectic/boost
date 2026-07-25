@@ -2,7 +2,7 @@
 id: mcp-aware-skills
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Interop · MCP
 complexity: L
 impact: Med
@@ -10,7 +10,7 @@ wow: 4
 note: skills that need a server
 order: 46
 owner: loop/mcp-aware-skills
-pr:
+pr: 235
 title: MCP-aware skills — declare and wire an <code>.mcp.json</code> on install
 ---
 Mining boost's catalog surfaces a recurring shape: skills that only work paired
