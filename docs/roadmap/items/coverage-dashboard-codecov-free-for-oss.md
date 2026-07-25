@@ -2,7 +2,7 @@
 id: coverage-dashboard-codecov-free-for-oss
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Testing · Platform
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: PR decoration
 order: 8
 owner: loop/quality-dashboards
-pr:
+pr: 246
 title: Coverage dashboard — Codecov (free for OSS)
 ---
 The self-contained <code>diff-cover</code> gate enforces patch coverage in CI; this is

@@ -2,7 +2,7 @@
 id: quality-dashboard-sonarcloud-free-for-oss
 board: code
 section: health
-status: inflight
+status: shipped
 category: Quality · Platform
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 5
 note: PR quality gate
 order: 6
 owner: loop/quality-dashboards
-pr:
+pr: 246
 title: Quality dashboard — SonarCloud (free for OSS)
 ---
 One external surface over everything the offline gates measure separately: bugs, code
