@@ -5,17 +5,24 @@ section: pipeline
 status: planned
 category: Supply chain
 complexity: S
-impact: Med
-wow: 2
-note:
+impact: Low
+wow: 1
+note: extras only — <code>/requirements</code> is covered
 order: 11
 owner:
 pr:
-title: Dependabot has no <code>pip</code> ecosystem entry
+title: Dependabot's <code>pip</code> entry misses <code>pyproject.toml</code>'s extras
 ---
-<code>.github/dependabot.yml</code> declares only <code>package-ecosystem: github-actions</code>,
-reasoned as "the runtime is stdlib-only" — but the <code>[rag]</code>/<code>[eval]</code>/
-<code>[bdd]</code>/<code>[perf]</code> extras in <code>pyproject.toml</code> (sqlite-vec, ranx,
-ragas, the langchain stack, behave, pytest-benchmark) never get proactive version-bump PRs, only
-reactive <code>pip-audit</code> CVE flags. Add a <code>pip</code> ecosystem entry targeting
-<code>pyproject.toml</code> alongside the existing <code>github-actions</code> one.
+<code>.github/dependabot.yml</code> declares <code>pip</code> for
+<code>directory: /requirements</code>, so the hash-pinned dev/CI toolchain does get weekly
+bump PRs. What it does <b>not</b> cover is <code>pyproject.toml</code> at the repo root:
+Dependabot only scans manifests under the declared <code>directory</code>, so the optional
+extras — <code>[rag]</code> (sqlite-vec), <code>[eval]</code> (ranx, ragas and the pinned
+langchain 0.3 stack), <code>[bdd]</code> (behave), <code>[perf]</code> (pytest-benchmark) —
+never get proactive version-bump PRs, only reactive <code>pip-audit</code> CVE flags.
+Low impact by design: <code>[project].dependencies</code> is empty, so none of this reaches
+anyone who installs <code>boost-skill-cli</code> — it is contributor-facing only. The fix is
+a second <code>pip</code> entry with <code>directory: /</code>. Weigh it against the noise:
+the <code>[eval]</code> stack is <b>deliberately</b> held at langchain 0.3 because ragas
+0.2.x breaks against langchain &ge;1.0, so that one will raise PRs that must be closed
+unmerged until ragas catches up.

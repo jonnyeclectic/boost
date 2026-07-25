@@ -109,7 +109,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>142</b><span>Loop finds</span></div>
+      <div class="stat"><b>143</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1656,17 +1656,25 @@ timeouts: short for <code>lint</code>/<code>pip-audit</code>, longer for
 
       <article class="cap rcard" id="dependabot-missing-pip-ecosystem">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
-        <h3>Dependabot has no <code>pip</code> ecosystem entry</h3>
-        <p><code>.github/dependabot.yml</code> declares only <code>package-ecosystem: github-actions</code>,
-reasoned as "the runtime is stdlib-only" — but the <code>[rag]</code>/<code>[eval]</code>/
-<code>[bdd]</code>/<code>[perf]</code> extras in <code>pyproject.toml</code> (sqlite-vec, ranx,
-ragas, the langchain stack, behave, pytest-benchmark) never get proactive version-bump PRs, only
-reactive <code>pip-audit</code> CVE flags. Add a <code>pip</code> ecosystem entry targeting
-<code>pyproject.toml</code> alongside the existing <code>github-actions</code> one.</p>
+        <h3>Dependabot's <code>pip</code> entry misses <code>pyproject.toml</code>'s extras</h3>
+        <p><code>.github/dependabot.yml</code> declares <code>pip</code> for
+<code>directory: /requirements</code>, so the hash-pinned dev/CI toolchain does get weekly
+bump PRs. What it does <b>not</b> cover is <code>pyproject.toml</code> at the repo root:
+Dependabot only scans manifests under the declared <code>directory</code>, so the optional
+extras — <code>[rag]</code> (sqlite-vec), <code>[eval]</code> (ranx, ragas and the pinned
+langchain 0.3 stack), <code>[bdd]</code> (behave), <code>[perf]</code> (pytest-benchmark) —
+never get proactive version-bump PRs, only reactive <code>pip-audit</code> CVE flags.
+Low impact by design: <code>[project].dependencies</code> is empty, so none of this reaches
+anyone who installs <code>boost-skill-cli</code> — it is contributor-facing only. The fix is
+a second <code>pip</code> entry with <code>directory: /</code>. Weigh it against the noise:
+the <code>[eval]</code> stack is <b>deliberately</b> held at langchain 0.3 because ragas
+0.2.x breaks against langchain &ge;1.0, so that one will raise PRs that must be closed
+unmerged until ragas catches up.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
-          <span class="m">Impact <b>Med</b></span>
-          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">extras only — <code>/requirements</code> is covered</span>
         </div>
       </article>
 
@@ -1683,6 +1691,38 @@ extra ships it.</p>
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="pytest-tmpdir-cve-blocked-by-py39-floor">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <h3>The <code>pytest</code> tmpdir CVE has no fix at our Python floor</h3>
+        <p>CVE-2025-71176 — pytest through 9.0.2 relies on the predictable
+<code>/tmp/pytest-of-{user}</code> path, letting a <b>local</b> user cause a denial of
+service or possibly gain privileges. Dependabot alert #1 (medium), raised against
+<code>requirements/test-tools.txt</code>.
+It cannot be closed by a version bump. The lock carries <b>two markered pins</b>, and only
+one of them is exposed: <code>pytest==9.1.1 ; python_full_version &ge; '3.10'</code> is
+already past the 9.0.3 patch, while
+<code>pytest==8.4.2 ; python_full_version &lt; '3.10'</code> is not — and cannot be, because
+pytest 9.x declares <code>requires-python &ge;3.10</code> while this project declares
+<code>requires-python = "&gt;=3.9"</code>. The advisory marks <b>every</b> 8.x release
+vulnerable, so there is no backport to move to either. The fix is gated on dropping the 3.9
+floor, which is a deliberate compatibility promise, not an oversight.
+Residual exposure is contributor-facing only: <code>test-tools.txt</code> is the dev/CI
+toolchain and <code>[project].dependencies</code> is empty, so nobody installing
+<code>boost-skill-cli</code> ever receives pytest, and CI runners are single-tenant
+ephemeral VMs where the local-attacker precondition does not hold. <b>Dismissed as
+<code>tolerable_risk</code></b> rather than left open to rot the alert list.
+Revisit when either the 3.9 floor is dropped or a patched 8.x lands. If the floor must stay
+and the alert must clear, the real mitigation is pointing pytest at a private base
+temp dir (<code>--basetemp</code> / <code>PYTEST_DEBUG_TEMPROOT</code>) so the predictable
+path is never used — that fixes the behaviour without satisfying Dependabot's version check.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">dismissed as tolerable risk, 2026-07-25</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
