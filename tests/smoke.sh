@@ -76,6 +76,11 @@ run "drift"                  0 ./boost drift
 run "test"                   0 ./boost test
 run "fingerprint"            0 ./boost fingerprint
 run "audit (fixture clean)"  0 ./boost audit
+# rc 1 because the fixture installs a declared conflict pair (see the next
+# check) and a conflict is MED. The unsigned fixture tap is only LOW, so this
+# asserts both halves of the severity contract at once: the conflict is what
+# raises rc, and the LOW findings alone would not have.
+run "audit --skills (conflict)" 1 ./boost audit --skills
 run "conflict finds pair"    1 ./boost conflict
 run "changelog"              0 ./boost changelog brainstorming
 run "attest"                 0 ./boost attest
@@ -99,6 +104,9 @@ run "snapshot save"          0 ./boost snapshot save before-uninstall
 run "snapshot list"          0 ./boost snapshot list
 run "uninstall"              0 ./boost uninstall cowboy-coding
 run "conflict now clean"     0 ./boost conflict
+# the other half of the severity contract: with the conflicting peer gone only
+# LOW findings remain (the tap is still unsigned), so rc drops back to 0.
+run "audit --skills now ok"  0 ./boost audit --skills
 
 echo "== workspace scope (--local)"
 # A throwaway repo, so the local install has a real project root to walk up to.

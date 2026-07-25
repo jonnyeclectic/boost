@@ -217,6 +217,71 @@ class TestAudit:
         assert all(f["severity"] == "HIGH"
                    for f in data["findings"]["danger-skill"])
 
+    def test_skills_flag_reports_the_unsigned_fixture_tap(self, boost, installed):
+        # the fixture tap publishes no signature: one LOW finding, still rc 0 —
+        # LOW alone must not fail, or the command cries wolf on every install.
+        r = boost("audit", "--skills")
+        assert "trust audit — 1 skill" in r.out
+        assert "brainstorming" in r.out
+        assert "LOW" in r.out
+        assert "unsigned-tap" in r.out
+        assert "tap publishes no signature" in r.out
+        assert "0 high · 0 medium · 1 low across 1 of 1 skill" in r.out
+
+    def test_skills_json_shape(self, boost, installed):
+        data = json.loads(boost("audit", "--skills", "--json").out)
+        assert data["skills_scanned"] == 1
+        assert data["counts"] == {"HIGH": 0, "MED": 0, "LOW": 1}
+        assert [f["label"] for f in data["findings"]["brainstorming"]] \
+            == ["unsigned-tap"]
+
+    def test_skills_nothing_installed(self, boost, sandbox):
+        r = boost("audit", "--skills")
+        assert "nothing installed yet" in r.out
+
+    def test_skills_local_import_reports_local_source(self, boost, tmp_path):
+        _import_skill(boost, tmp_path, "local-skill", "# Local\n\nNothing here.\n")
+        data = json.loads(boost("audit", "--skills", "--json").out)
+        assert [f["label"] for f in data["findings"]["local-skill"]] \
+            == ["local-source"]
+        assert data["counts"]["LOW"] == 1
+
+    def test_skills_conflict_between_installed_is_medium_rc1(self, boost, tmp_path):
+        _import_skill(boost, tmp_path, "alpha", "# Alpha\n",
+                      extra_fm="conflicts: beta\n")
+        _import_skill(boost, tmp_path, "beta", "# Beta\n")
+        r = boost("audit", "--skills", expect=1)
+        assert "conflict" in r.out
+        assert "declares a conflict with beta" in r.out
+        assert "1 high · 0 medium" not in r.out       # a conflict is MED, not HIGH
+
+        data = json.loads(boost("audit", "--skills", "--json", expect=1).out)
+        assert data["counts"]["MED"] == 1
+        labels = [f["label"] for f in data["findings"]["alpha"]]
+        assert "conflict" in labels
+        # beta never declared anything, so it gets no conflict finding
+        assert "conflict" not in [f["label"] for f in data["findings"]["beta"]]
+
+    def test_skills_conflict_against_uninstalled_peer_is_silent(self, boost, tmp_path):
+        _import_skill(boost, tmp_path, "alpha", "# Alpha\n",
+                      extra_fm="conflicts: never-installed\n")
+        data = json.loads(boost("audit", "--skills", "--json").out)
+        assert [f["label"] for f in data["findings"]["alpha"]] == ["local-source"]
+
+    def test_skills_behind_tap(self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "bumped-tap")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        _bump(tap_dir, "brainstorming", "1.4.0", "1.5.0")
+        boost("update", "--taps-only")
+
+        data = json.loads(boost("audit", "--skills", "--json").out)
+        labels = [f["label"] for f in data["findings"]["brainstorming"]]
+        assert "behind-tap" in labels
+        detail = next(f["detail"] for f in data["findings"]["brainstorming"]
+                      if f["label"] == "behind-tap")
+        assert detail == "tap has a newer copy (version)"
+
     def test_blocked_skills_policy_hit(self, boost, installed):
         (paths.state_dir() / "policy.json").write_text(
             json.dumps({"blocked_skills": ["brainstorming"]}), encoding="utf-8")
