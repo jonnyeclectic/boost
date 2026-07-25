@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — the 8-group command carousel</title>
+<meta name="description" content="A GIF carousel of boost's flagship command from each of its 8 command groups — install, search, explain, tap, distill, doctor, hooks, and pulse — recorded live with VHS.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<!-- Shared Aurora design system. Recolour everything by editing style/boost.css. -->
+<link rel="stylesheet" href="../style/boost.css">
+<style>
+  /* Page-specific layout — built only on boost.css :root tokens so it stays on-palette. */
+  main { padding-bottom: 40px; }
+  section { padding: 92px 0 8px; }
+  .hero { padding: 84px 0 8px; }
+  .hero h1 { font-size: clamp(38px, 6vw, 66px); font-weight: 800;
+             letter-spacing: -.035em; line-height: 1.05; max-width: 880px;
+             text-wrap: balance; margin-top: 24px; }
+  .hero p.lede { max-width: 680px; margin-top: 24px; font-size: 18.5px; color: var(--text-2); }
+  .crumbs { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); margin-bottom: 4px; }
+  .crumbs a { color: var(--sky); text-decoration: none; }
+  .stats { margin-top: 58px; }
+
+  /* ---------- the carousel ---------- */
+  .carousel { margin-top: 44px; position: relative; }
+  .car-viewport { }
+  .car-track {
+    display: flex; flex-direction: column; gap: 28px;
+  }
+  .js-carousel .car-viewport { overflow: hidden; border-radius: var(--radius-lg); }
+  .js-carousel .car-track {
+    flex-direction: row; flex-wrap: nowrap; gap: 0;
+    transition: transform .5s cubic-bezier(.2,.7,.2,1);
+    will-change: transform;
+  }
+  .car-slide { }
+  .js-carousel .car-slide { flex: 0 0 100%; min-width: 0; padding: 2px 3px; }
+
+  .slide-grid {
+    display: grid; grid-template-columns: 1.15fr 1fr; gap: 40px; align-items: center;
+  }
+  .slide-copy .grp-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+    letter-spacing: .1em; text-transform: uppercase;
+    padding: 6px 13px; border-radius: 999px; border: 1px solid var(--line-hi);
+    background: var(--hue-bg, rgba(255,255,255,.06)); color: var(--hue-fg, var(--text));
+  }
+  .slide-copy .grp-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .slide-copy h3 { margin-top: 16px; font-size: 26px; font-weight: 800; letter-spacing: -.015em; }
+  .slide-copy h3 code { font-family: var(--mono); color: var(--hue-fg, var(--cyan)); }
+  .slide-copy .summary { margin-top: 6px; font-family: var(--mono); font-size: 13px; color: var(--text-3); }
+  .slide-copy p.value { margin-top: 16px; font-size: 15px; color: var(--text-2); line-height: 1.65; }
+  .slide-copy .tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
+  .slide-copy .group-note { margin-top: 14px; font-size: 12.5px; color: var(--text-3); }
+  .slide-copy .regen { margin-top: 18px; font-family: var(--mono); font-size: 11.5px; color: var(--text-3); }
+  .slide-copy .regen code { color: var(--sky); background: rgba(125,211,252,.08); padding: 1px 6px; border-radius: 5px; }
+
+  .window.gif-window { margin: 0; }
+  .window.gif-window .screen { line-height: 0; }
+  .window.gif-window .screen img { display: block; width: 100%; height: auto; }
+
+  /* ---------- controls ---------- */
+  .car-controls, .car-dots { display: none; }
+  .js-carousel .car-controls {
+    display: flex; align-items: center; justify-content: center; gap: 22px; margin-top: 26px;
+  }
+  .car-arrow {
+    display: flex; align-items: center; justify-content: center;
+    width: 42px; height: 42px; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    font-size: 17px; cursor: pointer;
+    transition: border-color .15s ease, transform .15s ease, background .15s ease;
+  }
+  .car-arrow:hover { border-color: var(--line-hi); background: rgba(255,255,255,.07); transform: translateY(-1px); }
+  .js-carousel .car-dots {
+    display: flex; align-items: center; justify-content: center; gap: 9px; margin-top: 18px;
+  }
+  .car-dot {
+    width: 9px; height: 9px; border-radius: 50%; padding: 0; border: none; cursor: pointer;
+    background: var(--line-hi); opacity: .5; transition: opacity .2s ease, transform .2s ease;
+  }
+  .car-dot.active { opacity: 1; background: var(--dot, var(--cyan)); transform: scale(1.25); }
+  .car-hint {
+    margin-top: 14px; text-align: center; font-size: 12.5px; color: var(--text-3);
+  }
+
+
+  @media (max-width: 860px) {
+    .slide-grid { grid-template-columns: 1fr; gap: 22px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap site-nav">
+    <a class="logo" href="index.html"><b>boost</b><span>Carousel</span></a>
+    <ul>
+      <li><a href="index.html">Guide</a></li>
+      <li><a href="commands.html">Commands</a></li>
+      <li><a href="roadmap.html">Roadmap</a></li>
+      <li><a href="design-roadmap.html">Design</a></li>
+      <li><a href="mcp-hub.html">MCP Hub</a></li>
+      <li><a href="eval.html">Evaluation</a></li>
+      <li><a href="adapters.html">Adapters</a></li>
+      <li><a href="#top" aria-current="page">Carousel</a></li>
+      <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="top">
+  <!-- ===== hero ===== -->
+  <div class="wrap hero">
+    <p class="crumbs"><a href="index.html">boost</a> / docs / carousel</p>
+    <span class="badge">8 command groups · recorded live with VHS</span>
+    <h1>78 commands. <span class="grad-text">One flagship each.</span></h1>
+    <p class="lede">boost's command surface spans 8 groups, from package management to team
+      collaboration. Rather than 78 near-identical recordings, this page tours <b>one
+      representative command per group</b> — the one that shows what that group is actually
+      for — captured straight from a real terminal, no hand-edited frames.</p>
+
+    <div class="stats">
+      <div class="stat reveal"><b>76</b><span>Commands across 8 groups</span></div>
+      <div class="stat reveal"><b>8</b><span>Flagship recordings below</span></div>
+      <div class="stat reveal"><b>100%</b><span>Recorded with VHS, not staged</span></div>
+      <div class="stat reveal"><b>0</b><span>Frames touched up by hand</span></div>
+    </div>
+  </div>
+
+  <!-- ===== carousel ===== -->
+  <section id="tour">
+    <div class="wrap">
+      <span class="eyebrow">See it in action</span>
+      <h2 class="sec-title">Pick a group, watch it work</h2>
+      <p class="sec-sub">Every recording runs against a disposable <code>$HOME</code> and a
+        throwaway fixture tap — the same sandbox the test suite uses — so nothing here touches
+        a real skill setup.</p>
+
+      <div class="carousel" id="carousel" aria-roledescription="carousel" aria-label="boost flagship commands, one per group">
+        <div class="car-viewport">
+          <div class="car-track" id="carTrack">
+
+            <!-- 1 · Package Management -->
+            <article class="car-slide" data-group="pkg" data-hue="cyan" aria-label="Slide 1 of 8: Package Management — install">
+              <div class="slide-grid">
+                <div class="window gif-window reveal">
+                  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+                    <div class="bar-title">zsh — boost install</div></div>
+                  <div class="screen">
+                    <img src="carousel/gifs/install.gif" loading="eager" alt="Terminal recording: boost install jira-integration copies the skill into the canonical store, links it into claude-code, windsurf, and cursor, updates the lock file, and reports a quality score of 90/100; boost list then shows it installed.">
+                  </div>
+                </div>
+                <div class="slide-copy reveal">
+                  <span class="grp-badge"><i class="dot"></i>Package Management</span>
+                  <h3><code>boost install</code></h3>
+                  <p class="summary">Install a skill from a tap registry</p>
+                  <p class="value">One command copies a skill into the canonical store, symlinks it
+                    into every agent you've got enabled — Claude Code, Windsurf, Cursor — and
+                    records it in the lock file with a quality score attached. No hand-copying
+                    <code>SKILL.md</code> into three different folders.</p>
+                  <div class="tags">
+                    <code>uninstall</code><code>sync</code><code>update</code><code>bundle</code>
+                    <code>import</code><code>pin</code><code>snapshot</code><code>export</code>
+                  </div>
+                  <p class="group-note">14 commands in this group.</p>
+                  <p class="regen">regenerate: <code>vhs docs/carousel/tapes/install.tape</code></p>
+                </div>
+              </div>
+            </article>
+
+            <!-- 2 · Discovery & Search -->
+            <article class="car-slide" data-group="find" data-hue="violet" aria-label="Slide 2 of 8: Discovery & Search — search">
+              <div class="slide-grid">
+                <div class="window gif-window reveal">
+                  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+                    <div class="bar-title">zsh — boost search</div></div>
+                  <div class="screen">
+                    <img src="carousel/gifs/search.gif" loading="lazy" alt="Terminal recording: boost search 'never write production code without a failing test' ranks tdd-workflow first via full-content BM25 even though that phrase isn't in its name or description; a second search for jira ranks jira-integration top with a relevance meter.">
+                  </div>
+                </div>
+                <div class="slide-copy reveal">
+                  <span class="grp-badge"><i class="dot"></i>Discovery &amp; Search</span>
+                  <h3><code>boost search</code></h3>
+                  <p class="summary">Search skills across tap registries (AI-ranked)</p>
+                  <p class="value">Search isn't grep over filenames — it's full-content BM25 over
+                    every skill's body text, so a query can match a rule buried three headings
+                    deep with no setup required. Ranked results ship with a relevance meter, and
+                    <code>--smart</code> reranks the top hits with Claude when it's available.</p>
+                  <div class="tags">
+                    <code>reindex</code><code>discover</code><code>recommend</code><code>browse</code>
+                    <code>trending</code><code>stats</code><code>count</code>
+                  </div>
+                  <p class="group-note">9 commands in this group.</p>
+                  <p class="regen">regenerate: <code>vhs docs/carousel/tapes/search.tape</code></p>
+                </div>
+              </div>
+            </article>
+
+            <!-- 3 · Skill Information -->
+            <article class="car-slide" data-group="info" data-hue="pink" aria-label="Slide 3 of 8: Skill Information — explain">
+              <div class="slide-grid">
+                <div class="window gif-window reveal">
+                  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+                    <div class="bar-title">zsh — boost explain</div></div>
+                  <div class="screen">
+                    <img src="carousel/gifs/explain.gif" loading="lazy" alt="Terminal recording: boost explain tdd-workflow prints a plain-English description, an outline, and the skill's key always/never rules, using boost's offline heuristic fallback since no AI key is set.">
+                  </div>
+                </div>
+                <div class="slide-copy reveal">
+                  <span class="grp-badge"><i class="dot"></i>Skill Information</span>
+                  <h3><code>boost explain</code></h3>
+                  <p class="summary">Explain what a skill does in plain English</p>
+                  <p class="value">Point it at any skill in a tapped registry — installed or not —
+                    and get a plain-English read of what it changes about the agent's behavior and
+                    when it triggers. With no <code>claude</code> CLI or API key on hand it falls
+                    back to an honest heuristic: description, outline, and every always/never rule.</p>
+                  <div class="tags">
+                    <code>list</code><code>info</code><code>cat</code><code>preview</code>
+                    <code>log</code><code>deps</code><code>tag</code>
+                  </div>
+                  <p class="group-note">10 commands in this group.</p>
+                  <p class="regen">regenerate: <code>vhs docs/carousel/tapes/explain.tape</code></p>
+                </div>
+              </div>
+            </article>
+
+            <!-- 4 · Registry (Taps) -->
+            <article class="car-slide" data-group="tap" data-hue="green" aria-label="Slide 4 of 8: Registry (Taps) — tap">
+              <div class="slide-grid">
+                <div class="window gif-window reveal">
+                  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+                    <div class="bar-title">zsh — boost tap</div></div>
+                  <div class="screen">
+                    <img src="carousel/gifs/tap.gif" loading="lazy" alt="Terminal recording: boost tap --catalog --category rag --dry-run lists 7 curated RAG skill registries offline; boost tap then adds a real registry and boost taps confirms it is tracked with its skill count.">
+                  </div>
+                </div>
+                <div class="slide-copy reveal">
+                  <span class="grp-badge"><i class="dot"></i>Registry (Taps)</span>
+                  <h3><code>boost tap</code></h3>
+                  <p class="summary">Add a GitHub repo as a skill registry</p>
+                  <p class="value">Tap any bare GitHub repo — or browse the bundled catalog of
+                    100+ classified registries offline with <code>--catalog --dry-run</code> before
+                    committing to one. Once tapped, everything inside becomes searchable and
+                    installable.</p>
+                  <div class="tags">
+                    <code>untap</code><code>taps</code><code>outdated</code>
+                  </div>
+                  <p class="group-note">4 commands in this group.</p>
+                  <p class="regen">regenerate: <code>vhs docs/carousel/tapes/tap.tape</code></p>
+                </div>
+              </div>
+            </article>
+
+            <!-- 5 · Intelligence -->
+            <article class="car-slide" data-group="ai" data-hue="yellow" aria-label="Slide 5 of 8: Intelligence — distill">
+              <div class="slide-grid">
+                <div class="window gif-window reveal">
+                  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+                    <div class="bar-title">zsh — boost distill</div></div>
+                  <div class="screen">
+                    <img src="carousel/gifs/distill.gif" loading="lazy" alt="Terminal recording: boost distill tdd-workflow commit-messages -o safe-tdd merges both skills into one deduplicated SKILL.md file, using the offline heuristic merge; cat then shows the merged result with rules from both sources kept and duplicates dropped.">
+                  </div>
+                </div>
+                <div class="slide-copy reveal">
+                  <span class="grp-badge"><i class="dot"></i>Intelligence</span>
+                  <h3><code>boost distill</code></h3>
+                  <p class="summary">Merge multiple skills into one deduplicated skill</p>
+                  <p class="value">Distill folds two or more skills into a single SKILL.md — union
+                    the tags, keep every distinct rule once, drop the redundant ones — with Claude
+                    doing the merge when it's available and a mechanical, honest fallback when it
+                    isn't.</p>
+                  <div class="tags">
+                    <code>simulate</code><code>infer</code><code>absorb</code><code>evolve</code>
+                    <code>context</code><code>focus</code><code>impact</code>
+                  </div>
+                  <p class="group-note">8 commands in this group.</p>
+                  <p class="regen">regenerate: <code>vhs docs/carousel/tapes/distill.tape</code></p>
+                </div>
+              </div>
+            </article>
+
+            <!-- 6 · Quality & Health -->
+            <article class="car-slide" data-group="chk" data-hue="cyan" aria-label="Slide 6 of 8: Quality & Health — doctor">
+              <div class="slide-grid">
+                <div class="window gif-window reveal">
+                  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+                    <div class="bar-title">zsh — boost doctor</div></div>
+                  <div class="screen">
+                    <img src="carousel/gifs/doctor.gif" loading="lazy" alt="Terminal recording: boost doctor finds a skill missing from the store and three broken agent symlinks; boost heal reinstalls the skill from its tap and removes the broken links; a second boost doctor run comes back healthy.">
+                  </div>
+                </div>
+                <div class="slide-copy reveal">
+                  <span class="grp-badge"><i class="dot"></i>Quality &amp; Health</span>
+                  <h3><code>boost doctor</code></h3>
+                  <p class="summary">Check installation health &amp; report issues</p>
+                  <p class="value">Doctor audits git, every tap, the lock file, each installed
+                    skill's agent symlinks, and log rotation in one pass — then names the exact
+                    command that fixes whatever it finds. Here it catches a skill wiped from the
+                    store, and <code>heal</code> restores it straight from the tap.</p>
+                  <div class="tags">
+                    <code>lint</code><code>audit</code><code>verify</code><code>drift</code>
+                    <code>heal</code><code>conflict</code><code>attest</code><code>health</code>
+                  </div>
+                  <p class="group-note">15 commands in this group.</p>
+                  <p class="regen">regenerate: <code>vhs docs/carousel/tapes/doctor.tape</code></p>
+                </div>
+              </div>
+            </article>
+
+            <!-- 7 · Configuration -->
+            <article class="car-slide" data-group="cfg" data-hue="violet" aria-label="Slide 7 of 8: Configuration — hooks">
+              <div class="slide-grid">
+                <div class="window gif-window reveal">
+                  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+                    <div class="bar-title">zsh — boost hooks</div></div>
+                  <div class="screen">
+                    <img src="carousel/gifs/hooks.gif" loading="lazy" alt="Terminal recording: boost hooks add SessionStart registers a project-scoped Claude Code hook named greet; boost hooks list shows it tracked in .claude/settings.json.">
+                  </div>
+                </div>
+                <div class="slide-copy reveal">
+                  <span class="grp-badge"><i class="dot"></i>Configuration</span>
+                  <h3><code>boost hooks</code></h3>
+                  <p class="summary">Manage Claude Code hooks (scope-aware) in settings.json</p>
+                  <p class="value">Add, list, and remove Claude Code hooks at either scope without
+                    hand-editing JSON. Every hook boost creates is tagged with a marker comment, so
+                    it only ever touches hooks it made — yours are always left alone.</p>
+                  <div class="tags">
+                    <code>config</code><code>create</code><code>policy</code><code>schedule</code>
+                    <code>serve</code><code>mcp</code><code>bmad</code><code>self-update</code>
+                  </div>
+                  <p class="group-note">12 commands in this group.</p>
+                  <p class="regen">regenerate: <code>vhs docs/carousel/tapes/hooks.tape</code></p>
+                </div>
+              </div>
+            </article>
+
+            <!-- 8 · Team & Collaboration -->
+            <article class="car-slide" data-group="team" data-hue="pink" aria-label="Slide 8 of 8: Team & Collaboration — pulse">
+              <div class="slide-grid">
+                <div class="window gif-window reveal">
+                  <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+                    <div class="bar-title">zsh — boost pulse</div></div>
+                  <div class="screen">
+                    <img src="carousel/gifs/pulse.gif" loading="lazy" alt="Terminal recording: boost pulse shows a local activity feed of recent tap and install events with who did what, when, and from which tap.">
+                  </div>
+                </div>
+                <div class="slide-copy reveal">
+                  <span class="grp-badge"><i class="dot"></i>Team &amp; Collaboration</span>
+                  <h3><code>boost pulse</code></h3>
+                  <p class="summary">Team activity feed of skill-management events</p>
+                  <p class="value">A local, chronological feed of every skill-management action —
+                    who tapped or installed what, and when — ready to hand off to a team with
+                    <code>boost onboard</code> instead of a Slack thread.</p>
+                  <div class="tags">
+                    <code>cohort</code><code>profile</code><code>protocol</code>
+                    <code>replay</code><code>who</code>
+                  </div>
+                  <p class="group-note">6 commands in this group.</p>
+                  <p class="regen">regenerate: <code>vhs docs/carousel/tapes/pulse.tape</code></p>
+                </div>
+              </div>
+            </article>
+
+          </div>
+        </div>
+
+        <div class="car-controls">
+          <button type="button" class="car-arrow" id="carPrev" aria-label="Previous group">‹</button>
+          <div class="car-dots" id="carDots" aria-label="Choose a command group"></div>
+          <button type="button" class="car-arrow" id="carNext" aria-label="Next group">›</button>
+        </div>
+        <p class="car-hint">← → to navigate · auto-advances every 6s, hover or focus to pause</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
+    <nav class="foot-links" aria-label="Documentation">
+      <a href="index.html">Guide</a>
+      <a href="commands.html">Commands</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="design-roadmap.html">Design</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a href="eval.html">Evaluation</a>
+      <a href="adapters.html">Adapters</a>
+      <a href="#top" aria-current="page">Carousel</a>
+    </nav>
+    <p class="foot-legal">
+      <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+      <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+      <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+      Released under the GPL-3.0 license
+    </p>
+  </div>
+</footer>
+
+
+
+<script src="../style/boost.js" defer></script>
+<script>
+(function () {
+  var root = document.getElementById('carousel');
+  var track = document.getElementById('carTrack');
+  var slides = Array.prototype.slice.call(track.querySelectorAll('.car-slide'));
+  var dotsWrap = document.getElementById('carDots');
+  var prevBtn = document.getElementById('carPrev');
+  var nextBtn = document.getElementById('carNext');
+  if (!slides.length) return;
+
+  var HUE_FG = { cyan: '#7dd3fc', violet: '#c4b5fd', pink: '#f9a8d4', green: '#86efac', yellow: '#fde68a' };
+  var HUE_BG = {
+    cyan: 'rgba(34,211,238,.12)', violet: 'rgba(168,85,247,.14)', pink: 'rgba(244,114,208,.13)',
+    green: 'rgba(74,222,128,.13)', yellow: 'rgba(250,204,21,.13)'
+  };
+
+  slides.forEach(function (slide, i) {
+    var hue = slide.getAttribute('data-hue');
+    var copy = slide.querySelector('.slide-copy');
+    if (copy && hue) {
+      copy.style.setProperty('--hue-fg', HUE_FG[hue] || '');
+      copy.style.setProperty('--hue-bg', HUE_BG[hue] || '');
+    }
+    var dot = document.createElement('button');
+    dot.type = 'button';
+    dot.className = 'car-dot';
+    dot.setAttribute('aria-label', 'Go to slide ' + (i + 1) + ' of ' + slides.length);
+    dot.style.setProperty('--dot', HUE_FG[hue] || '');
+    dot.addEventListener('click', function () { goTo(i, true); });
+    dotsWrap.appendChild(dot);
+  });
+  var dots = Array.prototype.slice.call(dotsWrap.children);
+
+  root.classList.add('js-carousel');
+  var index = 0;
+  var timer = null;
+  var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function render() {
+    track.style.transform = 'translateX(-' + (index * 100) + '%)';
+    slides.forEach(function (slide, i) {
+      var active = i === index;
+      slide.setAttribute('aria-hidden', active ? 'false' : 'true');
+      if ('inert' in slide) slide.inert = !active;
+      var img = slide.querySelector('img');
+      if (active && img && img.getAttribute('loading') === 'lazy') img.setAttribute('loading', 'eager');
+    });
+    dots.forEach(function (d, i) { d.classList.toggle('active', i === index); });
+  }
+
+  function goTo(i, manual) {
+    index = (i + slides.length) % slides.length;
+    render();
+    if (manual) restartAutoplay();
+  }
+
+  function startAutoplay() {
+    if (reduceMotion || timer) return;
+    timer = setInterval(function () { goTo(index + 1); }, 6000);
+  }
+  function stopAutoplay() {
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+  function restartAutoplay() { stopAutoplay(); startAutoplay(); }
+
+  prevBtn.addEventListener('click', function () { goTo(index - 1, true); });
+  nextBtn.addEventListener('click', function () { goTo(index + 1, true); });
+
+  root.addEventListener('mouseenter', stopAutoplay);
+  root.addEventListener('mouseleave', startAutoplay);
+  root.addEventListener('focusin', stopAutoplay);
+  root.addEventListener('focusout', startAutoplay);
+
+  root.setAttribute('tabindex', '0');
+  root.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowLeft') { goTo(index - 1, true); }
+    else if (e.key === 'ArrowRight') { goTo(index + 1, true); }
+  });
+
+  var touchX = null;
+  root.addEventListener('touchstart', function (e) { touchX = e.touches[0].clientX; stopAutoplay(); }, { passive: true });
+  root.addEventListener('touchend', function (e) {
+    if (touchX === null) return;
+    var dx = e.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 40) goTo(index + (dx < 0 ? 1 : -1));
+    touchX = null;
+    startAutoplay();
+  }, { passive: true });
+
+  render();
+  startAutoplay();
+})();
+</script>
+</body>
+</html>

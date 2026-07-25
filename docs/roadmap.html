@@ -75,6 +75,7 @@
       <li><a href="mcp-hub.html">MCP Hub</a></li>
       <li><a href="eval.html">Evaluation</a></li>
       <li><a href="adapters.html">Adapters</a></li>
+      <li><a href="carousel.html">Carousel</a></li>
       <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
     </ul>
   </div>
@@ -108,7 +109,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>116</b><span>Loop finds</span></div>
+      <div class="stat"><b>117</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1924,6 +1925,36 @@ no <code>id</code>, so no item could link another. Locked by
           <span class="m">7 pages · one nav, one footer</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="command-carousel-page">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Design system</span></div>
+        <h3>A GIF carousel touring one flagship command per group</h3>
+        <p><code>README</code> shipped a single <code>demo.gif</code> and the guide described
+78 commands entirely in prose — nothing showed what a boost session actually
+<em>looks like</em>. <b>Shipped:</b> <code>docs/carousel.html</code>, a keyboard-
+and swipe-navigable carousel of <b>8 terminal recordings</b>, one flagship command
+per command group — <code>install</code>, <code>search</code>, <code>explain</code>,
+<code>tap</code>, <code>distill</code>, <code>doctor</code>, <code>hooks</code> and
+<code>pulse</code>. Every recording is scripted as a
+<a href="https://github.com/charmbracelet/vhs">VHS</a> tape checked in beside the
+GIF it produces, so a stale frame is one <code>make carousel</code> away from being
+regenerated rather than re-recorded by hand. Each GIF carries descriptive alt text
+covering what the terminal actually does, so the page is usable without images.
+The counts on the page are hand-typed no longer: the per-slide
+&ldquo;N commands in this group&rdquo; notes and the headline total are asserted
+against <code>cli.py</code>'s <code>COMMANDS</code> by
+<code>tests/unit/test_docsite_chrome.py</code>, the same guard that covers the
+guide — the page arrived claiming <b>76</b> commands with two group counts already
+adrift. Built on the shared chrome from
+<a href="#docsite-chrome-and-content-audit">the docsite audit</a>, so it carries the
+same nav and footer as every other page.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">8 GIFs · one flagship per group</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -2398,6 +2429,7 @@ paths.</p>
       <a href="mcp-hub.html">MCP Hub</a>
       <a href="eval.html">Evaluation</a>
       <a href="adapters.html">Adapters</a>
+      <a href="carousel.html">Carousel</a>
     </nav>
     <p class="foot-legal">
       <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·

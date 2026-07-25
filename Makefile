@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli fuzz
+.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli fuzz
 
 # Every tool comes from a hash-pinned requirements/*.txt — the same files CI
 # installs (see scripts/lock_toolchain.py). pip enforces the hashes, so a dev
@@ -164,6 +164,10 @@ generate:
 # regenerate docs/demo.gif (brew install vhs)
 demo:
 	vhs docs/demo.tape
+
+# regenerate all 8 docs/carousel/gifs/*.gif, one flagship command per group
+carousel:
+	for t in docs/carousel/tapes/*.tape; do vhs "$$t"; done
 
 check: lint eval test smoke mutation
 	@echo "== all gates passed =="

@@ -332,6 +332,7 @@ _PAGE = """<!DOCTYPE html>
     <a href="mcp-hub.html">MCP Hub</a>
     <a href="eval.html">Evaluation</a>
     <a href="adapters.html">Adapters</a>
+    <a href="carousel.html">Carousel</a>
   </nav>
   <p class="foot-legal">
     <a href="https://github.com/jonnyeclectic/boost">GitHub</a> &middot;

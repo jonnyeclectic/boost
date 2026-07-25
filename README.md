@@ -163,7 +163,9 @@ boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 
 `boost --help` prints the full grouped command list; for a visual tour see
 [`docs/index.html`](docs/index.html), and for every flag of every command see
-[`docs/commands.html`](docs/commands.html).
+[`docs/commands.html`](docs/commands.html). For a GIF of one flagship command
+per group — recorded live with [VHS](https://github.com/charmbracelet/vhs) — see
+[`docs/carousel.html`](docs/carousel.html).
 
 | Group | Commands |
 |---|---|

@@ -35,7 +35,7 @@ _INDEX = _DOCS / "index.html"
 # all the others — the standing "no new page ships unlinked" rule.
 _PAGES = (
     "index.html", "commands.html", "roadmap.html", "design-roadmap.html",
-    "mcp-hub.html", "eval.html", "adapters.html",
+    "mcp-hub.html", "eval.html", "adapters.html", "carousel.html",
 )
 # commands.html is a sidebar reference, not a top-nav page; it links the rest
 # from its footer and its sidebar "back to overview".
@@ -89,6 +89,52 @@ def test_index_command_groups_match_the_cli():
     assert declared == {group for _n, group, _m, _s in COMMANDS}
 
 
+def test_carousel_group_counts_match_the_cli():
+    """Each slide's "N commands in this group" is hand-typed, so it drifts.
+
+    The page shipped claiming 76 commands with two group counts already wrong;
+    every slide is tagged ``data-group`` so this maps to COMMANDS mechanically.
+    """
+    html = (_DOCS / "carousel.html").read_text(encoding="utf-8")
+    slides = re.findall(
+        r'data-group="(\w+)".*?<p class="group-note">(\d+) commands in this group',
+        html, re.S)
+    assert len(slides) == 8, "expected one slide per command group, got %d" % len(slides)
+    actual = {}
+    for _name, group, _mod, _summary in COMMANDS:
+        actual[group] = actual.get(group, 0) + 1
+    assert [(g, int(n)) for g, n in slides] == [(g, actual[g]) for g, _n in slides]
+
+
+def test_carousel_covers_every_command_group():
+    html = (_DOCS / "carousel.html").read_text(encoding="utf-8")
+    assert set(re.findall(r'data-group="(\w+)"', html)) == {
+        group for _n, group, _m, _s in COMMANDS}
+
+
+def test_carousel_slides_name_real_commands():
+    """The flagship <h3> and the chip list must not outlive a renamed command."""
+    html = (_DOCS / "carousel.html").read_text(encoding="utf-8")
+    names = {name for name, _g, _m, _s in COMMANDS}
+    cited = set(re.findall(r"<h3><code>boost ([\w-]+)</code></h3>", html))
+    for block in re.findall(r'<div class="tags">(.*?)</div>', html, re.S):
+        cited |= set(re.findall(r"<code>([^<]+)</code>", block))
+    assert cited <= names, "carousel names commands the CLI no longer has: %s" % (
+        sorted(cited - names))
+
+
+def test_every_carousel_gif_has_a_tape_and_alt_text():
+    """A GIF without its VHS tape can't be regenerated; one without alt text
+    makes the page unusable with images off."""
+    gifs = {p.stem for p in (_DOCS / "carousel" / "gifs").glob("*.gif")}
+    tapes = {p.stem for p in (_DOCS / "carousel" / "tapes").glob("*.tape")}
+    assert gifs == tapes, "gif/tape mismatch: %s" % sorted(gifs ^ tapes)
+    html = (_DOCS / "carousel.html").read_text(encoding="utf-8")
+    for img in re.findall(r"<img[^>]*carousel/gifs/[^>]*>", html):
+        alt = re.search(r'alt="([^"]*)"', img)
+        assert alt and len(alt.group(1)) > 40, "GIF needs descriptive alt text: %s" % img[:80]
+
+
 @pytest.mark.parametrize("page", _NAV_PAGES)
 def test_every_page_has_the_shared_nav(page):
     """style/boost.css documents two accepted forms: .site-nav or .nav."""
@@ -98,8 +144,16 @@ def test_every_page_has_the_shared_nav(page):
 
 
 @pytest.mark.parametrize("page", _PAGES)
-def test_every_page_has_a_footer(page):
-    assert "<footer>" in (_DOCS / page).read_text(encoding="utf-8"), "%s has no footer" % page
+def test_every_page_has_exactly_one_footer(page):
+    """Match ``<footer`` rather than ``<footer>``: a page carrying a classed
+    footer (``<footer class="site-foot">``) reads as having none otherwise, and
+    the fix is then to add a second one."""
+    html = (_DOCS / page).read_text(encoding="utf-8")
+    opens = re.findall(r"<footer[^>]*>", html)
+    assert len(opens) == 1, "%s has %d footers (%s)" % (page, len(opens), opens)
+    assert opens[0] == "<footer>", (
+        "%s styles its footer locally (%s) — the shared sheet owns bare <footer>"
+        % (page, opens[0]))
 
 
 @pytest.mark.parametrize("page", _PAGES)
