@@ -177,7 +177,10 @@ def render_design_card(item: dict) -> str:
         '  <div class="ritem-top"><span class="rid">%s</span>'
         '<span class="rstatus %s">%s</span></div>'
         % (item.get("id", ""), status, DESIGN_STATUS[status]),
-        "  <h4>%s</h4>" % item.get("title", ""),
+        # h3, not h4: the card sits inside a track whose heading is an h2, and a
+        # skipped level is a WCAG 1.3.1 failure (scripts/a11y_check.py). The
+        # `.ritem h3` selector in design-roadmap.html carries the styling.
+        "  <h3>%s</h3>" % item.get("title", ""),
         "  <p>%s</p>" % item["body"],
         '  <div class="rmeta"><span class="m-cat">%s</span>'
         "<span>Complexity %s</span>"
