@@ -109,7 +109,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>117</b><span>Loop finds</span></div>
+      <div class="stat"><b>141</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -919,6 +919,219 @@ chunks instead cost ~70%.</p>
           <span class="m">rules/workflows were user-global only</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="ambiguous-tap-short-name-resolution">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <h3>Ambiguous tap short-name resolution silently picks the wrong tap</h3>
+        <p><code>registry.get(name)</code> matches on full name, safe-name, or trailing path segment and returns
+the <em>first</em> hit with no ambiguity check — unlike <code>catalog.resolve_one</code>, which
+explicitly errors on a multi-tap ambiguous match. Three of the five default taps end in
+<code>/skills</code>, so after <code>boost tap --defaults</code>, <code>boost untap skills</code> or
+<code>boost update skills</code> silently resolves to whichever tap sorts first and the others
+become unreachable by short name. Raise on an ambiguous short-name match, mirroring
+<code>resolve_one</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="sync-deletes-unowned-broken-symlinks">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <h3><code>sync --apply</code> deletes any broken symlink, not just boost's own</h3>
+        <p><code>sync_plan</code> flags every broken symlink under an enabled agent dir as stale regardless of
+whether it points into boost's store — the <code>points_into_store</code> check only runs on the
+live-link branch — and <code>sync_apply</code> unconditionally unlinks everything in
+<code>stale_links</code>. A user's own unrelated broken symlink sitting in
+<code>~/.claude/skills</code> gets deleted by <code>boost sync --apply</code> with no ownership
+check. Only treat a broken symlink as boost-managed if its raw <code>readlink()</code> target
+resolves under the store dir.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="dense-search-fallback-and-stale-tap-pruning">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <h3>Dense search's empty result skips the BM25 fallback</h3>
+        <p><code>_retrieve_any</code> treats any non-<code>None</code> dense result as final, but
+<code>dense.retrieve()</code> returns <code>[]</code> (not <code>None</code>) whenever every KNN
+neighbor gets filtered by kind mismatch or staleness — silently short-circuiting the documented
+"everything degrades to BM25" contract. Compounding it, <code>dense.build()</code>'s incremental
+path only prunes chunks for taps still present in the current entry set, so a tap removed via
+<code>boost tap remove</code> leaves ghost vectors in <code>rag_vectors.sqlite</code> forever,
+crowding the KNN pool on every future query. Distinguish "dense unavailable" from "dense had zero
+live hits," and prune removed taps on every build, not just changed ones.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="journal-rotation-race-and-handle-leak">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Concurrency · Bug</span></div>
+        <h3>Journal rotation has a lost-update race between concurrent processes</h3>
+        <p><code>_maybe_rotate</code> reads the whole pulse file and atomically replaces it with a truncated
+snapshot — but two concurrent boost processes (explicitly expected per this repo's parallel-loop
+model) can both read, then both write their own snapshot, and whichever writes last silently
+discards any event the other appended in between. <code>rotation_healthy()</code> also opens the
+file with a bare <code>p.open()</code> and never closes it, relying on GC instead of a
+<code>with</code> block like every other open in the module. Rotate under a lock (or an
+append-only rename scheme), and close the handle explicitly.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="uninstall-has-no-confirmation-prompt">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <h3><code>boost uninstall</code> has no confirmation prompt</h3>
+        <p><code>boost uninstall</code> deletes a skill's store directory and lock entry straight through
+<code>shutil.rmtree()</code> with zero confirmation — every other destructive command
+(<code>snapshot restore</code>, <code>cohort delete</code>, <code>profile delete</code>,
+<code>untap</code>, <code>replay rollback</code>, <code>bmad uninstall</code>) gates on
+<code>out.confirm()</code> first. Add the same <code>out.confirm()</code> (bypassable via the
+existing <code>BOOST_ASSUME_YES</code>/<code>--yes</code> convention) before the <code>rmtree</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="update-reinstall-widens-agent-scope">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <h3><code>update</code>/<code>reinstall</code> silently widen a skill's agent scope</h3>
+        <p>A skill installed with <code>--agent</code> narrowing (e.g. <code>boost install foo --agent
+claude-code</code>) records that subset in the lock, but <code>boost update</code>/
+<code>boost reinstall</code> force-reinstall via <code>store.install(entry, force=True)</code>
+without passing <code>only_agents</code> — so <code>link_agents</code> relinks into every currently
+enabled agent and silently overwrites the lock's narrower agent list. Pass
+<code>only_agents=lk.get("agents")</code> on both force-reinstall paths, matching what the
+rule/workflow update path already does for scope.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="lint-tap-misscopes-rule-workflow-entries">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <h3><code>lint --tap</code> mis-scores rule/workflow entries as broken</h3>
+        <p><code>boost lint --tap</code> builds its target list without filtering by kind, so rule/workflow
+catalog entries (which have no <code>SKILL.md</code>) always report "missing SKILL.md," and
+repo-root items get scored against the entire tap directory instead of their actual file. Running
+it against any tap that mixes rules/workflows with skills makes every rule/workflow entry show a
+bogus error and a garbage score. Skip or special-case non-skill kinds, mirroring the kind-branching
+already used elsewhere in <code>pkg.py</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="onboard-overwrites-generated-files-without-confirm">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <h3><code>boost onboard</code> silently overwrites existing generated files</h3>
+        <p><code>boost onboard</code> writes <code>.boost/telemetry.json</code>, a GitHub Actions workflow, and
+<code>.skill-lock.json</code> via a bare <code>write_text()</code> with no existence check,
+confirmation, or diff — unlike the sibling "write a generated file" helper elsewhere in the
+codebase, which always confirms before overwriting. Re-running it on a repo with its own tracked
+lock file silently clobbers it and still reports "created," even though it overwrote. Check
+<code>dest.exists()</code> and route through <code>out.confirm()</code> first.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="negative-limit-inverts-log-pulse-output">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI ergonomics</span></div>
+        <h3>Negative <code>-n</code> silently inverts <code>log</code>/<code>pulse</code> output</h3>
+        <p><code>boost log</code>/<code>boost pulse</code> accept <code>-n</code>/<code>--limit</code> as a bare
+<code>type=int</code> with no positivity check, and the slicing does
+<code>out[:n] if n else out</code> — a negative <code>n</code> becomes a Python negative slice, so
+<code>-n -1</code> silently returns everything except the most recent event instead of erroring.
+<code>discovery.py</code>'s <code>--limit</code> flags already share a <code>_positive_int</code>
+validator that rejects values below 1; reuse it here.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="crash-listing-branch-untested">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Bug</span></div>
+        <h3><code>boost log --crashes</code> listing branch has no non-empty test</h3>
+        <p><code>_show_crashes</code> has an empty-state branch and a listing branch that reads each
+<code>crash-*.log</code>, extracts its summary line, and swallows <code>OSError</code> on an
+unreadable report — only the empty-state message is exercised by any test. A regression in the glob
+sort, the summary-extraction regex, or the <code>OSError</code> fallback would ship undetected. Add
+a test that seeds one or more crash logs and asserts on the rendered listing.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="serve-py-traversal-guards-untested">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Security</span></div>
+        <h3><code>boost serve</code>'s own path-traversal guards are untested</h3>
+        <p><code>serve.py</code>'s defenses against a malicious catalog <code>skill_md</code> path
+(<code>_is_within</code>, <code>_safe_join_within</code>, the <code>".." in rel.parts</code> check)
+and its HTTP-handler failure modes are the least-covered lines in <code>core/</code> — 84.5% file
+coverage, the lowest of any module — and no test actually feeds a <code>..</code>-containing path
+through <code>skill_text()</code> to prove the guard fires. Add adversarial tests for the traversal
+guards and for <code>_CatalogHandler</code>'s error paths.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">lowest coverage in core/</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="structured-json-log-output-mode">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Observability</span></div>
+        <h3>Diagnostic log has no structured/JSON output mode</h3>
+        <p><code>core/logs.py</code> uses stdlib <code>logging</code> with rotation and crash reports, but its
+file formatter only ever emits fixed plain-text lines — unlike <code>core/journal.py</code>, which
+already writes one JSON object per line for the pulse feed. A <code>BOOST_LOG_FORMAT=json</code>
+option emitting the same fields as structured records would let
+<code>~/.boost/logs/boost.log</code> feed straight into <code>jq</code> or a log aggregator instead
+of needing regex parsing.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="ai-bridge-silent-failure-logging">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Observability</span></div>
+        <h3>AI bridge swallows failures with zero diagnostic trail</h3>
+        <p><code>core/ai.py</code>'s CLI and API call paths both catch their failure modes (timeout, OS error,
+URL error, bad JSON) and return <code>None</code> — but neither ever calls into the logger, unlike
+the rest of boost. A user whose expired key or flaky network silently degrades every AI-assisted
+command to its heuristic fallback has no trail to diagnose why, even with <code>--debug</code>. Add
+a one-line <code>logger.debug(...)</code> in each except branch.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -1196,6 +1409,24 @@ improvement is real (or isn't)."</p>
         </div>
       </article>
 
+      <article class="cap rcard" id="mypy-strict-mode-for-commands">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Type</span></div>
+        <h3>mypy's default mode skips untyped command bodies</h3>
+        <p><code>[tool.mypy]</code> in <code>pyproject.toml</code> sets only <code>python_version</code>/
+<code>files</code>, leaving mypy in its default permissive mode — a function with any untyped
+parameter has its <em>body</em> skipped entirely. All 76 <code>cmd_*</code> functions across
+<code>boost_cli/commands/*.py</code> take a bare <code>argv</code>, and a third have no return-type
+annotation, so the required "zero mypy errors" lint gate isn't actually checking most of the CLI's
+dispatch logic. Scoping <code>disallow_untyped_defs</code> (or at least
+<code>check_untyped_defs</code>) to <code>boost_cli.commands</code> will surface a real backlog —
+exactly what the gate is supposed to catch.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="doctor-checks-rules-and-workflows">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Diagnostics · Install engine</span></div>
         <h3><code>boost doctor</code> checks installed rules and workflows</h3>
@@ -1356,6 +1587,70 @@ improvement is real (or isn't)."</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">self-hosted</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="publish-gate-ignores-pip-audit-and-metadata">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI/CD</span></div>
+        <h3><code>publish.yml</code> ignores the <code>pip-audit</code> / metadata gates</h3>
+        <p><code>publish.yml</code> triggers on <code>workflow_run: [ci]</code> and gates only on
+<code>github.event.workflow_run.conclusion == 'success'</code> — it never checks the
+independently-triggered <code>pip-audit.yml</code> or <code>package-metadata.yml</code> workflows
+that run on the same push. A merge that fails the live-CVE gate or the twine/metadata check still
+auto-publishes to PyPI as long as <code>ci</code> itself is green. Fold both as jobs inside
+<code>ci.yml</code>, or have the release job poll their run status via the API before publishing.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">gates PyPI</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="ci-job-timeout-minutes">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI/CD</span></div>
+        <h3>No <code>timeout-minutes</code> on any CI job</h3>
+        <p>None of the 8 workflow files set <code>timeout-minutes</code>, so a hung step — a stalled tap
+clone, a wedged smoke-test subprocess — runs until GitHub's default job timeout instead of failing
+fast, costliest across the 2 OS &#215; 3 Python <code>tests</code> matrix. Add explicit per-job
+timeouts: short for <code>lint</code>/<code>pip-audit</code>, longer for
+<code>tests</code>/<code>mutation</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="dependabot-missing-pip-ecosystem">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <h3>Dependabot has no <code>pip</code> ecosystem entry</h3>
+        <p><code>.github/dependabot.yml</code> declares only <code>package-ecosystem: github-actions</code>,
+reasoned as "the runtime is stdlib-only" — but the <code>[rag]</code>/<code>[eval]</code>/
+<code>[bdd]</code>/<code>[perf]</code> extras in <code>pyproject.toml</code> (sqlite-vec, ranx,
+ragas, the langchain stack, behave, pytest-benchmark) never get proactive version-bump PRs, only
+reactive <code>pip-audit</code> CVE flags. Add a <code>pip</code> ecosystem entry targeting
+<code>pyproject.toml</code> alongside the existing <code>github-actions</code> one.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="license-compliance-scanning">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <h3>License-compliance scanning of the dependency closure</h3>
+        <p>Nothing in CI checks SPDX license compatibility of resolved dependencies — <code>pip-audit</code>
+gates known CVEs, not license terms, and the <code>[eval]</code>/<code>[rag]</code> extras pull in a
+nontrivial transitive closure (the langchain stack, ragas, sqlite-vec) whose licenses are never
+verified against boost's own. Add a <code>pip-licenses --fail-on</code> (or <code>reuse lint</code>)
+step to <code>package-metadata.yml</code> to catch an incompatible transitive dependency before an
+extra ships it.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -1536,6 +1831,54 @@ improvement is real (or isn't)."</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">runtime + static</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="required-checks-config-drift">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI/CD</span></div>
+        <h3>Required-status-checks list is prose-only, and already stale</h3>
+        <p>Branch protection is hand-configured in GitHub Settings and only described in prose in
+<code>CONTRIBUTING.md</code> — there is no config-as-code (a repo ruleset export, Terraform, or a CI
+check diffing required names against real job names) to catch drift. It has already drifted:
+<code>ci.yml</code>'s <code>install-smoke</code> job, and the <code>pip-audit</code>/
+<code>package-metadata</code> workflows, are never listed as required, so a PR can merge to main
+with any of them red.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="github-community-health-files">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Developer Experience</span></div>
+        <h3>No issue/PR templates or a code of conduct</h3>
+        <p>The repo has <code>SECURITY.md</code>, <code>CONTRIBUTING.md</code>, and
+<code>dependabot.yml</code>, but no <code>.github/ISSUE_TEMPLATE/</code>, no
+<code>.github/PULL_REQUEST_TEMPLATE.md</code>, and no <code>CODE_OF_CONDUCT.md</code>. For a project
+that explicitly expects parallel external contributors (per the worktree-coordination rules in
+<code>CONTRIBUTING.md</code>), a bug-report template built around <code>boost doctor</code>/crash-log
+output and a PR checklist would cut triage friction more cheaply than most engine work.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="wire-bdd-suite-into-ci">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Test infra</span></div>
+        <h3>New BDD suite has zero CI wiring</h3>
+        <p>The behave suite added under <code>tests/bdd/</code> (11 features, 47 scenarios) passes cleanly
+today, but <code>make bdd</code> is invoked nowhere in <code>.github/workflows/</code> — only
+<code>lint</code>, <code>test</code>, <code>smoke</code>, and <code>mutation</code> run in
+<code>ci.yml</code>. Unlike the eval/mutation gates, which degrade cleanly but still execute, this
+suite only runs if a human remembers to run it locally, so a CLI change that breaks the step glue
+(output-string matching, mocked <code>shutil.which</code>) can rot silently for any number of merges.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
         </div>
       </article>
 
@@ -2154,6 +2497,23 @@ same nav and footer as every other page.</p>
         </div>
       </article>
 
+      <article class="cap rcard" id="self-update-broken-for-pip-pipx-installs">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <h3><code>self-update</code> is non-functional for pip/pipx installs</h3>
+        <p><code>boost self-update</code> only works when boost runs from a git checkout: <code>paths.repo_root()</code>
+resolves inside <code>site-packages</code> for a pip/pipx install, <code>gitutil.is_repo()</code> is
+False, and <code>cmd_self_update</code> raises "boost is not running from a git checkout" with a hint
+to clone the repo — telling a normal PyPI user to abandon their install method. Detect the install
+method and shell out to <code>pip install --upgrade boost-skill-cli</code> /
+<code>pipx upgrade boost-skill-cli</code>, falling back to the git-pull path only for source
+checkouts.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="mcp-register-names-server-before-env">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · MCP</span></div>
         <h3>Order the server name before -e flags in `boost mcp register`</h3>
@@ -2382,6 +2742,45 @@ paths.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">builds on policy.py</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="install-from-path-bypasses-policy-and-pin-checks">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Bug</span></div>
+        <h3><code>install_from_path</code> bypasses pin &amp; policy checks</h3>
+        <p><code>boost import</code>, <code>boost migrate --from-skills-cli</code>, <code>boost rename</code>,
+and the local-install paths behind the AI <code>distill</code>/<code>evolve</code> commands all
+route through <code>store.install_from_path()</code>, which never calls
+<code>policy.check_install()</code> and never checks <code>existing.get("pinned")</code> the way
+<code>store.install()</code> does. Any of those commands can silently overwrite a pinned skill, or
+one that <code>blocked_skills</code>/<code>allowed_taps</code>/<code>max_skills</code>/<code>pin_only</code>
+policy would otherwise refuse. Route <code>install_from_path</code> through the same
+pinned/existing/policy gates as <code>install()</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">code-scan finding</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="path-traversal-unsanitized-rule-workflow-name">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Security · Bug</span></div>
+        <h3>Path traversal via unsanitized rule/workflow name</h3>
+        <p><code>catalog._make_entry</code> only slugifies a catalog name when it contains a space, so a tap's
+rule/workflow frontmatter carrying <code>name: ../../../../.ssh/authorized_keys</code> sails straight
+through into <code>rule_target</code>/<code>workflow_target</code>, which build the destination as
+<code>root / "rules" / (name + ext)</code> with zero traversal guard — unlike
+<code>skill_store_dir()</code>'s <code>[A-Za-z0-9._-]+</code> regex. A malicious tap can write an
+arbitrary file outside <code>.cursor/rules/</code> or <code>.claude/</code>, and it is worse under
+<code>--scope project</code> since <code>base</code> is the victim's own repo. Apply the same
+name-validation regex used by <code>skill_store_dir()</code> before any rule/workflow install path
+is built.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">live-reproduced</span>
         </div>
       </article>
 
