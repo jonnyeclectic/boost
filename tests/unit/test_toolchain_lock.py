@@ -135,3 +135,35 @@ class TestEvalExtraStaysOut:
             for forbidden in ("langchain", "ragas", "ranx"):
                 assert forbidden not in text, \
                     "%s locks the opt-in [eval] stack (%s)" % (stem, forbidden)
+
+
+class TestCompileIsStable:
+    """The compile must reproduce the committed lock, not chase the newest release.
+
+    uv treats an existing `--output-file` as the preferred solution and keeps
+    those pins unless a declaration forces a change. Compiling to stdout instead
+    re-resolves against the live index, so any upstream release makes the
+    committed lock "stale" and reddens `lint` on unrelated PRs with no code
+    change — the exact failure mode requirements/lint-tools.in's header warns
+    about, and one this gate hit within a day of landing.
+
+    This asserts the mechanism rather than running uv (which needs the network):
+    a resolver invoked without an output file to read cannot be stable.
+    """
+
+    def test_compile_passes_output_file_so_uv_reads_current_pins(self):
+        src = (ROOT / "scripts" / "lock_toolchain.py").read_text(encoding="utf-8")
+        assert "--output-file" in src, \
+            "compile_group must give uv the committed lock to prefer"
+
+    def test_compile_seeds_the_scratch_file_from_the_committed_lock(self):
+        # Copying the committed .txt into the scratch path is what makes uv
+        # prefer the existing pins; without the copy the flag achieves nothing.
+        src = (ROOT / "scripts" / "lock_toolchain.py").read_text(encoding="utf-8")
+        assert "shutil.copyfile(target, scratch)" in src
+
+    def test_upgrade_is_the_only_way_to_re_resolve(self):
+        src = (ROOT / "scripts" / "lock_toolchain.py").read_text(encoding="utf-8")
+        assert '"--upgrade"' in src
+        # --check must never imply --upgrade, or the gate becomes non-deterministic
+        assert "--check and --upgrade are exclusive" in src
