@@ -75,9 +75,14 @@ jobs:
         if: env.SONAR_TOKEN == ''
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        # One heredoc, not five appends: shellcheck's SC2129 flags repeated
+        # individual redirects to the same file, and actionlint runs shellcheck
+        # over every run: block.
         run: |
-          echo "SONAR_TOKEN is not set — SonarCloud analysis skipped." >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "To enable: import the repo at https://sonarcloud.io (Analysis Method:" >> "$GITHUB_STEP_SUMMARY"
-          echo "GitHub Actions), then add the generated token as the SONAR_TOKEN secret." >> "$GITHUB_STEP_SUMMARY"
-          echo "Project settings live in sonar-project.properties." >> "$GITHUB_STEP_SUMMARY"
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          SONAR_TOKEN is not set — SonarCloud analysis skipped.
+
+          To enable: import the repo at https://sonarcloud.io (Analysis Method:
+          GitHub Actions), then add the generated token as the SONAR_TOKEN secret.
+          Project settings live in sonar-project.properties.
+          EOF
