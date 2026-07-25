@@ -1,0 +1,32 @@
+# Declared lint toolchain — the human-edited source of truth for the versions
+# CI's `lint` job and local `make lint` both install.
+#
+# EDIT THIS FILE, then run `python3 scripts/lock_toolchain.py` to regenerate the
+# hash-pinned `lint-tools.txt` beside it. CI installs the .txt (with pip
+# enforcing every hash), never this file; `make lint` fails on drift.
+#
+# Resolved for Python 3.12 — the version CI's lint job pins.
+#
+# Why pin at all: these tools were once installed UNPINNED (`pip install ruff mypy …`), so
+# every CI run pulled the latest release. When ruff 0.16.0 shipped it began
+# flagging rule families this repo deliberately does not select (UP/BLE/PLW —
+# ~1100 findings of exactly the pyupgrade-style churn the roadmap already
+# declined), turning the lint gate red on every open PR and on main, with no
+# code change. A lint gate whose meaning can shift out from under you on an
+# upstream release is not a gate. Pinning here freezes the ruleset to a known
+# state; upgrades become a deliberate, reviewable bump of this file.
+ruff==0.15.22
+mypy==2.3.0
+codespell==2.4.3
+import-linter==2.13
+vulture==2.16
+xenon==0.9.3
+pyright==1.1.411
+interrogate==1.7.0
+# refurb: modernization smells. ruff ports only a handful of the FURB checks
+# (FURB167 alone fires here); refurb's own mypy-backed analysis found 70 in
+# boost_cli — contextlib.suppress candidates, redundant list()/dict()/str()
+# casts, `x or ""` on a value that is already non-optional. It needs >=3.10
+# itself, which is why this set is lint-only and never a runtime dependency.
+# Reuses the mypy pinned above.
+refurb==2.3.1

@@ -1,7 +1,18 @@
 version: 2
 updates:
-  # the runtime is stdlib-only, so Actions versions are the only dependencies
+  # The shipped runtime is stdlib-only ([project].dependencies is empty), so
+  # Actions and the dev/CI toolchain are the only dependencies boost has.
   - package-ecosystem: github-actions
     directory: /
+    schedule:
+      interval: weekly
+  # The hash-pinned dev/CI toolchain (requirements/*.txt, generated from the
+  # *.in files by scripts/lock_toolchain.py). Without this entry the lock would
+  # silently rot — the exact failure mode pinning exists to prevent, so a pin
+  # with no update path is only half the job. Dependabot rewrites the .txt files
+  # including their hashes; `make lint` runs lock_toolchain.py --check, so a bump
+  # that drifts from the .in declarations fails the gate rather than landing.
+  - package-ecosystem: pip
+    directory: /requirements
     schedule:
       interval: weekly

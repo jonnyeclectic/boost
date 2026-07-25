@@ -1,0 +1,16 @@
+# Declared mutation-gate toolchain — what CI's `mutation` job installs.
+#
+# EDIT THIS FILE, then run `python3 scripts/lock_toolchain.py` to regenerate the
+# hash-pinned `mutation-tools.txt` beside it.
+#
+# Self-contained (it redeclares the test tools rather than layering two hashed
+# files at install time) because pip enforces hashes across the whole
+# resolution: two independently-compiled files that pin the same transitive
+# dependency to different versions cannot be installed together. One file per
+# consumer, each internally consistent, is the shape that always works.
+#
+# Resolved for Python 3.11 — mutmut 3.x requires >=3.11, and CI's mutation job
+# runs 3.14. That floor is why this is a separate file from test-tools.in, which
+# has to resolve all the way down to 3.9.
+-r test-tools.in
+mutmut
