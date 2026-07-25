@@ -2,7 +2,7 @@
 id: refresh-the-marketing-surface
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Docs · Marketing
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 4
 note: 
 order: 4
 owner: loop/marketing
-pr:
+pr: 245
 title: Refresh the marketing surface
 ---
 The front page had drifted from the product: the README claimed <b>72</b> commands
