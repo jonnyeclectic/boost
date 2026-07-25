@@ -65,7 +65,23 @@
 </head>
 <body>
 
-<main>
+<header>
+  <div class="wrap site-nav">
+    <a class="logo" href="index.html"><b>boost</b><span>Adapters</span></a>
+    <ul>
+      <li><a href="index.html">Guide</a></li>
+      <li><a href="commands.html">Commands</a></li>
+      <li><a href="roadmap.html">Roadmap</a></li>
+      <li><a href="design-roadmap.html">Design</a></li>
+      <li><a href="mcp-hub.html">MCP Hub</a></li>
+      <li><a href="eval.html">Evaluation</a></li>
+      <li><a href="#top" aria-current="page">Adapters</a></li>
+      <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="top">
   <!-- ===== hero ===== -->
   <div class="wrap hero">
     <p class="crumbs"><a href="index.html">boost</a> / docs / adapters · <span class="mono">boost adapt</span></p>
@@ -327,15 +343,30 @@ python3 -m venv /tmp/crew &amp;&amp; /tmp/crew/bin/pip install <span class="s">"
     </div>
   </section>
 
-  <footer>
-    <div class="wrap">
-      <p>boost · <b>Framework adapters</b> — <code class="mono">boost adapt &lt;skill&gt; --to &lt;framework&gt;</code> ·
-        <a href="index.html">docs home</a> ·
-        <a href="mcp-hub.html">RAG &amp; MCP hub</a><br>
-        Styled with the shared <a href="../style/boost.css">Aurora</a> design system.</p>
-    </div>
-  </footer>
 </main>
+
+<footer>
+  <div class="wrap">
+    <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
+    <nav class="foot-links" aria-label="Documentation">
+      <a href="index.html">Guide</a>
+      <a href="commands.html">Commands</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="design-roadmap.html">Design</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a href="eval.html">Evaluation</a>
+      <a href="#top" aria-current="page">Adapters</a>
+    </nav>
+    <p class="foot-legal">
+      <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+      <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+      <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+      Released under the GPL-3.0 license
+    </p>
+  </div>
+</footer>
+
 
 <script src="../style/boost.js" defer></script>
 </body>

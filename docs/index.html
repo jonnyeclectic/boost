@@ -62,7 +62,7 @@
     -webkit-backdrop-filter: blur(12px);
     border-bottom: 1px solid var(--line-soft);
   }
-  header .nav { display: flex; align-items: center; gap: 24px; height: 64px; }
+  header .nav { display: flex; align-items: center; gap: 24px; min-height: 64px; }
   .logo { display: flex; align-items: baseline; gap: 10px; text-decoration: none; }
   .logo b { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--cyan); letter-spacing: -.02em; }
   .logo span { font-size: 10.5px; letter-spacing: .24em; color: var(--text-2); text-transform: uppercase; }
@@ -77,6 +77,23 @@
   }
   header .nav ul a:hover { color: var(--text); background: var(--panel); }
   header .nav ul a.cta { color: var(--text); font-weight: 600; }
+
+  /* Small screens: the fourteen links get their own full-width row and scroll,
+     with 40px tap targets — mirrors the .site-nav rules in style/boost.css.
+     Stated here because this page's inline nav styling would otherwise win
+     against the shared sheet on cascade order. */
+  @media (max-width: 720px) {
+    header .nav { flex-wrap: wrap; gap: 6px 18px; padding: 8px 0 6px; }
+    header .nav ul {
+      width: 100%; margin-left: 0; flex-wrap: nowrap; gap: 6px;
+      -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity;
+      margin-inline: -24px; padding-inline: 24px; padding-bottom: 4px;
+      -webkit-mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
+              mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
+    }
+    header .nav ul li { scroll-snap-align: start; }
+    header .nav ul a { display: flex; align-items: center; min-height: 40px; }
+  }
 
   /* ---------- shared section chrome ---------- */
   section { padding: 110px 0 20px; }
@@ -334,19 +351,6 @@
   .mini .name .v { color: #85859c; font-weight: 400; }
   .mini p { font-size: 13px; color: var(--text-2); margin-top: 5px; }
 
-  /* ---------- footer ---------- */
-  footer { margin-top: 130px; border-top: 1px solid var(--line-soft); padding: 44px 0 60px; text-align: center; }
-  footer .brand { font-size: 15px; color: var(--text-2); }
-  footer .brand b { font-family: var(--mono); color: var(--cyan); }
-  footer .meta { margin-top: 10px; font-size: 13.5px; color: var(--text-3); }
-  footer .meta code {
-    color: var(--text-2); background: var(--panel); border: 1px solid var(--line-soft);
-    padding: 1px 7px; border-radius: 6px; font-size: .9em;
-  }
-  footer .links { margin-top: 14px; font-size: 13.5px; color: var(--text-3); }
-  footer .links a { color: var(--text-2); text-decoration: none; }
-  footer .links a:hover { color: var(--text); }
-
   /* ---------- responsive ---------- */
   @media (max-width: 960px) {
     .stats { grid-template-columns: repeat(2, 1fr); }
@@ -402,11 +406,11 @@
     </p>
     <div class="cta-row">
       <a class="btn btn-grad" href="#workflow">See how it works →</a>
-      <a class="btn btn-ghost" href="#commands">Explore all 73 commands</a>
+      <a class="btn btn-ghost" href="#commands">Explore all 78 commands</a>
     </div>
     <div class="stats">
       <div class="stat reveal"><b>10,000+</b><span>Discoverable skills</span></div>
-      <div class="stat reveal"><b>73</b><span>Commands · 8 groups</span></div>
+      <div class="stat reveal"><b>78</b><span>Commands · 8 groups</span></div>
       <div class="stat reveal"><b>5</b><span>Pre-tapped registries</span></div>
       <div class="stat reveal"><b>3</b><span>AI agents supported</span></div>
     </div>
@@ -577,7 +581,7 @@ facilitate structured divergent thinking:
   <section id="commands">
     <div class="wrap">
       <span class="eyebrow">What It Can Do</span>
-      <h2 class="sec-title">73 commands, 8 groups</h2>
+      <h2 class="sec-title">78 commands, 8 groups</h2>
       <p class="sec-sub">From basic install/update to AI-powered authoring, governance,
         and team rollouts. Filter live to find what you need.</p>
 
@@ -754,9 +758,23 @@ pip install <span class="yv">"boost-skill-cli[rag]"</span></pre>
 
   <footer>
     <div class="wrap">
-      <p class="brand"><b>boost</b> · AI Skill Package Manager · <code>pip install boost-skill-cli</code></p>
-      <p class="meta">Requires Python 3.9+ and <code>git</code>. Supports Claude Code, Windsurf &amp; Cursor.</p>
-      <p class="links"><a href="#commands">CLI Reference</a> · <a href="#top">Home</a></p>
+      <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+      <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
+      <nav class="foot-links" aria-label="Documentation">
+        <a href="#top" aria-current="page">Guide</a>
+        <a href="commands.html">Commands</a>
+        <a href="roadmap.html">Roadmap</a>
+        <a href="design-roadmap.html">Design</a>
+        <a href="mcp-hub.html">MCP Hub</a>
+        <a href="eval.html">Evaluation</a>
+        <a href="adapters.html">Adapters</a>
+      </nav>
+      <p class="foot-legal">
+        <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+        <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+        <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+        Released under the GPL-3.0 license
+      </p>
     </div>
   </footer>
 
@@ -795,6 +813,8 @@ const COMMANDS = [
   ["unpin","pkg","Allow a pinned skill to update again"],
   ["snapshot","pkg","Save & restore whole skill environments"],
   ["export","pkg","Package skills as shareable zip/tar archives"],
+  ["adapt","pkg","Render a skill as another framework's agent source (CrewAI, Agents SDK)"],
+  ["run","pkg","Adapt a skill, wire tools & run it as a live agent"],
   ["search","find","Search skills across tap registries (AI-ranked)"],
   ["reindex","find","Build/refresh the full-content search index"],
   ["discover","find","Browse & search the GitHub-wide skill discovery index"],
@@ -840,6 +860,7 @@ const COMMANDS = [
   ["changelog","chk","Show a skill's upstream change history"],
   ["attest","chk","Display/verify the install record for skills"],
   ["health","chk","Dashboard of skill-environment health"],
+  ["trust","chk","Manage signing keys & verify tap provenance"],
   ["config","cfg","Display or modify boost configuration"],
   ["clean","cfg","Clear stale caches & broken symlinks"],
   ["create","cfg","Scaffold a new skill from a template"],
@@ -849,6 +870,8 @@ const COMMANDS = [
   ["schedule","cfg","Manage automatic skill-sync scheduling"],
   ["serve","cfg","Serve the skill catalog over HTTP (port 8787)"],
   ["mcp","cfg","Register boost as an MCP server for Claude Code"],
+  ["hooks","cfg","Manage Claude Code hooks (scope-aware) in settings.json"],
+  ["bmad","cfg","Install & manage the BMAD Method (scope-aware, toggleable)"],
   ["self-update","cfg","Update boost itself to the latest version"],
   ["cohort","team","Controlled skill rollouts & team A/B testing"],
   ["profile","team","Named skill profiles for context switching"],

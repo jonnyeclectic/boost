@@ -391,9 +391,58 @@ footer {
 footer a { color: var(--text-2); text-decoration: underline; }
 footer a:hover { color: var(--text); }
 
+/* The standard footer body: one brand line, one install line, the page index,
+   then the legal row. Kept to what a visitor needs — no stylesheet credits,
+   PR numbers or build chatter. The page index is a nav of discrete targets,
+   so those links are chips (not prose) and opt out of the underline above. */
+footer .foot-brand { font-size: 14.5px; color: var(--text-2); text-align: center; }
+footer .foot-brand b { font-family: var(--mono); font-weight: 700; color: var(--cyan); }
+footer .foot-note { margin-top: 9px; font-size: 13px; color: var(--text-3); text-align: center; }
+footer .foot-note code {
+  font-size: .92em; color: var(--sky);
+  background: rgb(34 211 238 / 8%);
+  border: 1px solid var(--line-soft); border-radius: 6px; padding: 2px 8px;
+}
+footer .foot-links {
+  display: flex; flex-wrap: wrap; justify-content: center;
+  gap: 4px 6px; margin-top: 16px;
+}
+footer .foot-links a {
+  display: flex; align-items: center; min-height: 34px;
+  padding: 5px 11px; border-radius: 8px;
+  font-size: 13px; color: var(--text-2); text-decoration: none;
+  transition: color .15s ease, background .15s ease;
+}
+footer .foot-links a:hover,
+footer .foot-links a[aria-current="page"] { color: var(--text); background: var(--panel); }
+footer .foot-legal { margin-top: 13px; font-size: 12.5px; color: var(--text-3); text-align: center; }
+
+/* ---------- nav on small screens ----------
+   Fourteen links will not fit one row on a phone. Stacking them into a column
+   turns the sticky header into six rows of prose-sized targets, so instead the
+   list keeps one row and scrolls: full bleed to the screen edges, 40px tap
+   targets (WCAG 2.5.5), snap points, and a faded trailing edge so it reads as
+   scrollable rather than truncated. */
 @media (max-width: 720px) {
-  .site-nav, header .nav { flex-direction: column; align-items: flex-start; gap: 10px; }
-  .site-nav ul, header .nav ul { gap: 12px; }
+  .site-nav, header .nav {
+    flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 8px 0 6px;
+  }
+  .site-nav ul, header .nav ul {
+    width: 100%; flex-wrap: nowrap; gap: 6px;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none; scroll-snap-type: x proximity;
+    /* bleed past .wrap's 24px gutter, then pad it back so nothing is clipped */
+    margin-inline: -24px; padding-inline: 24px; padding-bottom: 4px;
+    -webkit-mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
+            mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
+  }
+  .site-nav ul::-webkit-scrollbar, header .nav ul::-webkit-scrollbar { display: none; }
+  .site-nav ul li, header .nav ul li { scroll-snap-align: start; }
+  .site-nav ul a, header .nav ul a {
+    display: flex; align-items: center; min-height: 40px;
+    padding: 8px 12px; border-radius: 9px;
+  }
+  footer .foot-links a { min-height: 40px; }
 }
 
 /* ============================================================================

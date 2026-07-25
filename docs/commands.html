@@ -70,6 +70,25 @@
     border-right: none; border-bottom: 1px solid var(--line); }
     .arg { grid-template-columns: 1fr; gap: 2px; }
   }
+
+  /* Site footer — same content as every other docs page. This page is
+     self-contained (its sidebar layout owns .wrap), so the rules are local. */
+  footer { border-top: 1px solid var(--line); padding: 30px 20px 40px; text-align: center; }
+  footer .foot-brand { font-size: 14.5px; color: var(--text-2); }
+  footer .foot-brand b { font-family: var(--mono); font-weight: 700; color: var(--amber); }
+  footer .foot-note { margin-top: 9px; font-size: 13px; color: var(--text-2); opacity: .8; }
+  footer .foot-note code { font-size: .92em; color: var(--amber);
+    background: rgba(34,211,238,.08); border: 1px solid var(--line);
+    border-radius: 6px; padding: 2px 8px; }
+  footer .foot-links { display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 4px 6px; margin-top: 16px; }
+  footer .foot-links a { display: flex; align-items: center; min-height: 40px;
+    padding: 5px 11px; border-radius: 8px; font-size: 13px;
+    color: var(--text-2); text-decoration: none; }
+  footer .foot-links a:hover,
+  footer .foot-links a[aria-current="page"] { color: var(--text); background: var(--panel); }
+  footer .foot-legal { margin-top: 13px; font-size: 12.5px; color: var(--text-2); opacity: .75; }
+  footer .foot-legal a { color: var(--text-2); text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -182,7 +201,7 @@
     </div>
     <div id="nohits">No commands match.</div>
   </aside>
-  <main>
+  <main id="top">
     <h1>boost <b>command reference</b></h1>
     <p class="lead">All <b>78</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
@@ -1149,6 +1168,26 @@
       </section>
   </main>
 </div>
+
+<footer>
+  <p class="foot-brand"><b>boost</b> &mdash; a package manager for AI coding skills</p>
+  <p class="foot-note">Install with <code>pip install boost-skill-cli</code> &middot; requires Python 3.9+ and <code>git</code></p>
+  <nav class="foot-links" aria-label="Documentation">
+    <a href="index.html">Guide</a>
+    <a href="#top" aria-current="page">Commands</a>
+    <a href="roadmap.html">Roadmap</a>
+    <a href="design-roadmap.html">Design</a>
+    <a href="mcp-hub.html">MCP Hub</a>
+    <a href="eval.html">Evaluation</a>
+    <a href="adapters.html">Adapters</a>
+  </nav>
+  <p class="foot-legal">
+    <a href="https://github.com/jonnyeclectic/boost">GitHub</a> &middot;
+    <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> &middot;
+    <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> &middot;
+    Released under the GPL-3.0 license
+  </p>
+</footer>
 <script>
   (function () {
     var q = document.getElementById('q');
