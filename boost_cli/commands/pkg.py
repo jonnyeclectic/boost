@@ -109,6 +109,67 @@ def _warn_secrets(res: store.InstallResult) -> None:
         out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
 
 
+def _offer_mcp(res: store.InstallResult) -> None:
+    """Surface the MCP servers a just-installed skill needs, and offer to wire them.
+
+    A skill that only works paired with an MCP server used to install "cleanly"
+    and then fail in the agent for a reason nothing surfaced. Now the requirement
+    is stated at install time, and boost offers to run the registration for the
+    servers that came with a runnable spec.
+
+    Advisory, never fatal: a declined prompt, a missing ``claude`` CLI or a failed
+    registration all leave the skill installed. Suppressed entirely by
+    ``--no-mcp``, which sets ``BOOST_NO_MCP_OFFER``.
+    """
+    rows = res.mcp_servers
+    if not rows or os.environ.get("BOOST_NO_MCP_OFFER"):
+        return
+    from ..core import mcpdecl
+    out.info("")
+    out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
+    for row in rows:
+        how = ("`%s`" % row["spec"]["command"] if row["spec"]
+               and row["spec"].get("command") else "no command declared")
+        out.info("  %s  %s" % (out.c(row["name"], out.BOLD),
+                               out.role(how, "muted")))
+    wirable = mcpdecl.registrable(rows)
+    if not wirable:
+        # Name-only declarations: boost will not invent a command line.
+        out.dim("  install these yourself, then `boost mcp register`")
+        return
+    if not out.confirm("register %s with Claude Code now?"
+                       % _plural(len(wirable), "server"), default=False):
+        out.dim("  skipped — `claude mcp add …` when you're ready")
+        return
+    for row in wirable:
+        _register_mcp_server(row["name"], row["spec"])
+
+
+def _register_mcp_server(name: str, spec: dict) -> None:
+    """Run one `claude mcp add` for a skill-declared server. Never raises."""
+    import subprocess
+    from ..core import mcpdecl
+    argv = mcpdecl.register_argv(name, spec)
+    if not shutil.which("claude"):
+        out.warn("`claude` CLI not found — run this yourself:")
+        out.info("  " + " ".join(argv))
+        return
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out.warn("could not register %s: %s" % (name, e))
+        out.info("  run it yourself: " + " ".join(argv))
+        return
+    if proc.returncode != 0:
+        tail = (proc.stderr or "").strip().splitlines()
+        out.warn("could not register %s: %s"
+                 % (name, tail[-1] if tail else "unknown error"))
+        out.info("  run it yourself: " + " ".join(argv))
+        return
+    out.ok("registered MCP server %s" % name)
+    journal.log("mcp-register", name)
+
+
 def _report_result(res: store.InstallResult) -> None:
     """The canonical three-line install report."""
     if res.kind in ("rule", "workflow"):
@@ -141,6 +202,7 @@ def _report_result(res: store.InstallResult) -> None:
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
     _warn_secrets(res)
+    _offer_mcp(res)
 
 
 def _boostfile_text(skills: Dict[str, dict], via: str = "boost bundle dump") -> str:
@@ -238,8 +300,15 @@ def cmd_install(argv: List[str]) -> int:
                     help="show what would happen without changing anything")
     ap.add_argument("--no-deps", action="store_true",
                     help="install only the named skills, not their `requires:`")
+    ap.add_argument("--no-mcp", action="store_true",
+                    help="don't offer to register MCP servers a skill declares")
     args = ap.parse_args(argv)
     args.scope = args.scope or scopes.SCOPE_USER
+    if args.no_mcp:
+        # An env flag rather than threading a parameter through _report_result's
+        # eight call sites: the offer is a leaf-level side effect, and this keeps
+        # every other install path (update, reinstall, team, MCP tool) unchanged.
+        os.environ["BOOST_NO_MCP_OFFER"] = "1"
     only = _check_agents(args.agent)
     multi = len(args.names) > 1
     entries, failed = [], 0
