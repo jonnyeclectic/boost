@@ -2,7 +2,7 @@
 id: coverage-guided-fuzzing-atheris-oss-fuzz
 board: code
 section: health
-status: inflight
+status: shipped
 category: Testing · Bug
 complexity: L
 impact: Med
@@ -10,7 +10,7 @@ wow: 4
 note: stretch
 order: 8
 owner: loop/fuzz-parsers
-pr:
+pr: 242
 title: Coverage-guided fuzzing — <code>atheris</code> / OSS-Fuzz
 ---
 Google's <code>atheris</code> instruments the bytecode and evolves inputs toward
