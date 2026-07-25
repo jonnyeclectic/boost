@@ -41,6 +41,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -101,19 +102,39 @@ def _uv() -> str:
 
 
 def compile_group(stem: str, python_version: str, upgrade: bool) -> str:
-    """Resolve one group and return the file contents we want on disk."""
-    # No `-o`: uv writes the resolution to stdout by default. Passing `-o -`
-    # streams to stdout *and* creates a file literally named "-" in the cwd.
-    cmd = [_uv(), "pip", "compile", str(REQS / ("%s.in" % stem)),
-           "--generate-hashes", "--universal",
-           "--python-version", python_version, "--no-header"]
-    if upgrade:
-        cmd.append("--upgrade")
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
-    if proc.returncode != 0:
-        sys.stderr.write(proc.stderr)
-        raise SystemExit("lock_toolchain: `uv pip compile` failed for %s" % stem)
-    body = _UV_HEADER.sub("", proc.stdout).lstrip("\n")
+    """Resolve one group and return the file contents we want on disk.
+
+    Resolution is deliberately NOT "newest that satisfies the .in". uv treats an
+    existing ``--output-file`` as the preferred solution and keeps those pins
+    unless a declaration forces a change, so the compile is *stable*: it
+    reproduces the committed lock byte-for-byte until someone edits the .in or
+    passes ``--upgrade``.
+
+    That distinction is the whole gate. Compiling to stdout instead re-resolves
+    against the live index every time, so any upstream release makes the
+    committed lock "stale" and reddens `lint` on unrelated PRs with no code
+    change — which is precisely the failure mode requirements/lint-tools.in's
+    header was written about. (It happened: three groups went STALE overnight.)
+    """
+    target = REQS / ("%s.txt" % stem)
+    # Compile into a scratch copy of the committed lock so uv can read the
+    # current pins and prefer them, without touching the real file until the
+    # caller decides to write it.
+    with tempfile.TemporaryDirectory() as tmp:
+        scratch = Path(tmp) / target.name
+        if target.exists():
+            shutil.copyfile(target, scratch)
+        cmd = [_uv(), "pip", "compile", str(REQS / ("%s.in" % stem)),
+               "--generate-hashes", "--universal",
+               "--python-version", python_version, "--no-header",
+               "--output-file", str(scratch)]
+        if upgrade:
+            cmd.append("--upgrade")
+        proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
+        if proc.returncode != 0:
+            sys.stderr.write(proc.stderr)
+            raise SystemExit("lock_toolchain: `uv pip compile` failed for %s" % stem)
+        body = _UV_HEADER.sub("", scratch.read_text(encoding="utf-8")).lstrip("\n")
     return _header(stem, python_version) + body
 
 
