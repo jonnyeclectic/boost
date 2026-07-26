@@ -113,6 +113,33 @@ def slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or "skill"
 
 
+# A catalog name becomes a path component (a rule file, a workflow file, a store
+# dir), so it has to be one segment with no traversal. Anchored, and "." / ".."
+# excluded separately because both match the character class.
+_SAFE_COMPONENT = re.compile(r"[A-Za-z0-9._-]+")
+
+
+def is_safe_component(name: str) -> bool:
+    """True if ``name`` is usable as a single path component.
+
+    The one place to ask "can this name be joined onto a directory?". A tap
+    controls its own frontmatter, so a name like ``../../../../.ssh/authorized_keys``
+    is attacker-supplied input on the way to an install path.
+    """
+    return bool(_SAFE_COMPONENT.fullmatch(name)) and name not in {".", ".."}
+
+
+def safe_component(name: str) -> str:
+    """``name`` if it is a safe path component, else a slug of it.
+
+    Used where a usable name is required and rejecting is not an option (catalog
+    indexing must not fail on one hostile entry). ``slugify`` alone is wrong here
+    because it also mangles names that were already fine — ``ok_name-1.2`` would
+    become ``ok-name-1-2`` — so only unsafe names are rewritten.
+    """
+    return name if is_safe_component(name) else slugify(name)
+
+
 def sha256_dir(path: Path) -> str:
     """Deterministic content hash of a directory tree (paths + bytes)."""
     h = hashlib.sha256()

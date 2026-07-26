@@ -492,3 +492,40 @@ class TestAtomicWriteText:
         assert p.read_text(encoding="utf-8") == "original"
         leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
         assert leftovers == []
+
+
+class TestSafeComponent:
+    """A catalog name becomes a path component, so it is attacker-controlled
+    input on the way to an install path (a tap writes its own frontmatter)."""
+
+    @pytest.mark.parametrize("name", [
+        "plain", "with-dash", "with_underscore", "dotted.name", "v1.2.3", "A-Z_0-9",
+    ])
+    def test_accepts_ordinary_names(self, name):
+        assert util.is_safe_component(name) is True
+        # and passes them through byte-for-byte — slugify would mangle these
+        assert util.safe_component(name) == name
+
+    @pytest.mark.parametrize("name", [
+        "../../../../.ssh/authorized_keys", "..", ".", "a/b", "a\\b", "with space",
+        "", "lead/../esc", "/abs/path", "nul\x00byte", "tab\tname",
+    ])
+    def test_rejects_unsafe_names(self, name):
+        assert util.is_safe_component(name) is False
+
+    @pytest.mark.parametrize("name", [
+        "../../../../.ssh/authorized_keys", "..", ".", "a/b", "/abs/path",
+    ])
+    def test_rewrites_unsafe_names_to_a_single_component(self, name):
+        got = util.safe_component(name)
+        assert util.is_safe_component(got), got
+        assert "/" not in got and got not in {".", ".."}
+
+    def test_traversal_slug_keeps_no_parent_segments(self):
+        assert util.safe_component("../../../../.ssh/authorized_keys") == "ssh-authorized-keys"
+
+    def test_dot_names_do_not_become_empty(self):
+        # slugify("..") -> "skill" rather than "", which would rejoin as the
+        # parent directory itself.
+        assert util.safe_component("..") == "skill"
+        assert util.safe_component(".") == "skill"

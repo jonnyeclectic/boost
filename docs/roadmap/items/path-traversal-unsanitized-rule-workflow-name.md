@@ -2,14 +2,14 @@
 id: path-traversal-unsanitized-rule-workflow-name
 board: code
 section: trust
-status: planned
+status: shipped
 category: Security · Bug
 complexity: M
 impact: High
 wow: 3
 note: live-reproduced
 order: 10
-owner:
+owner: loop/rule-name-traversal
 pr:
 title: Path traversal via unsanitized rule/workflow name
 ---
