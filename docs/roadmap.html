@@ -519,11 +519,22 @@ message, so routing it through the helper would change user-facing errors.</p>
       </article>
 
       <article class="cap rcard" id="refresh-the-marketing-surface">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Marketing</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Marketing</span></div>
         <h3>Refresh the marketing surface</h3>
-        <p>Re-record <code>docs/demo.gif</code> from <code>demo.tape</code> against
-           the current CLI, tighten the README hero, and give the landing page a
-           flashier first impression that matches the Aurora theme.</p>
+        <p>The front page had drifted from the product: the README claimed <b>72</b> commands
+           in one place and 78 in another (78 is correct), and <b>~2,600</b> mutants against a
+           real ~9,900. A number a reader can check in ten seconds costs more credibility
+           when wrong than the feature it describes earned. All three corrected — and pinned,
+           so they cannot rot again: a unit test derives the command and group counts from
+           <code>cli.COMMANDS</code> and fails if the README, the landing page, or the two
+           disagree with each other. The README hero now leads with the one-line pitch and a
+           four-command block that shows the whole flow before any prose. And
+           <code>demo.gif</code> — a generated artifact whose regeneration needed
+           <code>brew install vhs</code> on someone's laptop, so in practice it drifted (a
+           merged PR had to fix it for showing <code>./boost</code> long after that changed)
+           — is now re-recorded by CI whenever the surfaces it demonstrates change, proposed
+           as a PR because a GIF re-encode always differs byte-for-byte and its correctness
+           is visual, not comparable.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
