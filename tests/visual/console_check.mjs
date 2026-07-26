@@ -16,14 +16,22 @@
 // Runs against the live URL, not file://, because deployment is where the paths
 // change: that is the whole point of a post-deploy check.
 import { launch } from "puppeteer-core";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const BASE = (process.env.BOOST_SITE || "https://jonnyeclectic.github.io/boost/")
   .replace(/\/?$/, "/");
 
+// Derived from docs/, never hardcoded — scripts/check_anchors.py and
+// scripts/a11y_check.py both glob docs/*.html for the same reason. A literal
+// list silently stops covering a page the moment someone adds one, and the
+// gap looks identical to a green run: carousel.html was live and unchecked.
+const DOCS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "docs");
 const PAGES = [
-  "", "docs/index.html", "docs/roadmap.html", "docs/design-roadmap.html",
-  "docs/commands.html", "docs/adapters.html", "docs/eval.html", "docs/mcp-hub.html",
+  "",                                   // the site root's redirect stub
+  ...readdirSync(DOCS).filter((f) => f.endsWith(".html")).sort()
+    .map((f) => `docs/${f}`),
 ];
 
 const CANDIDATE_BINS = [
