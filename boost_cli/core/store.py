@@ -15,8 +15,17 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..errors import BoostError
-from . import (agents, journal, lockfile, paths, policy, projectlock, registry,
-               scopes, util)
+from . import (
+    agents,
+    journal,
+    lockfile,
+    paths,
+    policy,
+    projectlock,
+    registry,
+    scopes,
+    util,
+)
 
 
 @dataclass

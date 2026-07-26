@@ -6,6 +6,7 @@ Also exports detect_stack(), shared with the Quality commands.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import operator
 import re
@@ -18,12 +19,23 @@ import urllib.parse
 from pathlib import Path
 
 from .. import cliparse, spin
-from ..core import (agents, ai, catalog, config, gitutil,
-                    journal, lockfile, paths, rag, registry, store, util)
+from ..core import (
+    agents,
+    ai,
+    catalog,
+    config,
+    gitutil,
+    journal,
+    lockfile,
+    paths,
+    rag,
+    registry,
+    store,
+    util,
+)
 from ..core import output as out
 from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
 from ..errors import BoostError
-import contextlib
 
 __all__ = ["detect_stack"]
 

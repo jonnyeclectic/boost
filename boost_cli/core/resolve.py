@@ -20,9 +20,9 @@ plain graph work.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Callable, FrozenSet, List, Optional, Tuple
-from collections.abc import Sequence
 
 __all__ = ["Resolution", "resolve"]
 

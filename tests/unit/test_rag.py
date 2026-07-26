@@ -16,7 +16,6 @@ import pytest
 from boost_cli.core import dense as dense_mod
 from boost_cli.core import rag, registry
 
-
 # ------------------------------------------------------------- tokenize
 
 class TestTokenize:

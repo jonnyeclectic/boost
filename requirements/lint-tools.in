@@ -15,7 +15,7 @@
 # code change. A lint gate whose meaning can shift out from under you on an
 # upstream release is not a gate. Pinning here freezes the ruleset to a known
 # state; upgrades become a deliberate, reviewable bump of this file.
-ruff==0.15.22
+ruff==0.16.0
 mypy==2.3.0
 codespell==2.4.3
 import-linter==2.13

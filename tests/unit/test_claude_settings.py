@@ -9,7 +9,6 @@ from boost_cli.core import claude_settings as cs
 from boost_cli.core import paths
 from boost_cli.errors import BoostError
 
-
 # ------------------------------------------------------------------ scope paths
 
 class TestScopePaths:
