@@ -9,6 +9,14 @@ rules:
       # workflow_run head_sha), so a fork PR can't smuggle code into a run
       # holding contents:write + PyPI Trusted Publisher OIDC.
       - publish.yml:19
+      # Reacts to `pages-build-deployment` finishing, to check the site that was
+      # actually published. The danger in workflow_run is a privileged run
+      # executing PR-controlled code; none of that applies here. It holds only
+      # contents:read, has no secrets, checks out the default ref (never the
+      # workflow_run head_sha), and everything it runs comes from that checkout
+      # against a fixed public URL. It also cannot be reached from a fork:
+      # pages-build-deployment only fires on a real deploy of this repo.
+      - post-deploy.yml:21
   adhoc-packages:
     ignore:
       # Lint-only env on an ephemeral runner: major-pinned linters installed

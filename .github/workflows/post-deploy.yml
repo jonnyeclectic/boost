@@ -1,0 +1,83 @@
+name: post-deploy
+
+# Health check for the PUBLISHED docs site, right after Pages republishes it.
+#
+# Every other docs gate runs against the working tree — html-validate and
+# a11y_check parse the files, visual_check loads them over file://. All of them
+# can be green while the deployed site is broken, because deployment is where the
+# paths change: Pages serves this repo under /boost/, so a link that resolves on
+# disk can 404 in production. Nothing was watching that.
+#
+# Two layers:
+#   1. scripts/post_deploy_smoke.py — pure stdlib over HTTP: every page 200, every
+#      local asset and internal link resolves. No browser, so it always runs.
+#   2. tests/visual/console_check.mjs — headless Chrome: uncaught JS errors,
+#      console.error output, and runtime request failures a static scan can't see.
+#
+# Triggered by the Pages deployment finishing, so it checks what was actually
+# published rather than guessing at the propagation delay. Also on a schedule, to
+# catch a site that rots without a deploy (an expired asset, a dead redirect).
+
+on:
+  workflow_run:
+    workflows: ["pages-build-deployment"]
+    types: [completed]
+  schedule:
+    - cron: "0 7 * * 1"         # weekly, Monday 07:00 UTC
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Site root to check"
+        required: false
+        default: "https://jonnyeclectic.github.io/boost/"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: post-deploy
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    # A failed Pages build has nothing new to check — the previous deploy is
+    # still live, and reporting it as a fresh failure would be noise.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      BOOST_SITE: ${{ github.event.inputs.base_url || 'https://jonnyeclectic.github.io/boost/' }}
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: wait for the CDN to serve the new build
+        # Pages reports the deployment complete slightly before every edge node
+        # has it; without this the check can read the previous build and pass (or
+        # fail) on stale bytes.
+        if: github.event_name == 'workflow_run'
+        run: sleep 30
+      - name: HTTP smoke (pages, assets, internal links)
+        run: python scripts/post_deploy_smoke.py --base-url "$BOOST_SITE" -v
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22"
+      - name: install harness deps (pinned)
+        working-directory: tests/visual
+        run: npm install --no-save --no-audit --no-fund
+      - name: console + runtime-request health (headless Chrome)
+        # always(): an HTTP failure above must not hide a console failure here —
+        # they are different breakages and both belong in one report.
+        if: always()
+        run: node tests/visual/console_check.mjs
