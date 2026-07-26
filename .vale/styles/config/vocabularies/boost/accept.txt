@@ -4,6 +4,7 @@ argparse
 bmad
 bookended
 CI's
+Codecov
 codespell
 config
 configs
@@ -22,6 +23,7 @@ GIF
 gitignored
 glassmorphic
 hardcode
+hotspots
 jonnyeclectic
 jonnyeclectic's
 langchain
@@ -31,6 +33,7 @@ mergeable
 mutmut
 mypy
 npm
+onboards
 Pinecone
 pytest
 rebased
@@ -46,6 +49,7 @@ rulesets
 Rulesets
 sandboxed
 sandboxing
+SonarCloud
 stderr
 Stdlib
 stdlib

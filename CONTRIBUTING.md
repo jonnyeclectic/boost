@@ -63,6 +63,23 @@ are pinned to the same tool versions the lint gate uses, and
 [pre-commit.ci](https://pre-commit.ci) runs them on every PR and pushes any
 auto-fixes straight back onto the branch.
 
+## Optional dashboards (Codecov, SonarCloud)
+
+Two hosted dashboards are wired up but **inert until someone onboards them**.
+Both are deliberately *non-blocking*: boost's own gates run offline and are the
+authoritative ones, and a merge should never hinge on a third party's uptime.
+
+| Dashboard | To enable | Config |
+|---|---|---|
+| **Codecov** — PR diff-coverage comments, file sunburst, trend | add a `CODECOV_TOKEN` repo secret | [`codecov.yml`](codecov.yml) |
+| **SonarCloud** — bugs, smells, security hotspots, duplication | import the repo at [sonarcloud.io](https://sonarcloud.io) (Analysis Method: GitHub Actions), then add the generated token as `SONAR_TOKEN` | [`sonar-project.properties`](sonar-project.properties) |
+
+Without the secret each step skips itself — the `if:` reads the token through
+`env`, since a secret can't be referenced directly in an `if`. The SonarCloud job
+also writes a note to the run summary saying what to do, so a skipped run
+explains itself instead of looking broken. Neither is in the required-checks
+list, and neither should be added to it.
+
 ## The gates (CI runs all of these)
 
 | Command | Gate |
