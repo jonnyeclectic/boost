@@ -1,0 +1,47 @@
+# Required status checks for `main` — config as code.
+#
+# Branch protection is configured in GitHub Settings, which means the list of
+# required checks lived only in prose and drifted: jobs were added to CI that
+# nobody ever added to the list, so a PR could merge with them red.
+#
+# This file is the source of truth. `scripts/check_required_checks.py` (run by
+# `make lint`, so by CI) fails if any name here is not a real job that runs on
+# pull_request, and fails if any PR check name is ambiguous across workflows —
+# GitHub matches required checks BY NAME, so a duplicated name cannot be
+# required unambiguously.
+#
+# To apply this list to branch protection (needs admin):
+#
+#   python3 scripts/check_required_checks.py --print-api
+#
+# One check name per line. Blank lines and #-comments ignored.
+
+# --- the gates that decide whether a commit is releasable -------------------
+lint
+mutation
+install-smoke
+patch-coverage
+
+# Every matrix leg of ci.yml's `tests` job. They are listed individually
+# because GitHub requires the expanded matrix name, not the job id.
+tests (ubuntu-latest, 3.9)
+tests (ubuntu-latest, 3.12)
+tests (ubuntu-latest, 3.14)
+tests (macos-latest, 3.9)
+tests (macos-latest, 3.12)
+tests (macos-latest, 3.14)
+tests (windows-latest, 3.9)
+tests (windows-latest, 3.12)
+tests (windows-latest, 3.14)
+
+# --- security / supply chain ------------------------------------------------
+codeql-analyze
+pip-audit
+metadata
+scan-pr / osv-scan
+
+# --- docs + site ------------------------------------------------------------
+validate
+markdown-lint
+theme-lint
+vale

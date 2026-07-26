@@ -1843,10 +1843,11 @@ belonged to none of them. But protection cuts both ways here: the repo's whole w
 is parallel <code>loop/*</code> branches opening and merging their own PRs, so
 <b>"require pull request reviews"</b> would deadlock every loop (there is no second
 reviewer), and that same absence is what keeps <code>CodeReviewID</code> pinned at 0/30.
-The shape that fits: require <b>status checks</b> to pass (at minimum <code>ci / lint</code>
-and <code>ci / tests</code>) and require branches to be up to date, but do <b>not</b>
+The shape that fits: require <b>status checks</b> to pass (at minimum <code>lint</code>
+and the <code>tests</code> matrix) and require branches to be up to date, but do <b>not</b>
 require reviews. That enforces the release rule that actually matters while leaving
-self-merge intact. Decide before adding more concurrent loops, not after.</p>
+self-merge intact. Decide before adding more concurrent loops, not after.
+<b>Update — the blocker is gone.</b> This prescription was not implementable as written: <code>lint</code> named <i>three</i> different jobs (ci, markdownlint, theme-lint), and GitHub matches required checks by name alone. Those collisions are now renamed, the required list is checked-in at <code>.github/required-checks.txt</code> and gated against drift, and <code>python3 scripts/check_required_checks.py --print-api</code> emits the exact payload — with <code>required_pull_request_reviews: null</code>, so self-merging loops keep working. Still a decision, but now a one-command one.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -2041,9 +2042,9 @@ self-merge intact. Decide before adding more concurrent loops, not after.</p>
       </article>
 
       <article class="cap rcard" id="required-checks-config-drift">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI/CD</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI/CD</span></div>
         <h3>Required-status-checks list is prose-only, and already stale</h3>
-        <p>Branch protection is hand-configured in GitHub Settings and only described in prose in
+        <p><b>Shipped.</b> <code>.github/required-checks.txt</code> is now the source of truth and <code>scripts/check_required_checks.py</code> (in <code>make lint</code>, so in CI) fails when a required name stops matching a job that runs on <code>pull_request</code>. It also caught something the card missed: <b>three check names were ambiguous</b> — <code>lint</code> in ci/markdownlint/theme-lint, <code>audit</code> in lighthouse/pip-audit, <code>analyze</code> in codeql/sonarcloud. GitHub matches required checks by name, so none of those could be required unambiguously, and the colliding jobs are renamed. Original report follows. Branch protection was hand-configured in GitHub Settings and only described in prose in
 <code>CONTRIBUTING.md</code> — there is no config-as-code (a repo ruleset export, Terraform, or a CI
 check diffing required names against real job names) to catch drift. It has already drifted:
 <code>ci.yml</code>'s <code>install-smoke</code> job, and the <code>pip-audit</code>/
