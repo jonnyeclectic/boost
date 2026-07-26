@@ -109,7 +109,7 @@ def _warn_secrets(res: store.InstallResult) -> None:
         out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
 
 
-def _offer_mcp(res: store.InstallResult) -> None:
+def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     """Surface the MCP servers a just-installed skill needs, and offer to wire them.
 
     A skill that only works paired with an MCP server used to install "cleanly"
@@ -118,11 +118,11 @@ def _offer_mcp(res: store.InstallResult) -> None:
     servers that came with a runnable spec.
 
     Advisory, never fatal: a declined prompt, a missing ``claude`` CLI or a failed
-    registration all leave the skill installed. Suppressed entirely by
-    ``--no-mcp``, which sets ``BOOST_NO_MCP_OFFER``.
+    registration all leave the skill installed. Suppressed by ``--no-mcp`` (passed
+    down as ``no_mcp``) or by exporting ``BOOST_NO_MCP_OFFER``.
     """
     rows = res.mcp_servers
-    if not rows or os.environ.get("BOOST_NO_MCP_OFFER"):
+    if not rows or no_mcp or os.environ.get("BOOST_NO_MCP_OFFER"):
         return
     from ..core import mcpdecl
     out.info("")
@@ -170,7 +170,7 @@ def _register_mcp_server(name: str, spec: dict) -> None:
     journal.log("mcp-register", name)
 
 
-def _report_result(res: store.InstallResult) -> None:
+def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     """The canonical three-line install report."""
     if res.kind in ("rule", "workflow"):
         where = " (this repo)" if res.scope == "project" else ""
@@ -202,7 +202,7 @@ def _report_result(res: store.InstallResult) -> None:
     out.ok("lock updated (.skill-lock.json)")
     _warn_injection(res)
     _warn_secrets(res)
-    _offer_mcp(res)
+    _offer_mcp(res, no_mcp=no_mcp)
 
 
 def _boostfile_text(skills: Dict[str, dict], via: str = "boost bundle dump") -> str:
@@ -304,11 +304,6 @@ def cmd_install(argv: List[str]) -> int:
                     help="don't offer to register MCP servers a skill declares")
     args = ap.parse_args(argv)
     args.scope = args.scope or scopes.SCOPE_USER
-    if args.no_mcp:
-        # An env flag rather than threading a parameter through _report_result's
-        # eight call sites: the offer is a leaf-level side effect, and this keeps
-        # every other install path (update, reinstall, team, MCP tool) unchanged.
-        os.environ["BOOST_NO_MCP_OFFER"] = "1"
     only = _check_agents(args.agent)
     multi = len(args.names) > 1
     entries, failed = [], 0
@@ -394,7 +389,7 @@ def cmd_install(argv: List[str]) -> int:
             out.warn("%s: %s" % (e["name"], err.message))
             failed += 1
             continue
-        _report_result(res)
+        _report_result(res, no_mcp=args.no_mcp)
         results.append(res)
     if results:
         kinds = {r.kind for r in results}
