@@ -100,7 +100,7 @@
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">install</a>
-      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local name">uninstall</a>
+      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local -y, --yes name">uninstall</a>
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only tap">update</a>
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill or all skills (force)  --all name">reinstall</a>
@@ -226,10 +226,10 @@
           <div class="arg"><code>--no-mcp</code><span>don&#x27;t offer to register MCP servers a skill declares</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local name">
+      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local -y, --yes name">
         <h3><span class="cname">uninstall</span><span class="gtag">pkg</span></h3>
         <p class="summary">Remove an installed skill, rule, workflow, or config</p>
-        <pre class="syn">boost uninstall [--local] NAME [NAME ...]</pre>
+        <pre class="syn">boost uninstall [--local] [--yes] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span></span></div>
@@ -237,6 +237,7 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--local</code><span>remove from this repo rather than your user config</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the confirmation prompt</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json">

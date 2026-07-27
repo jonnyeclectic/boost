@@ -10,6 +10,14 @@
 # GitHub matches required checks BY NAME, so a duplicated name cannot be
 # required unambiguously.
 #
+# A name may only be listed here if its workflow runs on EVERY pull request.
+# Anything narrowed by `paths:` (or by a `types:` list that omits opened /
+# synchronize) must stay out: when a PR touches no matching path GitHub creates
+# no check run at all, branch protection waits forever for a status that is
+# never coming, and that PR can never merge. The gate enforces this now, but the
+# rule is the reason the docs/site checks below are commented out rather than
+# listed — they are genuinely useful, just not requireable.
+#
 # To apply this list to branch protection (needs admin):
 #
 #   python3 scripts/check_required_checks.py --print-api
@@ -41,7 +49,19 @@ metadata
 scan-pr / osv-scan
 
 # --- docs + site ------------------------------------------------------------
-validate
-markdown-lint
-theme-lint
-vale
+# NOT REQUIREABLE — every one of these is path-filtered, so it reports on some
+# PRs and not others. Requiring them is what would brick the repo:
+#
+#   validate       html-validate.yml  paths: docs/**.html, .htmlvalidate.json, …
+#   markdown-lint  markdownlint.yml   paths: **/*.md, .markdownlint-cli2.jsonc, …
+#   theme-lint     theme-lint.yml     paths: style/**, .stylelintrc.json, …
+#   vale           prose-lint.yml     paths: **/*.md, .vale.ini, .vale/**, …
+#
+# They still run and still go red on the PRs they apply to — they are simply
+# advisory rather than blocking. To make one of them requireable, widen its
+# trigger to every PR (drop the `paths:` filter); adding it here without doing
+# that is now a lint failure, not a silent deadlock.
+#
+# `sonar-analyze` (sonarcloud.yml) IS unfiltered and would be safe to require;
+# it is left out deliberately so an outage of a third-party service cannot
+# block a merge.

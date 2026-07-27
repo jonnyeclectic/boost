@@ -2,14 +2,14 @@
 id: main-has-no-branch-protection
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Release safety
 complexity: S
 impact: High
 wow: 3
-note: nothing enforces the red-merge rule
+note: decided, applied, and now gated against deadlock
 order: 14
-owner:
+owner: loop/required-checks-paths
 pr:
 title: <code>main</code> has no branch protection, so the release rules are honour-system
 ---
@@ -31,3 +31,12 @@ and the <code>tests</code> matrix) and require branches to be up to date, but do
 require reviews. That enforces the release rule that actually matters while leaving
 self-merge intact. Decide before adding more concurrent loops, not after.
 <b>Update — the blocker is gone.</b> This prescription was not implementable as written: <code>lint</code> named <i>three</i> different jobs (ci, markdownlint, theme-lint), and GitHub matches required checks by name alone. Those collisions are now renamed, the required list is checked-in at <code>.github/required-checks.txt</code> and gated against drift, and <code>python3 scripts/check_required_checks.py --print-api</code> emits the exact payload — with <code>required_pull_request_reviews: null</code>, so self-merging loops keep working. Still a decision, but now a one-command one.
+<b>Shipped.</b> The decision was taken as prescribed — status checks yes, reviews no.
+<code>GET /branches/main/protection</code> now returns <code>strict: true</code> with
+<code>required_pull_request_reviews</code> absent, so a red gate blocks the merge that would
+have cut the release, and loops still self-merge. One correction to the prescription above:
+requiring "at minimum <code>lint</code> and the <code>tests</code> matrix" is right, but the
+list must contain <i>only</i> checks that run on <b>every</b> PR — the first version also
+required four path-filtered docs checks, which report on some PRs and not others and would
+have hung any PR that touched no matching file. See
+<code>required-checks-can-declare-a-check-that-deadlocks-prs</code>.
