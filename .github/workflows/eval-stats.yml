@@ -32,6 +32,7 @@ jobs:
     # 'check-stats' label so a random label doesn't spend a CI minute.
     if: github.event_name != 'pull_request' || github.event.label.name == 'check-stats'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
