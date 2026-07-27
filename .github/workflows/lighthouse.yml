@@ -41,7 +41,7 @@ on:
 permissions: {}
 
 jobs:
-  audit:
+  lighthouse:
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -26,7 +26,8 @@ belonged to none of them. But protection cuts both ways here: the repo's whole w
 is parallel <code>loop/*</code> branches opening and merging their own PRs, so
 <b>"require pull request reviews"</b> would deadlock every loop (there is no second
 reviewer), and that same absence is what keeps <code>CodeReviewID</code> pinned at 0/30.
-The shape that fits: require <b>status checks</b> to pass (at minimum <code>ci / lint</code>
-and <code>ci / tests</code>) and require branches to be up to date, but do <b>not</b>
+The shape that fits: require <b>status checks</b> to pass (at minimum <code>lint</code>
+and the <code>tests</code> matrix) and require branches to be up to date, but do <b>not</b>
 require reviews. That enforces the release rule that actually matters while leaving
 self-merge intact. Decide before adding more concurrent loops, not after.
+<b>Update — the blocker is gone.</b> This prescription was not implementable as written: <code>lint</code> named <i>three</i> different jobs (ci, markdownlint, theme-lint), and GitHub matches required checks by name alone. Those collisions are now renamed, the required list is checked-in at <code>.github/required-checks.txt</code> and gated against drift, and <code>python3 scripts/check_required_checks.py --print-api</code> emits the exact payload — with <code>required_pull_request_reviews: null</code>, so self-merging loops keep working. Still a decision, but now a one-command one.

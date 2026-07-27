@@ -29,7 +29,7 @@ on:
 permissions: {}
 
 jobs:
-  lint:
+  theme-lint:
     runs-on: ubuntu-latest
     permissions:
       contents: read

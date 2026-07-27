@@ -70,6 +70,7 @@ lint:
 	$(PY) scripts/import_budget.py
 	$(PY) scripts/perf_gate.py
 	$(PY) scripts/check_anchors.py
+	$(PY) scripts/check_required_checks.py
 
 # Supply-chain CVE gate: fail on a known OSV/PyPI advisory in the project's
 # dependency closure. Mirrors the pip-audit CI workflow; run before releasing.
