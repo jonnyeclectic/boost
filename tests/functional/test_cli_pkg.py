@@ -775,6 +775,25 @@ class TestBundleEdges:
         assert "installed brainstorming v1.4.0 (fixture-tap)" in r.out
         assert "Installed 1 skill, 2 failed" in r.out
 
+    def test_unqualified_name_in_two_taps_is_refused(self, boost, tapped,
+                                                     tmp_path):
+        # A Boostfile is a reproducibility contract, so an unqualified name
+        # carried by two taps must not resolve to whichever one happens to be
+        # listed first — that installs different bytes on different machines.
+        boost("tap", _copy_tap(tapped, tmp_path / "other-tap"))
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill brainstorming\n", encoding="utf-8")
+        r = boost("bundle", "install", bf, expect=1)
+        assert ("brainstorming is ambiguous — in fixture-tap, other-tap; "
+                "qualify it as owner/repo:brainstorming") in r.out
+        assert "Installed 0 skills, 1 failed" in r.out
+        assert "brainstorming" not in boost("list").out
+        # ...and qualifying it resolves to exactly that tap.
+        bf.write_text("skill other-tap:brainstorming\n", encoding="utf-8")
+        r = boost("bundle", "install", bf)
+        assert "installed brainstorming v1.4.0 (other-tap)" in r.out
+        assert _lock()["brainstorming"]["tap"] == "other-tap"
+
     def test_install_dir_rc1(self, boost, sandbox, tmp_path):
         r = boost("bundle", "install", tmp_path, expect=1)
         assert "is a directory, not a Boostfile" in r.err
