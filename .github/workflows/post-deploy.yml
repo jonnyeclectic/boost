@@ -70,10 +70,17 @@ jobs:
         run: sleep 30
       - name: HTTP smoke (pages, assets, internal links)
         run: python scripts/post_deploy_smoke.py --base-url "$BOOST_SITE" -v
+      # These two carry always() for the same reason the console check below
+      # does: without it an HTTP smoke failure skips them, and the console step
+      # then runs with no node_modules — reporting an environment error instead
+      # of the console verdict it was supposed to preserve. That is the exact
+      # case the always() was written for, so it has to reach the setup too.
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        if: always()
         with:
           node-version: "22"
       - name: install harness deps (pinned)
+        if: always()
         working-directory: tests/visual
         run: npm install --no-save --no-audit --no-fund
       - name: console + runtime-request health (headless Chrome)

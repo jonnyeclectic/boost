@@ -59,6 +59,10 @@ Needs Python 3.9+ and `git`.
 pipx install boost-skill-cli        # or: pip install boost-skill-cli
 boost --version
 boost tap --defaults          # pull in the 5 starter registries
+
+# upgrading later is `upgrade`, not `install --upgrade` — with a bare package
+# name the latter matches the spec you already satisfy and silently does nothing
+pipx upgrade boost-skill-cli        # or: pip install --upgrade boost-skill-cli
 ```
 
 The default install is **zero-dependency** (pure stdlib). `boost search` and the

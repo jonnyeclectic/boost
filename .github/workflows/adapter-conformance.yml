@@ -12,6 +12,19 @@ name: adapter-conformance
 # and weekly to catch upstream breakage early. It never blocks a merge.
 on:
   workflow_dispatch:
+  # Also on PRs that touch the thing under test. The langgraph leg was merged
+  # broken and sat undetected for five days precisely because nothing exercised
+  # this file on its own pull request; the weekly cron was the first thing to
+  # run it. Deliberately narrow — these legs install CrewAI/LangGraph, so they
+  # are far too slow to hang off every PR.
+  #
+  # This stays path-filtered, which means it MUST NOT be added to the required
+  # status checks: a required context that does not report on a given PR leaves
+  # that PR pending forever. It is early signal, never a gate (see above).
+  pull_request:
+    paths:
+      - "boost_cli/core/adapters.py"
+      - ".github/workflows/adapter-conformance.yml"
   schedule:
     - cron: "0 6 * * 1"   # Mondays 06:00 UTC — early warning on framework drift
 
@@ -63,10 +76,24 @@ jobs:
           git config --global user.email ci@boost.test
           git config --global user.name "Boost CI"
       - name: install boost + ${{ matrix.pip }}
+        env:
+          # Via env, not inlined into the script: a `${{ }}` expansion pasted
+          # straight into `run:` is the template-injection shape zizmor flags.
+          PIP_SPEC: ${{ matrix.pip }}
         run: |
           python -m venv .venv
           .venv/bin/pip -q install -e .
-          .venv/bin/pip -q install "${{ matrix.pip }}"
+          # PIP_SPEC is a requirement *list* — the langgraph leg installs two
+          # packages — so it has to word-split. Quoting it (as this step used
+          # to) handed pip the single bogus requirement
+          # "langgraph langchain-anthropic" and the leg failed at install on
+          # every run since it was added. `set -f` keeps the word-splitting
+          # while stopping the shell from glob-expanding the `[extra]` brackets
+          # in the crewai/agents-sdk specs.
+          set -f
+          # The word-split below is deliberate, so SC2086 is not a finding here.
+          # shellcheck disable=SC2086
+          .venv/bin/pip -q install $PIP_SPEC
       - name: render a skill via `boost adapt --to ${{ matrix.to }}`
         run: |
           SB="$(mktemp -d)"
