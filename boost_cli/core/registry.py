@@ -80,12 +80,26 @@ def list_taps() -> List[Tap]:
 def get(name: str) -> Tap:
     """Look up a tap by name, safe_name, or bare repo name.
 
+    Tiered so a qualified name always beats a short one: exact ``owner/repo``
+    first, then ``safe_name``, then the bare repo tail. Within a tier a name
+    that matches more than one tap is an error rather than a guess — with
+    ``angular/skills`` and ``microsoft/skills`` both tapped, ``boost untap
+    skills`` used to act on whichever came first in config.json, which for a
+    destructive command is the wrong answer half the time.
+
     Raises BoostError (with a did-you-mean hint) if none match.
     """
     taps = list_taps()
-    for t in taps:
-        if name in (t.name, t.safe_name, t.name.split("/")[-1]):
-            return t
+    for key in (lambda t: t.name, lambda t: t.safe_name,
+                lambda t: t.name.split("/")[-1]):
+        hits = [t for t in taps if key(t) == name]
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            raise BoostError(
+                "%r is ambiguous — it matches %d taps: %s"
+                % (name, len(hits), ", ".join(sorted(t.name for t in hits))),
+                hint="use the full owner/repo name")
     close = difflib.get_close_matches(name, [t.name for t in taps], n=1)
     raise BoostError("no such tap: %s" % name,
                     hint=("did you mean %s?" % close[0]) if close

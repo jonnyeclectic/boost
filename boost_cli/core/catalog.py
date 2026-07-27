@@ -248,8 +248,15 @@ def find(name: str, tap: Optional[str] = None) -> List[dict]:
         tap, name = name.rsplit(":", 1)
     matches = [e for e in all_entries() if e["name"] == name]
     if tap:
-        matches = [e for e in matches
-                   if tap in (e["tap"], e["tap"].split("/")[-1])]
+        # Same tiering as registry.get: a qualified owner/repo beats a bare
+        # repo tail, so `angular/skills:x` never picks up `microsoft/skills:x`.
+        # Without this the two resolvers disagreed — `boost untap skills`
+        # errored on the ambiguity while `boost bundle apply` with
+        # `skills:brainstorming` silently took matches[0] from whichever tap
+        # sorted first.
+        exact = [e for e in matches if e["tap"] == tap]
+        matches = exact or [e for e in matches
+                            if e["tap"].split("/")[-1] == tap]
     return matches
 
 
