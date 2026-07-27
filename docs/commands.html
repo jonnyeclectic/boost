@@ -188,7 +188,7 @@
       <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server for claude code  --stdio {register,unregister}">mcp</a>
       <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage claude code hooks (scope-aware) in settings.json  -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad install &amp; manage the bmad method (scope-aware, toggleable)  -s, --scope {project,global} --modules modules -y, --yes --startup {install,init,startup,orient,uninstall,disable,enable,doctor,status} value">bmad</a>
-      <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version ">self-update</a>
+      <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
     </div>
     <div class="group" data-group="team">
       <div class="group-h">Team &amp; sharing</div>
@@ -1083,10 +1083,14 @@
           <div class="arg"><code>--startup</code><span>enable the startup toggle right after install</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-self-update" data-search="self-update update boost itself to the latest version ">
+      <section class="cmd" id="cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">
         <h3><span class="cname">self-update</span><span class="gtag">cfg</span></h3>
         <p class="summary">Update boost itself to the latest version</p>
-        <pre class="syn">boost self-update</pre>
+        <pre class="syn">boost self-update [--dry-run]</pre>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--dry-run</code><span>show how boost would update itself, change nothing</span></div>
+        </div>
       </section>
       <h2 class="group-h" id="grp-team">Team &amp; sharing</h2>
       <section class="cmd" id="cmd-cohort" data-search="cohort controlled skill rollouts &amp; team a/b testing  --skills skills --percent percent --json {list,create,delete,status,apply} name">
