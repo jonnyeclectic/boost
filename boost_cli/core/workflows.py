@@ -16,6 +16,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from ..errors import BoostError
+from . import util
+
 SLOT_COMMANDS = "commands"
 SLOT_AGENTS = "agents"
 
@@ -47,6 +50,10 @@ def workflow_target(skills_dir: Path, slot: str, name: str,
       * a directory (project scope) — that repo's per-agent dotdir
         (``<base>/.claude/<slot>/<name>.md``).
     """
+    # Same guard as rule_target: `name` is tap-controlled and is about to become
+    # a path component, so traversal has to be refused before the join.
+    if not util.is_safe_component(name):
+        raise BoostError("invalid workflow name %r" % name)
     root = (Path(base) / Path(skills_dir).parent.name) if base is not None \
         else Path(skills_dir).parent
     return root / slot / (name + ".md")
