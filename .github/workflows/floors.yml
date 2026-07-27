@@ -28,6 +28,7 @@ jobs:
   lowest:
     name: suite on declared floors (py3.9)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

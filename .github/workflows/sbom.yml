@@ -20,6 +20,7 @@ jobs:
   sbom:
     name: CycloneDX SBOM
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write   # attach the SBOM asset to the GitHub Release
     steps:
