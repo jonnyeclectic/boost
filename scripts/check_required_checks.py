@@ -17,7 +17,13 @@ honest. It fails when:
     (``lint`` in ci/markdownlint/theme-lint, ``audit`` in lighthouse/pip-audit,
     ``analyze`` in codeql/sonarcloud), which is why the prose list saying
     "require `lint`" was not actually implementable, or
-  * a required name only runs on **some** pull requests, because its trigger is
+  * a required name comes from a workflow with no ``merge_group:`` trigger. The
+    merge queue evaluates required checks against its own temporary
+    ``gh-readonly-queue/*`` ref rather than against the pull request, so such a
+    check never reports there and every enqueued PR waits forever. Nothing is
+    broken until the queue is switched on — which is a repo Setting, invisible
+    from the tree — so this is checked ahead of time rather than discovered
+    afterwards, or
     narrowed by ``paths:``/``paths-ignore:`` or by a ``types:`` list that omits
     the ordinary open/push events. This is the failure mode that actually bricks
     a repository: when a PR touches no matching path GitHub creates no check run
@@ -52,11 +58,23 @@ _NAME = re.compile(r"^    name:\s*(.+?)\s*$")
 _MATRIX_LEG = re.compile(r"^(?P<job>[A-Za-z0-9][\w-]*)\s*\(.*\)$")
 # The `  pull_request:` trigger line itself, capturing any same-line remainder.
 _PR_TRIGGER = re.compile(r"^  pull_request:\s*(.*)$")
+# The `  merge_group:` trigger. Presence is all that matters — unlike
+# pull_request there is nothing to narrow it with that would apply here.
+_MG_TRIGGER = re.compile(r"^  merge_group:\s*(.*)$")
 
 # How a workflow's pull_request trigger behaves.
 PR_NONE = "none"          # no pull_request trigger at all
 PR_ALWAYS = "always"      # fires on every PR — safe to require
 PR_FILTERED = "filtered"  # fires only on some PRs — NEVER safe to require
+
+
+def has_merge_group(header_lines: List[str]) -> bool:
+    """Does this workflow declare a ``merge_group:`` trigger?
+
+    Same narrow, stdlib-only parsing as everything else here: a top-level
+    trigger key sits at exactly two spaces of indent inside the ``on:`` block.
+    """
+    return any(_MG_TRIGGER.match(line) for line in header_lines)
 
 
 def pull_request_state(header_lines: List[str]) -> str:
@@ -101,15 +119,16 @@ def _strip_quotes(s: str) -> str:
     return s
 
 
-def parse_workflow(path: Path) -> Tuple[str, Dict[str, str]]:
-    """Return ``(pull_request_state, {job_id: display_name})`` for one file."""
+def parse_workflow(path: Path) -> Tuple[str, bool, Dict[str, str]]:
+    """``(pull_request_state, has_merge_group, {job_id: display_name})``."""
     lines = path.read_text(encoding="utf-8").splitlines()
     try:
         jobs_at = next(i for i, line in enumerate(lines) if line.rstrip() == "jobs:")
     except StopIteration:
-        return PR_NONE, {}
+        return PR_NONE, False, {}
 
     on_pr = pull_request_state(lines[:jobs_at])
+    on_mg = has_merge_group(lines[:jobs_at])
 
     jobs: Dict[str, str] = {}
     current = None
@@ -123,24 +142,26 @@ def parse_workflow(path: Path) -> Tuple[str, Dict[str, str]]:
             name = _NAME.match(line)
             if name:
                 jobs[current] = _strip_quotes(name.group(1))
-    return on_pr, jobs
+    return on_pr, on_mg, jobs
 
 
-def collect() -> Tuple[Dict[str, List[str]], Set[str], Dict[str, str]]:
-    """``({check_name: [workflow, ...]}, {names on every PR}, {name: workflow})``.
+def collect() -> Tuple[Dict[str, List[str]], Set[str], Dict[str, str], Set[str]]:
+    """``({check_name: [workflow, ...]}, {on every PR}, {name: workflow}, {on merge_group})``.
 
     The third value maps a *conditionally*-triggered check name to the workflow
-    that narrows it, so the error message can name the culprit.
+    that narrows it, so the error message can name the culprit. The fourth is
+    the set of names that would also report on a merge-queue ref.
     """
     by_name: Dict[str, List[str]] = {}
     on_pr: Set[str] = set()
     filtered: Dict[str, str] = {}
+    on_mg: Set[str] = set()
     files = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
     if not files:
         raise SystemExit("required-checks: no workflow files found under %s" % WORKFLOWS)
     parsed_any = False
     for path in files:
-        runs_on_pr, jobs = parse_workflow(path)
+        runs_on_pr, runs_on_mg, jobs = parse_workflow(path)
         if jobs:
             parsed_any = True
         for display in jobs.values():
@@ -149,12 +170,14 @@ def collect() -> Tuple[Dict[str, List[str]], Set[str], Dict[str, str]]:
                 on_pr.add(display)
             elif runs_on_pr == PR_FILTERED:
                 filtered[display] = path.name
+            if runs_on_mg:
+                on_mg.add(display)
     if not parsed_any:
         # Every workflow parsed to zero jobs: the format changed and this gate
         # would otherwise pass by finding no problems. Fail instead.
         raise SystemExit("required-checks: parsed 0 jobs from %d workflow files — "
                          "the parser is broken, not the config" % len(files))
-    return by_name, on_pr, filtered
+    return by_name, on_pr, filtered, on_mg
 
 
 def read_config() -> List[str]:
@@ -195,13 +218,33 @@ def resolve(required: str, on_pr: Set[str]) -> Tuple[bool, str]:
     return False, ""
 
 
+def workflows_for(required: str, by_name: Dict[str, List[str]]) -> List[str]:
+    """Which workflow file(s) produce ``required``.
+
+    Accepts the same three spellings :func:`resolve` does — an exact name, a
+    matrix leg like ``tests (ubuntu-latest, 3.9)``, and a reusable-workflow
+    ``caller / job`` — so an error message can name the file to edit instead of
+    leaving the reader to grep for it.
+    """
+    if required in by_name:
+        return by_name[required]
+    leg = _MATRIX_LEG.match(required)
+    if leg and leg.group("job") in by_name:
+        return by_name[leg.group("job")]
+    if " / " in required:
+        head = required.split(" / ", 1)[0].strip()
+        if head in by_name:
+            return by_name[head]
+    return ["an unknown workflow"]
+
+
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--print-api", action="store_true",
                     help="print the branch-protection API payload and exit")
     args = ap.parse_args(argv)
 
-    by_name, on_pr, filtered = collect()
+    by_name, on_pr, filtered, on_mg = collect()
     required = read_config()
 
     if args.print_api:
@@ -229,6 +272,26 @@ def main(argv: List[str]) -> int:
                         "required unambiguously" % (name, len(where), ", ".join(where)))
 
     for name in required:
+        # A required context must also report on the merge queue's ref. The
+        # queue evaluates required checks against gh-readonly-queue/*, not
+        # against the pull request, so a workflow without a `merge_group:`
+        # trigger never reports there and every enqueued PR waits forever —
+        # the same never-reports deadlock as a `paths:` filter, arriving
+        # through a different door. Checked independently of the
+        # pull_request result below: a check can be perfectly requireable
+        # today and still be the thing that breaks the day the queue is
+        # switched on, which is a repo Setting and not visible from here.
+        queue_ok, _ = resolve(name, on_mg)
+        if not queue_ok:
+            where = workflows_for(name, by_name)
+            problems.append(
+                "required check %r comes from %s, which has no `merge_group:` "
+                "trigger. Enabling the merge queue would deadlock every PR on "
+                "it, because the queue evaluates required checks against the "
+                "gh-readonly-queue/* ref where this never reports — add the "
+                "trigger, or drop the check from the required list"
+                % (name, ", ".join(where)))
+
         ok, _via = resolve(name, on_pr)
         if ok:
             continue

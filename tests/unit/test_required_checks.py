@@ -28,16 +28,23 @@ def load(monkeypatch, root: Path):
 
 
 def workflow(root: Path, name: str, jobs: str, on_pr: bool = True,
-             pr_filter: str = "") -> None:
+             pr_filter: str = "", merge_group: bool = True) -> None:
     """Write a synthetic workflow.
 
     ``pr_filter`` is extra YAML nested under the ``pull_request:`` trigger (a
     ``paths:`` or ``types:`` block), used to build the conditionally-triggered
     workflows that must never be requireable.
+
+    ``merge_group`` defaults to True so that every case written before the
+    queue rule existed still exercises what it was written to exercise: with
+    the opposite default they would all fail on the new rule instead, and the
+    trigger cases would stop testing triggers.
     """
     d = root / ".github" / "workflows"
     d.mkdir(parents=True, exist_ok=True)
     trigger = "on:\n  push:\n" + ("  pull_request:\n" + pr_filter if on_pr else "")
+    if merge_group:
+        trigger += "  merge_group:\n"
     (d / name).write_text("name: %s\n%s\njobs:\n%s" % (name[:-4], trigger, jobs),
                           encoding="utf-8")
 
@@ -224,6 +231,81 @@ class TestPullRequestState:
         assert mod.pull_request_state(
             ["on:", "  pull_request:", "  push:", "    paths:", "      - \"docs/**\""]
         ) == mod.PR_ALWAYS
+
+
+class TestMergeQueue:
+    """A required check must report on the queue's ref, not just on the PR.
+
+    The merge queue evaluates required checks against gh-readonly-queue/*. A
+    workflow without `merge_group:` never reports there, so the check stays
+    pending forever and nothing in the queue can land. It is invisible until
+    someone flips the Settings toggle, which is exactly why it is a gate.
+    """
+
+    def test_required_check_without_merge_group_fails(self, tmp_path, monkeypatch,
+                                                      capsys):
+        workflow(tmp_path, "codeql.yml",
+                 "  codeql-analyze:\n    runs-on: ubuntu-latest\n",
+                 merge_group=False)
+        config(tmp_path, "codeql-analyze\n")
+        assert load(monkeypatch, tmp_path).main([]) == 1
+        err = capsys.readouterr().err
+        # Names the check AND the file to edit: an error that says only
+        # "deadlock" sends you looking through 20-odd workflows.
+        assert "'codeql-analyze'" in err
+        assert "codeql.yml" in err
+        assert "merge_group:" in err
+
+    def test_adding_the_trigger_fixes_it(self, tmp_path, monkeypatch):
+        workflow(tmp_path, "codeql.yml",
+                 "  codeql-analyze:\n    runs-on: ubuntu-latest\n",
+                 merge_group=True)
+        config(tmp_path, "codeql-analyze\n")
+        assert load(monkeypatch, tmp_path).main([]) == 0
+
+    def test_a_matrix_leg_resolves_through_its_job(self, tmp_path, monkeypatch):
+        # The required entry is `tests (ubuntu-latest, 3.9)` but the trigger
+        # lives on the `tests` job. Asserting BOTH directions, so a rule that
+        # simply never fires on matrix legs cannot pass this pair.
+        workflow(tmp_path, "ci.yml", "  tests:\n    runs-on: ubuntu-latest\n",
+                 merge_group=True)
+        config(tmp_path, "tests (ubuntu-latest, 3.9)\n")
+        assert load(monkeypatch, tmp_path).main([]) == 0
+
+    def test_a_matrix_leg_without_the_trigger_still_fails(self, tmp_path,
+                                                          monkeypatch, capsys):
+        workflow(tmp_path, "ci.yml", "  tests:\n    runs-on: ubuntu-latest\n",
+                 merge_group=False)
+        config(tmp_path, "tests (ubuntu-latest, 3.9)\n")
+        assert load(monkeypatch, tmp_path).main([]) == 1
+        assert "ci.yml" in capsys.readouterr().err
+
+    def test_reusable_workflow_prefix_resolves(self, tmp_path, monkeypatch):
+        # `scan-pr / osv-scan` is the real shape: the required name is
+        # "caller / job", and the trigger is on the caller.
+        workflow(tmp_path, "osv.yml", "  scan-pr:\n    uses: ./x.yml\n",
+                 merge_group=True)
+        config(tmp_path, "scan-pr / osv-scan\n")
+        assert load(monkeypatch, tmp_path).main([]) == 0
+
+    def test_an_unrequired_workflow_needs_no_trigger(self, tmp_path, monkeypatch):
+        # The rule applies to REQUIRED checks only. Advisory path-filtered
+        # workflows (vale, markdown-lint, ...) must not be dragged in.
+        workflow(tmp_path, "ci.yml", "  lint:\n    runs-on: ubuntu-latest\n",
+                 merge_group=True)
+        workflow(tmp_path, "prose.yml", "  vale:\n    runs-on: ubuntu-latest\n",
+                 merge_group=False)
+        config(tmp_path, "lint\n")
+        assert load(monkeypatch, tmp_path).main([]) == 0
+
+    def test_detector_reads_the_trigger_not_the_word(self, tmp_path, monkeypatch):
+        # `merge_group` appearing in a comment or as a job id is not a trigger.
+        # Without this, the gate passes on a workflow that only mentions it.
+        mod = load(monkeypatch, tmp_path)
+        assert mod.has_merge_group(["on:", "  merge_group:"]) is True
+        assert mod.has_merge_group(["on:", "  push:"]) is False
+        assert mod.has_merge_group(["on:", "  # merge_group: someday"]) is False
+        assert mod.has_merge_group(["on:", "    merge_group:"]) is False
 
 
 class TestRefusesToPassVacuously:
