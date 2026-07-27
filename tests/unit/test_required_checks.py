@@ -27,10 +27,17 @@ def load(monkeypatch, root: Path):
     return mod
 
 
-def workflow(root: Path, name: str, jobs: str, on_pr: bool = True) -> None:
+def workflow(root: Path, name: str, jobs: str, on_pr: bool = True,
+             pr_filter: str = "") -> None:
+    """Write a synthetic workflow.
+
+    ``pr_filter`` is extra YAML nested under the ``pull_request:`` trigger (a
+    ``paths:`` or ``types:`` block), used to build the conditionally-triggered
+    workflows that must never be requireable.
+    """
     d = root / ".github" / "workflows"
     d.mkdir(parents=True, exist_ok=True)
-    trigger = "on:\n  push:\n" + ("  pull_request:\n" if on_pr else "")
+    trigger = "on:\n  push:\n" + ("  pull_request:\n" + pr_filter if on_pr else "")
     (d / name).write_text("name: %s\n%s\njobs:\n%s" % (name[:-4], trigger, jobs),
                           encoding="utf-8")
 
@@ -111,6 +118,112 @@ class TestAmbiguity:
                  "  lint:\n    runs-on: ubuntu-latest\n  tests:\n    runs-on: ubuntu-latest\n")
         config(tmp_path, "lint\ntests\n")
         assert load(monkeypatch, tmp_path).main([]) == 0
+
+
+class TestConditionalTriggers:
+    """A check that runs on only *some* PRs must never be requireable.
+
+    This is the failure that actually bricks a repository: GitHub creates no
+    check run at all for a workflow whose `paths:` filter does not match, so
+    branch protection waits forever for a status that is never coming. The
+    first version of the committed list required four path-filtered checks
+    (validate, markdown-lint, theme-lint, vale) and the gate passed it, because
+    it only looked for the string `pull_request:` and never at what narrowed it.
+    """
+
+    PATHS = "    paths:\n      - \"docs/**.html\"\n"
+    LABELED = "    types: [labeled]\n"
+
+    def test_path_filtered_job_cannot_be_required(self, tmp_path, monkeypatch, capsys):
+        workflow(tmp_path, "html-validate.yml",
+                 "  validate:\n    runs-on: ubuntu-latest\n", pr_filter=self.PATHS)
+        config(tmp_path, "validate\n")
+        assert load(monkeypatch, tmp_path).main([]) == 1
+        err = capsys.readouterr().err
+        assert "only runs on SOME pull requests" in err
+        # The message must name the culprit, or nobody can act on it.
+        assert "html-validate.yml" in err
+
+    def test_paths_ignore_is_a_filter_too(self, tmp_path, monkeypatch):
+        workflow(tmp_path, "docs.yml", "  docs:\n    runs-on: ubuntu-latest\n",
+                 pr_filter="    paths-ignore:\n      - \"**.md\"\n")
+        config(tmp_path, "docs\n")
+        assert load(monkeypatch, tmp_path).main([]) == 1
+
+    def test_label_gated_job_cannot_be_required(self, tmp_path, monkeypatch, capsys):
+        # `types: [labeled]` never fires on opened/synchronize, so an ordinary
+        # PR produces no run — same deadlock, different mechanism.
+        workflow(tmp_path, "fuzz.yml", "  fuzz:\n    runs-on: ubuntu-latest\n",
+                 pr_filter=self.LABELED)
+        config(tmp_path, "fuzz\n")
+        assert load(monkeypatch, tmp_path).main([]) == 1
+        assert "only runs on SOME pull requests" in capsys.readouterr().err
+
+    def test_types_list_covering_the_normal_events_is_still_requireable(self, tmp_path, monkeypatch):
+        # Narrowing `types:` is only disqualifying when it drops the events every
+        # PR actually emits; spelling them out explicitly must stay allowed.
+        workflow(tmp_path, "ci.yml", "  lint:\n    runs-on: ubuntu-latest\n",
+                 pr_filter="    types: [opened, synchronize, reopened]\n")
+        config(tmp_path, "lint\n")
+        assert load(monkeypatch, tmp_path).main([]) == 0
+
+    def test_block_style_types_are_parsed(self, tmp_path, monkeypatch):
+        workflow(tmp_path, "eval.yml", "  faithfulness:\n    runs-on: ubuntu-latest\n",
+                 pr_filter="    types:\n      - labeled\n")
+        config(tmp_path, "faithfulness\n")
+        assert load(monkeypatch, tmp_path).main([]) == 1
+
+    def test_a_filtered_job_nobody_requires_is_not_a_problem(self, tmp_path, monkeypatch):
+        # Path-filtered workflows are fine and useful — they just cannot gate.
+        workflow(tmp_path, "ci.yml", "  lint:\n    runs-on: ubuntu-latest\n")
+        workflow(tmp_path, "visual.yml", "  sweep:\n    runs-on: ubuntu-latest\n",
+                 pr_filter=self.PATHS)
+        config(tmp_path, "lint\n")
+        assert load(monkeypatch, tmp_path).main([]) == 0
+
+    def test_filtered_matrix_leg_is_caught(self, tmp_path, monkeypatch):
+        # The matrix-leg spelling must not smuggle a filtered job past the gate.
+        workflow(tmp_path, "floors.yml", "  lowest:\n    runs-on: ubuntu-latest\n",
+                 pr_filter="    paths:\n      - \"pyproject.toml\"\n")
+        config(tmp_path, "lowest (3.9)\n")
+        assert load(monkeypatch, tmp_path).main([]) == 1
+
+    def test_filtered_and_missing_are_reported_differently(self, tmp_path, monkeypatch, capsys):
+        # "exists but cannot gate" and "does not exist" need different fixes.
+        workflow(tmp_path, "ci.yml", "  lint:\n    runs-on: ubuntu-latest\n")
+        workflow(tmp_path, "visual.yml", "  sweep:\n    runs-on: ubuntu-latest\n",
+                 pr_filter=self.PATHS)
+        config(tmp_path, "lint\nsweep\nghost\n")
+        assert load(monkeypatch, tmp_path).main([]) == 1
+        err = capsys.readouterr().err
+        assert "'sweep' only runs on SOME pull requests" in err
+        assert "'ghost' is not a job that runs on pull_request" in err
+
+
+class TestPullRequestState:
+    """Direct coverage of the trigger classifier."""
+
+    def test_unfiltered(self, tmp_path, monkeypatch):
+        mod = load(monkeypatch, tmp_path)
+        assert mod.pull_request_state(["on:", "  push:", "  pull_request:"]) == mod.PR_ALWAYS
+
+    def test_absent(self, tmp_path, monkeypatch):
+        mod = load(monkeypatch, tmp_path)
+        assert mod.pull_request_state(["on:", "  schedule:"]) == mod.PR_NONE
+
+    def test_paths_filtered(self, tmp_path, monkeypatch):
+        mod = load(monkeypatch, tmp_path)
+        assert mod.pull_request_state(
+            ["on:", "  pull_request:", "    paths:", "      - \"docs/**\""]
+        ) == mod.PR_FILTERED
+
+    def test_a_later_siblings_paths_key_does_not_leak_in(self, tmp_path, monkeypatch):
+        # `paths:` under a *different* trigger must not taint pull_request —
+        # the block ends where the indentation returns to a sibling key.
+        mod = load(monkeypatch, tmp_path)
+        assert mod.pull_request_state(
+            ["on:", "  pull_request:", "  push:", "    paths:", "      - \"docs/**\""]
+        ) == mod.PR_ALWAYS
 
 
 class TestRefusesToPassVacuously:

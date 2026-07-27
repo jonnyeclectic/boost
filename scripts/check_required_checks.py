@@ -10,13 +10,21 @@ and `main` cuts a PyPI release on every merge.
 honest. It fails when:
 
   * a required name is not a job that runs on ``pull_request`` (removed, renamed,
-    or never existed), or
+    or never existed),
   * a check name is **ambiguous** — the same name produced by more than one
     workflow. GitHub matches required checks by name, so a duplicate cannot be
     required unambiguously. Three names collided here when this was written
     (``lint`` in ci/markdownlint/theme-lint, ``audit`` in lighthouse/pip-audit,
     ``analyze`` in codeql/sonarcloud), which is why the prose list saying
-    "require `lint`" was not actually implementable.
+    "require `lint`" was not actually implementable, or
+  * a required name only runs on **some** pull requests, because its trigger is
+    narrowed by ``paths:``/``paths-ignore:`` or by a ``types:`` list that omits
+    the ordinary open/push events. This is the failure mode that actually bricks
+    a repository: when a PR touches no matching path GitHub creates no check run
+    at all, so branch protection waits for a status that is never coming and the
+    PR can never merge. It is not hypothetical — the first version of this list
+    required ``validate``, ``markdown-lint``, ``theme-lint`` and ``vale``, all
+    four of which are path-filtered, and this gate passed it.
 
 Stdlib only, like the repo's other gates — there is no YAML parser in the lint
 toolchain. The parsing is deliberately narrow (top-level keys under ``jobs:``)
@@ -42,6 +50,49 @@ _JOB = re.compile(r"^  ([A-Za-z0-9][\w-]*):\s*$")
 _NAME = re.compile(r"^    name:\s*(.+?)\s*$")
 # A required entry like `tests (ubuntu-latest, 3.9)` -> the `tests` job.
 _MATRIX_LEG = re.compile(r"^(?P<job>[A-Za-z0-9][\w-]*)\s*\(.*\)$")
+# The `  pull_request:` trigger line itself, capturing any same-line remainder.
+_PR_TRIGGER = re.compile(r"^  pull_request:\s*(.*)$")
+
+# How a workflow's pull_request trigger behaves.
+PR_NONE = "none"          # no pull_request trigger at all
+PR_ALWAYS = "always"      # fires on every PR — safe to require
+PR_FILTERED = "filtered"  # fires only on some PRs — NEVER safe to require
+
+
+def pull_request_state(header_lines: List[str]) -> str:
+    """Classify the ``pull_request:`` trigger in a workflow header.
+
+    Returns one of :data:`PR_NONE`, :data:`PR_ALWAYS`, :data:`PR_FILTERED`.
+
+    Stdlib-only and deliberately narrow, like the rest of this gate: find the
+    ``  pull_request:`` line, then take the more-indented lines that follow it
+    as its block. A ``paths:``/``paths-ignore:`` key means the trigger only
+    fires when the PR touches matching files. A ``types:`` list means it only
+    fires on the listed activity types — which is fine if it still covers the
+    ordinary ``opened``/``synchronize`` pair, and disqualifying otherwise
+    (``types: [labeled]`` is used here for the opt-in eval and fuzz jobs).
+    """
+    for i, line in enumerate(header_lines):
+        match = _PR_TRIGGER.match(line)
+        if not match:
+            continue
+        block = [match.group(1)] if match.group(1).strip() else []
+        for nxt in header_lines[i + 1:]:
+            if not nxt.strip() or nxt.lstrip().startswith("#"):
+                continue
+            if len(nxt) - len(nxt.lstrip()) <= 2:
+                break  # dedented back to a sibling trigger
+            block.append(nxt)
+        text = "\n".join(block)
+        if re.search(r"^\s*paths(-ignore)?\s*:", text, re.M):
+            return PR_FILTERED
+        # Covers both inline (`types: [opened, synchronize]`) and block
+        # (`types:\n  - labeled`) forms — either way the names land in `text`.
+        if (re.search(r"^\s*types\s*:", text, re.M)
+                and not ("opened" in text and "synchronize" in text)):
+            return PR_FILTERED
+        return PR_ALWAYS
+    return PR_NONE
 
 
 def _strip_quotes(s: str) -> str:
@@ -50,16 +101,15 @@ def _strip_quotes(s: str) -> str:
     return s
 
 
-def parse_workflow(path: Path) -> Tuple[bool, Dict[str, str]]:
-    """Return ``(runs_on_pull_request, {job_id: display_name})`` for one file."""
+def parse_workflow(path: Path) -> Tuple[str, Dict[str, str]]:
+    """Return ``(pull_request_state, {job_id: display_name})`` for one file."""
     lines = path.read_text(encoding="utf-8").splitlines()
     try:
         jobs_at = next(i for i, line in enumerate(lines) if line.rstrip() == "jobs:")
     except StopIteration:
-        return False, {}
+        return PR_NONE, {}
 
-    header = "\n".join(lines[:jobs_at])
-    on_pr = bool(re.search(r"^\s{2}pull_request:", header, re.M))
+    on_pr = pull_request_state(lines[:jobs_at])
 
     jobs: Dict[str, str] = {}
     current = None
@@ -76,10 +126,15 @@ def parse_workflow(path: Path) -> Tuple[bool, Dict[str, str]]:
     return on_pr, jobs
 
 
-def collect() -> Tuple[Dict[str, List[str]], Set[str]]:
-    """``({check_name: [workflow, ...]}, {names that run on pull_request})``."""
+def collect() -> Tuple[Dict[str, List[str]], Set[str], Dict[str, str]]:
+    """``({check_name: [workflow, ...]}, {names on every PR}, {name: workflow})``.
+
+    The third value maps a *conditionally*-triggered check name to the workflow
+    that narrows it, so the error message can name the culprit.
+    """
     by_name: Dict[str, List[str]] = {}
     on_pr: Set[str] = set()
+    filtered: Dict[str, str] = {}
     files = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
     if not files:
         raise SystemExit("required-checks: no workflow files found under %s" % WORKFLOWS)
@@ -90,14 +145,16 @@ def collect() -> Tuple[Dict[str, List[str]], Set[str]]:
             parsed_any = True
         for display in jobs.values():
             by_name.setdefault(display, []).append(path.name)
-            if runs_on_pr:
+            if runs_on_pr == PR_ALWAYS:
                 on_pr.add(display)
+            elif runs_on_pr == PR_FILTERED:
+                filtered[display] = path.name
     if not parsed_any:
         # Every workflow parsed to zero jobs: the format changed and this gate
         # would otherwise pass by finding no problems. Fail instead.
         raise SystemExit("required-checks: parsed 0 jobs from %d workflow files — "
                          "the parser is broken, not the config" % len(files))
-    return by_name, on_pr
+    return by_name, on_pr, filtered
 
 
 def read_config() -> List[str]:
@@ -114,7 +171,13 @@ def read_config() -> List[str]:
 
 
 def resolve(required: str, on_pr: Set[str]) -> Tuple[bool, str]:
-    """Is ``required`` satisfied by some job that runs on pull_request?"""
+    """Is ``required`` satisfied by some job name in ``on_pr``?
+
+    Called twice — once against the names that run on every PR, and once
+    against the conditionally-triggered ones, so a required entry that matches
+    only the latter can be reported as the deadlock it is rather than as a
+    generic "no such job".
+    """
     if required in on_pr:
         return True, required
     # `tests (ubuntu-latest, 3.9)` is one leg of the `tests` matrix. Expanding a
@@ -138,7 +201,7 @@ def main(argv: List[str]) -> int:
                     help="print the branch-protection API payload and exit")
     args = ap.parse_args(argv)
 
-    by_name, on_pr = collect()
+    by_name, on_pr, filtered = collect()
     required = read_config()
 
     if args.print_api:
@@ -167,7 +230,17 @@ def main(argv: List[str]) -> int:
 
     for name in required:
         ok, _via = resolve(name, on_pr)
-        if not ok:
+        if ok:
+            continue
+        conditional, via = resolve(name, set(filtered))
+        if conditional:
+            problems.append(
+                "required check %r only runs on SOME pull requests (%s narrows "
+                "its trigger with paths:/types:). GitHub creates no check run at "
+                "all on a PR that does not match, so branch protection would "
+                "wait forever and the PR could never merge — drop it from the "
+                "list or widen the trigger" % (name, filtered[via]))
+        else:
             problems.append("required check %r is not a job that runs on "
                             "pull_request" % name)
 
