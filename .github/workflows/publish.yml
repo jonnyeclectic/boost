@@ -31,6 +31,7 @@ permissions:
   contents: write      # create the tag + GitHub Release
   id-token: write      # OIDC for PyPI Trusted Publishing
   attestations: write  # sign SLSA build-provenance for the dist artifacts
+  actions: read        # read the sibling gate workflows' run status (preflight)
 
 jobs:
   release:
@@ -63,6 +64,24 @@ jobs:
           ref: main
           fetch-depth: 0    # full history + tags for setuptools-scm
           persist-credentials: false
+
+      - name: require the sibling release gates to be green
+        # workflow_run only carries ci's verdict. pip-audit.yml (live CVEs in
+        # the dependency closure) and package-metadata.yml (twine --strict +
+        # wheel contents) are separate workflows on the same push, so without
+        # this a merge that failed either one still shipped to PyPI. Runs
+        # BEFORE release-drafter: a blocked release must leave no published
+        # GitHub Release or tag behind. `git rev-parse HEAD` — not the trigger
+        # sha — because that is the commit this job actually checked out and is
+        # about to build.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/release_preflight.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --sha "$(git rev-parse HEAD)" \
+            --require pip-audit.yml \
+            --require package-metadata.yml
 
       - name: publish GitHub release (creates the tag)
         id: release
