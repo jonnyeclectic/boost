@@ -1551,7 +1551,7 @@ marker-split pin is the recurring shape here, and is worth its own assertion.</p
       </article>
 
       <article class="cap rcard" id="rel-time-tests-race-the-wall-clock">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Flaky test</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Flaky test</span></div>
         <h3><code>rel_time</code> tests race the wall clock and flake on a loaded runner</h3>
         <p><code>TestRelTime</code> builds its input with
 <code>iso_ago(n) = (now() - n).strftime("%Y-%m-%dT%H:%M:%SZ")</code>, which
@@ -1573,12 +1573,13 @@ Fix by giving the test a fixed clock — monkeypatch
 <code>util.datetime</code> (or inject a <code>now</code> seam into
 <code>rel_time</code>) so both reads come from one frozen instant, and the
 boundary cases become exact rather than probabilistic. Freezing is preferable to
-widening the assertions: the boundaries are precisely the behaviour worth pinning.</p>
+widening the assertions: the boundaries are precisely the behaviour worth pinning.
+<b>Shipped.</b> It came true exactly as described: the mutation gate on <code>main</code> went red with <code>assert '1m ago' == '59s ago'</code> — the <code>iso_ago(59)</code> boundary named above — which skipped the release. Fixed by freezing the clock rather than widening the assertions: a <code>frozen_clock</code> fixture pins <code>util.datetime</code> to one instant and <code>iso_ago</code> measures back from that same instant, so both reads can no longer drift apart. The two absolute-date cases were rebased onto the frozen instant too — they read the real clock and would otherwise never have agreed with it.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">caught red on CI, 3.14</span>
+          <span class="m">predicted, then caught main red</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

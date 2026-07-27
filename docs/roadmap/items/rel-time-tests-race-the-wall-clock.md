@@ -2,14 +2,14 @@
 id: rel-time-tests-race-the-wall-clock
 board: code
 section: health
-status: planned
+status: shipped
 category: Flaky test
 complexity: S
 impact: Med
 wow: 2
-note: caught red on CI, 3.14
+note: predicted, then caught main red
 order: 37
-owner:
+owner: loop/freeze-reltime-clock
 pr:
 title: <code>rel_time</code> tests race the wall clock and flake on a loaded runner
 ---
@@ -34,3 +34,4 @@ Fix by giving the test a fixed clock — monkeypatch
 <code>rel_time</code>) so both reads come from one frozen instant, and the
 boundary cases become exact rather than probabilistic. Freezing is preferable to
 widening the assertions: the boundaries are precisely the behaviour worth pinning.
+<b>Shipped.</b> It came true exactly as described: the mutation gate on <code>main</code> went red with <code>assert '1m ago' == '59s ago'</code> — the <code>iso_ago(59)</code> boundary named above — which skipped the release. Fixed by freezing the clock rather than widening the assertions: a <code>frozen_clock</code> fixture pins <code>util.datetime</code> to one instant and <code>iso_ago</code> measures back from that same instant, so both reads can no longer drift apart. The two absolute-date cases were rebased onto the frozen instant too — they read the real clock and would otherwise never have agreed with it.
