@@ -948,7 +948,7 @@ chunks instead cost ~70%.</p>
       </article>
 
       <article class="cap rcard" id="ambiguous-tap-short-name-resolution">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3>Ambiguous tap short-name resolution silently picks the wrong tap</h3>
         <p><code>registry.get(name)</code> matches on full name, safe-name, or trailing path segment and returns
 the <em>first</em> hit with no ambiguity check — unlike <code>catalog.resolve_one</code>, which
@@ -956,7 +956,8 @@ explicitly errors on a multi-tap ambiguous match. Three of the five default taps
 <code>/skills</code>, so after <code>boost tap --defaults</code>, <code>boost untap skills</code> or
 <code>boost update skills</code> silently resolves to whichever tap sorts first and the others
 become unreachable by short name. Raise on an ambiguous short-name match, mirroring
-<code>resolve_one</code>.</p>
+<code>resolve_one</code>.
+<b>Shipped.</b> <code>registry.get()</code> is now tiered — exact <code>owner/repo</code>, then <code>safe_name</code>, then the bare repo tail — and refuses a short name that matches more than one tap instead of taking the first. Two corrections while fixing it: there is no <i>sort</i>, the winner was whichever came first in <code>config.json</code>; and the fix was <b>half a fix</b> as originally scoped. <code>catalog.find()</code> carried an independent, untiered <code>tap in (e["tap"], tail)</code> membership test, so with both taps configured <code>angular/skills:brainstorming</code> also matched <code>microsoft/skills</code>, and <code>boost bundle apply</code> took <code>matches[0]</code> — silently installing from the wrong tap, verbatim the defect this item exists to fix. Fixing only <code>registry.get</code> would have left the CLI self-contradictory: <code>boost untap skills</code> erroring while a Boostfile silently guessed. Both resolvers are tiered now and <code>bundle apply</code> refuses an ambiguous entry rather than picking one.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -965,7 +966,7 @@ become unreachable by short name. Raise on an ambiguous short-name match, mirror
       </article>
 
       <article class="cap rcard" id="sync-deletes-unowned-broken-symlinks">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3><code>sync --apply</code> deletes any broken symlink, not just boost's own</h3>
         <p><code>sync_plan</code> flags every broken symlink under an enabled agent dir as stale regardless of
 whether it points into boost's store — the <code>points_into_store</code> check only runs on the
@@ -973,7 +974,20 @@ live-link branch — and <code>sync_apply</code> unconditionally unlinks everyth
 <code>stale_links</code>. A user's own unrelated broken symlink sitting in
 <code>~/.claude/skills</code> gets deleted by <code>boost sync --apply</code> with no ownership
 check. Only treat a broken symlink as boost-managed if its raw <code>readlink()</code> target
-resolves under the store dir.</p>
+resolves under the store dir. Shipped as <code>store.points_into_store()</code>, applied to
+broken and live links alike. Two things turned up while fixing it. <code>boost clean</code>
+carried the identical overreach — it unlinked every broken symlink under an agent dir with no
+ownership test at all — so it now shares the same helper; fixing only <code>sync</code> would
+have left boost contradicting itself. And the original check was a substring test
+(<code>str(store_dir) in str(target)</code>), which also matches siblings like
+<code>~/.agents/skills-backup</code>; the comparison is component-wise now, and a relative
+<code>readlink()</code> target is resolved against the link's own directory before it is judged.
+Comparing properly is what exposed a Windows bug the sloppy check had been hiding: since 3.8
+<code>os.readlink()</code> there returns the reparse point's substitution path, which carries the
+<code>\\?\</code> extended-length prefix, so boost's own link reads back as a
+<em>different drive</em> and stopped matching the store at all. Every Windows leg of the matrix
+went red on it. The prefix is stripped before comparison, and the behaviour is pinned on every
+platform via <code>ntpath</code>, which imports fine on POSIX.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
