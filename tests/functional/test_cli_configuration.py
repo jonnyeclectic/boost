@@ -20,6 +20,7 @@ import urllib.request
 import pytest
 
 from boost_cli.core import frontmatter, journal, paths, policy, util
+from boost_cli.errors import BoostError
 
 
 def _git(cwd, *args):
@@ -846,13 +847,108 @@ class TestMcp:
 # ---------------------------------------------------------------- self-update
 
 class TestSelfUpdate:
-    def test_non_git_checkout_fails_with_hint(self, boost, sandbox, monkeypatch):
-        # repo_root() normally resolves to the real boost checkout (a git
-        # repo, both locally and in CI); point it at the sandbox instead
+    def _not_a_checkout(self, monkeypatch, sandbox):
+        """repo_root() normally resolves to the real boost checkout (a git repo
+        both locally and in CI) — point it at the sandbox so the pip/pipx paths
+        are reachable, and make a real upgrade impossible.
+
+        The second half is not paranoia: while these tests were being written,
+        a detection bug sent one of them down the pip branch for real, and it
+        installed boost-skill-cli from PyPI over the editable checkout. A test
+        must not be one bad branch away from mutating the machine.
+        """
         monkeypatch.setattr("boost_cli.core.paths.repo_root", lambda: sandbox)
+
+        def never(cmd, **kw):
+            raise AssertionError("this test must not run an upgrade: %s" % cmd)
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade", never)
+
+    def _pipx_install(self, monkeypatch, sandbox):
+        self._not_a_checkout(monkeypatch, sandbox)
+        prefix = sandbox / "pipx" / "venvs" / "boost-skill-cli"
+        prefix.mkdir(parents=True)
+        (prefix / "pipx_metadata.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("sys.prefix", str(prefix))
+        monkeypatch.setattr("boost_cli.core.selfupdate.shutil.which",
+                            lambda t: "/opt/bin/" + t)
+
+    def test_pipx_install_upgrades_with_pipx(self, boost, sandbox, monkeypatch):
+        # The old behaviour: rc=1, "boost is not running from a git checkout",
+        # and a hint telling a PyPI user to go clone the repo instead.
+        self._pipx_install(monkeypatch, sandbox)
+        r = boost("self-update", "--dry-run")
+        assert "installed with: pipx" in r.out
+        assert "would run: /opt/bin/pipx upgrade boost-skill-cli" in r.out
+
+    def test_plain_pip_install_upgrades_with_this_interpreter(
+            self, boost, sandbox, monkeypatch):
+        self._not_a_checkout(monkeypatch, sandbox)
+        monkeypatch.setattr("sys.prefix", str(sandbox))
+        monkeypatch.setattr("boost_cli.core.selfupdate.installed_version",
+                            lambda: "1.0.0")
+        r = boost("self-update", "--dry-run")
+        assert "installed with: pip" in r.out
+        assert ("would run: %s -m pip install --upgrade boost-skill-cli"
+                % sys.executable) in r.out
+
+    def test_pipx_upgrade_reports_the_new_version(self, boost, sandbox,
+                                                  monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+        ran = []
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: ran.append(cmd))
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: "9.9.9")
+        r = boost("self-update")
+        from boost_cli import __version__
+        assert ran == [["/opt/bin/pipx", "upgrade", "boost-skill-cli"]]
+        assert ("boost v%s → v9.9.9" % __version__) in r.out
+        ev = journal.events(action="self-update")[0]
+        assert ev["subject"] == "9.9.9" and ev["method"] == "pipx"
+
+    def test_upgrade_that_reveals_no_version_does_not_claim_one(
+            self, boost, sandbox, monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: None)
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: None)
+        r = boost("self-update")
+        assert "upgraded via pipx; run `boost --version` to confirm" in r.out
+        assert "→" not in r.out
+
+    def test_failed_upgrade_surfaces_the_managers_message(
+            self, boost, sandbox, monkeypatch):
+        self._pipx_install(monkeypatch, sandbox)
+
+        def boom(cmd, **kw):
+            raise BoostError("upgrade failed (pipx exited 1)",
+                             hint="ERROR: No matching distribution")
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade", boom)
         r = boost("self-update", expect=1)
-        assert "boost is not running from a git checkout" in r.err
-        assert "git clone the boost repo" in r.err
+        assert "upgrade failed (pipx exited 1)" in r.err
+        assert "No matching distribution" in r.err
+
+    def test_unknown_install_says_so_instead_of_guessing_pip(
+            self, boost, sandbox, monkeypatch):
+        self._not_a_checkout(monkeypatch, sandbox)
+        monkeypatch.setattr("sys.prefix", str(sandbox))
+        monkeypatch.setattr("boost_cli.core.selfupdate.installed_version",
+                            lambda: None)
+        r = boost("self-update", expect=1)
+        assert "cannot work out how boost was installed" in r.err
+        assert "pipx upgrade boost-skill-cli" in r.err
+
+    def test_git_checkout_dry_run_changes_nothing(self, boost, sandbox,
+                                                  monkeypatch):
+        monkeypatch.setattr("boost_cli.core.gitutil.is_repo", lambda p: True)
+
+        def no_git(*a, **kw):
+            raise AssertionError("--dry-run must not run git")
+        monkeypatch.setattr("boost_cli.core.gitutil.run", no_git)
+        r = boost("self-update", "--dry-run")
+        assert "installed with: git checkout" in r.out
+        assert "pull --ff-only" in r.out
 
     def _fake_git(self, monkeypatch, *, before, after, described):
         """Stub gitutil so self-update sees a controlled HEAD move + describe.
