@@ -241,6 +241,100 @@ class TestInstallFromPath:
             (src / "__pycache__" / "x.pyc").write_text("junk", encoding="utf-8")
         return src
 
+    # ── gates: install_from_path used to enforce NONE of these, so every local
+    # path in (import, create --install, migrate, distill/infer/absorb --install)
+    # was a way around the blocklist, pin_only, max_skills and denied_capabilities.
+
+    def test_refuses_a_pinned_skill(self, sandbox, tmp_path):
+        src = self._src(tmp_path, "---\nname: pinned-skill\nversion: 1.0.0\n---")
+        store.install_from_path(src)
+        lk = lockfile.get_skill("pinned-skill")
+        lk["pinned"] = True
+        lockfile.set_skill("pinned-skill", lk)
+        with pytest.raises(BoostError, match="pinned-skill is pinned"):
+            store.install_from_path(src)
+
+    def test_force_overrides_the_pin(self, sandbox, tmp_path):
+        # `boost reinstall` on a local skill must still work when pinned.
+        src = self._src(tmp_path, "---\nname: pinned-skill\nversion: 1.0.0\n---")
+        store.install_from_path(src)
+        lk = lockfile.get_skill("pinned-skill")
+        lk["pinned"] = True
+        lockfile.set_skill("pinned-skill", lk)
+        store.install_from_path(src, force=True)
+        assert lockfile.get_skill("pinned-skill")["pinned"] is True
+
+    def test_reimport_preserves_an_existing_pin(self, sandbox, tmp_path):
+        # The lock write hardcoded "pinned": False, so a re-import did not just
+        # skip the check — it silently CLEARED the pin.
+        src = self._src(tmp_path, "---\nname: keeps-pin\nversion: 1.0.0\n---")
+        store.install_from_path(src)
+        lk = lockfile.get_skill("keeps-pin")
+        lk["pinned"] = True
+        lockfile.set_skill("keeps-pin", lk)
+        store.install_from_path(src, force=True)
+        assert lockfile.get_skill("keeps-pin")["pinned"] is True
+
+    def test_unpinned_stays_unpinned(self, sandbox, tmp_path):
+        src = self._src(tmp_path, "---\nname: no-pin\nversion: 1.0.0\n---")
+        store.install_from_path(src)
+        store.install_from_path(src)
+        assert lockfile.get_skill("no-pin")["pinned"] is False
+
+    def test_blocklist_policy_refuses(self, sandbox, tmp_path):
+        policy.save({"blocked_skills": ["blocked-one"]})
+        src = self._src(tmp_path, "---\nname: blocked-one\nversion: 1.0.0\n---")
+        with pytest.raises(BoostError, match="policy blocks installing blocked-one"):
+            store.install_from_path(src)
+        assert lockfile.get_skill("blocked-one") is None
+
+    def test_pin_only_policy_refuses(self, sandbox, tmp_path):
+        policy.save({"pin_only": True})
+        src = self._src(tmp_path, "---\nname: frozen-env\nversion: 1.0.0\n---")
+        with pytest.raises(BoostError, match="pin-only"):
+            store.install_from_path(src)
+
+    def test_denied_capability_refuses(self, sandbox, tmp_path):
+        policy.save({"denied_capabilities": ["shell"]})
+        src = self._src(tmp_path,
+                        "---\nname: shelly\nversion: 1.0.0\ncapabilities: [shell]\n---")
+        with pytest.raises(BoostError, match="shell"):
+            store.install_from_path(src)
+
+    def test_force_does_not_bypass_policy(self, sandbox, tmp_path):
+        # force is about the pin, not about policy — matching install().
+        policy.save({"blocked_skills": ["still-blocked"]})
+        src = self._src(tmp_path, "---\nname: still-blocked\nversion: 1.0.0\n---")
+        with pytest.raises(BoostError, match="policy blocks"):
+            store.install_from_path(src, force=True)
+
+    def test_reimport_does_not_trip_max_skills(self, sandbox, tmp_path):
+        # The skill is already counted in the lock, so re-importing it must not
+        # be measured as if it were a new one.
+        src = self._src(tmp_path, "---\nname: only-one\nversion: 1.0.0\n---")
+        store.install_from_path(src)
+        policy.save({"max_skills": 1})
+        store.install_from_path(src)
+        assert lockfile.get_skill("only-one") is not None
+
+    def test_max_skills_still_refuses_a_genuinely_new_skill(self, sandbox, tmp_path):
+        first = self._src(tmp_path, "---\nname: first-one\nversion: 1.0.0\n---")
+        store.install_from_path(first)
+        policy.save({"max_skills": 1})
+        second = tmp_path / "second"
+        second.mkdir()
+        (second / "SKILL.md").write_text(
+            "---\nname: second-one\nversion: 1.0.0\n---\n\n# t\n", encoding="utf-8")
+        with pytest.raises(BoostError, match="policy blocks"):
+            store.install_from_path(second)
+
+    def test_refusal_leaves_no_half_copied_store_dir(self, sandbox, tmp_path):
+        policy.save({"blocked_skills": ["never-lands"]})
+        src = self._src(tmp_path, "---\nname: never-lands\nversion: 1.0.0\n---")
+        with pytest.raises(BoostError):
+            store.install_from_path(src)
+        assert not (paths.store_dir() / "never-lands").exists()
+
     def test_name_from_frontmatter(self, sandbox, tmp_path):
         src = self._src(tmp_path, "---\nname: imported-skill\nversion: 9.9.9\n---")
         res = store.install_from_path(src)
