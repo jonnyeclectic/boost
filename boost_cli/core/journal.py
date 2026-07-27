@@ -35,7 +35,9 @@ def events(n: Optional[int] = None, action: Optional[str] = None,
     if not p.exists():
         return []
     out = []
-    for line in p.read_text(encoding="utf-8").splitlines():
+    # errors="replace": one torn append must not make the whole feed
+    # unreadable — the corrupt line simply fails to parse as JSON below.
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             e = json.loads(line)
         except json.JSONDecodeError:
@@ -49,21 +51,64 @@ def events(n: Optional[int] = None, action: Optional[str] = None,
     return out[:n] if n else out
 
 
+def _line_count(p) -> int:
+    """Lines in `p`, closing the handle rather than leaving it to the GC.
+
+    Decodes leniently: the feed carries user-supplied text and a torn append
+    can leave a partial multi-byte sequence behind. A strict decode raises
+    UnicodeDecodeError, which is a ValueError — it would sail past the OSError
+    guard below and take down every command that logs, forever, over one bad
+    byte in an advisory feed.
+    """
+    with p.open(encoding="utf-8", errors="replace") as f:
+        return sum(1 for _ in f)
+
+
 def rotation_healthy() -> bool:
     """True when the pulse feed is absent or at most ROTATE_AT lines long."""
     p = paths.pulse_path()
     if not p.exists():
         return True
-    return sum(1 for _ in p.open()) <= ROTATE_AT
+    return _line_count(p) <= ROTATE_AT
 
 
 def _maybe_rotate() -> None:
+    """Trim the feed to ROTATE_KEEP lines once it passes ROTATE_AT.
+
+    Rotation is a read-modify-write of the whole file, and this repo's own
+    working model expects concurrent boost processes. Unserialized, two of
+    them could each read the feed, each build a snapshot, and the second
+    write would silently drop whatever the first had appended in between.
+
+    So rotation runs under a lock, and a process that cannot take it simply
+    returns: another one is already trimming, and doing it twice adds nothing.
+    Inside the lock the file is re-read — the count that got us here was taken
+    outside it and may already be stale — and anything appended between that
+    read and the swap is carried into the new file rather than dropped.
+    `log()` itself stays lock-free: O_APPEND writes of a single short record
+    do not tear, and making every command contend on a lock to protect an
+    advisory feed would be a bad trade.
+    """
     p = paths.pulse_path()
     try:
-        lines = p.read_text(encoding="utf-8").splitlines()
+        if _line_count(p) <= ROTATE_AT:
+            return
     except OSError:
         return
-    if len(lines) > ROTATE_AT:
-        # Atomic swap: a bare write_text here races concurrent log() appends and
-        # can truncate the feed mid-line if interrupted.
-        util.atomic_write_text(p, "\n".join(lines[-ROTATE_KEEP:]) + "\n")
+    with util.try_lock(p.with_name(p.name + ".rotate.lock")) as locked:
+        if not locked:
+            return
+        try:
+            raw = p.read_bytes()
+            lines = raw.decode("utf-8", "replace").splitlines()
+            if len(lines) <= ROTATE_AT:
+                return                      # someone else already rotated
+            keep = lines[-ROTATE_KEEP:]
+            # Re-read past the point we stopped, so an append that landed
+            # while we were building the snapshot survives it.
+            with p.open("rb") as f:
+                f.seek(len(raw))
+                keep += f.read().decode("utf-8", "replace").splitlines()
+        except OSError:
+            return
+        util.atomic_write_text(p, "\n".join(keep) + "\n")

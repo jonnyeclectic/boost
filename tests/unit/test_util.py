@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -531,6 +532,72 @@ class TestAtomicWriteText:
         assert p.read_text(encoding="utf-8") == "original"
         leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
         assert leftovers == []
+
+
+class TestTryLock:
+    """A lock that silently fails open is worse than no lock at all, so both
+    answers are pinned: who gets True, who gets False, and what is left behind."""
+
+    def test_taken_lock_yields_true_and_cleans_up(self, tmp_path):
+        lock = tmp_path / "x.lock"
+        with util.try_lock(lock) as got:
+            assert got is True
+            assert lock.is_file()
+        assert not lock.exists()
+
+    def test_second_holder_is_refused_rather_than_queued(self, tmp_path):
+        lock = tmp_path / "x.lock"
+        with util.try_lock(lock) as first, util.try_lock(lock) as second:
+            assert first is True
+            assert second is False
+
+    def test_the_loser_does_not_delete_the_winners_lock(self, tmp_path):
+        # The nastiest failure mode: a refused caller cleaning up on its way
+        # out would hand the lock to whoever asked next, while the holder is
+        # still working.
+        lock = tmp_path / "x.lock"
+        with util.try_lock(lock):
+            with util.try_lock(lock) as second:
+                assert second is False
+            assert lock.is_file()
+
+    def test_lock_is_released_when_the_body_raises(self, tmp_path):
+        lock = tmp_path / "x.lock"
+        with pytest.raises(ValueError), util.try_lock(lock):
+            raise ValueError("boom")
+        assert not lock.exists()
+
+    def test_stale_lock_is_stolen(self, tmp_path):
+        import os as _os
+        lock = tmp_path / "x.lock"
+        lock.write_text("999999", encoding="utf-8")
+        old = time.time() - 600
+        _os.utime(lock, (old, old))
+        with util.try_lock(lock, stale_after=300.0) as got:
+            assert got is True          # the holder died; don't wedge forever
+
+    def test_fresh_lock_is_not_stolen(self, tmp_path):
+        lock = tmp_path / "x.lock"
+        lock.write_text("999999", encoding="utf-8")
+        with util.try_lock(lock, stale_after=300.0) as got:
+            assert got is False
+        assert lock.is_file()           # and it is left for its owner
+
+    def test_a_vanished_lock_reads_as_free(self, tmp_path):
+        assert util._lock_is_stale(tmp_path / "never-existed", 300.0) is True
+
+    def test_unusable_path_refuses_instead_of_raising(self, tmp_path):
+        # Failing to take a lock must never be worse than the race it guards.
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("x", encoding="utf-8")
+        with util.try_lock(blocker / "sub" / "x.lock") as got:
+            assert got is False
+
+    def test_the_holder_records_its_pid(self, tmp_path):
+        import os as _os
+        lock = tmp_path / "x.lock"
+        with util.try_lock(lock):
+            assert lock.read_text(encoding="utf-8") == str(_os.getpid())
 
 
 class TestSafeComponent:
