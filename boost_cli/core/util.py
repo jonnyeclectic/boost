@@ -10,6 +10,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
@@ -35,6 +36,59 @@ def rmtree(path) -> None:
         shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
     else:
         shutil.rmtree(str(path), onerror=_clear_readonly_and_retry)
+
+
+def _lock_is_stale(path: Path, stale_after: float) -> bool:
+    """True when a lock file is old enough to have been abandoned."""
+    try:
+        return (time.time() - path.stat().st_mtime) > stale_after
+    except OSError:
+        return True     # it vanished under us — treat it as free
+
+
+@contextlib.contextmanager
+def try_lock(path, stale_after: float = 300.0):
+    """Best-effort exclusive lock, yielding whether it was actually taken.
+
+    An `O_CREAT | O_EXCL` create is atomic on every filesystem boost targets,
+    and needs neither `fcntl` (missing on Windows) nor `msvcrt` (missing
+    everywhere else). Yields True to the holder and **False** to everyone
+    else — this does not wait, because its callers are jobs where "another
+    process is already doing it" is a perfectly good outcome, and blocking
+    would trade a rare lost update for a common stall.
+
+    A lock file older than `stale_after` is stolen: a process killed
+    mid-operation must not wedge the operation forever. Any error acquiring
+    it yields False rather than raising — failing to take a lock must never
+    be worse than the problem it guards.
+    """
+    path = Path(path)
+    fd = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if not _lock_is_stale(path, stale_after):
+                yield False
+                return
+            with contextlib.suppress(OSError):
+                path.unlink()
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except OSError:
+        yield False
+        return
+    try:
+        with contextlib.suppress(OSError), os.fdopen(fd, "w") as f:
+            fd = None                      # fdopen owns it now
+            f.write(str(os.getpid()))
+        yield True
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        with contextlib.suppress(OSError):
+            path.unlink()
 
 
 def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
