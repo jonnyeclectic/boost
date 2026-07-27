@@ -11,10 +11,46 @@ from boost_cli.core import util
 
 ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
+# An arbitrary but FIXED instant. `iso_ago` measures back from it and the
+# frozen_clock fixture makes rel_time read the same one, so the two reads
+# cannot drift apart. See the fixture for why that matters.
+FROZEN_NOW = datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
+
+
+class _FrozenDatetime(datetime):
+    """``datetime`` with ``now()`` pinned to :data:`FROZEN_NOW`.
+
+    Subclassed rather than mocked so ``strptime``/``replace``/arithmetic all
+    keep working inside ``rel_time`` untouched — only ``now()`` changes.
+    """
+
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_NOW if tz is not None else FROZEN_NOW.replace(tzinfo=None)
+
+
+@pytest.fixture
+def frozen_clock(monkeypatch):
+    """Pin ``util``'s clock so bucket-boundary assertions are exact.
+
+    Without this the test measured a moving target: ``iso_ago`` truncates to
+    whole seconds, so the stamp is always <= the true instant, and ``rel_time``
+    then calls ``now()`` a SECOND time and floors the difference. The delta is
+    therefore ``n + frac(first_now) + runtime``, which tips into the next bucket
+    whenever that sum reaches 1.0 — rare on an idle laptop, routine on a loaded
+    runner. The boundary cases are the ones that bite: ``iso_ago(59)`` reads
+    "1m ago" and ``iso_ago(59 * 60)`` reads "1h ago", changing the UNIT rather
+    than a neighbouring number, which is why it looked like random redness.
+    Observed on CI as `assert '1m ago' == '59s ago'`. One frozen instant makes
+    every case below deterministic.
+    """
+    monkeypatch.setattr(util, "datetime", _FrozenDatetime)
+    return FROZEN_NOW
+
 
 def iso_ago(seconds: float) -> str:
-    return (datetime.now(timezone.utc)
-            - timedelta(seconds=seconds)).strftime(ISO_FMT)
+    """An ISO stamp exactly ``seconds`` before :data:`FROZEN_NOW`."""
+    return (FROZEN_NOW - timedelta(seconds=seconds)).strftime(ISO_FMT)
 
 
 class TestNowIso:
@@ -39,6 +75,7 @@ class TestUser:
         assert util.user() == "unknown"
 
 
+@pytest.mark.usefixtures("frozen_clock")
 class TestRelTime:
     def test_just_now_floors_to_one_second(self):
         assert util.rel_time(iso_ago(0)) == "1s ago"
@@ -86,11 +123,13 @@ class TestRelTime:
     def test_60_days_is_absolute_date_not_weeks(self):
         # past the `secs < 604800 * 8` (eight-week) cutoff, output is a date, not
         # "8w ago". (Pins the *8 multiplier — a *9 would extend weeks to 60 days.)
-        then = datetime.now(timezone.utc) - timedelta(days=60)
+        # Measured from FROZEN_NOW, like every case above: reading the real clock
+        # here would compare against the frozen one and never agree.
+        then = FROZEN_NOW - timedelta(days=60)
         assert util.rel_time(then.strftime(ISO_FMT)) == then.strftime("%Y-%m-%d")
 
     def test_100_days_is_absolute_date(self):
-        then = datetime.now(timezone.utc) - timedelta(days=100)
+        then = FROZEN_NOW - timedelta(days=100)
         assert util.rel_time(then.strftime(ISO_FMT)) == then.strftime("%Y-%m-%d")
 
     def test_junk_passthrough(self):
