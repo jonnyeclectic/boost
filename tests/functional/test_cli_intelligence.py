@@ -92,6 +92,33 @@ class TestDistill:
         assert entry["tap"] == "local"
         assert entry["version"] == "1.0.0"
 
+    def test_refused_install_saves_the_generation_instead_of_losing_it(
+            self, boost, tapped, tmp_path, monkeypatch):
+        """A refused install must leave the generated skill on disk.
+
+        `_install_generated` builds into a TemporaryDirectory, so letting a
+        BoostError escape the `with` block would delete the only copy of a
+        just-generated skill — silently discarding an LLM generation the user
+        paid for. Now that install_from_path enforces the policy gate, this is
+        the arm that actually fires, and it was the one arm with no test.
+        """
+        monkeypatch.chdir(tmp_path)
+        boost("policy", "set", "blocked_skills", "tdd-workflow-distilled")
+        r = boost("distill", "tdd-workflow", "commit-messages", "--install",
+                  expect=0)
+
+        assert "not installed" in (r.out + r.err)
+        assert "policy blocks" in (r.out + r.err)
+        # the refusal is not silent about where the work went
+        assert "generated skill saved to" in r.out
+
+        fallback = tmp_path / "tdd-workflow-distilled.SKILL.md"
+        assert fallback.is_file(), "the generation was discarded on refusal"
+        meta, _body = frontmatter.parse(fallback.read_text(encoding="utf-8"))
+        assert meta["name"] == "tdd-workflow-distilled"
+        # and it really was refused, not quietly installed anyway
+        assert not (paths.store_dir() / "tdd-workflow-distilled").exists()
+
     def test_ai_path_uses_reply(self, boost, tapped, tmp_path, monkeypatch, ai_on):
         monkeypatch.chdir(tmp_path)
         ai_on(ask_author="```markdown\n---\nname: merged-x\ndescription: AI merge\n"

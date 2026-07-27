@@ -1110,3 +1110,34 @@ class TestLocalInstallGates:
         # and the pin survives the reinstall
         skills = json.loads(boost("list", "--json").out)["skills"]
         assert skills["pinned-local"]["pinned"] is True
+
+    def test_migrate_from_skills_cli_keeps_going_past_a_refusal(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        """One blocked skill must not abandon the rest of the migration.
+
+        `cmd_migrate` grew the same per-item guard as `import --all`, but its
+        refusal arm was the only one with no test — a `continue` that silently
+        stopped continuing would have looked identical to a clean run.
+        """
+        skills_root = tmp_path / "dot-skills"
+        for n in ("mig-aaa", "mig-bbb", "mig-ccc"):
+            self._skill(skills_root, n)
+        boost("policy", "set", "blocked_skills", "mig-bbb")
+
+        r = boost("migrate", "--from-skills-cli", "--path", skills_root, expect=1)
+        assert "mig-bbb" in (r.out + r.err)          # the refusal is named
+        assert "Migrated" in r.out                   # and the summary still prints
+
+        out = boost("list").out
+        assert "mig-aaa" in out and "mig-ccc" in out  # the others landed
+        assert "mig-bbb" not in out
+
+    def test_migrate_from_skills_cli_counts_only_what_landed(
+            self, boost, sandbox, tmp_path):
+        # The summary counts migrated, not attempted: 2 of 3 here.
+        skills_root = tmp_path / "counted"
+        for n in ("cnt-aaa", "cnt-bbb", "cnt-ccc"):
+            self._skill(skills_root, n)
+        boost("policy", "set", "blocked_skills", "cnt-bbb")
+        r = boost("migrate", "--from-skills-cli", "--path", skills_root, expect=1)
+        assert "2 skills" in r.out
