@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from boost_cli.core import workflows
+from boost_cli.errors import BoostError
 
 
 class TestDetectSlot:
@@ -57,3 +60,31 @@ class TestWorkflowTarget:
         p = workflows.workflow_target(Path("/h/.claude/skills"), "agents",
                                       "rev", base=Path("/repo"))
         assert p == Path("/repo/.claude/agents/rev.md")
+
+
+class TestWorkflowNameTraversal:
+    """Same tap-controlled-name exposure as rules: workflow_target joins the
+    name straight onto the agent's commands/ or agents/ dir."""
+
+    EVIL = "../../../../.ssh/authorized_keys"
+
+    def test_user_scope_refuses_traversal(self):
+        with pytest.raises(BoostError, match="invalid workflow name"):
+            workflows.workflow_target(Path("/home/v/.claude/skills"), "commands", self.EVIL)
+
+    def test_project_scope_refuses_traversal(self):
+        with pytest.raises(BoostError, match="invalid workflow name"):
+            workflows.workflow_target(Path("/x/.claude/skills"), "agents", self.EVIL,
+                                      base=Path("/home/v/myrepo"))
+
+    @pytest.mark.parametrize("name", ["..", ".", "a/b", "with space", ""])
+    def test_refuses_other_non_components(self, name):
+        with pytest.raises(BoostError):
+            workflows.workflow_target(Path("/home/v/.claude/skills"), "commands", name)
+
+    def test_ordinary_name_still_lands_in_the_slot(self):
+        p = workflows.workflow_target(Path("/home/v/.claude/skills"), "commands",
+                                      "my_cmd-1.2")
+        assert p.parent.name == "commands"
+        assert p.name == "my_cmd-1.2.md"
+        assert Path(p).resolve().is_relative_to(Path("/home/v/.claude").resolve())

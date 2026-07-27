@@ -119,6 +119,29 @@ class TestScanDir:
         (e,) = catalog.scan_dir(root)
         assert e["name"] == "WeirdCase"
 
+    def test_traversal_name_is_slugified_not_kept(self, tmp_path):
+        # Slugifying only on " " let this through verbatim, and the name is
+        # joined onto the agent's rules/ dir downstream.
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\nname: ../../../../.ssh/authorized_keys\n---")
+        (e,) = catalog.scan_dir(root)
+        assert e["name"] == "ssh-authorized-keys"
+        assert ".." not in e["name"] and "/" not in e["name"]
+
+    @pytest.mark.parametrize("raw", ["..", ".", "a/b", "/abs"])
+    def test_other_non_component_names_are_neutralized(self, tmp_path, raw):
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\nname: '%s'\n---" % raw)
+        (e,) = catalog.scan_dir(root)
+        assert "/" not in e["name"] and e["name"] not in {".", ".."}
+
+    def test_dotted_and_underscored_names_survive_intact(self, tmp_path):
+        # These are safe components; slugify would mangle them to "v1-2-3".
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\nname: my_skill.v1.2-3\n---")
+        (e,) = catalog.scan_dir(root)
+        assert e["name"] == "my_skill.v1.2-3"
+
     def test_tap_curated_and_meta_propagated(self, tmp_path):
         root = tmp_path / "tap"
         write_skill(root / "s", "---\nname: s\ntags: [a, b]\n---")
