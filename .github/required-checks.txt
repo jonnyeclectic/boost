@@ -10,6 +10,13 @@
 # GitHub matches required checks BY NAME, so a duplicated name cannot be
 # required unambiguously.
 #
+# A name listed here must ALSO come from a workflow that declares
+# `merge_group:`. GitHub's merge queue evaluates required checks against its own
+# gh-readonly-queue/* ref, not against the pull request, so a required context
+# whose workflow lacks that trigger never reports there and every enqueued PR
+# waits on it forever. No queue is enabled today; the gate enforces the rule
+# now so that turning one on is a Settings toggle rather than an outage.
+#
 # A name may only be listed here if its workflow runs on EVERY pull request.
 # Anything narrowed by `paths:` (or by a `types:` list that omits opened /
 # synchronize) must stay out: when a PR touches no matching path GitHub creates
