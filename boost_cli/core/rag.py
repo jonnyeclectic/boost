@@ -19,9 +19,9 @@ import json
 import math
 import re
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from collections.abc import Sequence
 
 try:  # TypedDict lives in typing on 3.9+, kept optional for safety
     from typing import TypedDict

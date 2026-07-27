@@ -89,7 +89,7 @@ def _ask_api(prompt: str, system: Optional[str], model: str,
     }
     if system:
         body["system"] = system
-    req = urllib.request.Request(  # noqa: S310  API_URL is a hardcoded https endpoint
+    req = urllib.request.Request(
         API_URL,
         data=json.dumps(body).encode(),
         headers={

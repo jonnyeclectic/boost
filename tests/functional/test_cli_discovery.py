@@ -754,6 +754,7 @@ class TestBrowseAurora:
         if not _curses_available():
             pytest.skip("curses not available on this platform")
         import curses
+
         from boost_cli.commands import discovery
         from boost_cli.core import output as out
         base = discovery._nearest_base(curses)

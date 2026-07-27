@@ -1,7 +1,6 @@
 """Unit tests: boost_cli/core/frontmatter.py — the SKILL.md YAML-subset parser."""
 from __future__ import annotations
 
-
 from boost_cli.core import frontmatter
 
 

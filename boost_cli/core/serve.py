@@ -8,6 +8,7 @@ stdlib HTTP server for the CLI.
 """
 from __future__ import annotations
 
+import contextlib
 import errno
 import html
 import json
@@ -22,7 +23,6 @@ from .. import __version__
 from ..errors import BoostError
 from . import catalog, lockfile, logs, registry, store
 from . import output as out
-import contextlib
 
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 

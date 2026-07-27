@@ -15,13 +15,31 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .. import cliparse
-from ..core import (adapters, agents, catalog, config, frontmatter, gitutil,
-                    injectscan, integrity, journal, lockfile, paths, projectlock,
-                    registry, resolve, scopes, secretscan, staleness, store,
-                    typosquat, updatediff, util)
+from ..core import (
+    adapters,
+    agents,
+    catalog,
+    config,
+    frontmatter,
+    gitutil,
+    injectscan,
+    integrity,
+    journal,
+    lockfile,
+    paths,
+    projectlock,
+    registry,
+    resolve,
+    scopes,
+    secretscan,
+    staleness,
+    store,
+    typosquat,
+    updatediff,
+    util,
+)
 from ..core import output as out
 from ..errors import BoostError
-
 
 _tilde = paths.tilde
 
@@ -148,6 +166,7 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
 def _register_mcp_server(name: str, spec: dict) -> None:
     """Run one `claude mcp add` for a skill-declared server. Never raises."""
     import subprocess
+
     from ..core import mcpdecl
     argv = mcpdecl.register_argv(name, spec)
     if not shutil.which("claude"):

@@ -527,8 +527,8 @@ class TestScheduleCron:
 
 class TestServe:
     def test_endpoints(self, boost, installed, monkeypatch):
-        from boost_cli.core import serve as serve_mod
         from boost_cli.cli import main
+        from boost_cli.core import serve as serve_mod
         captured = {}
         real = serve_mod.ThreadingHTTPServer
 

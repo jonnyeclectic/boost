@@ -5,11 +5,11 @@ Consulted by store.install() (when config policy_enforce is true) and by
 """
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import List
 
 from . import config, paths
-import contextlib
 
 DEFAULTS = {
     "blocked_skills": [],      # names never allowed

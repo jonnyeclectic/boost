@@ -18,9 +18,25 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .. import cliparse
-from ..core import (agents, ai, catalog, frontmatter, gitutil, imperative,
-                    integrity, journal, lockfile, logs, output as out, paths,
-                    provenance, registry, staleness, store, util)
+from ..core import (
+    agents,
+    ai,
+    catalog,
+    frontmatter,
+    gitutil,
+    imperative,
+    integrity,
+    journal,
+    lockfile,
+    logs,
+    paths,
+    provenance,
+    registry,
+    staleness,
+    store,
+    util,
+)
+from ..core import output as out
 from ..errors import BoostError
 from ._common import _iter_installed, _s
 
