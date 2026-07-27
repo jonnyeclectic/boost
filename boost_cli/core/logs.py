@@ -31,6 +31,7 @@ lightweight timing record for spotting slow commands after the fact.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import logging.handlers
 import os
@@ -43,7 +44,6 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import paths
-import contextlib
 
 LOGGER_NAME = "boost"
 MAX_BYTES = 1_000_000  # ~1 MB per file …

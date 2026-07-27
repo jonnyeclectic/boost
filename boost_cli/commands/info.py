@@ -16,13 +16,28 @@ import webbrowser
 from pathlib import Path
 
 from .. import cliparse
-from ..core import (ai, capabilities, catalog, config, faithfulness,
-                    frontmatter, gitutil, imperative, integrity, journal,
-                    lockfile, logs, paths, projectlock, registry, scopes, store,
-                    util)
+from ..core import (
+    ai,
+    capabilities,
+    catalog,
+    config,
+    faithfulness,
+    frontmatter,
+    gitutil,
+    imperative,
+    integrity,
+    journal,
+    lockfile,
+    logs,
+    paths,
+    projectlock,
+    registry,
+    scopes,
+    store,
+    util,
+)
 from ..core import output as out
 from ..errors import BoostError
-
 
 # ---------------------------------------------------------------- helpers
 

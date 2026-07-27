@@ -1,6 +1,7 @@
 """Small shared utilities: time, hashing, versions, skill quality scoring."""
 from __future__ import annotations
 
+import contextlib
 import getpass
 import hashlib
 import os
@@ -12,7 +13,6 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
-import contextlib
 
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 

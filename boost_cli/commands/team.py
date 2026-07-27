@@ -13,7 +13,6 @@ from ..core import catalog, journal, lockfile, paths, registry, store, util
 from ..core import output as out
 from ..errors import BoostError
 
-
 _tilde = paths.tilde
 
 

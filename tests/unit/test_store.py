@@ -8,8 +8,17 @@ from typing import ClassVar
 
 import pytest
 
-from boost_cli.core import (catalog, gitutil, journal, lockfile, paths,
-                           policy, registry, store, util)
+from boost_cli.core import (
+    catalog,
+    gitutil,
+    journal,
+    lockfile,
+    paths,
+    policy,
+    registry,
+    store,
+    util,
+)
 from boost_cli.errors import BoostError
 
 ISO = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"

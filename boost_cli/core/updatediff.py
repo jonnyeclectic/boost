@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import difflib
 import re
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Dict, List, NamedTuple
-from collections.abc import Iterable
 
 from .util import IGNORED
 

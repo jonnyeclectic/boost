@@ -20,13 +20,13 @@ A Claude SessionStart hook block looks like:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import List, Optional
 
-from . import paths, util
 from ..errors import BoostError
-import contextlib
+from . import paths, util
 
 SCOPES = ("global", "project")
 MARKER = "# boost:"
