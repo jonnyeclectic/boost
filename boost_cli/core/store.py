@@ -810,6 +810,65 @@ def uninstall(name: str) -> dict:
     return {"name": name, "unlinked": removed_links, "entry": entry}
 
 
+def strip_extended_prefix(text: str) -> str:
+    """Drop Windows' ``\\\\?\\`` extended-length prefix from a raw path string.
+
+    Since 3.8, `os.readlink()` on Windows returns the reparse point's
+    substitution path, which typically carries that prefix — so boost's own
+    link into the store reads back as
+    ``\\\\?\\C:\\Users\\...\\.agents\\skills\\x``. Compared by path components
+    that is a *different drive* from ``C:\\Users\\...``, and every Windows leg
+    of the matrix went red on exactly this. The check it replaced was a
+    substring test, which the prefix sailed straight through; comparing
+    properly is what exposed it.
+    """
+    if text.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + text[len("\\\\?\\UNC\\"):]
+    if text.startswith("\\\\?\\"):
+        return text[len("\\\\?\\"):]
+    return text
+
+
+def normalize_link_target(path: Path) -> str:
+    """A comparable string form of a `readlink()` result.
+
+    Normalizes separators and case as well as the prefix: Windows paths
+    compare case-insensitively, and POSIX `normcase` is a no-op.
+    """
+    return os.path.normcase(os.path.normpath(strip_extended_prefix(str(path))))
+
+
+def points_into_store(link: Path) -> bool:
+    """True if `link`'s target lands inside boost's canonical store.
+
+    Reads the raw `readlink()` target rather than `resolve()`, because the
+    links this has to judge are usually broken — `resolve()` cannot tell us
+    where a dangling link was aiming. A relative target is resolved against
+    the link's own directory, and containment is decided by `commonpath`
+    (the same guard `scopes.contains` uses): a substring test on the store
+    path also matches siblings like `~/.agents/skills-backup`, which boost
+    does not own either.
+
+    Everything boost deletes under an agent's skills dir is gated on this.
+    A user's own broken symlink sitting in `~/.claude/skills` is not ours.
+    Fails closed — an unreadable link is not boost's to delete.
+    """
+    try:
+        target = link.readlink()
+    except OSError:
+        return False
+    if not target.is_absolute():
+        target = link.parent / target
+    target_s = normalize_link_target(target)
+    root_s = normalize_link_target(paths.store_dir())
+    try:
+        # ValueError for paths with no common root — on Windows, two different
+        # drives — which means "outside", not "crash out of the delete guard".
+        return os.path.commonpath([target_s, root_s]) == root_s
+    except ValueError:
+        return False
+
+
 def sync_plan() -> Dict[str, list]:
     """Compare lock file <-> store <-> agent symlinks.
 
@@ -843,11 +902,12 @@ def sync_plan() -> Dict[str, list]:
         if not adir.is_dir():
             continue
         for link in adir.iterdir():
-            if link.is_symlink():
-                points_into_store = str(paths.store_dir()) in str(
-                    link.resolve() if link.exists() else link.readlink())
-                if not link.exists() or (points_into_store and link.name not in lock):
-                    plan["stale_links"].append(str(link))
+            # Ownership first, for broken links too: the old test short-circuited
+            # on `not link.exists()`, so any dangling symlink a user happened to
+            # keep in ~/.claude/skills was swept up by `boost sync`.
+            if (link.is_symlink() and points_into_store(link)
+                    and (not link.exists() or link.name not in lock)):
+                plan["stale_links"].append(str(link))
     # Rules/workflows don't live in the store — they materialize into agent dirs.
     # A materialization whose file (or CLAUDE.md block) is gone can be repaired
     # by re-materializing from the tap, same as a missing skill store dir.
