@@ -26,6 +26,7 @@ from ..core import (
     policy,
     rag,
     registry,
+    selfupdate,
     serve,
     store,
     util,
@@ -1000,12 +1001,47 @@ def cmd_self_update(argv) -> int:
     p = cliparse.parser(
         prog="boost self-update",
         description="Update boost itself to the latest version")
-    p.parse_args(argv)
+    p.add_argument("--dry-run", action="store_true",
+                   help="show how boost would update itself, change nothing")
+    args = p.parse_args(argv)
 
+    method = selfupdate.detect()
+    if method != selfupdate.GIT:
+        return _self_update_package(method, dry_run=args.dry_run)
+    return _self_update_git(dry_run=args.dry_run)
+
+
+def _self_update_package(method: str, dry_run: bool) -> int:
+    """Upgrade a pip / pipx / uv-tool install by driving its own manager."""
+    old = __version__
+    cmd = selfupdate.upgrade_command(method)   # errors if the manager is gone
+    if dry_run:
+        out.info("installed with: %s" % method)
+        out.info("would run: %s" % " ".join(cmd))
+        return 0
+    out.info("updating via %s: %s" % (method, " ".join(cmd)))
+    selfupdate.run_upgrade(cmd)
+    # This process imported its version before the upgrade, so ask a fresh one.
+    new = selfupdate.observed_version()
+    journal.log("self-update", new or old, previous=old, method=method)
+    if new and new != old:
+        out.ok("boost v%s → v%s" % (old, new))
+    elif new:
+        out.ok("already up to date (v%s)" % new)
+    else:
+        # The upgrade succeeded but we never saw a version — say exactly that
+        # rather than claim one.
+        out.ok("upgraded via %s; run `boost --version` to confirm" % method)
+    return 0
+
+
+def _self_update_git(dry_run: bool) -> int:
+    """Fast-forward the source checkout boost is running from."""
     root = paths.repo_root()
-    if not gitutil.is_repo(root):
-        raise BoostError("boost is not running from a git checkout",
-                        hint="git clone the boost repo and symlink bin")
+    if dry_run:
+        out.info("installed with: git checkout (%s)" % _tilde(root))
+        out.info("would run: git -C %s pull --ff-only" % root)
+        return 0
     old = __version__
     before = gitutil.head_commit(root)
     gitutil.run(["-C", str(root), "pull", "--ff-only"], timeout=120)
