@@ -447,7 +447,21 @@ def cmd_uninstall(argv: List[str]) -> int:
     ap.add_argument("--local", dest="scope", action="store_const",
                     const=scopes.SCOPE_PROJECT, default=None,
                     help="remove from this repo rather than your user config")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the confirmation prompt")
     args = ap.parse_args(argv)
+    # Ask only when someone is there to answer. out.confirm() returns its
+    # `default` on a non-TTY, so gating on it unconditionally would turn every
+    # scripted `boost uninstall x` — CI step, Makefile, Dockerfile — into a
+    # silent no-op exiting 1. A pipeline that cannot see the prompt keeps the
+    # behaviour it has today; the prompt is a speed bump for humans only.
+    if sys.stdin.isatty() and not args.yes:
+        prompt = ("uninstall %s?" % args.names[0] if len(args.names) == 1 else
+                  "uninstall %d skills: %s?" % (len(args.names),
+                                                ", ".join(args.names)))
+        if not out.confirm(prompt):
+            out.info("cancelled")
+            return 1
     removed, failed = 0, 0
     for name in args.names:
         try:

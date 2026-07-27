@@ -1017,14 +1017,22 @@ append-only rename scheme), and close the handle explicitly.</p>
       </article>
 
       <article class="cap rcard" id="uninstall-has-no-confirmation-prompt">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">UX · Bug</span></div>
         <h3><code>boost uninstall</code> has no confirmation prompt</h3>
         <p><code>boost uninstall</code> deletes a skill's store directory and lock entry straight through
 <code>shutil.rmtree()</code> with zero confirmation — every other destructive command
 (<code>snapshot restore</code>, <code>cohort delete</code>, <code>profile delete</code>,
 <code>untap</code>, <code>replay rollback</code>, <code>bmad uninstall</code>) gates on
-<code>out.confirm()</code> first. Add the same <code>out.confirm()</code> (bypassable via the
-existing <code>BOOST_ASSUME_YES</code>/<code>--yes</code> convention) before the <code>rmtree</code>.</p>
+<code>out.confirm()</code> first. Shipped: a single prompt naming every skill about to go,
+before anything is touched, plus <code>-y/--yes</code> and the existing
+<code>BOOST_ASSUME_YES</code> bypass.
+<strong>The prompt is gated on <code>sys.stdin.isatty()</code>, not just on the flag.</strong>
+<code>out.confirm()</code> returns its <code>default</code> — <code>False</code> — when stdin is
+not a terminal, so the obvious <code>if not out.confirm(...)</code> would have turned
+<code>boost uninstall x</code> in every CI step, Makefile and Dockerfile into a silent no-op
+exiting 1. Guarding a destructive command must not break the callers that cannot see the
+guard; a regression test drives the command with a non-TTY stdin and no
+<code>BOOST_ASSUME_YES</code> to hold that line.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -1726,14 +1734,22 @@ widening the assertions: the boundaries are precisely the behaviour worth pinnin
       </article>
 
       <article class="cap rcard" id="publish-gate-ignores-pip-audit-and-metadata">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI/CD</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI/CD</span></div>
         <h3><code>publish.yml</code> ignores the <code>pip-audit</code> / metadata gates</h3>
         <p><code>publish.yml</code> triggers on <code>workflow_run: [ci]</code> and gates only on
 <code>github.event.workflow_run.conclusion == 'success'</code> — it never checks the
 independently-triggered <code>pip-audit.yml</code> or <code>package-metadata.yml</code> workflows
 that run on the same push. A merge that fails the live-CVE gate or the twine/metadata check still
-auto-publishes to PyPI as long as <code>ci</code> itself is green. Fold both as jobs inside
-<code>ci.yml</code>, or have the release job poll their run status via the API before publishing.</p>
+auto-publishes to PyPI as long as <code>ci</code> itself is green.
+Shipped as the second option: <code>scripts/release_preflight.py</code> runs as the release job's
+first step — before <code>release-drafter</code> creates the tag, so a blocked release leaves no
+published Release behind — and waits for each required workflow to conclude for
+<code>git rev-parse HEAD</code>, the commit actually checked out and about to be built.
+Folding them into <code>ci.yml</code> was rejected: <code>pip-audit</code> also runs weekly on a
+cron, which inside <code>ci.yml</code> would drag the whole 9-cell test matrix along with it.
+The gate <strong>fails closed</strong> — red, cancelled, <em>skipped</em>, never started, still
+running at the deadline and an unreadable API reply are all refusals. Silence is the dangerous
+case: a gate that never ran leaves nothing red to see, so it must never read as consent.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -1864,7 +1880,7 @@ config oversight.</p>
       </article>
 
       <article class="cap rcard" id="main-has-no-branch-protection">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release safety</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Release safety</span></div>
         <h3><code>main</code> has no branch protection, so the release rules are honour-system</h3>
         <p><code>GET /branches/main/protection</code> returns <b>"Branch not protected"</b>. Scorecard
 flags it (<code>BranchProtectionID</code>, score 0), but the sharper way to see it is this:
@@ -1883,12 +1899,61 @@ The shape that fits: require <b>status checks</b> to pass (at minimum <code>lint
 and the <code>tests</code> matrix) and require branches to be up to date, but do <b>not</b>
 require reviews. That enforces the release rule that actually matters while leaving
 self-merge intact. Decide before adding more concurrent loops, not after.
-<b>Update — the blocker is gone.</b> This prescription was not implementable as written: <code>lint</code> named <i>three</i> different jobs (ci, markdownlint, theme-lint), and GitHub matches required checks by name alone. Those collisions are now renamed, the required list is checked-in at <code>.github/required-checks.txt</code> and gated against drift, and <code>python3 scripts/check_required_checks.py --print-api</code> emits the exact payload — with <code>required_pull_request_reviews: null</code>, so self-merging loops keep working. Still a decision, but now a one-command one.</p>
+<b>Update — the blocker is gone.</b> This prescription was not implementable as written: <code>lint</code> named <i>three</i> different jobs (ci, markdownlint, theme-lint), and GitHub matches required checks by name alone. Those collisions are now renamed, the required list is checked-in at <code>.github/required-checks.txt</code> and gated against drift, and <code>python3 scripts/check_required_checks.py --print-api</code> emits the exact payload — with <code>required_pull_request_reviews: null</code>, so self-merging loops keep working. Still a decision, but now a one-command one.
+<b>Shipped.</b> The decision was taken as prescribed — status checks yes, reviews no.
+<code>GET /branches/main/protection</code> now returns <code>strict: true</code> with
+<code>required_pull_request_reviews</code> absent, so a red gate blocks the merge that would
+have cut the release, and loops still self-merge. One correction to the prescription above:
+requiring "at minimum <code>lint</code> and the <code>tests</code> matrix" is right, but the
+list must contain <i>only</i> checks that run on <b>every</b> PR — the first version also
+required four path-filtered docs checks, which report on some PRs and not others and would
+have hung any PR that touched no matching file. See
+<code>required-checks-can-declare-a-check-that-deadlocks-prs</code>.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">nothing enforces the red-merge rule</span>
+          <span class="m">decided, applied, and now gated against deadlock</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="required-checks-can-declare-a-check-that-deadlocks-prs">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Release safety</span></div>
+        <h3>The required-check gate could not see <code>paths:</code>, so it green-lit a list that deadlocks every PR</h3>
+        <p><code>.github/required-checks.txt</code> declared 21 contexts and
+<code>scripts/check_required_checks.py</code> reported
+<i>"21 required, 22 PR check names, no ambiguity"</i> and exited 0. Four of those 21 —
+<code>validate</code>, <code>markdown-lint</code>, <code>theme-lint</code> and
+<code>vale</code> — are produced by <b>path-filtered</b> workflows.
+
+When a pull request touches none of a workflow's <code>paths:</code>, GitHub does not
+create a pending check run that later resolves; it creates <b>no check run at all</b>.
+Branch protection then waits forever for a status that is never coming, and the pull
+request can never merge. Applying that list would have bricked the repository — and
+<code>--print-api</code> would have emitted the payload to do it.
+
+The cause is one regex. The gate decided "runs on pull_request" with
+<code>re.search(r"^\s{2}pull_request:", header)</code>, which is true for any workflow
+that <em>mentions</em> the trigger, whether or not <code>paths:</code>,
+<code>paths-ignore:</code> or <code>types: [labeled]</code> narrows it — precisely the
+distinction that decides whether a required check deadlocks.
+
+Demonstrated live rather than argued: the PR that fixed the
+<code>adapter-conformance</code> install touches no <code>style/**</code> file, and its 30
+check runs contain <code>validate</code>, <code>markdown-lint</code>, <code>vale</code>,
+<code>check</code> and <code>sweep</code> — but no <code>theme-lint</code>. Requiring
+<code>theme-lint</code> would have hung that PR permanently.
+
+Fix: classify the trigger as none/always/filtered and refuse any required name that
+resolves only to a filtered workflow, with an error that names the culprit file. The four
+docs checks move to a commented block explaining why they are useful but not requireable.
+The list is 17 contexts, all verified to report on every PR. Ten new tests cover the rule
+and all ten fail against the previous script.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">the gate green-lit a list that bricks every PR</span>
         </div>
       </article>
 

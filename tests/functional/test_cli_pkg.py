@@ -42,6 +42,13 @@ def _lock():
     return json.loads(paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
 
+class _FakeTtyStdin(io.StringIO):
+    """Scripted stdin that claims to be a terminal, so prompts actually fire."""
+
+    def isatty(self):
+        return True
+
+
 def _skill_dir(tmp_path, name, version="0.1.0", body="# Skill\n\nBody text.\n"):
     d = tmp_path / name
     d.mkdir(parents=True)
@@ -173,6 +180,59 @@ class TestUninstall:
     def test_single_unknown_rc1(self, boost, sandbox):
         r = boost("uninstall", "ghost", expect=1)
         assert "ghost is not installed" in r.err
+
+    def test_declining_the_prompt_keeps_the_skill(self, boost, installed,
+                                                  monkeypatch):
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("uninstall", "brainstorming", expect=1)
+        assert "uninstall brainstorming? [y/N]" in r.out
+        assert "cancelled" in r.out
+        assert "brainstorming" in _lock()
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+
+    def test_accepting_the_prompt_removes_it(self, boost, installed,
+                                             monkeypatch):
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("y\n"))
+        r = boost("uninstall", "brainstorming")
+        assert "uninstall brainstorming? [y/N]" in r.out
+        assert "Uninstalled 1 skill" in r.out
+        assert _lock() == {}
+
+    def test_multi_names_are_listed_in_one_prompt(self, boost, tapped,
+                                                  monkeypatch):
+        boost("install", "brainstorming", "commit-messages")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin("n\n"))
+        r = boost("uninstall", "brainstorming", "commit-messages", expect=1)
+        assert "uninstall 2 skills: brainstorming, commit-messages?" in r.out
+        assert sorted(_lock()) == ["brainstorming", "commit-messages"]
+
+    def test_yes_flag_skips_the_prompt(self, boost, installed, monkeypatch):
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        # An empty TTY stdin: if -y failed to suppress the prompt, the read
+        # would hit EOF and confirm() would answer no.
+        monkeypatch.setattr("sys.stdin", _FakeTtyStdin(""))
+        r = boost("uninstall", "brainstorming", "-y")
+        assert "uninstall brainstorming?" not in r.out
+        assert "Uninstalled 1 skill" in r.out
+        assert _lock() == {}
+
+    def test_non_interactive_uninstall_still_works(self, boost, installed,
+                                                   monkeypatch):
+        # The prompt must not reach scripts. out.confirm() returns its default
+        # (False) when stdin is not a terminal, so gating on it unconditionally
+        # would turn `boost uninstall x` in CI into a no-op exiting 1 — with no
+        # BOOST_ASSUME_YES and no flag, a non-TTY caller keeps working.
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))   # isatty() -> False
+        r = boost("uninstall", "brainstorming")
+        assert "uninstall brainstorming?" not in r.out
+        assert "cancelled" not in r.out
+        assert "Uninstalled 1 skill" in r.out
+        assert _lock() == {}
 
 
 # ── sync ─────────────────────────────────────────────────────────────────
