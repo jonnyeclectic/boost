@@ -1049,3 +1049,95 @@ class TestMcpAwareSkills:
         monkeypatch.setenv("BOOST_NO_MCP_OFFER", "1")
         r = boost("import", _mcp_skill_dir(tmp_path))
         assert "MCP server" not in r.out
+
+
+class TestLocalInstallGates:
+    """`install_from_path` now enforces the pin/policy/capability gates, so the
+    multi-item callers must refuse one item without abandoning the rest."""
+
+    def _skill(self, root, name):
+        d = root / name
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: %s\ndescription: a skill named %s for the gate tests\n"
+            "version: 1.0.0\n---\n\n# %s\n\nBody.\n" % (name, name, name),
+            encoding="utf-8")
+        return d
+
+    def test_import_refuses_a_blocked_skill(self, boost, sandbox, tmp_path):
+        d = self._skill(tmp_path / "one", "blocked-skill")
+        boost("policy", "set", "blocked_skills", "blocked-skill")
+        r = boost("import", d, expect=1)
+        assert "policy blocks" in (r.out + r.err)
+
+    def test_import_all_keeps_going_past_a_refusal(self, boost, sandbox, tmp_path):
+        # Before the per-item guard, the first refusal aborted the whole run and
+        # the remaining skills were never attempted — no summary, silent partial.
+        root = tmp_path / "many"
+        for n in ("aaa-skill", "bbb-skill", "ccc-skill"):
+            self._skill(root, n)
+        boost("policy", "set", "blocked_skills", "bbb-skill")
+        r = boost("import", root, "--all", expect=1)   # a refusal is still reported
+        assert "bbb-skill" in r.out           # and named
+        out = boost("list").out
+        assert "aaa-skill" in out and "ccc-skill" in out   # the others landed
+        assert "bbb-skill" not in out
+
+    def test_import_all_summary_counts_only_what_landed(self, boost, sandbox, tmp_path):
+        root = tmp_path / "many2"
+        for n in ("keep-one", "drop-one"):
+            self._skill(root, n)
+        boost("policy", "set", "blocked_skills", "drop-one")
+        r = boost("import", root, "--all", expect=1)
+        assert "Imported 1 skill" in r.out
+
+    def test_reinstall_all_keeps_going_past_a_refusal(self, boost, sandbox, tmp_path):
+        a = self._skill(tmp_path / "r", "raa-skill")
+        b = self._skill(tmp_path / "r", "rbb-skill")
+        boost("import", a)
+        boost("import", b)
+        boost("policy", "set", "blocked_skills", "raa-skill")
+        r = boost("reinstall", "--all", expect=1)
+        assert "Reinstalled" in r.out          # summary still printed
+        assert "raa-skill" in (r.out + r.err)
+
+    def test_reinstall_works_on_a_pinned_local_skill(self, boost, sandbox, tmp_path):
+        d = self._skill(tmp_path / "p", "pinned-local")
+        boost("import", d)
+        boost("pin", "pinned-local")
+        r = boost("reinstall", "pinned-local")
+        assert "reinstalled pinned-local" in r.out
+        # and the pin survives the reinstall
+        skills = json.loads(boost("list", "--json").out)["skills"]
+        assert skills["pinned-local"]["pinned"] is True
+
+    def test_migrate_from_skills_cli_keeps_going_past_a_refusal(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        """One blocked skill must not abandon the rest of the migration.
+
+        `cmd_migrate` grew the same per-item guard as `import --all`, but its
+        refusal arm was the only one with no test — a `continue` that silently
+        stopped continuing would have looked identical to a clean run.
+        """
+        skills_root = tmp_path / "dot-skills"
+        for n in ("mig-aaa", "mig-bbb", "mig-ccc"):
+            self._skill(skills_root, n)
+        boost("policy", "set", "blocked_skills", "mig-bbb")
+
+        r = boost("migrate", "--from-skills-cli", "--path", skills_root, expect=1)
+        assert "mig-bbb" in (r.out + r.err)          # the refusal is named
+        assert "Migrated" in r.out                   # and the summary still prints
+
+        out = boost("list").out
+        assert "mig-aaa" in out and "mig-ccc" in out  # the others landed
+        assert "mig-bbb" not in out
+
+    def test_migrate_from_skills_cli_counts_only_what_landed(
+            self, boost, sandbox, tmp_path):
+        # The summary counts migrated, not attempted: 2 of 3 here.
+        skills_root = tmp_path / "counted"
+        for n in ("cnt-aaa", "cnt-bbb", "cnt-ccc"):
+            self._skill(skills_root, n)
+        boost("policy", "set", "blocked_skills", "cnt-bbb")
+        r = boost("migrate", "--from-skills-cli", "--path", skills_root, expect=1)
+        assert "2 skills" in r.out
