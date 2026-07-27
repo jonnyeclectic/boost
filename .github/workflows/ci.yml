@@ -228,7 +228,15 @@ jobs:
               echo "- **Coverage:** ${PCT}% (gate: 80%)"
             fi
             SMOKE=$(grep -Eo '[0-9]+ passed, [0-9]+ failed' /tmp/smoke.out | tail -1 || true)
-            [ -n "$SMOKE" ] && echo "- **Smoke suite:** ${SMOKE}"
+            # `if`, not `[ -n "$SMOKE" ] && echo ...`: this is the last command
+            # of the group, the group is the last command of the step, and the
+            # step runs under `bash -eo pipefail`. With no smoke line the
+            # AND-list's status of 1 became the step's exit code — so a reporting
+            # step marked `if: always()` failed on its own, precisely in the case
+            # it exists for (an earlier step died before smoke.sh printed).
+            if [ -n "$SMOKE" ]; then
+              echo "- **Smoke suite:** ${SMOKE}"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
       - name: publish coverage badge
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.12' && github.ref == 'refs/heads/main'

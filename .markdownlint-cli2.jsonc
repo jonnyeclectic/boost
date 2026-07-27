@@ -15,7 +15,14 @@
     // Roadmap item bodies are HTML-in-Markdown card copy rendered by
     // build_roadmap.py, not standalone documents — heading/inline-HTML
     // document rules don't apply to them.
-    "docs/roadmap/items/**"
+    "docs/roadmap/items/**",
+    // Fuzzer seeds and saved crash reproducers. These are deliberately
+    // malformed frontmatter fed to atheris — malformed is the point. 12 of the
+    // 21 files this config linted were corpus seeds that passed only by luck,
+    // and fuzz.yml exists to mine NEW malformed inputs and ship them here as
+    // reproducers, so the first one committed would have turned a prose-style
+    // gate red for a reason that has nothing to do with prose.
+    "tests/fuzz/corpus/**"
   ],
   "config": {
     // Long lines are fine: prose wraps in the viewer, and tables/links often
