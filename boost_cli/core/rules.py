@@ -17,6 +17,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, Tuple
 
+from ..errors import BoostError
+from . import util
+
 # Name-scoped managed-block markers for CLAUDE.md. Stable + per-rule so install
 # is idempotent (a re-install replaces the block) and uninstall strips exactly
 # the one block it wrote, never a hand-authored neighbour.
@@ -55,6 +58,12 @@ def rule_target(agent: str, skills_dir: Path, name: str,
         since Claude reads per-repo memory from the root, ``<base>/CLAUDE.local.md``
         (the personal, git-ignored file) for Claude.
     """
+    # `name` comes from tap-controlled frontmatter and is about to be joined
+    # onto a directory, so it has to be a single component — otherwise
+    # `../../../../.ssh/authorized_keys` escapes the rules dir entirely, and
+    # under project scope it escapes into the victim's own repo.
+    if not util.is_safe_component(name):
+        raise BoostError("invalid rule name %r" % name)
     dotdir = Path(skills_dir).parent.name          # ".claude" / ".cursor" / …
     if agent in CLAUDE_MD_AGENTS:
         if base is not None:

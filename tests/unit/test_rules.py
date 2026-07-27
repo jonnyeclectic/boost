@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from boost_cli.core import rules
+from boost_cli.errors import BoostError
 
 
 class TestMarkers:
@@ -144,3 +147,40 @@ class TestStripBlock:
         original = "# my standing notes\n"
         merged = rules.merge_block(original, "r", "B")
         assert rules.strip_block(merged, "r") == original
+
+
+class TestRuleNameTraversal:
+    """A tap controls its rule frontmatter, so `name` reaches rule_target as
+    attacker input. Before the guard, `../../../../.ssh/authorized_keys`
+    resolved clean outside the rules dir — and under project scope, into the
+    victim's own repo."""
+
+    EVIL = "../../../../.ssh/authorized_keys"
+
+    def test_user_scope_refuses_traversal(self):
+        with pytest.raises(BoostError, match="invalid rule name"):
+            rules.rule_target("cursor", Path("/home/v/.cursor/skills"), self.EVIL)
+
+    def test_project_scope_refuses_traversal(self):
+        with pytest.raises(BoostError, match="invalid rule name"):
+            rules.rule_target("cursor", Path("/x/.cursor/skills"), self.EVIL,
+                              base=Path("/home/v/myrepo"))
+
+    @pytest.mark.parametrize("name", ["..", ".", "a/b", "with space", ""])
+    def test_refuses_other_non_components(self, name):
+        with pytest.raises(BoostError):
+            rules.rule_target("cursor", Path("/home/v/.cursor/skills"), name)
+
+    def test_ordinary_name_still_lands_in_the_rules_dir(self):
+        _mode, p = rules.rule_target("cursor", Path("/home/v/.cursor/skills"),
+                                     "my_rule-1.2")
+        assert p.parent.name == "rules"
+        assert p.name.startswith("my_rule-1.2")
+        # the guard must not have rewritten a legitimate name
+        assert Path(p).resolve().is_relative_to(Path("/home/v/.cursor").resolve())
+
+    def test_claude_md_path_is_guarded_too(self):
+        # Claude takes the CLAUDE.md branch before any join, but the name still
+        # reaches the managed-block markers, so it must be refused just as early.
+        with pytest.raises(BoostError, match="invalid rule name"):
+            rules.rule_target("claude-code", Path("/home/v/.claude/skills"), self.EVIL)
