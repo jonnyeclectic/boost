@@ -159,7 +159,10 @@ def pattern_for(root: Path, path: Path):
     if is_init(path):
         return None
     rel = path.relative_to(root / SOURCE).with_suffix("").as_posix()
-    return "%s.%s.*" % (str(SOURCE).replace("/", "."), rel.replace("/", "."))
+    # as_posix(), not str(): on Windows str(Path("boost_cli/core")) is
+    # "boost_cli\\core", so replacing "/" would be a no-op and the pattern
+    # would come out as "boost_cli\\core.lockfile.*" — matching nothing.
+    return "%s.%s.*" % (SOURCE.as_posix().replace("/", "."), rel.replace("/", "."))
 
 
 def cmd_plan(args: argparse.Namespace) -> int:

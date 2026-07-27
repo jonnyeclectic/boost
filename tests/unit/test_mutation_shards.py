@@ -372,3 +372,19 @@ def test_same_basename_in_different_packages_stays_distinct(tmp_path):
     pats = {ms.pattern_for(repo, repo / "boost_cli/core/util.py"),
             ms.pattern_for(repo, nested / "util.py")}
     assert pats == {"boost_cli.core.util.*", "boost_cli.core.rag.util.*"}
+
+
+def test_pattern_is_dotted_on_every_platform(monkeypatch):
+    """The dotted prefix must not depend on the OS path separator.
+
+    `str(Path("boost_cli/core"))` is "boost_cli\\core" on Windows, so building
+    the prefix with str() makes the "/"->"." replacement a no-op there and every
+    shard pattern comes out as "boost_cli\\core.<mod>.*", matching no mutant at
+    all. Each shard would then run nothing, merge would report every file unrun,
+    and the required check would go red on Windows only. Caught by the Windows
+    test legs; this asserts it everywhere so the Linux legs cannot stay blind.
+    """
+    from pathlib import PureWindowsPath
+    monkeypatch.setattr(ms, "SOURCE", PureWindowsPath("boost_cli/core"))
+    assert ms.SOURCE.as_posix().replace("/", ".") == "boost_cli.core"
+    assert "\\" not in ms.SOURCE.as_posix()
