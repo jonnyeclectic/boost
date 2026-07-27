@@ -6,10 +6,20 @@ import json
 from contextlib import suppress
 
 from .. import cliparse, spin
-from ..core import catalog, config, gitutil, journal, lockfile, paths, registry, staleness, store, util
+from ..core import (
+    catalog,
+    config,
+    gitutil,
+    journal,
+    lockfile,
+    paths,
+    registry,
+    staleness,
+    store,
+    util,
+)
 from ..core import output as out
 from ..errors import BoostError
-
 
 _tilde = paths.tilde
 

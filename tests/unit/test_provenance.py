@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from boost_cli.core import paths, provenance
 
-
 # ── trusted-key store ────────────────────────────────────────────────────
 
 def test_empty_store_reads_as_no_keys(sandbox):

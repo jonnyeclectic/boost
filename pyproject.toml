@@ -93,7 +93,23 @@ target-version = "py39"
 # (RUF). UP is pyupgrade, ported into ruff — it holds the line on dated idioms
 # as they are written, rather than letting them accrete (see the ignore block
 # for the four rules the >=3.9 runtime floor does not allow).
-extend-select = ["S", "B", "SIM", "C4", "PERF", "RUF", "UP"]
+#
+# `select`, NOT `extend-select`: extend-select ADDS to whatever ruff's defaults
+# happen to be, so a ruff release that widens them silently switches on families
+# this project never chose. ruff 0.16 did exactly that — the 0.15->0.16 bump
+# arrived as 100 errors in families nobody opted into. Stating the set outright
+# means a version bump can only change how the SELECTED rules behave, never
+# which rules run. E4/E7/E9/F is ruff's historical default, spelled out here.
+select = ["E4", "E7", "E9", "F", "S", "B", "SIM", "C4", "PERF", "RUF", "UP",
+          # Adopted with the 0.16 bump: isort (I) keeps import blocks ordered
+          # and was entirely mechanical — 34 sites, all auto-fixed, no judgement
+          # calls. NOT adopted: ISC (implicit string concat). It sounds like the
+          # right check for a codebase this full of wrapped literals, but all 8
+          # hits were deliberate line wrapping — an RFC 8032 hex vector split
+          # across lines, wrapped HTML fixtures, wrapped assertion strings — so
+          # it found zero real bugs and would have cost 8 hand edits that only
+          # add parentheses. Revisit if a missing comma ever actually lands.
+          "I"]
 # refurb runs as its own lint step and its suppressions are written the same
 # way (`# noqa: FURB143`). Declaring the prefix as external stops RUF102 from
 # reading another linter's codes as typos and deleting the suppression.

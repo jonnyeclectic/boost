@@ -7,6 +7,7 @@ qualitatively better. Session state lives in ~/.boost/state/.
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
 import fnmatch
 import json
@@ -18,11 +19,20 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .. import cliparse
-from ..core import (ai, catalog, frontmatter, gitutil, imperative, journal,
-                    lockfile, paths, store, util)
+from ..core import (
+    ai,
+    catalog,
+    frontmatter,
+    gitutil,
+    imperative,
+    journal,
+    lockfile,
+    paths,
+    store,
+    util,
+)
 from ..core import output as out
 from ..errors import BoostError
-import contextlib
 
 # ---------------------------------------------------------------- helpers
 

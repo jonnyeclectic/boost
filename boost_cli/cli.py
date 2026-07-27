@@ -6,6 +6,7 @@ Modules are imported lazily so `boost --help` stays instant.
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
 import importlib
 import sys
@@ -13,11 +14,9 @@ import time
 from typing import List
 
 from . import PRODUCT, TAGLINE, __version__
-from .core import logs
-from .core import nethttp
+from .core import logs, nethttp
 from .core import output as out
 from .errors import BoostError
-import contextlib
 
 # Global flags handled before dispatch, stripped from the command's own argv.
 _GLOBAL_FLAGS = {

@@ -32,9 +32,8 @@ from pathlib import Path
 
 from .. import cliparse
 from ..core import claude_settings as cs
-from ..core import journal
+from ..core import journal, paths, util
 from ..core import output as out
-from ..core import paths, util
 from ..errors import BoostError
 
 DEFAULT_MODULES = "bmm"

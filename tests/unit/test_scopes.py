@@ -8,7 +8,6 @@ import pytest
 from boost_cli.core import scopes
 from boost_cli.errors import BoostError
 
-
 # ── project_root: the walk-up ────────────────────────────────────────────
 
 def test_project_root_finds_the_marker_in_the_same_dir(tmp_path):
