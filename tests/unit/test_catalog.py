@@ -668,3 +668,87 @@ class TestSearchBlobPrecompute:
         assert "search_blob" not in e
         res = catalog.search("fallbackword", entries=[e])
         assert [(m["name"], s) for m, s in res] == [("x", 2)]
+
+
+class TestLintTargets:
+    """`boost lint` scores a SKILL.md directory, so only skills are lintable.
+
+    Rules and workflows are single files with no SKILL.md, so linting them
+    scored every one a 0 with a bogus "missing SKILL.md" — the tap's score was
+    a function of how many rules it shipped. They are now split out and
+    reported as skipped rather than scored or silently dropped.
+    """
+
+    ROOT = Path("/taps/demo")
+
+    def _e(self, name, kind=None, rel_dir="."):
+        e = {"name": name, "rel_dir": rel_dir}
+        if kind is not None:
+            e["kind"] = kind
+        return e
+
+    def test_skills_become_targets_rules_and_workflows_are_skipped(self):
+        entries = [self._e("brainstorm", "skill", "skills/brainstorm"),
+                   self._e("py-style", "rule", "rules/py-style.mdc"),
+                   self._e("ship-it", "workflow", "commands/ship-it.md")]
+        targets, skipped = catalog.lint_targets(entries, self.ROOT)
+        assert targets == [("brainstorm", self.ROOT / "skills/brainstorm")]
+        # Exact dicts, not just a count: the kind is what the message prints,
+        # so a mutant swapping it must fail here.
+        assert skipped == [{"name": "py-style", "kind": "rule"},
+                           {"name": "ship-it", "kind": "workflow"}]
+
+    def test_a_kindless_entry_counts_as_a_skill(self):
+        # Caches written before kinds existed have no `kind`. Treating those
+        # as non-skills would make `lint` silently skip everything.
+        targets, skipped = catalog.lint_targets([self._e("legacy")], self.ROOT)
+        assert targets == [("legacy", self.ROOT)]
+        assert skipped == []
+
+    def test_rel_dir_dot_is_the_tap_root_itself(self):
+        targets, _ = catalog.lint_targets([self._e("top", "skill", ".")],
+                                          self.ROOT)
+        assert targets == [("top", self.ROOT)]      # not ROOT/"."
+
+    def test_nested_rel_dir_is_joined(self):
+        targets, _ = catalog.lint_targets(
+            [self._e("deep", "skill", "a/b/c")], self.ROOT)
+        assert targets == [("deep", self.ROOT / "a" / "b" / "c")]
+
+    def test_names_filter_selects_only_the_named_skill(self):
+        entries = [self._e("one", "skill", "one"), self._e("two", "skill", "two")]
+        targets, skipped = catalog.lint_targets(entries, self.ROOT, ["two"])
+        assert targets == [("two", self.ROOT / "two")]
+        assert skipped == []
+
+    def test_an_explicitly_named_rule_is_reported_not_dropped(self):
+        # The whole point of returning `skipped`: asking to lint a rule by name
+        # must say why nothing happened, not exit silently having done nothing.
+        entries = [self._e("one", "skill", "one"),
+                   self._e("py-style", "rule", "rules/py-style.mdc")]
+        targets, skipped = catalog.lint_targets(entries, self.ROOT, ["py-style"])
+        assert targets == []
+        assert skipped == [{"name": "py-style", "kind": "rule"}]
+
+    def test_an_empty_names_list_does_not_filter_everything_out(self):
+        # `args.names or None` yields None for [], but guard the falsy case
+        # here too: a mutant turning `if wanted` into `if wanted is not None`
+        # would filter every entry away and lint nothing.
+        entries = [self._e("one", "skill", "one")]
+        assert catalog.lint_targets(entries, self.ROOT, [])[0] == \
+            [("one", self.ROOT / "one")]
+
+    def test_order_is_preserved(self):
+        entries = [self._e(n, "skill", n) for n in ("c", "a", "b")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert [n for n, _p in targets] == ["c", "a", "b"]
+
+    def test_no_entries_is_two_empty_lists(self):
+        assert catalog.lint_targets([], self.ROOT) == ([], [])
+
+    def test_a_string_tap_root_works_like_a_path(self):
+        # cmd_lint passes tap.path (a Path), but the signature accepts str and
+        # the join must not become string concatenation.
+        targets, _ = catalog.lint_targets([self._e("s", "skill", "d")],
+                                          "/taps/demo")
+        assert targets == [("s", Path("/taps/demo/d"))]

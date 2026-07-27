@@ -234,6 +234,35 @@ def load_tap(tap: registry.Tap, rebuild: bool = False) -> List[dict]:
     return []
 
 
+def lint_targets(entries: List[dict], tap_root: Path,
+                 names: Optional[List[str]] = None,
+                 ) -> Tuple[List[Tuple[str, Path]], List[dict]]:
+    """Split tap entries into lintable skills and skipped rule/workflow items.
+
+    `boost lint` scores a SKILL.md directory, so only `skill` entries are
+    lintable: rules and workflows are single files with no SKILL.md and
+    would every one of them score 0 with a bogus "missing SKILL.md".
+    Returns `(targets, skipped)` — `targets` is `(name, item_dir)` per skill
+    (an entry with no `kind` counts as a skill, for caches written before
+    kinds existed), `skipped` is `{"name", "kind"}` per non-skill entry.
+    A non-empty `names` filters both lists, so an explicitly named rule is
+    still reported as skipped rather than vanishing.
+    """
+    wanted = set(names or ())
+    targets: List[Tuple[str, Path]] = []
+    skipped: List[dict] = []
+    for entry in entries:
+        if wanted and entry["name"] not in wanted:
+            continue
+        kind = entry.get("kind", KIND_SKILL)
+        if kind == KIND_SKILL:
+            targets.append((entry["name"],
+                            Path(tap_root) / entry.get("rel_dir", ".")))
+        else:
+            skipped.append({"name": entry["name"], "kind": kind})
+    return targets, skipped
+
+
 def all_entries() -> List[dict]:
     """Return the entries of every configured tap, concatenated."""
     out: List[dict] = []
