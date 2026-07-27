@@ -719,8 +719,19 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
 
 def install_from_path(src_dir: Path, name: Optional[str] = None,
                       tap_label: str = "local",
-                      only_agents: Optional[List[str]] = None) -> InstallResult:
-    """Install directly from a local directory (used by `boost import`)."""
+                      only_agents: Optional[List[str]] = None,
+                      force: bool = False) -> InstallResult:
+    """Install directly from a local directory (used by `boost import`).
+
+    Enforces the same pin, policy and capability gates as ``install``. It used
+    to enforce none of them, so every local path in — ``import``, ``create
+    --install``, ``migrate``, ``distill/infer/absorb --install`` — was a way
+    around a blocklist, ``pin_only``, ``max_skills`` and ``denied_capabilities``.
+
+    Deliberately *not* adopted from ``install``: its "already installed" refusal.
+    This is the re-import path (``boost reinstall`` on a local skill), so that
+    gate would break the function's main use.
+    """
     src_dir = Path(src_dir)
     if not (src_dir / "SKILL.md").exists():
         raise BoostError("%s has no SKILL.md" % src_dir)
@@ -728,6 +739,21 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
     meta, _ = frontmatter.parse((src_dir / "SKILL.md").read_text(
         encoding="utf-8", errors="replace"))
     name = name or str(meta.get("name") or src_dir.name)
+    existing = lockfile.get_skill(name)
+    # Refuse before `dest` is touched, so a rejected install leaves nothing
+    # half-copied over an existing skill.
+    if existing and existing.get("pinned") and not force:
+        raise BoostError("%s is pinned" % name, hint="`boost unpin %s` first" % name)
+    violations = policy.check_install(
+        {"name": name, "tap": tap_label,
+         "version": str(meta.get("version") or "0.0.0"),
+         "description": meta.get("description")},
+        # Re-importing a skill that is already counted must not trip max_skills.
+        len(lockfile.installed()) - (1 if existing else 0))
+    if violations:
+        raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
+                        hint="inspect with `boost policy list`")
+    _enforce_capability_policy(name, src_dir / "SKILL.md")
     dest = skill_store_dir(name)
     paths.ensure_dirs()
     _copy_skill(src_dir, dest)
@@ -735,7 +761,6 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
     now = util.now_iso()
-    existing = lockfile.get_skill(name)
     lockfile.set_skill(name, {
         "version": str(meta.get("version") or "0.0.0"),
         "tap": tap_label,
@@ -744,7 +769,9 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
         "sha256": util.sha256_dir(dest),
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
-        "pinned": False,
+        # Was hardcoded False, which did not merely skip the pin check — a
+        # re-import silently CLEARED an existing pin. install() preserves it.
+        "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
         "agents": res.linked,
         "tags": (existing or {}).get("tags", []),

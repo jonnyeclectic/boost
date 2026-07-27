@@ -82,12 +82,25 @@ def _save_state(fname: str, data: dict) -> None:
 
 
 def _install_generated(name: str, text: str) -> None:
-    """Write a generated SKILL.md to a tempdir and install it as `name`."""
+    """Write a generated SKILL.md to a tempdir and install it as `name`.
+
+    The tempdir is the only copy of a just-generated skill, so a refused install
+    must not be allowed to propagate out of the ``with`` block and delete it —
+    that would discard an LLM generation the user paid for, with nothing on disk
+    to recover. On a refusal, save it beside the cwd and say where it went.
+    """
     with tempfile.TemporaryDirectory(prefix="boost-gen-") as td:
         src = Path(td) / name
         src.mkdir()
         (src / "SKILL.md").write_text(text, encoding="utf-8")
-        res = store.install_from_path(src, name=name, tap_label="local")
+        try:
+            res = store.install_from_path(src, name=name, tap_label="local")
+        except BoostError as err:
+            fallback = Path.cwd() / ("%s.SKILL.md" % name)
+            fallback.write_text(text, encoding="utf-8")
+            out.warn("not installed: %s" % err.message)
+            out.info("generated skill saved to %s" % _tilde(fallback))
+            return
     out.ok("installed %s → %s" % (name, _tilde(res.dest)))
     if res.linked:
         out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))

@@ -732,7 +732,17 @@ def cmd_reinstall(argv: List[str]) -> int:
         if lk.get("tap") == "local":
             src = Path(str(lk.get("source_dir") or ""))
             if src.is_dir() and (src / "SKILL.md").exists():
-                store.install_from_path(src, name=name)
+                # force=True to match the tap branch's `install(..., force=True)`:
+                # reinstalling a pinned skill is the point of the command. Policy
+                # still applies. The try/except mirrors the tap branch too —
+                # without it one policy-blocked skill aborts `--all` mid-run and
+                # the remaining names are never attempted.
+                try:
+                    store.install_from_path(src, name=name, force=True)
+                except BoostError as err:
+                    out.warn("%s: %s" % (name, err.message))
+                    failed += 1
+                    continue
                 out.ok("reinstalled %s (local, from %s)" % (name, _tilde(src)))
                 done += 1
             else:
@@ -927,12 +937,22 @@ def _import_root(root: Path, name: Optional[str], do_all: bool,
                             hint="available: %s" % ", ".join(e["name"] for e in entries))
         return one(dir_of(picks[0]))
     if do_all:
+        # One refused skill must not abandon the rest: same contract as a
+        # multi-skill `boost install`, which warns per item and still reports a
+        # summary (test_multi_policy_block_rc1_others_install).
+        imported, refused = 0, 0
         for e in entries:
-            res = store.install_from_path(dir_of(e), only_agents=only)
+            try:
+                res = store.install_from_path(dir_of(e), only_agents=only)
+            except BoostError as err:
+                out.warn("%s: %s" % (e["name"], err.message))
+                refused += 1
+                continue
             out.ok("imported %s v%s (score %d/100)" % (res.name, e["version"],
                                                        res.score))
-        out.info("Imported %s" % _plural(len(entries), "skill"))
-        return 0
+            imported += 1
+        out.info("Imported %s" % _plural(imported, "skill"))
+        return 1 if refused else 0
     out.heading("%d skills in %s" % (len(entries), display))
     out.table([(e["name"], "v" + e["version"], (e["description"] or "")[:60])
                for e in entries])
@@ -965,13 +985,22 @@ def cmd_migrate(argv: List[str]) -> int:
         if not entries:
             out.info("no skills found under %s" % _tilde(root))
             return 0
+        migrated, refused = 0, 0
         for e in entries:
             d = root if e["rel_dir"] == "." else root / e["rel_dir"]
-            res = store.install_from_path(d)
+            # A refusal partway through must not leave a silently half-done
+            # migration with no summary.
+            try:
+                res = store.install_from_path(d)
+            except BoostError as err:
+                out.warn("%s: %s" % (e["name"], err.message))
+                refused += 1
+                continue
             out.ok("imported %s v%s" % (res.name, e["version"]))
-        out.info("Migrated %s from %s" % (_plural(len(entries), "skill"),
+            migrated += 1
+        out.info("Migrated %s from %s" % (_plural(migrated, "skill"),
                                           _tilde(root)))
-        return 0
+        return 1 if refused else 0
 
     if not (args.src and args.dst):
         raise BoostError("nothing to do",
