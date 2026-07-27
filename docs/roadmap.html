@@ -110,7 +110,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>146</b><span>Loop finds</span></div>
+      <div class="stat"><b>147</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1492,6 +1492,40 @@ then #236 must not be merged — it reddens <code>ci / lint</code> on every bran
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">83 errors, 43 auto-fixable</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="lock-invariant-cannot-parse-extras-pins">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Latent bug</span></div>
+        <h3>The lock invariant can't parse <code>name[extra]==version</code>, so a valid pin fails the gate</h3>
+        <p><code>tests/unit/test_toolchain_lock.py</code> (added with the lock-stability fix, #248)
+asserts every requirement is pinned with <code>==</code>. Its regex is
+<code>(?P&lt;name&gt;[A-Za-z0-9][A-Za-z0-9._-]*)(?P&lt;spec&gt;==[^\s;\\]+)?</code> — and the
+name class has <b>no <code>[</code> or <code>]</code></b>. So against
+<code>coverage[toml]==7.15.2</code> the name matches <code>coverage</code>, the spec then
+fails to match because the next character is <code>[</code>, and <code>spec</code> comes
+back <code>None</code>. The test reports <i>"coverage is not pinned with == in
+test-tools"</i> about a line that is pinned exactly.
+Latent today — nothing in <code>requirements/*.txt</code> currently carries an extra — but
+<code>uv</code>/pip-tools emit <code>name[extra]==version</code> routinely, so the first
+legitimate extras-bearing pin will block the gate with a message that points at the wrong
+thing. Fix by allowing an optional extras group in the name, e.g.
+<code>[A-Za-z0-9._-]*(?:\[[^\]]+\])?</code>, and add both forms to the test's own cases.
+Found the honest way: Dependabot #253 (hypothesis) regenerated the lock and tripped this
+assertion. That PR is genuinely bad for an <b>unrelated</b> reason — it collapses
+<code>coverage==7.10.7 ; python&lt;'3.10'</code> and
+<code>coverage==7.15.2 ; python&gt;='3.10'</code> into a single
+<code>coverage[toml]==7.15.2</code>, and 7.15.2 requires Python &ge;3.10, so it silently
+drops the 3.9 leg this project promises. The gate <b>correctly refused</b> it. But it
+refused for the wrong reason, and that is the part worth fixing: the same message will one
+day reject a lock that is perfectly fine. See
+<a href="#pytest-tmpdir-cve-blocked-by-py39-floor">the pytest card</a> — collapsing a
+marker-split pin is the recurring shape here, and is worth its own assertion.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m"><code>pkg[extra]==x</code> reads as unpinned</span>
         </div>
       </article>
 
