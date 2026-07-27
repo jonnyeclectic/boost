@@ -119,10 +119,14 @@ def cmd_clean(argv) -> int:
         adir = spec["dir"]
         if not adir.is_dir():
             continue
+        # Same ownership rule as `boost sync`: a broken symlink is only ours to
+        # remove if it pointed into the canonical store. A user's own dangling
+        # link in ~/.claude/skills is not boost's to clean up.
         items.extend(
             (link, "broken symlink", 0)
             for link in sorted(adir.iterdir())
             if link.is_symlink() and not link.exists()
+            and store.points_into_store(link)
         )
 
     configured = {t.safe_name for t in registry.list_taps()}

@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from pathlib import Path
 from typing import ClassVar
 
 import pytest
@@ -457,6 +458,43 @@ class TestSyncPlan:
         link.symlink_to(target)
         assert store.sync_plan() == self.EMPTY
 
+    def test_broken_symlink_boost_does_not_own_is_left_alone(self,
+                                                             brainstorming):
+        # The ownership test used to be short-circuited by `not link.exists()`,
+        # so a user's own dangling link — an unmounted volume, a moved notes
+        # repo — was swept up by plain `boost sync`.
+        mine = paths.home() / ".claude" / "skills" / "my-notes"
+        mine.symlink_to(paths.home() / "unmounted-volume" / "notes")
+        assert store.sync_plan() == self.EMPTY
+        store.sync_apply(store.sync_plan())
+        assert mine.is_symlink()
+
+    def test_broken_link_into_a_lookalike_sibling_is_left_alone(self,
+                                                                brainstorming):
+        # `~/.agents/skills-backup` starts with the store path as a *string*
+        # but is a different directory; the check compares path components.
+        sibling = Path(str(paths.store_dir()) + "-backup")
+        link = paths.home() / ".claude" / "skills" / "backup-thing"
+        link.symlink_to(sibling / "brainstorming")
+        assert store.sync_plan() == self.EMPTY
+
+    def test_broken_link_with_a_relative_target_into_the_store_is_stale(
+            self, brainstorming):
+        # readlink() hands back the raw target; a relative one has to be
+        # resolved against the link's own directory before it can be judged.
+        adir = paths.home() / ".claude" / "skills"
+        rel = os.path.relpath(str(paths.store_dir() / "gone"), str(adir))
+        link = adir / "gone"
+        link.symlink_to(rel)
+        assert store.sync_plan()["stale_links"] == [str(link)]
+
+    def test_points_into_store_ignores_an_unreadable_link(self, brainstorming):
+        # A plain file is not a symlink, so readlink() raises rather than
+        # returning something that might accidentally look owned.
+        plain = paths.home() / ".claude" / "skills" / "notalink"
+        plain.write_text("x", encoding="utf-8")
+        assert store.points_into_store(plain) is False
+
     def test_orphaned_store_dir(self, brainstorming):
         rogue = paths.store_dir() / "rogue"
         rogue.mkdir()
@@ -482,6 +520,59 @@ class TestSyncPlan:
         assert plan["orphaned_store"] == []
         assert sorted(plan["stale_links"]) == sorted(
             str(_link(a)) for a in AGENT_DIRS)       # links now dangle
+
+
+
+class TestNormalizeLinkTarget:
+    """Windows readlink() hands back the reparse point's substitution path.
+
+    Since 3.8 that typically carries the `\\\\?\\` extended-length prefix, so
+    boost's own link into the store stopped matching the store root once the
+    comparison became component-wise instead of a substring test. Every
+    Windows leg of the matrix went red on exactly this.
+    """
+
+    def test_extended_length_prefix_is_stripped(self):
+        got = store.normalize_link_target(Path(r"\\?\C:\Users\me\.agents\skills"))
+        assert got == os.path.normcase(os.path.normpath(r"C:\Users\me\.agents\skills"))
+
+    def test_unc_prefix_becomes_a_plain_unc_path(self):
+        got = store.normalize_link_target(Path(r"\\?\UNC\server\share\x"))
+        assert got == os.path.normcase(os.path.normpath(r"\\server\share\x"))
+
+    def test_an_ordinary_path_is_left_alone_apart_from_normalizing(self,
+                                                                   tmp_path):
+        got = store.normalize_link_target(tmp_path / "a" / ".." / "b")
+        assert got == os.path.normcase(os.path.normpath(str(tmp_path / "b")))
+
+    def test_windows_containment_holds_under_ntpath_rules(self):
+        """Pin the actual Windows failure on every platform.
+
+        `ntpath` imports fine on POSIX, so the semantics that broke all three
+        Windows legs can be asserted here rather than only on a Windows runner
+        — where nobody can read the log from this sandbox anyway.
+        """
+        import ntpath
+        target = r"\\?\C:\Users\runneradmin\.agents\skills\gone"
+        root = r"C:\Users\runneradmin\.agents\skills"
+
+        # Why it went unnoticed: the check this replaced was a substring test,
+        # which the extended-length prefix sails straight through.
+        assert root in target
+
+        # Component-wise, the prefix reads as a different drive entirely.
+        with pytest.raises(ValueError):
+            ntpath.commonpath([ntpath.normpath(target), ntpath.normpath(root)])
+
+        # Stripped, containment holds — and the lookalike sibling still fails.
+        def win(text):
+            return ntpath.normcase(
+                ntpath.normpath(store.strip_extended_prefix(text)))
+
+        assert ntpath.commonpath([win(target), win(root)]) == win(root)
+        sibling = win(r"\\?\C:\Users\runneradmin\.agents\skills-backup\x")
+        assert ntpath.commonpath([sibling, win(root)]) != win(root)
+
 
 
 class TestSyncApply:

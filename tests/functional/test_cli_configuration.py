@@ -93,8 +93,9 @@ class TestConfig:
 
 class TestClean:
     def test_dry_run_then_real_then_nothing(self, boost, installed):
+        # Into the store: boost put it there, so boost may remove it.
         ghost = paths.home() / ".claude" / "skills" / "ghost"
-        ghost.symlink_to(paths.home() / "nowhere")
+        ghost.symlink_to(paths.store_dir() / "ghost")
         stale = paths.cache_dir() / "old__tap.json"
         stale.write_text('{"skills": []}', encoding="utf-8")            # 14 bytes
         ds = paths.store_dir() / "brainstorming" / ".DS_Store"
@@ -118,6 +119,17 @@ class TestClean:
     def test_fresh_sandbox_has_nothing_to_clean(self, boost, sandbox):
         r = boost("clean")
         assert "nothing to clean" in r.out
+
+    def test_leaves_a_broken_symlink_boost_does_not_own(self, boost, installed):
+        # `clean` carried the same overreach as `sync`: it removed every broken
+        # symlink under an agent dir, boost's or not. A user's own dangling
+        # link is not boost's to delete, and `clean` is the command people run
+        # without reading it first.
+        mine = paths.home() / ".claude" / "skills" / "my-notes"
+        mine.symlink_to(paths.home() / "unmounted" / "notes")
+        r = boost("clean")
+        assert "nothing to clean" in r.out
+        assert mine.is_symlink()
 
     def test_deep_clean_pycache_history_snapshots(self, boost, installed):
         import os
