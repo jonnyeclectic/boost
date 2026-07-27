@@ -10,7 +10,6 @@ are left untouched. See core/claude_settings.py.
 """
 from __future__ import annotations
 
-
 from .. import cliparse
 from ..core import claude_settings as cs
 from ..core import journal

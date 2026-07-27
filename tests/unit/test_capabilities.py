@@ -5,7 +5,6 @@ import pytest
 
 from boost_cli.core import capabilities as caps
 
-
 # ── declared ─────────────────────────────────────────────────────────────
 
 def test_declared_from_a_list():

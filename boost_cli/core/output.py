@@ -9,11 +9,11 @@ Conventions used across all commands:
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
 import sys
-import contextlib
 
 RESET = "\033[0m"
 BOLD = "\033[1m"

@@ -26,7 +26,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install build + validation tools
-        run: python -m pip install --upgrade pip build twine check-wheel-contents pyroma
+        # Hash-pinned (requirements/release-tools.txt, generated from the .in by
+        # scripts/lock_toolchain.py) — that file already declares build, twine,
+        # check-wheel-contents and pyroma for exactly this workflow. Unpinned,
+        # a `twine check --strict` or `pyroma` verdict could change on an
+        # upstream release, which is the thing a release gate must not do.
+        run: python -m pip -q install -r requirements/release-tools.txt
       - name: Build sdist + wheel
         run: python -m build
       - name: twine check (README renders on PyPI)

@@ -24,7 +24,6 @@ import pytest
 
 from boost_cli.core import dense, embed, rag
 
-
 # --------------------------------------------------------------- toy doubles
 
 def _toy_embed(texts, input_type=None, timeout=60):
