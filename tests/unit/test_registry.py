@@ -153,6 +153,47 @@ class TestListAndGet:
         self._seed()
         assert registry.get("repo").name == "owner/repo"
 
+    # ── ambiguity: a short name that matches two taps must not be guessed.
+    # `boost untap skills` with angular/skills and microsoft/skills both tapped
+    # used to act on whichever came first in config.json.
+
+    def _seed_two(self):
+        cfg = config.load()
+        cfg["taps"] = [{"name": "angular/skills", "url": "https://x/a"},
+                       {"name": "microsoft/skills", "url": "https://x/m"}]
+        config.save(cfg)
+
+    def test_ambiguous_tail_refuses(self, sandbox):
+        self._seed_two()
+        with pytest.raises(BoostError) as ei:
+            registry.get("skills")
+        assert "ambiguous" in ei.value.message
+        # both candidates named, so the user can pick
+        assert "angular/skills" in ei.value.message
+        assert "microsoft/skills" in ei.value.message
+        assert ei.value.hint == "use the full owner/repo name"
+
+    def test_qualified_name_still_resolves_when_tail_is_ambiguous(self, sandbox):
+        self._seed_two()
+        assert registry.get("angular/skills").name == "angular/skills"
+        assert registry.get("microsoft/skills").name == "microsoft/skills"
+
+    def test_safe_name_still_resolves_when_tail_is_ambiguous(self, sandbox):
+        self._seed_two()
+        assert registry.get("angular__skills").name == "angular/skills"
+
+    def test_exact_name_beats_another_taps_tail(self, sandbox):
+        # A tap literally named "skills" must win over owner/skills' tail.
+        cfg = config.load()
+        cfg["taps"] = [{"name": "angular/skills", "url": "https://x/a"},
+                       {"name": "skills", "url": "https://x/s"}]
+        config.save(cfg)
+        assert registry.get("skills").name == "skills"
+
+    def test_unambiguous_tail_still_works(self, sandbox):
+        self._seed()
+        assert registry.get("repo").name == "owner/repo"
+
     def test_get_miss_did_you_mean(self, sandbox):
         self._seed()
         with pytest.raises(BoostError) as ei:

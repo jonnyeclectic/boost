@@ -864,6 +864,14 @@ def _bundle_install(file: Optional[str]) -> int:
                          % (sname, (" in tap %s" % tapq) if tapq else ""))
                 failed += 1
                 continue
+            if len({e["tap"] for e in matches}) > 1:
+                # A Boostfile is meant to be reproducible, so guessing which tap
+                # `skills:brainstorming` meant is the one thing this must not do.
+                out.warn("%s is ambiguous — in %s; qualify it as owner/repo:%s"
+                         % (sname, ", ".join(sorted({e["tap"] for e in matches})),
+                            sname))
+                failed += 1
+                continue
             entry = matches[0]
             if sver and str(entry.get("version")) != sver:
                 out.warn("%s: Boostfile wants @%s, tap has %s — installing that"
