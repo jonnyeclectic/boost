@@ -472,6 +472,30 @@ class TestAllEntriesAndFind:
         assert [e["tap"] for e in catalog.find("dup", tap="beta")] == ["beta"]
         assert [e["tap"] for e in catalog.find("dup", tap="alpha")] == ["owner/alpha"]
 
+    def test_qualified_tap_beats_another_taps_tail(self, sandbox):
+        # angular/skills and microsoft/skills both end in "skills". The
+        # qualified form must select exactly one; the untiered `tap in (...)`
+        # membership test used to let the tail match leak the other tap in.
+        _fake_taps(("angular/skills", [_entry("brainstorming", "angular/skills")]),
+                   ("microsoft/skills", [_entry("brainstorming", "microsoft/skills")]))
+        got = catalog.find("brainstorming", tap="angular/skills")
+        assert [e["tap"] for e in got] == ["angular/skills"]
+        got = catalog.find("angular/skills:brainstorming")
+        assert [e["tap"] for e in got] == ["angular/skills"]
+
+    def test_ambiguous_tail_returns_every_candidate(self, sandbox):
+        # find() reports rather than guesses; the caller decides. `bundle apply`
+        # refuses, which is what stops it installing from the wrong tap.
+        _fake_taps(("angular/skills", [_entry("brainstorming", "angular/skills")]),
+                   ("microsoft/skills", [_entry("brainstorming", "microsoft/skills")]))
+        got = catalog.find("brainstorming", tap="skills")
+        assert sorted(e["tap"] for e in got) == ["angular/skills", "microsoft/skills"]
+
+    def test_exact_tap_name_wins_over_a_tail(self, sandbox):
+        _fake_taps(("owner/skills", [_entry("dup", "owner/skills")]),
+                   ("skills", [_entry("dup", "skills")]))
+        assert [e["tap"] for e in catalog.find("dup", tap="skills")] == ["skills"]
+
 
 class TestResolveOne:
     def test_single_hit(self, sandbox):
