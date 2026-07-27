@@ -2,15 +2,15 @@
 id: ruff-016-widens-the-default-rule-set
 board: code
 section: health
-status: planned
+status: shipped
 category: Toolchain
 complexity: M
 impact: Med
 wow: 2
 note: 83 errors, 43 auto-fixable
 order: 15
-owner:
-pr: 236
+owner: loop/roadmap-hygiene
+pr: 260
 title: ruff 0.16 widens the default rule set — 83 new errors on a version bump
 ---
 Dependabot #236 bumps ruff <code>0.15.22 &rarr; 0.16.0</code> and the <code>ruff</code> step
@@ -34,5 +34,13 @@ call sites that each need a judgement about whether a non-zero exit should raise
 <code>DTZ005/006</code> (naive <code>datetime.now()</code>) is worth a look on its own
 merits given <a href="#rel-time-tests-race-the-wall-clock">the clock-racing test</a>.
 Recommended: pin <code>select</code> first so the bump is unblocked and the gate stops
-depending on an upstream default, then adopt families deliberately in follow-ups. Until
-then #236 must not be merged — it reddens <code>ci / lint</code> on every branch.
+depending on an upstream default, then adopt families deliberately in follow-ups.
+Shipped that way in #260: <code>pyproject.toml</code> now states the rule set outright with
+<code>select = ["E4", "E7", "E9", "F", "S", "B", "SIM", "C4", "PERF", "RUF", "UP", "I"]</code>,
+so a future ruff release can only change how the chosen rules behave, never which rules run.
+<code>I001</code> was adopted (34 sites, entirely mechanical); <code>ISC</code> was
+considered and declined — all 8 hits were deliberate line wrapping. <code>external = ["FURB"]</code>
+is preserved, so <code>FURB167</code> stays refurb's call rather than ruff's.
+<code>requirements/lint-tools.txt</code> carries <code>ruff==0.16.0</code> and Dependabot #236
+was closed as superseded. <code>PLW1510</code> and <code>DTZ005/006</code> remain unadopted and
+are the deliberate follow-ups.
