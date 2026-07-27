@@ -214,7 +214,27 @@ jobs:
           # of the toolchain, and some matrix legs have no wheel for it.
           "$VENV_BIN/pip" -q install sqlite-vec || true
       - name: unit + functional (80% coverage gate)
-        run: "\"$VENV_BIN/pytest\" tests/unit tests/functional --cov=boost_cli --cov-report=term-missing --cov-report=json -q"
+        # Every failing test is re-emitted as a `::error::` workflow command so
+        # it lands as a check-run annotation. The step conclusion already says
+        # WHICH STEP broke; the annotation is what says WHICH TEST. Without it
+        # the only place that answer exists is the raw job log, which is not
+        # reachable from every environment (it redirects to blob storage that
+        # egress policies and proxies routinely block) — and "the suite failed
+        # somewhere" costs a whole CI round-trip to narrow down.
+        #
+        # `shell: bash` on this job already means `-eo pipefail`, so the pipe
+        # into tee reports pytest's status rather than tee's; `|| rc=$?` is what
+        # keeps -e from killing the step before the annotations are emitted.
+        # set -o pipefail is restated anyway so this does not silently become a
+        # green step if the job's shell: is ever changed.
+        run: |
+          set -o pipefail
+          rc=0
+          "$VENV_BIN/pytest" tests/unit tests/functional \
+            --cov=boost_cli --cov-report=term-missing --cov-report=json -q \
+            | tee /tmp/pytest.out || rc=$?
+          grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | sed 's/^/::error::/' || true
+          exit "$rc"
       - name: shell smoke suite (152 checks, sandboxed)
         run: bash tests/smoke.sh | tee /tmp/smoke.out
       - name: job summary (coverage + counts)
@@ -227,7 +247,11 @@ jobs:
               PCT=$("$VENV_BIN/python" -c "import json; print(round(json.load(open('coverage.json'))['totals']['percent_covered'],1))")
               echo "- **Coverage:** ${PCT}% (gate: 80%)"
             fi
-            SMOKE=$(grep -Eo '[0-9]+ passed, [0-9]+ failed' /tmp/smoke.out | tail -1 || true)
+            # 2>/dev/null because the file is absent in exactly the case this
+            # step exists for: the test step failed, so smoke never ran. `||
+            # true` already handles the status; this drops the misleading "No
+            # such file" that would otherwise sit in the log of a failed run.
+            SMOKE=$(grep -Eo '[0-9]+ passed, [0-9]+ failed' /tmp/smoke.out 2>/dev/null | tail -1 || true)
             # `if`, not `[ -n "$SMOKE" ] && echo ...`: this is the last command
             # of the group, the group is the last command of the step, and the
             # step runs under `bash -eo pipefail`. With no smoke line the
