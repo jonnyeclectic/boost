@@ -154,11 +154,22 @@ isolation can still land a broken *combination*. Guard against it in the `main`
 branch ruleset (**Settings → Rules → Rulesets**):
 
 - **Require a pull request before merging.**
-- **Require status checks to pass** — select `lint`, every `tests (…)` matrix job,
-  `mutation`, and `CodeQL`, and tick **Require branches to be up to date before
-  merging**. This is the key one: it forces each PR to be rebased onto the latest
-  `main` and re-pass the full gate before it can merge, so an incompatible pair
-  can't both land — the second PR must include the first and re-run CI.
+- **Require status checks to pass** — the list is no longer prose. It lives in
+  [`.github/required-checks.txt`](.github/required-checks.txt), and
+  `scripts/check_required_checks.py` (part of `make lint`, so part of CI) fails
+  if a name there stops matching a real job that runs on `pull_request`. Get the
+  exact payload with `python3 scripts/check_required_checks.py --print-api`.
+- Tick **Require branches to be up to date before merging**. This is the key one:
+  it forces each PR to be rebased onto the latest `main` and re-pass the full
+  gate before it can merge, so an incompatible pair can't both land — the second
+  PR must include the first and re-run CI.
+
+> Check names must be **unique across workflows** — GitHub matches a required
+> check by name alone. Three names collided before this was written (`lint` in
+> ci/markdownlint/theme-lint, `audit` in lighthouse/pip-audit, `analyze` in
+> codeql/sonarcloud), so the older advice here to "select `lint`" named three
+> different jobs and could not be applied as written. The gate now refuses any
+> duplicate.
 
 Then land PRs with `gh pr merge --squash` once green (never onto a red release).
 
