@@ -9,6 +9,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Required by branch protection, so it must also report on the merge
+  # queue's temporary ref: the queue evaluates required checks against
+  # gh-readonly-queue/*, NOT against the pull request. A required context
+  # whose workflow lacks this trigger simply never reports there, and every
+  # enqueued PR waits on it forever. check_required_checks.py enforces this.
+  merge_group:
 
 permissions:
   contents: read
