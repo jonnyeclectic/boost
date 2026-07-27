@@ -35,8 +35,27 @@ permissions:
 
 jobs:
   release:
-    # gate on CI success; workflow_dispatch carries no workflow_run payload
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    # Gate on CI success; workflow_dispatch carries no workflow_run payload.
+    #
+    # The other two conditions are what keep this trigger from being reachable
+    # by anyone with a fork. `branches: [main]` above filters on the TRIGGERING
+    # run's head_branch, not on the event type and not on the repository — and
+    # ci.yml runs on `pull_request`, so a fork PR opened from a branch that
+    # happens to be named `main` produces a ci run whose head_branch is `main`
+    # and satisfies that filter. If it went green, this job fired with
+    # contents:write and PyPI Trusted-Publishing OIDC and cut a real release.
+    # Nothing else stood in the way: the `pypi` environment has no protection
+    # rules and no deployment branch policy.
+    #
+    # It was never code execution — the checkout below pins `ref: main` — but an
+    # outsider could force an unreviewed version bump, tag and PyPI upload at
+    # will. Requiring the triggering run to be a `push` from THIS repository
+    # closes it; releases are cut by pushes to main, never by pull requests.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          || (github.event.workflow_run.conclusion == 'success'
+              && github.event.workflow_run.event == 'push'
+              && github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: ubuntu-latest
     environment: pypi
     steps:
