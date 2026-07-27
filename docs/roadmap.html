@@ -110,7 +110,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>149</b><span>Loop finds</span></div>
+      <div class="stat"><b>159</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1014,7 +1014,7 @@ live hits," and prune removed taps on every build, not just changed ones.</p>
       </article>
 
       <article class="cap rcard" id="journal-rotation-race-and-handle-leak">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Concurrency · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Concurrency · Bug</span></div>
         <h3>Journal rotation has a lost-update race between concurrent processes</h3>
         <p><code>_maybe_rotate</code> reads the whole pulse file and atomically replaces it with a truncated
 snapshot — but two concurrent boost processes (explicitly expected per this repo's parallel-loop
@@ -1022,7 +1022,22 @@ model) can both read, then both write their own snapshot, and whichever writes l
 discards any event the other appended in between. <code>rotation_healthy()</code> also opens the
 file with a bare <code>p.open()</code> and never closes it, relying on GC instead of a
 <code>with</code> block like every other open in the module. Rotate under a lock (or an
-append-only rename scheme), and close the handle explicitly.</p>
+append-only rename scheme), and close the handle explicitly.
+Shipped with <code>util.try_lock()</code>, a portable <code>O_CREAT | O_EXCL</code> advisory
+lock that needs neither <code>fcntl</code> (absent on Windows) nor <code>msvcrt</code> (absent
+everywhere else). It <em>yields False rather than waiting</em>: a process that cannot take it
+just returns, because another one is already trimming and blocking would trade a rare lost
+update for a common stall. A lock older than five minutes is stolen, so a process killed
+mid-rotation cannot wedge the feed forever. Inside the lock the file is re-read (the count
+that got us there was taken outside it) and anything appended since is carried into the new
+file instead of dropped. <code>log()</code> stays lock-free — <code>O_APPEND</code> writes of
+one short record do not tear, and making every command contend on a lock to protect an
+advisory feed would be the wrong trade.
+Writing the test for a torn append turned up a third defect neither the card nor the code
+had noticed: a single invalid byte in the feed raised <code>UnicodeDecodeError</code>, which
+is a <code>ValueError</code> and sails straight past the <code>except OSError</code> guard —
+so one bad byte crashed <em>every command that logs</em>, permanently. Both reads decode with
+<code>errors="replace"</code> now.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -1781,13 +1796,22 @@ case: a gate that never ran leaves nothing red to see, so it must never read as 
       </article>
 
       <article class="cap rcard" id="ci-job-timeout-minutes">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI/CD</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI/CD</span></div>
         <h3>No <code>timeout-minutes</code> on any CI job</h3>
-        <p>None of the 8 workflow files set <code>timeout-minutes</code>, so a hung step — a stalled tap
-clone, a wedged smoke-test subprocess — runs until GitHub's default job timeout instead of failing
-fast, costliest across the 2 OS &#215; 3 Python <code>tests</code> matrix. Add explicit per-job
-timeouts: short for <code>lint</code>/<code>pip-audit</code>, longer for
-<code>tests</code>/<code>mutation</code>.</p>
+        <p>A hung step — a stalled tap clone, a wedged smoke-test subprocess — runs until GitHub's default
+job timeout instead of failing fast, costliest across the 3 OS &#215; 3 Python <code>tests</code>
+matrix. (The card said 8 workflow files; there are 24 now, of which only <code>fuzz.yml</code>
+and <code>sonarcloud.yml</code> had a timeout.) Shipped: 24 jobs across 22 files, with the
+numbers taken from <em>measured</em> durations over recent runs rather than guessed —
+<code>mutation</code>'s slowest observed run was 24.8m so it gets 60, the <code>tests</code>
+matrix peaked at 8.3m so it gets 30, <code>publish</code>'s release job gets 45 because the
+new release preflight can legitimately wait on a sibling gate, and everything else ran under
+2m so it gets 15. A timeout that trips on a normal run is worse than no timeout.
+<code>osv-scanner.yml</code>'s <code>scan-pr</code> is the one job left without one: it
+delegates to a reusable workflow via a job-level <code>uses:</code>, and GitHub rejects
+<code>timeout-minutes</code> there outright — the bound has to live in the called workflow.
+A unit test holds the line so a job added next month cannot quietly arrive without one, and
+it refuses to pass vacuously if its own parser stops finding jobs.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -2014,6 +2038,124 @@ and all ten fail against the previous script.</p>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">the gate green-lit a list that bricks every PR</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="ci-summary-step-fails-itself">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>ci.yml</code>'s job summary could exit 1 on its own, under the <code>always()</code> it was given</h3>
+        <p>The <code>job summary</code> step is marked <code>if: always()</code> so a run still reports
+when something upstream died. Its last line was
+<code>[ -n "$SMOKE" ] &amp;&amp; echo "- **Smoke suite:** ${SMOKE}"</code>, which is the final command
+of the <code>{ ... } &gt;&gt; "$GITHUB_STEP_SUMMARY"</code> group, and that group is the final
+command of the step. GitHub runs <code>shell: bash</code> as
+<code>bash --noprofile --norc -eo pipefail</code>, so with <code>$SMOKE</code> empty the
+AND-list's status of 1 becomes the group's status and then the step's exit code.
+
+<code>$SMOKE</code> is empty precisely when <code>smoke.sh</code> never printed its
+<code>== results:</code> line — an earlier step died first, or smoke never ran. That is the
+exact scenario <code>always()</code> exists for, so the reporting step failed in the one case
+it was written to survive. Reproduced directly: exit 1 with no match, exit 0 with one.
+
+It never masked a real failure (the job is already red when this happens), but it planted a
+second misleading red step, and would have silently reddened the job if that step were ever
+moved into a green context. Replaced with an <code>if</code> block.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">an always() step that exits 1 on its own</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="post-deploy-always-defeated-by-skipped-setup">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>post-deploy.yml</code>'s <code>always()</code> destroyed the second signal it existed to preserve</h3>
+        <p>The console-health step carries <code>if: always()</code> with the comment
+"an HTTP failure above must not hide a console failure here — they are different breakages
+and both belong in one report". But the two steps it depends on —
+<code>actions/setup-node</code> and the <code>npm install</code> that fetches puppeteer — had
+<b>no <code>if:</code> at all</b>. A failure in the HTTP smoke skips both, so the console
+check then runs with no <code>node_modules</code> and produces an environment error rather
+than a console verdict.
+
+The run history separates the two cleanly: an environment error exits <b>2</b>, a genuine
+console failure exits <b>1</b>. Run 30214061945 has
+<code>HTTP smoke = failure, setup-node = skipped, npm = skipped, console = failure (exit 2)</code>,
+while the four runs where the npm install actually happened all exit 1. So in exactly the
+case the <code>always()</code> was written for, the second signal was destroyed instead of
+preserved — and the report said "console check failed" when it meant "the console check
+never ran".
+
+Fixed by putting <code>always()</code> on the setup steps too, so the dependency chain the
+final step needs survives the failure it is meant to outlive.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">the always() destroyed the signal it was written to preserve</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="markdownlint-lints-the-fuzz-corpus">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>markdownlint linted the fuzzer's corpus, so shipping a crash reproducer would redden a prose gate</h3>
+        <p><code>.markdownlint-cli2.jsonc</code> globs <code>**/*.md</code> and its <code>ignores</code>
+list carved out <code>.claude/**</code> and <code>docs/roadmap/items/**</code> but not
+<code>tests/fuzz/corpus/**</code>. So <b>12 of the 21 files being prose-linted</b> were
+deliberately-malformed YAML-frontmatter seeds for the atheris fuzzer —
+<code>07-unterminated.md</code>, <code>09-unbalanced-quote.md</code>, <code>12-bom.md</code>
+and friends. Malformed is their entire purpose, and they passed the gate only by luck.
+
+That luck was going to run out by design. <code>fuzz.yml</code> exists to mine <em>new</em>
+malformed inputs and ship them as reproducers
+(<code>-artifact_prefix=artifacts/</code>, uploaded as <code>fuzz-crash-&lt;target&gt;</code>),
+and one such crash artifact already exists from a real run. The moment anyone committed it into
+<code>tests/fuzz/corpus/frontmatter/</code> — exactly what the workflow is for — an unrelated
+prose-style gate would have gone red for a reason with nothing to do with prose, on a file
+whose whole point is to be invalid.
+
+Fixed by adding <code>tests/fuzz/corpus/**</code> to <code>ignores</code>. Verified with the
+pinned <code>markdownlint-cli2@0.18.1</code>: 21 → 9 files linted, 0 errors, and a planted
+crash reproducer no longer reddens the gate.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">12 of 21 linted files were malformed on purpose</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="merge-queue-would-deadlock-most-required-checks">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release safety</span></div>
+        <h3>Enabling a merge queue would deadlock every required check except ci.yml's</h3>
+        <p>Only <code>ci.yml</code> declares <code>merge_group</code> among its triggers. The other
+workflows producing required contexts — <code>codeql.yml</code>,
+<code>pip-audit.yml</code>, <code>package-metadata.yml</code>, <code>osv-scanner.yml</code> —
+run on <code>pull_request</code> only.
+
+GitHub's merge queue evaluates the <b>required</b> checks against the temporary
+<code>merge_group</code> ref, not against the pull request. So the moment a merge queue is
+turned on, <code>codeql-analyze</code>, <code>pip-audit</code>, <code>metadata</code> and
+<code>scan-pr / osv-scan</code> would never report on the queued ref and every enqueued PR
+would sit forever — the same never-reports deadlock as
+<code>required-checks-can-declare-a-check-that-deadlocks-prs</code>, arriving through a
+different door.
+
+Nothing is broken today; no merge queue is configured. Filed because the trap is invisible
+until the switch is flipped, and because the pressure to flip it is real: with
+<code>strict: true</code> and several concurrent loops, every merge forces every other open
+PR to rebase and re-run its full matrix, which is exactly the problem merge queues solve.
+
+Fix before enabling, not after: add <code>merge_group:</code> to each workflow that produces
+a required context, and extend <code>scripts/check_required_checks.py</code> to fail when a
+required name comes from a workflow lacking that trigger — the same gate that now catches
+<code>paths:</code> filters.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">a latent trap, only if someone enables the queue</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -2359,6 +2501,41 @@ suite only runs if a human remembers to run it locally, so a CLI change that bre
           <span class="m">skills that need a server</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="roadmap-html-goes-stale-on-every-rebase">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">DX</span></div>
+        <h3><code>roadmap.html</code> goes stale on every rebase, so a card and a merge race redden the whole matrix</h3>
+        <p>The data-driven roadmap solved the conflict problem for <em>item files</em>: two loops adding
+two cards touch two different files and merge cleanly. But <code>docs/roadmap.html</code> is
+still a single committed artifact generated from <b>all</b> of them, and
+<code>update-branch</code> merges it textually.
+
+So whenever another roadmap-carrying PR merges first, the rebase brings in the new item
+<code>.md</code> cleanly and leaves the generated HTML behind. The board no longer matches
+<code>docs/roadmap/items/</code>, and both <code>build_roadmap.py --check</code> (in lint) and
+<code>tests/unit/test_roadmap_fresh.py</code> fail — on <b>every</b> test leg, for a PR that
+changed no Python at all. It reads as a catastrophic failure and is really a stale generated
+file.
+
+This is not hypothetical: one PR hit it twice in a single afternoon, each time needing a
+manual regenerate-and-push, and the cost scales with the number of concurrent loops — the
+exact workload the item-file split was introduced to support. With <code>strict: true</code>
+every merge rebases every open PR, so any PR carrying a card is guaranteed to hit it if it
+sits behind one other roadmap PR.
+
+Options, roughly in order of appeal: have CI regenerate and push the board on the PR branch
+(fixes it silently, needs a bot token and care with the required checks); a custom merge
+driver for the generated boards that reruns the generator instead of merging text; or stop
+committing the HTML and build the site at deploy time (biggest change, and it removes the
+artifact from review). At minimum, make the <code>--check</code> failure message say
+"regenerate after rebasing" so the cause is obvious from the log.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">hit twice on one PR in a single afternoon</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -2672,6 +2849,66 @@ same nav and footer as every other page.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">8 GIFs · one flagship per group</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="demo-gif-workflow-has-never-succeeded">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <h3><code>demo.yml</code> has failed every run since it landed — vhs-action cannot install ffmpeg</h3>
+        <p><code>demo.yml</code> re-records <code>docs/demo.gif</code> with
+<code>charmbracelet/vhs-action</code> and opens a PR when the recording changes. It exists
+because "a generated artifact whose regeneration is manual is one nobody regenerates".
+All <b>3 of its 3 runs</b> since 2026-07-26 failed at the recording step with the annotation
+<code>Failed to install ffmpeg</code>, so the follow-on "open a PR" step was skipped every
+time and it has never produced a single PR.
+
+The net effect is worse than not having it: <code>demo.gif</code> is exactly as stale as
+before, but the repo now looks covered. Same class as the LangGraph conformance leg — a leg
+that has never passed since the day it was added. A secondary annotation on the same runs
+flags that vhs-action v2.1.0 targets Node 20, now deprecated and force-run on Node 24.
+
+Options: install ffmpeg explicitly before the action runs, pin a runner image that carries
+it, switch to a maintained recorder, or delete the workflow and regenerate the GIF by hand.
+Whichever is chosen, the workflow should fail loudly rather than sit red indefinitely — a
+scheduled job nobody reads is how this went unnoticed for its whole lifetime.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">3 runs, 3 failures, 0 PRs opened</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="install-docs-never-mentioned-upgrading">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs</span></div>
+        <h3>No install doc ever said how to <em>upgrade</em>, so users guessed <code>install --upgrade</code> — which no-ops</h3>
+        <p>A user on the README-recommended <code>pipx</code> install ran
+<code>pipx install boost-skill-cli --upgrade</code> and stayed on 1.0.203 while PyPI was at
+1.0.226 — 23 releases behind. Nothing was broken. pipx's <code>install --upgrade</code> only
+acts when the installed version does not satisfy the <b>supplied spec</b>, and the spec was
+the bare name <code>boost-skill-cli</code>, which every version satisfies. It printed
+<code>boost-skill-cli 1.0.203 already satisfies boost-skill-cli</code> and did nothing.
+
+Confirmed at the source (pipx 1.16.2): <code>package_spec_satisfied()</code> returns True for
+a bare name at any installed version, so the upgrade branch is never reached;
+a pinned spec returns False. <code>pipx upgrade boost-skill-cli</code> is the correct verb,
+verified end to end (1.0.203 → 1.0.227).
+
+The root cause is documentation, not pipx. Every install surface — README,
+<code>docs/index.html</code>, the site root — stopped at the install command; the word
+"upgrade" appeared nowhere in any of them. With no correct command to copy, guessing
+<code>install --upgrade</code> is the reasonable move.
+
+Fixed by adding the upgrade line <em>inside</em> the code block users already copy from
+(<code>docs/index.html</code>'s Copy button takes the whole block, so the right command
+travels with the paste). The deeper bug — <code>boost self-update</code> hard-failing on
+pip/pipx installs and telling a PyPI user to clone the repo — is separate and still open at
+<code>self-update-broken-for-pip-pipx-installs</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">reported by a real user stuck 24 releases behind</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -3184,6 +3421,122 @@ is built.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">audit what you run</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="sbom-release-event-never-fires">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <h3><code>sbom.yml</code> has never run — it waits for an event <code>GITHUB_TOKEN</code> cannot emit</h3>
+        <p><code>sbom.yml</code> triggers on <code>release: types: [published]</code> and promises
+"a CycloneDX SBOM for every release, attached to the GitHub Release as an asset".
+It has <b>0 runs</b>. Releases here are created by <code>release-drafter</code> inside
+<code>publish.yml</code> authenticated with <code>GITHUB_TOKEN</code>, and <b>events created
+with <code>GITHUB_TOKEN</code> do not trigger workflows</b>. <code>publish.yml</code>'s own
+header states that rule verbatim — "we never rely on the release event to trigger a second
+workflow" — and <code>sbom.yml</code> is exactly that pattern.
+
+So the <code>if: github.event_name == 'release'</code> guard on its upload step is dead code,
+<code>workflow_dispatch</code> is the only reachable path and has never been used, and every
+one of the last ten releases carries <code>assets: []</code>. Zero SBOMs have been produced
+since the file landed on 2026-07-22. Same shape as the LangGraph conformance leg: wired up,
+looks covered, never executed once.
+
+Fix is a decision, not a patch: either build and attach the SBOM inside
+<code>publish.yml</code>'s release job (it already holds <code>contents: write</code> and is
+where the tag is cut), or have <code>publish.yml</code> dispatch this workflow with a PAT
+rather than <code>GITHUB_TOKEN</code>. The first is simpler and keeps the release atomic;
+the second keeps the SBOM logic in its own file. Worth pairing with a check that fails the
+release when the asset is missing, so "never ran" cannot recur silently.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">0 runs, 0 SBOMs, 227 releases</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="main-ruleset-ref-pattern-has-literal-quotes">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Release safety</span></div>
+        <h3>The <code>main</code> ruleset is inert — its ref pattern is <code>refs/heads/"main"</code>, quotes included</h3>
+        <p>The repo has an <b>active</b> ruleset named <code>main</code> (id 19130332) carrying eight
+rules: <code>deletion</code>, <code>non_fast_forward</code>, <code>pull_request</code>,
+<code>required_status_checks</code> (9 contexts), <code>code_quality</code>,
+<code>code_coverage</code> (minimum 80), <code>code_scanning</code> and
+<code>required_deployments</code>. Its ref condition is:
+<code>"include": ["refs/heads/\"main\""]</code> — with <b>literal quote characters</b>, so it
+matches a branch named <code>"main"</code>, not <code>main</code>.
+
+GitHub's authoritative endpoint settles it: <code>/rules/branches/main</code> returns
+<b>0 rules</b>, while <code>/rules/branches/%22main%22</code> returns all 8. Everything in
+that ruleset is unenforced. Only the legacy branch protection is actually gating
+<code>main</code>, and it requires a different, shorter list.
+
+<b>Do not just fix the quotes.</b> The ruleset includes
+<code>required_deployments: ["github-pages", "pypi"]</code>. Correcting the ref pattern
+activates that rule, and no pull request deploys to the <code>pypi</code> environment —
+<code>publish.yml</code> runs post-merge on <code>workflow_run</code>. So the one-character
+fix converts an inert ruleset into a hard deadlock on every PR, for a reason that has
+nothing to do with status checks. Its check list is also stale relative to
+<code>.github/required-checks.txt</code> (missing the three Windows legs,
+<code>install-smoke</code>, <code>patch-coverage</code>, <code>codeql-analyze</code>) and it
+pins <code>CodeQL</code> from the code-scanning app rather than the workflow job.
+
+The safe move is one edit that does all of it: fix the pattern, drop
+<code>required_deployments</code>, and reconcile the contexts with the checked-in list — or
+delete the ruleset outright and keep the legacy protection as the single mechanism. Two
+overlapping systems is how this stayed invisible.
+
+<b>Shipped — repaired in a single write</b>, so it never existed in the deadlocking state:
+pattern corrected to <code>refs/heads/main</code>, <code>required_deployments</code> removed,
+and the status-check list replaced with the 17 contexts from
+<code>.github/required-checks.txt</code> (dropping the code-scanning <code>CodeQL</code>
+entry in favour of the <code>codeql-analyze</code> workflow job the checked-in list names).
+Verified after: <code>/rules/branches/main</code> returns <b>7</b> rules, and
+<code>/rules/branches/%22main%22</code> returns <b>0</b>. Confirmed against all three open
+pull requests beforehand that every one of the 17 contexts actually reports — including a PR
+touching only <code>.github/</code> — so the tightened list cannot deadlock. One API wrinkle
+worth recording: <code>GET</code> returns <code>code_coverage.max_coverage_drop: null</code>
+but <code>PUT</code> rejects it ("data matches no possible input"), so round-tripping a
+ruleset requires stripping null-valued parameters.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">8 active rules enforcing nothing — and the obvious fix deadlocks every PR</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="publish-trigger-was-reachable-from-a-fork">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security</span></div>
+        <h3>The release trigger was reachable from a fork — <code>branches:</code> filters head_branch, not the event</h3>
+        <p><code>publish.yml</code> fires on <code>workflow_run</code> of <code>ci</code> with
+<code>branches: [main]</code>. That filter matches the <b>triggering run's head_branch</b> —
+not the event type, and not the repository. <code>ci.yml</code> also runs on
+<code>pull_request</code>, so a pull request opened from a branch named <code>main</code>
+produced a ci run whose head_branch was <code>main</code> and satisfied the filter. The job
+gate checked only <code>workflow_run.conclusion == 'success'</code>, so a green run on that
+path fired the release job with <code>contents: write</code> and PyPI Trusted-Publishing
+OIDC — cutting a tag, a GitHub Release and a PyPI upload. There was no second gate: the
+<code>pypi</code> environment has no protection rules and no deployment branch policy.
+
+Never code execution — the checkout pins <code>ref: main</code>, so what ships is always
+main's code. The exposure was an <b>unreviewed release triggerable from outside the repo</b>.
+
+Measured rather than assumed: <code>ci-failure-issue.yml</code> draws from the same
+<code>workflow_run</code> source with no <code>branches</code> filter and has <b>679</b> runs
+against ci's <b>254</b> pushes, proving <code>workflow_run</code> fires for PR-triggered runs
+too; only the head_branch filter kept <code>publish.yml</code> near the push count.
+
+Fixed by requiring the triggering run to be a <code>push</code> whose
+<code>head_repository</code> is this repo. No regression: all 254 ci runs with
+<code>head_branch=main</code> are pushes from <code>jonnyeclectic/boost</code>, and the gate
+still admits push-to-main and <code>workflow_dispatch</code> while rejecting fork PRs,
+same-repo PRs and red CI.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">a PR branch named main could cut a PyPI release</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
