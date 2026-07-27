@@ -65,7 +65,10 @@ def _description(meta: dict, body: str) -> str:
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
                 tap_name: str, curated: bool, meta: dict, body: str) -> dict:
     name = str(meta.get("name") or "").strip() or default_name
-    slug = util.slugify(name) if " " in name else name
+    # Slugify anything that is not already a safe path component, not just names
+    # containing a space: this name becomes a rule/workflow filename, so
+    # `../../..` has to be neutralized at index time too, not only at the sinks.
+    slug = util.safe_component(name)
     description = _description(meta, body)
     item_dir = defining_file.parent
     return {

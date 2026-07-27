@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -54,7 +53,7 @@ def skill_store_dir(name: str) -> Path:
 
     Raises BoostError unless the name is a safe path component.
     """
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", name) or name in {".", ".."}:
+    if not util.is_safe_component(name):
         raise BoostError("invalid skill name %r" % name)
     return paths.store_dir() / name
 
