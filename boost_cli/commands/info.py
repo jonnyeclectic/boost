@@ -540,6 +540,26 @@ def cmd_explain(argv):
     return 0
 
 
+def _diag_line(line: str) -> str:
+    """Render one stored log line for display, whether it is text or JSON.
+
+    ``BOOST_LOG_FORMAT=json`` makes the file JSONL, which is the point — but
+    this command is the *human* view of that same file, and raw JSONL is not
+    it. Anything that is not a boost log object passes through untouched, so a
+    file whose format changed mid-life still reads end to end.
+    """
+    if not line.startswith("{"):
+        return line
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return line
+    if not isinstance(rec, dict) or "msg" not in rec:
+        return line
+    return "%s %-7s %s: %s" % (rec.get("ts", ""), rec.get("level", ""),
+                               rec.get("logger", ""), rec["msg"])
+
+
 def _show_diagnostics(limit):
     lp = logs.log_path()
     if not lp.exists():
@@ -548,7 +568,7 @@ def _show_diagnostics(limit):
     lines = lp.read_text(encoding="utf-8", errors="replace").splitlines()
     out.heading("diagnostic log — %s" % lp)
     for line in lines[-limit:]:
-        out.info(line)
+        out.info(_diag_line(line))
     return 0
 
 

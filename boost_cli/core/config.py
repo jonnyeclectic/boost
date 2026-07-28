@@ -30,6 +30,10 @@ DEFAULTS = {
         # See core/logs.py and docs/DEBUGGING.md.
         "level": "OFF",
         "file": True,  # set false (or BOOST_NO_LOG=1) to disable the log file
+        # "text" (default) or "json". json emits one JSON object per line —
+        # the same fields, but readable by jq or a log collector without a
+        # regex. Overridden by BOOST_LOG_FORMAT.
+        "format": "text",
     },
 }
 

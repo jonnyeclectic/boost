@@ -28,10 +28,21 @@ to disable the file.
 Each invocation bookends the trail with an ``invoke:`` line and a ``done:`` line
 that carries the exit code and wall-clock duration, so the log doubles as a
 lightweight timing record for spotting slow commands after the fact.
+
+Line *format* is resolved separately from verbosity, same precedence shape:
+
+  1. ``BOOST_LOG_FORMAT=json|text``
+  2. config ``logging.format`` (default ``text``)
+
+``json`` emits one JSON object per line — the same fields the text formatter
+renders — so ``~/.boost/logs/boost.log`` pipes straight into ``jq`` or a log
+collector instead of needing a regex. It is the same JSONL shape
+``core.journal`` already writes for the pulse feed.
 """
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import logging.handlers
 import os
@@ -51,6 +62,9 @@ BACKUP_COUNT = 3       # … times (N+1) files kept = ~4 MB ceiling
 KEEP_CRASH_REPORTS = 20
 
 _LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+_FORMATS = ("text", "json")
+_TEXT_FMT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+_DATE_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
 # Set by configure(); read by main()'s exception handler to decide whether to
 # print a full traceback or a friendly one-liner.
@@ -98,6 +112,54 @@ def _console_level(verbose: bool, debug: bool, quiet: bool) -> Optional[int]:
     return getattr(logging, cfg) if cfg in _LEVELS else None
 
 
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line, carrying the text formatter's own fields.
+
+    Hand-rolled rather than pulled from a dependency: the runtime is
+    stdlib-only, ``core.journal`` already writes JSONL by hand for the pulse
+    feed, and a formatter that can raise is a formatter that loses the trail it
+    exists to keep — hence ``default=str``, so an unexpected object in a record
+    degrades to its repr instead of killing the handler.
+
+    ``converter`` is set on the instance by :func:`_formatter`, not here: as a
+    class attribute mypy binds it as a method and the signature stops matching
+    the base class's.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, _DATE_FMT),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def log_format() -> str:
+    """Resolve the log line format: env first, then config, else ``text``."""
+    env = (os.environ.get("BOOST_LOG_FORMAT") or "").strip().lower()
+    if env in _FORMATS:
+        return env
+    from . import config
+    cfg = str(config.get("logging.format", "text") or "text").strip().lower()
+    return cfg if cfg in _FORMATS else "text"
+
+
+def _formatter(fmt_name: str) -> logging.Formatter:
+    """Build the formatter both handlers share."""
+    fmt: logging.Formatter = (JsonFormatter() if fmt_name == "json"
+                              else logging.Formatter(_TEXT_FMT,
+                                                     datefmt=_DATE_FMT))
+    # Both stamp a literal ``Z`` (UTC) suffix, so the timestamp has to be
+    # rendered in UTC — otherwise it uses local time and every line is
+    # mislabelled by the machine's offset. gmtime keeps it honest.
+    fmt.converter = time.gmtime
+    return fmt
+
+
 def _file_enabled() -> bool:
     if os.environ.get("BOOST_NO_LOG"):
         return False
@@ -141,14 +203,10 @@ def configure(verbose: bool = False, debug: bool = False,
         return logger
     _configured = True
 
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)-7s %(name)s: %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%SZ",
-    )
-    # datefmt stamps a literal ``Z`` (UTC) suffix, so the timestamp must be
-    # rendered in UTC — otherwise ``%(asctime)s`` uses local time and every
-    # line is mislabelled by the machine's offset. gmtime keeps it honest.
-    fmt.converter = time.gmtime
+    # One formatter for both handlers: a user who asked for JSON asked for it
+    # everywhere, and a file/console split would make `--debug` disagree with
+    # the file it is meant to be showing.
+    fmt = _formatter(log_format())
 
     # File handler — always DEBUG, best-effort (never break the CLI over a log).
     if _file_enabled():
