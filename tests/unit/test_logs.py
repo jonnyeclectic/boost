@@ -378,3 +378,96 @@ class TestUtcTimestamps:
         finally:
             monkeypatch.delenv("TZ", raising=False)
             time.tzset()
+
+
+# ── `boost log --crashes`, the listing branch ────────────────────────────────
+#
+# Only the empty state was covered. Everything below it — the glob's reverse
+# sort, the `command:` summary extraction, the OSError fallback and the --limit
+# cut — could regress without a single test noticing.
+
+def _seed_crash(stamp: str, command: str = "boost install foo") -> pathlib.Path:
+    """Write a crash report shaped like the real one logs.py produces."""
+    paths.logs_dir().mkdir(parents=True, exist_ok=True)
+    report = paths.logs_dir() / ("crash-%s.log" % stamp)
+    report.write_text(
+        "boost crash report\n"
+        "version:  0.0.0\n"
+        "command:  %s\n"
+        "\ntraceback:\nRuntimeError: boom\n" % command,
+        encoding="utf-8")
+    return report
+
+
+def test_log_crashes_lists_each_report_with_its_command(boost):
+    _seed_crash("20260101-101010", "boost install foo")
+    _seed_crash("20260102-202020", "boost tap o/r")
+    res = boost("log", "--crashes")
+
+    assert "crash reports in" in res.out
+    assert "crash-20260101-101010.log  command:  boost install foo" in res.out
+    assert "crash-20260102-202020.log  command:  boost tap o/r" in res.out
+    assert "view one with:  cat " in res.out
+    assert "no crash reports" not in res.out
+
+
+def test_log_crashes_lists_newest_first(boost):
+    _seed_crash("20260101-101010")
+    _seed_crash("20260303-303030")
+    out_lines = [ln for ln in boost("log", "--crashes").out.splitlines()
+                 if "crash-2026" in ln]
+    assert [ln.split()[0] for ln in out_lines] == [
+        "crash-20260303-303030.log", "crash-20260101-101010.log"]
+
+
+def test_log_crashes_honours_the_limit(boost):
+    for stamp in ("20260101-010101", "20260202-020202", "20260303-030303"):
+        _seed_crash(stamp)
+    res = boost("log", "--crashes", "-n", "2")
+    assert res.out.count("crash-2026") == 2
+    # The two kept are the newest, not simply the first two the glob returned.
+    assert "crash-20260303-030303.log" in res.out
+    assert "crash-20260202-020202.log" in res.out
+    assert "crash-20260101-010101.log" not in res.out
+
+
+def test_log_crashes_tolerates_a_report_with_no_command_line(boost):
+    paths.logs_dir().mkdir(parents=True, exist_ok=True)
+    (paths.logs_dir() / "crash-20260404-040404.log").write_text(
+        "truncated before the command line got written\n", encoding="utf-8")
+    res = boost("log", "--crashes")
+    assert "crash-20260404-040404.log" in res.out
+
+
+def test_log_crashes_survives_an_unreadable_report(boost):
+    # A directory where a file should be: read_text raises IsADirectoryError on
+    # POSIX and PermissionError on Windows — both OSError, which is exactly the
+    # fallback's contract. It must still list the entry, not abort the command.
+    _seed_crash("20260505-050505")
+    (paths.logs_dir() / "crash-20260606-060606.log").mkdir(parents=True)
+    res = boost("log", "--crashes")
+    assert "crash-20260606-060606.log" in res.out
+    assert "crash-20260505-050505.log  command:  boost install foo" in res.out
+
+
+def test_a_real_crash_shows_up_in_the_listing(boost, monkeypatch):
+    # End-to-end across the writer and the reader: whatever logs.py records is
+    # what `--crashes` has to be able to parse back out.
+    from boost_cli import cli
+    real_dispatch = cli._dispatch
+    crashed = []
+
+    def crash_once(name, argv, soft=False):
+        # Only the first invocation blows up; `log --crashes` still has to run
+        # for real. monkeypatch.undo() is not an option here — it would also
+        # revert the sandbox fixture's $HOME and read the developer's own logs.
+        if not crashed:
+            crashed.append(name)
+            raise RuntimeError("boom")
+        return real_dispatch(name, argv, soft=soft)
+
+    monkeypatch.setattr(cli, "_dispatch", crash_once)
+    boost("count", expect=70)
+    res = boost("log", "--crashes")
+    assert crashed == ["count"]
+    assert "command:  boost count" in res.out
