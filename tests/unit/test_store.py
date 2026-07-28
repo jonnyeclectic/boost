@@ -506,7 +506,16 @@ class TestSyncPlan:
         # only claude-code was linked, so the other agent dirs were never
         # created — sync still wants links there, and the stale-link scan
         # skips the nonexistent dirs.
+        #
+        # `--agent` is used here purely to leave those dirs uncreated, so the
+        # declaration it records is cleared again: a *narrowed* skill is now
+        # deliberately left alone (TestSyncRespectsDeclaredScope), and what
+        # this test is about is the unnarrowed fan-out reporting a missing
+        # directory as missing_links rather than stale_links.
         store.install(entry, only_agents=["claude-code"])
+        e = lockfile.get_skill("brainstorming")
+        e["only_agents"] = None
+        lockfile.set_skill("brainstorming", e)
         assert not (paths.home() / ".windsurf" / "skills").exists()
         plan = store.sync_plan()
         assert plan == {**self.EMPTY, "missing_links": [
@@ -1527,3 +1536,140 @@ class TestReinstallKeepsAgentScope:
         res = store.install(entry, scope="project", base=str(repo), force=True)
         assert res.linked == ["cursor"]
         assert not (repo / ".claude" / "skills" / "brainstorming").exists()
+
+
+class TestDeclaredAgentScope:
+    """What the lock RECORDS as the requested scope.
+
+    Distinct from `preserved_agent_scope`, which answers "what should this
+    install link into". Conflating them is the bug: `agents` records what is
+    linked right now, so promoting it to a declared scope would freeze a skill
+    out of every agent enabled later.
+    """
+
+    def test_an_explicit_narrowing_is_recorded(self):
+        assert store.declared_agent_scope(["cursor"], None) == ["cursor"]
+
+    def test_a_never_narrowed_install_declares_nothing(self):
+        assert store.declared_agent_scope(None, None) is None
+        assert store.declared_agent_scope(None, {}) is None
+
+    def test_the_linked_agents_list_is_not_promoted_to_a_declaration(self):
+        # The whole point. This entry was installed unnarrowed and happens to
+        # be linked into one agent; that must not become "only ever cursor".
+        assert store.declared_agent_scope(None, {"agents": ["cursor"]}) is None
+
+    def test_an_earlier_declaration_survives_update(self):
+        # update/reinstall pass only_agents=None; the request must persist.
+        assert store.declared_agent_scope(
+            None, {"agents": ["cursor"], "only_agents": ["cursor"]}) == ["cursor"]
+
+    def test_a_re_narrowing_replaces_the_old_declaration(self):
+        assert store.declared_agent_scope(
+            ["windsurf"], {"only_agents": ["cursor"]}) == ["windsurf"]
+
+    def test_the_declaration_is_copied_not_aliased(self):
+        # The caller's list must not become the lock's mutable state.
+        asked = ["cursor"]
+        got = store.declared_agent_scope(asked, None)
+        asked.append("windsurf")
+        assert got == ["cursor"]
+
+
+class TestScopedAgents:
+    ENABLED: ClassVar[dict] = {"claude-code": Path("/a"), "cursor": Path("/b")}
+
+    def test_no_declaration_means_every_enabled_agent(self):
+        assert store.scoped_agents({}, self.ENABLED) == self.ENABLED
+
+    def test_a_declaration_filters_to_it(self):
+        assert store.scoped_agents({"only_agents": ["cursor"]}, self.ENABLED) \
+            == {"cursor": Path("/b")}
+
+    def test_an_empty_declaration_fails_open(self):
+        # Every entry written before this field existed reads as [] or absent.
+        # Reading that as "link nowhere" would strand every existing install.
+        assert store.scoped_agents({"only_agents": []}, self.ENABLED) == self.ENABLED
+
+    def test_a_declared_agent_that_is_not_enabled_is_not_invented(self):
+        assert store.scoped_agents(
+            {"only_agents": ["cursor", "zed"]}, self.ENABLED) == {"cursor": Path("/b")}
+
+    def test_the_enabled_mapping_is_not_mutated(self):
+        enabled = dict(self.ENABLED)
+        store.scoped_agents({"only_agents": ["cursor"]}, enabled)
+        assert enabled == self.ENABLED
+
+
+class TestSyncRespectsDeclaredScope:
+    """`boost sync` was a second, independent path to the scope leak.
+
+    `preserved_agent_scope` (PR #288) closed the install side. sync_plan walked
+    every enabled agent regardless, reported a missing_link for each one outside
+    the narrowing, and sync_apply linked them — so a single `boost sync` undid
+    what `install --agent` asked for.
+    """
+
+    def test_sync_does_not_report_links_outside_the_declared_scope(self, tap, entry):
+        store.install(entry, only_agents=["claude-code"])
+        assert store.sync_plan()["missing_links"] == []
+
+    def test_sync_does_not_relink_a_narrowed_skill(self, tap, entry):
+        store.install(entry, only_agents=["claude-code"])
+        store.sync_apply(store.sync_plan())
+        assert _link("claude-code").is_symlink()
+        for agent in ("windsurf", "cursor"):
+            assert not _link(agent).exists(), agent
+
+    def test_a_dropped_link_inside_the_scope_is_still_repaired(self, tap, entry):
+        # Narrowing must not turn sync off for the agents it does cover.
+        store.install(entry, only_agents=["claude-code"])
+        _link("claude-code").unlink()
+        assert store.sync_plan()["missing_links"] == [("brainstorming", "claude-code")]
+        store.sync_apply(store.sync_plan())
+        assert _link("claude-code").is_symlink()
+
+    def test_an_unnarrowed_skill_still_reaches_a_newly_enabled_agent(self,
+                                                                     brainstorming):
+        # sync's other job. An entry with no declaration must keep fanning out,
+        # which is why scoped_agents fails open rather than closed.
+        _link("cursor").unlink()
+        assert store.sync_plan()["missing_links"] == [("brainstorming", "cursor")]
+
+    def test_a_pre_existing_lock_entry_is_unaffected(self, brainstorming):
+        # Locks written before `only_agents` existed have no such key at all.
+        e = lockfile.get_skill("brainstorming")
+        assert "only_agents" in e          # new installs record it (as None)
+        del e["only_agents"]
+        lockfile.set_skill("brainstorming", e)
+        for agent in AGENT_DIRS:
+            _link(agent).unlink()
+        assert sorted(store.sync_plan()["missing_links"]) == [
+            ("brainstorming", "claude-code"), ("brainstorming", "cursor"),
+            ("brainstorming", "windsurf")]
+
+    def test_the_declaration_is_written_to_the_lock(self, tap, entry):
+        store.install(entry, only_agents=["claude-code"])
+        assert lockfile.get_skill("brainstorming")["only_agents"] == ["claude-code"]
+
+    def test_an_unnarrowed_install_records_no_declaration(self, brainstorming):
+        assert lockfile.get_skill("brainstorming")["only_agents"] is None
+
+    def test_a_forced_reinstall_keeps_the_declaration(self, tap, entry):
+        store.install(entry, only_agents=["claude-code"])
+        store.install(entry, force=True)
+        assert lockfile.get_skill("brainstorming")["only_agents"] == ["claude-code"]
+        assert store.sync_plan()["missing_links"] == []
+
+    def test_import_from_path_records_its_narrowing(self, sandbox, tmp_path):
+        # `boost import --agent ...` is a second entry point to the same lock
+        # entry. Narrow links plus no declaration is the worst combination:
+        # sync sees no scope and widens them straight back.
+        src = tmp_path / "mine"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: mine\ndescription: d\nversion: 1.0.0\n---\nbody\n",
+            encoding="utf-8")
+        store.install_from_path(src, only_agents=["claude-code"])
+        assert lockfile.get_skill("mine")["only_agents"] == ["claude-code"]
+        assert store.sync_plan()["missing_links"] == []
