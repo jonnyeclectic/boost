@@ -230,6 +230,11 @@ mutants/
 
 # sandboxed boost home for the Tier 1 eval corpus (`make eval` taps here)
 .eval-home/
+
+# `make evals` output. The generated corpus and index live in the system temp
+# dir (see evals/run_evals.py), so only the per-run scores land here; the
+# committed evals/baseline.json is what regressions are measured against.
+evals/results.json
 tests/visual/node_modules/
 tests/visual/out/
 tests/visual/package-lock.json

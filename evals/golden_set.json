@@ -1,0 +1,372 @@
+{
+  "version": 1,
+  "generated_by": "evals/make_golden.py",
+  "corpus": "evals/make_corpus.py",
+  "corpus_skills": 49,
+  "grades": {
+    "3": "perfect",
+    "2": "useful",
+    "1": "marginal"
+  },
+  "queries": [
+    {
+      "id": "q01",
+      "query": "my tests pass locally but fail randomly in CI",
+      "labels": {
+        "flaky-test-triage": 3,
+        "github-actions-ci": 1,
+        "integration-test-harness": 1
+      },
+      "note": "intermittency, not coverage — the near-neighbor trap is unit-test-authoring"
+    },
+    {
+      "id": "q02",
+      "query": "how do I know whether my tests actually check anything",
+      "labels": {
+        "mutation-testing": 3,
+        "test-coverage-gates": 2,
+        "unit-test-authoring": 1
+      },
+      "note": "coverage-vs-strength distinction; both testing skills are defensible"
+    },
+    {
+      "id": "q03",
+      "query": "write a focused test for one function",
+      "labels": {
+        "property-based-testing": 2,
+        "tdd-workflow": 2,
+        "unit-test-authoring": 3
+      },
+      "note": "three testing skills all apply, in a clear preference order"
+    },
+    {
+      "id": "q04",
+      "query": "write the test before writing the implementation",
+      "labels": {
+        "cowboy-coding": 1,
+        "tdd-workflow": 3,
+        "unit-test-authoring": 2
+      },
+      "note": "cowboy-coding is the fixture's deliberate anti-skill — marginal, not wrong"
+    },
+    {
+      "id": "q05",
+      "query": "spin up a real database for my test suite instead of mocking it",
+      "labels": {
+        "database-index-tuning": 1,
+        "integration-test-harness": 3,
+        "unit-test-authoring": 1
+      },
+      "note": "cross-cluster distractor: the database skill shares vocabulary, not intent"
+    },
+    {
+      "id": "q06",
+      "query": "what format should our commit messages follow",
+      "labels": {
+        "branch-naming": 1,
+        "changelog-discipline": 2,
+        "commit-messages": 3
+      },
+      "note": "changelog is genuinely useful here — commits feed it"
+    },
+    {
+      "id": "q07",
+      "query": "naming convention for git branches tied to tickets",
+      "labels": {
+        "branch-naming": 3,
+        "commit-messages": 1,
+        "jira-integration": 2
+      },
+      "note": "two-cluster query: naming plus tracker integration"
+    },
+    {
+      "id": "q08",
+      "query": "should I rebase my feature branch or merge trunk into it",
+      "labels": {
+        "branch-naming": 1,
+        "commit-messages": 1,
+        "rebase-vs-merge": 3
+      },
+      "note": "one clear answer with two weak neighbors"
+    },
+    {
+      "id": "q09",
+      "query": "find which commit introduced a regression",
+      "labels": {
+        "flaky-test-triage": 1,
+        "git-bisect-hunt": 3,
+        "stack-trace-triage": 1
+      },
+      "note": "debugging vocabulary overlaps three clusters"
+    },
+    {
+      "id": "q10",
+      "query": "how should I review a pull request properly",
+      "labels": {
+        "code-review-checklist": 3,
+        "pr-description-writer": 2,
+        "review-comment-tone": 2,
+        "sql-injection-review": 1
+      },
+      "note": "widest graded tail in the set — good nDCG discriminator"
+    },
+    {
+      "id": "q11",
+      "query": "giving critical feedback without discouraging the author",
+      "labels": {
+        "code-review-checklist": 2,
+        "review-comment-tone": 3
+      },
+      "note": "tone, not correctness"
+    },
+    {
+      "id": "q12",
+      "query": "write a pull request description reviewers will actually read",
+      "labels": {
+        "changelog-discipline": 1,
+        "code-review-checklist": 1,
+        "pr-description-writer": 3
+      },
+      "note": "authoring side of review"
+    },
+    {
+      "id": "q13",
+      "query": "my continuous integration pipeline is too slow",
+      "labels": {
+        "docker-build-optimization": 2,
+        "github-actions-ci": 3,
+        "test-coverage-gates": 1
+      },
+      "note": "perf question answered by a ci skill — cross-cluster on purpose"
+    },
+    {
+      "id": "q14",
+      "query": "publish a release automatically when I push a tag",
+      "labels": {
+        "changelog-discipline": 2,
+        "github-actions-ci": 2,
+        "release-automation": 3
+      },
+      "note": "three plausible answers, clear ordering"
+    },
+    {
+      "id": "q15",
+      "query": "my container image is enormous and rebuilds from scratch every time",
+      "labels": {
+        "docker-build-optimization": 3,
+        "github-actions-ci": 1
+      },
+      "note": "layer caching — narrow, should be an easy #1"
+    },
+    {
+      "id": "q16",
+      "query": "roll out a risky change to production safely",
+      "labels": {
+        "deployment-rollback": 3,
+        "feature-flag-hygiene": 3,
+        "observability-metrics": 1,
+        "production-incident-response": 2
+      },
+      "note": "two equally-perfect answers — tests that nDCG handles ties sanely"
+    },
+    {
+      "id": "q17",
+      "query": "we have hundreds of old feature toggles nobody removed",
+      "labels": {
+        "dead-code-removal": 2,
+        "feature-flag-hygiene": 3
+      },
+      "note": "flag debt reads as dead code — deliberate second-place"
+    },
+    {
+      "id": "q18",
+      "query": "someone committed an API key to the repository",
+      "labels": {
+        "auth-token-handling": 2,
+        "dependency-audit": 1,
+        "secret-scanning": 3
+      },
+      "note": "rotation vs detection; both security skills are relevant"
+    },
+    {
+      "id": "q19",
+      "query": "enumerate the ways an attacker could abuse this service design",
+      "labels": {
+        "auth-token-handling": 2,
+        "sql-injection-review": 2,
+        "threat-modeling": 3
+      },
+      "note": "design-time security, with two implementation-level neighbors"
+    },
+    {
+      "id": "q20",
+      "query": "review data access code for unsafe query construction",
+      "labels": {
+        "code-review-checklist": 2,
+        "sql-injection-review": 3,
+        "threat-modeling": 1
+      },
+      "note": "security review sits across the review and security clusters"
+    },
+    {
+      "id": "q21",
+      "query": "where should access tokens be stored and how often rotated",
+      "labels": {
+        "auth-token-handling": 3,
+        "secret-scanning": 2,
+        "threat-modeling": 1
+      },
+      "note": "storage and lifecycle"
+    },
+    {
+      "id": "q22",
+      "query": "my python program is slow and I don't know which part",
+      "labels": {
+        "caching-strategy": 1,
+        "memory-leak-hunt": 1,
+        "profiling-python": 3
+      },
+      "note": "measure-first; the two neighbors are the wrong-but-tempting answers"
+    },
+    {
+      "id": "q23",
+      "query": "queries against a large table have gotten slow",
+      "labels": {
+        "caching-strategy": 2,
+        "database-index-tuning": 3,
+        "profiling-python": 1
+      },
+      "note": "indexing beats caching here, but caching is a real answer"
+    },
+    {
+      "id": "q24",
+      "query": "the page takes too long to load in the browser",
+      "labels": {
+        "caching-strategy": 2,
+        "frontend-bundle-size": 3
+      },
+      "note": "front-end perf — the only query targeting this skill"
+    },
+    {
+      "id": "q25",
+      "query": "the service's memory usage climbs until it gets restarted",
+      "labels": {
+        "memory-leak-hunt": 3,
+        "observability-metrics": 2,
+        "profiling-python": 2
+      },
+      "note": "retention, not allocation"
+    },
+    {
+      "id": "q26",
+      "query": "make sense of this exception traceback",
+      "labels": {
+        "git-bisect-hunt": 1,
+        "logging-discipline": 2,
+        "stack-trace-triage": 3
+      },
+      "note": "reading a failure"
+    },
+    {
+      "id": "q27",
+      "query": "what should we be logging in production",
+      "labels": {
+        "logging-discipline": 3,
+        "observability-metrics": 3,
+        "production-incident-response": 2
+      },
+      "note": "second tied-perfect pair, in a different cluster than q16"
+    },
+    {
+      "id": "q28",
+      "query": "the site is down — what do we do first",
+      "labels": {
+        "deployment-rollback": 3,
+        "logging-discipline": 1,
+        "observability-metrics": 2,
+        "production-incident-response": 3
+      },
+      "note": "mitigate before diagnose; four graded levels in one query"
+    },
+    {
+      "id": "q29",
+      "query": "which alerts are worth paging someone for",
+      "labels": {
+        "logging-discipline": 1,
+        "observability-metrics": 3,
+        "production-incident-response": 2
+      },
+      "note": "symptom-based alerting"
+    },
+    {
+      "id": "q30",
+      "query": "safely delete code nobody calls anymore",
+      "labels": {
+        "dead-code-removal": 3,
+        "feature-flag-hygiene": 1,
+        "refactor-legacy-code": 2
+      },
+      "note": "deletion confidence"
+    },
+    {
+      "id": "q31",
+      "query": "change old code that has no test coverage",
+      "labels": {
+        "refactor-legacy-code": 3,
+        "tdd-workflow": 2,
+        "unit-test-authoring": 2
+      },
+      "note": "characterization tests first — spans refactoring and testing"
+    },
+    {
+      "id": "q32",
+      "query": "remove a public function without breaking downstream users",
+      "labels": {
+        "api-deprecation": 3,
+        "api-reference-docs": 2,
+        "changelog-discipline": 2
+      },
+      "note": "deprecation is a schedule, not a warning"
+    },
+    {
+      "id": "q33",
+      "query": "document our HTTP endpoints for other teams",
+      "labels": {
+        "adr-writing": 1,
+        "api-reference-docs": 3,
+        "readme-authoring": 2
+      },
+      "note": "reference vs narrative docs"
+    },
+    {
+      "id": "q34",
+      "query": "new users can't figure out how to get started with our project",
+      "labels": {
+        "api-reference-docs": 1,
+        "onboarding-buddy": 2,
+        "readme-authoring": 3
+      },
+      "note": "onboarding reads as both a docs and a people problem"
+    },
+    {
+      "id": "q35",
+      "query": "record why we chose this architecture so nobody relitigates it",
+      "labels": {
+        "adr-writing": 3,
+        "monorepo-workspaces": 1,
+        "threat-modeling": 1
+      },
+      "note": "decision records"
+    },
+    {
+      "id": "q36",
+      "query": "generate and narrow down ideas for a new feature",
+      "labels": {
+        "brainstorming": 3,
+        "estimation-poker": 2,
+        "standup-notes": 1
+      },
+      "note": "fixture skill as the target — diverge then converge"
+    }
+  ]
+}
