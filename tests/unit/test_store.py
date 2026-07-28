@@ -1407,3 +1407,123 @@ class TestCopySkillBackupCleanup:
         assert (dest / "SKILL.md").read_text(encoding="utf-8") == "new\n"
         assert not (dest / "gone.md").exists()   # a swap, not a merge
         assert [p.name for p in tmp_path.iterdir() if ".old" in p.name] == []
+
+
+class TestPreservedAgentScope:
+    """The rule: a re-install may not widen what an install narrowed.
+
+    ``update``/``reinstall`` force-reinstall with ``only_agents=None``, which
+    used to mean "link into every enabled agent" and rewrote the lock's agent
+    list to match — so ``boost install foo --agent claude-code`` quietly became
+    a full install the first time anything upstream changed.
+    """
+
+    def test_an_explicit_scope_always_wins(self):
+        # Re-running install with --agent is how a narrowed skill is widened
+        # again; the lock must not veto it.
+        assert store.preserved_agent_scope(
+            ["cursor"], {"agents": ["claude-code"]}) == ["cursor"]
+        assert store.preserved_agent_scope(
+            ["a", "b"], {"agents": ["a"]}) == ["a", "b"]
+
+    def test_an_explicit_empty_list_is_not_the_lock_s_scope(self):
+        # [] is not None: the caller passed something, so it is theirs to mean.
+        assert store.preserved_agent_scope([], {"agents": ["claude-code"]}) == []
+
+    def test_a_fresh_install_has_no_scope_to_preserve(self):
+        assert store.preserved_agent_scope(None, None) is None
+        assert store.preserved_agent_scope(None, {}) is None
+
+    def test_a_skill_s_scope_comes_from_its_agents_list(self):
+        assert store.preserved_agent_scope(
+            None, {"agents": ["claude-code"]}) == ["claude-code"]
+
+    def test_a_rule_s_scope_comes_from_its_materializations(self):
+        existing = {"materializations": [{"agent": "cursor", "path": "/x"},
+                                         {"agent": "windsurf", "path": "/y"}]}
+        assert store.preserved_agent_scope(None, existing) == ["cursor", "windsurf"]
+
+    def test_a_materialization_row_with_no_agent_is_dropped(self):
+        existing = {"materializations": [{"agent": "cursor"}, {"path": "/y"}]}
+        assert store.preserved_agent_scope(None, existing) == ["cursor"]
+
+    def test_an_empty_record_means_every_agent_not_no_agent(self):
+        # Nothing was linked last time (no agents enabled, or all conflicted).
+        # Reading that as "link nowhere" would strand the skill forever.
+        assert store.preserved_agent_scope(None, {"agents": []}) is None
+        assert store.preserved_agent_scope(None, {"materializations": []}) is None
+        assert store.preserved_agent_scope(
+            None, {"materializations": [{"path": "/y"}]}) is None
+
+    def test_agents_is_preferred_over_materializations(self):
+        # A project skill records both; `agents` is the complete list (it
+        # carries forward agents an earlier filtered install left untouched).
+        existing = {"agents": ["claude-code", "cursor"],
+                    "materializations": [{"agent": "cursor"}]}
+        assert store.preserved_agent_scope(None, existing) == \
+            ["claude-code", "cursor"]
+
+
+class TestReinstallKeepsAgentScope:
+    """End-to-end of the same rule, through the real install paths."""
+
+    def test_a_forced_skill_reinstall_does_not_relink_everywhere(self, tap, entry):
+        store.install(entry, only_agents=["claude-code"])
+        res = store.install(entry, force=True)          # what `update` does
+        assert res.linked == ["claude-code"]
+        assert lockfile.get_skill("brainstorming")["agents"] == ["claude-code"]
+        assert _link("claude-code").is_symlink()
+        assert not _link("windsurf").exists()
+        assert not _link("cursor").exists()
+
+    def test_a_forced_reinstall_can_still_widen_on_request(self, tap, entry):
+        store.install(entry, only_agents=["claude-code"])
+        res = store.install(entry, force=True,
+                            only_agents=["claude-code", "cursor"])
+        assert res.linked == ["claude-code", "cursor"]
+        assert _link("cursor").is_symlink()
+        assert not _link("windsurf").exists()
+
+    def test_an_unnarrowed_skill_still_reinstalls_everywhere(self, tap, entry):
+        store.install(entry)
+        res = store.install(entry, force=True)
+        assert res.linked == ["claude-code", "windsurf", "cursor"]
+
+    def test_install_from_path_keeps_the_scope_too(self, tap, entry, tmp_path):
+        # `boost reinstall` on a local skill goes through install_from_path.
+        store.install(entry, only_agents=["cursor"])
+        src = tmp_path / "brainstorming"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: brainstorming\nversion: 9.9.9\n---\nhi\n", encoding="utf-8")
+        res = store.install_from_path(src, name="brainstorming", force=True)
+        assert res.linked == ["cursor"]
+        assert lockfile.get_skill("brainstorming")["agents"] == ["cursor"]
+        assert not _link("claude-code").exists()
+
+    def test_a_forced_rule_reinstall_keeps_its_materializations(self, tap):
+        rule = _rule_entry(tap)
+        store.install(rule, only_agents=["cursor"])
+        res = store.install(rule, force=True)
+        assert res.linked == ["cursor"]
+        assert [m["agent"] for m in
+                lockfile.get_rule("team-conventions")["materializations"]] == ["cursor"]
+        assert not (paths.home() / "CLAUDE.md").exists()
+        assert not (paths.home() / ".windsurf" / "rules"
+                    / "team-conventions.mdc").exists()
+
+    def test_a_forced_workflow_reinstall_keeps_its_drops(self, tap):
+        wf = _workflow_entry(tap)
+        store.install(wf, only_agents=["claude-code"])
+        res = store.install(wf, force=True)
+        assert res.linked == ["claude-code"]
+        assert not (paths.home() / ".cursor" / "commands" / "ship-it.md").exists()
+
+    def test_a_forced_project_reinstall_keeps_its_agent_dirs(self, entry, tmp_path):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo),
+                      only_agents=["cursor"])
+        res = store.install(entry, scope="project", base=str(repo), force=True)
+        assert res.linked == ["cursor"]
+        assert not (repo / ".claude" / "skills" / "brainstorming").exists()
