@@ -1,10 +1,13 @@
 """Diagnostic logging & crash reporting."""
 from __future__ import annotations
 
+import json
 import logging
 import logging.handlers
 import pathlib
+import re
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -378,3 +381,233 @@ class TestUtcTimestamps:
         finally:
             monkeypatch.delenv("TZ", raising=False)
             time.tzset()
+
+
+# ── `boost log --crashes`, the listing branch ────────────────────────────────
+#
+# Only the empty state was covered. Everything below it — the glob's reverse
+# sort, the `command:` summary extraction, the OSError fallback and the --limit
+# cut — could regress without a single test noticing.
+
+def _seed_crash(stamp: str, command: str = "boost install foo") -> pathlib.Path:
+    """Write a crash report shaped like the real one logs.py produces."""
+    paths.logs_dir().mkdir(parents=True, exist_ok=True)
+    report = paths.logs_dir() / ("crash-%s.log" % stamp)
+    report.write_text(
+        "boost crash report\n"
+        "version:  0.0.0\n"
+        "command:  %s\n"
+        "\ntraceback:\nRuntimeError: boom\n" % command,
+        encoding="utf-8")
+    return report
+
+
+def test_log_crashes_lists_each_report_with_its_command(boost):
+    _seed_crash("20260101-101010", "boost install foo")
+    _seed_crash("20260102-202020", "boost tap o/r")
+    res = boost("log", "--crashes")
+
+    assert "crash reports in" in res.out
+    assert "crash-20260101-101010.log  command:  boost install foo" in res.out
+    assert "crash-20260102-202020.log  command:  boost tap o/r" in res.out
+    assert "view one with:  cat " in res.out
+    assert "no crash reports" not in res.out
+
+
+def test_log_crashes_lists_newest_first(boost):
+    _seed_crash("20260101-101010")
+    _seed_crash("20260303-303030")
+    out_lines = [ln for ln in boost("log", "--crashes").out.splitlines()
+                 if "crash-2026" in ln]
+    assert [ln.split()[0] for ln in out_lines] == [
+        "crash-20260303-303030.log", "crash-20260101-101010.log"]
+
+
+def test_log_crashes_honours_the_limit(boost):
+    for stamp in ("20260101-010101", "20260202-020202", "20260303-030303"):
+        _seed_crash(stamp)
+    res = boost("log", "--crashes", "-n", "2")
+    assert res.out.count("crash-2026") == 2
+    # The two kept are the newest, not simply the first two the glob returned.
+    assert "crash-20260303-030303.log" in res.out
+    assert "crash-20260202-020202.log" in res.out
+    assert "crash-20260101-010101.log" not in res.out
+
+
+def test_log_crashes_tolerates_a_report_with_no_command_line(boost):
+    paths.logs_dir().mkdir(parents=True, exist_ok=True)
+    (paths.logs_dir() / "crash-20260404-040404.log").write_text(
+        "truncated before the command line got written\n", encoding="utf-8")
+    res = boost("log", "--crashes")
+    assert "crash-20260404-040404.log" in res.out
+
+
+def test_log_crashes_survives_an_unreadable_report(boost):
+    # A directory where a file should be: read_text raises IsADirectoryError on
+    # POSIX and PermissionError on Windows — both OSError, which is exactly the
+    # fallback's contract. It must still list the entry, not abort the command.
+    _seed_crash("20260505-050505")
+    (paths.logs_dir() / "crash-20260606-060606.log").mkdir(parents=True)
+    res = boost("log", "--crashes")
+    assert "crash-20260606-060606.log" in res.out
+    assert "crash-20260505-050505.log  command:  boost install foo" in res.out
+
+
+def test_a_real_crash_shows_up_in_the_listing(boost, monkeypatch):
+    # End-to-end across the writer and the reader: whatever logs.py records is
+    # what `--crashes` has to be able to parse back out.
+    from boost_cli import cli
+    real_dispatch = cli._dispatch
+    crashed = []
+
+    def crash_once(name, argv, soft=False):
+        # Only the first invocation blows up; `log --crashes` still has to run
+        # for real. monkeypatch.undo() is not an option here — it would also
+        # revert the sandbox fixture's $HOME and read the developer's own logs.
+        if not crashed:
+            crashed.append(name)
+            raise RuntimeError("boom")
+        return real_dispatch(name, argv, soft=soft)
+
+    monkeypatch.setattr(cli, "_dispatch", crash_once)
+    boost("count", expect=70)
+    res = boost("log", "--crashes")
+    assert crashed == ["count"]
+    assert "command:  boost count" in res.out
+
+
+# ── BOOST_LOG_FORMAT=json ────────────────────────────────────────────────────
+
+class TestLogFormatResolution:
+    """Env beats config beats the `text` default — same shape as the level."""
+
+    def test_defaults_to_text(self, env):
+        assert logs.log_format() == "text"
+
+    def test_env_selects_json(self, env, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        assert logs.log_format() == "json"
+
+    def test_env_is_case_and_space_insensitive(self, env, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "  JSON ")
+        assert logs.log_format() == "json"
+
+    def test_an_unknown_env_value_falls_back_to_text(self, env, monkeypatch):
+        # A typo must not silently disable logging or crash configure().
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "yaml")
+        assert logs.log_format() == "text"
+
+    def test_config_selects_json_when_env_is_unset(self, env, monkeypatch):
+        from boost_cli.core import config
+        monkeypatch.delenv("BOOST_LOG_FORMAT", raising=False)
+        config.set_value("logging.format", "json")
+        assert logs.log_format() == "json"
+
+    def test_env_wins_over_config(self, env, monkeypatch):
+        from boost_cli.core import config
+        config.set_value("logging.format", "json")
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "text")
+        assert logs.log_format() == "text"
+
+
+class TestJsonFileOutput:
+    def _records(self, env, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        logs.configure()
+        logs.get_logger().info("hello %s", "world")
+        text = logs.log_path().read_text(encoding="utf-8")
+        return [json.loads(ln) for ln in text.splitlines() if ln.strip()]
+
+    def test_one_json_object_per_line(self, env, monkeypatch):
+        recs = self._records(env, monkeypatch)
+        assert len(recs) == 1
+        assert recs[0]["msg"] == "hello world", "args must be interpolated"
+        assert recs[0]["level"] == "INFO"
+        assert recs[0]["logger"] == "boost"
+
+    def test_the_timestamp_is_utc_with_a_z(self, env, monkeypatch):
+        ts = self._records(env, monkeypatch)[0]["ts"]
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", ts), ts
+        # Parsed as UTC it must be within a minute of now; a local-time stamp
+        # wearing a Z would be off by the machine's offset.
+        parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+        assert abs((datetime.now(timezone.utc) - parsed).total_seconds()) < 60
+
+    def test_an_exception_is_carried_in_its_own_field(self, env, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        logs.configure()
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            logs.get_logger().exception("caught it")
+        rec = [json.loads(ln) for ln in
+               logs.log_path().read_text(encoding="utf-8").splitlines()][-1]
+        assert rec["msg"] == "caught it"
+        assert "ValueError: boom" in rec["exc"]
+        assert "\n" not in json.dumps(rec), "one physical line per record"
+
+    def test_an_unserializable_arg_degrades_instead_of_losing_the_line(
+            self, env, monkeypatch):
+        # A formatter that raises loses the trail it exists to keep.
+        class Weird:
+            def __repr__(self):
+                return "<weird>"
+
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        logs.configure()
+        logs.get_logger().info("got %r", Weird())
+        rec = [json.loads(ln) for ln in
+               logs.log_path().read_text(encoding="utf-8").splitlines()][-1]
+        assert rec["msg"] == "got <weird>"
+
+    def test_text_mode_is_unchanged(self, env, monkeypatch):
+        monkeypatch.delenv("BOOST_LOG_FORMAT", raising=False)
+        logs.configure()
+        logs.get_logger().info("plain line")
+        text = logs.log_path().read_text(encoding="utf-8")
+        assert "INFO" in text and "boost: plain line" in text
+        assert not text.lstrip().startswith("{")
+
+
+class TestJsonConsoleOutput:
+    def test_the_console_handler_uses_the_same_format(self, env, monkeypatch,
+                                                      capsys):
+        # A `--debug` stream that disagrees with the file it is showing would
+        # be its own bug report.
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        logs.configure(debug=True)
+        logs.get_logger().error("stderr line")
+        err = capsys.readouterr().err.strip().splitlines()[-1]
+        assert json.loads(err)["msg"] == "stderr line"
+
+
+class TestDiagnosticsViewerReadsBothFormats:
+    """`boost log --diagnostics` is the human view of that same file."""
+
+    def _diag(self):
+        from boost_cli.commands import info
+        return info._diag_line
+
+    def test_a_json_line_is_rendered_back_as_text(self):
+        line = json.dumps({"ts": "2026-07-27T00:00:00Z", "level": "INFO",
+                           "logger": "boost", "msg": "invoke: boost count"})
+        assert self._diag()(line) == \
+            "2026-07-27T00:00:00Z INFO    boost: invoke: boost count"
+
+    def test_a_plain_text_line_passes_through(self):
+        line = "2026-07-27T00:00:00Z INFO    boost: invoke: boost count"
+        assert self._diag()(line) == line
+
+    def test_a_line_that_only_looks_like_json_passes_through(self):
+        # A mixed file (the format changed mid-life) has to read end to end.
+        for line in ("{not json at all", json.dumps({"other": "shape"}),
+                     json.dumps([1, 2, 3])):
+            assert self._diag()(line) == line
+
+    def test_the_command_renders_a_json_trail(self, boost, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        boost("count")
+        res = boost("log", "--diagnostics")
+        assert "invoke: boost count" in res.out
+        assert "{" not in res.out, "raw JSONL is not the human view"

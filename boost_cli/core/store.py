@@ -96,6 +96,36 @@ def link_agents(name: str, only: Optional[List[str]] = None) -> InstallResult:
     return res
 
 
+def preserved_agent_scope(only_agents: Optional[List[str]],
+                          existing: Optional[dict]) -> Optional[List[str]]:
+    """Agent scope for a re-install: the caller's if given, else the lock's.
+
+    ``boost install foo --agent claude-code`` records exactly that subset. But
+    ``update`` and ``reinstall`` force-reinstall with ``only_agents=None``, and
+    ``link_agents(None)`` fans out to *every* enabled agent — so a deliberate
+    narrowing silently became a full install, and the lock entry was rewritten
+    to match. Falling back to what the lock already records keeps the scope a
+    property of the install rather than of whichever agents happen to be
+    enabled the next time something updates.
+
+    An explicit ``only_agents`` still wins, so re-running install with
+    ``--agent`` remains the way to widen the scope again. Skills record their
+    scope as ``agents``; rules and workflows record one ``materializations``
+    row per agent. An empty record means "nothing was linked", not "link
+    nothing", so it falls back to every enabled agent — exactly what
+    ``link_agents`` does with ``None``.
+    """
+    if only_agents is not None:
+        return only_agents
+    if not existing:
+        return None
+    recorded = existing.get("agents")
+    if recorded is None:
+        recorded = [m.get("agent")
+                    for m in existing.get("materializations") or ()]
+    return [a for a in recorded if a] or None
+
+
 def unlink_agents(name: str) -> List[str]:
     """Remove the ``name`` symlink from every enabled agent dir.
 
@@ -277,7 +307,7 @@ def install(entry: dict, force: bool = False,
     paths.ensure_dirs()
     _copy_skill(src, dest)
 
-    res = link_agents(name, only=only_agents)
+    res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
     res.upgraded = existing is not None
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
@@ -337,6 +367,7 @@ def _install_project_skill(entry: dict, force: bool = False,
 
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
+    only_agents = preserved_agent_scope(only_agents, existing)
     targets = [(agent, scopes.skill_target(skills_dir, name, base=resolved_base))
                for agent, skills_dir in agents.enabled_agents().items()
                if not only_agents or agent in only_agents]
@@ -535,6 +566,7 @@ def _install_rule(entry: dict, force: bool = False,
     if existing and not force:
         raise BoostError("%s is already installed" % name,
                         hint="`boost reinstall %s` to force" % name)
+    only_agents = preserved_agent_scope(only_agents, existing)
 
     violations = policy.check_install(entry, len(lockfile.installed()))
     if violations:
@@ -641,6 +673,7 @@ def _install_workflow(entry: dict, force: bool = False,
     if existing and not force:
         raise BoostError("%s is already installed" % name,
                         hint="`boost reinstall %s` to force" % name)
+    only_agents = preserved_agent_scope(only_agents, existing)
 
     violations = policy.check_install(entry, len(lockfile.installed()))
     if violations:
@@ -756,7 +789,7 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
     dest = skill_store_dir(name)
     paths.ensure_dirs()
     _copy_skill(src_dir, dest)
-    res = link_agents(name, only=only_agents)
+    res = link_agents(name, only=preserved_agent_scope(only_agents, existing))
     res.score, _ = util.score_skill(dest)
     res.mcp_servers = declared_mcp_servers(dest)
     now = util.now_iso()

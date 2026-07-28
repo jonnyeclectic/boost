@@ -265,6 +265,40 @@ def build_design() -> tuple[Path, str]:
     return DESIGN_HTML, html
 
 
+_CARD_ID = re.compile(r'<article class="(?:cap rcard|ritem)" id="([^"]+)"')
+
+
+def diagnose(path, committed: str, fresh: str) -> list[str]:
+    """Explain *why* a board drifted, in the terms the reader needs.
+
+    The common cause is not a hand-edit. It is a rebase: another PR's card
+    merges in as a clean new ``docs/roadmap/items/*.md``, git merges the
+    generated HTML textually and succeeds, and the board is silently missing
+    that card. The old message said only "out of date", so a PR that changed no
+    Python at all went red across lint and every test leg with nothing in the
+    log pointing at the actual cause.
+    """
+    was = _CARD_ID.findall(committed)
+    now = _CARD_ID.findall(fresh)
+    missing = [i for i in now if i not in set(was)]
+    extra = [i for i in was if i not in set(now)]
+    lines = []
+    if missing:
+        lines.append("  missing %d card(s) present in docs/roadmap/items/: %s"
+                     % (len(missing), ", ".join(missing[:8])
+                        + (" …" if len(missing) > 8 else "")))
+        lines.append("  ↳ almost always a rebase: someone else's card landed on "
+                     "main and the generated HTML merged textually.")
+    if extra:
+        lines.append("  %d card(s) in the HTML have no item file: %s"
+                     % (len(extra), ", ".join(extra[:8])
+                        + (" …" if len(extra) > 8 else "")))
+    if not missing and not extra:
+        lines.append("  the same cards, rendered differently — an item file's "
+                     "fields or body changed, or the generator did.")
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Regenerate the roadmap boards.")
     parser.add_argument(
@@ -277,21 +311,29 @@ def main(argv: list[str] | None = None) -> int:
     drift = []
     for path, fresh in targets:
         if args.check:
-            if path.read_text(encoding="utf-8") != fresh:
-                drift.append(path)
+            committed = path.read_text(encoding="utf-8")
+            if committed != fresh:
+                drift.append((path, committed, fresh))
         else:
             path.write_text(fresh, encoding="utf-8")
             print("wrote %s" % path)
 
     if args.check:
         if drift:
-            print(
-                "ERROR: roadmap HTML is out of date — regenerate with\n"
-                "    python3 scripts/build_roadmap.py\n"
-                "and commit the result (see CONTRIBUTING.md):\n  %s"
-                % "\n  ".join(str(p) for p in drift),
-                file=sys.stderr,
-            )
+            report = ["ERROR: the roadmap board is stale — regenerate with",
+                      "    python3 scripts/build_roadmap.py",
+                      "and commit the result (see CONTRIBUTING.md).",
+                      ""]
+            for path, committed, fresh in drift:
+                report.append("%s" % path)
+                report.extend(diagnose(path, committed, fresh))
+            print("\n".join(report), file=sys.stderr)
+            # One annotation so the cause is visible on the checks tab without
+            # opening a log: this failure lands on every matrix leg at once and
+            # reads as a broken build rather than a stale generated file.
+            print("::error::roadmap board is stale — run "
+                  "`python3 scripts/build_roadmap.py` and commit "
+                  "(usually needed after a rebase)")
             return 1
         print("roadmap boards are up to date.")
     return 0

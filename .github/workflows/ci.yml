@@ -112,7 +112,14 @@ jobs:
         # triggers. Accepted findings are documented in .github/zizmor.yml.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pipx run zizmor==1.27.0 .github/workflows
+        # 1.27.0 was YANKED from PyPI for GHSA-f42p-wjw5-97qh; 1.28.0 is
+        # the fix. Nothing in CI would have caught it: zizmor is invoked
+        # through `pipx run` inside this step, so it is in no lock file,
+        # pip-audit never resolves it and Dependabot never sees it. Every
+        # `pipx run`/`npx` pin in .github/workflows/ has that same blind
+        # spot — Scorecard's PinnedDependencies hits are about exactly
+        # these invocations.
+        run: pipx run zizmor==1.28.0 .github/workflows
       - name: registries.json is regenerated
         run: python scripts/build_registries.py --check
       - name: roadmap HTML is regenerated
@@ -643,3 +650,54 @@ jobs:
           .venv/bin/pip -q install pytest pytest-cov coverage hypothesis
           .venv/bin/pip -q install -e .
           .venv/bin/pytest tests/unit tests/functional -q
+
+  # The behave suite (tests/bdd — 11 features, 47 scenarios) ran nowhere in CI:
+  # `make bdd` only ever executed if a contributor remembered to run it. Unlike
+  # the eval and mutation gates, which degrade cleanly but still execute, this
+  # one was invisible — so a CLI change that broke the step glue (output-string
+  # matching, mocked shutil.which) could rot across any number of merges.
+  #
+  # Its own job rather than a step inside `tests`: the suite is platform- and
+  # version-independent glue, so running it nine times across that matrix buys
+  # nothing, and a dedicated check name is what makes it requireable through the
+  # documented .github/required-checks.txt path instead of quietly turning an
+  # existing required check into the gate for a second suite.
+  bdd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          # audit: record egress, never block — the runtime signal that
+          # catches a compromised action exfiltrating a token, paired with
+          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: git identity (fixture repos)
+        # environment.py builds the shared fixture tap with make_fixture.py,
+        # which commits — a runner has no default identity.
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install behave
+        # Unlocked and installed from the [bdd] extra rather than added to
+        # requirements/*.in: behave is an optional runtime extra declared in
+        # pyproject, not part of the pinned gate toolchain — the same call the
+        # `tests` job makes for the [rag] extra's sqlite-vec.
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -e '.[bdd]'
+      - name: behave (11 features, 47 scenarios)
+        # Every scenario sandboxes its own $HOME in environment.py, so this
+        # touches no real agent config. --no-capture-stderr keeps a failing
+        # step's own diagnostics in the log next to the scenario that failed.
+        run: .venv/bin/behave tests/bdd/features --no-capture-stderr

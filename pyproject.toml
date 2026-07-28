@@ -177,6 +177,15 @@ files = ["boost_cli"]
 module = "boost_cli._version"
 ignore_missing_imports = true
 
+# Every cmd_* function takes a bare `argv`, and mypy's default mode skips the
+# BODY of any function with an untyped parameter — so the required "zero mypy
+# errors" gate was checking almost none of the CLI's dispatch logic. This turns
+# body checking on for the command layer without demanding annotated signatures
+# (76 of them), which would be churn for no extra checking.
+[[tool.mypy.overrides]]
+module = "boost_cli.commands.*"
+check_untyped_defs = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider"

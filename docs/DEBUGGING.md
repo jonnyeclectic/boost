@@ -80,6 +80,33 @@ BOOST_NO_LOG=1 boost install foo      # this run writes no file
 boost config set logging.file false   # permanently
 ```
 
+### Structured (JSON) log lines
+
+The trail is plain text by default. `json` emits **one JSON object per line**
+carrying the same fields, so the file pipes straight into `jq` or a log
+collector instead of needing a regex:
+
+```bash
+BOOST_LOG_FORMAT=json boost install foo    # this run
+boost config set logging.format json       # permanently
+
+jq -r 'select(.level=="WARNING") | .msg' ~/.boost/logs/boost.log
+```
+
+| Field | Meaning |
+|-------|---------|
+| `ts` | UTC timestamp, `2026-07-27T14:03:11Z` |
+| `level` | `DEBUG` … `CRITICAL` |
+| `logger` | always `boost` today |
+| `msg` | the formatted message, arguments already interpolated |
+| `exc` | the traceback — present only on records logged with an exception |
+
+The format applies to the console channel too, so `--debug` shows the same
+shape the file is recording. `boost log --diagnostics` renders JSON lines back
+as text, so switching format doesn't cost you the built-in viewer, and a file
+whose format changed mid-life still reads end to end. An unrecognised value
+falls back to `text` rather than failing the run.
+
 ---
 
 ## Crash reports
@@ -149,6 +176,7 @@ Everything that changes boost's runtime behaviour, in one place:
 | `BOOST_AGENTS_STORE` | override `~/.agents/skills` (the canonical store) |
 | `BOOST_DEBUG` | `=1` → console `DEBUG` + tracebacks |
 | `BOOST_LOG_LEVEL` | explicit console diagnostic level |
+| `BOOST_LOG_FORMAT` | `text` (default) or `json` — one JSON object per log line |
 | `BOOST_NO_LOG` | `=1` → don't write the diagnostic log file |
 | `BOOST_NO_AI` | `=1` → disable all AI calls (offline / deterministic) |
 | `BOOST_ASSUME_YES` | `=1` → auto-confirm prompts (also `--yes`/`-y`) |

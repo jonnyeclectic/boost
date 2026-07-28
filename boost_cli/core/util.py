@@ -119,6 +119,28 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
         raise
 
 
+def positive_int(s: str) -> int:
+    """argparse ``type=`` for count flags (``-n``/``--limit``): an int >= 1.
+
+    A bare ``type=int`` lets a negative through, and every count flag in boost
+    ends up as a slice bound or a ``git log -n`` argument — where a negative
+    silently *inverts* the request instead of failing it. Rejecting it at parse
+    time is the only place the user still sees a usable error.
+    """
+    # Local import: argparse is not on the `boost --help` startup path, and
+    # util is (via core.logs). Every caller of this function is a command
+    # module that has already imported argparse through cliparse.
+    import argparse
+
+    try:
+        v = int(s)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("invalid int value: %r" % s) from None
+    if v < 1:
+        raise argparse.ArgumentTypeError("must be >= 1")
+    return v
+
+
 def now_iso() -> str:
     """Return UTC now as ``'2026-07-16T01:00:00Z'`` (what ``rel_time`` parses)."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

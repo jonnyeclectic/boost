@@ -986,6 +986,17 @@ class TestStats:
         assert "Sync commits and PRs to Jira tickets" in r.out
         assert "0 installs · 0 updates · 0 uninstalls" in r.out
 
+    def test_installed_but_no_longer_in_any_tap(self, boost, installed):
+        # The asymmetric case: `lock` exists, `cat` is None. cmd_stats guards
+        # "neither" and then relies on that guard two screens later — enabling
+        # check_untyped_defs on the command layer is what surfaced the reliance,
+        # so it gets a test rather than an implicit invariant.
+        boost("untap", "fixture-tap", "--force")
+        r = boost("stats", "brainstorming")
+        assert "1.4.0" in r.out              # version from the lock
+        assert "not installed" not in r.out
+        assert "0 installs" in r.out or "installs" in r.out
+
     def test_unknown(self, boost, tapped):
         r = boost("stats", "nope", expect=1)
         assert "no skill named 'nope' installed or in any tap" in r.err

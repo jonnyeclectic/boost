@@ -6,6 +6,7 @@ so the command modules count toward coverage.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,56 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+def absolutize_source_paths(config) -> list:
+    """Rewrite ``config.source_paths`` in place to absolute paths.
+
+    Takes the config object rather than fetching it so the behaviour can be
+    tested without mutmut installed. Returns the new list.
+    """
+    config.source_paths = [Path(p).resolve() for p in config.source_paths]
+    return config.source_paths
+
+
+def pytest_configure(config):
+    """Make mutmut's ``source_paths`` absolute before any test can chdir.
+
+    mutmut's ``record_trampoline_hit`` runs on every call into mutated code
+    during stats collection, and opens with::
+
+        source_paths = [p.resolve(strict=True) for p in Config.get().source_paths]
+
+    Those paths come from ``setup.cfg`` and are *relative*, so ``resolve()``
+    consults the current working directory — and this suite's functional tests
+    chdir into throwaway project dirs, where ``boost_cli/`` does not exist. The
+    result is ``FileNotFoundError: <tmpdir>/boost_cli`` raised from inside the
+    trampoline. It surfaces as a failed test and takes the whole stats phase
+    with it ("failed to collect stats"), so no mutation run that selects
+    ``tests/functional/`` can start at all.
+
+    That is what pins the mutation gate to ``tests/unit/``, and unit tests
+    alone leave ``boost_cli/commands/`` at ~18% line coverage (91.5% with
+    functional included). Since "no tests" mutants count against the score, the
+    gate cannot be extended past ``core/`` while this stands.
+
+    Resolving once here, while the cwd is still the tree root, is enough:
+    ``resolve()`` on an already-absolute path never consults the cwd. No mutmut
+    behaviour changes — the list is only ever compared against stack-frame
+    filenames, which are absolute already.
+
+    Upstream the offending line is dead code in the default configuration: its
+    only consumer sits behind ``if max_stack_depth != -1``, and -1 is the
+    default, so it computes a value nothing reads and raises while doing it.
+    """
+    del config
+    if not os.environ.get("MUTANT_UNDER_TEST"):
+        return          # not a mutmut run — nothing to normalize
+    try:
+        from mutmut.configuration import Config
+    except Exception:   # mutmut absent, or its internals moved
+        return
+    absolutize_source_paths(Config.get())
 
 
 @pytest.fixture(autouse=True)
