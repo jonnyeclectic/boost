@@ -83,19 +83,46 @@ PROTOCOL_VERSION = "2024-11-05"
 # Server-level guidance returned in the `initialize` result. MCP hosts load this
 # into the model's context, so it is boost's one chance to tell an agent WHEN it
 # is relevant — the difference between a search tool that sits unused and one an
-# agent reaches for before reinventing a skill. Framed by the agent's trigger
-# ("about to author reusable instructions"), not boost's nouns.
+# agent reaches for. Framed by the agent's triggers, not boost's nouns.
+#
+# It declares TWO triggers, and the first exists because the second alone was
+# not enough. Framed only as "before you author a skill", agents reached for
+# boost exclusively when they were already about to write one — which is the
+# rarer moment. The common one is starting ordinary work that an installed or
+# installable skill already covers, and nothing was telling them to look. The
+# closing proportion note is load-bearing in the other direction: an unbounded
+# "always check first" turns every trivial turn into a tool call, and an agent
+# that learns to ignore the guidance ignores all of it.
 INSTRUCTIONS = (
     "boost is a package manager for AI-agent skills: reusable, version-tracked "
     "capabilities (skills, rules, slash-commands, subagents) from curated "
-    "registries. BEFORE you author a new skill, subagent, slash-command, rule, "
-    "or any reusable block of agent instructions — or when the user describes a "
-    "repeatable workflow (\"set up code review\", \"add a commit convention\") — "
-    "call boost_search FIRST to check whether a vetted one already exists. "
-    "Installing beats hand-writing: an installed skill is version-pinned, wired "
-    "into every agent on this machine, policy-governed, and shareable with the "
-    "team. Typical flow: boost_search -> boost_info -> boost_install. Only build "
-    "from scratch when a search turns up nothing relevant."
+    "registries.\n"
+    "\n"
+    "Two moments make boost relevant. The first is the one usually missed:\n"
+    "\n"
+    "1. STARTING A TASK. Before doing non-trivial work — building a feature, "
+    "setting up tooling or CI, reviewing code, debugging a class of problem, "
+    "writing docs — stop and check whether a skill already covers it. Call "
+    "boost_list for what is installed and usable right now, and boost_search "
+    "for what could be. A matching skill is a procedure someone already got "
+    "right and vetted; following it beats reconstructing the same steps from "
+    "memory.\n"
+    "\n"
+    "2. AUTHORING. Before you write a new skill, subagent, slash-command, "
+    "rule, or any reusable block of agent instructions — or when the user "
+    "describes a repeatable workflow (\"set up code review\", \"add a commit "
+    "convention\") — call boost_search FIRST to check whether a vetted one "
+    "already exists. Installing beats hand-writing: an installed skill is "
+    "version-pinned, wired into every agent on this machine, policy-governed, "
+    "and shareable with the team.\n"
+    "\n"
+    "Typical flow: boost_search -> boost_info -> boost_install. Only build "
+    "from scratch when a search turns up nothing relevant.\n"
+    "\n"
+    "Proportion: skip the check for trivial or one-off turns — answering a "
+    "question, a small edit, running a command you were just handed. Checking "
+    "once when a task starts is the habit; checking before every tool call is "
+    "noise."
 )
 
 

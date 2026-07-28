@@ -116,9 +116,17 @@ class TestHandleRequest:
         instr = resp["result"]["instructions"]
         assert instr == mcp.INSTRUCTIONS
         low = instr.lower()
-        assert "before you author" in low          # the trigger moment
+        # TWO triggers must survive here. Authoring alone was the original
+        # framing and it under-fired: agents reached for boost only when about
+        # to write a skill, never to check whether one already covered the work
+        # in front of them. Dropping either trigger regresses that.
+        assert "starting a task" in low            # trigger 1: leverage first
+        assert "boost_list" in instr               # ...what is already installed
+        assert "before you write a new skill" in low   # trigger 2: authoring
         assert "boost_search" in instr             # the concrete first action
         assert "already exists" in low             # the "don't reinvent" frame
+        # ...and it must stay bounded, or an agent learns to ignore all of it.
+        assert "skip the check for trivial" in low
 
     def test_protocol_version_constant(self):
         assert mcp.PROTOCOL_VERSION == "2024-11-05"

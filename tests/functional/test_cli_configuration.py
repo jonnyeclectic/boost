@@ -876,8 +876,15 @@ class TestMcp:
         from boost_cli.commands import configuration
         specs = {s["name"]: s["description"].lower()
                  for s in configuration.REGISTRY.specs()}
+        # search carries BOTH triggers: starting a task, and authoring. The
+        # second alone is why the tool sat unused for ordinary work.
+        assert "starting non-trivial work" in specs["boost_search"]
         assert "first stop before writing" in specs["boost_search"]
         assert "reinvent" in specs["boost_search"]
+        # list is the cheap half of the task-start check — leverage what is
+        # already installed, not merely "avoid a duplicate install".
+        assert "start" in specs["boost_list"]
+        assert "leverage" in specs["boost_list"]
         # install points back at the search that should precede it
         assert "boost_search" in specs["boost_install"]
         # info is framed as the vet-before-install step
