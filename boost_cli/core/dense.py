@@ -163,7 +163,14 @@ def build(entries: Optional[List[dict]] = None,
         fresh = [e for e in entries
                  if e["tap"].replace("/", "__") not in reused]
         changed_taps = sorted({e["tap"] for e in fresh})
-        _delete_taps(con, changed_taps)
+        # Prune taps that are gone entirely, not only the ones that changed.
+        # `boost untap` removes a tap's entries, so it can never appear in
+        # `fresh` and its vectors survived every later incremental build —
+        # crowding the KNN pool on every query with rows `retrieve` then
+        # discards for not being live, which is how a dense search quietly
+        # returns fewer hits the longer an index has been in use.
+        removed_taps = sorted(_indexed_taps(con) - {e["tap"] for e in entries})
+        _delete_taps(con, changed_taps + removed_taps)
 
         added = _embed_and_store(con, fresh, tap_paths)
         _write_meta(con, {"version": INDEX_VERSION, "provider": prov,
@@ -176,12 +183,21 @@ def build(entries: Optional[List[dict]] = None,
             "added": added,
             "taps": len(commits),
             "reindexed": changed_taps,
+            "pruned": removed_taps,
             "reused": sorted(reused),
             "provider": prov,
             "model": mdl,
         }
     finally:
         con.close()
+
+
+def _indexed_taps(con: sqlite3.Connection) -> set:
+    """Every tap name the vector index currently holds chunks for."""
+    try:
+        return {r[0] for r in con.execute("SELECT DISTINCT tap FROM chunks")}
+    except sqlite3.OperationalError:
+        return set()          # no chunks table yet — nothing indexed, nothing stale
 
 
 def _delete_taps(con: sqlite3.Connection, taps: List[str]) -> None:

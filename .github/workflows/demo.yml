@@ -28,6 +28,23 @@ on:
       - "boost_cli/commands/pkg.py"
       - "boost_cli/commands/quality.py"
       - ".github/workflows/demo.yml"
+  # Record on the PR too, without opening one. This workflow failed all six of
+  # its runs because it only ever ran on `main`, where a broken recorder step is
+  # a red run nobody is looking at; running it on the PR that changes the tape
+  # or the recorder proves the toolchain before it lands.
+  #
+  # The list is duplicated rather than shared through a YAML anchor: GitHub
+  # Actions' workflow parser does not support anchors or aliases, so `*name`
+  # here is a workflow that fails to load at all.
+  pull_request:
+    paths:
+      - "docs/demo.tape"
+      - "boost_cli/cli.py"
+      - "boost_cli/core/output.py"
+      - "boost_cli/commands/discovery.py"
+      - "boost_cli/commands/pkg.py"
+      - "boost_cli/commands/quality.py"
+      - ".github/workflows/demo.yml"
 
 permissions:
   contents: read
@@ -54,17 +71,76 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
+      - name: install the recorder toolchain (ffmpeg, ttyd, vhs)
+        # charmbracelet/vhs-action is gone rather than pinned forward. Its
+        # installLatestFfmpeg() scans BtbN/FFmpeg-Builds' *latest* release for
+        # an asset matching `ffmpeg-n5.1…linux64-gpl-5.1….tar.xz`. BtbN moved
+        # past n5.1 years ago, so the loop matches nothing, the URL stays
+        # undefined and the action rejects with the exact message this workflow
+        # failed with six times out of six: "Failed to install ffmpeg". It is
+        # not a flake and not a version to pin around — the action has had no
+        # functional commit since 2024 and is broken on Linux for everyone.
+        #
+        # ffmpeg comes from apt (ubuntu-24.04 ships no ffmpeg). ttyd and vhs
+        # come from GitHub release *asset ids*, which are immutable, rather
+        # than tag URLs, which are not. vhs also publishes a sha256 through the
+        # releases API, so that one is verified outright.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VHS_VERSION: "0.11.0"
+          # sha256 of vhs_0.11.0_Linux_x86_64.tar.gz, from the releases API.
+          VHS_SHA256: "99cb634587eaae0473c1ea377db80c3a048c27f99fe0a7febb1a1e8cb7ee5009"
+          TTYD_ASSET_ID: "159377628"   # tsl0922/ttyd 1.7.7 · ttyd.x86_64
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-jetbrains-mono
+          mkdir -p "$HOME/.local/bin"
+
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+               -H "Accept: application/octet-stream" \
+               -o "$HOME/.local/bin/ttyd" \
+               "https://api.github.com/repos/tsl0922/ttyd/releases/assets/$TTYD_ASSET_ID"
+          chmod +x "$HOME/.local/bin/ttyd"
+
+          curl -fsSL -o /tmp/vhs.tar.gz \
+               "https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz"
+          echo "${VHS_SHA256}  /tmp/vhs.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/vhs.tar.gz -C /tmp
+          install -m 0755 "/tmp/vhs_${VHS_VERSION}_Linux_x86_64/vhs" "$HOME/.local/bin/vhs"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: recorder versions
+        # Printed unconditionally: when a recording looks wrong, the first
+        # question is always which encoder produced it.
+        run: |
+          ffmpeg -version | head -1
+          ttyd --version
+          vhs --version
       - name: record docs/demo.gif
-        # vhs drives a real PTY through ttyd and encodes with ffmpeg; the action
-        # brings both. The tape sets its own throwaway $HOME, so the recording
-        # never touches the runner's state.
-        uses: charmbracelet/vhs-action@59641cdc7fadf3978db65eb8c6937ea2752f4ec3 # v2.1.0
+        # vhs drives a real PTY through ttyd and encodes with ffmpeg. The tape
+        # sets its own throwaway $HOME, so the recording never touches the
+        # runner's state. CI= unset and COLORTERM=truecolor are what vhs-action
+        # used to export: without them termenv strips the ANSI colour the demo
+        # exists to show.
+        env:
+          CI: ""
+          COLORTERM: truecolor
+        run: vhs docs/demo.tape
+      - name: upload the recording (pull requests)
+        # On a PR there is nothing to open a PR against — the artifact is how a
+        # reviewer eyeballs what this branch's recorder actually produced.
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: docs/demo.tape
+          name: demo-gif
+          path: docs/demo.gif
+          if-no-files-found: error
       - name: open a PR if the recording changed
         # A GIF re-encode always differs byte-for-byte, so `git diff --quiet` is
         # not a meaningful staleness test — this always has something to push,
         # and the PR is where a human decides whether it looks right.
+        if: github.event_name != 'pull_request'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           add-paths: docs/demo.gif

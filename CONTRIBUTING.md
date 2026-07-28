@@ -87,6 +87,7 @@ list, and neither should be added to it.
 | `make test` | unit + functional suites, **≥80% line coverage** |
 | `make patch-coverage` | changed-line coverage vs `main`, **≥80% of the diff** (PRs) |
 | `bash tests/smoke.sh` | 170 end-to-end checks through the real `./boost` shim |
+| `make bdd` | the Gherkin suite — 11 features, 47 scenarios (needs the `[bdd]` extra) |
 | `make mutation` | mutmut over `boost_cli/core`, **≥80% mutants killed** |
 | `ruff check boost_cli tests` | lint, zero findings |
 | `mypy` | type check, zero errors |
@@ -96,6 +97,12 @@ list, and neither should be added to it.
 | `xenon` | complexity ratchet: aggregate cyclomatic complexity can't regress (avg ≤B) |
 | `refurb boost_cli` | modernization smells the ruff families miss, zero findings |
 | `scripts/lock_toolchain.py --check` | the hash-pinned toolchain matches its `.in` declarations |
+
+## Code of conduct
+
+Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md)
+(Contributor Covenant 2.1). Conduct reports go through the private reporting
+form linked there, never a public issue.
 
 ## Ground rules
 
@@ -146,6 +153,10 @@ also keeps line-adjacent conflicts rare.
 
 Branch from `main`, keep PRs focused, and write the PR description in the
 commit message (it becomes the release notes via release-drafter).
+
+[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)
+pre-fills the checklist — chiefly `make check` and the generated-file
+regeneration, which are the two things that most often send a PR back.
 
 ## Release safety — require branches be up to date
 

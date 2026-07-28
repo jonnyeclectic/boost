@@ -1,10 +1,14 @@
 rules:
   dangerous-triggers:
     ignore:
-      # Reacts to `ci` finishing on main to open/update a tracking issue. No
-      # checkout, no build — only reads workflow_run event metadata (sha,
-      # branch, run id) to compose an issue body. Nothing PR-controlled runs.
-      - ci-failure-issue.yml:8
+      # Reacts to `ci`/`demo` finishing on main to open/update a tracking
+      # issue. No checkout, no build — only reads workflow_run event metadata
+      # (sha, branch, run id) to compose an issue body. Nothing PR-controlled
+      # runs.
+      # NOTE: these ignores are keyed by file:LINE, so editing anything above
+      # a workflow's `on:` block moves it and silently un-ignores the finding.
+      # That is what reddened lint here: four lines of added header comment.
+      - ci-failure-issue.yml:12
       # Release pipeline. Explicitly checks out `ref: main` (never the
       # workflow_run head_sha), so a fork PR can't smuggle code into a run
       # holding contents:write + PyPI Trusted Publisher OIDC.
@@ -17,6 +21,14 @@ rules:
       # against a fixed public URL. It also cannot be reached from a fork:
       # pages-build-deployment only fires on a real deploy of this repo.
       - post-deploy.yml:21
+      # Reacts to `release` finishing, to attach the SBOM to the release that
+      # just published. It has to be workflow_run: the release event itself is
+      # created with GITHUB_TOKEN and so triggers nothing. It holds only
+      # contents:write, has no secrets, and builds from a release *tag* on this
+      # repo — never the workflow_run head_sha — so no PR-controlled code runs.
+      # It is additionally gated on head_repository == this repository, which is
+      # what keeps a fork PR from reaching it.
+      - sbom.yml:29
   adhoc-packages:
     ignore:
       # Lint-only env on an ephemeral runner: major-pinned linters installed
