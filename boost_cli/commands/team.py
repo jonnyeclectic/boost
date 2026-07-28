@@ -456,7 +456,8 @@ def cmd_pulse(argv) -> int:
     p = cliparse.parser(
         prog="boost pulse",
         description="Team activity feed of skill-management events")
-    p.add_argument("-n", type=int, default=20, help="events to show (default 20)")
+    p.add_argument("-n", type=util.positive_int, default=20,
+                   help="events to show (default 20)")
     p.add_argument("--all", action="store_true", help="show the whole journal")
     p.add_argument("--action", help="filter by action (install, tap, ...)")
     p.add_argument("--json", action="store_true", help="machine-readable output")

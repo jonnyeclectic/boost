@@ -324,6 +324,12 @@ class TestPulse:
         rows = [l for l in r.out.splitlines() if USER in l]
         assert len(rows) == 1 and "fixture-tap" in rows[0]
 
+    def test_negative_or_zero_limit_rejected(self, boost, installed):
+        r = boost("pulse", "-n", "-1", expect=2)
+        assert "argument -n: must be >= 1" in r.err
+        r = boost("pulse", "-n", "0", expect=2)
+        assert "argument -n: must be >= 1" in r.err
+
     def test_json_purity(self, boost, installed):
         r = boost("pulse", "--json")
         events = json.loads(r.out)
