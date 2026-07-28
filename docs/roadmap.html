@@ -110,7 +110,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>167</b><span>Loop finds</span></div>
+      <div class="stat"><b>171</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2475,6 +2475,154 @@ was found by accident, while installing zizmor locally to verify an unrelated ch
           <span class="m">the only yanked release of 66 — and the required lint job pins exactly it</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="release-verifies-the-wrong-commit">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release safety</span></div>
+        <h3>The release verifies one commit and ships another</h3>
+        <p><code>publish.yml</code> fires on <code>workflow_run</code> when <code>ci</code> completes, gates
+on that run's <code>conclusion == 'success'</code> (plus <code>event == 'push'</code> and
+<code>head_repository == this repo</code>), and then checks out <code>ref: main</code>. Those are
+not the same commit. <b>Observed 2026-07-28:</b> <code>ci</code> for <code>ecfe38bc</code>
+completed at 20:19:05Z; the release run was created at 20:19:07Z; it tagged and shipped
+<code>c1727bac</code> as <b>v1.0.271</b> &mdash; while <code>c1727bac</code>'s own
+<code>ci</code>, started 20:18:40Z, was still <code>in_progress</code>. One commit's green
+verdict authorised a different commit's release.
+
+<b>Most of this is already mitigated, and the card should not be read as "untested code ships".</b>
+A strict "require branches to be up to date" policy means the shipped commit was green as a pull
+request before it could merge, so its <em>tree</em> was gated. And
+<code>release_preflight.py</code> is already pointed at the right commit &mdash;
+<code>--sha "$(git rev-parse HEAD)"</code>, with an explicit comment that this is "not the trigger
+sha". It polls each required workflow for that exact sha and fails closed on red, cancelled,
+skipped, never-ran or still-running-at-deadline. The machinery is correct.
+
+<b>Its coverage is the gap.</b> <code>.github/required-checks.txt</code> lists <b>18</b> required
+contexts. <code>publish.yml</code> passes preflight exactly two of them &mdash;
+<code>--require pip-audit.yml</code> and <code>--require package-metadata.yml</code>. The other
+<b>16 are never re-checked against the commit being shipped</b>, including all 14 that come from
+<code>ci.yml</code> and <code>codeql-analyze</code>. The clearest evidence this is an oversight
+rather than a decision is in-tree: <code>release_preflight.py</code>'s own docstring says it waits
+for <em>every</em> required workflow for the exact commit being released, and the caller hands it
+two.
+
+<b>A required context that can never report on <code>main</code> at all.</b> While checking the
+other 16: <code>osv-scanner.yml</code> declares only <code>pull_request</code> and
+<code>merge_group</code> triggers &mdash; no <code>push</code>. So <code>scan-pr / osv-scan</code>
+is green as a PR gate and produces <em>nothing</em> for any commit on <code>main</code>, race or
+no race. Adding it to preflight without first giving that workflow a
+<code>push: branches: [main]</code> trigger would fail the release closed every time.
+
+The fix is not to change the checkout ref. Pinning to
+<code>github.event.workflow_run.head_sha</code> would build the older commit while release-drafter
+still tags the default branch's head &mdash; artifact and tag would disagree. The lower-risk
+change is to widen preflight's <code>--require</code> set to the contexts that actually run on
+<code>main</code>, and optionally fail the job when <code>git rev-parse HEAD</code> differs from
+the triggering run's <code>head_sha</code>. This is the third defect found in the same few lines
+&mdash; see <code>publish-trigger-was-reachable-from-a-fork</code> (who can fire it) and
+<code>publish-gate-ignores-pip-audit-and-metadata</code> (which gates are consulted); this one is
+<em>which commit</em> they were consulted about.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">2 of 18 required contexts are re-checked against the sha actually shipped</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="demo-cannot-open-its-own-pr">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI reporting</span></div>
+        <h3><code>demo.yml</code> still fails on every push &mdash; and the fix is not in the workflow</h3>
+        <p><code>demo-gif-workflow-has-never-succeeded</code> (shipped, PR&nbsp;294) fixed the recorder:
+<code>charmbracelet/vhs-action</code>'s broken ffmpeg installer was replaced with apt plus
+ttyd/vhs pinned by release-asset id. That worked. The recording step now succeeds on both event
+paths. <b>The workflow still fails on every push to <code>main</code></b> &mdash; observed
+2026-07-28 at 20:56, 20:04 and 09:27, and it is the only failing workflow in the last 60 runs.
+
+The failure moved one step later, to <code>open a PR if the recording changed</code>. The run
+annotation gives it verbatim:
+
+<code>GitHub Actions is not permitted to create or approve pull requests.</code>
+
+<b>Nothing in <code>demo.yml</code> is wrong, so nothing in <code>demo.yml</code> will fix it.</b>
+The job already declares <code>contents: write</code> and <code>pull-requests: write</code>,
+which is exactly what <code>peter-evans/create-pull-request</code> documents as required. The
+workflow uses no secrets. <code>persist-credentials: false</code> on the checkout is correct and
+is the repo-wide convention across all 31 checkout steps &mdash; the action supplies its own git
+auth and explicitly unsets any persisted credential. Every one of those is a plausible-looking
+false lead. The actual blocker is a <b>repository setting</b>: Actions&nbsp;&rarr;&nbsp;General
+&nbsp;&rarr;&nbsp;Workflow permissions &nbsp;&rarr;&nbsp; "Allow GitHub Actions to create and
+approve pull requests", which the API reports as
+<code>can_approve_pull_request_reviews: false</code>. This is the same shape as
+<code>sbom.yml</code>: a workflow that is correct in the file and inert in reality.
+
+Deciding it is a real decision, not a formality. Turning that toggle on grants <em>every</em>
+workflow in the repo the ability to open pull requests, which is a genuine widening of what a
+compromised action can do. The alternative is to accept that this step cannot work and change
+what the push path does &mdash; upload the GIF as an artifact on both paths, as the pull-request
+path already does, and drop the PR-opening step.
+
+<b>A second, independent defect in the same file.</b> Its concurrency group is
+<code>group: demo</code>, not ref-scoped. Every other per-ref workflow scopes it &mdash;
+<code>sonarcloud-${{ github.ref }}</code>, <code>fuzz-${{ github.ref }}</code>,
+<code>eval-stats-${{ github.ref }}</code>, <code>eval-explain-${{ github.ref }}</code>; only the
+deliberately-singleton <code>release</code> and <code>post-deploy</code> are global. With
+<code>cancel-in-progress: true</code>, a pull-request run and a <code>main</code> run therefore
+cancel each other, which is where demo's <code>cancelled</code> runs come from. Fix is
+<code>group: demo-${{ github.ref }}</code> regardless of what is decided about the toggle.
+
+Worth reconciling while here: the tree disagrees with itself on the history.
+<code>demo-gif-workflow-has-never-succeeded</code> says "3 runs, 3 failures", while
+<code>demo.yml</code> and <code>ci-failure-issue.yml</code> both say six of six.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">a repo setting blocks it — no edit to demo.yml can fix this one</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="merged-loop-branches-are-never-pruned">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Hygiene · DX</span></div>
+        <h3>68 of the repo's 77 branches are merged <code>loop/*</code> branches nobody deletes</h3>
+        <p>The repository carries <b>77 branches, 70 of them <code>loop/*</code></b>. Classifying each by the
+state of its pull request: <b>68 have a merged PR</b> and are safe to delete, <b>1</b> has an open
+PR (<code>loop/dependabot-findings</code>), and 1 has no PR on record. The default branch list is
+almost entirely finished work.
+
+<b>The obvious measurement is wrong here, which is worth recording.</b> Testing "is it merged?"
+with <code>compare(main...branch).ahead_by == 0</code> reports <b>0 of 70</b> as merged &mdash;
+because this repo squash-merges, and a squash leaves the branch's original commits outside
+<code>main</code>'s history forever. Every merged branch looks permanently ahead. The state has to
+come from the pull request, not from commit reachability.
+
+The cause is a single repository setting: <code>delete_branch_on_merge</code> is <b>false</b>, so
+nothing removes a head branch when its PR merges. No workflow prunes them either &mdash; none of
+the 25 workflow files triggers on <code>create</code>/<code>delete</code> or touches
+<code>loop/*</code>, and no <code>scripts/</code> entry or Makefile target does branch cleanup.
+The one branch-deletion automation in the tree is <code>demo.yml</code>'s
+<code>delete-branch: true</code>, which is <code>create-pull-request</code> tidying its own
+<code>bot/demo-gif</code> branch and has nothing to do with <code>loop/*</code>. No documentation
+asks anyone to clean up either: <code>CONTRIBUTING.md</code>, <code>CLAUDE.md</code> and
+<code>.claude/commands/roadmap-loop.md</code> all describe branching and squash-merging, and none
+of the three mentions deleting the branch afterwards.
+
+<b>Not a claim that branches are never deleted.</b> The item files name <b>144 distinct</b>
+<code>owner: loop/&lt;topic&gt;</code> values against 70 surviving branches, so roughly 98 have
+gone at some point &mdash; by hand, or by topic reuse. The accurate statement is narrower:
+nothing in the repo <em>causes</em> cleanup, so merged branches accumulate until someone does it
+manually.
+
+Low impact and near-zero risk to fix &mdash; flip <code>delete_branch_on_merge</code> to true and
+the backlog can be pruned by listing merged PR head refs. The reason it is worth doing at all is
+that CLAUDE.md tells every agent to run <code>git worktree list</code> and inspect branch state
+before touching a tree, and 68 stale entries make that check noisier for every concurrent loop.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">68 of 70 loop/* branches have a merged PR; one setting fixes it</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -2851,6 +2999,52 @@ artifact from review). At minimum, make the <code>--check</code> failure message
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">hit twice on one PR in a single afternoon</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="make-lint-masks-actionlint-failures">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Bug</span></div>
+        <h3><code>make lint</code> reports success when <code>actionlint</code> fails &mdash; and says it wasn't installed</h3>
+        <p><code>Makefile:64</code> guards the workflow linter like this:
+
+<code>@command -v actionlint &gt;/dev/null 2&gt;&amp;1 &amp;&amp; actionlint || echo "actionlint not on PATH &mdash; skipping (CI enforces it)"</code>
+
+Because <code>||</code> binds to the whole <code>&amp;&amp;</code> chain, the fallback fires in
+<b>both</b> failure modes &mdash; actionlint absent, <em>and</em> actionlint present and reporting
+findings. Reproduced with a stub that exits 1:
+
+<code>actionlint: FAKE ERROR</code><br>
+<code>actionlint not on PATH &mdash; skipping (CI enforces it)</code><br>
+<code>make exit=0</code>
+
+So a real workflow-lint failure is swallowed, and the message asserts something false &mdash; that
+the tool is not installed, when it is installed and just failed. <b><code>make lint</code> and
+therefore <code>make check</code> can never fail on actionlint.</b> CLAUDE.md calls
+<code>make check</code> "the one gate that matters" and tells every agent to run it before calling
+a change done; for this tool it returns green unconditionally, and the developer who reads the
+output is told the opposite of what happened.
+
+The local-versus-CI gap is wider than this one line. CI's required <code>lint</code> job runs
+three workflow/security tools that <code>make lint</code> has no equivalent for at all:
+<b>actionlint</b> (present but unfailable), <b>zizmor</b> and <b>gitleaks</b> (absent from the
+Makefile entirely). No CI job invokes <code>make lint</code>, so the two lists are hand-maintained
+duplicates with nothing checking they agree &mdash; which is how they drifted.
+
+Minimal fix is to stop discarding the exit status:
+
+<code>@if command -v actionlint &gt;/dev/null 2&gt;&amp;1; then actionlint; else echo "actionlint not on PATH &mdash; skipping (CI enforces it)"; fi</code>
+
+The stricter option is to install actionlint in <code>make venv</code> and let absence itself
+fail, so <code>make check</code> cannot report success while skipping a required gate. The same
+masking idiom appears at <code>Makefile:143</code> (hyperfine) and <code>Makefile:167</code>
+(node); neither is reached by <code>check</code>, so they are cosmetic by comparison, but they are
+the same bug. Incidental drift found alongside: <code>CLAUDE.md</code> describes the lint recipe
+as "18 commands" and it is 19.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">a failing actionlint prints "not on PATH" and make exits 0</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
