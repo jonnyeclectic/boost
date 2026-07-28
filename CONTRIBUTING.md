@@ -97,6 +97,12 @@ list, and neither should be added to it.
 | `refurb boost_cli` | modernization smells the ruff families miss, zero findings |
 | `scripts/lock_toolchain.py --check` | the hash-pinned toolchain matches its `.in` declarations |
 
+## Code of conduct
+
+Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md)
+(Contributor Covenant 2.1). Conduct reports go through the private reporting
+form linked there, never a public issue.
+
 ## Ground rules
 
 - **Stdlib only** at runtime. No third-party imports in `boost_cli/`.
@@ -146,6 +152,10 @@ also keeps line-adjacent conflicts rare.
 
 Branch from `main`, keep PRs focused, and write the PR description in the
 commit message (it becomes the release notes via release-drafter).
+
+[`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)
+pre-fills the checklist — chiefly `make check` and the generated-file
+regeneration, which are the two things that most often send a PR back.
 
 ## Release safety — require branches be up to date
 
