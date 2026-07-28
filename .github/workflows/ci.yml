@@ -274,19 +274,89 @@ jobs:
           git add coverage.json && git commit -qm "coverage ${PCT}%"
           git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" badges:badges
 
-  mutation:
-    # mutmut needs 3.11+; one representative environment keeps CI fast
+  # The mutation gate runs ~10.5k mutants over boost_cli/core. As one job it took
+  # ~26 minutes — three times the next-longest job in CI — so it alone decided how
+  # long a pull request waited, and then how long the PyPI release waited behind
+  # main's own run. The same gate, charged twice per change.
+  #
+  # It is now three jobs:
+  #   mutation-scope   can the score have changed at all? (for 38% of this
+  #                    repo's merged PRs — docs, roadmap cards, other workflows
+  #                    — provably not)
+  #   mutation-shard   six parallel slices of the mutant set. store.py is ~18%
+  #                    of all mutants and cannot be split, so ~5.4x is the real
+  #                    ceiling however many runners are added.
+  #   mutation         THE REQUIRED CHECK: merges the slices and applies the gate.
+  #
+  # `mutation` is the context named in .github/required-checks.txt, so it must run
+  # and report on every pull request. Neither path-filtering it nor letting
+  # `needs:` skip it is acceptable — a required check that never reports leaves
+  # branch protection waiting for a status that is never coming, which is exactly
+  # how this repo has deadlocked before. Hence `if: always()`, plus an explicit
+  # inspection of what the upstream jobs did: `always()` on its own would report a
+  # failed shard as a green required check.
+  mutation-scope:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      relevant: ${{ steps.scope.outputs.relevant }}
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
         with:
-          # audit: record egress, never block — the runtime signal that
-          # catches a compromised action exfiltrating a token, paired with
-          # zizmor's static analysis. Flip to block + an allowlist to enforce.
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # need the base commit to diff against
+          persist-credentials: false
+      - name: can the mutation score have changed?
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+        run: |
+          # Fail safe. With no usable base commit (a first push, a force push, a
+          # shallow clone) we cannot prove the score is unchanged, so run the
+          # whole gate. A wasted 26 minutes is a far better outcome than a gate
+          # that quietly stopped gating.
+          if [ -z "$BASE" ] || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            echo "no usable base commit ('$BASE') — running the full gate"
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --no-renames: with rename detection on, `git diff --name-only`
+          # reports only a move's DESTINATION, so moving boost_cli/core/x.py to
+          # docs/x.py would look like a docs-only change and skip the gate.
+          # core.quotepath=false: otherwise a non-ASCII path comes back
+          # \ooo-escaped and would not match any prefix we test for.
+          git -c core.quotepath=false diff --no-renames --name-only "$BASE" "$HEAD" > changed.txt
+          echo "changed files:"
+          sed 's/^/  /' changed.txt
+          RELEVANT="$(python3 scripts/mutation_shards.py scope --changed changed.txt)"
+          echo "mutation-relevant: $RELEVANT"
+          echo "relevant=$RELEVANT" >> "$GITHUB_OUTPUT"
+
+  mutation-shard:
+    needs: mutation-scope
+    if: needs.mutation-scope.outputs.relevant == 'true'
+    # mutmut needs 3.11+; one representative environment keeps CI fast
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      # The gate needs every slice's results, so cancelling the siblings when
+      # one shard fails would only turn a single failure into six — and cost a
+      # rerun of the whole matrix to learn anything.
+      fail-fast: false
+      matrix:
+        index: [0, 1, 2, 3, 4, 5]
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -308,8 +378,115 @@ jobs:
           .venv/bin/pip -q install -r requirements/mutation-tools.txt
           # sqlite-vec so dense.py's mutants are covered by the dense tests
           .venv/bin/pip -q install sqlite-vec || true
+      - name: mutate shard ${{ matrix.index }} of 6
+        env:
+          SHARD: ${{ matrix.index }}
+        run: |
+          PATTERNS="$(python3 scripts/mutation_shards.py plan --shards 6 --index "$SHARD")"
+          echo "shard $SHARD patterns: $PATTERNS"
+          # `mutmut run` with no arguments runs EVERY mutant. An empty plan must
+          # therefore run nothing at all, not silently become a full 26-minute
+          # run in six places at once.
+          if [ -z "$PATTERNS" ]; then
+            echo "::error::shard $SHARD planned no patterns — refusing to run unfiltered"
+            exit 1
+          fi
+          set +e
+          set -f
+          # The word split is deliberate: each pattern must reach mutmut as its
+          # own argument. Globbing is off (set -f) so the shell cannot expand
+          # them against the working tree first.
+          # shellcheck disable=SC2086
+          .venv/bin/mutmut run $PATTERNS
+          rc=$?
+          set -e
+          set +f
+          # mutmut reports surviving mutants with a non-zero status. Survivors
+          # are the gate's business, not a shard's — only a genuine failure to
+          # run should fail this job. (Matches scripts/mutation_gate.py.)
+          if [ "$rc" != "0" ] && [ "$rc" != "2" ]; then
+            echo "::error::mutmut run failed in shard $SHARD (rc=$rc)"
+            exit 1
+          fi
+      - name: upload shard results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutation-shard-${{ matrix.index }}
+          # Only the .meta results are needed downstream: `mutmut
+          # export-cicd-stats` reads mutants/<path>.meta and never looks at the
+          # generated mutant sources.
+          path: mutants/boost_cli/core
+          retention-days: 1
+          if-no-files-found: error
+
+  mutation:
+    needs: [mutation-scope, mutation-shard]
+    # Required check — see the comment above mutation-scope. This must run and
+    # report even when every shard was skipped.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - name: upstream jobs must be conclusive
+        env:
+          SCOPE: ${{ needs.mutation-scope.result }}
+          SHARDS: ${{ needs.mutation-shard.result }}
+          RELEVANT: ${{ needs.mutation-scope.outputs.relevant }}
+        run: |
+          echo "scope=$SCOPE shards=$SHARDS relevant=$RELEVANT"
+          # `always()` means this job runs whatever happened upstream, so it has
+          # to judge for itself. Without this step a failed or cancelled shard
+          # would surface as a green required check.
+          if [ "$SCOPE" != "success" ]; then
+            echo "::error::mutation-scope did not succeed ($SCOPE) — cannot gate"
+            exit 1
+          fi
+          if [ "$RELEVANT" = "true" ] && [ "$SHARDS" != "success" ]; then
+            echo "::error::a mutation shard did not succeed ($SHARDS)"
+            exit 1
+          fi
+      - name: nothing mutable changed
+        if: needs.mutation-scope.outputs.relevant != 'true'
+        run: |
+          echo "No change under boost_cli/, tests/, or the mutation configuration,"
+          echo "so the mutation score is identical to the base commit's."
+          echo "- **Mutation:** skipped — no mutable code changed" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.mutation-scope.outputs.relevant == 'true'
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        if: needs.mutation-scope.outputs.relevant == 'true'
+        with:
+          python-version: "3.14"
+      - name: install mutmut (for export-cicd-stats)
+        if: needs.mutation-scope.outputs.relevant == 'true'
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -r requirements/mutation-tools.txt
+      - name: download shard results
+        if: needs.mutation-scope.outputs.relevant == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: mutation-shard-*
+          path: shard-results
+      - name: merge shard results
+        if: needs.mutation-scope.outputs.relevant == 'true'
+        # Refuses on a missing or half-finished shard rather than gating on a
+        # partial result: mutmut counts an unrun mutant as "not checked" and the
+        # gate divides by total, so silently accepting one would quietly lower
+        # the score instead of failing.
+        run: python3 scripts/mutation_shards.py merge --shards 6 --into mutants --source shard-results
       - name: mutation strength gate (>=80% killed)
-        run: .venv/bin/python scripts/mutation_gate.py --run --min 80
+        if: needs.mutation-scope.outputs.relevant == 'true'
+        run: .venv/bin/python scripts/mutation_gate.py --min 80
 
   install-smoke:
     # Every gate above runs an editable `pip install -e .`, which cannot catch a
