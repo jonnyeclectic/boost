@@ -994,6 +994,43 @@ class TestEngineRouting:
         monkeypatch.setattr(dense_mod, "ready", lambda: False)
         assert rag.search("react", smart=False) is None
 
+    def test_dense_zero_hits_still_falls_through_to_bm25(self, sandbox,
+                                                        monkeypatch):
+        # THE BUG: `[]` is what dense.retrieve returns when every KNN neighbour
+        # was dropped for a kind mismatch or for no longer being live — a thin
+        # index, not a verdict on the query. Taking it as final answered "no
+        # results" with a perfectly good BM25 index sitting unused.
+        self._bm25_ready()
+        monkeypatch.setattr(dense_mod, "ready", lambda: True)
+        monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: [])
+        result = rag.search("react", smart=False,
+                            entries=[_entry("a", tap="x/y")])
+        assert result is not None, "empty dense result must not end the search"
+        hits, label = result
+        assert label == "BM25 full-content"
+        assert [h["entry"]["name"] for h in hits] == ["a"]
+
+    def test_dense_zero_hits_with_no_bm25_index_falls_all_the_way_out(
+            self, sandbox, monkeypatch):
+        # Nothing left to try: the caller has to know to use catalog.search,
+        # which it only does when it gets None back.
+        monkeypatch.setattr(dense_mod, "ready", lambda: True)
+        monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: [])
+        assert rag.search("react", smart=False) is None
+
+    def test_a_non_empty_dense_result_is_still_final(self, sandbox, monkeypatch):
+        # The fix must not turn into "always run BM25 too": a real dense hit
+        # ends the search, even with a BM25 index present that would rank
+        # something else first.
+        self._bm25_ready()
+        monkeypatch.setattr(dense_mod, "ready", lambda: True)
+        monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: [
+            {"entry": {"name": "d", "tap": "x/y"}, "score": 9.0, "snippet": "D"}])
+        hits, label = rag.search("react", smart=False,
+                                 entries=[_entry("a", tap="x/y")])
+        assert label == "dense vectors"
+        assert [h["entry"]["name"] for h in hits] == ["d"]
+
 
 class TestAtomicIndexSave:
     """`_save` must route the index through util.atomic_write_text so a crash
