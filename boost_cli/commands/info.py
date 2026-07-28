@@ -14,6 +14,7 @@ import sys
 import textwrap
 import webbrowser
 from pathlib import Path
+from typing import Dict, List
 
 from .. import cliparse
 from ..core import (
@@ -126,8 +127,8 @@ def _kind_table(heading, items, extra=None):
     ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
     count line reuses the heading's trailing noun (`installed rules` -> `rule`)."""
     out.heading(heading)
-    headers = ("NAME", "VERSION", "TAP", "AGENTS")
-    rows = []
+    headers: tuple = ("NAME", "VERSION", "TAP", "AGENTS")  # `extra` adds a 5th
+    rows: List[tuple] = []   # 4 columns, or 5 when `extra` adds one
     for name in sorted(items):
         e = items[name]
         row = [name, e.get("version", "?"), e.get("tap", "?"),
@@ -179,7 +180,7 @@ def cmd_list(argv):
         return 0
     if skills:
         out.heading("installed skills")
-        rows = []
+        rows: List[tuple] = []   # 5 columns here, 4 for project skills below
         for name in sorted(skills):
             e = skills[name]
             # Aurora-tinted flags — now that table() aligns by visible width,
@@ -227,7 +228,8 @@ def cmd_info(argv):
     if lock:
         matches = catalog.find(name)
         same_tap = [e for e in matches if e["tap"] == lock.get("tap")]
-        cat = (same_tap or matches or [None])[0]
+        candidates = same_tap or matches
+        cat = candidates[0] if candidates else None
     else:
         cat = catalog.resolve_one(name)   # raises if unknown anywhere
 
@@ -245,7 +247,7 @@ def cmd_info(argv):
         except BoostError:
             skill_dir = None
     desc = str((cat or {}).get("description") or "")
-    meta = {}
+    meta: dict = {}
     skill_text = ""
     if skill_dir and (skill_dir / "SKILL.md").exists():
         skill_text = _read(skill_dir / "SKILL.md")
@@ -308,11 +310,11 @@ def cmd_info(argv):
             out.kv("latest", out.role(latest, "warn", bold=True)
                    + out.role("  (update available)", "muted"))
     else:
-        out.kv("latest", str(cat.get("version", "?")))
-    out.kv("tap", (lock or cat).get("tap", "?"))
+        out.kv("latest", str((cat or {}).get("version", "?")))
+    out.kv("tap", (lock or cat or {}).get("tap", "?"))
     if lock and sdir.is_dir():
         out.kv("store", _tilde(sdir))
-    src = lock.get("source_dir") if lock else cat.get("rel_dir")
+    src = lock.get("source_dir") if lock else (cat or {}).get("rel_dir")
     if src:
         out.kv("source", _tilde(src))
     if lock:
@@ -343,7 +345,9 @@ def cmd_info(argv):
         # A skill that needs an MCP server is useless without it, so this belongs
         # next to capabilities: both answer "what does this expect of my setup?"
         out.kv("mcp servers", ", ".join(r["name"] for r in mcp_servers))
-    if score is not None:
+    # All three are set together under `if skill_dir` above; naming that here
+    # states the invariant instead of leaving it for a reader to reconstruct.
+    if score is not None and size is not None and files is not None:
         out.kv("quality", "%d/100" % score)
         out.kv("size", util.human_size(size))
         out.kv("files", str(files))
@@ -695,7 +699,9 @@ def cmd_deps(argv):
             out.info("  conflicts: %s %s" % (c_name, state))
         return 1 if problems else 0
 
-    unmet, pairs, seen = [], [], set()
+    unmet: List[dict] = []
+    pairs: List[list] = []   # JSON-dumped, so lists rather than tuples
+    seen: set = set()
     for name in sorted(inst):
         meta = _skill_meta(name) or {}
         unmet.extend(
@@ -749,7 +755,7 @@ def cmd_tag(argv):
     mods = operands[1:]
 
     if args.list_all:
-        mapping = {}
+        mapping: Dict[str, List[str]] = {}
         for name, e in sorted(lockfile.installed().items()):
             for t in e.get("tags") or []:
                 mapping.setdefault(t, []).append(name)
