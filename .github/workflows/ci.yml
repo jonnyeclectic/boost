@@ -49,7 +49,7 @@ jobs:
         # install instead of silently changing what the gate checks.
         run: python -m pip -q install -r requirements/lint-tools.txt
       - name: ruff
-        run: ruff check boost_cli tests
+        run: ruff check boost_cli tests evals
       - name: mypy
         run: mypy
       - name: pyright (second type checker)
@@ -138,6 +138,11 @@ jobs:
         # runs here rather than needing Node/Chrome; the axe-core sweep in
         # tests/visual covers what needs a live DOM.
         run: python scripts/a11y_check.py -v
+      - name: golden set is regenerated
+        # evals/golden_set.json is generated from evals/make_golden.py's query
+        # table and validated against the generated corpus, so a judgment can
+        # never cite a skill the corpus does not contain.
+        run: python evals/make_golden.py --check
       - name: command reference is regenerated
         # docs/commands.html is generated from the CLI's own COMMANDS + argparse
         # parsers, so it can't drift from the code. The script imports boost_cli
@@ -169,6 +174,35 @@ jobs:
         run: |
           bash scripts/ensure_eval_corpus.sh
           PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 --fail-under 0.85 --regression-eps 1
+
+  evals:
+    # Evaluation-harness gate: recall@5/@10, MRR, nDCG@5/@10 with graded (3/2/1)
+    # relevance over the hermetic golden set, plus a paired-bootstrap regression
+    # test against the committed evals/baseline.json. Deliberately its own job
+    # rather than a step in `lint`: unlike the Tier 1 gate there, it needs NO
+    # network and NO API key — it generates its own corpus and taps it into a
+    # disposable BOOST_HOME — so it must stay green even when GitHub is having a
+    # bad day. Pure stdlib; nothing to install beyond Python and git.
+    runs-on: ubuntu-latest
+    # Measured well under a minute (corpus + BM25 index + 36 queries x 2 engines
+    # + a 10k-resample bootstrap, all stdlib); 15 is slack for a cold runner.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: evaluation harness gate (floors + significance)
+        run: python scripts/eval_gate.py --run
 
   tests:
     runs-on: ${{ matrix.os }}

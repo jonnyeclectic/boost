@@ -36,6 +36,7 @@ lint
 mutation
 install-smoke
 patch-coverage
+evals
 
 # Every matrix leg of ci.yml's `tests` job. They are listed individually
 # because GitHub requires the expanded matrix name, not the job id.

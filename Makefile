@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-ai eval-rec eval-stats eval-explain audit dist-check bdd bench bench-cli fuzz post-deploy
+.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-ai eval-rec eval-stats eval-explain evals evals-baseline evals-golden evals-online audit dist-check bdd bench bench-cli fuzz post-deploy
 
 # Every tool comes from a hash-pinned requirements/*.txt — the same files CI
 # installs (see scripts/lock_toolchain.py). pip enforces the hashes, so a dev
@@ -52,7 +52,7 @@ mutation:
 	$(PY) scripts/mutation_gate.py --run --min 80
 
 lint:
-	$(VENV)/bin/ruff check boost_cli tests
+	$(VENV)/bin/ruff check boost_cli tests evals
 	$(VENV)/bin/mypy
 	$(VENV)/bin/pyright
 	$(VENV)/bin/lint-imports
@@ -71,6 +71,7 @@ lint:
 	$(PY) scripts/perf_gate.py
 	$(PY) scripts/check_anchors.py
 	$(PY) scripts/check_required_checks.py
+	$(PY) evals/make_golden.py --check
 
 # Supply-chain CVE gate: fail on a known OSV/PyPI advisory in the project's
 # dependency closure. Mirrors the pip-audit CI workflow; run before releasing.
@@ -123,6 +124,30 @@ eval-stats:
 eval-explain:
 	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
 	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_explain.py --fail-under 0.80
+
+# Retrieval-quality gate over the HERMETIC golden set: recall@5/@10, MRR, and
+# nDCG@5/@10 with graded (3/2/1) relevance, plus a paired-bootstrap regression
+# test against the committed evals/baseline.json. Part of `check` and required
+# in CI. Unlike `eval` above it needs no network and no API key: it generates
+# its own corpus and taps it into a disposable BOOST_HOME under the system temp
+# dir, so a metric moving can only mean the ranker moved.
+evals:
+	$(PY) scripts/eval_gate.py --run
+
+# Re-pin evals/baseline.json to the current scores. Deliberate: it is how you
+# accept a ranking change, so it must be a separate commit that says why.
+evals-baseline:
+	$(PY) evals/run_evals.py --save-baseline
+
+# Regenerate evals/golden_set.json from evals/make_golden.py after editing the
+# query table (`--check` runs in `lint` and fails on drift).
+evals-golden:
+	$(PY) evals/make_golden.py
+
+# The same five metrics over the pinned REAL-registry corpus `eval` uses.
+# Needs the network; reported, never gated — mirrors `tests/smoke.sh --online`.
+evals-online:
+	$(PY) evals/run_evals.py --online --faithfulness
 
 # Opt-in Gherkin/BDD suite (tests/bdd) — additive to tests/functional, not a
 # replacement. Needs the [bdd] extra (`pip install -e '.[bdd]'`); not part of
@@ -180,7 +205,7 @@ demo:
 carousel:
 	for t in docs/carousel/tapes/*.tape; do vhs "$$t"; done
 
-check: lint eval test smoke mutation
+check: lint eval evals test smoke mutation
 	@echo "== all gates passed =="
 
 clean-test:
