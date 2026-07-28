@@ -2,15 +2,15 @@
 id: wire-bdd-suite-into-ci
 board: code
 section: dx
-status: planned
+status: shipped
 category: Test infra
 complexity: S
 impact: Med
 wow: 2
 note:
 order: 12
-owner:
-pr:
+owner: loop/wire-bdd-into-ci
+pr: 292
 title: New BDD suite has zero CI wiring
 ---
 The behave suite added under <code>tests/bdd/</code> (11 features, 47 scenarios) passes cleanly

@@ -9,7 +9,7 @@ impact: High
 wow: 4
 note: 253 releases shipped with no SBOM; fixed with workflow_run
 order: 50
-owner:
+owner: loop/sbom-trigger
 pr: 295
 title: <code>sbom.yml</code> has never run — it waits for an event <code>GITHUB_TOKEN</code> cannot emit
 ---

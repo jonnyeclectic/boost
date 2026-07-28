@@ -126,6 +126,41 @@ def preserved_agent_scope(only_agents: Optional[List[str]],
     return [a for a in recorded if a] or None
 
 
+def declared_agent_scope(only_agents: Optional[List[str]],
+                         existing: Optional[dict]) -> Optional[List[str]]:
+    """The scope to RECORD in the lock: an explicit narrowing, or the last one.
+
+    Deliberately *not* :func:`preserved_agent_scope`. That one answers "which
+    agents should this install link into", and falls back to the lock's
+    ``agents`` — which records what happens to be linked right now. Writing
+    that back as a declared scope would promote "these were the enabled agents
+    at install time" into "the user asked for exactly these", permanently
+    freezing a skill out of any agent enabled later. The two questions look
+    alike and are not, so they get separate functions.
+
+    Only an explicit ``--agent`` narrows. Absent that, an earlier declaration
+    is carried forward so ``update``/``reinstall`` don't drop it, and a skill
+    that was never narrowed keeps no scope at all (``None``).
+    """
+    if only_agents is not None:
+        return list(only_agents)
+    return (existing or {}).get("only_agents")
+
+
+def scoped_agents(entry: dict, enabled: Dict[str, Path]) -> Dict[str, Path]:
+    """The enabled agents a locked skill is supposed to be linked into.
+
+    Fails **open**: an entry with no ``only_agents`` — every entry written
+    before this field existed — means "not narrowed", so it gets every enabled
+    agent. That keeps ``boost sync`` doing its other job, which is linking
+    already-installed skills into an agent that was enabled afterwards.
+    """
+    scope = entry.get("only_agents")
+    if not scope:
+        return enabled.copy()
+    return {a: d for a, d in enabled.items() if a in scope}
+
+
 def unlink_agents(name: str) -> List[str]:
     """Remove the ``name`` symlink from every enabled agent dir.
 
@@ -326,6 +361,11 @@ def install(entry: dict, force: bool = False,
         "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
         "agents": res.linked,
+        # `agents` is what IS linked; `only_agents` is what the user ASKED for.
+        # sync needs the second: it links a skill into every enabled agent, and
+        # without a record of the request it cannot tell a deliberate `--agent`
+        # narrowing from a skill that simply predates a newly enabled agent.
+        "only_agents": declared_agent_scope(only_agents, existing),
         "tags": (existing or {}).get("tags", []),
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
@@ -806,6 +846,10 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
         "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
         "agents": res.linked,
+        # `boost import --agent ...` narrows the same way `install` does, so it
+        # has to record the same declaration — otherwise the links are narrow
+        # but sync sees no scope and widens them right back.
+        "only_agents": declared_agent_scope(only_agents, existing),
         "tags": (existing or {}).get("tags", []),
     })
     journal.log("import", name, source=str(src_dir))
@@ -922,7 +966,12 @@ def sync_plan() -> Dict[str, list]:
             continue
         if entry.get("quarantined"):
             continue
-        for agent, adir in agents.enabled_agents().items():
+        # Only the agents this skill was installed for. Walking every enabled
+        # agent made `boost sync` a second path to the scope leak that
+        # `preserved_agent_scope` closed on the install side: it reported a
+        # missing_link for each agent outside the narrowing, and sync_apply
+        # dutifully linked them, undoing `install --agent` in one command.
+        for agent, adir in scoped_agents(entry, agents.enabled_agents()).items():
             link = adir / name
             if not link.is_symlink() or not link.exists():
                 plan["missing_links"].append((name, agent))

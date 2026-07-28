@@ -2,15 +2,15 @@
 id: license-compliance-scanning
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Supply chain
 complexity: S
 impact: Med
 wow: 2
 note:
 order: 12
-owner:
-pr:
+owner: loop/license-compliance
+pr: 310
 title: License-compliance scanning of the dependency closure
 ---
 Nothing in CI checks SPDX license compatibility of resolved dependencies — <code>pip-audit</code>

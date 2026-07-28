@@ -2,15 +2,15 @@
 id: dependabot-missing-pip-ecosystem
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Supply chain
 complexity: S
 impact: Low
 wow: 1
 note: extras only — <code>/requirements</code> is covered
 order: 11
-owner:
-pr:
+owner: loop/dependabot-pyproject-extras
+pr: 289
 title: Dependabot's <code>pip</code> entry misses <code>pyproject.toml</code>'s extras
 ---
 <code>.github/dependabot.yml</code> declares <code>pip</code> for

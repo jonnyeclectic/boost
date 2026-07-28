@@ -2,15 +2,15 @@
 id: negative-limit-inverts-log-pulse-output
 board: code
 section: internals
-status: planned
+status: shipped
 category: CLI ergonomics
 complexity: S
 impact: Low
 wow: 1
 note:
 order: 36
-owner:
-pr:
+owner: loop/positive-count-flags
+pr: 285
 title: Negative <code>-n</code> silently inverts <code>log</code>/<code>pulse</code> output
 ---
 <code>boost log</code>/<code>boost pulse</code> accept <code>-n</code>/<code>--limit</code> as a bare
