@@ -35,11 +35,15 @@ def test_roadmap_html_is_regenerated():
     builder = _load_builder()
     path, fresh = builder.build_code()
     committed = path.read_text(encoding="utf-8")
-    assert committed == fresh, (
-        "docs/roadmap.html is out of date — regenerate with\n"
-        "    python3 scripts/build_roadmap.py\n"
-        "and commit the result (see CONTRIBUTING.md)."
-    )
+    # Reuse the script's own diagnosis rather than restating "out of date".
+    # This assertion fires on all nine test legs at once, so what it says is
+    # what nine failures say — and the cause is a rebase far more often than a
+    # hand-edit.
+    assert committed == fresh, "\n".join(
+        ["docs/roadmap.html is stale — regenerate with",
+         "    python3 scripts/build_roadmap.py",
+         "and commit the result (see CONTRIBUTING.md).",
+         *builder.diagnose(path, committed, fresh)])
 
 
 @pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
@@ -48,11 +52,11 @@ def test_design_roadmap_html_is_regenerated():
     builder = _load_builder()
     path, fresh = builder.build_design()
     committed = path.read_text(encoding="utf-8")
-    assert committed == fresh, (
-        "docs/design-roadmap.html is out of date — regenerate with\n"
-        "    python3 scripts/build_roadmap.py\n"
-        "and commit the result (see CONTRIBUTING.md)."
-    )
+    assert committed == fresh, "\n".join(
+        ["docs/design-roadmap.html is stale — regenerate with",
+         "    python3 scripts/build_roadmap.py",
+         "and commit the result (see CONTRIBUTING.md).",
+         *builder.diagnose(path, committed, fresh)])
 
 
 @pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
@@ -84,3 +88,64 @@ def test_every_design_item_has_required_fields():
             "%s: bad status %r" % (item["_file"], item["status"]))
         assert str(item.get("impact", "")).lower() in builder.IMPACT_LABEL, (
             "%s: bad impact %r" % (item["_file"], item.get("impact")))
+
+
+# ── the diagnosis itself ─────────────────────────────────────────────────────
+#
+# The failure above lands on lint and on all nine test legs simultaneously, for
+# a PR that may have changed no Python at all. Whether it reads as "the build is
+# broken" or as "regenerate the board after your rebase" is entirely down to
+# what these strings say, so they are tested rather than trusted.
+
+CARD = '<article class="cap rcard" id="%s">body</article>'
+
+
+@pytest.mark.skipif(not _SCRIPT.exists(), reason="repo-root files not reachable")
+class TestDiagnose:
+    def _lines(self, committed, fresh):
+        return _load_builder().diagnose(Path("docs/roadmap.html"),
+                                        committed, fresh)
+
+    def test_a_card_missing_from_the_html_names_it_and_blames_the_rebase(self):
+        # THE case this exists for: another PR's item file merged in cleanly,
+        # the generated HTML merged textually, and the card is simply absent.
+        lines = self._lines(CARD % "old-one",
+                            (CARD % "old-one") + (CARD % "someone-elses-card"))
+        text = "\n".join(lines)
+        assert "someone-elses-card" in text
+        assert "rebase" in text
+        assert "missing 1 card" in text
+
+    def test_several_missing_cards_are_summarised_not_dumped(self):
+        fresh = "".join(CARD % ("card-%d" % i) for i in range(20))
+        text = "\n".join(self._lines("", fresh))
+        assert "missing 20 card(s)" in text
+        assert text.count("card-") <= 9, "8 named plus the ellipsis"
+        assert "…" in text
+
+    def test_a_card_with_no_item_file_is_called_out_separately(self):
+        lines = self._lines(CARD % "deleted-item", "")
+        text = "\n".join(lines)
+        assert "no item file" in text
+        assert "deleted-item" in text
+        assert "rebase" not in text, "nothing is missing — different cause"
+
+    def test_same_cards_rendered_differently_says_so(self):
+        # A field or body edit, or a generator change — not a rebase.
+        lines = self._lines('<article class="cap rcard" id="a">old</article>',
+                            '<article class="cap rcard" id="a">new</article>')
+        text = "\n".join(lines)
+        assert "rendered differently" in text
+        assert "missing" not in text
+
+    def test_the_design_board_shape_is_recognised_too(self):
+        # design-roadmap.html uses <article class="ritem" …>, not "cap rcard".
+        fresh = ('<article class="ritem" id="BOOST-D99" data-track="x" '
+                 'data-impact="y">body</article>')
+        assert "BOOST-D99" in "\n".join(self._lines("", fresh))
+
+    def test_it_never_returns_nothing(self):
+        # An empty diagnosis would leave the assertion message ending on a
+        # colon with no explanation — worse than the message it replaced.
+        for committed, fresh in (("", ""), ("x", "y"), (CARD % "a", CARD % "a")):
+            assert self._lines(committed, fresh)

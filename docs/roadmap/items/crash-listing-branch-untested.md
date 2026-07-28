@@ -2,15 +2,15 @@
 id: crash-listing-branch-untested
 board: code
 section: internals
-status: planned
+status: shipped
 category: Testing · Bug
 complexity: S
 impact: Low
 wow: 1
 note:
 order: 37
-owner:
-pr:
+owner: loop/crash-listing-tests
+pr: 291
 title: <code>boost log --crashes</code> listing branch has no non-empty test
 ---
 <code>_show_crashes</code> has an empty-state branch and a listing branch that reads each

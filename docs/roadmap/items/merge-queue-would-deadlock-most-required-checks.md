@@ -2,15 +2,15 @@
 id: merge-queue-would-deadlock-most-required-checks
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Release safety
 complexity: S
 impact: Med
 wow: 3
 note: a latent trap, only if someone enables the queue
 order: 58
-owner:
-pr:
+owner: loop/merge-queue
+pr: 280
 title: Enabling a merge queue would deadlock every required check except ci.yml's
 ---
 Only <code>ci.yml</code> declares <code>merge_group</code> among its triggers. The other

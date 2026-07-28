@@ -12,6 +12,7 @@ import json
 import re
 import time
 from contextlib import suppress
+from typing import Any, Dict, List
 
 from .. import cliparse
 from ..core import (
@@ -299,7 +300,7 @@ def cmd_verify(argv):
                             hint="see what is with `boost list`")
     user_names = [n for n in (args.names or []) if n in lockfile.installed()]
 
-    results = []
+    results: List[Dict[str, Any]] = []
     for name, entry in _iter_installed(user_names or (None if not args.names else [])):
         missing_fields = [f for f in ("version", "tap", "sha256", "installed_at")
                           if not entry.get(f)]
@@ -381,13 +382,13 @@ def cmd_quarantine(argv):
 
     if args.list_mode:
         rows = []
-        for name, entry in _iter_installed():
-            if not entry.get("quarantined"):
+        for name, rec in _iter_installed():
+            if not rec.get("quarantined"):
                 continue
             evs = journal.events(action="quarantine", subject=name)
             since = util.rel_time(evs[0].get("ts", "")) if evs else "?"
-            rows.append((name, entry.get("version", "?"),
-                         entry.get("tap", "?"), since))
+            rows.append((name, rec.get("version", "?"),
+                         rec.get("tap", "?"), since))
         if not rows:
             out.info("no skills in quarantine")
             return 0

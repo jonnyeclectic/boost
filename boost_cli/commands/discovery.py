@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.parse
 from pathlib import Path
+from typing import Any, Dict, List
 
 from .. import cliparse, spin
 from ..core import (
@@ -217,7 +218,8 @@ def cmd_index(argv):
     if not shutil.which("gh"):
         raise BoostError("the GitHub CLI (gh) is required to build the index",
                         hint="brew install gh && gh auth login")
-    items, total = [], 0
+    items: List[dict] = []
+    total = 0
     pages = min((max(1, args.limit) + 99) // 100, 10)  # code search caps at 1000
     for page in range(1, pages + 1):
         spin.progress(page, pages, "searching GitHub for SKILL.md")
@@ -399,7 +401,7 @@ def cmd_recommend(argv):
         raise BoostError("no skills in any tap to recommend from",
                         hint="add registries with `boost tap --defaults`")
     stack = detect_stack(target)
-    agg = {}
+    agg: Dict[str, Dict[str, Any]] = {}
     for kw in stack["keywords"]:
         for e, s in catalog.search(kw, entries):
             rec = agg.setdefault(e["name"], {"entry": e, "score": 0,
@@ -420,10 +422,15 @@ def cmd_recommend(argv):
     if stack["frameworks"]:
         line += " · frameworks: " + ", ".join(stack["frameworks"])
     out.info(out.role("%s  (%s)" % (line, _tilde(target)), "muted"))
-    shown = ranked[:args.limit]
+    shown: List[Dict[str, Any]] = ranked[:args.limit]
     if not shown:
-        shown = [{"entry": e, "score": 0, "because": {"curated"}}
-                 for e in entries if e.get("curated")][:args.limit]
+        # Annotated rather than inlined: an unannotated literal of mixed value
+        # types infers dict[str, object], which then makes every r["entry"][…]
+        # read below an error about indexing `object`.
+        curated: List[Dict[str, Any]] = [
+            {"entry": e, "score": 0, "because": {"curated"}}
+            for e in entries if e.get("curated")]
+        shown = curated[:args.limit]
         if not shown:
             out.info("no recommendations for this stack — try `boost search <keyword>`")
             return 0
@@ -680,7 +687,7 @@ def _browse_tui(curses, entries):
     """Run the curses UI. Returns the list of entries picked for install
     (one or more, via multi-select), or None if the user quit without picking.
     """
-    state = {"picks": None}
+    state: Dict[str, Any] = {"picks": None}
     categories = _tap_categories()
     desc_cache: dict = {}
     loading: set = set()
@@ -889,7 +896,7 @@ def cmd_trending(argv):
                     out.truncate(e["description"], descw))
                    for e in sorted(curated, key=operator.itemgetter("name"))[:args.limit]])
         return 0
-    agg = {}
+    agg: Dict[str, Any] = {}
     for ev in evs:  # most-recent-first, so first ts per subject is the latest
         name = ev.get("subject") or "?"
         rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})
@@ -951,7 +958,7 @@ def cmd_stats(argv):
         out.kv("sha256", str(lock.get("sha256", ""))[:12])
         if size is not None:
             out.kv("size", util.human_size(size))
-    else:
+    elif cat:   # no lock means the guard above found a catalog entry
         out.kv("version", cat["version"])
         out.kv("tap", cat["tap"])
         out.kv("description", cat["description"])

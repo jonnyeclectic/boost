@@ -2,15 +2,15 @@
 id: lock-invariant-cannot-parse-extras-pins
 board: code
 section: health
-status: planned
+status: shipped
 category: Latent bug
 complexity: S
 impact: Med
 wow: 2
 note: <code>pkg[extra]==x</code> reads as unpinned
 order: 16
-owner:
-pr:
+owner: loop/lock-invariant-extras
+pr: 306
 title: The lock invariant can't parse <code>name[extra]==version</code>, so a valid pin fails the gate
 ---
 <code>tests/unit/test_toolchain_lock.py</code> (added with the lock-stability fix, #248)

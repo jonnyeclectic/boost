@@ -2,15 +2,15 @@
 id: dense-search-fallback-and-stale-tap-pruning
 board: code
 section: internals
-status: planned
+status: shipped
 category: Bug
 complexity: M
 impact: Med
 wow: 2
 note:
 order: 30
-owner:
-pr:
+owner: loop/dense-fallback-and-prune
+pr: 293
 title: Dense search's empty result skips the BM25 fallback
 ---
 <code>_retrieve_any</code> treats any non-<code>None</code> dense result as final, but

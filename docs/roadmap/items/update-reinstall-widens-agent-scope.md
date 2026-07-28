@@ -2,15 +2,15 @@
 id: update-reinstall-widens-agent-scope
 board: code
 section: internals
-status: planned
+status: shipped
 category: Bug
 complexity: S
 impact: Med
 wow: 2
 note:
 order: 33
-owner:
-pr:
+owner: loop/keep-agent-scope
+pr: 288
 title: <code>update</code>/<code>reinstall</code> silently widen a skill's agent scope
 ---
 A skill installed with <code>--agent</code> narrowing (e.g. <code>boost install foo --agent
