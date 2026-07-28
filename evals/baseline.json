@@ -9,7 +9,7 @@
     "nDCG@10"
   ],
   "corpus": {
-    "corpus": "/tmp/claude-501/boost-evals-home/boost-eval-corpus",
+    "corpus": "evals/make_corpus.py (generated, hermetic)",
     "entries": 57,
     "docs": 57,
     "taps": 1

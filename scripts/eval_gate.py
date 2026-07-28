@@ -82,6 +82,30 @@ def load(path: Path, what: str) -> Optional[dict]:
         return None
 
 
+def corpus_drift(current: dict, baseline: Optional[dict]) -> Optional[str]:
+    """Refuse to compare scores measured over a different corpus.
+
+    The per-query numbers only mean anything against the corpus they were pinned
+    over, and nothing else here notices a change: `make_corpus.build` only ever
+    writes and `git add -A`s — it never deletes — into a *reused* directory under
+    $TMPDIR. So dropping an item from the SKILLS table leaves the old SKILL.md on
+    a developer's disk forever while CI, starting clean, indexes one item fewer.
+    Both runs then score a corpus the baseline was never pinned over, and the
+    gate would happily compare them. Comparing the wrong things quietly is worse
+    than not comparing: this returns rc 2 (a broken gate), not rc 1 (a failure).
+    """
+    if not baseline:
+        return None
+    want = (baseline.get("corpus") or {}).get("entries")
+    got = (current.get("corpus") or {}).get("entries")
+    if want is None or got is None or want == got:
+        return None
+    return ("corpus drift — baseline was pinned over %d entries, this run "
+            "measured %d. Scores are not comparable. Delete the generated "
+            "corpus and re-run, or re-pin with `make evals-baseline` if the "
+            "change was intended." % (want, got))
+
+
 def check_floors(mean: Dict[str, float]) -> List[str]:
     failures = []
     print("eval gate: absolute floors")
@@ -181,6 +205,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("eval gate: %d queries over %d corpus entries, primary arm %r"
           % (current["golden"]["queries"], current["corpus"]["entries"], arm))
     failures = check_floors(mean)
+
+    baseline_peek = load(args.baseline, "baseline")
+    drift = corpus_drift(current, baseline_peek)
+    if drift:
+        print("\neval gate: %s" % drift)
+        return 2
 
     baseline = load(args.baseline, "baseline")
     if baseline is None:

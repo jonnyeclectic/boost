@@ -85,7 +85,13 @@ def prepare_home(home: Path, rebuild: bool = True) -> dict:
         registry.update(tap.name)
     entries = catalog.rebuild_tap(tap)
     stats = rag.build(catalog.all_entries(), force=rebuild)
-    return {"corpus": str(corpus), "entries": len(entries),
+    # A generator identity, not the absolute path it happened to be built at.
+    # `corpus` lives under $TMPDIR, so serializing the resolved path baked one
+    # machine's scratch directory into the committed baseline — a value that is
+    # meaningless everywhere else and ships in the PyPI sdist. The online arm
+    # below already reports a stable label; this matches it.
+    return {"corpus": "evals/make_corpus.py (generated, hermetic)",
+            "entries": len(entries),
             "docs": stats["docs"], "taps": stats["taps"]}
 
 
