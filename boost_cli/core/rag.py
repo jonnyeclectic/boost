@@ -432,7 +432,14 @@ def _retrieve_any(query: str, k: int, kind: Optional[str],
     from . import dense
     if dense.ready():
         hits = dense.retrieve(query, k=k, kind=kind, entries=entries)
-        if hits is not None:
+        # An empty list is not the same answer as None. ``dense.retrieve``
+        # returns ``[]`` whenever every KNN neighbour was dropped for a kind
+        # mismatch or for no longer being live, which is a *thin index*, not a
+        # verdict on the query — and taking it as final short-circuits the
+        # documented "everything degrades to BM25" contract, so `boost search`
+        # answered "no results" while a perfectly good BM25 index sat unused.
+        # Only a non-empty dense result is final.
+        if hits:
             return hits, "dense vectors"
     if ready():
         return retrieve(query, k=k, kind=kind, entries=entries), "BM25 full-content"

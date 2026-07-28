@@ -5,7 +5,6 @@ Also exports detect_stack(), shared with the Quality commands.
 """
 from __future__ import annotations
 
-import argparse
 import contextlib
 import json
 import operator
@@ -39,17 +38,6 @@ from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
 from ..errors import BoostError
 
 __all__ = ["detect_stack"]
-
-
-def _positive_int(s: str) -> int:
-    """argparse type for --limit flags: an int that must be >= 1."""
-    try:
-        v = int(s)
-    except ValueError:
-        raise argparse.ArgumentTypeError("invalid int value: %r" % s) from None
-    if v < 1:
-        raise argparse.ArgumentTypeError("must be >= 1")
-    return v
 
 
 _tilde = paths.tilde
@@ -99,7 +87,7 @@ def cmd_search(argv):
     p.add_argument("query", nargs="+", help="search terms")
     p.add_argument("--smart", action="store_true",
                    help="rerank the top hits with Claude")
-    p.add_argument("--limit", type=_positive_int, default=15,
+    p.add_argument("--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
@@ -224,7 +212,7 @@ def cmd_index(argv):
     p = cliparse.parser(
         prog="boost index",
         description="Build the discovery registry via GitHub Code Search")
-    p.add_argument("--limit", type=_positive_int, default=300,
+    p.add_argument("--limit", type=util.positive_int, default=300,
                    help="max skill files to index (default 300)")
     args = p.parse_args(argv)
     if not shutil.which("gh"):
@@ -331,7 +319,7 @@ def cmd_discover(argv):
         prog="boost discover",
         description="Browse & search the GitHub-wide skill discovery index")
     p.add_argument("query", nargs="*", help="filter terms (repo/path substring)")
-    p.add_argument("--limit", type=_positive_int, default=25,
+    p.add_argument("--limit", type=util.positive_int, default=25,
                    help="max rows (default 25)")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
@@ -400,7 +388,7 @@ def cmd_recommend(argv):
         prog="boost recommend",
         description="Suggest skills based on your project's tech stack")
     p.add_argument("--path", default=".", help="project directory (default: cwd)")
-    p.add_argument("--limit", type=_positive_int, default=8,
+    p.add_argument("--limit", type=util.positive_int, default=8,
                    help="max suggestions (default 8)")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
@@ -892,7 +880,7 @@ def cmd_trending(argv):
     p = cliparse.parser(
         prog="boost trending",
         description="Show trending skills by install count")
-    p.add_argument("--limit", type=_positive_int, default=10,
+    p.add_argument("--limit", type=util.positive_int, default=10,
                    help="max rows (default 10)")
     args = p.parse_args(argv)
     evs = journal.events(action="install")

@@ -181,7 +181,7 @@
       <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep">clean</a>
       <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">create</a>
       <a class="cmd-link" href="#cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">policy</a>
-      <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run">onboard</a>
+      <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run -f, --force">onboard</a>
       <a class="cmd-link" href="#cmd-completions" data-search="completions generate shell tab-completion scripts  {bash,zsh,fish}">completions</a>
       <a class="cmd-link" href="#cmd-schedule" data-search="schedule manage automatic skill-sync scheduling  --interval {6h,12h,daily} --json {status,enable,disable}">schedule</a>
       <a class="cmd-link" href="#cmd-serve" data-search="serve serve the skill catalog over http (port 8787)  --port port --host host">serve</a>
@@ -991,15 +991,16 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run">
+      <section class="cmd" id="cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run -f, --force">
         <h3><span class="cname">onboard</span><span class="gtag">cfg</span></h3>
         <p class="summary">Add skill-tracker telemetry to a repo &amp; open a PR</p>
-        <pre class="syn">boost onboard [--repo REPO] [--pr] [--dry-run]</pre>
+        <pre class="syn">boost onboard [--repo REPO] [--pr] [--dry-run] [--force]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--repo REPO</code><span>repository directory (default: .)</span></div>
           <div class="arg"><code>--pr</code><span>commit on a branch and open a PR with `gh`</span></div>
           <div class="arg"><code>--dry-run</code><span>preview the files without writing anything</span></div>
+          <div class="arg"><code>-f, --force</code><span>overwrite existing files without confirming</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-completions" data-search="completions generate shell tab-completion scripts  {bash,zsh,fish}">

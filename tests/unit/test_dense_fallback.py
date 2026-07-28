@@ -439,6 +439,45 @@ class TestBuildWithoutExtension:
         assert stats["added"] == 2
         assert stats["chunks"] == 2                        # replaced, not dupe
 
+    def test_an_untapped_tap_is_pruned_from_the_index(self, store):
+        # THE GHOST-VECTOR BUG. `boost untap` removes a tap's entries, so it
+        # can never appear in `fresh` — the incremental path only ever deleted
+        # taps that CHANGED, and everything from a removed tap survived every
+        # later build, crowding the KNN pool that retrieve() then filters back
+        # out for not being live.
+        both = [*_ENTRIES, _e("gone", "from the other tap", tap="old/skills")]
+        store.setattr(rag, "_tap_commits",
+                      lambda: {"acme__skills": "c1", "old__skills": "c1"})
+        dense.build(entries=both, force=True)
+        con = sqlite3.connect(str(dense.db_path()))
+        assert con.execute("SELECT COUNT(*) FROM chunks WHERE tap = 'old/skills'"
+                           ).fetchone()[0] == 1
+        con.close()
+
+        # …the tap is removed: gone from the entry set and from the commit map.
+        store.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
+        stats = dense.build(entries=_ENTRIES)
+
+        assert stats["pruned"] == ["old/skills"]
+        assert stats["reused"] == ["acme__skills"], "the surviving tap is untouched"
+        con = sqlite3.connect(str(dense.db_path()))
+        assert con.execute("SELECT COUNT(*) FROM chunks WHERE tap = 'old/skills'"
+                           ).fetchone()[0] == 0
+        assert con.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0] == 2
+        con.close()
+
+    def test_nothing_is_pruned_when_every_tap_is_still_present(self, store):
+        dense.build(entries=_ENTRIES, force=True)
+        assert dense.build(entries=_ENTRIES)["pruned"] == []
+
+    def test_indexed_taps_is_empty_before_any_schema_exists(self, tmp_path):
+        # _indexed_taps runs against whatever connection build() has; on a
+        # database with no chunks table the answer is "nothing indexed", not a
+        # crash that takes the whole build down.
+        con = sqlite3.connect(str(tmp_path / "empty.sqlite"))
+        assert dense._indexed_taps(con) == set()
+        con.close()
+
     def test_provider_switch_wipes_and_rebuilds(self, store):
         dense.build(entries=_ENTRIES, force=True)
         store.setattr(embed, "provider", lambda: "voyage")
