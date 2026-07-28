@@ -314,6 +314,11 @@ class TestLog:
         assert len(lines) == 1
         assert "install brainstorming" in lines[0]
 
+    def test_negative_limit_rejected_on_every_branch(self, boost, installed):
+        for extra in ([], ["--diagnostics"], ["--crashes"]):
+            r = boost("log", *extra, "-n", "-1", expect=2)
+            assert "argument -n/--limit: must be >= 1" in r.err
+
     def test_skill_git_history(self, boost, installed):
         r = boost("log", "brainstorming")
         assert "brainstorming — history in fixture-tap" in r.out

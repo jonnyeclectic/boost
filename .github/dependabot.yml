@@ -16,3 +16,23 @@ updates:
     directory: /requirements
     schedule:
       interval: weekly
+  # pyproject.toml's optional extras. Dependabot only scans manifests under the
+  # declared `directory`, so the /requirements entry above never sees the repo
+  # root — [rag], [bdd] and [perf] got no proactive bump PRs at all, only
+  # reactive pip-audit CVE flags. Contributor-facing only: [project].dependencies
+  # is empty, so none of this reaches anyone who `pip install boost-skill-cli`.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      # The [eval] extra is deliberately held at the langchain 0.3 stack:
+      # ragas 0.2.x hard-imports a ChatVertexAI path that langchain>=1.0 and
+      # langchain-community>=0.4 removed. A bump PR here cannot be merged until
+      # ragas itself catches up, so Dependabot must not raise one — the whole
+      # reason this entry did not already exist. Drop these four ignores in the
+      # same change that lifts the `ragas>=0.2,<0.3` ceiling in pyproject.toml.
+      - dependency-name: ragas
+      - dependency-name: langchain-core
+      - dependency-name: langchain-community
+      - dependency-name: langchain-openai
