@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import errno
 import json
+import os
+from pathlib import Path
 
 import pytest
 
+from boost_cli.core import output as out
 from boost_cli.core import serve
 from boost_cli.errors import BoostError
 
@@ -245,3 +248,241 @@ class TestDoGetErrorHandling:
         monkeypatch.setattr(serve, "route",
                             lambda _p: (_ for _ in ()).throw(BrokenPipeError()))
         handler.do_GET()   # must not raise
+
+
+# ---------------------------------------------------------------- _is_within
+
+class TestIsWithin:
+    def test_base_itself_is_within(self, tmp_path):
+        assert serve._is_within(tmp_path, tmp_path) is True
+
+    def test_child_is_within(self, tmp_path):
+        assert serve._is_within(tmp_path, tmp_path / "a" / "b") is True
+
+    def test_sibling_is_not_within(self, tmp_path):
+        assert serve._is_within(tmp_path / "a", tmp_path / "b") is False
+
+    def test_name_prefix_sibling_is_not_within(self, tmp_path):
+        # "…/foobar" starts with "…/foo" as a *string* but is not inside it
+        assert serve._is_within(tmp_path / "foo", tmp_path / "foobar") is False
+
+    def test_parent_is_not_within_child(self, tmp_path):
+        assert serve._is_within(tmp_path / "a", tmp_path) is False
+
+    def test_unresolvable_path_is_not_within(self, tmp_path):
+        # embedded NUL -> ValueError out of resolve(), swallowed as "not within"
+        assert serve._is_within(tmp_path, Path("a\x00b")) is False
+
+
+# --------------------------------------------------------- _safe_join_within
+
+class TestSafeJoinWithin:
+    def test_relative_join_returns_resolved_child(self, tmp_path):
+        assert (serve._safe_join_within(tmp_path, Path("SKILL.md"))
+                == tmp_path.resolve() / "SKILL.md")
+
+    def test_string_rel_is_accepted(self, tmp_path):
+        assert (serve._safe_join_within(tmp_path, "SKILL.md")
+                == tmp_path.resolve() / "SKILL.md")
+
+    def test_dotdot_inside_base_is_normalised_not_rejected(self, tmp_path):
+        assert (serve._safe_join_within(tmp_path, Path("sub/../SKILL.md"))
+                == tmp_path.resolve() / "SKILL.md")
+
+    def test_absolute_rel_is_refused(self, tmp_path):
+        assert serve._safe_join_within(tmp_path, Path(tmp_path / "x")) is None
+
+    def test_dotdot_escape_is_refused(self, tmp_path):
+        base = tmp_path / "base"
+        base.mkdir()
+        assert serve._safe_join_within(base, Path("../outside.md")) is None
+
+    def test_symlink_escape_is_refused(self, tmp_path):
+        base = tmp_path / "base"
+        base.mkdir()
+        outside = tmp_path / "outside.md"
+        outside.write_text("secret", encoding="utf-8")
+        os.symlink(outside, base / "link.md")
+        assert serve._safe_join_within(base, Path("link.md")) is None
+
+    def test_non_path_rel_is_refused(self, tmp_path):
+        assert serve._safe_join_within(tmp_path, None) is None
+
+
+# ------------------------------------------------------ skill_text adversarial
+
+def _wire(monkeypatch, store_dir, tap_dir, entries):
+    monkeypatch.setattr(serve.store, "skill_store_dir", lambda n: store_dir)
+    monkeypatch.setattr(serve.catalog, "find", lambda n: entries)
+    monkeypatch.setattr(serve.registry, "get", lambda t: _Tap(tap_dir))
+
+
+class TestSkillTextTraversal:
+    def _layout(self, tmp_path):
+        store_dir = tmp_path / "store" / "thing"
+        store_dir.mkdir(parents=True)
+        tap_dir = tmp_path / "tap"
+        tap_dir.mkdir()
+        secret = tmp_path / "secret.md"
+        secret.write_text("TOP SECRET", encoding="utf-8")
+        return store_dir, tap_dir, secret
+
+    def test_dotdot_skill_md_is_refused(self, monkeypatch, tmp_path):
+        store_dir, tap_dir, secret = self._layout(tmp_path)
+        _wire(monkeypatch, store_dir, tap_dir,
+              [{"tap": "t", "skill_md": "../secret.md"}])
+        assert secret.read_text(encoding="utf-8") == "TOP SECRET"   # readable
+        assert serve.skill_text("thing") is None                    # but refused
+
+    def test_absolute_skill_md_is_refused(self, monkeypatch, tmp_path):
+        store_dir, tap_dir, secret = self._layout(tmp_path)
+        _wire(monkeypatch, store_dir, tap_dir,
+              [{"tap": "t", "skill_md": str(secret)}])
+        assert serve.skill_text("thing") is None
+
+    def test_tap_symlink_escape_is_refused(self, monkeypatch, tmp_path):
+        store_dir, tap_dir, secret = self._layout(tmp_path)
+        os.symlink(secret, tap_dir / "SKILL.md")
+        _wire(monkeypatch, store_dir, tap_dir,
+              [{"tap": "t", "skill_md": "SKILL.md"}])
+        assert serve.skill_text("thing") is None
+
+    def test_store_symlink_escape_is_refused(self, monkeypatch, tmp_path):
+        store_dir, tap_dir, secret = self._layout(tmp_path)
+        os.symlink(secret, store_dir / "SKILL.md")
+        _wire(monkeypatch, store_dir, tap_dir, [])
+        assert serve.skill_text("thing") is None
+
+    def test_refused_entry_does_not_stop_the_scan(self, monkeypatch, tmp_path):
+        # the `continue` must keep scanning: a hostile first entry must not
+        # shadow a legitimate later one (a `break` here would return None)
+        store_dir, tap_dir, _secret = self._layout(tmp_path)
+        (tap_dir / "SKILL.md").write_text("good-body", encoding="utf-8")
+        _wire(monkeypatch, store_dir, tap_dir,
+              [{"tap": "t", "skill_md": "../secret.md"},
+               {"tap": "t", "skill_md": "SKILL.md"}])
+        assert serve.skill_text("thing") == "good-body"
+
+    def test_missing_file_entry_does_not_stop_the_scan(self, monkeypatch, tmp_path):
+        store_dir, tap_dir, _secret = self._layout(tmp_path)
+        (tap_dir / "SKILL.md").write_text("good-body", encoding="utf-8")
+        _wire(monkeypatch, store_dir, tap_dir,
+              [{"tap": "t", "skill_md": "nope/SKILL.md"},
+               {"tap": "t", "skill_md": "SKILL.md"}])
+        assert serve.skill_text("thing") == "good-body"
+
+    def test_non_string_name_is_refused(self):
+        assert serve._validated_skill_name(None) is None
+        assert serve._validated_skill_name(b"brainstorming") is None
+        assert serve.skill_text(None) is None
+
+    @pytest.mark.parametrize("name", [".", ".."])
+    def test_dot_names_are_refused(self, name):
+        assert serve._validated_skill_name(name) is None
+
+    def test_route_dotdot_name_is_404_not_500(self, sandbox, monkeypatch):
+        # `..` passes SKILL_NAME_RE; only the {".",".."} guard stops it, and
+        # store.skill_store_dir("..") would raise BoostError without it.
+        monkeypatch.setattr(serve.catalog, "find", lambda n: [])
+        status, ctype, body = serve.route("/skill/..")
+        assert status == 404
+        assert ctype == "application/json"
+        assert json.loads(body) == {"error": "no skill named '..'"}
+
+    def test_route_percent_encoded_traversal_is_404(self, sandbox, monkeypatch):
+        monkeypatch.setattr(serve.catalog, "find", lambda n: [])
+        status, _ctype, body = serve.route("/skill/%2e%2e%2f%2e%2e%2fetc%2fpasswd")
+        assert status == 404
+        assert json.loads(body) == {"error": "no skill named '../../etc/passwd'"}
+
+
+# ------------------------------------------------------------------- _send
+
+class _Wire:
+    def __init__(self):
+        self.data = b""
+
+    def write(self, b):
+        self.data += b
+
+
+class TestSend:
+    def _handler(self, monkeypatch):
+        h = serve._CatalogHandler.__new__(serve._CatalogHandler)
+        h.command = "GET"
+        h.path = "/catalog.json"
+        h.wfile = _Wire()
+        calls = {"status": None, "headers": [], "ended": 0}
+        monkeypatch.setattr(h, "send_response",
+                            lambda s: calls.__setitem__("status", s))
+        monkeypatch.setattr(h, "send_header",
+                            lambda k, v: calls["headers"].append((k, v)))
+        monkeypatch.setattr(h, "end_headers",
+                            lambda: calls.__setitem__("ended", calls["ended"] + 1))
+        return h, calls
+
+    def test_headers_body_and_log_are_exact(self, monkeypatch):
+        h, calls = self._handler(monkeypatch)
+        dimmed = []
+        monkeypatch.setattr(serve.out, "dim", dimmed.append)
+        h._send(200, "application/json", b'{"ok": true}')
+        assert calls["status"] == 200
+        assert calls["headers"] == [("Content-Type", "application/json"),
+                                    ("Content-Length", "12")]
+        assert calls["ended"] == 1
+        assert h.wfile.data == b'{"ok": true}'
+        assert dimmed == ["  GET /catalog.json → 200"]
+
+    def test_log_message_is_silent(self, monkeypatch, capsys):
+        h = serve._CatalogHandler.__new__(serve._CatalogHandler)
+        assert h.log_message("%s - %s", "a", "b") is None
+        assert capsys.readouterr() == ("", "")
+
+
+# --------------------------------------------------------------- serve_http
+
+class _FakeServer:
+    def __init__(self, addr, handler, boom=None):
+        self.addr, self.handler, self.boom = addr, handler, boom
+        self.served = 0
+        self.closed = 0
+
+    def serve_forever(self):
+        self.served += 1
+        if self.boom is not None:
+            raise self.boom
+
+    def server_close(self):
+        self.closed += 1
+
+
+class TestServeHttpRun:
+    def _install(self, monkeypatch, boom=None):
+        made = {}
+
+        def factory(addr, handler):
+            made["srv"] = _FakeServer(addr, handler, boom)
+            return made["srv"]
+        monkeypatch.setattr(serve, "ThreadingHTTPServer", factory)
+        return made
+
+    def test_binds_announces_serves_and_closes(self, monkeypatch):
+        made = self._install(monkeypatch)
+        infos = []
+        monkeypatch.setattr(serve.out, "info", infos.append)
+        serve.serve_http("1.2.3.4", 8080)
+        srv = made["srv"]
+        assert srv.addr == ("1.2.3.4", 8080)
+        assert srv.handler is serve._CatalogHandler
+        assert (srv.served, srv.closed) == (1, 1)
+        assert infos == ["⚡ serving skill catalog on http://1.2.3.4:8080 "
+                         + out.c("(ctrl-c to stop)", out.DIM)]
+
+    def test_keyboard_interrupt_stops_cleanly(self, monkeypatch, capsys):
+        made = self._install(monkeypatch, boom=KeyboardInterrupt())
+        monkeypatch.setattr(serve.out, "info", lambda _m: None)
+        oks = []
+        monkeypatch.setattr(serve.out, "ok", oks.append)
+        serve.serve_http("127.0.0.1", 9)
+        assert oks == ["server stopped"]
+        assert made["srv"].closed == 1
