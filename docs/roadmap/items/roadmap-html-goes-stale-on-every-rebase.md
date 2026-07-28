@@ -2,15 +2,15 @@
 id: roadmap-html-goes-stale-on-every-rebase
 board: code
 section: dx
-status: planned
+status: shipped
 category: DX
 complexity: M
 impact: Med
 wow: 3
 note: hit twice on one PR in a single afternoon
 order: 59
-owner:
-pr:
+owner: loop/roadmap-stale-diagnosis
+pr: 307
 title: <code>roadmap.html</code> goes stale on every rebase, so a card and a merge race redden the whole matrix
 ---
 The data-driven roadmap solved the conflict problem for <em>item files</em>: two loops adding

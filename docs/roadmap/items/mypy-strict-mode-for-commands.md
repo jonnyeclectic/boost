@@ -2,15 +2,15 @@
 id: mypy-strict-mode-for-commands
 board: code
 section: health
-status: planned
+status: shipped
 category: Testing · Type
 complexity: M
 impact: High
 wow: 3
 note:
 order: 11
-owner:
-pr:
+owner: loop/mypy-check-command-bodies
+pr: 309
 title: mypy's default mode skips untyped command bodies
 ---
 <code>[tool.mypy]</code> in <code>pyproject.toml</code> sets only <code>python_version</code>/

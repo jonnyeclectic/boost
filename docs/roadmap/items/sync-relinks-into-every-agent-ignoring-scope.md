@@ -10,7 +10,7 @@ wow: 2
 note: the half of the scope leak PR #288 deliberately left open
 order: 34
 owner: loop/sync-agent-scope
-pr:
+pr: 311
 title: <code>sync</code> relinks a narrowed skill into every agent
 ---
 <code>store.preserved_agent_scope</code> (PR #288) stopped <code>update</code> and

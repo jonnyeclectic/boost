@@ -2,15 +2,15 @@
 id: lint-tap-misscopes-rule-workflow-entries
 board: code
 section: internals
-status: planned
+status: shipped
 category: Bug
 complexity: S
 impact: Med
 wow: 2
 note:
 order: 34
-owner:
-pr:
+owner: loop/lint-tap-scope
+pr: 279
 title: <code>lint --tap</code> mis-scores rule/workflow entries as broken
 ---
 <code>boost lint --tap</code> builds its target list without filtering by kind, so rule/workflow
