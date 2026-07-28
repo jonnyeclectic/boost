@@ -4,6 +4,21 @@
     python3 scripts/lock_toolchain.py            # regenerate requirements/*.txt
     python3 scripts/lock_toolchain.py --check     # fail (exit 1) on drift
     python3 scripts/lock_toolchain.py --upgrade   # re-resolve to newest allowed
+    python3 scripts/lock_toolchain.py -P twine    # re-resolve ONE package
+
+``-P/--upgrade-package`` exists to answer a Dependabot pull request. Dependabot
+regenerates these files itself, on Linux, and writes that resolution back — which
+drops every pin whose environment marker excludes it there (``colorama ;
+sys_platform == 'win32'`` is pytest's Windows dependency, and it vanished from
+three locks in a single run). These files install with ``--require-hashes`` on
+Windows and macOS too, so a dropped pin becomes an install failure on the very
+platform that needed it — reported against the install step, never naming the
+package.
+
+So a bump here is not merged, it is *reproduced*: take the version Dependabot
+proposes, run ``-P <name>``, and the resolution stays universal — markers intact,
+every other pin untouched. ``--upgrade`` would also pick up the new version, but
+it re-resolves all five groups, burying a one-package bump in unrelated churn.
 
 Each ``requirements/<name>.in`` is the human-edited declaration; the generated
 ``requirements/<name>.txt`` beside it carries an exact version *and every
@@ -42,6 +57,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -101,7 +117,8 @@ def _uv() -> str:
     return str(local) if local.exists() else (shutil.which("uv") or "uv")
 
 
-def compile_group(stem: str, python_version: str, upgrade: bool) -> str:
+def compile_group(stem: str, python_version: str, upgrade: bool,
+                  packages: Sequence[str] = ()) -> str:
     """Resolve one group and return the file contents we want on disk.
 
     Resolution is deliberately NOT "newest that satisfies the .in". uv treats an
@@ -109,6 +126,12 @@ def compile_group(stem: str, python_version: str, upgrade: bool) -> str:
     unless a declaration forces a change, so the compile is *stable*: it
     reproduces the committed lock byte-for-byte until someone edits the .in or
     passes ``--upgrade``.
+
+    ``packages`` narrows that to a named few: uv re-resolves those and keeps its
+    preference for every other committed pin. A group that does not contain the
+    named package is therefore recompiled to exactly what it already was, which
+    is why this can be applied across all groups without knowing which ones the
+    package appears in.
 
     That distinction is the whole gate. Compiling to stdout instead re-resolves
     against the live index every time, so any upstream release makes the
@@ -130,6 +153,8 @@ def compile_group(stem: str, python_version: str, upgrade: bool) -> str:
                "--output-file", str(scratch)]
         if upgrade:
             cmd.append("--upgrade")
+        for name in packages:
+            cmd += ["--upgrade-package", name]
         proc = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT)
         if proc.returncode != 0:
             sys.stderr.write(proc.stderr)
@@ -144,15 +169,26 @@ def main() -> int:
                     help="exit 1 if any generated file is stale")
     ap.add_argument("--upgrade", action="store_true",
                     help="re-resolve to the newest versions the .in files allow")
+    ap.add_argument("-P", "--upgrade-package", action="append", default=[],
+                    metavar="NAME", dest="upgrade_package",
+                    help="re-resolve only NAME (repeatable), keeping every "
+                         "other committed pin — use this to answer a Dependabot "
+                         "bump instead of merging its regenerated lock")
     args = ap.parse_args()
 
-    if args.check and args.upgrade:
-        raise SystemExit("lock_toolchain: --check and --upgrade are exclusive")
+    if args.check and (args.upgrade or args.upgrade_package):
+        raise SystemExit(
+            "lock_toolchain: --check cannot be combined with --upgrade/-P")
+    if args.upgrade and args.upgrade_package:
+        # --upgrade already re-resolves everything, so naming a package on top
+        # of it reads as a narrowing that is not happening.
+        raise SystemExit("lock_toolchain: --upgrade and -P are exclusive")
 
     stale = []
     for stem, python_version in GROUPS:
         target = REQS / ("%s.txt" % stem)
-        want = compile_group(stem, python_version, args.upgrade)
+        want = compile_group(stem, python_version, args.upgrade,
+                             args.upgrade_package)
         if args.check:
             have = target.read_text(encoding="utf-8") if target.exists() else ""
             if have != want:
