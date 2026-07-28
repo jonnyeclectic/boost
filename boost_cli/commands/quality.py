@@ -391,6 +391,15 @@ def cmd_doctor(argv):
     return 1 if issues else 0
 
 
+def _print_skipped(skipped: List[dict]) -> None:
+    """Note the rule/workflow entries `lint` passed over (they have no SKILL.md)."""
+    if not skipped:
+        return
+    out.info("skipped %d rule/workflow item%s (%s) — lint scores SKILL.md skills only"
+             % (len(skipped), _s(len(skipped)),
+                ", ".join(s["name"] for s in skipped[:5])))
+
+
 def cmd_lint(argv):
     ap = cliparse.parser(
         prog="boost lint", description="Validate SKILL.md frontmatter & quality")
@@ -402,25 +411,23 @@ def cmd_lint(argv):
     args = ap.parse_args(argv)
 
     targets: List[Tuple[str, Path]] = []
+    skipped: List[dict] = []
     if args.tap:
         tap = registry.get(args.tap)
         if not tap.is_cloned:
             raise BoostError("tap %s is not cloned" % tap.name,
                             hint="run `boost update %s`" % tap.name)
-        entries = catalog.load_tap(tap)
-        if args.names:
-            wanted = set(args.names)
-            entries = [e for e in entries if e["name"] in wanted]
-        targets = [(e["name"],
-                    tap.path if e["rel_dir"] == "." else tap.path / e["rel_dir"])
-                   for e in entries]
+        targets, skipped = catalog.lint_targets(
+            catalog.load_tap(tap), tap.path, args.names or None)
     else:
         targets = [(n, store.skill_store_dir(n))
                    for n, _e in _iter_installed(args.names or None)]
     if not targets:
         if args.json:
-            print(json.dumps([]))
+            print(json.dumps({"min": args.min_score, "skills": [],
+                              "skipped": skipped, "failed": 0}))
         else:
+            _print_skipped(skipped)
             out.info("nothing to lint")
         return 0
 
@@ -445,7 +452,7 @@ def cmd_lint(argv):
     failed = [r for r in results if r["score"] < args.min_score or r["errors"]]
     if args.json:
         print(json.dumps({"min": args.min_score, "skills": results,
-                          "failed": len(failed)}))
+                          "skipped": skipped, "failed": len(failed)}))
         return 1 if failed else 0
 
     width = max(len(r["name"]) for r in results)
@@ -458,6 +465,7 @@ def cmd_lint(argv):
             print("    " + out.role("error: " + e, "danger"))
         for n in r["notes"]:
             print("    " + out.role(n, "muted"))
+    _print_skipped(skipped)
     if failed:
         out.warn("%d of %d skill%s below %d or with errors"
                  % (len(failed), len(results), _s(len(results)), args.min_score))

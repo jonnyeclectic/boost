@@ -17,6 +17,16 @@ def _copy_tap(src, dest):
     return dest
 
 
+def _add_and_commit(tap_dir, relpath, content, msg):
+    p = tap_dir / relpath
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    subprocess.run(["git", "-C", str(tap_dir), "add", "-A"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", msg],
+                   check=True, capture_output=True)
+
+
 def _bump(tap_dir, skill, old, new):
     md = tap_dir / "skills" / skill / "SKILL.md"
     md.write_text(md.read_text(encoding="utf-8").replace("version: %s" % old,
@@ -183,6 +193,40 @@ class TestLint:
         assert "cowboy-coding" in r.out
         assert "80/100" in r.out
         assert "1 skill pass lint (min 40)" in r.out
+
+
+    def test_tap_with_rules_lints_only_the_skills(self, boost, fixture_tap_src,
+                                                  tmp_path):
+        # The defect: rules and workflows are single files with no SKILL.md, so
+        # linting them scored each one 0 for "missing SKILL.md" and dragged the
+        # tap's verdict to failure. A tap's score must not depend on how many
+        # rules it ships.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "mixed-tap")
+        _add_and_commit(tap_dir, "rules/py-style.mdc",
+                        "---\nname: py-style\n---\n\nUse black.\n", "add rule")
+        _add_and_commit(tap_dir, "commands/ship-it.md",
+                        "---\nname: ship-it\n---\n\nShip it.\n", "add workflow")
+        boost("tap", tap_dir)
+        r = boost("lint", "--tap", "mixed-tap")          # rc 0: was rc 1
+        assert "5 skills pass lint (min 40)" in r.out
+        assert "skipped 2 rule/workflow items" in r.out
+        assert "py-style" in r.out and "ship-it" in r.out
+        assert "missing SKILL.md" not in r.out
+        # \b so this does not match the "80/100" a real skill legitimately
+        # scores — the claim is that nothing scored exactly zero.
+        assert not re.search(r"\b0/100\b", r.out)
+
+    def test_naming_a_rule_explicitly_says_why_it_was_skipped(
+            self, boost, fixture_tap_src, tmp_path):
+        # Filtering the rule out silently would exit 0 having scored nothing,
+        # which reads as "your rule is fine".
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "named-tap")
+        _add_and_commit(tap_dir, "rules/py-style.mdc",
+                        "---\nname: py-style\n---\n\nUse black.\n", "add rule")
+        boost("tap", tap_dir)
+        r = boost("lint", "--tap", "named-tap", "py-style")
+        assert "skipped 1 rule/workflow item" in r.out
+        assert "lint scores SKILL.md skills only" in r.out
 
 
 # ── audit ────────────────────────────────────────────────────────────────
