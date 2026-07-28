@@ -15,7 +15,7 @@ from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from itertools import starmap
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .. import cliparse
 from ..core import (
@@ -431,7 +431,7 @@ def cmd_lint(argv):
             out.info("nothing to lint")
         return 0
 
-    results = []
+    results: List[Dict[str, Any]] = []
     for name, sdir in targets:
         score, notes = util.score_skill(sdir)
         meta, _ = _read_skill(sdir)
@@ -679,8 +679,8 @@ def cmd_conflict(argv):
     args = ap.parse_args(argv)
 
     installed = _iter_installed()
-    rules = []   # (skill, line, polarity, stem set)
-    declared = []
+    rules: List[Tuple[str, str, str, set]] = []   # skill, line, polarity, stems
+    declared: List[Tuple[str, str]] = []           # skill, conflicting skill
     installed_names = {n for n, _e in installed}
     for name, _entry in installed:
         meta, body = _read_skill(store.skill_store_dir(name))
@@ -705,12 +705,16 @@ def cmd_conflict(argv):
             if stem:
                 rules.append((name, raw.strip(), polarity, stem))
 
-    pairs, seen = [], set()
+    pairs: List[Dict[str, str]] = []
+    seen: set = set()   # holds both key shapes below, declared and heuristic
     for da, db in declared:
-        key = (*tuple(sorted((da, db))), "declared")
-        if key in seen:
+        # Two different key SHAPES share `seen` — a flat triple here, a pair of
+        # (skill, line) pairs below. Distinct names because reusing one made the
+        # second `sorted()` type-check against the first one's element type.
+        dkey = (*tuple(sorted((da, db))), "declared")
+        if dkey in seen:
             continue
-        seen.add(key)
+        seen.add(dkey)
         pairs.append({"kind": "declared", "a": da, "b": db,
                       "a_line": "frontmatter declares conflicts: %s" % db,
                       "b_line": ""})
@@ -720,10 +724,10 @@ def cmd_conflict(argv):
                 continue
             small = min(len(a_stem), len(b_stem))
             if small and len(a_stem & b_stem) / small >= _CONFLICT_OVERLAP:
-                key = tuple(sorted(((a_skill, a_line), (b_skill, b_line))))
-                if key in seen:
+                hkey = tuple(sorted(((a_skill, a_line), (b_skill, b_line))))
+                if hkey in seen:
                     continue
-                seen.add(key)
+                seen.add(hkey)
                 pairs.append({"kind": "heuristic", "a": a_skill, "b": b_skill,
                               "a_line": a_line, "b_line": b_line})
 
