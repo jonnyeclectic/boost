@@ -14,9 +14,13 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
-from . import config, nethttp
+from . import config, logs, nethttp
 
 API_URL = "https://api.anthropic.com/v1/messages"
+
+# Bound on how much of the CLI's stderr goes into the diagnostic log — enough
+# for the one-line reason ("Invalid API key"), never a whole stack dump.
+STDERR_LOG_CHARS = 200
 
 
 def enabled() -> bool:
@@ -65,6 +69,24 @@ def ask_author(prompt: str, system: Optional[str] = None,
                max_tokens=max_tokens, timeout=240)
 
 
+def _log_failure(route: str, reason: str) -> None:
+    """Record why an AI call fell through to the caller's heuristic fallback.
+
+    Every failure path in this module returns ``None`` and lets the caller
+    degrade quietly, which is the right UX but leaves a user with an expired
+    key or a flaky network no way to tell *why* every AI command went
+    heuristic. DEBUG keeps it out of normal runs: the rotating log file always
+    records it, and ``--debug`` surfaces it on stderr.
+    """
+    logs.get_logger().debug("ai: %s call failed: %s", route, reason)
+
+
+def _stderr_excerpt(text: Optional[str]) -> str:
+    """Collapse a subprocess' stderr to one bounded line fit for the log."""
+    s = " ".join((text or "").split())
+    return (s[:STDERR_LOG_CHARS] + "...") if len(s) > STDERR_LOG_CHARS else s
+
+
 def _ask_cli(prompt: str, system: Optional[str], model: str,
              timeout: int) -> Optional[str]:
     cmd = ["claude", "-p", "--model", model, "--output-format", "text"]
@@ -73,11 +95,20 @@ def _ask_cli(prompt: str, system: Optional[str], model: str,
     try:
         proc = subprocess.run(cmd, input=prompt, capture_output=True,
                               text=True, timeout=timeout)
-    except (subprocess.TimeoutExpired, OSError):
+    except (subprocess.TimeoutExpired, OSError) as e:
+        # The exception TYPE only, never str(e): TimeoutExpired stringifies the
+        # whole argv, which carries the --append-system-prompt text with it.
+        _log_failure("claude CLI", type(e).__name__)
         return None
     if proc.returncode != 0:
+        _log_failure("claude CLI", "exit %d: %s"
+                     % (proc.returncode, _stderr_excerpt(proc.stderr)))
         return None
-    return proc.stdout.strip() or None
+    out = proc.stdout.strip()
+    if not out:
+        _log_failure("claude CLI", "empty reply")
+        return None
+    return out
 
 
 def _ask_api(prompt: str, system: Optional[str], model: str,
@@ -102,11 +133,16 @@ def _ask_api(prompt: str, system: Optional[str], model: str,
     try:
         with nethttp.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode())
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
+        _log_failure("Anthropic API", "%s: %s" % (type(e).__name__, e))
         return None
     parts = [b.get("text", "") for b in data.get("content", [])
              if b.get("type") == "text"]
-    return "\n".join(parts).strip() or None
+    text = "\n".join(parts).strip()
+    if not text:
+        _log_failure("Anthropic API", "reply had no text content")
+        return None
+    return text
 
 
 def extract_markdown(text: str) -> str:

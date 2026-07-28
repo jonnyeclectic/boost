@@ -575,7 +575,7 @@ def cmd_log(argv):
     ap = cliparse.parser(prog="boost log",
                                  description="Git log for a skill, or boost's activity log")
     ap.add_argument("name", nargs="?", help="skill to show upstream history for")
-    ap.add_argument("-n", "--limit", type=int, default=20, metavar="N",
+    ap.add_argument("-n", "--limit", type=util.positive_int, default=20, metavar="N",
                     help="max entries (default 20)")
     ap.add_argument("--diagnostics", action="store_true",
                     help="show boost's diagnostic log trail (not skill history)")

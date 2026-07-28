@@ -2,6 +2,7 @@
 completions, schedule, serve, mcp, self-update."""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -401,8 +402,41 @@ jobs:
 """
 
 
+def _write_onboard_file(dest: Path, content: str, force: bool) -> bool:
+    """Write one generated onboard file; confirm first if it already exists.
+
+    ``boost onboard`` is routinely re-run on a repo that already has its own
+    tracked ``.skill-lock.json``, and a bare ``write_text`` there replaces the
+    repo's lock with whatever this machine happens to have installed — while
+    still reporting "created". Existence has to be checked *before* the write,
+    the same way :func:`intelligence._write_generated` already does.
+
+    Returns True when the file was written.
+    """
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(content, encoding="utf-8")
+        out.ok("created %s" % _tilde(dest))
+        return True
+    try:
+        unchanged = dest.read_text(encoding="utf-8") == content
+    except (OSError, UnicodeDecodeError):
+        unchanged = False   # unreadable: treat as different and ask
+    if unchanged:
+        # Re-running onboard regenerates the workflow byte-for-byte. Prompting
+        # to overwrite a file with its own contents is noise, not safety.
+        out.info("unchanged %s" % _tilde(dest))
+        return False
+    if not force and not out.confirm("overwrite %s?" % _tilde(dest)):
+        out.info("skipped %s" % _tilde(dest))
+        return False
+    dest.write_text(content, encoding="utf-8")
+    out.ok("updated %s" % _tilde(dest))
+    return True
+
+
 def cmd_onboard(argv) -> int:
-    """boost onboard [--repo DIR] [--pr] [--dry-run]"""
+    """boost onboard [--repo DIR] [--pr] [--dry-run] [--force]"""
     p = cliparse.parser(
         prog="boost onboard",
         description="Add skill-tracker telemetry to a repo & open a PR")
@@ -411,6 +445,9 @@ def cmd_onboard(argv) -> int:
                    help="commit on a branch and open a PR with `gh`")
     p.add_argument("--dry-run", action="store_true",
                    help="preview the files without writing anything")
+    p.add_argument("-f", "--force", action="store_true",
+                   help="overwrite existing files without confirming")
+    p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args(argv)
 
     repo = paths.expand(args.repo).resolve()
@@ -431,7 +468,10 @@ def cmd_onboard(argv) -> int:
 
     if args.dry_run:
         for rel, content in files:
-            out.heading("would write %s" % _tilde(repo / rel))
+            dest = repo / rel
+            out.heading("would %s %s"
+                        % ("overwrite" if dest.exists() else "write",
+                           _tilde(dest)))
             for line in content.splitlines()[:24]:
                 out.dim("    " + line)
         return 0
@@ -447,17 +487,21 @@ def cmd_onboard(argv) -> int:
             raise BoostError("the `gh` CLI is required for --pr",
                             hint="brew install gh, or rerun without --pr")
 
-    for rel, content in files:
-        fp = repo / rel
-        fp.parent.mkdir(parents=True, exist_ok=True)
-        fp.write_text(content, encoding="utf-8")
-        out.ok("created %s" % _tilde(fp))
+    written = [rel for rel, content in files
+               if _write_onboard_file(repo / rel, content,
+                                      args.force or args.yes)]
+    if not written:
+        # Nothing changed, so there is nothing to journal — and nothing for
+        # --pr to commit. Branching here would leave an empty branch behind
+        # and then fail on `git commit` with no staged changes.
+        out.info("nothing to do — %s already onboarded" % _tilde(repo))
+        return 0
     journal.log("onboard", _tilde(repo), pr=args.pr or None)
 
     if args.pr:
         branch = "boost/onboard-skill-tracker"
         gitutil.run(["-C", str(repo), "checkout", "-b", branch])
-        gitutil.run(["-C", str(repo), "add"] + [rel for rel, _ in files])
+        gitutil.run(["-C", str(repo), "add", *written])
         gitutil.run(["-C", str(repo), "commit", "-m",
                      "chore: add boost skill tracking (boost onboard)"])
         try:
