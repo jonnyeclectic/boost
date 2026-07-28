@@ -67,20 +67,42 @@ jobs:
           persist-credentials: false
 
       - name: require the sibling release gates to be green
-        # workflow_run only carries ci's verdict. pip-audit.yml (live CVEs in
-        # the dependency closure) and package-metadata.yml (twine --strict +
-        # wheel contents) are separate workflows on the same push, so without
-        # this a merge that failed either one still shipped to PyPI. Runs
-        # BEFORE release-drafter: a blocked release must leave no published
-        # GitHub Release or tag behind. `git rev-parse HEAD` — not the trigger
-        # sha — because that is the commit this job actually checked out and is
-        # about to build.
+        # Verify the gates against the commit THIS JOB CHECKED OUT, which is not
+        # necessarily the commit whose ci fired the trigger. `ref: main` above
+        # resolves to main's tip at checkout time, so when two merges land close
+        # together the trigger can carry commit A's verdict while the job builds
+        # commit B. Observed: ci for ecfe38bc completed 20:19:05Z, this workflow
+        # started 20:19:07Z, and it shipped c1727bac as v1.0.271 while
+        # c1727bac's own ci was still running. Hence `git rev-parse HEAD` — not
+        # the trigger sha — because that is the commit about to be built.
+        #
+        # The --require list is every required context's workflow that actually
+        # runs on a push to main, so the release waits for the shipped sha's own
+        # verdicts rather than inheriting another commit's:
+        #   ci.yml               14 of the 18 required contexts
+        #   codeql.yml           codeql-analyze
+        #   pip-audit.yml        live CVEs in the dependency closure
+        #   package-metadata.yml twine --strict + wheel contents
+        # osv-scanner.yml is deliberately NOT here. It is pull_request-scoped by
+        # design (it uses the -reusable-pr diff workflow so it reports only what
+        # a PR *adds*, and a full-repo scan would trip the accepted old-langchain
+        # pin in the [eval] extra). `scan-pr / osv-scan` therefore cannot report
+        # for any commit on main, and requiring it would fail every release.
+        #
+        # Runs BEFORE release-drafter: a blocked release must leave no published
+        # GitHub Release or tag behind. The timeout is generous because ci now
+        # has to finish for the shipped sha, and ci's wall clock is dominated by
+        # runner queueing when several branches are in flight; failing closed on
+        # a slow-but-green ci would be a worse outcome than waiting.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 scripts/release_preflight.py \
             --repo "$GITHUB_REPOSITORY" \
             --sha "$(git rev-parse HEAD)" \
+            --timeout-seconds 3600 \
+            --require ci.yml \
+            --require codeql.yml \
             --require pip-audit.yml \
             --require package-metadata.yml
 
