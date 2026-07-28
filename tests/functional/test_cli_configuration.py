@@ -345,6 +345,154 @@ class TestOnboard:
         assert "is not clean" in r.err
 
 
+class TestOnboardOverwrite:
+    """Re-running onboard must not silently replace a repo's own files.
+
+    The interesting file is ``.skill-lock.json``: a repo that tracks its own
+    lock gets it replaced by whatever *this machine* has installed, and the
+    old code still printed "created". Every test here therefore asserts on
+    file contents, not just on the message.
+    """
+
+    LOCK = ".skill-lock.json"
+    TELEMETRY = ".boost/telemetry.json"
+    WORKFLOW = ".github/workflows/boost-skill-inventory.yml"
+
+    def _seeded(self, boost, tmp_path):
+        """A repo already onboarded, with a hand-edited lock file."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        boost("onboard", "--repo", repo)             # BOOST_ASSUME_YES: creates
+        (repo / self.LOCK).write_text('{"mine": true}\n', encoding="utf-8")
+        return repo
+
+    def test_declining_leaves_the_existing_file_byte_for_byte(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = self._seeded(boost, tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")   # stdin is not a tty -> "no"
+        r = boost("onboard", "--repo", repo)
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == '{"mine": true}\n'
+        assert "skipped" in r.out
+        assert "created %s" % self.LOCK not in r.out
+
+    def test_force_overwrites_and_says_updated_not_created(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = self._seeded(boost, tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, "--force")
+        lock = json.loads((repo / self.LOCK).read_text(encoding="utf-8"))
+        assert "brainstorming" in lock["skills"], "the real lock, not the stub"
+        assert "updated" in r.out
+        # "created" was the lie the old code told about every overwrite.
+        assert "created" not in r.out
+
+    def test_answering_yes_at_the_prompt_overwrites(
+            self, boost, installed, tmp_path):
+        # BOOST_ASSUME_YES is the fixture default, i.e. the user said yes.
+        repo = self._seeded(boost, tmp_path)
+        r = boost("onboard", "--repo", repo)
+        lock = json.loads((repo / self.LOCK).read_text(encoding="utf-8"))
+        assert "brainstorming" in lock["skills"]
+        assert "updated" in r.out
+
+    def test_an_existing_file_boost_cannot_read_is_still_protected(
+            self, boost, installed, tmp_path, monkeypatch):
+        # The identical-content shortcut reads the file; a binary or
+        # permission-denied file must fall back to asking, not to overwriting.
+        repo = self._seeded(boost, tmp_path)
+        (repo / self.WORKFLOW).write_bytes(b"\xff\xfe not utf-8")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo)
+        assert (repo / self.WORKFLOW).read_bytes() == b"\xff\xfe not utf-8"
+        assert "skipped" in r.out
+
+    def test_the_hidden_yes_alias_also_overwrites(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = self._seeded(boost, tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        boost("onboard", "--repo", repo, "--yes")
+        assert '{"mine": true}' not in (repo / self.LOCK).read_text(encoding="utf-8")
+
+    def test_identical_content_is_never_prompted_for(
+            self, boost, installed, tmp_path, monkeypatch):
+        # The workflow YAML regenerates byte-for-byte, so a second run has
+        # nothing to ask about it. Asking anyway trains users to say yes.
+        repo = self._seeded(boost, tmp_path)
+        # Leave *only* the workflow: telemetry carries a timestamp and the lock
+        # is live machine state, so neither is a stable "identical" case.
+        (repo / self.TELEMETRY).unlink()
+        (repo / self.LOCK).unlink()
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        monkeypatch.setattr("boost_cli.core.output.confirm",
+                            lambda *a, **k: pytest.fail(
+                                "prompted to overwrite an identical file"))
+        r = boost("onboard", "--repo", repo)
+        assert "unchanged" in r.out
+        assert self.WORKFLOW in r.out
+
+    def test_dry_run_distinguishes_write_from_overwrite(
+            self, boost, installed, tmp_path):
+        repo = self._seeded(boost, tmp_path)
+        r = boost("onboard", "--repo", repo, "--dry-run")
+        assert "would overwrite" in r.out
+        assert "would write" not in r.out, "every file already exists here"
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == '{"mine": true}\n'
+
+    def test_declining_everything_journals_nothing(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = self._seeded(boost, tmp_path)
+        # Make all three differ so all three get a prompt, then decline them.
+        (repo / self.TELEMETRY).write_text("{}\n", encoding="utf-8")
+        (repo / self.WORKFLOW).write_text("# theirs\n", encoding="utf-8")
+        before = len(journal.events(action="onboard"))
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo)
+        assert "nothing to do" in r.out
+        assert len(journal.events(action="onboard")) == before, \
+            "a no-op run must not add an onboard event"
+
+    def test_pr_stages_only_the_files_it_actually_wrote(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        (repo / self.LOCK).write_text('{"mine": true}\n', encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "our own lock")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        real_run = subprocess.run
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.subprocess.run",
+            lambda cmd, **kw: _proc(cmd, 0, out="https://github.com/o/r/pull/9\n")
+            if cmd and cmd[0] == "gh" else real_run(cmd, **kw))
+        monkeypatch.delenv("BOOST_ASSUME_YES")     # decline the lock overwrite
+        boost("onboard", "--repo", repo, "--pr")
+
+        names = subprocess.run(["git", "show", "--name-only", "--pretty=", "HEAD"],
+                               cwd=str(repo), capture_output=True, text=True)
+        staged = set(names.stdout.split())
+        assert staged == {self.TELEMETRY, self.WORKFLOW}
+        assert (repo / self.LOCK).read_text(encoding="utf-8") == '{"mine": true}\n'
+
+    def test_pr_with_nothing_to_write_leaves_no_branch_behind(
+            self, boost, installed, tmp_path, monkeypatch):
+        repo = _mk_repo(tmp_path / "repo")
+        for rel, body in ((self.TELEMETRY, "{}\n"), (self.WORKFLOW, "# theirs\n"),
+                          (self.LOCK, '{"mine": true}\n')):
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(body, encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "already ours")
+        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
+                            lambda c: "/usr/bin/" + c)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("onboard", "--repo", repo, "--pr")
+        assert "nothing to do" in r.out
+        head = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                              cwd=str(repo), capture_output=True, text=True)
+        assert head.stdout.strip() != "boost/onboard-skill-tracker", \
+            "an empty branch would fail on `git commit` with nothing staged"
+
+
 # ---------------------------------------------------------------- completions
 
 class TestCompletions:

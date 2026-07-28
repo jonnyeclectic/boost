@@ -1,0 +1,16 @@
+# Blank issues stay enabled on purpose: the two forms above cover the common
+# cases, but "I don't know which of these this is" is a legitimate report and
+# forcing it into the wrong form loses information.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/jonnyeclectic/boost/security/advisories/new
+    about: >
+      Report privately, never as a public issue. Tap content escaping the
+      store, path traversal via SKILL.md frontmatter, and command injection
+      through skill or tap names are especially valuable — see SECURITY.md.
+  - name: Contributing guide
+    url: https://github.com/jonnyeclectic/boost/blob/main/CONTRIBUTING.md
+    about: >
+      Dev setup, the full list of quality gates, and which checked-in files
+      are generated and must never be hand-edited.

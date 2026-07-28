@@ -2,15 +2,15 @@
 id: mutation-gate-was-the-whole-critical-path
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: CI speed
 complexity: M
 impact: High
 wow: 4
-note: 26 min, 3x the next job, and charged twice per change
+note: 28 min of CI became 12; the new floor is one file, store.py
 order: 60
-owner: loop/mutation-speedup
-pr:
+owner:
+pr: 281
 title: The mutation gate <em>was</em> CI — 26 minutes, three times the next-longest job
 ---
 Measured across twelve consecutive runs, the <code>mutation</code> job took
@@ -80,3 +80,20 @@ actually did; <code>always()</code> on its own would have reported a failed shar
 required check. Merging likewise fails closed: mutmut counts an unrun mutant as "not checked"
 inside <code>total</code>, and the gate divides by it, so a partial merge would quietly depress
 the score instead of erroring.
+
+<b>What actually landed, measured on <code>main</code>.</b> The eleven CI runs before this
+merged took <b>20.7&ndash;39.4 minutes</b> (median ~28.4); the merge commit's own run took
+<b>12.1</b>. This pull request touches <code>tests/</code>, so it ran the <em>full</em> six-shard
+gate &mdash; the worst case, not the docs-only path.
+
+It also missed its own estimate, in an instructive way. The prediction was ~6 minutes for a code
+change; the slowest shard took <b>9.9</b>. Packing by mutant count is near-perfect &mdash; the six
+shards carry 1703&ndash;1931 mutants each, within <b>1.10x</b> of ideal &mdash; but measured
+throughput ran <b>3.39 to 14.19 mutants/second</b>, a <b>4.2x</b> spread. Mutant count is simply a
+poor proxy for time: a <code>store.py</code> mutant re-runs a far larger covering test set than an
+<code>ed25519.py</code> one, and survivors run their tests to completion where kills exit early.
+Re-weighting the planner by seconds instead of count would even out the billed minutes but
+<em>not</em> the wall clock, because shard 0 is <code>store.py</code> by itself and its 9.5 minutes
+is the floor. Going below it means splitting a single file &mdash; feasible, since mutant names are
+addressable per function (<code>boost_cli.core.store.install_*</code>), which would bring the floor
+toward the 5.1-minute even split of the 30.8 minutes of total work.

@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import urllib.error
 
 import pytest
 
-from boost_cli.core import ai, config
+from boost_cli.core import ai, config, logs
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 AUTHOR_MODEL = "claude-sonnet-5"
@@ -260,3 +261,179 @@ class TestExtractMarkdown:
     def test_empty_and_none(self):
         assert ai.extract_markdown("") == ""
         assert ai.extract_markdown(None) == ""
+
+
+class _Recorder(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+    @property
+    def messages(self):
+        return [r.getMessage() for r in self.records]
+
+
+@pytest.fixture()
+def ai_log(ai_on):
+    """Capture the `boost` logger directly.
+
+    Not caplog: logs.configure() sets propagate=False on the boost logger, and
+    logs.reset() leaves it that way, so caplog's root handler would see nothing
+    once any earlier test in the process has configured logging.
+    """
+    logger = logs.get_logger()
+    logger.setLevel(logging.DEBUG)
+    handler = _Recorder()
+    logger.addHandler(handler)
+    yield handler
+    logger.removeHandler(handler)
+
+
+class TestFailureLogging:
+    def test_cli_timeout_logs_type_without_argv(self, ai_log, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which",
+                            lambda n: "/fake/bin/claude")
+
+        def boom(*a, **k):
+            raise subprocess.TimeoutExpired(cmd=["claude", "--append-system-prompt",
+                                                 "SECRET SYSTEM PROMPT"], timeout=1)
+        monkeypatch.setattr("boost_cli.core.ai.subprocess.run", boom)
+        assert ai.ask("hi", system="SECRET SYSTEM PROMPT") is None
+        assert ai_log.messages == ["ai: claude CLI call failed: TimeoutExpired"]
+        assert ai_log.records[0].levelno == logging.DEBUG
+        assert "SECRET SYSTEM PROMPT" not in ai_log.messages[0]
+
+    def test_cli_oserror_logs_type(self, ai_on, ai_log, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which",
+                            lambda n: "/fake/bin/claude")
+
+        def boom(*a, **k):
+            raise FileNotFoundError("claude")
+        monkeypatch.setattr("boost_cli.core.ai.subprocess.run", boom)
+        assert ai.ask("hi") is None
+        assert ai_log.messages == ["ai: claude CLI call failed: FileNotFoundError"]
+
+    def test_cli_nonzero_exit_logs_code_and_stderr(self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=3, stderr="Invalid API key\n  · Fix external\n")
+        assert ai.ask("hi") is None
+        assert ai_log.messages == [
+            "ai: claude CLI call failed: exit 3: Invalid API key · Fix external"]
+
+    def test_cli_empty_stderr_logs_bare_exit_code(self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stderr="")
+        assert ai.ask("hi") is None
+        assert ai_log.messages == ["ai: claude CLI call failed: exit 1: "]
+
+    def test_cli_empty_reply_logged(self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=0, stdout="   \n")
+        assert ai.ask("hi") is None
+        assert ai_log.messages == ["ai: claude CLI call failed: empty reply"]
+
+    def test_stderr_excerpt_boundary_exact(self):
+        assert ai.STDERR_LOG_CHARS == 200
+        assert ai._stderr_excerpt("x" * 200) == "x" * 200      # at the bound: kept
+        assert ai._stderr_excerpt("x" * 201) == "x" * 200 + "..."  # over: trimmed
+        assert len(ai._stderr_excerpt("y" * 5000)) == 203
+        assert ai._stderr_excerpt(None) == ""
+        assert ai._stderr_excerpt(" a \n b\t c ") == "a b c"
+
+    def test_api_httperror_logs_status(self, ai_log, monkeypatch):
+        _without_cli(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-expired")
+
+        def fail(req, timeout=None):
+            raise urllib.error.HTTPError(ai.API_URL, 401, "Unauthorized", {}, None)
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", fail)
+        assert ai.ask("p") is None
+        assert ai_log.messages == [
+            "ai: Anthropic API call failed: HTTPError: HTTP Error 401: Unauthorized"]
+        assert "sk-expired" not in ai_log.messages[0]
+
+    def test_api_urlerror_logs_reason(self, ai_log, monkeypatch):
+        _without_cli(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        def fail(req, timeout=None):
+            raise urllib.error.URLError("boom")
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", fail)
+        assert ai.ask("p") is None
+        assert ai_log.messages == [
+            "ai: Anthropic API call failed: URLError: <urlopen error boom>"]
+
+    def test_api_bad_json_logs_decode_error(self, ai_log, monkeypatch):
+        _without_cli(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        class R:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"<html>gateway</html>"
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen",
+                            lambda req, timeout=None: R())
+        assert ai.ask("p") is None
+        assert ai_log.messages == [
+            "ai: Anthropic API call failed: JSONDecodeError: "
+            "Expecting value: line 1 column 1 (char 0)"]
+
+    def test_api_no_text_blocks_logged(self, ai_log, monkeypatch):
+        _without_cli(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setattr(
+            "boost_cli.core.nethttp.urlopen",
+            lambda req, timeout=None: FakeResp({"content": [{"type": "tool_use"}]}))
+        assert ai.ask("p") is None
+        assert ai_log.messages == [
+            "ai: Anthropic API call failed: reply had no text content"]
+
+    def test_success_logs_nothing(self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=0, stdout="answer")
+        assert ai.ask("hi") == "answer"
+        assert ai_log.messages == []
+
+    def test_cli_failure_then_api_success_logs_only_the_cli_failure(
+            self, ai_log, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stderr="nope")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setattr(
+            "boost_cli.core.nethttp.urlopen",
+            lambda req, timeout=None: FakeResp(
+                {"content": [{"type": "text", "text": "api says"}]}))
+        assert ai.ask("hi") == "api says"
+        assert ai_log.messages == ["ai: claude CLI call failed: exit 1: nope"]
+
+    def test_debug_console_surfaces_the_reason_on_stderr(
+            self, ai_on, monkeypatch, capsys):
+        """--debug is the user-facing payoff: the reason reaches stderr."""
+        logs.configure(debug=True)
+        _without_cli(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-expired")
+
+        def fail(req, timeout=None):
+            raise urllib.error.HTTPError(ai.API_URL, 401, "Unauthorized", {}, None)
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", fail)
+        assert ai.ask("p") is None
+        err = capsys.readouterr().err
+        assert ("DEBUG   boost: ai: Anthropic API call failed: "
+                "HTTPError: HTTP Error 401: Unauthorized") in err
+
+    def test_quiet_run_keeps_stderr_clean(self, ai_on, monkeypatch, capsys):
+        """Default verbosity: the trail goes to the file, never to stderr."""
+        logs.configure()
+        _without_cli(monkeypatch)
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-expired")
+
+        def fail(req, timeout=None):
+            raise urllib.error.URLError("boom")
+        monkeypatch.setattr("boost_cli.core.nethttp.urlopen", fail)
+        assert ai.ask("p") is None
+        assert capsys.readouterr().err == ""
+        assert "ai: Anthropic API call failed: URLError" in \
+            logs.log_path().read_text(encoding="utf-8")

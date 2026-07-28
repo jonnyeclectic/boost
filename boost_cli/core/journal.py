@@ -30,7 +30,13 @@ def log(action: str, subject: str = "", **fields) -> None:
 
 def events(n: Optional[int] = None, action: Optional[str] = None,
            subject: Optional[str] = None) -> List[dict]:
-    """Most-recent-first list of journal events."""
+    """Most-recent-first list of journal events; ``n=None`` means all of them.
+
+    ``n`` must be >= 0: a negative would become a negative slice and silently
+    return every event *but* the oldest ones, so it raises instead.
+    """
+    if n is not None and n < 0:
+        raise ValueError("events(n=%d): n must be >= 0" % n)
     p = paths.pulse_path()
     if not p.exists():
         return []
@@ -48,7 +54,7 @@ def events(n: Optional[int] = None, action: Optional[str] = None,
             continue
         out.append(e)
     out.reverse()
-    return out[:n] if n else out
+    return out if n is None else out[:n]
 
 
 def _line_count(p) -> int:
