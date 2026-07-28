@@ -10,11 +10,23 @@ it needs `uv` and the network. `make lint` and CI's lint job own that.
 """
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 REQS = ROOT / "requirements"
+SCRIPT = ROOT / "scripts" / "lock_toolchain.py"
+
+
+def load_lock_toolchain():
+    """Import scripts/lock_toolchain.py by path, the way this repo tests scripts/."""
+    spec = importlib.util.spec_from_file_location("lock_toolchain_under_test",
+                                                  SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(mod)
+    return mod
 
 # Every group scripts/lock_toolchain.py generates, and the consumer that reads
 # it. Keep in step with that script's GROUPS tuple.
@@ -222,8 +234,101 @@ class TestCompileIsStable:
         src = (ROOT / "scripts" / "lock_toolchain.py").read_text(encoding="utf-8")
         assert "shutil.copyfile(target, scratch)" in src
 
-    def test_upgrade_is_the_only_way_to_re_resolve(self):
-        src = (ROOT / "scripts" / "lock_toolchain.py").read_text(encoding="utf-8")
+    def test_re_resolving_is_always_explicit(self):
+        src = SCRIPT.read_text(encoding="utf-8")
         assert '"--upgrade"' in src
-        # --check must never imply --upgrade, or the gate becomes non-deterministic
-        assert "--check and --upgrade are exclusive" in src
+        # --check must never imply a re-resolve, or the gate stops being
+        # deterministic: it would call the lock stale on any upstream release.
+        assert "--check cannot be combined with --upgrade/-P" in src
+
+
+class TestUpgradePackage:
+    """`-P/--upgrade-package`: bump one package, keep every other pin.
+
+    This is how a Dependabot bump gets answered. Dependabot regenerates these
+    files on Linux and commits that resolution, which drops the pins whose
+    environment markers exclude them there — `colorama ; sys_platform ==
+    'win32'` disappeared from three locks in one run, and since the files
+    install with --require-hashes on Windows too, the Windows jobs then died in
+    their install step without ever naming colorama. Re-resolving one package
+    through this script keeps the resolution universal.
+    """
+
+    @staticmethod
+    def _captured_cmd(monkeypatch, mod, **kwargs):
+        """Run compile_group with uv stubbed out; return the argv it built."""
+        seen = []
+
+        class FakeProc:
+            returncode = 0
+            stderr = ""
+
+        def fake_run(cmd, **_):
+            seen.append(list(cmd))
+            return FakeProc()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        mod.compile_group("test-tools", "3.9", **kwargs)
+        assert len(seen) == 1
+        return seen[0]
+
+    def test_named_package_is_passed_through_to_uv(self, monkeypatch):
+        mod = load_lock_toolchain()
+        cmd = self._captured_cmd(monkeypatch, mod, upgrade=False,
+                                 packages=["hypothesis", "twine"])
+        pairs = [(cmd[i], cmd[i + 1]) for i in range(len(cmd) - 1)]
+        assert ("--upgrade-package", "hypothesis") in pairs
+        assert ("--upgrade-package", "twine") in pairs
+
+    def test_naming_a_package_does_not_upgrade_everything_else(self, monkeypatch):
+        # The whole point of -P over --upgrade: a bare --upgrade here would
+        # re-resolve all five groups and bury the bump in unrelated churn.
+        mod = load_lock_toolchain()
+        cmd = self._captured_cmd(monkeypatch, mod, upgrade=False,
+                                 packages=["hypothesis"])
+        assert "--upgrade" not in cmd
+
+    def test_a_plain_regenerate_names_no_package(self, monkeypatch):
+        mod = load_lock_toolchain()
+        cmd = self._captured_cmd(monkeypatch, mod, upgrade=False)
+        assert "--upgrade" not in cmd
+        assert "--upgrade-package" not in cmd
+
+    def test_resolution_stays_universal(self, monkeypatch):
+        # --universal is what emits the environment markers instead of resolving
+        # for the running machine, so it must survive a targeted upgrade too.
+        mod = load_lock_toolchain()
+        cmd = self._captured_cmd(monkeypatch, mod, upgrade=False,
+                                 packages=["hypothesis"])
+        assert "--universal" in cmd
+        assert "--generate-hashes" in cmd
+
+
+class TestMutuallyExclusiveFlags:
+    """The flag combinations that would quietly make the gate meaningless."""
+
+    @staticmethod
+    def _main_with(monkeypatch, argv):
+        mod = load_lock_toolchain()
+        monkeypatch.setattr(mod.sys, "argv", ["lock_toolchain.py", *argv])
+        # Any of these must be rejected during argument handling, i.e. before
+        # uv is ever invoked — so no stub is needed and no network is touched.
+        try:
+            mod.main()
+        except SystemExit as exc:
+            return str(exc.code)
+        return ""
+
+    def test_check_rejects_upgrade(self, monkeypatch):
+        assert "cannot be combined" in self._main_with(
+            monkeypatch, ["--check", "--upgrade"])
+
+    def test_check_rejects_upgrade_package(self, monkeypatch):
+        # A --check that re-resolves would report the committed lock stale on
+        # every upstream release, reddening lint on unrelated PRs.
+        assert "cannot be combined" in self._main_with(
+            monkeypatch, ["--check", "-P", "hypothesis"])
+
+    def test_upgrade_rejects_upgrade_package(self, monkeypatch):
+        assert "exclusive" in self._main_with(
+            monkeypatch, ["--upgrade", "-P", "hypothesis"])
