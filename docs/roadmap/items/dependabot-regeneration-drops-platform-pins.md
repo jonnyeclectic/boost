@@ -44,3 +44,11 @@ with <code>lock_toolchain.py</code> instead. Whatever is chosen, it needs a guar
 <i>loses</i> a platform-markered pin should fail its own gate rather than fail three Windows jobs
 two steps later, because the current failure names the install step and never mentions the missing
 package. Related: [[dependabot-root-pip-entry-duplicates-requirements]].
+<b>Progress:</b> <code>lock_toolchain.py</code> now takes <code>-P/--upgrade-package</code>, so a
+Dependabot bump can be <i>reproduced</i> rather than merged — take the version it proposes,
+re-resolve that one package universally, and every other pin (markers included) stays as committed.
+Both open bumps were landed that way: <code>hypothesis</code> 6.161.6 to 6.163.0 and
+<code>twine</code> 6.2.0 to 7.0.0, four changed lines across five locks, with
+<code>colorama</code> and <code>pywin32-ctypes</code> intact. What remains is the config half —
+stopping Dependabot raising these at all — which is deliberately still open because its effect is
+only observable on the next scheduled run.
