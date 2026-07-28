@@ -5,6 +5,8 @@ import getpass
 import json
 import re
 
+import pytest
+
 from boost_cli.core import journal, paths
 
 
@@ -254,3 +256,24 @@ class TestRotationHealthy:
     def test_one_over_limit_unhealthy(self, sandbox):
         write_lines(journal.ROTATE_AT + 1)
         assert journal.rotation_healthy() is False
+
+
+class TestEventsLimitGuard:
+    """A negative n used to become a negative slice — see the roadmap item."""
+
+    def test_negative_n_raises_instead_of_inverting(self, sandbox):
+        for i in range(3):
+            journal.log("install", "s%d" % i)
+        with pytest.raises(ValueError) as exc:
+            journal.events(-1)
+        assert str(exc.value) == "events(n=-1): n must be >= 0"
+        assert len(journal.events()) == 3
+
+    def test_zero_n_is_empty_not_everything(self, sandbox):
+        for i in range(3):
+            journal.log("install", "s%d" % i)
+        assert journal.events(0) == []
+
+    def test_n_larger_than_feed_returns_all(self, sandbox):
+        journal.log("install", "only")
+        assert [e["subject"] for e in journal.events(9)] == ["only"]

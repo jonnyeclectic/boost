@@ -1,6 +1,7 @@
 """Unit tests: boost_cli/core/util.py — time, hashing, versions, scoring."""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import re
 import time
@@ -635,3 +636,26 @@ class TestSafeComponent:
         # parent directory itself.
         assert util.safe_component("..") == "skill"
         assert util.safe_component(".") == "skill"
+
+
+class TestPositiveInt:
+    """`util.positive_int` — the argparse type behind every -n/--limit flag."""
+
+    def test_accepts_one_and_above_exactly(self):
+        assert util.positive_int("1") == 1
+        assert util.positive_int("20") == 20
+
+    def test_zero_rejected_with_exact_message(self):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.positive_int("0")
+        assert str(exc.value) == "must be >= 1"
+
+    def test_negative_rejected_with_exact_message(self):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.positive_int("-1")
+        assert str(exc.value) == "must be >= 1"
+
+    def test_non_numeric_rejected_with_exact_message(self):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.positive_int("abc")
+        assert str(exc.value) == "invalid int value: 'abc'"
