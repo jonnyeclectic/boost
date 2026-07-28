@@ -122,5 +122,39 @@ jobs:
           /tmp/wheel-venv/bin/pip -q install dist/*.whl
           /tmp/wheel-venv/bin/boost --version
 
+      - name: CycloneDX SBOM of the shipped wheel
+        # This lived in sbom.yml, which triggered on `release: published` and
+        # therefore never ran once: a release created with GITHUB_TOKEN emits
+        # no event that starts a workflow — the same rule this file's header
+        # states, and why everything else here is one job. 0 runs, 0 SBOMs.
+        #
+        # Scans /tmp/wheel-venv, the clean install the step above just proved
+        # boots, so the SBOM describes the runtime closure a user actually gets
+        # rather than this job's build environment.
+        run: |
+          python -m pip -q install cyclonedx-bom
+          cyclonedx-py environment /tmp/wheel-venv/bin/python \
+            --output-format JSON -o boost-sbom.cdx.json
+
       - name: publish to PyPI
         uses: pypa/gh-action-pypi-publish@ba38be9e461d3875417946c167d0b5f3d385a247 # v1.14.1
+
+      - name: attach the SBOM to the release, and prove it landed
+        # AFTER the PyPI upload on purpose: the SBOM is a trust artifact, not a
+        # precondition, so a GitHub API hiccup here must not be able to block
+        # the release it describes. The job still goes red, which is the point.
+        #
+        # The read-back is the part that matters. `gh release upload` exiting 0
+        # is not evidence the asset is on the release, and "produces no SBOM"
+        # is precisely the failure that hid for 227 releases because nothing
+        # ever checked. Now it cannot recur silently.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Through the environment, never spliced into the script: a crafted
+          # tag name cannot inject shell (zizmor: template-injection).
+          TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          gh release upload "$TAG" boost-sbom.cdx.json --clobber
+          gh release view "$TAG" --json assets --jq '.assets[].name' \
+            | grep -qx boost-sbom.cdx.json \
+            || { echo "::error::SBOM asset missing from release $TAG"; exit 1; }

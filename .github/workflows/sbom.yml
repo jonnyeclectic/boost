@@ -1,17 +1,21 @@
 name: sbom
 
-# CycloneDX SBOM for every release, attached to the GitHub Release as an asset.
+# Ad-hoc CycloneDX SBOM of the current main, for eyeballing. Manual only.
+#
+# The RELEASE SBOM is generated and attached in publish.yml, not here. This
+# file used to trigger on `release: published` and had 0 runs across 227
+# releases: releases are created by release-drafter authenticated with
+# GITHUB_TOKEN, and events created with GITHUB_TOKEN do not start workflows.
+# publish.yml's own header states that rule, which is why every other release
+# step already lives in that one job. The dead trigger is removed rather than
+# left looking like coverage.
 #
 # boost's runtime is stdlib-only, so the SBOM documents a zero-third-party-
 # dependency shipped artifact — a verifiable supply-chain statement that
 # complements the CVE scanners already in CI (pip-audit on the resolved env,
-# osv-scanner on the manifest diff). Separate from publish.yml, so it can never
-# redden or block the release itself; workflow_dispatch allows a manual run to
-# eyeball the generated SBOM.
+# osv-scanner on the manifest diff).
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
 
 permissions: {}
@@ -22,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write   # attach the SBOM asset to the GitHub Release
+      contents: read    # nothing is attached here any more — see the header
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -47,11 +51,11 @@ jobs:
             --output-format JSON -o boost-sbom.cdx.json
           echo "----- SBOM -----"
           cat boost-sbom.cdx.json
-      - name: attach the SBOM to the release
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # Pass the tag through the environment, never spliced into the script —
-          # a crafted tag name can't inject shell (zizmor: template-injection).
-          TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" boost-sbom.cdx.json --clobber
+      - name: upload the SBOM as a run artifact
+        # Nothing to attach to on a manual run — the artifact is how you get
+        # the file off the runner.
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: boost-sbom
+          path: boost-sbom.cdx.json
+          if-no-files-found: error
