@@ -48,7 +48,10 @@ Two details the trigger change forced. The workflow now resolves its tag from th
 commit (<code>git tag --points-at</code>) rather than "newest release" &mdash; releases here
 land minutes apart, so <code>gh release view</code> would race and SBOM the <em>next</em>
 version; and two tags on one commit is real (<code>v1.0.248</code> and <code>v1.0.249</code>
-both point at <code>c750651</code>), so it takes the highest. And per the original note, a
+both point at <code>c750651</code>), so it takes <em>every</em> tag on the commit and builds each
+separately &mdash; taking only the highest left the other release with no SBOM, which showed up in
+production as <code>v1.0.277</code>; see <code>one-commit-can-cut-two-releases</code>. And per the
+original note, a
 final step re-reads the release and fails unless the asset is actually attached &mdash; a
 silent upload no-op is indistinguishable from success, which is the same class of quiet
 nothing that produced this bug.
