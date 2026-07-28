@@ -73,60 +73,68 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          TAG="${INPUT_TAG:-}"
-          # The tag release-drafter cut sits on the commit the release ran from.
           # Resolve by commit rather than "newest release": releases here land
           # minutes apart, so `gh release view` can race and hand this run the
-          # *next* version's tag. Two tags on one commit does happen (two ci
-          # runs, one sha) — take the highest version.
+          # *next* version's tag.
+          #
+          # EVERY tag on the commit, not just the highest. One commit really can
+          # carry two releases — publish.yml checks out `ref: main`, so two ci
+          # runs completing close together each cut a version from the same tip
+          # (v1.0.277 and v1.0.278 both point at 5061e756). Taking only the
+          # highest left the other release with no SBOM, which is the very hole
+          # this workflow exists to close. Each tag is built separately because
+          # setuptools-scm reads the version from the tag, so one SBOM cannot
+          # honestly describe both.
           # SHA is empty on a manual dispatch, which has no workflow_run payload.
-          if [ -z "$TAG" ] && [ -n "${SHA:-}" ]; then
-            TAG="$(git tag --points-at "$SHA" --sort=-v:refname | head -n1 || true)"
+          TAGS="${INPUT_TAG:-}"
+          if [ -z "$TAGS" ] && [ -n "${SHA:-}" ]; then
+            TAGS="$(git tag --points-at "$SHA" --sort=-v:refname || true)"
           fi
-          if [ -z "$TAG" ]; then
-            TAG="$(gh release view --json tagName -q .tagName)"
-            echo "::warning::no tag resolved from '${SHA:-<none>}'; using latest release $TAG"
+          if [ -z "$TAGS" ]; then
+            TAGS="$(gh release view --json tagName -q .tagName)"
+            echo "::warning::no tag resolved from '${SHA:-<none>}'; using latest release $TAGS"
           fi
-          echo "resolved tag: $TAG"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "resolved tags:"
+          echo "$TAGS"
+          {
+            echo "tags<<__EOF__"
+            echo "$TAGS"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
-      - name: build the released wheel and generate a CycloneDX SBOM of its install
+      - name: build each released wheel, generate its SBOM, and attach it
         env:
-          TAG: ${{ steps.tag.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          # Passed through the environment, never spliced into the script — a
+          # crafted tag can't inject shell (zizmor: template-injection).
+          TAGS: ${{ steps.tag.outputs.tags }}
         run: |
           set -euo pipefail
-          # Build the tagged code, not main's tip — main moves on while the
-          # release is still publishing, so the SBOM has to pin to the tag.
-          git checkout --detach "refs/tags/$TAG"
           python -m pip -q install build cyclonedx-bom
-          python -m build --wheel
-          # Scan a clean install of the shipped wheel (not the build env), so the
-          # SBOM is the runtime dependency closure a user actually gets.
-          python -m venv /tmp/sbomenv
-          /tmp/sbomenv/bin/pip -q install dist/*.whl
-          cyclonedx-py environment /tmp/sbomenv/bin/python \
-            --output-format JSON -o boost-sbom.cdx.json
-          echo "----- SBOM -----"
-          cat boost-sbom.cdx.json
-
-      - name: attach the SBOM to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: gh release upload "$TAG" boost-sbom.cdx.json --clobber
-
-      - name: verify the asset is actually on the release
-        # The point of this workflow is an artifact that exists. Without this a
-        # silent upload no-op looks exactly like success — the same class of
-        # quiet nothing that left 253 releases with no SBOM.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          gh release view "$TAG" --json assets -q '.assets[].name' | tee /tmp/assets.txt
-          grep -qx 'boost-sbom.cdx.json' /tmp/assets.txt
+          echo "$TAGS" | while read -r TAG; do
+            [ -n "$TAG" ] || continue
+            echo "::group::$TAG"
+            # Build the tagged code, not main's tip — main moves on while the
+            # release is still publishing, so the SBOM has to pin to the tag.
+            git checkout --detach "refs/tags/$TAG"
+            rm -rf dist /tmp/sbomenv
+            python -m build --wheel
+            # Scan a clean install of the shipped wheel (not the build env), so
+            # the SBOM is the dependency closure a user actually gets.
+            python -m venv /tmp/sbomenv
+            /tmp/sbomenv/bin/pip -q install dist/*.whl
+            cyclonedx-py environment /tmp/sbomenv/bin/python \
+              --output-format JSON -o boost-sbom.cdx.json
+            cat boost-sbom.cdx.json
+            gh release upload "$TAG" boost-sbom.cdx.json --clobber
+            # Verify per tag. The point of this workflow is an artifact that
+            # exists; without this a silent upload no-op looks exactly like
+            # success — the same quiet nothing that left 253 releases with none.
+            gh release view "$TAG" --json assets -q '.assets[].name' > /tmp/assets.txt
+            grep -qx 'boost-sbom.cdx.json' /tmp/assets.txt
+            echo "::endgroup::"
+          done
