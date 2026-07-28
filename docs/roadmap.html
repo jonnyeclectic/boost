@@ -2501,7 +2501,7 @@ caught by a human noticing a pip warning, twice, by luck.</p>
       </article>
 
       <article class="cap rcard" id="release-verifies-the-wrong-commit">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release safety</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Release safety</span></div>
         <h3>The release verifies one commit and ships another</h3>
         <p><code>publish.yml</code> fires on <code>workflow_run</code> when <code>ci</code> completes, gates
 on that run's <code>conclusion == 'success'</code> (plus <code>event == 'push'</code> and
@@ -2529,12 +2529,16 @@ rather than a decision is in-tree: <code>release_preflight.py</code>'s own docst
 for <em>every</em> required workflow for the exact commit being released, and the caller hands it
 two.
 
-<b>A required context that can never report on <code>main</code> at all.</b> While checking the
-other 16: <code>osv-scanner.yml</code> declares only <code>pull_request</code> and
-<code>merge_group</code> triggers &mdash; no <code>push</code>. So <code>scan-pr / osv-scan</code>
-is green as a PR gate and produces <em>nothing</em> for any commit on <code>main</code>, race or
-no race. Adding it to preflight without first giving that workflow a
-<code>push: branches: [main]</code> trigger would fail the release closed every time.
+<b>A required context that can never report on <code>main</code> at all &mdash; and must not
+be made to.</b> <code>osv-scanner.yml</code> declares only <code>pull_request</code> and
+<code>merge_group</code>, so <code>scan-pr / osv-scan</code> produces nothing for any commit on
+<code>main</code>. This card originally proposed giving it a <code>push</code> trigger. <b>That was
+wrong.</b> It is PR-scoped deliberately: it calls the
+<code>osv-scanner-reusable-<b>pr</b>.yml</code> diff workflow so it reports only what a pull
+request <em>adds</em>, and its own header records why a full-repo scan is unwanted &mdash; it
+would trip the accepted, documented old-langchain pin in the <code>[eval]</code> extra that ragas
+requires. The correct conclusion is the opposite one: <code>scan-pr / osv-scan</code> is
+inherently a pull-request gate and belongs nowhere near release preflight.
 
 The fix is not to change the checkout ref. Pinning to
 <code>github.event.workflow_run.head_sha</code> would build the older commit while release-drafter
@@ -2544,12 +2548,29 @@ change is to widen preflight's <code>--require</code> set to the contexts that a
 the triggering run's <code>head_sha</code>. This is the third defect found in the same few lines
 &mdash; see <code>publish-trigger-was-reachable-from-a-fork</code> (who can fire it) and
 <code>publish-gate-ignores-pip-audit-and-metadata</code> (which gates are consulted); this one is
-<em>which commit</em> they were consulted about.</p>
+<em>which commit</em> they were consulted about.
+
+<b>Shipped.</b> <code>publish.yml</code> now passes preflight every required context's workflow
+that actually runs on a push to <code>main</code> &mdash; <code>ci.yml</code>,
+<code>codeql.yml</code>, <code>pip-audit.yml</code>, <code>package-metadata.yml</code> &mdash;
+taking coverage of the shipped sha from <b>2 of 18 required contexts to 17 of 18</b>. The
+remaining one is <code>scan-pr / osv-scan</code>, excluded on purpose for the reason above. The
+checkout ref is untouched: pinning it to the trigger's <code>head_sha</code> would build the older
+commit while release-drafter still tags the branch head, leaving artifact and tag disagreeing.
+<code>--timeout-seconds</code> is raised to 3600 because ci must now finish for the shipped sha and
+ci's wall clock is dominated by runner queueing; failing closed on a slow-but-green ci would be
+worse than waiting, and a timeout is still fail-closed either way.
+
+Verified by running the real script against <code>main</code> before merging: the four shipped
+gates return <b>exit 0</b> ("all 4 release gates green"), and adding
+<code>--require osv-scanner.yml</code> returns <b>exit 1</b> &mdash; "no run recorded for this
+commit ... a release gate that never reported cannot be assumed green" &mdash; which is the
+concrete proof that the original recommendation would have blocked every release.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">2 of 18 required contexts are re-checked against the sha actually shipped</span>
+          <span class="m">preflight now waits on 17 of 18 for the shipped sha, up from 2</span>
         </div>
       </article>
 
