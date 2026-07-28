@@ -2160,7 +2160,7 @@ required name comes from a workflow lacking that trigger — the same gate that 
       </article>
 
       <article class="cap rcard" id="mutation-gate-was-the-whole-critical-path">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CI speed</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI speed</span></div>
         <h3>The mutation gate <em>was</em> CI — 26 minutes, three times the next-longest job</h3>
         <p>Measured across twelve consecutive runs, the <code>mutation</code> job took
 <b>20.6&ndash;39.2 minutes</b> (median ~27) while the next-longest job in the same run,
@@ -2228,12 +2228,29 @@ required job always runs (<code>if: always()</code>) and inspects what the upstr
 actually did; <code>always()</code> on its own would have reported a failed shard as a green
 required check. Merging likewise fails closed: mutmut counts an unrun mutant as "not checked"
 inside <code>total</code>, and the gate divides by it, so a partial merge would quietly depress
-the score instead of erroring.</p>
+the score instead of erroring.
+
+<b>What actually landed, measured on <code>main</code>.</b> The eleven CI runs before this
+merged took <b>20.7&ndash;39.4 minutes</b> (median ~28.4); the merge commit's own run took
+<b>12.1</b>. This pull request touches <code>tests/</code>, so it ran the <em>full</em> six-shard
+gate &mdash; the worst case, not the docs-only path.
+
+It also missed its own estimate, in an instructive way. The prediction was ~6 minutes for a code
+change; the slowest shard took <b>9.9</b>. Packing by mutant count is near-perfect &mdash; the six
+shards carry 1703&ndash;1931 mutants each, within <b>1.10x</b> of ideal &mdash; but measured
+throughput ran <b>3.39 to 14.19 mutants/second</b>, a <b>4.2x</b> spread. Mutant count is simply a
+poor proxy for time: a <code>store.py</code> mutant re-runs a far larger covering test set than an
+<code>ed25519.py</code> one, and survivors run their tests to completion where kills exit early.
+Re-weighting the planner by seconds instead of count would even out the billed minutes but
+<em>not</em> the wall clock, because shard 0 is <code>store.py</code> by itself and its 9.5 minutes
+is the floor. Going below it means splitting a single file &mdash; feasible, since mutant names are
+addressable per function (<code>boost_cli.core.store.install_*</code>), which would bring the floor
+toward the 5.1-minute even split of the 30.8 minutes of total work.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">26 min, 3x the next job, and charged twice per change</span>
+          <span class="m">28 min of CI became 12; the new floor is one file, store.py</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -3503,7 +3520,7 @@ is built.</p>
       </article>
 
       <article class="cap rcard" id="sbom-release-event-never-fires">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Supply chain</span></div>
         <h3><code>sbom.yml</code> has never run — it waits for an event <code>GITHUB_TOKEN</code> cannot emit</h3>
         <p><code>sbom.yml</code> triggers on <code>release: types: [published]</code> and promises
 "a CycloneDX SBOM for every release, attached to the GitHub Release as an asset".
@@ -3519,17 +3536,36 @@ one of the last ten releases carries <code>assets: []</code>. Zero SBOMs have be
 since the file landed on 2026-07-22. Same shape as the LangGraph conformance leg: wired up,
 looks covered, never executed once.
 
-Fix is a decision, not a patch: either build and attach the SBOM inside
-<code>publish.yml</code>'s release job (it already holds <code>contents: write</code> and is
-where the tag is cut), or have <code>publish.yml</code> dispatch this workflow with a PAT
-rather than <code>GITHUB_TOKEN</code>. The first is simpler and keeps the release atomic;
-the second keeps the SBOM logic in its own file. Worth pairing with a check that fails the
-release when the asset is missing, so "never ran" cannot recur silently.</p>
+By the time it was fixed the count was <b>253 releases, 0 runs, 0 SBOM assets</b>.
+
+<b>Fixed with a third option neither branch of that decision considered:</b>
+<code>workflow_run</code>. The <code>GITHUB_TOKEN</code> restriction applies to
+<em>events</em> a token creates; <code>workflow_run</code> is documented as exempt and fires
+on the upstream <em>run</em> completing regardless of what triggered it &mdash; which is
+already how <code>ci &rarr; release</code> works in this repo. Chaining
+<code>release &rarr; sbom</code> makes this the third link, inside GitHub's documented
+three-level <code>workflow_run</code> limit. So no PAT is needed, and the SBOM logic stays
+out of <code>publish.yml</code>.
+
+That separation turned out to matter more than "keeps the logic in its own file":
+<code>publish.yml</code>'s job holds PyPI Trusted-Publishing OIDC credentials, and generating
+the SBOM means installing a third-party build plugin (<code>cyclonedx-bom</code>). Inlining it
+would have put that plugin inside the one job that can publish to PyPI. Kept separate, it
+holds only <code>contents: write</code>.
+
+Two details the trigger change forced. The workflow now resolves its tag from the release
+commit (<code>git tag --points-at</code>) rather than "newest release" &mdash; releases here
+land minutes apart, so <code>gh release view</code> would race and SBOM the <em>next</em>
+version; and two tags on one commit is real (<code>v1.0.248</code> and <code>v1.0.249</code>
+both point at <code>c750651</code>), so it takes the highest. And per the original note, a
+final step re-reads the release and fails unless the asset is actually attached &mdash; a
+silent upload no-op is indistinguishable from success, which is the same class of quiet
+nothing that produced this bug.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">0 runs, 0 SBOMs, 227 releases</span>
+          <span class="m">253 releases shipped with no SBOM; fixed with workflow_run</span>
         </div>
       </article>
 
