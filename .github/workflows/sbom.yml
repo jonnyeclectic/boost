@@ -5,20 +5,49 @@ name: sbom
 # boost's runtime is stdlib-only, so the SBOM documents a zero-third-party-
 # dependency shipped artifact — a verifiable supply-chain statement that
 # complements the CVE scanners already in CI (pip-audit on the resolved env,
-# osv-scanner on the manifest diff). Separate from publish.yml, so it can never
-# redden or block the release itself; workflow_dispatch allows a manual run to
-# eyeball the generated SBOM.
+# osv-scanner on the manifest diff).
+#
+# TRIGGER — why this is `workflow_run` and not `release: [published]`:
+# publish.yml creates the GitHub Release with the default GITHUB_TOKEN, and
+# events created with GITHUB_TOKEN never trigger another workflow run. So a
+# `release: [published]` trigger here could not fire even once, and it didn't:
+# 253 releases, 0 runs of this workflow, 0 SBOM assets on any release. It was a
+# supply-chain control that looked present and produced nothing. publish.yml's
+# own header already records the hazard ("we never rely on the release event to
+# trigger a second workflow"); this file just hadn't applied it.
+#
+# `workflow_run` is the documented exception — it fires regardless of what
+# created the upstream run, which is how ci -> release already works. That makes
+# this the third link (ci -> release -> sbom), inside GitHub's documented
+# three-level workflow_run chain limit.
+#
+# Kept as its own workflow rather than folded into publish.yml on purpose: this
+# installs a third-party build plugin (cyclonedx-bom), and publish.yml's job
+# holds PyPI Trusted-Publishing OIDC credentials. Running the plugin here means
+# it can neither reach those credentials nor redden the release.
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: [release]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build the SBOM for (default: the tag this release cut)"
+        required: false
+        default: ""
 
 permissions: {}
 
 jobs:
   sbom:
     name: CycloneDX SBOM
+    # Only for a release that actually succeeded, and only for this repository's
+    # own releases — the same fork-safety reasoning publish.yml documents.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          || (github.event.workflow_run.conclusion == 'success'
+              && github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -30,13 +59,49 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0    # tags for setuptools-scm version resolution
+          fetch-depth: 0    # full history + tags: for the tag resolution below,
+                            # and setuptools-scm reads the version from the tag
           persist-credentials: false
+
+      - name: resolve the release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Passed through the environment, never spliced into the script — a
+          # crafted tag or input can't inject shell (zizmor: template-injection).
+          INPUT_TAG: ${{ inputs.tag }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          # The tag release-drafter cut sits on the commit the release ran from.
+          # Resolve by commit rather than "newest release": releases here land
+          # minutes apart, so `gh release view` can race and hand this run the
+          # *next* version's tag. Two tags on one commit does happen (two ci
+          # runs, one sha) — take the highest version.
+          # SHA is empty on a manual dispatch, which has no workflow_run payload.
+          if [ -z "$TAG" ] && [ -n "${SHA:-}" ]; then
+            TAG="$(git tag --points-at "$SHA" --sort=-v:refname | head -n1 || true)"
+          fi
+          if [ -z "$TAG" ]; then
+            TAG="$(gh release view --json tagName -q .tagName)"
+            echo "::warning::no tag resolved from '${SHA:-<none>}'; using latest release $TAG"
+          fi
+          echo "resolved tag: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: "3.12"
-      - name: build the wheel and generate a CycloneDX SBOM of its install
+
+      - name: build the released wheel and generate a CycloneDX SBOM of its install
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
+          set -euo pipefail
+          # Build the tagged code, not main's tip — main moves on while the
+          # release is still publishing, so the SBOM has to pin to the tag.
+          git checkout --detach "refs/tags/$TAG"
           python -m pip -q install build cyclonedx-bom
           python -m build --wheel
           # Scan a clean install of the shipped wheel (not the build env), so the
@@ -47,11 +112,21 @@ jobs:
             --output-format JSON -o boost-sbom.cdx.json
           echo "----- SBOM -----"
           cat boost-sbom.cdx.json
+
       - name: attach the SBOM to the release
-        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-          # Pass the tag through the environment, never spliced into the script —
-          # a crafted tag name can't inject shell (zizmor: template-injection).
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: gh release upload "$TAG" boost-sbom.cdx.json --clobber
+
+      - name: verify the asset is actually on the release
+        # The point of this workflow is an artifact that exists. Without this a
+        # silent upload no-op looks exactly like success — the same class of
+        # quiet nothing that left 253 releases with no SBOM.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json assets -q '.assets[].name' | tee /tmp/assets.txt
+          grep -qx 'boost-sbom.cdx.json' /tmp/assets.txt
