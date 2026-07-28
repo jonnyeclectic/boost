@@ -1,13 +1,17 @@
 name: ci-failure-alert
 
-# Free, GitHub-native alerting: when the `ci` workflow fails on the default
-# branch, open (or update) a single tracking issue so a red main is impossible
-# to miss without any paid monitoring service. `workflow_run` only fires from
-# the default branch, so this never nags on PR-branch failures.
+# Free, GitHub-native alerting: when a watched workflow fails on the default
+# branch, open (or update) a tracking issue so a red main is impossible to miss
+# without any paid monitoring service. `workflow_run` only fires from the
+# default branch, so this never nags on PR-branch failures.
+#
+# `demo` is watched because it was the case this alerting missed entirely: it
+# failed six runs out of six on main, alerted nobody, and was found by a manual
+# audit instead. Any workflow that runs on main and nobody watches belongs here.
 
 on:
   workflow_run:
-    workflows: ["ci"]
+    workflows: ["ci", "demo"]
     types: [completed]
 
 permissions:
@@ -28,7 +32,11 @@ jobs:
             const { owner, repo } = context.repo;
             const run = context.payload.workflow_run;
             const label = 'ci-failure';
-            const marker = '<!-- ci-failure-tracker -->';
+            // Keyed by workflow: with one shared marker, a `demo` failure
+            // would comment on an open `ci` tracker and read as the same
+            // outage. Pre-existing issues carry the unkeyed marker and simply
+            // stop matching — they are closed by hand once, not migrated.
+            const marker = `<!-- ci-failure-tracker:${run.name} -->`;
 
             // Ensure the label exists (creating an issue with a missing label errors).
             try {
