@@ -112,7 +112,14 @@ jobs:
         # triggers. Accepted findings are documented in .github/zizmor.yml.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: pipx run zizmor==1.27.0 .github/workflows
+        # 1.27.0 was YANKED from PyPI for GHSA-f42p-wjw5-97qh; 1.28.0 is
+        # the fix. Nothing in CI would have caught it: zizmor is invoked
+        # through `pipx run` inside this step, so it is in no lock file,
+        # pip-audit never resolves it and Dependabot never sees it. Every
+        # `pipx run`/`npx` pin in .github/workflows/ has that same blind
+        # spot — Scorecard's PinnedDependencies hits are about exactly
+        # these invocations.
+        run: pipx run zizmor==1.28.0 .github/workflows
       - name: registries.json is regenerated
         run: python scripts/build_registries.py --check
       - name: roadmap HTML is regenerated
