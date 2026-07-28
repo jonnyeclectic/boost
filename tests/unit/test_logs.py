@@ -1,10 +1,13 @@
 """Diagnostic logging & crash reporting."""
 from __future__ import annotations
 
+import json
 import logging
 import logging.handlers
 import pathlib
+import re
 import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -471,3 +474,140 @@ def test_a_real_crash_shows_up_in_the_listing(boost, monkeypatch):
     res = boost("log", "--crashes")
     assert crashed == ["count"]
     assert "command:  boost count" in res.out
+
+
+# ── BOOST_LOG_FORMAT=json ────────────────────────────────────────────────────
+
+class TestLogFormatResolution:
+    """Env beats config beats the `text` default — same shape as the level."""
+
+    def test_defaults_to_text(self, env):
+        assert logs.log_format() == "text"
+
+    def test_env_selects_json(self, env, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        assert logs.log_format() == "json"
+
+    def test_env_is_case_and_space_insensitive(self, env, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "  JSON ")
+        assert logs.log_format() == "json"
+
+    def test_an_unknown_env_value_falls_back_to_text(self, env, monkeypatch):
+        # A typo must not silently disable logging or crash configure().
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "yaml")
+        assert logs.log_format() == "text"
+
+    def test_config_selects_json_when_env_is_unset(self, env, monkeypatch):
+        from boost_cli.core import config
+        monkeypatch.delenv("BOOST_LOG_FORMAT", raising=False)
+        config.set_value("logging.format", "json")
+        assert logs.log_format() == "json"
+
+    def test_env_wins_over_config(self, env, monkeypatch):
+        from boost_cli.core import config
+        config.set_value("logging.format", "json")
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "text")
+        assert logs.log_format() == "text"
+
+
+class TestJsonFileOutput:
+    def _records(self, env, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        logs.configure()
+        logs.get_logger().info("hello %s", "world")
+        text = logs.log_path().read_text(encoding="utf-8")
+        return [json.loads(ln) for ln in text.splitlines() if ln.strip()]
+
+    def test_one_json_object_per_line(self, env, monkeypatch):
+        recs = self._records(env, monkeypatch)
+        assert len(recs) == 1
+        assert recs[0]["msg"] == "hello world", "args must be interpolated"
+        assert recs[0]["level"] == "INFO"
+        assert recs[0]["logger"] == "boost"
+
+    def test_the_timestamp_is_utc_with_a_z(self, env, monkeypatch):
+        ts = self._records(env, monkeypatch)[0]["ts"]
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", ts), ts
+        # Parsed as UTC it must be within a minute of now; a local-time stamp
+        # wearing a Z would be off by the machine's offset.
+        parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+        assert abs((datetime.now(timezone.utc) - parsed).total_seconds()) < 60
+
+    def test_an_exception_is_carried_in_its_own_field(self, env, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        logs.configure()
+        try:
+            raise ValueError("boom")
+        except ValueError:
+            logs.get_logger().exception("caught it")
+        rec = [json.loads(ln) for ln in
+               logs.log_path().read_text(encoding="utf-8").splitlines()][-1]
+        assert rec["msg"] == "caught it"
+        assert "ValueError: boom" in rec["exc"]
+        assert "\n" not in json.dumps(rec), "one physical line per record"
+
+    def test_an_unserializable_arg_degrades_instead_of_losing_the_line(
+            self, env, monkeypatch):
+        # A formatter that raises loses the trail it exists to keep.
+        class Weird:
+            def __repr__(self):
+                return "<weird>"
+
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        logs.configure()
+        logs.get_logger().info("got %r", Weird())
+        rec = [json.loads(ln) for ln in
+               logs.log_path().read_text(encoding="utf-8").splitlines()][-1]
+        assert rec["msg"] == "got <weird>"
+
+    def test_text_mode_is_unchanged(self, env, monkeypatch):
+        monkeypatch.delenv("BOOST_LOG_FORMAT", raising=False)
+        logs.configure()
+        logs.get_logger().info("plain line")
+        text = logs.log_path().read_text(encoding="utf-8")
+        assert "INFO" in text and "boost: plain line" in text
+        assert not text.lstrip().startswith("{")
+
+
+class TestJsonConsoleOutput:
+    def test_the_console_handler_uses_the_same_format(self, env, monkeypatch,
+                                                      capsys):
+        # A `--debug` stream that disagrees with the file it is showing would
+        # be its own bug report.
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        logs.configure(debug=True)
+        logs.get_logger().error("stderr line")
+        err = capsys.readouterr().err.strip().splitlines()[-1]
+        assert json.loads(err)["msg"] == "stderr line"
+
+
+class TestDiagnosticsViewerReadsBothFormats:
+    """`boost log --diagnostics` is the human view of that same file."""
+
+    def _diag(self):
+        from boost_cli.commands import info
+        return info._diag_line
+
+    def test_a_json_line_is_rendered_back_as_text(self):
+        line = json.dumps({"ts": "2026-07-27T00:00:00Z", "level": "INFO",
+                           "logger": "boost", "msg": "invoke: boost count"})
+        assert self._diag()(line) == \
+            "2026-07-27T00:00:00Z INFO    boost: invoke: boost count"
+
+    def test_a_plain_text_line_passes_through(self):
+        line = "2026-07-27T00:00:00Z INFO    boost: invoke: boost count"
+        assert self._diag()(line) == line
+
+    def test_a_line_that_only_looks_like_json_passes_through(self):
+        # A mixed file (the format changed mid-life) has to read end to end.
+        for line in ("{not json at all", json.dumps({"other": "shape"}),
+                     json.dumps([1, 2, 3])):
+            assert self._diag()(line) == line
+
+    def test_the_command_renders_a_json_trail(self, boost, monkeypatch):
+        monkeypatch.setenv("BOOST_LOG_FORMAT", "json")
+        boost("count")
+        res = boost("log", "--diagnostics")
+        assert "invoke: boost count" in res.out
+        assert "{" not in res.out, "raw JSONL is not the human view"
