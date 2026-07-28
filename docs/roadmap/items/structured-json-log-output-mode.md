@@ -2,15 +2,15 @@
 id: structured-json-log-output-mode
 board: code
 section: internals
-status: planned
+status: shipped
 category: Observability
 complexity: M
 impact: Med
 wow: 2
 note:
 order: 39
-owner:
-pr:
+owner: loop/json-log-format
+pr: 308
 title: Diagnostic log has no structured/JSON output mode
 ---
 <code>core/logs.py</code> uses stdlib <code>logging</code> with rotation and crash reports, but its

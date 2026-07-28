@@ -2,15 +2,15 @@
 id: demo-gif-workflow-has-never-succeeded
 board: code
 section: docsite
-status: planned
+status: shipped
 category: Bug
 complexity: S
 impact: Low
 wow: 2
 note: 3 runs, 3 failures, 0 PRs opened
 order: 52
-owner:
-pr:
+owner: loop/fix-demo-recorder
+pr: 294
 title: <code>demo.yml</code> has failed every run since it landed — vhs-action cannot install ffmpeg
 ---
 <code>demo.yml</code> re-records <code>docs/demo.gif</code> with

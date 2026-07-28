@@ -2,15 +2,15 @@
 id: ai-bridge-silent-failure-logging
 board: code
 section: internals
-status: planned
+status: shipped
 category: Observability
 complexity: S
 impact: Med
 wow: 2
 note:
 order: 40
-owner:
-pr:
+owner: loop/ai-failure-logging
+pr: 284
 title: AI bridge swallows failures with zero diagnostic trail
 ---
 <code>core/ai.py</code>'s CLI and API call paths both catch their failure modes (timeout, OS error,

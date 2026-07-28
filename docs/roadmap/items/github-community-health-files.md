@@ -2,15 +2,15 @@
 id: github-community-health-files
 board: code
 section: dx
-status: planned
+status: shipped
 category: Developer Experience
 complexity: S
 impact: Med
 wow: 2
 note:
 order: 11
-owner:
-pr:
+owner: loop/community-health-files
+pr: 290
 title: No issue/PR templates or a code of conduct
 ---
 The repo has <code>SECURITY.md</code>, <code>CONTRIBUTING.md</code>, and
