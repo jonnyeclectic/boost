@@ -2,12 +2,12 @@
 id: make-lint-masks-actionlint-failures
 board: code
 section: dx
-status: planned
+status: shipped
 category: Testing · Bug
 complexity: S
 impact: Med
 wow: 4
-note: a failing actionlint prints "not on PATH" and make exits 0
+note: fixed — a failing actionlint now fails make, in all three targets
 order: 60
 owner:
 pr:
@@ -48,3 +48,14 @@ masking idiom appears at <code>Makefile:143</code> (hyperfine) and <code>Makefil
 (node); neither is reached by <code>check</code>, so they are cosmetic by comparison, but they are
 the same bug. Incidental drift found alongside: <code>CLAUDE.md</code> describes the lint recipe
 as "18 commands" and it is 19.
+
+<b>Shipped.</b> All three occurrences of the idiom were rewritten to an
+<code>if/then/else</code> so the tool's exit status is no longer discarded &mdash;
+<code>Makefile:64</code> (actionlint, inside <code>lint</code> and therefore inside
+<code>check</code>), plus <code>bench-cli</code> and <code>post-deploy</code>, which had the same
+bug without being reachable from the gate. Verified against the patched recipe itself, in all
+three states: a <b>failing</b> actionlint now fails <code>make</code> (exit 2) instead of printing
+"not on PATH" and returning 0; a <b>passing</b> one still exits 0; an <b>absent</b> one still exits
+0 with the skip message intact. The wider local-versus-CI gap this card also names &mdash;
+<code>zizmor</code> and <code>gitleaks</code> run only in CI and are absent from the Makefile
+&mdash; is untouched and still open.

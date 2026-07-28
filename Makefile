@@ -61,7 +61,8 @@ lint:
 	$(VENV)/bin/interrogate boost_cli/core
 	$(VENV)/bin/refurb boost_cli
 	$(VENV)/bin/codespell boost_cli docs README.md
-	@command -v actionlint >/dev/null 2>&1 && actionlint || echo "actionlint not on PATH — skipping (CI enforces it)"
+	@if command -v actionlint >/dev/null 2>&1; then actionlint; \
+	else echo "actionlint not on PATH — skipping (CI enforces it)"; fi
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
 	$(PY) scripts/build_command_reference.py --check
@@ -140,7 +141,8 @@ bench:
 # part of `make check`; degrades cleanly (prints a skip message, exits 0) when
 # hyperfine isn't installed (`brew install hyperfine`).
 bench-cli:
-	@command -v hyperfine >/dev/null 2>&1 && bash scripts/bench_cli.sh || echo "hyperfine not on PATH — install via 'brew install hyperfine', skipping"
+	@if command -v hyperfine >/dev/null 2>&1; then bash scripts/bench_cli.sh; \
+	else echo "hyperfine not on PATH — install via 'brew install hyperfine', skipping"; fi
 
 # Opt-in coverage-guided fuzzing of the hand-rolled parsers (atheris/libFuzzer).
 # Not part of `make check` — a fuzzer is a search, not a pass/fail gate; the
@@ -164,7 +166,8 @@ fuzz:
 BOOST_SITE ?= https://jonnyeclectic.github.io/boost/
 post-deploy:
 	$(PY) scripts/post_deploy_smoke.py --base-url "$(BOOST_SITE)" -v
-	@command -v node >/dev/null 2>&1 && BOOST_SITE="$(BOOST_SITE)" node tests/visual/console_check.mjs || echo "node not on PATH — skipping the console check (CI runs it)"
+	@if command -v node >/dev/null 2>&1; then BOOST_SITE="$(BOOST_SITE)" node tests/visual/console_check.mjs; \
+	else echo "node not on PATH — skipping the console check (CI runs it)"; fi
 
 # regenerate generated artifacts from their source (registries + roadmap boards)
 generate:
