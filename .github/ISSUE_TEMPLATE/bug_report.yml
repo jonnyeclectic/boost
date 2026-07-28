@@ -1,0 +1,98 @@
+name: Bug report
+description: Something in the CLI misbehaves — wrong output, a crash, a bad install
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The two fields marked **required** below —
+        `boost doctor` and the exact command — are what usually make a bug
+        reproducible on the first try instead of the third.
+
+        Found a **security** problem? Don't file it here: use
+        [private vulnerability reporting](https://github.com/jonnyeclectic/boost/security/advisories/new)
+        instead (see [SECURITY.md](https://github.com/jonnyeclectic/boost/blob/main/SECURITY.md)).
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+      placeholder: |
+        `boost install foo` reported "installed" but ~/.claude/skills/foo is missing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The exact command, and its output
+      description: >
+        Paste the command and everything it printed. Re-run it with `--debug`
+        if you can — that turns on the diagnostic log's stderr output.
+      render: console
+      placeholder: |
+        $ boost install foo --debug
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`boost --version` and `boost doctor` output"
+      description: >
+        Paste both, in full. `doctor` reports tap/catalog state, the lock
+        file's schema, whether each installed skill is still present in the
+        store and still linked for its agents, and whether any has drifted
+        from its recorded digest — most of what a triager would otherwise
+        have to ask for, one round trip at a time.
+      render: console
+      placeholder: |
+        $ boost --version
+        $ boost doctor
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: crash-log
+    attributes:
+      label: Crash report (if boost crashed)
+      description: >
+        An unhandled error writes a report under `~/.boost/logs/`. List them
+        with `boost log --crashes` and paste the relevant one. Skip this if
+        boost exited cleanly with a wrong answer rather than crashing.
+      render: text
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and shell
+      placeholder: "macOS 15.4, zsh 5.9 — or: Ubuntu 24.04, bash"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: How is boost installed?
+      options:
+        - pipx
+        - pip
+        - uv
+        - from a git checkout (./boost)
+        - other / not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues.
+          required: true
+        - label: >
+            I checked that this reproduces on the latest release
+            (`boost self-update`, then retry).

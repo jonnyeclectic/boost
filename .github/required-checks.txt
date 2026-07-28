@@ -49,6 +49,12 @@ tests (windows-latest, 3.9)
 tests (windows-latest, 3.12)
 tests (windows-latest, 3.14)
 
+# The Gherkin/BDD suite (tests/bdd, 11 features / 47 scenarios). Runs on every
+# pull request and on the merge queue, same as the rest of ci.yml, so it is
+# requireable by the rules above. It shipped with no CI wiring at all, which is
+# the failure this entry closes: an invisible suite is one that rots.
+bdd
+
 # --- security / supply chain ------------------------------------------------
 codeql-analyze
 pip-audit
