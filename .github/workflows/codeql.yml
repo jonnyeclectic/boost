@@ -6,6 +6,12 @@ on:
   pull_request:
   schedule:
     - cron: "17 6 * * 1"  # weekly, Monday morning UTC
+  # Required by branch protection, so it must also report on the merge
+  # queue's temporary ref: the queue evaluates required checks against
+  # gh-readonly-queue/*, NOT against the pull request. A required context
+  # whose workflow lacks this trigger simply never reports there, and every
+  # enqueued PR waits on it forever. check_required_checks.py enforces this.
+  merge_group:
 
 # Least-privilege default. `analyze` declares its own block, and a job-level
 # block replaces this rather than merging, so its effective token is unchanged.
