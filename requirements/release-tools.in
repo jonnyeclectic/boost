@@ -15,3 +15,7 @@ twine
 check-wheel-contents
 pyroma
 pip-audit
+# SPDX license compliance of a resolved closure (licenses.yml). Pinned for the
+# same reason as the rest: a verdict that changes on an upstream release of the
+# scanner is a verdict about the scanner, not about the dependencies.
+pip-licenses

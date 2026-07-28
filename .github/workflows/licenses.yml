@@ -1,0 +1,92 @@
+name: licenses
+
+# SPDX licence compatibility of the resolved dependency closure.
+#
+# pip-audit gates known CVEs; nothing gated licence *terms*. boost ships a
+# stdlib-only runtime, so the whole exposure is the opt-in extras — `[eval]`
+# alone resolves to 94 packages including the pinned langchain stack — and none
+# of them had ever been checked against the project's own GPL-3.0.
+#
+# Path-filtered on purpose, and therefore NOT requireable (see
+# .github/required-checks.txt for why a path-filtered check must stay out of
+# that list): licence terms change when dependencies change, so running this on
+# every PR would be waste. Changing pyproject.toml or the locks is exactly the
+# moment an incompatible transitive dependency arrives.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pyproject.toml"
+      - "requirements/**"
+      - "scripts/check_licenses.py"
+      - ".github/workflows/licenses.yml"
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "requirements/**"
+      - "scripts/check_licenses.py"
+      - ".github/workflows/licenses.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  licenses:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Split so a slow [eval] resolve cannot hide a fast, common failure,
+          # and so the log says which closure is at fault.
+          - name: runtime + light extras
+            install: ".[rag,bdd,perf]"
+          # The pinned langchain 0.3 stack. Heaviest by far and the one the
+          # roadmap item was actually worried about.
+          - name: eval extra
+            install: ".[eval]"
+    name: licenses (${{ matrix.name }})
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: resolve the closure and report its licences
+        # pip-licenses is hash-pinned in requirements/release-tools.txt: a
+        # licence verdict that changes on an upstream release of the scanner is
+        # a verdict about the scanner. It is installed into the SAME venv as the
+        # closure because it reads that environment's installed distributions.
+        env:
+          INSTALL: ${{ matrix.install }}
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/licenv
+          /tmp/licenv/bin/pip -q install "$INSTALL"
+          /tmp/licenv/bin/pip -q install -r requirements/release-tools.txt
+          /tmp/licenv/bin/pip-licenses --format=json > /tmp/licenses.json
+      - name: check compatibility with GPL-3.0
+        run: python3 scripts/check_licenses.py /tmp/licenses.json
+      - name: job summary
+        if: always()
+        run: |
+          {
+            echo "### licences — ${{ matrix.name }}"
+            echo ""
+            if [ -f /tmp/licenses.json ]; then
+              /tmp/licenv/bin/pip-licenses --format=markdown --order=license
+            else
+              echo "_the closure never resolved — see the step above_"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
