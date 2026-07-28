@@ -4,7 +4,12 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SB="$(mktemp -d /tmp/boost-smoke-XXXXXX)"
+# Honor $TMPDIR (defaults to /tmp, i.e. unchanged on CI and a normal dev box).
+# Hardcoding /tmp made the whole suite fail opaquely wherever it is not
+# writable — macOS per-user temp dirs, sandboxed agents, hardened CI images:
+# mktemp fails, SB is empty, HOME becomes "", and every check dies on `/.boost`.
+SB="$(mktemp -d "${TMPDIR:-/tmp}/boost-smoke-XXXXXX")" || {
+  echo "smoke: cannot create a sandbox dir under ${TMPDIR:-/tmp}" >&2; exit 1; }
 export HOME="$SB" BOOST_NO_AI=1 BOOST_ASSUME_YES=1 NO_COLOR=1
 cd "$ROOT"
 

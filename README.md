@@ -281,16 +281,56 @@ reports, and the free services that monitor the project.
 
 ## Test suite
 
-Three layers, all enforced (`make check` runs the full set; CI runs the same thing):
+Four layers, all enforced (`make check` runs the full set; CI runs the same thing):
 
 | Layer | What it does | Gate |
 |---|---|---|
 | `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 78 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
 | `make smoke` | `tests/smoke.sh` — 170 checks run through the actual `./boost` shim (`--online` also hits real registries) | all pass |
 | `make mutation` | [mutmut] mutates `boost_cli/core` (~9,900 mutants) and reruns the unit suite against each one | **≥80% killed** (`scripts/mutation_gate.py`) |
+| `make evals` | scores the search ranker on a graded golden set — recall@5/@10, MRR, nDCG@5/@10 | **metric floors + no statistically significant regression** (`scripts/eval_gate.py`) |
 
 Dev setup: `make venv` (pulls in pytest, coverage, mutmut — the shipped
 runtime itself stays dependency-free). Every test run uses a throwaway
 `$HOME`, so your actual agent configs are never at risk.
 
 [mutmut]: https://mutmut.readthedocs.io/
+
+## Evaluation harness
+
+Search quality is the one thing the suite above can't assert: every test can
+pass while the ranker quietly gets worse. `make evals` measures it. The harness
+is pure stdlib and fully offline — it generates its own corpus of skills, rules,
+and workflows and taps it into a disposable `BOOST_HOME`, so a metric that moves
+can only mean the *ranker* moved. See [`evals/README.md`](evals/README.md).
+
+**Golden set** — [`evals/golden_set.json`](evals/golden_set.json): 36 realistic
+queries with **graded** relevance (3 perfect · 2 useful · 1 marginal) over the
+generated corpus. Generated and validated by `evals/make_golden.py`, which
+refuses a judgment naming a skill the corpus doesn't contain; `--check` fails CI
+on drift, so the file can never disagree with its source.
+
+**Five metrics**, all computed by `evals/metrics.py`:
+
+- **recall@5** / **recall@10** — of everything relevant, what fraction reached the top *k*.
+- **MRR** — 1/rank of the first relevant hit, averaged; sensitive only to the top of the list, which is where people look.
+- **nDCG@5** / **nDCG@10** — graded gain (`2^rel − 1`) with the standard `log2(rank + 1)` discount; the only metric that distinguishes the right results in the wrong order from the right order.
+
+**Significance gating.** A metric dropping isn't automatically a regression —
+with 36 queries, one unlucky result moves the mean. So `scripts/eval_gate.py`
+fails a metric only when it falls more than 0.02 below the committed baseline
+**and** a seeded 10,000-resample paired bootstrap over the per-query deltas puts
+that drop at `p < 0.05`. Alongside that, each metric has an absolute floor set
+~0.05 below its first measured value, which catches the erosion that a
+compare-to-last-commit check never sees. Accepting a real ranking change is a
+deliberate `make evals-baseline` commit.
+
+**Faithfulness.** `boost explain` and `boost distill` generate prose from a
+`SKILL.md`, and their failure mode is overclaiming. The harness scores that with
+the Ragas method — split the answer into atomic statements, verify each against
+the source, score supported/total — and reports it alongside what the runtime
+grounding guardrail in `boost explain` would do with the same reply. With no
+`claude` CLI and no `ANTHROPIC_API_KEY` it **skips rather than fails**, and
+reports a status instead of a number so "couldn't measure" is never mistaken for
+"scored zero". It's therefore outside `make check`; run it with
+`make evals-online`.
