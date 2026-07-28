@@ -2,15 +2,15 @@
 id: onboard-overwrites-generated-files-without-confirm
 board: code
 section: internals
-status: planned
+status: shipped
 category: UX · Bug
 complexity: S
 impact: Med
 wow: 2
 note:
 order: 35
-owner:
-pr:
+owner: loop/onboard-confirm-overwrite
+pr: 287
 title: <code>boost onboard</code> silently overwrites existing generated files
 ---
 <code>boost onboard</code> writes <code>.boost/telemetry.json</code>, a GitHub Actions workflow, and

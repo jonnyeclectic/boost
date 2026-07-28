@@ -2,15 +2,15 @@
 id: serve-py-traversal-guards-untested
 board: code
 section: internals
-status: planned
+status: shipped
 category: Testing · Security
 complexity: S
 impact: Med
 wow: 2
 note: lowest coverage in core/
 order: 38
-owner:
-pr:
+owner: loop/serve-guard-coverage
+pr: 282
 title: <code>boost serve</code>'s own path-traversal guards are untested
 ---
 <code>serve.py</code>'s defenses against a malicious catalog <code>skill_md</code> path

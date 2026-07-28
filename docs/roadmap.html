@@ -110,7 +110,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>161</b><span>Loop finds</span></div>
+      <div class="stat"><b>162</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -996,7 +996,7 @@ platform via <code>ntpath</code>, which imports fine on POSIX.</p>
       </article>
 
       <article class="cap rcard" id="dense-search-fallback-and-stale-tap-pruning">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3>Dense search's empty result skips the BM25 fallback</h3>
         <p><code>_retrieve_any</code> treats any non-<code>None</code> dense result as final, but
 <code>dense.retrieve()</code> returns <code>[]</code> (not <code>None</code>) whenever every KNN
@@ -1070,7 +1070,7 @@ guard; a regression test drives the command with a non-TTY stdin and no
       </article>
 
       <article class="cap rcard" id="update-reinstall-widens-agent-scope">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3><code>update</code>/<code>reinstall</code> silently widen a skill's agent scope</h3>
         <p>A skill installed with <code>--agent</code> narrowing (e.g. <code>boost install foo --agent
 claude-code</code>) records that subset in the lock, but <code>boost update</code>/
@@ -1087,7 +1087,7 @@ rule/workflow update path already does for scope.</p>
       </article>
 
       <article class="cap rcard" id="lint-tap-misscopes-rule-workflow-entries">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3><code>lint --tap</code> mis-scores rule/workflow entries as broken</h3>
         <p><code>boost lint --tap</code> builds its target list without filtering by kind, so rule/workflow
 catalog entries (which have no <code>SKILL.md</code>) always report "missing SKILL.md," and
@@ -1134,8 +1134,49 @@ every enabled agent. So narrowing is honoured and the newly-enabled-agent path i
         </div>
       </article>
 
+      <article class="cap rcard" id="dependabot-root-pip-entry-duplicates-requirements">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Build · Gap</span></div>
+        <h3>Dependabot raises every toolchain bump <em>twice</em></h3>
+        <p>PR #289 added a third Dependabot entry, <code>package-ecosystem: pip</code> with
+<code>directory: /</code>, to give <code>pyproject.toml</code>'s optional extras the proactive bump
+PRs they had never had. The first scheduled run after it merged produced <b>eight</b> PRs, and two
+pairs of them are duplicates: <code>#301</code>/<code>#302</code> (twine) and
+<code>#300</code>/<code>#303</code> (hypothesis) change <b>byte-identical file sets</b> — one PR from
+the <code>/</code> entry and one from the pre-existing <code>/requirements</code> entry, for the same
+bump. Merging either makes the other redundant, and Dependabot closes the twin automatically, so the
+cost is noise rather than breakage. It will recur every week.
+
+Worse, the entry cannot deliver what it was added for. Every constraint under
+<code>[project.optional-dependencies]</code> is either an open lower bound
+(<code>sqlite-vec&gt;=0.1.6</code>) or explicitly listed in that entry's own <code>ignore</code>
+block (the pinned langchain 0.3 stack held back for ragas). Dependabot does not raise a
+<i>version</i> PR when the declared range already admits the newest release, so the set of
+<code>pyproject.toml</code> version updates this entry can ever produce is <b>empty</b> — which is
+why none of the eight touched <code>pyproject.toml</code>.
+
+Do not simply revert it. Dependabot <i>security</i> updates ignore the versioning strategy and fire
+on a vulnerable version inside a permitted range, so the entry does give the extras security
+coverage they previously lacked — the item it closed was right that
+<code>[rag]</code>/<code>[bdd]</code>/<code>[perf]</code> had only reactive pip-audit flags. The
+entry should be <b>narrowed</b>, not removed.
+
+Two candidate fixes, both needing verification against a real scheduled run rather than reasoning —
+Dependabot's file discovery is what got this wrong in the first place. <b>First</b>, scope the
+<code>/</code> entry so it stops matching <code>requirements/**</code>, leaving
+<code>/requirements</code> as the single owner of the hash-pinned lock. <b>Second</b>, if proactive
+extras bumps are genuinely wanted, that needs <code>versioning-strategy: increase</code> so open
+lower bounds are raised at all; otherwise accept that this entry is security-only and say so in the
+comment, which is the honest smaller change.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">fallout from</span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="onboard-overwrites-generated-files-without-confirm">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">UX · Bug</span></div>
         <h3><code>boost onboard</code> silently overwrites existing generated files</h3>
         <p><code>boost onboard</code> writes <code>.boost/telemetry.json</code>, a GitHub Actions workflow, and
 <code>.skill-lock.json</code> via a bare <code>write_text()</code> with no existence check,
@@ -1151,7 +1192,7 @@ lock file silently clobbers it and still reports "created," even though it overw
       </article>
 
       <article class="cap rcard" id="negative-limit-inverts-log-pulse-output">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI ergonomics</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI ergonomics</span></div>
         <h3>Negative <code>-n</code> silently inverts <code>log</code>/<code>pulse</code> output</h3>
         <p><code>boost log</code>/<code>boost pulse</code> accept <code>-n</code>/<code>--limit</code> as a bare
 <code>type=int</code> with no positivity check, and the slicing does
@@ -1167,7 +1208,7 @@ validator that rejects values below 1; reuse it here.</p>
       </article>
 
       <article class="cap rcard" id="crash-listing-branch-untested">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Bug</span></div>
         <h3><code>boost log --crashes</code> listing branch has no non-empty test</h3>
         <p><code>_show_crashes</code> has an empty-state branch and a listing branch that reads each
 <code>crash-*.log</code>, extracts its summary line, and swallows <code>OSError</code> on an
@@ -1182,7 +1223,7 @@ a test that seeds one or more crash logs and asserts on the rendered listing.</p
       </article>
 
       <article class="cap rcard" id="serve-py-traversal-guards-untested">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Security</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Security</span></div>
         <h3><code>boost serve</code>'s own path-traversal guards are untested</h3>
         <p><code>serve.py</code>'s defenses against a malicious catalog <code>skill_md</code> path
 (<code>_is_within</code>, <code>_safe_join_within</code>, the <code>".." in rel.parts</code> check)
@@ -1199,7 +1240,7 @@ guards and for <code>_CatalogHandler</code>'s error paths.</p>
       </article>
 
       <article class="cap rcard" id="structured-json-log-output-mode">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Observability</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Observability</span></div>
         <h3>Diagnostic log has no structured/JSON output mode</h3>
         <p><code>core/logs.py</code> uses stdlib <code>logging</code> with rotation and crash reports, but its
 file formatter only ever emits fixed plain-text lines — unlike <code>core/journal.py</code>, which
@@ -1215,7 +1256,7 @@ of needing regex parsing.</p>
       </article>
 
       <article class="cap rcard" id="ai-bridge-silent-failure-logging">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Observability</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Observability</span></div>
         <h3>AI bridge swallows failures with zero diagnostic trail</h3>
         <p><code>core/ai.py</code>'s CLI and API call paths both catch their failure modes (timeout, OS error,
 URL error, bad JSON) and return <code>None</code> — but neither ever calls into the logger, unlike
@@ -1513,7 +1554,7 @@ improvement is real (or isn't)."</p>
       </article>
 
       <article class="cap rcard" id="mypy-strict-mode-for-commands">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Testing · Type</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Testing · Type</span></div>
         <h3>mypy's default mode skips untyped command bodies</h3>
         <p><code>[tool.mypy]</code> in <code>pyproject.toml</code> sets only <code>python_version</code>/
 <code>files</code>, leaving mypy in its default permissive mode — a function with any untyped
@@ -1573,7 +1614,7 @@ are the deliberate follow-ups.</p>
       </article>
 
       <article class="cap rcard" id="lock-invariant-cannot-parse-extras-pins">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Latent bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Latent bug</span></div>
         <h3>The lock invariant can't parse <code>name[extra]==version</code>, so a valid pin fails the gate</h3>
         <p><code>tests/unit/test_toolchain_lock.py</code> (added with the lock-stability fix, #248)
 asserts every requirement is pinned with <code>==</code>. Its regex is
@@ -1852,7 +1893,7 @@ it refuses to pass vacuously if its own parser stops finding jobs.</p>
       </article>
 
       <article class="cap rcard" id="dependabot-missing-pip-ecosystem">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Supply chain</span></div>
         <h3>Dependabot's <code>pip</code> entry misses <code>pyproject.toml</code>'s extras</h3>
         <p><code>.github/dependabot.yml</code> declares <code>pip</code> for
 <code>directory: /requirements</code>, so the hash-pinned dev/CI toolchain does get weekly
@@ -1876,7 +1917,7 @@ unmerged until ragas catches up.</p>
       </article>
 
       <article class="cap rcard" id="license-compliance-scanning">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Supply chain</span></div>
         <h3>License-compliance scanning of the dependency closure</h3>
         <p>Nothing in CI checks SPDX license compatibility of resolved dependencies — <code>pip-audit</code>
 gates known CVEs, not license terms, and the <code>[eval]</code>/<code>[rag]</code> extras pull in a
@@ -2159,7 +2200,7 @@ crash reproducer no longer reddens the gate.</p>
       </article>
 
       <article class="cap rcard" id="merge-queue-would-deadlock-most-required-checks">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release safety</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Release safety</span></div>
         <h3>Enabling a merge queue would deadlock every required check except ci.yml's</h3>
         <p>Only <code>ci.yml</code> declares <code>merge_group</code> among its triggers. The other
 workflows producing required contexts — <code>codeql.yml</code>,
@@ -2488,7 +2529,7 @@ with any of them red.</p>
       </article>
 
       <article class="cap rcard" id="github-community-health-files">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Developer Experience</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Developer Experience</span></div>
         <h3>No issue/PR templates or a code of conduct</h3>
         <p>The repo has <code>SECURITY.md</code>, <code>CONTRIBUTING.md</code>, and
 <code>dependabot.yml</code>, but no <code>.github/ISSUE_TEMPLATE/</code>, no
@@ -2504,7 +2545,7 @@ output and a PR checklist would cut triage friction more cheaply than most engin
       </article>
 
       <article class="cap rcard" id="wire-bdd-suite-into-ci">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Test infra</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Test infra</span></div>
         <h3>New BDD suite has zero CI wiring</h3>
         <p>The behave suite added under <code>tests/bdd/</code> (11 features, 47 scenarios) passes cleanly
 today, but <code>make bdd</code> is invoked nowhere in <code>.github/workflows/</code> — only
@@ -2630,7 +2671,7 @@ suite only runs if a human remembers to run it locally, so a CLI change that bre
       </article>
 
       <article class="cap rcard" id="roadmap-html-goes-stale-on-every-rebase">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">DX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">DX</span></div>
         <h3><code>roadmap.html</code> goes stale on every rebase, so a card and a merge race redden the whole matrix</h3>
         <p>The data-driven roadmap solved the conflict problem for <em>item files</em>: two loops adding
 two cards touch two different files and merge cleanly. But <code>docs/roadmap.html</code> is
@@ -2980,7 +3021,7 @@ same nav and footer as every other page.</p>
       </article>
 
       <article class="cap rcard" id="demo-gif-workflow-has-never-succeeded">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3><code>demo.yml</code> has failed every run since it landed — vhs-action cannot install ffmpeg</h3>
         <p><code>demo.yml</code> re-records <code>docs/demo.gif</code> with
 <code>charmbracelet/vhs-action</code> and opens a PR when the recording changes. It exists
