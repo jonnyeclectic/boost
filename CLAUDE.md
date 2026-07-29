@@ -186,7 +186,32 @@ work in tests and the dev loop:
 ~/.agents/skills/                canonical store — single source of truth for installed skills
 ~/.agents/skills/.skill-lock.json   v3 lock file
 ~/.claude/skills/  ~/.windsurf/skills/  ~/.cursor/skills/   symlinked out from the canonical store
+~/.gemini/                       rules (GEMINI.md) + workflows only — see below
 ```
+
+**Four agent targets, but only three get symlinks.** Gemini CLI implements the
+Agent Skills standard and discovers `~/.agents/skills` — the canonical store —
+*directly*, so it is configured with `links_skills: false`. Linking into
+`~/.gemini/skills` too would put one skill in two of its discovery tiers, where
+the `.agents` alias out-ranks whatever we linked, costing the user a "Skill
+conflict detected" line per skill per session and buying nothing. Consequences
+for code you write:
+
+- Iterate `agents.linking_agents()` for anything symlink-shaped (link, unlink,
+  stale-link sweeps, coverage counts). `agents.enabled_agents()` is still right
+  for rules and workflows, which materialize into `~/.gemini/` like any other
+  agent's dotdir. `agents.native_store_agents()` is the complement, for reporting.
+- Per-agent *formats* differ and are pure functions in `core/`: `rules.CONTEXT_FILES`
+  maps an agent with no rules dir to its context file (`claude-code` → CLAUDE.md /
+  CLAUDE.local.md, `gemini` → GEMINI.md for both scopes), and
+  `workflows.TOML_COMMAND_AGENTS` marks agents whose slash commands are TOML.
+  Gemini's `commands/` slot is `.toml` (`workflows.render_gemini_command`); its
+  `agents/` slot stays verbatim Markdown. Getting that backwards produces a file
+  the agent silently never loads.
+- `core/mcphost.py` holds the per-host `mcp add`/`remove` grammar. Claude and
+  Gemini disagree on name position, the `--` separator, and whether unregister
+  needs an explicit scope — all three verified against the real CLIs and pinned
+  by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape.
 
 `core/catalog.scan_dir` walks a tap's clone and classifies each file into one
 of the three item kinds (see Non-obvious rules above); `core/store.py` owns

@@ -112,9 +112,13 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     is stated at install time, and boost offers to run the registration for the
     servers that came with a runnable spec.
 
-    Advisory, never fatal: a declined prompt, a missing ``claude`` CLI or a failed
+    Advisory, never fatal: a declined prompt, a missing agent CLI or a failed
     registration all leave the skill installed. Suppressed by ``--no-mcp`` (passed
     down as ``no_mcp``) or by exporting ``BOOST_NO_MCP_OFFER``.
+
+    The offer targets whichever agent CLIs are actually installed, so a machine
+    with only Gemini CLI is offered ``gemini mcp add`` rather than a ``claude``
+    command it cannot run.
     """
     rows = res.mcp_servers
     if not rows or no_mcp or os.environ.get("BOOST_NO_MCP_OFFER"):
@@ -132,22 +136,30 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
         # Name-only declarations: boost will not invent a command line.
         out.dim("  install these yourself, then `boost mcp register`")
         return
-    if not out.confirm("register %s with Claude Code now?"
-                       % _plural(len(wirable), "server"), default=False):
-        out.dim("  skipped — `claude mcp add …` when you're ready")
+    from ..core import mcphost
+    # Offer the CLIs that are actually here. With none installed we still fall
+    # back to the full list so the manual command lines get printed.
+    targets = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
+        or mcphost.hosts()
+    where = " · ".join(mcphost.label(h) for h in targets)
+    if not out.confirm("register %s with %s now?"
+                       % (_plural(len(wirable), "server"), where), default=False):
+        out.dim("  skipped — `%s mcp add …` when you're ready"
+                % mcphost.cli(targets[0]))
         return
     for row in wirable:
-        _register_mcp_server(row["name"], row["spec"])
+        for host in targets:
+            _register_mcp_server(row["name"], row["spec"], host=host)
 
 
-def _register_mcp_server(name: str, spec: dict) -> None:
-    """Run one `claude mcp add` for a skill-declared server. Never raises."""
+def _register_mcp_server(name: str, spec: dict, host: str = "claude") -> None:
+    """Run one `<host> mcp add` for a skill-declared server. Never raises."""
     import subprocess
 
-    from ..core import mcpdecl
-    argv = mcpdecl.register_argv(name, spec)
-    if not shutil.which("claude"):
-        out.warn("`claude` CLI not found — run this yourself:")
+    from ..core import mcpdecl, mcphost
+    argv = mcpdecl.register_argv(name, spec, host=host)
+    if not shutil.which(mcphost.cli(host)):
+        out.warn("`%s` CLI not found — run this yourself:" % mcphost.cli(host))
         out.info("  " + " ".join(argv))
         return
     try:
@@ -162,8 +174,8 @@ def _register_mcp_server(name: str, spec: dict) -> None:
                  % (name, tail[-1] if tail else "unknown error"))
         out.info("  run it yourself: " + " ".join(argv))
         return
-    out.ok("registered MCP server %s" % name)
-    journal.log("mcp-register", name)
+    out.ok("registered MCP server %s with %s" % (name, mcphost.label(host)))
+    journal.log("mcp-register", name, host=host)
 
 
 def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
@@ -191,8 +203,13 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
     out.ok("copied to %s" % _tilde(res.dest))
     if res.linked:
         out.ok("linked → %s" % " · ".join(res.linked))
-    else:
+    elif not res.native:
         out.warn("no agent links created (no enabled agents?)")
+    # Agents that read the canonical store need no link, but saying nothing
+    # would make a Gemini-only install look like it reached no agent at all.
+    if res.native:
+        out.ok("available to %s (reads the store directly)"
+               % " · ".join(agents.display_name(a) for a in res.native))
     for path in res.conflicts:
         out.warn("not linked: %s exists and is not managed by boost" % _tilde(path))
     out.ok("lock updated (.skill-lock.json)")

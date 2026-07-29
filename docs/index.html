@@ -536,6 +536,11 @@ facilitate structured divergent thinking:
             <h3>Cursor</h3>
             <p><code>~/.cursor/skills/</code></p>
           </div>
+          <div class="node agent">
+            <span class="tag">Agent</span>
+            <h3>Gemini CLI</h3>
+            <p><code>~/.agents/skills/</code> — read directly, no symlink</p>
+          </div>
         </div>
       </div>
     </div>
@@ -560,6 +565,7 @@ facilitate structured divergent thinking:
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">install</span> jira-integration
   <span class="tok">✓</span> copied to ~/.agents/skills/jira-integration
   <span class="tok">✓</span> linked → claude-code · windsurf · cursor
+  <span class="tok">✓</span> available to Gemini CLI (reads the store directly)
   <span class="tok">✓</span> lock updated (.skill-lock.json)
   <span class="tbox">╭─ </span><b>installed</b><span class="tbox"> ────────────────────────────────────────╮</span>
   <span class="tbox">│</span> Installed 1 new skill; quality score 92/100        <span class="tbox">│</span>
@@ -875,7 +881,7 @@ const COMMANDS = [
   ["completions","cfg","Generate shell tab-completion scripts"],
   ["schedule","cfg","Manage automatic skill-sync scheduling"],
   ["serve","cfg","Serve the skill catalog over HTTP (port 8787)"],
-  ["mcp","cfg","Register boost as an MCP server for Claude Code"],
+  ["mcp","cfg","Register boost as an MCP server (Claude Code, Gemini CLI)"],
   ["hooks","cfg","Manage Claude Code hooks (scope-aware) in settings.json"],
   ["bmad","cfg","Install & manage the BMAD Method (scope-aware, toggleable)"],
   ["self-update","cfg","Update boost itself to the latest version"],

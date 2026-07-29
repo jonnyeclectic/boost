@@ -7,10 +7,11 @@ from boost_cli.core import agents, config
 class TestKnownAgents:
     def test_default_dirs_derive_from_sandbox_home(self, sandbox):
         known = agents.known_agents()
-        assert set(known) == {"claude-code", "windsurf", "cursor"}
+        assert list(known) == ["claude-code", "windsurf", "cursor", "gemini"]
         assert known["claude-code"]["dir"] == sandbox / ".claude" / "skills"
         assert known["windsurf"]["dir"] == sandbox / ".windsurf" / "skills"
         assert known["cursor"]["dir"] == sandbox / ".cursor" / "skills"
+        assert known["gemini"]["dir"] == sandbox / ".gemini" / "skills"
         assert all(spec["enabled"] is True for spec in known.values())
 
     def test_enabled_flag_honored_from_config(self, sandbox):
@@ -36,6 +37,7 @@ class TestEnabledAgents:
             "claude-code": sandbox / ".claude" / "skills",
             "windsurf": sandbox / ".windsurf" / "skills",
             "cursor": sandbox / ".cursor" / "skills",
+            "gemini": sandbox / ".gemini" / "skills",
         }
 
     def test_disabled_agent_filtered_out(self, sandbox):
@@ -45,7 +47,66 @@ class TestEnabledAgents:
         assert agents.enabled_agents() == {
             "claude-code": sandbox / ".claude" / "skills",
             "windsurf": sandbox / ".windsurf" / "skills",
+            "gemini": sandbox / ".gemini" / "skills",
         }
+
+
+class TestLinkingAgents:
+    """The linking/native split — which agents need a skill symlinked in.
+
+    Gemini CLI implements the Agent Skills standard and reads
+    ``~/.agents/skills`` (boost's canonical store) directly, so linking for it
+    would put one skill in two of its discovery tiers. These assertions pin
+    that the two sets partition the enabled agents exactly, because a bug in
+    either direction is silent: a missing link makes a skill invisible, and a
+    surplus one makes Gemini log a conflict for every skill, every session.
+    """
+
+    def test_gemini_is_excluded_by_default(self, sandbox):
+        assert agents.linking_agents() == {
+            "claude-code": sandbox / ".claude" / "skills",
+            "windsurf": sandbox / ".windsurf" / "skills",
+            "cursor": sandbox / ".cursor" / "skills",
+        }
+
+    def test_native_store_agents_is_the_complement(self, sandbox):
+        assert agents.native_store_agents() == {
+            "gemini": sandbox / ".gemini" / "skills"}
+
+    def test_the_two_sets_partition_enabled_agents(self, sandbox):
+        linking, native = agents.linking_agents(), agents.native_store_agents()
+        assert not set(linking) & set(native)
+        assert {**linking, **native} == agents.enabled_agents()
+
+    def test_links_skills_defaults_true_for_an_agent_that_omits_it(self, sandbox):
+        # Every agent but gemini omits the key; none of them may be treated as
+        # native or their skills stop being linked anywhere.
+        known = agents.known_agents()
+        assert known["claude-code"]["links_skills"] is True
+        assert known["gemini"]["links_skills"] is False
+
+    def test_a_hand_added_agent_links_by_default(self, sandbox):
+        cfg = config.load()
+        cfg["agents"]["zed"] = {"dir": "~/.zed/skills", "enabled": True}
+        config.save(cfg)
+        assert "zed" in agents.linking_agents()
+        assert "zed" not in agents.native_store_agents()
+
+    def test_links_skills_is_configurable_back_on(self, sandbox):
+        # The documented escape hatch if the ~/.agents/skills alias is ever
+        # narrowed: flipping the flag restores the symlink.
+        cfg = config.load()
+        cfg["agents"]["gemini"]["links_skills"] = True
+        config.save(cfg)
+        assert "gemini" in agents.linking_agents()
+        assert agents.native_store_agents() == {}
+
+    def test_a_disabled_native_agent_is_in_neither_set(self, sandbox):
+        cfg = config.load()
+        cfg["agents"]["gemini"]["enabled"] = False
+        config.save(cfg)
+        assert "gemini" not in agents.linking_agents()
+        assert "gemini" not in agents.native_store_agents()
 
 
 class TestDisplayName:
@@ -53,6 +114,13 @@ class TestDisplayName:
         assert agents.display_name("claude-code") == "Claude Code"
         assert agents.display_name("windsurf") == "Windsurf"
         assert agents.display_name("cursor") == "Cursor"
+        assert agents.display_name("gemini") == "Gemini CLI"
+
+    def test_every_default_agent_has_a_display_name(self, sandbox):
+        # a new agent added to config DEFAULTS without a DISPLAY entry would
+        # surface its raw config key ("gemini") in user-facing output.
+        for name in agents.known_agents():
+            assert agents.display_name(name) != name
 
     def test_unknown_passthrough(self):
         assert agents.display_name("aider") == "aider"
@@ -61,7 +129,7 @@ class TestDisplayName:
 class TestEnsureAgentDirs:
     def test_creates_all_enabled_dirs(self, sandbox):
         agents.ensure_agent_dirs()
-        for d in (".claude", ".windsurf", ".cursor"):
+        for d in (".claude", ".windsurf", ".cursor", ".gemini"):
             assert (sandbox / d / "skills").is_dir()
 
     def test_disabled_dir_not_created(self, sandbox):
@@ -71,6 +139,7 @@ class TestEnsureAgentDirs:
         agents.ensure_agent_dirs()
         assert (sandbox / ".claude" / "skills").is_dir()
         assert (sandbox / ".windsurf" / "skills").is_dir()
+        assert (sandbox / ".gemini" / "skills").is_dir()
         assert not (sandbox / ".cursor" / "skills").exists()
 
     def test_is_idempotent_when_dirs_exist(self, sandbox):

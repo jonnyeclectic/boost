@@ -10,7 +10,7 @@
 
 **Homebrew for AI coding skills.** boost finds, installs, and version-tracks
 skills from GitHub-hosted registries — and wires each one into **Claude Code,
-Windsurf, and Cursor** in a single pass.
+Windsurf, Cursor, and Gemini CLI** in a single pass.
 
 ```bash
 pipx install boost-skill-cli
@@ -19,7 +19,7 @@ boost search tdd              # full-content BM25 over every skill
 boost install tdd-workflow    # → every agent, version-pinned, one lock file
 ```
 
-No more copying `SKILL.md` into three agent folders and forgetting which one is
+No more copying `SKILL.md` into four agent folders and forgetting which one is
 stale. The default install is **zero-dependency** — pure stdlib, no build step.
 
 <p align="center">
@@ -122,6 +122,13 @@ GitHub registries  ──boost update──▶  ~/.boost/repos/    (shallow clon
                    ────symlinks───▶  ~/.claude/skills/  ~/.windsurf/skills/  ~/.cursor/skills/
 ```
 
+Gemini CLI is the one agent that needs no symlink: it implements the
+[Agent Skills](https://agentskills.io) standard and discovers `~/.agents/skills`
+— boost's canonical store — directly. Linking into `~/.gemini/skills` as well
+would put the same skill in two of its discovery tiers, so boost deliberately
+doesn't (`agents.gemini.links_skills` is `false`; flip it to `true` if you ever
+need the copy). Rules and workflows still materialize under `~/.gemini/`.
+
 ### User scope vs project scope
 
 That's the default — **user scope**, the skills you want everywhere. The other
@@ -195,6 +202,37 @@ The AI-assisted commands (`search --smart`, `explain`, `distill`, `infer`,
 available on your PATH (or `ANTHROPIC_API_KEY` is set), and fall back to
 plain heuristics when it isn't — so the tool still works without an API key,
 just less cleverly.
+
+## boost as an MCP server
+
+boost is itself an MCP server, so an agent can search and install skills mid-task
+instead of waiting for you to shell out. `boost mcp register` wires it into every
+agent CLI it finds on your PATH:
+
+```bash
+boost mcp register                 # every installed host (default: --host auto)
+boost mcp register --host gemini   # just one
+boost mcp unregister               # same host selection, in reverse
+```
+
+| Host | CLI | Registered in |
+|------|-----|---------------|
+| Claude Code | `claude` | `claude mcp add` → its user-scope MCP config |
+| Gemini CLI | `gemini` | `gemini mcp add -s user` → `~/.gemini/settings.json` (`mcpServers`) |
+
+A host whose CLI isn't installed is skipped, not an error — name it explicitly
+(`--host gemini`) to have boost print the command for you to run later.
+
+Six tools are exposed: `boost_search`, `boost_list`, `boost_info`,
+`boost_install`, `boost_doctor`, and `boost_discover_github`. The server also
+returns MCP `instructions`, which both hosts load into the model's context — it
+tells the agent *when* boost is relevant, so a matching skill gets found at the
+start of a task rather than after the work is already reconstructed by hand.
+
+Verify the wiring with `claude mcp list` or `gemini mcp list` — boost should show
+as **Connected**. (Gemini only connects stdio servers in a trusted folder; run
+`gemini` once in the directory and accept the trust prompt if it shows
+`Disabled`.)
 
 ## Claude Code hooks & the BMAD Method
 

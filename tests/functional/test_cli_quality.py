@@ -83,7 +83,7 @@ class TestDoctor:
         shutil.rmtree(paths.store_dir() / "brainstorming")
         r = boost("doctor", expect=1)
         assert "skill brainstorming missing from store — run `boost heal`" in r.out
-        # the three agent links now dangle too
+        # the three symlinked agents now dangle too (gemini never had a link)
         assert "3 broken symlinks in agent dirs" in r.out
         assert "1 skill installed · 1 tap synced · 3 broken links" in r.out
 
@@ -462,7 +462,8 @@ class TestQuarantine:
         assert "fixture-tap" in r.out and "ago" in r.out
 
         r = boost("quarantine", "--release", "brainstorming")
-        assert "released brainstorming (linked: claude-code, windsurf, cursor)" in r.out
+        assert ("released brainstorming "
+                "(linked: claude-code, windsurf, cursor)") in r.out
         link = paths.home() / ".claude" / "skills" / "brainstorming"
         assert link.is_symlink() and link.exists()
         entry = _lock()["brainstorming"]
@@ -623,9 +624,11 @@ class TestHealth:
         assert "boost health" in r.out
         assert "1 installed · 0 quarantined · 0 pinned" in r.out
         assert "1 configured · 1 cloned" in r.out
-        for agent in ("claude-code", "windsurf", "cursor"):
+        for agent in ("claude-code", "windsurf", "cursor", "gemini"):
             assert agent in r.out
         assert "1/1 ✓" in r.out
+        # gemini has no links to count, so it is scored on the store it reads
+        assert "1/1 ✓ (reads the store directly)" in r.out
         assert "1 in-sync" in r.out
         assert re.search(r"broken links\s+0", r.out)
         assert "2 events" in r.out                # tap + install in journal

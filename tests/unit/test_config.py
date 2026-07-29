@@ -31,9 +31,19 @@ class TestLoadDefaults:
         assert cfg["policy_enforce"] is True
         assert cfg["telemetry"] is False
         assert cfg["taps"] == []
-        assert set(cfg["agents"]) == {"claude-code", "windsurf", "cursor"}
+        # Order is load-bearing: agents are iterated (and linked/reported) in
+        # declaration order, and gemini was appended last so an existing
+        # config.json's key order keeps matching the defaults' prefix.
+        assert list(cfg["agents"]) == ["claude-code", "windsurf", "cursor",
+                                       "gemini"]
         assert cfg["agents"]["cursor"] == {"dir": "~/.cursor/skills",
                                            "enabled": True}
+        # links_skills False is the whole point of the gemini entry: it reads
+        # ~/.agents/skills natively, so a symlink would only duplicate the skill
+        # into a second discovery tier.
+        assert cfg["agents"]["gemini"] == {"dir": "~/.gemini/skills",
+                                           "enabled": True,
+                                           "links_skills": False}
 
 
 class TestDeepMerge:

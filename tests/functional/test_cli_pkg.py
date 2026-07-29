@@ -95,6 +95,9 @@ class TestInstall:
         r = boost("install", "brainstorming")
         assert "copied to ~/.agents/skills/brainstorming" in r.out
         assert "linked → claude-code · windsurf · cursor" in r.out
+        # gemini reads the canonical store directly: no symlink, but the report
+        # must still say the skill reached it
+        assert "available to Gemini CLI (reads the store directly)" in r.out
         assert "lock updated (.skill-lock.json)" in r.out
         assert "Installed 1 new skill; quality score 95/100" in r.out
         # D13: framed success card with a next-step hint
@@ -103,8 +106,10 @@ class TestInstall:
         entry = _lock()["brainstorming"]
         assert entry["version"] == "1.4.0"
         assert entry["tap"] == "fixture-tap"
+        # the lock records real symlinks only — gemini needs none
         assert entry["agents"] == ["claude-code", "windsurf", "cursor"]
         assert entry["pinned"] is False and entry["quarantined"] is False
+        assert not (paths.home() / ".gemini" / "skills").exists()
 
     def test_multi_with_one_unknown_rc1_installs_known(self, boost, tapped):
         r = boost("install", "brainstorming", "nope", expect=1)
@@ -118,7 +123,10 @@ class TestInstall:
         r = boost("install", "--dry-run", "brainstorming")
         assert "would install brainstorming v1.4.0 from fixture-tap" in r.out
         assert "~/.boost/repos/fixture-tap/skills/brainstorming" in r.out
-        assert "link  → claude-code · windsurf · cursor" in r.out
+        # NOTE: the preview lists every *enabled* agent, so it still promises a
+        # gemini link the real install does not make (gemini reads the store
+        # directly — see test_exact_report_lines). Pinned as it behaves today.
+        assert "link  → claude-code · windsurf · cursor · gemini" in r.out
         assert "dry run — nothing was changed" in r.out
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not paths.lockfile_path().exists()
@@ -150,10 +158,12 @@ class TestInstall:
         r = boost("install", "brainstorming", "--agent", "claude-code")
         assert "linked → claude-code" in r.out
         assert "windsurf" not in r.out
+        assert "gemini" not in r.out
         home = paths.home()
         assert (home / ".claude" / "skills" / "brainstorming").is_symlink()
         assert not (home / ".windsurf" / "skills" / "brainstorming").exists()
         assert not (home / ".cursor" / "skills" / "brainstorming").exists()
+        assert not (home / ".gemini" / "skills" / "brainstorming").exists()
         assert _lock()["brainstorming"]["agents"] == ["claude-code"]
 
     def test_unknown_agent_rc1(self, boost, tapped):
@@ -699,13 +709,15 @@ class TestInstallEdges:
         assert ("not linked: ~/.claude/skills/brainstorming exists and is "
                 "not managed by boost") in r.out
         assert "linked → windsurf · cursor" in r.out
+        assert "available to Gemini CLI (reads the store directly)" in r.out
         assert _lock()["brainstorming"]["agents"] == ["windsurf", "cursor"]
         assert blocker.is_dir() and not blocker.is_symlink()
 
     def test_no_enabled_agents_warns(self, boost, tapped):
         cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
         cfg["agents"] = {a: {"enabled": False}
-                         for a in ("claude-code", "windsurf", "cursor")}
+                         for a in ("claude-code", "windsurf", "cursor",
+                                   "gemini")}
         paths.config_path().write_text(json.dumps(cfg), encoding="utf-8")
         r = boost("install", "brainstorming")
         assert "no agent links created (no enabled agents?)" in r.out
@@ -1005,65 +1017,115 @@ class TestMcpAwareSkills:
         r = boost("import", d)
         assert "MCP server" not in r.out
 
-    def test_sidecar_spec_is_offered_and_registered(self, boost, sandbox,
-                                                    tmp_path, monkeypatch):
+    def _fake_which(self, monkeypatch, *present):
+        """Pretend exactly ``present`` executables are on PATH."""
+        monkeypatch.setattr(
+            "shutil.which",
+            lambda n: "/usr/bin/" + n if n in present else None)
+
+    def _capture_run(self, monkeypatch, rc=0, err=""):
+        """Capture every subprocess argv; return the list."""
         calls = []
 
         class _Proc:
-            returncode = 0
+            returncode = rc
             stdout = ""
-            stderr = ""
+            stderr = err
 
-        monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/claude")
         monkeypatch.setattr("subprocess.run",
                             lambda argv, **kw: calls.append(argv) or _Proc())
+        return calls
+
+    def test_sidecar_spec_is_offered_and_registered(self, boost, sandbox,
+                                                    tmp_path, monkeypatch):
+        self._fake_which(monkeypatch, "claude")
+        calls = self._capture_run(monkeypatch)
         d = _mcp_skill_dir(
             tmp_path, decl="github",
             sidecar={"mcpServers": {"github": {"command": "npx",
                                                "args": ["-y", "srv"]}}})
         # BOOST_ASSUME_YES (set by the sandbox fixture) accepts the prompt.
         r = boost("import", d)
-        assert "registered MCP server github" in r.out
+        assert "registered MCP server github with Claude Code" in r.out
         assert calls == [["claude", "mcp", "add", "github", "--scope", "user",
                           "--", "npx", "-y", "srv"]]
+        # gemini's CLI is not installed, so it is not offered a registration
+        assert "with Gemini CLI" not in r.out
+        assert "gemini mcp add" not in r.out
+
+    def test_sidecar_registers_with_every_installed_cli(self, boost, sandbox,
+                                                        tmp_path, monkeypatch):
+        # a declared server belongs on every agent CLI that is actually here,
+        # each written in that CLI's own grammar: claude takes
+        # `add <name> … -- <command>`, gemini `add [options] <name> <command>`.
+        self._fake_which(monkeypatch, "claude", "gemini")
+        calls = self._capture_run(monkeypatch)
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx",
+                                               "args": ["-y", "srv"]}}})
+        r = boost("import", d)
+        assert calls == [
+            ["claude", "mcp", "add", "github", "--scope", "user",
+             "--", "npx", "-y", "srv"],
+            ["gemini", "mcp", "add", "--scope", "user",
+             "github", "npx", "-y", "srv"]]
+        assert "registered MCP server github with Claude Code" in r.out
+        assert "registered MCP server github with Gemini CLI" in r.out
+
+    def test_offer_targets_the_only_installed_cli(self, boost, sandbox,
+                                                  tmp_path, monkeypatch):
+        # a machine with only Gemini CLI must be offered `gemini mcp add`,
+        # never a `claude` command line it cannot run.
+        self._fake_which(monkeypatch, "gemini")
+        calls = self._capture_run(monkeypatch)
+        d = _mcp_skill_dir(
+            tmp_path, decl="github",
+            sidecar={"mcpServers": {"github": {"command": "npx",
+                                               "args": ["-y", "srv"]}}})
+        r = boost("import", d)
+        assert calls == [["gemini", "mcp", "add", "--scope", "user",
+                          "github", "npx", "-y", "srv"]]
+        assert "registered MCP server github with Gemini CLI" in r.out
+        assert "Claude Code" not in r.out
 
     def test_declining_leaves_the_skill_installed(self, boost, sandbox,
                                                   tmp_path, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
-        monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/claude")
+        self._fake_which(monkeypatch, "claude", "gemini")
         d = _mcp_skill_dir(
             tmp_path, decl="github",
             sidecar={"mcpServers": {"github": {"command": "npx"}}})
         r = boost("import", d)
         # non-TTY stdin makes confirm() return its default, which is False here
-        assert "skipped" in r.out
+        assert "skipped — `claude mcp add …` when you're ready" in r.out
         assert "mcp-skill" in _lock()
 
-    def test_missing_claude_cli_prints_the_command(self, boost, sandbox,
+    def test_missing_agent_clis_print_the_commands(self, boost, sandbox,
                                                    tmp_path, monkeypatch):
-        monkeypatch.setattr("shutil.which", lambda n: None)
+        # nothing installed: fall back to the full host list so every manual
+        # command line gets printed, one per host, in its own grammar.
+        self._fake_which(monkeypatch)
         d = _mcp_skill_dir(
             tmp_path, decl="github",
             sidecar={"mcpServers": {"github": {"command": "npx"}}})
         r = boost("import", d)
         assert "`claude` CLI not found" in r.out
-        assert "claude mcp add github" in r.out
+        assert "claude mcp add github --scope user -- npx" in r.out
+        assert "`gemini` CLI not found" in r.out
+        assert "gemini mcp add --scope user github npx" in r.out
         assert "mcp-skill" in _lock()          # still installed
 
     def test_failed_registration_is_not_fatal(self, boost, sandbox, tmp_path,
                                               monkeypatch):
-        class _Proc:
-            returncode = 1
-            stdout = ""
-            stderr = "boom\n"
-
-        monkeypatch.setattr("shutil.which", lambda n: "/usr/bin/claude")
-        monkeypatch.setattr("subprocess.run", lambda argv, **kw: _Proc())
+        self._fake_which(monkeypatch, "claude", "gemini")
+        self._capture_run(monkeypatch, rc=1, err="boom\n")
         d = _mcp_skill_dir(
             tmp_path, decl="github",
             sidecar={"mcpServers": {"github": {"command": "npx"}}})
         r = boost("import", d)
-        assert "could not register github: boom" in r.out
+        # one host failing must not abort the next one, nor the install
+        assert r.out.count("could not register github: boom") == 2
         assert "mcp-skill" in _lock()          # the install still stands
 
     def test_malformed_sidecar_degrades_to_the_names(self, boost, sandbox,

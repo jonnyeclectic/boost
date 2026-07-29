@@ -25,11 +25,58 @@ class TestMarkers:
         assert rules.markers("a")[0] != rules.markers("b")[0]
 
 
+class TestContextFiles:
+    """The context-file map replaced a bare set of agent names, so the (user,
+    project) filename *pair* — not just membership — is what decides where a
+    rule lands. Pin both entries exactly."""
+
+    def test_exact_map(self):
+        assert rules.CONTEXT_FILES == {
+            "claude-code": ("CLAUDE.md", "CLAUDE.local.md"),
+            "gemini": ("GEMINI.md", "GEMINI.md"),
+        }
+
+    def test_claude_user_and_project_filenames_differ(self):
+        # ~/.claude/CLAUDE.md is personal, but <repo>/CLAUDE.md is committed and
+        # team-reviewed — so project scope must divert to CLAUDE.local.md.
+        user_name, project_name = rules.CONTEXT_FILES["claude-code"]
+        assert user_name != project_name
+        assert project_name == "CLAUDE.local.md"
+
+    def test_gemini_uses_the_same_file_in_both_scopes(self):
+        # Gemini CLI documents no ".local" variant: <repo>/GEMINI.md is the
+        # per-project context file, so the pair is deliberately identical.
+        assert rules.CONTEXT_FILES["gemini"] == ("GEMINI.md", "GEMINI.md")
+
+    def test_rules_dir_agents_are_absent(self):
+        # membership here is what routes an agent away from its rules/ dir
+        for agent in ("cursor", "windsurf", "cline", "zed"):
+            assert agent not in rules.CONTEXT_FILES
+
+    def test_mode_claude_value_is_frozen(self):
+        # written verbatim into every rule's lock record; renaming it would
+        # orphan already-installed materializations (see store._uninstall_rule).
+        assert rules.MODE_CLAUDE == "claude"
+        assert rules.MODE_FILE == "file"
+
+
 class TestRuleTarget:
     def test_claude_merges_into_claude_md_at_root(self):
         mode, path = rules.rule_target("claude-code", Path("/h/.claude/skills"), "r")
         assert mode == rules.MODE_CLAUDE
         assert path == Path("/h/.claude/CLAUDE.md")
+
+    def test_gemini_merges_into_gemini_md_at_root(self):
+        mode, path = rules.rule_target("gemini", Path("/h/.gemini/skills"), "r")
+        assert mode == rules.MODE_CLAUDE
+        assert path == Path("/h/.gemini/GEMINI.md")
+
+    def test_context_file_ignores_the_rule_name(self):
+        # the block is name-scoped *inside* the file, so two rules must merge
+        # into the SAME context file rather than one file each.
+        _m, a = rules.rule_target("gemini", Path("/h/.gemini/skills"), "alpha")
+        _m2, b = rules.rule_target("gemini", Path("/h/.gemini/skills"), "beta")
+        assert a == b == Path("/h/.gemini/GEMINI.md")
 
     def test_cursor_drops_mdc_in_rules_dir(self):
         mode, path = rules.rule_target("cursor", Path("/h/.cursor/skills"), "r")
@@ -52,6 +99,31 @@ class TestRuleTarget:
                                        "r", base=Path("/repo"))
         assert mode == rules.MODE_CLAUDE
         assert path == Path("/repo/CLAUDE.local.md")   # personal, not ~/.claude
+
+    def test_project_gemini_uses_plain_gemini_md_at_repo_root(self):
+        mode, path = rules.rule_target("gemini", Path("/h/.gemini/skills"),
+                                       "r", base=Path("/repo"))
+        assert mode == rules.MODE_CLAUDE
+        assert path == Path("/repo/GEMINI.md")         # no .local variant exists
+
+    def test_project_scope_claude_and_gemini_diverge(self):
+        # the two context-file agents share a mode but NOT a filename rule:
+        # Claude diverts to a .local file in project scope, Gemini does not.
+        _m, claude = rules.rule_target("claude-code", Path("/h/.claude/skills"),
+                                       "r", base=Path("/repo"))
+        _m2, gemini = rules.rule_target("gemini", Path("/h/.gemini/skills"),
+                                        "r", base=Path("/repo"))
+        assert claude != gemini
+        assert claude.name == "CLAUDE.local.md"
+        assert gemini.name == "GEMINI.md"
+        assert claude.parent == gemini.parent == Path("/repo")
+
+    def test_project_scope_context_file_ignores_the_agent_dotdir(self):
+        # unlike the rules-dir agents, a context file lands at the repo ROOT —
+        # not under <repo>/.gemini/.
+        _mode, path = rules.rule_target("gemini", Path("/h/.gemini/skills"), "r",
+                                        base=Path("/repo"))
+        assert ".gemini" not in path.parts
 
     def test_project_cursor_uses_repo_dotcursor_rules(self):
         mode, path = rules.rule_target("cursor", Path("/h/.cursor/skills"),
@@ -184,3 +256,11 @@ class TestRuleNameTraversal:
         # reaches the managed-block markers, so it must be refused just as early.
         with pytest.raises(BoostError, match="invalid rule name"):
             rules.rule_target("claude-code", Path("/home/v/.claude/skills"), self.EVIL)
+
+    @pytest.mark.parametrize("agent", ["claude-code", "gemini"])
+    def test_every_context_file_agent_is_guarded(self, agent):
+        # the guard must precede the CONTEXT_FILES lookup, not sit in the
+        # rules-dir branch only — every agent takes it.
+        with pytest.raises(BoostError, match="invalid rule name"):
+            rules.rule_target(agent, Path("/home/v/.x/skills"), self.EVIL,
+                              base=Path("/home/v/myrepo"))

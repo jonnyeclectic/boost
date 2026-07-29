@@ -830,7 +830,9 @@ class TestMcp:
         assert by_id[7]["error"]["code"] == -32602
 
         assert "installed brainstorming v1.4.0 from fixture-tap" in text(8)
+        # gemini reads the canonical store directly, so it is never symlinked
         assert "linked agents: claude-code, windsurf, cursor" in text(8)
+        assert "gemini" not in text(8)
         assert "quality score:" in text(8)
         assert "brainstorming v1.4.0 (fixture-tap)" in text(9)
         assert "installed: yes" in text(10)
@@ -936,26 +938,27 @@ class TestMcp:
         assert is_err is True
         assert "GitHub code search failed" in text
 
-    def test_register_without_claude_prints_manual_command(self, boost, sandbox,
-                                                           monkeypatch):
-        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
-                            lambda c: None)
-        shim = str(paths.repo_root() / "boost")
-        r = boost("mcp", "register")
-        assert "`claude` CLI not found — run this yourself:" in r.out
-        assert ("claude mcp add boost --scope user "
-                "-e OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES -e no_proxy=* "
-                "-- %s mcp --stdio" % shim) in r.out
-        r = boost("mcp", "unregister")
-        assert "claude mcp remove boost" in r.out
-        assert journal.events(action="mcp")[0]["subject"] == "unregister"
+    # ── mcp register / unregister ────────────────────────────────────────
+    # boost registers itself with every agent CLI that speaks MCP, and the two
+    # grammars disagree on almost every detail: Claude wants
+    # `add <name> [options] -- <command>` (its `-e` is variadic, so a name
+    # placed after it is swallowed as another env var); Gemini wants
+    # `add [options] <name> <commandOrUrl> [args...]` with no `--` (which its
+    # trailing variadic would capture and hand to boost as a literal argument).
+    # Every test below captures the argv the fake CLI receives — an argv that
+    # is merely plausible fails silently, on someone else's machine.
 
-    def test_register_with_claude_cli(self, boost, sandbox, monkeypatch):
-        # one patch covers both lookups (shutil is shared): find `claude`,
-        # keep launcher() on its checkout-shim fallback
-        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
-                            lambda c: "/usr/local/bin/claude"
-                            if c == "claude" else None)
+    def _fake_clis(self, monkeypatch, *present):
+        """Put exactly ``present`` agent CLIs on PATH; return captured argvs.
+
+        One patch covers every lookup (``shutil`` is one shared module
+        object). ``boost`` itself is never "present", which keeps
+        ``paths.launcher()`` on its checkout-shim fallback so the expected
+        argv is stable.
+        """
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.shutil.which",
+            lambda c: "/usr/local/bin/" + c if c in present else None)
         calls = []
 
         def fake_run(cmd, **kw):
@@ -964,39 +967,165 @@ class TestMcp:
 
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
                             fake_run)
+        return calls
+
+    def _shim(self):
+        return str(paths.repo_root() / "boost")
+
+    def _claude_add(self):
+        return ["claude", "mcp", "add", "boost", "--scope", "user",
+                "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
+                "-e", "no_proxy=*",
+                "--", self._shim(), "mcp", "--stdio"]
+
+    def _gemini_add(self):
+        return ["gemini", "mcp", "add", "--scope", "user",
+                "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
+                "-e", "no_proxy=*",
+                "boost", self._shim(), "mcp", "--stdio"]
+
+    def test_register_with_only_claude_cli(self, boost, sandbox, monkeypatch):
+        calls = self._fake_clis(monkeypatch, "claude")
         r = boost("mcp", "register")
-        assert calls == [["claude", "mcp", "add", "boost", "--scope", "user",
-                          "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
-                          "-e", "no_proxy=*",
-                          "--", str(paths.repo_root() / "boost"),
-                          "mcp", "--stdio"]]
+        assert calls == [self._claude_add()]
         assert "Added stdio MCP server boost" in r.out
-        assert "registered boost as an MCP server (scope: user)" in r.out
+        assert ("registered boost as an MCP server for Claude Code "
+                "(scope: user)") in r.out
+        # a host that is simply not installed is neither a failure nor noise
+        assert "Gemini CLI" not in r.out
+        assert "no agent CLI found" not in r.out
+        assert journal.events(action="mcp")[0]["hosts"] == "claude"
+
+    def test_register_with_only_gemini_cli(self, boost, sandbox, monkeypatch):
+        calls = self._fake_clis(monkeypatch, "gemini")
+        r = boost("mcp", "register")
+        assert calls == [self._gemini_add()]
+        assert "Added stdio MCP server boost" in r.out
+        assert ("registered boost as an MCP server for Gemini CLI "
+                "(scope: user)") in r.out
+        assert "Claude Code" not in r.out
+        assert journal.events(action="mcp")[0]["hosts"] == "gemini"
+
+    def test_register_with_both_clis_registers_both(self, boost, sandbox,
+                                                    monkeypatch):
+        calls = self._fake_clis(monkeypatch, "claude", "gemini")
+        r = boost("mcp", "register")
+        assert calls == [self._claude_add(), self._gemini_add()]
+        assert ("registered boost as an MCP server for Claude Code "
+                "(scope: user)") in r.out
+        assert ("registered boost as an MCP server for Gemini CLI "
+                "(scope: user)") in r.out
+        assert journal.events(action="mcp")[0]["hosts"] == "claude,gemini"
+
+    def test_register_without_any_cli_prints_manual_commands(self, boost,
+                                                             sandbox,
+                                                             monkeypatch):
+        calls = self._fake_clis(monkeypatch)          # no agent CLI on PATH
+        r = boost("mcp", "register")
+        assert calls == []                            # nothing was run
+        assert "no agent CLI found (looked for: claude, gemini)" in r.out
+        assert " ".join(self._claude_add()) in r.out
+        assert " ".join(self._gemini_add()) in r.out
+        assert journal.events(action="mcp")[0]["hosts"] == ""
+
+        r = boost("mcp", "unregister")
+        assert "claude mcp remove boost" in r.out
+        assert "gemini mcp remove --scope user boost" in r.out
+        assert journal.events(action="mcp")[0]["subject"] == "unregister"
+
+    def test_explicit_host_registers_only_that_host(self, boost, sandbox,
+                                                    monkeypatch):
+        calls = self._fake_clis(monkeypatch, "claude", "gemini")
+        r = boost("mcp", "register", "--host", "gemini")
+        assert calls == [self._gemini_add()]          # claude was not a target
+        assert ("registered boost as an MCP server for Gemini CLI "
+                "(scope: user)") in r.out
+        assert "Claude Code" not in r.out
+
+    def test_explicit_host_missing_prints_that_hosts_command(self, boost,
+                                                             sandbox,
+                                                             monkeypatch):
+        # naming a host you have not installed yet must still show its argv —
+        # `auto` is the mode that skips silently, not `--host <name>`.
+        calls = self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--host", "gemini")
+        assert calls == []
+        assert "`gemini` CLI not found — run this yourself:" in r.out
+        assert " ".join(self._gemini_add()) in r.out
+        assert "claude mcp add" not in r.out
+        assert "no agent CLI found" not in r.out      # the named host said it
+
+    def test_host_all_reports_hosts_that_are_not_installed(self, boost, sandbox,
+                                                           monkeypatch):
+        # `all` is `auto` without the skip: a machine being set up sees the
+        # argv for an agent CLI it does not have yet.
+        calls = self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--host", "all")
+        assert calls == [self._claude_add()]
+        assert ("registered boost as an MCP server for Claude Code "
+                "(scope: user)") in r.out
+        assert "`gemini` CLI not found — run this yourself:" in r.out
+        assert " ".join(self._gemini_add()) in r.out
+
+    def test_unknown_host_rc1(self, boost, sandbox, monkeypatch):
+        self._fake_clis(monkeypatch, "claude", "gemini")
+        r = boost("mcp", "register", "--host", "bogus", expect=1)
+        assert "unknown MCP host 'bogus'" in r.err
+        assert "known hosts: claude, gemini" in r.err
+
+    def test_unregister_uses_each_hosts_grammar(self, boost, sandbox,
+                                                monkeypatch):
+        calls = self._fake_clis(monkeypatch, "claude", "gemini")
+        r = boost("mcp", "unregister")
+        # `gemini mcp remove` defaults to --scope project and would report
+        # "not found" while leaving the user-scope entry in place, so the
+        # scope flag is mandatory on the way out; claude's takes none.
+        assert calls == [["claude", "mcp", "remove", "boost"],
+                         ["gemini", "mcp", "remove", "--scope", "user",
+                          "boost"]]
+        assert ("unregistered boost as an MCP server for Claude Code "
+                "(scope: user)") in r.out
+        assert ("unregistered boost as an MCP server for Gemini CLI "
+                "(scope: user)") in r.out
+        assert journal.events(action="mcp")[0]["subject"] == "unregister"
 
     def test_register_names_server_before_env_flags(self, boost, sandbox,
                                                      monkeypatch):
         # Regression: `claude`'s `-e` is variadic, so the server name must come
         # before the first `-e` or it is swallowed as another env var
-        # ("Invalid environment variable format: boost"). Pin name < any `-e`.
-        monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
-                            lambda c: "/usr/local/bin/claude"
-                            if c == "claude" else None)
-        calls = []
-        monkeypatch.setattr(
-            "boost_cli.commands.configuration.subprocess.run",
-            lambda cmd, **kw: (calls.append(list(cmd)) or _proc(cmd, 0)))
+        # ("Invalid environment variable format: boost"). Pin name < any `-e`,
+        # and `--` immediately before the command boost is launched with.
+        calls = self._fake_clis(monkeypatch, "claude")
         boost("mcp", "register")
         cmd = calls[0]
         assert cmd[:4] == ["claude", "mcp", "add", "boost"]
         assert cmd.index("boost") < cmd.index("-e")
+        assert cmd[cmd.index("--") + 1] == self._shim()
+
+    def test_gemini_puts_flags_before_the_name_and_omits_the_separator(
+            self, boost, sandbox, monkeypatch):
+        # Regression: gemini's `add` takes yargs positionals
+        # (`[options] <name> <commandOrUrl> [args...]`), so flags may precede
+        # the name — but a `--` would be captured by the trailing variadic and
+        # passed through to boost as a literal argument.
+        calls = self._fake_clis(monkeypatch, "gemini")
+        boost("mcp", "register")
+        cmd = calls[0]
+        assert cmd[:3] == ["gemini", "mcp", "add"]
+        assert cmd.index("-e") < cmd.index("boost")
+        assert "--" not in cmd
+        assert cmd[cmd.index("boost") + 1] == self._shim()
 
     def test_register_failure(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",
-                            lambda c: "/usr/local/bin/claude")
+                            lambda c: "/usr/local/bin/" + c)
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
                             lambda cmd, **kw: _proc(cmd, 1, err="no auth"))
         r = boost("mcp", "register", expect=1)
         assert "claude mcp register failed: no auth" in r.err
+        # the failing host names itself — not a generic "an agent CLI failed"
+        r = boost("mcp", "register", "--host", "gemini", expect=1)
+        assert "gemini mcp register failed: no auth" in r.err
 
 
 # ---------------------------------------------------------------- self-update
