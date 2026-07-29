@@ -36,3 +36,21 @@ updates:
       - dependency-name: langchain-core
       - dependency-name: langchain-community
       - dependency-name: langchain-openai
+  # The two npm trees, for the same reason the pip entries exist: both are now
+  # hash-pinned by a committed package-lock.json, and a pin with no update path
+  # is only half the job. Dependabot scans one `directory` at a time and neither
+  # manifest is under the other, so both need their own entry.
+  #
+  # /            — stylelint + eslint for the theme assets (theme-lint.yml)
+  # /tests/visual — puppeteer-core + axe-core for the render/a11y/console sweeps
+  #
+  # Contributor-facing only: none of this ships. The runtime is stdlib Python and
+  # MANIFEST.in keeps both manifests out of the sdist.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /tests/visual
+    schedule:
+      interval: weekly

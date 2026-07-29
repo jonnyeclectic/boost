@@ -9,4 +9,7 @@ prune .idea
 prune .claude
 prune .github
 exclude .coverage
+# The npm lint/test toolchain (stylelint, eslint, puppeteer-core, axe-core). CI
+# only; nothing in the shipped runtime touches node.
+exclude package.json package-lock.json
 global-exclude __pycache__ *.pyc *.pyo .DS_Store

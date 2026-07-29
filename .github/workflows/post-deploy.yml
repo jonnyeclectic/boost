@@ -79,10 +79,13 @@ jobs:
         if: always()
         with:
           node-version: "22"
-      - name: install harness deps (pinned)
+      # `npm ci` from the committed tests/visual/package-lock.json — same
+      # hash-pinned tree the visual sweep installs, so a console failure here
+      # and a render failure there cannot come from two different puppeteers.
+      - name: install harness deps (hash-pinned)
         if: always()
         working-directory: tests/visual
-        run: npm install --no-save --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
       - name: console + runtime-request health (headless Chrome)
         # always(): an HTTP failure above must not hide a console failure here —
         # they are different breakages and both belong in one report.

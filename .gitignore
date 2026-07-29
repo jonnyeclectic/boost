@@ -235,6 +235,12 @@ mutants/
 # dir (see evals/run_evals.py), so only the per-run scores land here; the
 # committed evals/baseline.json is what regressions are measured against.
 evals/results.json
-tests/visual/node_modules/
 tests/visual/out/
-tests/visual/package-lock.json
+
+# Installed npm trees, never the lockfiles that describe them. Both
+# package-lock.json files ARE committed on purpose: package.json pins only the
+# direct dependencies, so without the lock every transitive package resolves
+# fresh at install time. The lock carries an integrity hash for all 181 (root)
+# and 81 (tests/visual) packages, which is what makes `npm ci` reproducible and
+# what OpenSSF Scorecard's Pinned-Dependencies check asks for.
+node_modules/
