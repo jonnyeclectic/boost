@@ -27,11 +27,14 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# Least privilege at the workflow level. While this workflow had exactly one
+# job the distinction did not exist — the workflow-level block *was* that job's
+# block — so the release's write scopes lived here harmlessly. With `guard`
+# alongside it they would also be handed to a job that only reads tags, which is
+# what zizmor's excessive-permissions audit flags. Every write scope now sits on
+# the job that actually needs it.
 permissions:
-  contents: write      # create the tag + GitHub Release
-  id-token: write      # OIDC for PyPI Trusted Publishing
-  attestations: write  # sign SLSA build-provenance for the dist artifacts
-  actions: read        # read the sibling gate workflows' run status (preflight)
+  contents: read
 
 jobs:
   guard:
@@ -95,6 +98,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: pypi
+    permissions:
+      contents: write      # create the tag + GitHub Release
+      id-token: write      # OIDC for PyPI Trusted Publishing
+      attestations: write  # sign SLSA build-provenance for the dist artifacts
+      actions: read        # read the sibling gate workflows' run status (preflight)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
