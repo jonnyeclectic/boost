@@ -5,6 +5,6 @@
   "devDependencies": {
     "eslint": "10.8.0",
     "stylelint": "16.26.1",
-    "stylelint-config-standard": "36.0.1"
+    "stylelint-config-standard": "40.0.0"
   }
 }
