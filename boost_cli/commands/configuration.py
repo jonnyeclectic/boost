@@ -871,8 +871,16 @@ def _tool_install(args: dict):
     res = store.install(entry)
     lines = ["installed %s v%s from %s → %s"
              % (res.name, entry.get("version", "?"), entry["tap"], res.dest),
-             "linked agents: %s" % (", ".join(res.linked) or "none"),
-             "quality score: %d/100" % res.score]
+             "linked agents: %s" % (", ".join(res.linked) or "none")]
+    # Without this an agent that reads the canonical store — Gemini CLI — sees
+    # only "linked agents: claude-code, windsurf, cursor", concludes the skill
+    # did not reach *it*, and goes back to reconstructing the work by hand.
+    # That is the exact failure this tool exists to prevent, so the line says
+    # plainly that the skill is already usable.
+    if res.native:
+        lines.append("available without linking (reads %s directly): %s"
+                     % (res.dest.parent, ", ".join(res.native)))
+    lines.append("quality score: %d/100" % res.score)
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
     # The same prompt-injection and secret scan `boost install` runs. This path

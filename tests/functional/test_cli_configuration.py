@@ -830,9 +830,14 @@ class TestMcp:
         assert by_id[7]["error"]["code"] == -32602
 
         assert "installed brainstorming v1.4.0 from fixture-tap" in text(8)
-        # gemini reads the canonical store directly, so it is never symlinked
+        # gemini reads the canonical store directly, so it is never symlinked —
+        # but the response MUST still say the skill reached it. A Gemini agent
+        # that sees only "linked agents: claude-code, windsurf, cursor" concludes
+        # the install missed it and rebuilds the work by hand, which is the one
+        # failure this tool exists to prevent.
         assert "linked agents: claude-code, windsurf, cursor" in text(8)
-        assert "gemini" not in text(8)
+        assert "available without linking" in text(8)
+        assert text(8).rstrip().endswith("directly): gemini\nquality score: 95/100")
         assert "quality score:" in text(8)
         assert "brainstorming v1.4.0 (fixture-tap)" in text(9)
         assert "installed: yes" in text(10)
