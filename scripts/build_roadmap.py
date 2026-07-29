@@ -60,6 +60,11 @@ STATUS_LABEL = {
     "inflight": "In flight",
     "next": "Next",
     "planned": "Planned",
+    # A measured "no". Without it, an item that was investigated and rejected
+    # sits on the board as `planned` forever and reads as backlog, so the next
+    # loop scanning for work re-opens the same question. The pill is muted
+    # rather than coloured because a decline is not a lifecycle stage.
+    "declined": "Declined",
 }
 
 # rstatus class -> visible label (design board).
