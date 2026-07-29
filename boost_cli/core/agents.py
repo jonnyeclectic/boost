@@ -68,6 +68,13 @@ def display_name(agent: str) -> str:
 
 
 def ensure_agent_dirs() -> None:
-    """Create every enabled agent's skills dir (`mkdir -p`, idempotent)."""
-    for d in enabled_agents().values():
+    """Create every *linking* agent's skills dir (`mkdir -p`, idempotent).
+
+    Not :func:`enabled_agents`: this exists so a skill has somewhere to be
+    linked, and boost never links into a native-store agent's dir. Creating
+    ``~/.gemini/skills`` anyway would leave an empty directory nothing ever
+    writes to, which ``boost heal`` would first report as a missing directory
+    it needed to create.
+    """
+    for d in linking_agents().values():
         d.mkdir(parents=True, exist_ok=True)

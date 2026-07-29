@@ -127,10 +127,23 @@ class TestDisplayName:
 
 
 class TestEnsureAgentDirs:
-    def test_creates_all_enabled_dirs(self, sandbox):
+    def test_creates_every_linking_agents_dir(self, sandbox):
         agents.ensure_agent_dirs()
-        for d in (".claude", ".windsurf", ".cursor", ".gemini"):
+        for d in (".claude", ".windsurf", ".cursor"):
             assert (sandbox / d / "skills").is_dir()
+
+    def test_a_native_store_agent_gets_no_empty_skills_dir(self, sandbox):
+        # nothing is ever linked into ~/.gemini/skills, so creating it would
+        # leave an empty directory that `boost heal` first reports as missing.
+        agents.ensure_agent_dirs()
+        assert not (sandbox / ".gemini" / "skills").exists()
+
+    def test_dir_is_created_once_links_skills_is_on(self, sandbox):
+        cfg = config.load()
+        cfg["agents"]["gemini"]["links_skills"] = True
+        config.save(cfg)
+        agents.ensure_agent_dirs()
+        assert (sandbox / ".gemini" / "skills").is_dir()
 
     def test_disabled_dir_not_created(self, sandbox):
         cfg = config.load()
@@ -139,7 +152,6 @@ class TestEnsureAgentDirs:
         agents.ensure_agent_dirs()
         assert (sandbox / ".claude" / "skills").is_dir()
         assert (sandbox / ".windsurf" / "skills").is_dir()
-        assert (sandbox / ".gemini" / "skills").is_dir()
         assert not (sandbox / ".cursor" / "skills").exists()
 
     def test_is_idempotent_when_dirs_exist(self, sandbox):

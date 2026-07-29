@@ -605,7 +605,9 @@ def cmd_heal(argv):
     dry = args.dry_run
     actions: List[str] = []
 
-    wanted = [paths.boost_home(), paths.repos_dir(), paths.cache_dir(), paths.logs_dir(), paths.state_dir(), paths.snapshots_dir(), paths.lock_history_dir(), paths.profiles_dir(), paths.store_dir(), *list(agents.enabled_agents().values())]
+    # linking_agents, matching agents.ensure_agent_dirs below: a native-store
+    # agent's skills dir is never written to, so it is not a missing directory.
+    wanted = [paths.boost_home(), paths.repos_dir(), paths.cache_dir(), paths.logs_dir(), paths.state_dir(), paths.snapshots_dir(), paths.lock_history_dir(), paths.profiles_dir(), paths.store_dir(), *list(agents.linking_agents().values())]
     missing = [d for d in wanted if not d.is_dir()]
     if missing:
         if dry:
