@@ -2,14 +2,14 @@
 id: bring-commands-under-mutation-testing
 board: code
 section: planned
-status: planned
+status: declined
 category: Testing · Gap
 complexity: XL
 impact: High
 wow: 3
-note: 
+note: declined 2026-07-29 — 71.9% measured, and the run cannot complete at all
 order: 2
-owner:
+owner: loop/roadmap-decisions
 pr:
 title: Bring <code>commands/</code> under mutation testing
 ---
@@ -47,3 +47,28 @@ The ~8,100-line command layer has <strong>zero</strong> mutation coverage: mutmu
            One prerequisite is already fixed: <code>--no-mcp</code> leaked through
            <code>os.environ</code> and made the suite order-dependent, which mutmut exposes
            because it runs whichever test subset covers each mutant.
+           <b>Declined 2026-07-29.</b> Not "hard" — <em>blocked</em>, and the block is
+           upstream. mutmut <b>3.6.0 is still the latest release</b>, and
+           <code>src/mutmut/__main__.py:120</code> still reads
+           <code>source_paths = [p.resolve(strict=True) for p in Config.get().source_paths]</code>
+           — unconditionally, before the <code>max_stack_depth</code> guard — on paths that
+           <code>configuration.py:102</code> builds as plain relative <code>Path</code>s. Every
+           <code>chdir</code>-ing functional test therefore kills the run, and the functional
+           suite is precisely what takes <code>commands/</code> from 17.9% to 91.5% line
+           coverage. So the two candidate configurations are "floors out near 18%" and "crashes";
+           there is no third. Even granting a fix, the measured numbers already refuse the
+           proposal on their own terms: <b>71.9%</b> against an <b>80%</b> blocking floor, with
+           survivors spread evenly rather than pooled in one testable gap, at
+           <b>2.5–4.5 hours</b> per run against an ~18-minute job. A gate that is 8 points red
+           on the day it lands does not gate anything; it just makes <code>main</code> red.
+           <b>The lead, if anyone reopens this:</b> the crash is a relative-path bug, and
+           <code>source_paths</code> is not required to be relative — an absolute path survives
+           <code>resolve(strict=True)</code> from any working directory. Whether the rest of
+           mutmut's <code>mutants/</code> copy machinery tolerates one is untested. That, plus a
+           non-blocking scheduled job that rotates one module per week, is the shape worth
+           trying; a blocking 80% floor is not.
+           <b>What is not lost by declining.</b> The architecture already puts behaviour in
+           <code>core/</code> — which <em>is</em> mutation-gated at 80% — and keeps
+           <code>commands/</code> as thin CLI glue. The uncovered layer is the one deliberately
+           designed to hold the least logic, and it still carries 91.5% line coverage from the
+           functional suite.
