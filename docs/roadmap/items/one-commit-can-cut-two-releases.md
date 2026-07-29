@@ -10,7 +10,7 @@ wow: 3
 note: guarded on PyPI, not on the tag — so retries still work
 order: 67
 owner: fix/release-idempotence
-pr:
+pr: 325
 title: One commit can cut two releases, and the naive guard against it breaks retries
 ---
 <code>publish.yml</code> checks out <code>ref: main</code> rather than the commit whose
