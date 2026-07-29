@@ -100,9 +100,18 @@ jobs:
       - name: actionlint (workflow linting + shellcheck)
         # The release is fully automated across every workflow file — a malformed
         # ${{ }} expression or a bug in a run: block is a broken publish. Pin the
-        # binary; shellcheck is preinstalled on the runner, so run: blocks are
-        # checked too.
+        # binary.
+        #
+        # actionlint does not lint run: blocks itself: it shells out to
+        # shellcheck, and when shellcheck is absent it skips them and still
+        # exits 0. This step used to rely on the runner image happening to
+        # preinstall it — an unpinned, unversioned dependency on somebody
+        # else's base image, silently revocable, whose removal would look
+        # exactly like a passing lint. shellcheck now comes from
+        # requirements/lint-tools.txt (installed above, hash-pinned), so assert
+        # it is there rather than assume it.
         run: |
+          command -v shellcheck
           curl -sSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar xz actionlint
           ./actionlint -color
       - name: workflow SAST (zizmor)
