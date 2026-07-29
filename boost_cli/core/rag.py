@@ -421,13 +421,17 @@ def rerank(query: str, hits: List[Hit], limit: int = 10) -> Tuple[List[Hit], str
     return (picked + rest)[:limit], "Claude relevance"
 
 
-def _retrieve_any(query: str, k: int, kind: Optional[str],
-                  entries: Optional[List[dict]]
-                  ) -> Tuple[Optional[List[Hit]], str]:
+def retrieve_any(query: str, k: int = 60, kind: Optional[str] = None,
+                 entries: Optional[List[dict]] = None
+                 ) -> Tuple[Optional[List[Hit]], str]:
     """Prefer the opt-in dense backend, floor to BM25.
 
     Returns ``(hits, engine_label)``; ``hits`` is ``None`` only when no index of
     any kind exists so the caller can fall back to ``catalog.search``.
+
+    Public because every retrieval entry point must make the same engine
+    choice: `cmd_search` calling ``retrieve`` directly meant the CLI could
+    never use a built dense index, while the MCP path could.
     """
     from . import dense
     if dense.ready():
@@ -454,7 +458,7 @@ def search(query: str, limit: int = 10, kind: Optional[str] = None,
     Returns ``(hits, ranker_label)``, or ``None`` when no index exists yet so
     the caller can fall back to ``catalog.search``.
     """
-    hits, engine = _retrieve_any(query, max(60, limit * 4), kind, entries)
+    hits, engine = retrieve_any(query, max(60, limit * 4), kind, entries)
     if hits is None:
         return None
     if smart:
