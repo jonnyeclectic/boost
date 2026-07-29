@@ -61,7 +61,17 @@ lint:
 	$(VENV)/bin/interrogate boost_cli/core
 	$(VENV)/bin/refurb boost_cli
 	$(VENV)/bin/codespell boost_cli docs README.md
-	@if command -v actionlint >/dev/null 2>&1; then actionlint; \
+	@# actionlint does not lint `run:` blocks itself — it shells out to
+	@# shellcheck, and if shellcheck is not on PATH it skips them silently and
+	@# still exits 0. So `make lint` could report a clean workflow lint having
+	@# never looked inside a single script. shellcheck is pinned in
+	@# requirements/lint-tools.in for exactly this; put $(VENV)/bin on PATH so
+	@# actionlint finds it, and fail loudly rather than run a hollow check.
+	@if command -v actionlint >/dev/null 2>&1; then \
+	  if [ ! -x $(VENV)/bin/shellcheck ]; then \
+	    echo "shellcheck missing from $(VENV) — actionlint would skip every run: block. Re-run 'make venv'."; exit 1; \
+	  fi; \
+	  PATH="$(CURDIR)/$(VENV)/bin:$$PATH" actionlint; \
 	else echo "actionlint not on PATH — skipping (CI enforces it)"; fi
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
