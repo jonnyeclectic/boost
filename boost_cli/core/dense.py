@@ -115,6 +115,12 @@ def ready() -> bool:
             return False
         if meta.get("provider") != embed.provider():
             return False
+        # Model, not just provider+dim: two models from one provider can share
+        # a dimension and still be different embedding spaces (voyage-3 and
+        # voyage-4 are both 1024-d), so serving stale vectors would silently
+        # mix spaces rather than fail loudly.
+        if meta.get("model") != embed.model():
+            return False
         if meta.get("dim") != embed.dimension():
             return False
         try:
@@ -147,7 +153,9 @@ def build(entries: Optional[List[dict]] = None,
         return None
     try:
         meta = _read_meta(con)
-        same_backend = (meta.get("provider") == prov and meta.get("dim") == dim)
+        same_backend = (meta.get("provider") == prov
+                        and meta.get("model") == mdl
+                        and meta.get("dim") == dim)
         if force or not same_backend:
             _wipe(con)
         _ensure_schema(con, dim)
@@ -172,9 +180,16 @@ def build(entries: Optional[List[dict]] = None,
         removed_taps = sorted(_indexed_taps(con) - {e["tap"] for e in entries})
         _delete_taps(con, changed_taps + removed_taps)
 
-        added = _embed_and_store(con, fresh, tap_paths)
+        added, failed_taps = _embed_and_store(con, fresh, tap_paths)
+        # Only record a commit for a tap whose chunks actually landed. Recording
+        # one for a tap that stored nothing makes every later non-forced run
+        # treat it as already built and skip it — one transient rate limit would
+        # otherwise leave the store permanently empty until `--force`.
+        failed_safe = {t.replace("/", "__") for t in failed_taps}
+        recorded = {safe: c for safe, c in commits.items()
+                    if safe not in failed_safe}
         _write_meta(con, {"version": INDEX_VERSION, "provider": prov,
-                          "model": mdl, "dim": dim, "commits": commits})
+                          "model": mdl, "dim": dim, "commits": recorded})
         con.commit()
         total = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         return {
@@ -185,6 +200,7 @@ def build(entries: Optional[List[dict]] = None,
             "reindexed": changed_taps,
             "pruned": removed_taps,
             "reused": sorted(reused),
+            "failed": sorted(failed_taps),
             "provider": prov,
             "model": mdl,
         }
@@ -210,19 +226,31 @@ def _delete_taps(con: sqlite3.Connection, taps: List[str]) -> None:
 
 
 def _embed_and_store(con: sqlite3.Connection, entries: List[dict],
-                     tap_paths: Optional[Dict[str, Path]]) -> int:
+                     tap_paths: Optional[Dict[str, Path]]
+                     ) -> Tuple[int, set]:
+    """Embed every chunk of ``entries``; returns ``(added, failed_taps)``.
+
+    A batch the provider rejects (rate limit, quota, oversized input) yields no
+    vectors. Its taps are reported back rather than silently dropped, so the
+    caller can avoid recording a commit for a tap that stored nothing.
+    """
     mod = _load()
     if mod is None:          # [rag] extra absent — nothing to serialize into
-        return 0             # (callers fall back to BM25; see module docstring)
+        # Report every tap as failed so the caller records no commits: marking
+        # them built with zero vectors stored is what leaves the store
+        # permanently empty. (callers fall back to BM25; see module docstring)
+        return 0, {e["tap"] for e in entries}
     rows: List[Tuple[dict, int, str]] = []   # (entry, chunk_ix, text)
     for e in entries:
         for ci, text in enumerate(_chunk_texts(e, tap_paths)):
             rows.append((e, ci, text))
     added = 0
+    failed_taps: set = set()
     for start in range(0, len(rows), _BATCH):
         batch = rows[start:start + _BATCH]
         vecs = embed.embed([t for _e, _c, t in batch], input_type="document")
         if not vecs or len(vecs) != len(batch):
+            failed_taps.update(e["tap"] for e, _c, _t in batch)
             continue
         for (e, ci, text), vec in zip(batch, vecs):
             cur = con.execute(
@@ -233,7 +261,7 @@ def _embed_and_store(con: sqlite3.Connection, entries: List[dict],
             con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
                         (cur.lastrowid, mod.serialize_float32(vec)))
             added += 1
-    return added
+    return added, failed_taps
 
 
 def retrieve(query: str, k: int = 60, kind: Optional[str] = None,

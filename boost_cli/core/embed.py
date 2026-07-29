@@ -23,7 +23,10 @@ OPENAI_URL = "https://api.openai.com/v1/embeddings"
 
 # model -> output dimension. Stored in the vector index so a provider/model
 # switch is detected and forces a clean rebuild instead of mixing spaces.
-VOYAGE_MODEL = "voyage-3"
+# voyage-4 over voyage-3: same 1024-d default and same $/token, but the
+# voyage-4 generation carries a 200M-token complimentary allowance where
+# voyage-3 has none — so a full index build of a large corpus is free.
+VOYAGE_MODEL = "voyage-4"
 OPENAI_MODEL = "text-embedding-3-small"
 _DIMS = {VOYAGE_MODEL: 1024, OPENAI_MODEL: 1536}
 
