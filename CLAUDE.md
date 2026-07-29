@@ -11,7 +11,7 @@ make venv                                      # .venv from the hash-pinned requ
 .venv/bin/pytest tests/unit/test_catalog.py -q                    # one test file
 .venv/bin/pytest tests/unit/test_catalog.py::test_scan_dir -q     # one test
 .venv/bin/pytest tests/functional -q -k install                   # functional tests matching "install"
-make lint                                      # the whole static tier — see the recipe, it is 18 commands
+make lint                                      # the whole static tier — read the recipe, it is long
 make test                                      # unit + functional with 80% coverage gate
 make check                                     # the full required gate — see table below
 

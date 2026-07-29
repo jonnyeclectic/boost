@@ -30,3 +30,13 @@ interrogate==1.7.0
 # itself, which is why this set is lint-only and never a runtime dependency.
 # Reuses the mypy pinned above.
 refurb==2.3.1
+# shellcheck, as a pinned dependency rather than an assumption. actionlint does
+# not lint `run:` blocks itself — it shells out to shellcheck, and when
+# shellcheck is not on PATH it skips that entirely and still exits 0. Same
+# workflow file, same actionlint: without shellcheck, no output and exit 0; with
+# it, `SC2001` and exit 1. CI got away with it because the GitHub runner image
+# happens to preinstall shellcheck, which is an unpinned, unversioned, silently
+# revocable dependency on somebody else's base image — and locally, where it is
+# usually absent, `make lint` was passing a check it never ran. Pinning it here
+# puts it on both sides and makes the version reviewable like every other tool.
+shellcheck-py==0.11.0.1
