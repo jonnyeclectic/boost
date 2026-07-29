@@ -10,7 +10,7 @@ wow: 4
 note: the one install path with no human watching was the one not scanning
 order: 2
 owner: fix/mcp-install-scan
-pr:
+pr: 327
 title: The MCP <code>boost_install</code> tool skipped the injection scan the CLI runs
 ---
 <code>prompt-injection-scanning-of-skill-markdown</code> shipped the scanner and
