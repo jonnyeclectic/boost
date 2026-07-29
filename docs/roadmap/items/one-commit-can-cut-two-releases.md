@@ -48,5 +48,9 @@ ci will trigger its own release, but it means some merges never get their own ve
 
 <b>Already mitigated:</b> <code>sbom.yml</code> now builds and attaches an SBOM for <em>every</em>
 tag on the commit rather than only the highest, so a duplicate release no longer produces a release
-with no SBOM. Each tag is built separately, because setuptools-scm reads the version from the tag
-and one SBOM cannot honestly describe two versions.
+with no SBOM. Each tag is built separately so its SBOM carries its own version.
+
+<b>Correction:</b> the claim above originally read "because setuptools-scm reads the version from
+the tag", and that is false — it reads the version from the <em>commit</em>, so separate checkouts
+of two tags on one commit produce the same version. That was a second, quieter consequence of the
+duplicate release, fixed separately in <code>sbom-declares-the-wrong-version</code>.
