@@ -1106,3 +1106,54 @@ class TestReindex:
         assert data["dense"]["chunks"] >= 1
         assert data["dense"]["provider"] == "openai"
         assert dense.ready() is True
+
+    def test_cli_search_uses_dense_when_the_vector_store_is_built(
+            self, boost, tapped, monkeypatch):
+        """`boost search` must answer from the same engine the MCP server does.
+
+        It previously called ``rag.retrieve`` directly, so a built dense index
+        served the MCP path while the CLI stayed BM25-only.
+        """
+        if not _vec_loadable():
+            pytest.skip("sqlite-vec extension not loadable here")
+        from boost_cli.core import dense, embed
+
+        def toy(texts, input_type=None, timeout=60):
+            return [[1.0, 2.0, 3.0] for _ in texts]
+        monkeypatch.setattr(embed, "embed", toy)
+        monkeypatch.setattr(embed, "available", lambda: True)
+        monkeypatch.setattr(embed, "provider", lambda: "openai")
+        monkeypatch.setattr(embed, "model", lambda: "toy-3")
+        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        boost("reindex", "--dense")
+        assert dense.ready() is True
+        r = boost("search", "brainstorming")
+        assert "ranked by dense vectors" in r.out
+        assert "full-content BM25" not in r.out
+
+    def test_empty_store_warns_instead_of_reporting_success(
+            self, boost, tapped, monkeypatch):
+        """A store left empty by an earlier run must not print a green check.
+
+        Reporting success on an empty store cost a real user a long debugging
+        detour: every tap reads as already-built, so the reuse path skips
+        everything and stores nothing.
+        """
+        if not _vec_loadable():
+            pytest.skip("sqlite-vec extension not loadable here")
+        from boost_cli.core import dense, embed
+
+        def toy(texts, input_type=None, timeout=60):
+            return [[1.0, 2.0, 3.0] for _ in texts]
+        monkeypatch.setattr(embed, "embed", toy)
+        monkeypatch.setattr(embed, "available", lambda: True)
+        monkeypatch.setattr(embed, "provider", lambda: "openai")
+        monkeypatch.setattr(embed, "model", lambda: "toy-3")
+        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        # Records every tap commit while storing nothing — the exact state a
+        # rate-limited pre-fix run left behind.
+        dense.build(entries=[], force=True)
+        r = boost("reindex", "--dense")
+        assert "dense vector store is empty" in r.out
+        assert "--force" in r.out
+        assert dense.ready() is False

@@ -150,13 +150,15 @@ class TestReadyGuards:
         monkeypatch.setattr(dense, "db_path", lambda: dbfile)
         monkeypatch.setattr(embed, "available", lambda: True)
         monkeypatch.setattr(embed, "provider", lambda: "openai")
+        monkeypatch.setattr(embed, "model", lambda: "toy-3")
         monkeypatch.setattr(embed, "dimension", lambda: 3)
         return monkeypatch
 
     def _use(self, monkeypatch, con):
         monkeypatch.setattr(dense, "_connect", lambda: con)
 
-    _GOOD: ClassVar[dict] = {"version": dense.INDEX_VERSION, "provider": "openai", "dim": 3}
+    _GOOD: ClassVar[dict] = {"version": dense.INDEX_VERSION,
+                             "provider": "openai", "model": "toy-3", "dim": 3}
 
     def test_true_when_everything_matches(self, wired):
         self._use(wired, self._seed(self._GOOD, rows=1))
@@ -180,6 +182,17 @@ class TestReadyGuards:
 
     def test_false_on_dim_mismatch(self, wired):
         self._use(wired, self._seed({**self._GOOD, "dim": 99}))
+        assert dense.ready() is False
+
+    def test_false_on_model_mismatch(self, wired):
+        # provider and dim still match — only the model moved (voyage-3 ->
+        # voyage-4 is this exact case, both 1024-d under provider "voyage")
+        self._use(wired, self._seed({**self._GOOD, "model": "toy-4"}))
+        assert dense.ready() is False
+
+    def test_false_when_model_absent_from_meta(self, wired):
+        meta = {k: v for k, v in self._GOOD.items() if k != "model"}
+        self._use(wired, self._seed(meta))
         assert dense.ready() is False
 
     def test_false_when_chunks_table_missing(self, wired):
@@ -485,11 +498,56 @@ class TestBuildWithoutExtension:
         assert stats["reused"] == []
         assert stats["provider"] == "voyage"
 
+    def test_model_switch_wipes_and_rebuilds(self, store):
+        # provider and dim unchanged, only the model moved — the voyage-3 ->
+        # voyage-4 case. Without the model term in `same_backend` the unchanged
+        # tap commit would reuse vectors from the old embedding space.
+        dense.build(entries=_ENTRIES, force=True)
+        store.setattr(embed, "model", lambda: "toy-4")
+        stats = dense.build(entries=_ENTRIES)              # no force needed
+        assert stats["reused"] == []
+        assert stats["model"] == "toy-4"
+        assert stats["added"] == 2
+        assert stats["chunks"] == 2                        # wiped, not appended
+
     def test_batch_count_mismatch_drops_that_batch(self, store):
         store.setattr(embed, "embed", lambda texts, **k: [[1.0, 2.0, 3.0]])
         stats = dense.build(entries=_ENTRIES, force=True)
         assert stats["added"] == 0
         assert stats["chunks"] == 0
+
+    def test_failed_batch_is_reported_not_swallowed(self, store):
+        store.setattr(embed, "embed", lambda texts, **k: None)   # provider 429s
+        stats = dense.build(entries=_ENTRIES, force=True)
+        assert stats["added"] == 0
+        assert stats["failed"] == ["acme/skills"]
+
+    def test_failed_tap_commit_is_not_recorded(self, store):
+        # A rate-limited run must not mark the tap "built at c1" — otherwise the
+        # next non-forced run reuses it and the store stays empty forever.
+        store.setattr(embed, "embed", lambda texts, **k: None)
+        dense.build(entries=_ENTRIES, force=True)
+        con = sqlite3.connect(str(dense.db_path()))
+        meta = dense._read_meta(con)
+        con.close()
+        assert meta["commits"] == {}
+
+    def test_rerun_after_failure_retries_instead_of_reusing(self, store):
+        store.setattr(embed, "embed", lambda texts, **k: None)
+        dense.build(entries=_ENTRIES, force=True)         # fails, stores nothing
+        store.setattr(embed, "embed", _toy_embed)         # provider recovers
+        stats = dense.build(entries=_ENTRIES)             # no --force needed
+        assert stats["reused"] == []
+        assert stats["failed"] == []
+        assert stats["added"] == 2
+        assert stats["chunks"] == 2
+
+    def test_successful_tap_commit_is_recorded(self, store):
+        dense.build(entries=_ENTRIES, force=True)
+        con = sqlite3.connect(str(dense.db_path()))
+        meta = dense._read_meta(con)
+        con.close()
+        assert meta["commits"] == {"acme__skills": "c1"}
 
     def test_empty_entries_builds_nothing(self, store):
         stats = dense.build(entries=[], force=True)

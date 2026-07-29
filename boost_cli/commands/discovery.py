@@ -79,6 +79,9 @@ def _ai_rank(query: str, scored):
     return [by_name[n] for n in names] + rest
 
 
+_ENGINE_LABEL = {"BM25 full-content": "full-content BM25"}
+
+
 def cmd_search(argv):
     """Search the tap catalogs, optionally AI-reranked with --smart."""
     p = cliparse.parser(
@@ -104,9 +107,13 @@ def cmd_search(argv):
     if not use_rag:
         with spin.Spinner("building the search index (first run)"):
             use_rag = rag.ensure()
+    engine = ""
     if use_rag:
-        scored = [(h["entry"], h["score"])
-                  for h in rag.retrieve(query, k=max(60, args.limit * 4))]
+        # retrieve_any, not retrieve: this picks the dense backend when one is
+        # built and floors to BM25 otherwise, so the CLI and the MCP server
+        # answer from the same engine instead of the CLI being BM25-only.
+        hits, engine = rag.retrieve_any(query, k=max(60, args.limit * 4))
+        scored = [(h["entry"], h["score"]) for h in (hits or [])]
     else:
         scored = catalog.search(query)
     if args.as_json:
@@ -116,7 +123,10 @@ def cmd_search(argv):
         out.info("no matches for %r" % query)
         out.info(out.role("try `boost discover %s` to search all of GitHub" % query, "muted"))
         return 0
-    ranker = "full-content BM25" if use_rag else "heuristic relevance"
+    # The CLI's long-standing wording for the BM25 engine differs from the label
+    # rag/eval use ("BM25 full-content"), and both are load-bearing: the latter
+    # is pinned in tests/eval/baseline.json. Map instead of moving either.
+    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else "heuristic relevance"
     if args.smart:
         if ai.available():
             with spin.Spinner("ranking %d matches with Claude" % len(scored)):
@@ -190,8 +200,24 @@ def cmd_reindex(argv):
         if dense_stats is None:
             out.warn("dense index skipped — %s" % embed.fallback_note())
         else:
-            out.ok("embedded %d passages (%s) into the dense vector store"
-                   % (dense_stats["chunks"], dense_stats["provider"]))
+            failed = dense_stats.get("failed") or []
+            if failed:
+                out.warn("embedding failed for %d tap(s) — %d passages stored. "
+                         "The provider rejected those batches (rate limit, "
+                         "quota, or oversized input); their commits were not "
+                         "recorded, so a rerun retries them."
+                         % (len(failed), dense_stats["chunks"]))
+            elif not dense_stats["chunks"]:
+                # Reporting success with an empty store sent a real user chasing
+                # the wrong cause: a stale run can mark every tap "built", so the
+                # reuse path skips everything and stores nothing.
+                out.warn("the dense vector store is empty — %d tap(s) were "
+                         "reused as already-built. Rebuild with "
+                         "`boost reindex --dense --force`."
+                         % len(dense_stats["reused"]))
+            else:
+                out.ok("embedded %d passages (%s) into the dense vector store"
+                       % (dense_stats["chunks"], dense_stats["provider"]))
     journal.log("reindex", "%d passages" % stats["docs"],
                 entries=stats["entries"])
     return 0
