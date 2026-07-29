@@ -51,6 +51,19 @@ class TestProviderSelection:
         assert embed.dimension() == 1024
         assert embed.available() is True
 
+    def test_every_selectable_model_has_a_dimension(self, sandbox, monkeypatch):
+        """A model bump that forgets ``_DIMS`` would hand ``dense`` a None dim.
+
+        ``dense.build`` bails out on a None dimension, so the vector store would
+        silently never build rather than fail loudly.
+        """
+        for env in ("VOYAGE_API_KEY", "OPENAI_API_KEY"):
+            monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+            monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+            monkeypatch.setenv(env, "k")
+            assert embed.model() in embed._DIMS
+            assert isinstance(embed.dimension(), int)
+
     def test_openai_when_only_openai(self, sandbox, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "o")
         assert embed.provider() == "openai"

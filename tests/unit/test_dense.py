@@ -203,6 +203,27 @@ class TestIncremental:
         monkeypatch.setattr(embed, "dimension", lambda: 4)
         assert dense.ready() is False
 
+    def test_model_switch_invalidates(self, dense_env, monkeypatch):
+        # Same provider, same dimension, different model — voyage-3 -> voyage-4
+        # is exactly this shape. provider+dim alone cannot catch it.
+        dense.build(entries=_ENTRIES, force=True)
+        assert dense.ready() is True
+        monkeypatch.setattr(embed, "model", lambda: "toy-4")
+        assert dense.ready() is False
+
+    def test_model_switch_reembeds_instead_of_reusing(self, dense_env,
+                                                      monkeypatch):
+        # The tap commit is unchanged, so only the model check can stop the
+        # reuse path from serving vectors from the previous embedding space.
+        dense.build(entries=_ENTRIES, force=True)
+        monkeypatch.setattr(embed, "model", lambda: "toy-4")
+        stats = dense.build(entries=_ENTRIES)
+        assert stats["reused"] == []
+        assert stats["model"] == "toy-4"
+        assert stats["added"] == len(_ENTRIES)
+        assert stats["chunks"] == len(_ENTRIES)   # wiped, not appended
+        assert dense.ready() is True
+
     def test_added_and_chunks_on_reindex(self, dense_env, monkeypatch):
         dense.build(entries=_ENTRIES, force=True)
         monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c2"})
