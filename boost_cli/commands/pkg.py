@@ -22,7 +22,7 @@ from ..core import (
     config,
     frontmatter,
     gitutil,
-    injectscan,
+    installscan,
     integrity,
     journal,
     lockfile,
@@ -31,7 +31,6 @@ from ..core import (
     registry,
     resolve,
     scopes,
-    secretscan,
     staleness,
     store,
     typosquat,
@@ -78,19 +77,10 @@ def _check_agents(names: Optional[List[str]]) -> Optional[List[str]]:
     return names
 
 
-def _scan_label(res: store.InstallResult) -> str:
-    """What was scanned, for the warning text: skills ship a SKILL.md; rules and
-    workflows ship a single file, so name the kind instead."""
-    return "SKILL.md" if res.kind == "skill" else "%s content" % res.kind
-
-
-def _scan_findings(res: store.InstallResult, scanner):
-    """Findings for the content boost just installed. Skills scan their
-    SKILL.md; rules/workflows scan the raw source (res.scan_text) — the exact
-    Markdown that landed, not a non-existent SKILL.md under the dest file."""
-    if res.scan_text is not None:
-        return scanner.scan_text(res.scan_text)
-    return scanner.scan_file(res.dest / "SKILL.md")
+def _emit_scan(reports) -> None:
+    """Print installscan reports as warnings. Silent when there is nothing."""
+    for line in installscan.as_lines(reports):
+        out.warn(line)
 
 
 def _warn_injection(res: store.InstallResult) -> None:
@@ -98,16 +88,10 @@ def _warn_injection(res: store.InstallResult) -> None:
 
     boost installs Markdown the agent then executes, so the installed content is
     scanned (core.injectscan) and any hits are surfaced worst-first. Advisory
-    only — it warns, it never blocks the install.
+    only — it warns, it never blocks the install. The scan itself lives in
+    core.installscan so every front end shares it, not just this one.
     """
-    findings = _scan_findings(res, injectscan)
-    if not findings:
-        return
-    out.warn("%s: %d suspicious pattern%s in %s (%s) — review before use"
-             % (res.name, len(findings), "" if len(findings) == 1 else "s",
-                _scan_label(res), injectscan.worst_severity(findings)))
-    for f in findings[:3]:
-        out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
+    _emit_scan(installscan.scan(res, installscan.INJECTION))
 
 
 def _warn_secrets(res: store.InstallResult) -> None:
@@ -117,14 +101,7 @@ def _warn_secrets(res: store.InstallResult) -> None:
     surfaces any hits worst-first, with the secret value redacted. Advisory
     only — it warns, it never blocks the install.
     """
-    findings = _scan_findings(res, secretscan)
-    if not findings:
-        return
-    out.warn("%s: %d possible secret%s in %s (%s) — do not commit"
-             % (res.name, len(findings), "" if len(findings) == 1 else "s",
-                _scan_label(res), secretscan.worst_severity(findings)))
-    for f in findings[:3]:
-        out.warn("  L%d [%s] %s" % (f.line, f.severity, f.description))
+    _emit_scan(installscan.scan(res, installscan.SECRET))
 
 
 def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
