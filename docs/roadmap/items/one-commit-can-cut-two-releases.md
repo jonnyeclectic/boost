@@ -2,14 +2,14 @@
 id: one-commit-can-cut-two-releases
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Release safety
 complexity: M
 impact: Med
 wow: 3
-note: v1.0.277 and v1.0.278 are the same commit; so were 246/247 and 248/249
+note: guarded on PyPI, not on the tag — so retries still work
 order: 67
-owner:
+owner: fix/release-idempotence
 pr:
 title: One commit can cut two releases, and the naive guard against it breaks retries
 ---
@@ -51,6 +51,18 @@ tag on the commit rather than only the highest, so a duplicate release no longer
 with no SBOM. Each tag is built separately so its SBOM carries its own version.
 
 <b>Correction:</b> the claim above originally read "because setuptools-scm reads the version from
-the tag", and that is false — it reads the version from the <em>commit</em>, so separate checkouts
-of two tags on one commit produce the same version. That was a second, quieter consequence of the
-duplicate release, fixed separately in <code>sbom-declares-the-wrong-version</code>.
+the tag", and that is false &mdash; it reads the version from the <em>commit</em>, so separate
+checkouts of two tags on one commit produce the same version. That was a second, quieter
+consequence of the duplicate release, fixed separately in
+<code>sbom-declares-the-wrong-version</code>.
+
+<b>Shipped</b> &mdash; the PyPI option above, because it is the only one that answers what was
+actually <em>published</em> rather than what was merely attempted. A new <code>guard</code> job runs
+<code>scripts/release_guard.py</code> before <code>release</code> and resolves three cases: tagged
+and the version is on PyPI &rarr; skip; tagged and it is <b>not</b> on PyPI &rarr; release, because
+that is the failed-upload retry this card warned a tag-only guard would break; untagged &rarr;
+release. It fails <em>closed</em> &mdash; tagged but PyPI unreadable also skips, since a missed
+release is one <code>workflow_dispatch</code> away while a duplicate burns a version on identical
+code. A separate job rather than an <code>if:</code> on all eight release steps, so one forgotten
+condition cannot half-execute a release. <code>ref: main</code> stays: shipping the tip is
+deliberate, and idempotence was the piece missing from it.
