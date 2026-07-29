@@ -27,14 +27,17 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+# Least privilege at the workflow level. While this workflow had exactly one
+# job the distinction did not exist — the workflow-level block *was* that job's
+# block — so the release's write scopes lived here harmlessly. With `guard`
+# alongside it they would also be handed to a job that only reads tags, which is
+# what zizmor's excessive-permissions audit flags. Every write scope now sits on
+# the job that actually needs it.
 permissions:
-  contents: write      # create the tag + GitHub Release
-  id-token: write      # OIDC for PyPI Trusted Publishing
-  attestations: write  # sign SLSA build-provenance for the dist artifacts
-  actions: read        # read the sibling gate workflows' run status (preflight)
+  contents: read
 
 jobs:
-  release:
+  guard:
     # Gate on CI success; workflow_dispatch carries no workflow_run payload.
     #
     # The other two conditions are what keep this trigger from being reachable
@@ -57,8 +60,49 @@ jobs:
               && github.event.workflow_run.event == 'push'
               && github.event.workflow_run.head_repository.full_name == github.repository) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read   # only reads tags; the release job keeps the write scopes
+    outputs:
+      proceed: ${{ steps.guard.outputs.proceed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0    # all tags — the guard reads them
+          persist-credentials: false
+
+      - name: skip a commit PyPI already has
+        id: guard
+        # `ref: main` above is deliberate — a release ships the tip, not the
+        # commit that fired the trigger. What that costs is idempotence: two
+        # merges landing minutes apart produce two ci runs, both of which
+        # resolve main to the SAME tip, so the second run releases a commit the
+        # first already shipped, under a second version number. 1.0.282/1.0.283
+        # were kept apart by spacing the merges by hand.
+        #
+        # The guard asks PyPI rather than looking for a tag, because the
+        # documented recovery from a failed upload is to re-run the failed
+        # release run — and at that point HEAD *is* tagged from the first
+        # attempt. Only PyPI distinguishes "already published" from "tagged but
+        # the upload died". See scripts/release_guard.py.
+        #
+        # A separate job (not a step) so a skip costs one short runner rather
+        # than an `if:` on every step of the release job, where one forgotten
+        # condition would mean a half-executed release.
+        run: python3 scripts/release_guard.py --project boost-skill-cli
+
+  release:
+    needs: guard
+    if: needs.guard.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: pypi
+    permissions:
+      contents: write      # create the tag + GitHub Release
+      id-token: write      # OIDC for PyPI Trusted Publishing
+      attestations: write  # sign SLSA build-provenance for the dist artifacts
+      actions: read        # read the sibling gate workflows' run status (preflight)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
