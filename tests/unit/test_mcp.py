@@ -116,15 +116,22 @@ class TestHandleRequest:
         instr = resp["result"]["instructions"]
         assert instr == mcp.INSTRUCTIONS
         low = instr.lower()
-        # TWO triggers must survive here. Authoring alone was the original
+        # THREE triggers must survive here. Authoring alone was the original
         # framing and it under-fired: agents reached for boost only when about
         # to write a skill, never to check whether one already covered the work
-        # in front of them. Dropping either trigger regresses that.
+        # in front of them. Dropping any trigger regresses that.
         assert "starting a task" in low            # trigger 1: leverage first
         assert "boost_list" in instr               # ...what is already installed
         assert "before you write a new skill" in low   # trigger 2: authoring
         assert "boost_search" in instr             # the concrete first action
         assert "already exists" in low             # the "don't reinvent" frame
+        # Trigger 3 closes the hole the other two leave open: both fire at a
+        # recognized task boundary, so a turn that starts trivial and escalates
+        # is never re-evaluated. Observed in practice — a one-line question grew
+        # into hours of retrieval work and the check never fired, because the
+        # proportionality carve-out below had already excused the opening turn.
+        assert "scope growth" in low               # trigger 3: escalation
+        assert "grows into one" in low             # ...wired into Proportion
         # ...and it must stay bounded, or an agent learns to ignore all of it.
         assert "skip the check for trivial" in low
 
