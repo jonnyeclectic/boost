@@ -20,6 +20,7 @@ lint`, and in CI, and fails naming the package rather than three jobs later.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 from pathlib import Path
 
@@ -302,6 +303,23 @@ class TestAuditCli:
 
         monkeypatch.setattr(mod.subprocess, "run", explode)
         assert mod.main() == 1
+
+    def test_asking_for_both_runs_both(self, monkeypatch):
+        # --audit is the cheaper half of --check, so naming both must not let it
+        # short-circuit the drift check the caller also asked for.
+        mod = load_lock_toolchain()
+        monkeypatch.setattr(mod.sys, "argv",
+                            ["lock_toolchain.py", "--check", "--audit"])
+        reached = []
+
+        def fake_run(cmd, **_):
+            reached.append(cmd)
+            raise SystemExit("stop here")
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        with contextlib.suppress(SystemExit):
+            mod.main()
+        assert reached, "--check --audit must still reach the drift check"
 
     def test_audit_is_exclusive_with_regeneration_flags(self, monkeypatch):
         for argv in (["--audit", "--upgrade"], ["--audit", "-P", "twine"]):

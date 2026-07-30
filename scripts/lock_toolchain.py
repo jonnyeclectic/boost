@@ -350,8 +350,10 @@ def main() -> int:
                 print("  %s\n" % problem)
             return 1
         print("platform pins intact.")
-        if args.audit:
+        if args.audit and not args.check:
             return 0
+        # `--check --audit` asked for both, so fall through to the drift check
+        # rather than letting the cheaper flag silently swallow the other.
 
     stale = []
     for stem, python_version in GROUPS:
