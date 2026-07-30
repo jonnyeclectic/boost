@@ -266,6 +266,76 @@ def declared_mcp_servers(skill_dir) -> List[dict]:
     return mcpdecl.servers_for(meta, sidecar)
 
 
+def project_mcp_sidecar(base) -> Path:
+    """The repo's ``.mcp.json`` — where a project-scoped install records servers.
+
+    The committable file agents already read, which is the whole point of
+    project scope over shelling out to ``<host> mcp add``: a registration that
+    lives here is reviewable in a diff and arrives with a teammate's clone,
+    where one made through a host CLI exists only on the machine that ran it.
+    """
+    from . import mcpdecl
+    return Path(base) / mcpdecl.SIDECAR
+
+
+def _load_sidecar(path: Path) -> Optional[dict]:
+    """The sidecar document, or None if absent or unreadable.
+
+    Best-effort by design, exactly like :func:`declared_mcp_servers`: by the
+    time this runs the skill is already on disk, so a corrupt ``.mcp.json`` must
+    not turn a completed install into a traceback. ``merge_into`` treats a
+    non-dict as empty, so a damaged file is rebuilt rather than propagated.
+    """
+    import json
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _write_sidecar(path: Path, doc: dict) -> None:
+    """Write the sidecar as indented JSON with a trailing newline."""
+    import json
+    path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8")
+
+
+def register_project_mcp(base, rows, skill: str) -> List[str]:
+    """Record ``skill``'s declared MCP servers in the repo. Returns names added.
+
+    Never overwrites a server already present — one the user configured by hand,
+    or one another skill declared first — and never creates the file for a skill
+    that declares nothing registrable, so a repo gains an ``.mcp.json`` only
+    when there is genuinely something in it.
+    """
+    from . import mcpdecl as _decl
+    if not _decl.registrable(rows):
+        return []
+    path = project_mcp_sidecar(base)
+    doc, added = _decl.merge_into(_load_sidecar(path), rows, skill)
+    if added:
+        _write_sidecar(path, doc)
+    return added
+
+
+def unregister_project_mcp(base, skill: str) -> List[str]:
+    """Remove the servers boost recorded for ``skill``. Returns names removed.
+
+    Marker-keyed entries only, so a hand-configured server and another skill's
+    server both survive. Writes nothing when it owns nothing, which keeps an
+    uninstall from rewriting — and reformatting — a file it has no claim on.
+    """
+    from . import mcpdecl as _decl
+    path = project_mcp_sidecar(base)
+    existing = _load_sidecar(path)
+    if existing is None:
+        return []
+    doc, removed = _decl.strip_owned(existing, skill)
+    if removed:
+        _write_sidecar(path, doc)
+    return removed
+
+
 def _enforce_capability_policy(name: str, skill_md: Path) -> None:
     """Raise if the skill's declared/detected capabilities are denied by policy.
 
@@ -501,6 +571,12 @@ def _install_project_skill(entry: dict, force: bool = False,
     res.upgraded = existing is not None
     res.scope = scopes.SCOPE_PROJECT
     res.score, _ = util.score_skill(first)
+    res.mcp_servers = declared_mcp_servers(first)
+    # Project scope registers into the repo's own .mcp.json rather than leaving
+    # it to the command layer's `<host> mcp add` offer, which is user-scoped and
+    # would put a machine-wide registration behind a --scope project install.
+    # Recorded here so it lands with the skill and reverses with it.
+    register_project_mcp(resolved_base, res.mcp_servers, name)
     return res
 
 
@@ -525,8 +601,14 @@ def uninstall_project(name: str, base=None) -> dict:
         if m.get("agent"):
             removed.append(m["agent"])
     projectlock.remove_skill(resolved_base, name)
+    # Reverse exactly what the install recorded. Marker-keyed entries only, so a
+    # server the user configured by hand — or one another skill still needs —
+    # survives. Without this a skill tried once keeps launching its server for
+    # every project that clones the repo.
+    unregistered = unregister_project_mcp(resolved_base, name)
     journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
     return {"name": name, "unlinked": removed, "entry": entry,
+            "mcp_unregistered": unregistered,
             "scope": scopes.SCOPE_PROJECT, "base": str(resolved_base)}
 
 

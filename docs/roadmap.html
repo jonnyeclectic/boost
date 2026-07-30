@@ -3173,7 +3173,7 @@ suite only runs if a human remembers to run it locally, so a CLI change that bre
       </article>
 
       <article class="cap rcard" id="mcp-servers-ignore-install-scope">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug · MCP</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · MCP</span></div>
         <h3>A project-scoped install registers its MCP servers <em>machine-wide</em></h3>
         <p><code>boost install &lt;skill&gt; --scope project</code> (or <code>--here</code>) is a promise about
 blast radius: the skill lands inside this repo, committable, affecting nobody else's machine. The
@@ -3227,6 +3227,32 @@ the scope it was registered at, which is another reason to record it rather than
 <b>The prompt should say where.</b> Today it asks "register N servers with Claude Code now?" and
 names no scope. It should say which file or scope is about to change, because that is the decision
 being made.
+
+<b>Shipped, all four.</b> Scope now flows: <code>_offer_mcp</code> reads <code>res.scope</code> and
+threads it through <code>_register_mcp_server</code> into <code>register_argv</code>, so a
+user-scope install passes its scope explicitly rather than silently inheriting the
+<code>scope="user"</code> default that caused this. A project-scope install does not shell out at
+all &mdash; it records into the repo's <code>.mcp.json</code>, which is the committable, reviewable
+registration <code>--scope project</code> promises, and it arrives with a teammate's clone where a
+host-CLI registration exists only on the machine that ran it. Uninstall reverses exactly those
+entries. And the prompt names the scope: it now asks to register "for every project on this
+machine", which is the detail the answer turns on.
+
+Wiring was most of it &mdash; <b>both halves of the document logic already existed and had no
+callers</b>. <code>merge_into</code> and <code>strip_owned</code> were written, tested and unused;
+the new code is the file I/O around them, which lives in <code>core/store.py</code> because
+<code>core/mcpdecl.py</code> is deliberately I/O-free (the same split <code>core/mcphost.py</code>
+keeps).
+
+The properties worth stating, because each is a way to destroy someone else's work: a server the
+user configured by hand is never overwritten on install and never removed on uninstall; another
+skill's server survives both; unrelated keys in the document survive both; an uninstall that owns
+nothing does not rewrite &mdash; and so does not reformat &mdash; a file it has no claim on; and a
+corrupt or absent <code>.mcp.json</code> is never fatal, because by then the skill is already on
+disk. A skill declaring nothing registrable creates no file at all.
+
+Verified by disabling the wiring and confirming the end-to-end tests fail without it, rather than
+trusting that a passing test proves anything.
 
 Related: [[mcp-aware-skills]] (which added the declaration format),
 [[mcp-install-skips-the-injection-scan]] and [[mcp-register-names-server-before-env]].</p>
