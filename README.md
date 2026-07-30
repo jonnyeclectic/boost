@@ -80,16 +80,27 @@ boost reindex --dense                          # embed chunks into the vector st
 ```
 
 Want the whole ecosystem instead of the starter set? boost ships a **curated
-registry catalog** — 100+ classified GitHub registries of skills, Cursor/Windsurf
+registry catalog** — 460+ classified GitHub registries of skills, Cursor/Windsurf
 **rules**, and Claude Code **workflows** (slash commands & subagents),
-collectively indexing thousands of items. Categories include a curated
-**`rag`** set — official Weaviate, Pinecone, and DSPy skill libraries plus
-Graph-RAG and agentic-RAG toolkits for building retrieval pipelines:
+collectively indexing ~28,000 scannable items. Every `est_items` is *measured*
+from the repo's file tree, not estimated, so `--limit` ranks by real size.
+
+Six domains are curated end to end, each tappable on its own:
+**`ai`** (RAG, evals, tracing, model serving — official OpenAI, Anthropic,
+LangChain, Qdrant, Elastic, MLflow, Langfuse, Arize, W&B, vLLM libraries),
+**`architecture`** (DDD, clean architecture, system design, C4/ADR),
+**`ui`** (data visualization, design systems, accessibility, TUI/dotfiles),
+**`java`** (Spring Boot, Kotlin/JVM, Quarkus, JetBrains, Camunda, Vaadin),
+**`ecommerce`** (Shopify, Magento, WooCommerce, Spree, Bagisto, PrestaShop,
+Stripe, Algolia), and **`infra`** (Docker, Kubernetes, OpenShift, Helm, GitOps,
+networking — plus official Azure, Grafana, Pulumi, Flux, DigitalOcean packs):
 
 ```bash
 boost tap --catalog --dry-run                 # browse the classified catalog
 boost tap --catalog --type skill --limit 20   # tap the 20 biggest skill packs
 boost tap --catalog --type rule               # every rules registry
+boost tap --catalog --category infra          # Docker/Kubernetes/OpenShift packs
+boost tap --catalog --category java           # Spring Boot / Kotlin / JVM packs
 boost tap --catalog --category rag            # RAG / vector-search skill packs
 boost tap --catalog --category security       # filter by category
 ```
