@@ -2,6 +2,7 @@
 id: mcp-servers-ignore-install-scope
 board: code
 section: dx
+status: planned
 category: Bug · MCP
 complexity: M
 impact: High
