@@ -104,3 +104,61 @@ def test_the_root_ignore_list_matches_the_ceilings_pyproject_sets():
                  for reqs in extras.values() for req in reqs if "<" in req}
     assert held_back, "no upper bounds left in pyproject — drop the ignores"
     assert set(pip_entry("/")[2]) == held_back
+
+
+def limit_for(directory: str):
+    """The `open-pull-requests-limit` of the pip entry for `directory`, or None.
+
+    Parsed separately rather than by widening `entries()`, which several tests
+    unpack positionally.
+    """
+    seen = None
+    for line in CONFIG.read_text(encoding="utf-8").splitlines():
+        m = _ENTRY.match(line)
+        if m:
+            seen = {"eco": m.group(1)}
+            continue
+        if seen is None:
+            continue
+        m = _FIELD.match(line)
+        if not m:
+            continue
+        seen[m.group(1)] = m.group(2)
+        if seen.get("directory") == directory and seen["eco"] == "pip" \
+                and "open-pull-requests-limit" in seen:
+            return int(seen["open-pull-requests-limit"])
+    return None
+
+
+class TestNeitherPipEntryRegeneratesTheLock:
+    """Dependabot must not raise *version* updates for either pip entry.
+
+    Not a preference — it cannot regenerate the hash-pinned locks correctly. It
+    re-resolves on Linux and commits that resolution, dropping every pin whose
+    environment marker excludes it there, and the locks install with
+    --require-hashes on Windows and macOS too. `scripts/lock_toolchain.py`
+    resolves --universal for every supported platform, which is why it is the
+    source of truth (see its `-P` flag, and requirements/platform-pins.lock).
+
+    `open-pull-requests-limit: 0` disables version updates while leaving
+    **security** updates firing, which is what these entries are actually worth.
+    """
+
+    def test_the_requirements_entry_raises_no_version_prs(self):
+        assert limit_for("/requirements") == 0
+
+    def test_the_root_entry_raises_no_version_prs(self):
+        # The root entry cannot deliver what it was added for: every constraint
+        # under [project.optional-dependencies] is either an open lower bound or
+        # in its own ignore list, so the set of pyproject version updates it can
+        # ever produce is EMPTY — none of the eight PRs in the first scheduled
+        # run touched pyproject.toml. What it did produce was byte-identical
+        # duplicates of the /requirements entry's lock regenerations, which is
+        # the one thing that must never be merged.
+        assert limit_for("/") == 0
+
+    def test_both_pip_entries_still_exist(self):
+        # Deleting them would give up security updates too, which ignore the
+        # limit and are the coverage these entries genuinely provide.
+        assert pip_entry("/requirements")
+        assert pip_entry("/")
