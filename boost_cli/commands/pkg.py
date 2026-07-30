@@ -130,13 +130,25 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     # top would register the same servers a second time, machine-wide — which
     # is the bug this path had: the offer never looked at res.scope at all.
     if res.scope == scopes.SCOPE_PROJECT:
-        names = [r["name"] for r in mcpdecl.registrable(rows)]
-        if names:
-            out.info("")
+        # Report what was RECORDED, not what was declared. The two differ when
+        # the sidecar could not be written — a read-only checkout, a root-owned
+        # .mcp.json — and claiming success there would be the worse failure,
+        # because the skill really is installed and the servers really are not.
+        wanted = [r["name"] for r in mcpdecl.registrable(rows)]
+        if not wanted:
+            return
+        out.info("")
+        if res.mcp_recorded:
             out.ok("recorded %s in %s"
-                   % (_plural(len(names), "MCP server"), mcpdecl.SIDECAR))
+                   % (_plural(len(res.mcp_recorded), "MCP server"),
+                      mcpdecl.SIDECAR))
             out.dim("  %s — commit it to share with the team"
-                    % ", ".join(names))
+                    % ", ".join(res.mcp_recorded))
+        else:
+            out.warn("could not write %s — %s not registered"
+                     % (mcpdecl.SIDECAR, ", ".join(wanted)))
+            out.dim("  the skill is installed; fix the file's permissions and "
+                    "reinstall to record them")
         return
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))

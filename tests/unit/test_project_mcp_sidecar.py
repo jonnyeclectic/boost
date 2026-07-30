@@ -144,3 +144,44 @@ class TestUnregister:
         assert sorted(_servers(tmp_path)) == ["a", "b"]
         assert store.unregister_project_mcp(tmp_path, "sk") == ["a", "b"]
         assert _servers(tmp_path) == {}
+
+
+class TestAnUnwritableSidecarNeverCrashesAnInstall:
+    """The write is the half that runs AFTER the install is already committed.
+
+    By the time `register_project_mcp` is called the skill is materialized, the
+    project lock is written and the journal is logged. An unwritable
+    `.mcp.json` — read-only checkout, root-owned file, full disk — must not
+    turn that completed install into a traceback, which is the same contract
+    `_load_sidecar` already keeps for a corrupt file on the way in.
+    """
+
+    @staticmethod
+    def _unwritable(monkeypatch):
+        def boom(*_a, **_k):
+            raise OSError(13, "Permission denied")
+        monkeypatch.setattr(store.Path, "write_text", boom)
+
+    def test_register_reports_nothing_recorded_instead_of_raising(
+            self, tmp_path, monkeypatch):
+        self._unwritable(monkeypatch)
+        assert store.register_project_mcp(tmp_path, _rows("gh"), "sk") == []
+
+    def test_unregister_reports_nothing_removed_instead_of_raising(
+            self, tmp_path, monkeypatch):
+        (tmp_path / mcpdecl.SIDECAR).write_text(json.dumps(
+            {mcpdecl.SERVERS_KEY: {"gh": {"command": "npx",
+                                          mcpdecl.MARKER_KEY: "sk"}}}),
+            encoding="utf-8")
+        self._unwritable(monkeypatch)
+        assert store.unregister_project_mcp(tmp_path, "sk") == []
+
+    def test_a_failed_write_is_not_reported_as_success(self, tmp_path,
+                                                       monkeypatch):
+        # The return value is what the install report prints, so it must not
+        # name servers that were never written.
+        self._unwritable(monkeypatch)
+        recorded = store.register_project_mcp(tmp_path, _rows("a", "b"), "sk")
+        assert recorded == [], \
+            "claiming a server was recorded when the file could not be " \
+            "written is worse than the failure itself"

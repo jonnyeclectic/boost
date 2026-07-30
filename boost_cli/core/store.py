@@ -51,6 +51,10 @@ class InstallResult:
     # but never acted on: core stays non-interactive, so the command layer owns
     # the offer to register them — same split as `conflicts` and `score`.
     mcp_servers: List[dict] = field(default_factory=list)
+    # Names actually written to the project's .mcp.json — not what was
+    # declared. The two differ when the file could not be written, and the
+    # install report must show the former.
+    mcp_recorded: List[str] = field(default_factory=list)
 
 
 def skill_store_dir(name: str) -> Path:
@@ -293,11 +297,24 @@ def _load_sidecar(path: Path) -> Optional[dict]:
         return None
 
 
-def _write_sidecar(path: Path, doc: dict) -> None:
-    """Write the sidecar as indented JSON with a trailing newline."""
+def _write_sidecar(path: Path, doc: dict) -> bool:
+    """Write the sidecar as indented JSON. False if it could not be written.
+
+    Best-effort on the way OUT as well as in. ``_load_sidecar`` already refuses
+    to turn a corrupt file into a traceback, but the write is the half that runs
+    *after* the skill is materialized, the lock is written and the journal is
+    logged — so an unwritable ``.mcp.json`` (read-only checkout, a root-owned
+    file, a full disk) would crash an install that had already succeeded. The
+    caller reports what was actually recorded rather than what was declared, so
+    a failure here is visible instead of silent.
+    """
     import json
-    path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8")
+    try:
+        path.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8")
+        return True
+    except OSError:
+        return False
 
 
 def register_project_mcp(base, rows, skill: str) -> List[str]:
@@ -313,8 +330,8 @@ def register_project_mcp(base, rows, skill: str) -> List[str]:
         return []
     path = project_mcp_sidecar(base)
     doc, added = _decl.merge_into(_load_sidecar(path), rows, skill)
-    if added:
-        _write_sidecar(path, doc)
+    if added and not _write_sidecar(path, doc):
+        return []          # nothing was recorded; do not claim otherwise
     return added
 
 
@@ -331,8 +348,8 @@ def unregister_project_mcp(base, skill: str) -> List[str]:
     if existing is None:
         return []
     doc, removed = _decl.strip_owned(existing, skill)
-    if removed:
-        _write_sidecar(path, doc)
+    if removed and not _write_sidecar(path, doc):
+        return []
     return removed
 
 
@@ -576,7 +593,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     # it to the command layer's `<host> mcp add` offer, which is user-scoped and
     # would put a machine-wide registration behind a --scope project install.
     # Recorded here so it lands with the skill and reverses with it.
-    register_project_mcp(resolved_base, res.mcp_servers, name)
+    res.mcp_recorded = register_project_mcp(resolved_base, res.mcp_servers, name)
     return res
 
 
