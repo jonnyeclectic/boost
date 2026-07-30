@@ -24,6 +24,7 @@ from ..core import (
     journal,
     lockfile,
     mcp,
+    mcphost,
     paths,
     policy,
     rag,
@@ -870,8 +871,16 @@ def _tool_install(args: dict):
     res = store.install(entry)
     lines = ["installed %s v%s from %s → %s"
              % (res.name, entry.get("version", "?"), entry["tap"], res.dest),
-             "linked agents: %s" % (", ".join(res.linked) or "none"),
-             "quality score: %d/100" % res.score]
+             "linked agents: %s" % (", ".join(res.linked) or "none")]
+    # Without this an agent that reads the canonical store — Gemini CLI — sees
+    # only "linked agents: claude-code, windsurf, cursor", concludes the skill
+    # did not reach *it*, and goes back to reconstructing the work by hand.
+    # That is the exact failure this tool exists to prevent, so the line says
+    # plainly that the skill is already usable.
+    if res.native:
+        lines.append("available without linking (reads %s directly): %s"
+                     % (res.dest.parent, ", ".join(res.native)))
+    lines.append("quality score: %d/100" % res.score)
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
     # The same prompt-injection and secret scan `boost install` runs. This path
@@ -1004,59 +1013,89 @@ def _mcp_tool(tool: str, args: dict):
     return REGISTRY.call(tool, args)
 
 
+def _run_mcp_host(host: str, action: str, cmd) -> bool:
+    """Run one host's register/unregister argv. True if it actually ran.
+
+    A host whose CLI is not installed is *not* an error — most machines have
+    one agent CLI, not all of them — so the argv is printed for the user to run
+    later and the caller moves on to the next host. A CLI that is present and
+    fails is a real error and raises.
+    """
+    exe = mcphost.cli(host)
+    if not shutil.which(exe):
+        return False
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise BoostError("%s mcp %s failed: %s" % (exe, action, e),
+                        hint="run it yourself: " + " ".join(cmd)) from e
+    for ln in (proc.stdout or "").strip().splitlines():
+        out.info(ln)
+    if proc.returncode != 0:
+        tail = (proc.stderr or "").strip().splitlines()
+        raise BoostError("%s mcp %s failed: %s"
+                        % (exe, action, tail[-1] if tail else "unknown error"),
+                        hint="run it yourself: " + " ".join(cmd))
+    return True
+
+
 def cmd_mcp(argv) -> int:
-    """boost mcp [register|unregister] [--stdio]"""
+    """boost mcp [register|unregister] [--host H] [--stdio]"""
     p = cliparse.parser(
         prog="boost mcp",
-        description="Register boost as an MCP server for Claude Code")
+        description="Register boost as an MCP server for your agent CLIs")
     p.add_argument("action", nargs="?", default="register",
                    choices=("register", "unregister"),
                    help="what to do (default: register)")
+    p.add_argument("--host", metavar="H", default="auto",
+                   help="agent CLI to (un)register with: %s, or `auto` "
+                        "(default) for every one that is installed"
+                        % ", ".join(mcphost.hosts()))
     p.add_argument("--stdio", action="store_true",
-                   help="run the MCP server on stdin/stdout (used by Claude Code)")
+                   help="run the MCP server on stdin/stdout (used by the agent)")
     args = p.parse_args(argv)
 
     if args.stdio:
         return mcp.serve_stdio(REGISTRY, version=__version__)
 
-    shim = paths.launcher()
-    if args.action == "register":
-        # Fork-safe launch env: a host that fork()s into `boost mcp --stdio`
-        # on macOS can SIGABRT on the child side *pre-exec* if Obj-C is touched
-        # post-fork (CFPreferences / _scproxy proxy lookup). Disabling the
-        # fork-safety trap and short-circuiting proxy resolution keeps the
-        # host's fork into boost from aborting before our Python ever runs.
-        #
-        # The server name ("boost") MUST come before the `-e` flags: `claude`'s
-        # `-e` is variadic, so a name placed after it is swallowed as another
-        # env var ("Invalid environment variable format: boost"). Order is
-        # `add <name> [options] -- <command>`.
-        cmd = ["claude", "mcp", "add", "boost", "--scope", "user",
-               "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
-               "-e", "no_proxy=*",
-               "--", str(shim), "mcp", "--stdio"]
-    else:
-        cmd = ["claude", "mcp", "remove", "boost"]
+    try:
+        targets = mcphost.resolve(args.host)
+    except KeyError as e:
+        raise BoostError("unknown MCP host %r" % args.host,
+                        hint="known hosts: %s" % ", ".join(mcphost.hosts())) from e
 
-    if shutil.which("claude"):
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise BoostError("claude mcp %s failed: %s" % (args.action, e),
-                            hint="run it yourself: " + " ".join(cmd)) from e
-        for ln in (proc.stdout or "").strip().splitlines():
-            out.info(ln)
-        if proc.returncode != 0:
-            tail = (proc.stderr or "").strip().splitlines()
-            raise BoostError("claude mcp %s failed: %s"
-                            % (args.action, tail[-1] if tail else "unknown error"),
-                            hint="run it yourself: " + " ".join(cmd))
-        out.ok("%sed boost as an MCP server (scope: user)"
-               % ("register" if args.action == "register" else "unregister"))
-    else:
-        out.warn("`claude` CLI not found — run this yourself:")
-        out.info(" ".join(cmd))
-    journal.log("mcp", args.action)
+    shim = str(paths.launcher())
+    # `auto` skips hosts that are not installed; naming a host explicitly (or
+    # `all`) always reports it, so a user setting up a machine can see the argv
+    # for an agent CLI they have not installed yet.
+    explicit = args.host not in (None, "", "auto")
+    done, missing = [], []
+    for host in targets:
+        cmd = mcphost.argv(host, args.action, shim)
+        if _run_mcp_host(host, args.action, cmd):
+            done.append(host)
+        else:
+            missing.append(host)
+            if explicit:
+                out.warn("`%s` CLI not found — run this yourself:"
+                         % mcphost.cli(host))
+                out.info(" ".join(cmd))
+
+    verb = "register" if args.action == "register" else "unregister"
+    for host in done:
+        out.ok("%sed boost as an MCP server for %s (scope: user)"
+               % (verb, mcphost.label(host)))
+    if not done:
+        # Nothing ran. Under `auto` nothing has been printed yet, so say which
+        # CLIs were looked for rather than exiting silently on success.
+        if not explicit:
+            out.warn("no agent CLI found (looked for: %s)"
+                     % ", ".join(mcphost.cli(h) for h in missing))
+            for host in missing:
+                out.info(" ".join(mcphost.argv(host, args.action, shim)))
+        journal.log("mcp", args.action, hosts="")
+        return 0
+    journal.log("mcp", args.action, hosts=",".join(done))
     return 0
 
 

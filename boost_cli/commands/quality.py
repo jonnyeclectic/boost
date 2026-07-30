@@ -605,7 +605,9 @@ def cmd_heal(argv):
     dry = args.dry_run
     actions: List[str] = []
 
-    wanted = [paths.boost_home(), paths.repos_dir(), paths.cache_dir(), paths.logs_dir(), paths.state_dir(), paths.snapshots_dir(), paths.lock_history_dir(), paths.profiles_dir(), paths.store_dir(), *list(agents.enabled_agents().values())]
+    # linking_agents, matching agents.ensure_agent_dirs below: a native-store
+    # agent's skills dir is never written to, so it is not a missing directory.
+    wanted = [paths.boost_home(), paths.repos_dir(), paths.cache_dir(), paths.logs_dir(), paths.state_dir(), paths.snapshots_dir(), paths.lock_history_dir(), paths.profiles_dir(), paths.store_dir(), *list(agents.linking_agents().values())]
     missing = [d for d in wanted if not d.is_dir()]
     if missing:
         if dry:
@@ -818,7 +820,7 @@ def cmd_health(argv):
 
     expected = [n for n, e in installed if not e.get("quarantined")]
     coverage_ok = True
-    for agent, adir in agents.enabled_agents().items():
+    for agent, adir in agents.linking_agents().items():
         linked = sum(1 for n in expected
                      if (adir / n).is_symlink() and (adir / n).exists())
         full = linked == len(expected)
@@ -826,6 +828,13 @@ def cmd_health(argv):
         out.kv(agent, "%d/%d %s" % (linked, len(expected),
                                     out.role("✓", "success") if full
                                     else out.role("!", "warn")))
+    # Agents that read the canonical store have no links to count — scoring
+    # them 0/N would report a healthy setup as broken. They are listed anyway,
+    # because an agent silently absent from a health report reads as "boost is
+    # not wired up for it".
+    for agent in agents.native_store_agents():
+        out.kv(agent, "%d/%d %s (reads the store directly)"
+               % (len(expected), len(expected), out.role("✓", "success")))
 
     drift_counts: dict = {}
     for name, entry in installed:

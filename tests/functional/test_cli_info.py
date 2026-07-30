@@ -42,7 +42,10 @@ class TestList:
         assert "NAME" in r.out and "VERSION" in r.out and "FLAGS" in r.out
         assert "brainstorming" in r.out and "1.4.0" in r.out
         assert "commit-messages" in r.out and "1.0.2" in r.out
-        assert "claude·windsurf·cursor" in r.out   # abbreviated agents column
+        # abbreviated agents column: the linked ones only — gemini reads the
+        # canonical store directly and is never symlinked
+        assert "claude·windsurf·cursor" in r.out
+        assert "gemini" not in r.out
         assert "2 skills" in r.out
 
     def test_json_pure_with_fields(self, boost, installed):
@@ -57,6 +60,8 @@ class TestList:
         e = data["skills"]["brainstorming"]
         assert e["version"] == "1.4.0"
         assert e["tap"] == "fixture-tap"
+        # the lock records real symlinks only, so gemini (which reads the
+        # canonical store directly) is absent by design
         assert e["agents"] == ["claude-code", "windsurf", "cursor"]
         assert e["pinned"] is False
 

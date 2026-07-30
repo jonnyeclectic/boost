@@ -123,7 +123,7 @@ COMMANDS = [
     ("completions", "cfg", "configuration", "Generate shell tab-completion scripts"),
     ("schedule",    "cfg", "configuration", "Manage automatic skill-sync scheduling"),
     ("serve",       "cfg", "configuration", "Serve the skill catalog over HTTP (port 8787)"),
-    ("mcp",         "cfg", "configuration", "Register boost as an MCP server for Claude Code"),
+    ("mcp",         "cfg", "configuration", "Register boost as an MCP server (Claude Code, Gemini CLI)"),
     ("hooks",       "cfg", "hooks", "Manage Claude Code hooks (scope-aware) in settings.json"),
     ("bmad",        "cfg", "bmad", "Install & manage the BMAD Method (scope-aware, toggleable)"),
     ("self-update", "cfg", "configuration", "Update boost itself to the latest version"),

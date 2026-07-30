@@ -4,6 +4,7 @@ argparse
 bmad
 bookended
 CI's
+CLIs
 Codecov
 codespell
 config
@@ -13,6 +14,7 @@ Dependabot
 deps
 Dev
 docsite
+dotdir
 DSPy
 else's
 env
@@ -67,6 +69,7 @@ toolkits
 traceback
 tracebacks
 unkilled
+unregister
 unstaged
 untap
 vendored

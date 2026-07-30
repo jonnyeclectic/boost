@@ -11,6 +11,7 @@ import pytest
 
 from boost_cli.core import (
     catalog,
+    config,
     gitutil,
     journal,
     lockfile,
@@ -23,7 +24,16 @@ from boost_cli.core import (
 from boost_cli.errors import BoostError
 
 ISO = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
-AGENT_DIRS = {"claude-code": ".claude", "windsurf": ".windsurf", "cursor": ".cursor"}
+# Keep insertion order in step with config.DEFAULTS["agents"] — several tests
+# assert the linked list exactly, and that list follows enabled_agents() order.
+AGENT_DIRS = {"claude-code": ".claude", "windsurf": ".windsurf",
+              "cursor": ".cursor", "gemini": ".gemini"}
+# The agents a *user-scope skill* is symlinked into. gemini is deliberately
+# absent: it reads ~/.agents/skills (the canonical store) natively, so
+# links_skills is False and link_agents never touches ~/.gemini/skills. It is
+# still a full agent everywhere else — rules, workflows and project-scope
+# copies all materialize into ~/.gemini, so those assertions DO include it.
+LINKED_AGENTS = ["claude-code", "windsurf", "cursor"]
 
 
 def _link(agent):
@@ -73,7 +83,8 @@ class TestInstall:
         dest = paths.store_dir() / "brainstorming"
         assert res.name == "brainstorming"
         assert res.dest == dest
-        assert res.linked == ["claude-code", "windsurf", "cursor"]
+        assert res.linked == LINKED_AGENTS
+        assert res.native == ["gemini"]
         assert res.conflicts == []
         assert res.upgraded is False
         assert res.score == 95
@@ -81,7 +92,7 @@ class TestInstall:
         assert not (dest / ".git").exists()
         assert not (dest / "__pycache__").exists()
         assert not (dest / ".DS_Store").exists()
-        for agent in AGENT_DIRS:
+        for agent in LINKED_AGENTS:
             link = _link(agent)
             assert link.is_symlink()
             assert link.resolve() == dest.resolve()
@@ -98,7 +109,7 @@ class TestInstall:
         assert e["updated_at"] == e["installed_at"]
         assert e["pinned"] is False
         assert e["quarantined"] is False
-        assert e["agents"] == ["claude-code", "windsurf", "cursor"]
+        assert e["agents"] == LINKED_AGENTS
         assert e["tags"] == []
 
         ev = journal.events(action="install")[0]
@@ -194,6 +205,7 @@ class TestInstall:
         assert _link("claude-code").is_symlink()
         assert not _link("windsurf").exists()
         assert not _link("cursor").exists()
+        assert not _link("gemini").exists()
         assert lockfile.get_skill("brainstorming")["agents"] == ["claude-code"]
 
     def test_preexisting_real_dir_is_conflict_not_clobbered(self, tap, entry):
@@ -227,6 +239,70 @@ class TestUnlinkAgents:
         assert cursor_link.is_dir()
         assert not _link("claude-code").exists()
         assert not _link("windsurf").exists()
+        assert not _link("gemini").exists()
+
+
+class TestNativeStoreAgents:
+    """A skill install must reach Gemini CLI without ever linking into it.
+
+    Gemini reads ``~/.agents/skills`` — the canonical store — directly, so the
+    contract is precisely: the store dir is written, ``~/.gemini/skills`` is
+    NOT, and the result still reports gemini as reached. Each half is pinned
+    separately because getting either wrong fails silently: no link and no
+    report reads as "boost does not support Gemini", while a link makes Gemini
+    log a skill conflict on every session.
+    """
+
+    def test_install_writes_the_store_but_no_gemini_link(self, brainstorming):
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert not (paths.home() / ".gemini" / "skills").exists()
+
+    def test_result_reports_gemini_as_native_not_linked(self, tap, entry):
+        res = store.install(entry)
+        assert res.linked == LINKED_AGENTS
+        assert res.native == ["gemini"]
+        assert "gemini" not in res.linked
+
+    def test_the_lock_records_only_real_links(self, brainstorming):
+        # `agents` drives `boost sync`; a native agent recorded there would make
+        # sync create the very link this design avoids.
+        assert lockfile.get_skill("brainstorming")["agents"] == LINKED_AGENTS
+
+    def test_native_is_reported_even_when_the_scope_is_narrowed(self, tap, entry):
+        # `--agent cursor` narrows which agents get a *link*, but the store is
+        # written regardless, so Gemini really can see the skill. Reporting
+        # otherwise would be untrue.
+        res = store.install(entry, only_agents=["cursor"])
+        assert res.linked == ["cursor"]
+        assert res.native == ["gemini"]
+
+    def test_native_survives_a_reinstall(self, tap, entry):
+        # Regression: reinstall replays the lock's recorded links as the scope,
+        # and those never contain a native agent — filtering `native` by that
+        # scope silently emptied it on every reinstall.
+        store.install(entry)
+        res = store.install(entry, force=True)
+        assert res.native == ["gemini"]
+
+    def test_sync_never_wants_a_gemini_link(self, brainstorming):
+        plan = store.sync_plan()
+        assert not any(a == "gemini" for _n, a in plan["missing_links"])
+
+    def test_unlink_reports_only_agents_it_actually_unlinked(self, brainstorming):
+        assert "gemini" not in store.unlink_agents("brainstorming")
+
+    def test_uninstall_removes_the_store_dir_gemini_reads(self, brainstorming):
+        store.uninstall("brainstorming")
+        assert not (paths.store_dir() / "brainstorming").exists()
+
+    def test_flipping_links_skills_on_restores_the_link(self, tap, entry):
+        cfg = config.load()
+        cfg["agents"]["gemini"]["links_skills"] = True
+        config.save(cfg)
+        res = store.install(entry)
+        assert "gemini" in res.linked
+        assert res.native == []
+        assert _link("gemini").is_symlink()
 
 
 class TestInstallFromPath:
@@ -356,7 +432,7 @@ class TestInstallFromPath:
         assert re.fullmatch(r"[0-9a-f]{64}", e["sha256"])
         assert re.fullmatch(ISO, e["installed_at"])
         assert e["updated_at"] == e["installed_at"]   # both set to `now`
-        assert e["agents"] == ["claude-code", "windsurf", "cursor"]
+        assert e["agents"] == LINKED_AGENTS
 
     def test_reinstall_preserves_installed_at_and_tags(self, sandbox, tmp_path):
         src = self._src(tmp_path, "---\nname: keep\nversion: 1.0\n---", extras=False)
@@ -399,10 +475,10 @@ class TestUninstall:
     def test_uninstall_removes_everything(self, brainstorming):
         result = store.uninstall("brainstorming")
         assert result["name"] == "brainstorming"
-        assert result["unlinked"] == ["claude-code", "windsurf", "cursor"]
+        assert result["unlinked"] == LINKED_AGENTS
         assert result["entry"]["version"] == "1.4.0"
         assert not (paths.store_dir() / "brainstorming").exists()
-        for agent in AGENT_DIRS:
+        for agent in LINKED_AGENTS:
             assert not _link(agent).exists()
         assert lockfile.get_skill("brainstorming") is None
 
@@ -431,7 +507,7 @@ class TestSyncPlan:
         e = lockfile.get_skill("brainstorming")
         e["quarantined"] = True
         lockfile.set_skill("brainstorming", e)
-        for agent in AGENT_DIRS:
+        for agent in LINKED_AGENTS:
             _link(agent).unlink()
         assert store.sync_plan() == self.EMPTY
 
@@ -517,6 +593,10 @@ class TestSyncPlan:
         e["only_agents"] = None
         lockfile.set_skill("brainstorming", e)
         assert not (paths.home() / ".windsurf" / "skills").exists()
+        # gemini never gets a link, so its dir is absent for a different reason
+        # and sync must NOT report one as missing — doing so would make `boost
+        # sync` recreate the duplicate links_skills exists to prevent.
+        assert not (paths.home() / ".gemini" / "skills").exists()
         plan = store.sync_plan()
         assert plan == {**self.EMPTY, "missing_links": [
             ("brainstorming", "windsurf"), ("brainstorming", "cursor")]}
@@ -528,7 +608,7 @@ class TestSyncPlan:
         assert plan["missing_links"] == []          # skipped via continue
         assert plan["orphaned_store"] == []
         assert sorted(plan["stale_links"]) == sorted(
-            str(_link(a)) for a in AGENT_DIRS)       # links now dangle
+            str(_link(a)) for a in LINKED_AGENTS)    # links now dangle
 
 
 
@@ -605,7 +685,7 @@ class TestSyncApply:
         assert actions[-1] == "reinstalled missing brainstorming from fixture-tap"
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
         assert lockfile.get_skill("brainstorming") is not None
-        for agent in AGENT_DIRS:
+        for agent in LINKED_AGENTS:
             assert _link(agent).is_symlink()
 
     def test_missing_store_reinstall_fails_falls_back_to_drop(self, tap, brainstorming):
@@ -715,9 +795,12 @@ class TestRuleInstall:
     def _claude_md(self):
         return paths.home() / ".claude" / "CLAUDE.md"
 
+    def _gemini_md(self):
+        return paths.home() / ".gemini" / "GEMINI.md"
+
     def test_materializes_into_each_agent_native_format(self, tap):
         res = store.install(_rule_entry(tap))
-        assert set(res.linked) == {"claude-code", "windsurf", "cursor"}
+        assert set(res.linked) == {"claude-code", "windsurf", "cursor", "gemini"}
 
         # Claude Code has no rules folder -> managed block in CLAUDE.md.
         text = self._claude_md().read_text(encoding="utf-8")
@@ -725,6 +808,18 @@ class TestRuleInstall:
         assert "# Team Conventions" in text
         assert "Always write tests first." in text
         assert "name: Team Conventions" not in text  # frontmatter stripped for CLAUDE.md
+
+        # Gemini CLI has no rules folder either -> the same managed block, in
+        # its own context file. A ~/.gemini/rules/ drop would never be read.
+        gem = self._gemini_md()
+        assert gem.is_file()
+        gtext = gem.read_text(encoding="utf-8")
+        assert "boost:rule:team-conventions start" in gtext
+        assert "boost:rule:team-conventions end" in gtext
+        assert "# Team Conventions" in gtext
+        assert "Always write tests first." in gtext
+        assert "name: Team Conventions" not in gtext   # frontmatter stripped
+        assert not (paths.home() / ".gemini" / "rules").exists()
 
         # Cursor: verbatim .mdc drop, frontmatter preserved (native metadata).
         cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
@@ -738,7 +833,14 @@ class TestRuleInstall:
         assert rec["kind"] == "rule"
         assert rec["tap"] == tap.name
         assert {m["agent"] for m in rec["materializations"]} == {
-            "claude-code", "windsurf", "cursor"}
+            "claude-code", "windsurf", "cursor", "gemini"}
+        # The mode is what uninstall dispatches on, so pin it per agent: the two
+        # context-file agents share MODE_CLAUDE, the rules-dir agents don't.
+        assert {m["agent"]: m["mode"] for m in rec["materializations"]} == {
+            "claude-code": "claude", "gemini": "claude",
+            "windsurf": "file", "cursor": "file"}
+        assert {m["agent"]: m["path"] for m in rec["materializations"]}["gemini"] \
+            == str(gem)
         assert lockfile.get_skill("team-conventions") is None  # not a skill
 
     def test_uninstall_reverses_every_materialization(self, tap):
@@ -748,13 +850,36 @@ class TestRuleInstall:
         claude_md.write_text("# My own standing notes\n\n" + claude_md.read_text(encoding="utf-8"), encoding="utf-8")
 
         info = store.uninstall("team-conventions")
-        assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor"}
+        assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
+                                         "gemini"}
         assert lockfile.get_rule("team-conventions") is None
         text = claude_md.read_text(encoding="utf-8")
         assert "boost:rule" not in text
         assert "# My own standing notes" in text
         assert not (paths.home() / ".cursor" / "rules" / "team-conventions.mdc").exists()
         assert not (paths.home() / ".windsurf" / "rules" / "team-conventions.md").exists()
+        # GEMINI.md held only our block, so it goes with it.
+        assert not self._gemini_md().exists()
+
+    def test_uninstall_strips_only_our_block_from_gemini_md(self, tap):
+        """The GEMINI.md equivalent of the CLAUDE.md guarantee above.
+
+        Gemini's context file is the user's own standing-instructions file, so
+        uninstall has to splice our block out and leave the rest — not delete a
+        file the user writes in.
+        """
+        store.install(_rule_entry(tap))
+        gem = self._gemini_md()
+        gem.write_text("# My Gemini notes\n\n" + gem.read_text(encoding="utf-8"),
+                       encoding="utf-8")
+
+        store.uninstall("team-conventions")
+
+        assert gem.is_file()                       # survived: not only our block
+        text = gem.read_text(encoding="utf-8")
+        assert "boost:rule" not in text
+        assert "Always write tests first." not in text
+        assert "# My Gemini notes" in text
 
     def test_uninstall_removes_claude_md_when_only_our_block(self, tap):
         store.install(_rule_entry(tap, name="solo"))
@@ -776,6 +901,7 @@ class TestRuleInstall:
         assert res.linked == ["cursor"]
         assert (paths.home() / ".cursor" / "rules" / "team-conventions.mdc").is_file()
         assert not self._claude_md().exists()
+        assert not self._gemini_md().exists()
 
     def test_missing_source_raises(self, tap):
         entry = _rule_entry(tap)
@@ -802,14 +928,28 @@ class TestWorkflowInstall:
     def test_command_drops_into_each_agents_commands_dir(self, tap):
         res = store.install(_workflow_entry(tap))
         assert res.kind == "workflow"
-        assert set(res.linked) == {"claude-code", "windsurf", "cursor"}
+        assert set(res.linked) == {"claude-code", "windsurf", "cursor", "gemini"}
         for adir in (".claude", ".windsurf", ".cursor"):
             f = paths.home() / adir / "commands" / "ship-it.md"
             assert f.is_file()
             assert "Run the release." in f.read_text(encoding="utf-8")  # verbatim drop
+
+        # Gemini CLI reads slash commands as TOML: a .md drop there is simply
+        # never discovered, so the extension AND the content have to change.
+        gem = paths.home() / ".gemini" / "commands" / "ship-it.toml"
+        assert gem.is_file()
+        assert not (paths.home() / ".gemini" / "commands" / "ship-it.md").exists()
+        gtext = gem.read_text(encoding="utf-8")
+        assert gtext == ('description = "release helper"\n'
+                         'prompt = "Run the release."\n')
+        assert "---" not in gtext                  # frontmatter dropped, not carried
+        assert "allowed-tools" not in gtext
+
         rec = lockfile.get_workflow("ship-it")
         assert rec["kind"] == "workflow"
         assert rec["slot"] == "commands"
+        assert {m["agent"]: m["path"] for m in rec["materializations"]}["gemini"] \
+            == str(gem)
         assert lockfile.get_skill("ship-it") is None
 
     def test_subagent_drops_into_agents_dir(self, tap):
@@ -821,13 +961,51 @@ class TestWorkflowInstall:
         assert not (paths.home() / ".claude" / "commands" / "reviewer.md").exists()
         assert lockfile.get_workflow("reviewer")["slot"] == "agents"
 
+    def test_gemini_subagent_stays_verbatim_markdown(self, tap):
+        """Only Gemini's *commands* slot is TOML — its subagents are Markdown.
+
+        The easy way to get this wrong is to key the conversion on the agent
+        alone, which would hand Gemini a .toml subagent it cannot load.
+        """
+        body = ("---\nname: reviewer\ndescription: reviews\ntools: Read\n---\n\n"
+                "Review it.\n")
+        entry = _workflow_entry(tap, name="reviewer", rel="agents/reviewer.md",
+                                body=body)
+        store.install(entry)
+
+        gem = paths.home() / ".gemini" / "agents" / "reviewer.md"
+        assert gem.is_file()
+        assert gem.read_text(encoding="utf-8") == body      # byte-for-byte verbatim
+        assert not (paths.home() / ".gemini" / "agents" / "reviewer.toml").exists()
+        assert not (paths.home() / ".gemini" / "commands" / "reviewer.md").exists()
+        assert not (paths.home() / ".gemini" / "commands" / "reviewer.toml").exists()
+
+        rec = lockfile.get_workflow("reviewer")
+        assert rec["slot"] == "agents"
+        assert {m["agent"]: m["path"] for m in rec["materializations"]}["gemini"] \
+            == str(gem)
+
     def test_uninstall_removes_every_dropped_file(self, tap):
         store.install(_workflow_entry(tap))
         info = store.uninstall("ship-it")
-        assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor"}
+        assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
+                                         "gemini"}
         assert lockfile.get_workflow("ship-it") is None
         for adir in (".claude", ".windsurf", ".cursor"):
             assert not (paths.home() / adir / "commands" / "ship-it.md").exists()
+        # The recorded path is the .toml one, so that is what must be removed.
+        assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
+
+    def test_uninstall_removes_a_gemini_subagent_markdown_file(self, tap):
+        entry = _workflow_entry(tap, name="reviewer", rel="agents/reviewer.md",
+                                body="---\nname: reviewer\n---\n\nReview it.\n")
+        store.install(entry)
+        gem = paths.home() / ".gemini" / "agents" / "reviewer.md"
+        assert gem.is_file()
+        info = store.uninstall("reviewer")
+        assert "gemini" in info["unlinked"]
+        assert not gem.exists()
+        assert lockfile.get_workflow("reviewer") is None
 
     def test_reinstall_requires_force(self, tap):
         entry = _workflow_entry(tap)
@@ -842,6 +1020,7 @@ class TestWorkflowInstall:
         assert res.linked == ["claude-code"]
         assert (paths.home() / ".claude" / "commands" / "ship-it.md").is_file()
         assert not (paths.home() / ".cursor" / "commands" / "ship-it.md").exists()
+        assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
 
     def test_missing_source_raises(self, tap):
         entry = _workflow_entry(tap)
@@ -953,12 +1132,38 @@ class TestInstallScope:
         assert rec["scope"] == "project"
         assert rec["base"] == str(repo)
 
+    def test_rule_project_scope_uses_geminis_repo_context_file(self, tap, tmp_path):
+        """Gemini documents no ``.local`` variant, so its project context file
+        is the repo's own ``GEMINI.md`` — not a ``GEMINI.local.md`` that nothing
+        reads, and not a ``.gemini/rules/`` drop that nothing reads either."""
+        repo = tmp_path / "repo-gem"
+        repo.mkdir()
+        store.install(_rule_entry(tap), scope="project", base=str(repo))
+
+        gem = repo / "GEMINI.md"
+        assert gem.is_file()
+        text = gem.read_text(encoding="utf-8")
+        assert "boost:rule:team-conventions start" in text
+        assert "boost:rule:team-conventions end" in text
+        assert "Always write tests first." in text
+        assert not (repo / "GEMINI.local.md").exists()
+        assert not (repo / ".gemini").exists()
+        assert not (paths.home() / ".gemini" / "GEMINI.md").exists()  # not global
+
+        rec = lockfile.get_rule("team-conventions")
+        by_agent = {m["agent"]: m for m in rec["materializations"]}
+        assert by_agent["gemini"]["mode"] == "claude"
+        assert by_agent["gemini"]["path"] == str(gem)
+
     def test_workflow_project_scope_under_base(self, tap, tmp_path):
         repo = tmp_path / "repo2"
         repo.mkdir()
         store.install(_workflow_entry(tap), scope="project", base=str(repo))
         assert (repo / ".claude" / "commands" / "ship-it.md").is_file()
+        assert (repo / ".gemini" / "commands" / "ship-it.toml").is_file()
+        assert not (repo / ".gemini" / "commands" / "ship-it.md").exists()
         assert not (paths.home() / ".claude" / "commands" / "ship-it.md").exists()
+        assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
         assert lockfile.get_workflow("ship-it")["base"] == str(repo)
 
     def test_user_scope_is_default_and_global(self, tap):
@@ -975,6 +1180,7 @@ class TestInstallScope:
         store.uninstall("team-conventions")
         assert not (repo / ".cursor" / "rules" / "team-conventions.mdc").exists()
         assert not (repo / "CLAUDE.local.md").exists()  # held only our block
+        assert not (repo / "GEMINI.md").exists()        # ditto for Gemini's
         assert lockfile.get_rule("team-conventions") is None
 
 
@@ -1023,8 +1229,8 @@ class TestProjectSkills:
         assert rec["kind"] == "skill"
         assert rec["version"] == "1.4.0"
         assert rec["tap"] == "fixture-tap"
-        assert rec["agents"] == ["claude-code", "windsurf", "cursor"]
-        assert len(rec["materializations"]) == 3
+        assert rec["agents"] == ["claude-code", "windsurf", "cursor", "gemini"]
+        assert len(rec["materializations"]) == 4
         assert re.match(ISO, rec["installed_at"])
         assert re.match(ISO, rec["updated_at"])
         assert rec["sha256"] and rec["commit"]
@@ -1087,6 +1293,7 @@ class TestProjectSkills:
         assert list(outside.iterdir()) == []
         assert not (repo / ".windsurf" / "skills" / "brainstorming").exists()
         assert not (repo / ".cursor" / "skills" / "brainstorming").exists()
+        assert not (repo / ".gemini" / "skills" / "brainstorming").exists()
 
     def test_policy_blocks_a_project_install_too(self, entry, tmp_path):
         # Vendoring into a repo is not an escape hatch around policy.
@@ -1117,7 +1324,8 @@ class TestProjectSkills:
         repo, _ = self._install(entry, tmp_path)
         info = store.uninstall_project("brainstorming", base=str(repo))
         assert info["scope"] == "project"
-        assert sorted(info["unlinked"]) == ["claude-code", "cursor", "windsurf"]
+        assert sorted(info["unlinked"]) == ["claude-code", "cursor", "gemini",
+                                            "windsurf"]
         assert info["base"] == str(repo)
         for dotdir in AGENT_DIRS.values():
             assert not (repo / dotdir / "skills" / "brainstorming").exists()
@@ -1215,6 +1423,7 @@ class TestProjectSkills:
         paths_rec = sorted(m["path"] for m in rec["materializations"])
         assert paths_rec == [".claude/skills/brainstorming",
                              ".cursor/skills/brainstorming",
+                             ".gemini/skills/brainstorming",
                              ".windsurf/skills/brainstorming"]
         # Nothing machine-specific: this file is committed and read elsewhere.
         for p in paths_rec:
@@ -1251,7 +1460,7 @@ class TestProjectSkills:
         info = store.uninstall_project("brainstorming", base=str(repo))
         # cursor's dir was already gone — claiming to have removed it would be
         # a lie in the CLI's own summary line.
-        assert sorted(info["unlinked"]) == ["claude-code", "windsurf"]
+        assert sorted(info["unlinked"]) == ["claude-code", "gemini", "windsurf"]
         assert projectlock.get_skill(repo, "brainstorming") is None
 
     # ── conflicts and partial reinstalls ─────────────────────────────────
@@ -1284,8 +1493,9 @@ class TestProjectSkills:
         store.install(entry, scope="project", base=str(repo), force=True,
                       only_agents=["cursor"])
         rec = projectlock.get_skill(repo, "brainstorming")
-        assert sorted(rec["agents"]) == ["claude-code", "cursor", "windsurf"]
-        assert len(rec["materializations"]) == 3
+        assert sorted(rec["agents"]) == ["claude-code", "cursor", "gemini",
+                                         "windsurf"]
+        assert len(rec["materializations"]) == 4
         # And uninstall still reverses every one of them.
         store.uninstall_project("brainstorming", base=str(repo))
         for dotdir in AGENT_DIRS.values():
@@ -1364,9 +1574,9 @@ class TestProjectSkills:
 
         assert "TEAM EDIT" in claude_md.read_text(encoding="utf-8")
         assert (repo / ".cursor" / "skills" / "brainstorming" / "SKILL.md").is_file()
-        # and the lock still describes all three
+        # and the lock still describes all four
         assert len(projectlock.get_skill(repo, "brainstorming")
-                   ["materializations"]) == 3
+                   ["materializations"]) == 4
 
 
 class TestCopySkillBackupCleanup:
@@ -1484,6 +1694,7 @@ class TestReinstallKeepsAgentScope:
         assert _link("claude-code").is_symlink()
         assert not _link("windsurf").exists()
         assert not _link("cursor").exists()
+        assert not _link("gemini").exists()
 
     def test_a_forced_reinstall_can_still_widen_on_request(self, tap, entry):
         store.install(entry, only_agents=["claude-code"])
@@ -1492,11 +1703,13 @@ class TestReinstallKeepsAgentScope:
         assert res.linked == ["claude-code", "cursor"]
         assert _link("cursor").is_symlink()
         assert not _link("windsurf").exists()
+        assert not _link("gemini").exists()
 
     def test_an_unnarrowed_skill_still_reinstalls_everywhere(self, tap, entry):
         store.install(entry)
         res = store.install(entry, force=True)
-        assert res.linked == ["claude-code", "windsurf", "cursor"]
+        assert res.linked == LINKED_AGENTS
+        assert res.native == ["gemini"]
 
     def test_install_from_path_keeps_the_scope_too(self, tap, entry, tmp_path):
         # `boost reinstall` on a local skill goes through install_from_path.
@@ -1518,6 +1731,7 @@ class TestReinstallKeepsAgentScope:
         assert [m["agent"] for m in
                 lockfile.get_rule("team-conventions")["materializations"]] == ["cursor"]
         assert not (paths.home() / "CLAUDE.md").exists()
+        assert not (paths.home() / ".gemini" / "GEMINI.md").exists()
         assert not (paths.home() / ".windsurf" / "rules"
                     / "team-conventions.mdc").exists()
 
@@ -1527,6 +1741,7 @@ class TestReinstallKeepsAgentScope:
         res = store.install(wf, force=True)
         assert res.linked == ["claude-code"]
         assert not (paths.home() / ".cursor" / "commands" / "ship-it.md").exists()
+        assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
 
     def test_a_forced_project_reinstall_keeps_its_agent_dirs(self, entry, tmp_path):
         repo = tmp_path / "proj"
@@ -1618,7 +1833,7 @@ class TestSyncRespectsDeclaredScope:
         store.install(entry, only_agents=["claude-code"])
         store.sync_apply(store.sync_plan())
         assert _link("claude-code").is_symlink()
-        for agent in ("windsurf", "cursor"):
+        for agent in ("windsurf", "cursor", "gemini"):
             assert not _link(agent).exists(), agent
 
     def test_a_dropped_link_inside_the_scope_is_still_repaired(self, tap, entry):
@@ -1642,7 +1857,7 @@ class TestSyncRespectsDeclaredScope:
         assert "only_agents" in e          # new installs record it (as None)
         del e["only_agents"]
         lockfile.set_skill("brainstorming", e)
-        for agent in AGENT_DIRS:
+        for agent in LINKED_AGENTS:
             _link(agent).unlink()
         assert sorted(store.sync_plan()["missing_links"]) == [
             ("brainstorming", "claude-code"), ("brainstorming", "cursor"),

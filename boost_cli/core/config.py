@@ -12,6 +12,20 @@ DEFAULTS = {
         "claude-code": {"dir": "~/.claude/skills", "enabled": True},
         "windsurf": {"dir": "~/.windsurf/skills", "enabled": True},
         "cursor": {"dir": "~/.cursor/skills", "enabled": True},
+        # Gemini CLI discovers boost's canonical store directly: its user tier
+        # reads `~/.gemini/skills` **or the `~/.agents/skills` alias**, and that
+        # alias is exactly paths.store_dir(). So skills need no symlink —
+        # `links_skills: false` — and linking anyway would put the same skill in
+        # two of Gemini's discovery tiers, where the alias out-ranks the dir we
+        # linked into: the link could never win, it would only cost the user a
+        # "Skill conflict detected" line per skill at every session start.
+        #
+        # The dir is still configured because it anchors everything that is NOT
+        # a store symlink: `~/.gemini` is where rules (GEMINI.md) and workflows
+        # (commands/, agents/) materialize. Set links_skills true to restore the
+        # symlink if that alias is ever narrowed.
+        "gemini": {"dir": "~/.gemini/skills", "enabled": True,
+                   "links_skills": False},
     },
     "taps": [],  # [{"name": "owner/repo", "url": "...", "curated": bool}]
     "ai": {

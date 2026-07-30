@@ -34,6 +34,8 @@ from __future__ import annotations
 import json
 from typing import Dict, List, Optional, Tuple
 
+from . import mcphost
+
 # The frontmatter key a skill uses to name the servers it needs.
 DECL_KEY = "mcp"
 
@@ -132,24 +134,34 @@ def registrable(rows) -> List[dict]:
             and str(r["spec"].get("command") or "").strip()]
 
 
-def register_argv(name: str, spec: dict, *, scope: str = "user") -> List[str]:
-    """The ``claude mcp add`` argv that registers one declared server.
+def register_argv(name: str, spec: dict, *, scope: str = "user",
+                  host: str = mcphost.CLAUDE) -> List[str]:
+    """The ``<host> mcp add`` argv that registers one declared server.
 
-    Mirrors ``cmd_mcp``'s invariant exactly: the server **name** precedes every
-    ``-e`` flag, and a bare ``--`` separates boost's flags from the server's own
-    command and arguments. Getting that order wrong makes the CLI read the
-    command as another flag value, which is why it is pinned by a test.
+    Mirrors :mod:`boost_cli.core.mcphost`'s per-host grammar exactly, because
+    the two build the same command for different servers and a divergence would
+    only show up on someone else's machine. For Claude the server **name**
+    precedes every ``-e`` flag (its ``-e`` is variadic, so a name after it is
+    swallowed as another env var) and a bare ``--`` separates boost's flags from
+    the server's own command; for Gemini the flags precede the name and there is
+    no ``--``, which would be passed through as a literal argument.
+
+    ``host`` defaults to Claude Code so existing callers are unchanged.
     """
-    argv = ["claude", "mcp", "add", name, "--scope", scope]
+    exe = mcphost.cli(host)
     env = spec.get("env")
+    flags: List[str] = []
     if isinstance(env, dict):
         for key in sorted(env):
-            argv += ["-e", "%s=%s" % (key, env[key])]
-    argv.extend(("--", str(spec["command"])))
+            flags += ["-e", "%s=%s" % (key, env[key])]
+    command = str(spec["command"])
     args = spec.get("args")
-    if isinstance(args, list):
-        argv += [str(a) for a in args]
-    return argv
+    tail = [str(a) for a in args] if isinstance(args, list) else []
+    if host == mcphost.GEMINI:
+        return [exe, "mcp", "add", "--scope", scope, *flags,
+                name, command, *tail]
+    return [exe, "mcp", "add", name, "--scope", scope, *flags,
+            "--", command, *tail]
 
 
 def merge_into(existing: Optional[dict], rows, skill: str) -> Tuple[dict, List[str]]:

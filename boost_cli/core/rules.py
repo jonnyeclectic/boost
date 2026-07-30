@@ -31,9 +31,25 @@ BLOCK_END = "<!-- boost:rule:%s end -->"
 RULE_DIR_EXT = {"cursor": ".mdc", "windsurf": ".md", "cline": ".md"}
 DEFAULT_RULE_EXT = ".md"
 
-# Agents with no rules folder: a rule becomes a CLAUDE.md managed block.
-CLAUDE_MD_AGENTS = {"claude-code"}
+# Agents with no rules folder: a rule becomes a managed block in the agent's
+# *context file* — the standing-instructions Markdown it reads every turn.
+# Claude Code reads CLAUDE.md; Gemini CLI reads GEMINI.md.
+#
+# The value is ``(user_filename, project_filename)``. They differ for Claude
+# because it documents a personal, git-ignored ``CLAUDE.local.md`` for the
+# per-repo case, and installing a rule into the *committed* CLAUDE.md would
+# rewrite a file the whole team reviews. Gemini CLI documents no ``.local``
+# variant — its project context file is just ``<repo>/GEMINI.md`` — so both
+# entries are the same and the pair still expresses the choice explicitly.
+CONTEXT_FILES = {
+    "claude-code": ("CLAUDE.md", "CLAUDE.local.md"),
+    "gemini": ("GEMINI.md", "GEMINI.md"),
+}
 
+# ``MODE_CLAUDE``'s *value* is written into every rule's lock record, so it is
+# frozen at "claude" even though the mode now covers any context-file agent.
+# Renaming the string would orphan the materializations of already-installed
+# rules — uninstall matches on it (see store._uninstall_rule).
 MODE_CLAUDE = "claude"
 MODE_FILE = "file"
 
@@ -47,16 +63,18 @@ def rule_target(agent: str, skills_dir: Path, name: str,
                 base: Optional[Path] = None) -> Tuple[str, Path]:
     """Where rule ``name`` materializes for ``agent``.
 
-    Returns ``(mode, path)``: ``MODE_CLAUDE`` writes/merges a CLAUDE.md;
-    ``MODE_FILE`` drops a file into the agent's ``rules/`` dir.
+    Returns ``(mode, path)``: ``MODE_CLAUDE`` writes/merges the agent's context
+    file; ``MODE_FILE`` drops a file into the agent's ``rules/`` dir.
 
     ``base`` selects the scope:
       * ``None`` (user scope) — the agent's user config: the parent of its
         configured skills dir (``~/.cursor/skills`` -> ``~/.cursor``), and
-        ``~/.claude/CLAUDE.md`` for Claude.
+        ``~/.claude/CLAUDE.md`` / ``~/.gemini/GEMINI.md`` for the context-file
+        agents.
       * a directory (project scope) — that repo: ``<base>/.cursor/rules/…`` and,
-        since Claude reads per-repo memory from the root, ``<base>/CLAUDE.local.md``
-        (the personal, git-ignored file) for Claude.
+        since those agents read per-repo memory from the root,
+        ``<base>/CLAUDE.local.md`` or ``<base>/GEMINI.md`` (see
+        :data:`CONTEXT_FILES`).
     """
     # `name` comes from tap-controlled frontmatter and is about to be joined
     # onto a directory, so it has to be a single component — otherwise
@@ -65,10 +83,12 @@ def rule_target(agent: str, skills_dir: Path, name: str,
     if not util.is_safe_component(name):
         raise BoostError("invalid rule name %r" % name)
     dotdir = Path(skills_dir).parent.name          # ".claude" / ".cursor" / …
-    if agent in CLAUDE_MD_AGENTS:
+    context = CONTEXT_FILES.get(agent)
+    if context is not None:
+        user_name, project_name = context
         if base is not None:
-            return MODE_CLAUDE, Path(base) / "CLAUDE.local.md"
-        return MODE_CLAUDE, Path(skills_dir).parent / "CLAUDE.md"
+            return MODE_CLAUDE, Path(base) / project_name
+        return MODE_CLAUDE, Path(skills_dir).parent / user_name
     root = (Path(base) / dotdir) if base is not None else Path(skills_dir).parent
     ext = RULE_DIR_EXT.get(agent, DEFAULT_RULE_EXT)
     return MODE_FILE, root / "rules" / (name + ext)

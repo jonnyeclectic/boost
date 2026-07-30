@@ -34,6 +34,11 @@ class InstallResult:
     dest: Path
     linked: List[str] = field(default_factory=list)
     conflicts: List[str] = field(default_factory=list)
+    # Agents that can already use this skill without a symlink because they read
+    # the canonical store directly (agents.native_store_agents). Kept apart from
+    # `linked` so the lock records only real links, while the install report can
+    # still tell the user the skill reached them.
+    native: List[str] = field(default_factory=list)
     score: int = 0
     upgraded: bool = False
     kind: str = "skill"
@@ -77,11 +82,20 @@ def source_dir_for(entry: dict) -> Path:
 
 
 def link_agents(name: str, only: Optional[List[str]] = None) -> InstallResult:
-    """Symlink store/<name> into each enabled agent dir. Returns result with
-    .linked (agent names) and .conflicts (paths that were real files/dirs)."""
+    """Symlink store/<name> into each linking agent dir. Returns result with
+    .linked (agent names), .conflicts (paths that were real files/dirs) and
+    .native (agents that read the store directly and needed no link)."""
     res = InstallResult(name=name, dest=skill_store_dir(name))
     target = skill_store_dir(name)
-    for agent, adir in agents.enabled_agents().items():
+    # Deliberately NOT filtered by `only`. That list scopes which agents get a
+    # *link*, but a native-store agent's access follows from the store itself,
+    # which every install writes no matter how narrow the scope — so even
+    # `--agent cursor` really does leave the skill visible to Gemini, and
+    # saying otherwise would be a lie. Filtering here also silently broke
+    # reinstall: `preserved_agent_scope` replays the lock's recorded *links*,
+    # which by construction never contain a native agent.
+    res.native = list(agents.native_store_agents())
+    for agent, adir in agents.linking_agents().items():
         if only and agent not in only:
             continue
         adir.mkdir(parents=True, exist_ok=True)
@@ -162,12 +176,15 @@ def scoped_agents(entry: dict, enabled: Dict[str, Path]) -> Dict[str, Path]:
 
 
 def unlink_agents(name: str) -> List[str]:
-    """Remove the ``name`` symlink from every enabled agent dir.
+    """Remove the ``name`` symlink from every linking agent dir.
 
-    Returns the agents unlinked; non-symlink files are left alone.
+    Returns the agents unlinked; non-symlink files are left alone. Agents that
+    read the canonical store directly never had a link, so there is nothing
+    here to reverse for them — uninstalling the store dir is what removes the
+    skill from their view.
     """
     removed = []
-    for agent, adir in agents.enabled_agents().items():
+    for agent, adir in agents.linking_agents().items():
         link = adir / name
         if link.is_symlink():
             link.unlink()
@@ -737,14 +754,15 @@ def _install_workflow(entry: dict, force: bool = False,
     for agent, skills_dir in agents.enabled_agents().items():
         if only_agents and agent not in only_agents:
             continue
-        path = workflows.workflow_target(skills_dir, slot, name, base=resolved_base)
+        path = workflows.workflow_target(skills_dir, slot, name,
+                                         base=resolved_base, agent=agent)
         # Project scope writes into the repo; a committed agent dir could be a
         # symlink escaping it (see scopes.ensure_in_base). User scope writes into
         # the user's own ~/.claude, which they control — nothing to guard.
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        util.atomic_write_text(path, raw)
+        util.atomic_write_text(path, workflows.render(agent, slot, name, raw))
         materializations.append({"agent": agent, "slot": slot, "path": str(path)})
         linked.append(agent)
 
@@ -971,7 +989,10 @@ def sync_plan() -> Dict[str, list]:
         # `preserved_agent_scope` closed on the install side: it reported a
         # missing_link for each agent outside the narrowing, and sync_apply
         # dutifully linked them, undoing `install --agent` in one command.
-        for agent, adir in scoped_agents(entry, agents.enabled_agents()).items():
+        # linking_agents, not enabled_agents: an agent that reads the canonical
+        # store has no link to be missing, and reporting one would make `boost
+        # sync` create the very duplicate `links_skills: false` exists to avoid.
+        for agent, adir in scoped_agents(entry, agents.linking_agents()).items():
             link = adir / name
             if not link.is_symlink() or not link.exists():
                 plan["missing_links"].append((name, agent))
