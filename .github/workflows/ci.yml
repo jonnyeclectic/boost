@@ -20,6 +20,31 @@ on:
 permissions:
   contents: read
 
+# Cancel a pull request's previous run when a new push supersedes it, and NEVER
+# cancel anything else.
+#
+# Measured over six consecutive successful runs, 31% of all job time here was
+# spent queueing rather than executing — 104 job-minutes against 236 — and the
+# median per-job queue swung 29x between runs (0.1 min when the repo was quiet,
+# 2.9 min with a dozen loop/* branches and Dependabot PRs live). The cost is
+# driven by how much runner footprint is in flight at once, not by the change
+# under test, and sharding the mutation gate traded one runner slot for six.
+# This was the only workflow in the repo with no concurrency group at all, so
+# every superseded push left ~36 checks — six of them mutation shards — running
+# to completion against a commit nobody was waiting on any more.
+#
+# The condition is the load-bearing part. `cancel-in-progress: true` would also
+# cancel:
+#   * push to main, which publish.yml gates the release on via workflow_run —
+#     cancelling it means a merge that silently never ships;
+#   * merge_group, where a cancelled run never reports its required contexts and
+#     the queue then waits on a status that is never coming, which is exactly
+#     the deadlock the comments further down this file describe.
+# Both evaluate false here. tests/unit/test_workflow_concurrency.py pins that.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest

@@ -2,15 +2,15 @@
 id: ci-time-is-now-runner-queueing
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: CI speed
 complexity: M
 impact: High
 wow: 4
 note: 104 job-min queued vs 236 executing — 31% of CI is waiting for a runner
 order: 62
-owner:
-pr:
+owner: loop/ci-concurrency
+pr: 350
 title: A third of CI job time is spent waiting for a runner, not running
 ---
 With the mutation gate no longer dominating, the largest remaining term in CI wall clock is
@@ -38,3 +38,24 @@ roughly in increasing order of intrusiveness: a <code>concurrency</code> group t
 superseded PR runs; capping the shard matrix with <code>max-parallel</code>; or making the shard
 count adaptive. Worth measuring before choosing &mdash; this item is the measurement, not the
 fix.
+
+<b>Shipped: the least intrusive one, and it turned out to be a plain omission rather than a
+trade-off.</b> Seven workflows here already declare a <code>concurrency</code> group.
+<code>ci.yml</code> &mdash; the largest by a wide margin, ~36 checks including six mutation
+shards &mdash; declared none, so every push to a pull request left the whole previous run
+executing against a commit nobody was waiting on. This session alone pushed four times to one PR,
+which is 24 shard jobs of which 18 were already superseded.
+
+The condition is the load-bearing part, and it is what the tests pin rather than the group name.
+<code>cancel-in-progress: true</code> would also cancel a <b>push to main</b>, which
+<code>publish.yml</code> gates the release on via <code>workflow_run</code> &mdash; a merge that
+silently never ships &mdash; and a <b>merge_group</b> run, where a cancelled run never reports its
+required contexts and the queue then waits forever on a status that is not coming. Both evaluate
+false. A separate assertion sweeps every workflow that triggers on <code>merge_group</code> and
+fails if any of them cancels unconditionally, so the deadlock cannot arrive later through a
+different file.
+
+What this does <em>not</em> do is reduce the footprint of a single run, which is the other half of
+the measurement. <code>max-parallel</code> on the shard matrix and an adaptive shard count are
+still open, and both trade latency for footprint rather than removing waste &mdash; worth
+re-measuring queue time after this lands before spending that trade.
