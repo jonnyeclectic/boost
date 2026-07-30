@@ -10,7 +10,7 @@ wow: 3
 note: 45 core modules and an enforced layering rule, with no diagram of either
 order: 12
 owner: loop/architecture-diagrams
-pr: 343
+pr: 345
 title: The engine had no architecture diagram &mdash; and the one written rule was documented backwards
 ---
 boost had <b>no internal architecture diagram of any kind</b>. <code>docs/rag-architecture.md</code>
