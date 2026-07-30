@@ -2623,7 +2623,7 @@ missing file is now imputed at the measured mean rate, which keeps every weight 
       </article>
 
       <article class="cap rcard" id="ci-time-is-now-runner-queueing">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI speed</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI speed</span></div>
         <h3>A third of CI job time is spent waiting for a runner, not running</h3>
         <p>With the mutation gate no longer dominating, the largest remaining term in CI wall clock is
 <b>queueing</b>. Measured over six consecutive successful <code>ci</code> runs: <b>104
@@ -2649,7 +2649,38 @@ dozen branches are in flight, because every concurrent PR now multiplies its foo
 roughly in increasing order of intrusiveness: a <code>concurrency</code> group that cancels
 superseded PR runs; capping the shard matrix with <code>max-parallel</code>; or making the shard
 count adaptive. Worth measuring before choosing &mdash; this item is the measurement, not the
-fix.</p>
+fix.
+
+<b>Shipped: the least intrusive one, and it turned out to be a plain omission rather than a
+trade-off.</b> Seven workflows here already declare a <code>concurrency</code> group.
+<code>ci.yml</code> &mdash; the largest by a wide margin, ~36 checks including six mutation
+shards &mdash; declared none, so every push to a pull request left the whole previous run
+executing against a commit nobody was waiting on. This session alone pushed four times to one PR,
+which is 24 shard jobs of which 18 were already superseded.
+
+Two things keep the release path out of it, and the second is easy to miss. The <b>condition</b>:
+<code>cancel-in-progress: true</code> would also cancel a push to main, which
+<code>publish.yml</code> gates the release on via <code>workflow_run</code> &mdash; a merge that
+silently never ships &mdash; and a <code>merge_group</code> run, where a cancelled run never
+reports its required contexts and the queue then waits forever on a status that is not coming.
+Both evaluate false.
+
+The <b>key</b>: non-PR events group on <code>github.sha</code>, not <code>github.ref</code>.
+<code>cancel-in-progress: false</code> does not mean "never cancel" &mdash; it means a newer run
+<i>waits</i>, and GitHub cancels the older <em>pending</em> run when a third arrives. Keying main
+on its ref would put every main push in one group, so three quick merges would leave a middle
+commit whose <code>ci</code> never completes, and since <code>publish.yml</code> fires on
+<code>workflow_run</code> of <code>ci</code>, that commit would never release. A sha is unique per
+commit, so main and the merge queue never share a group at all.
+
+Both properties are pinned by tests rather than by the comment, and a separate assertion sweeps
+every workflow that triggers on <code>merge_group</code> and fails if any cancels unconditionally
+&mdash; so the deadlock cannot arrive later through a different file.
+
+What this does <em>not</em> do is reduce the footprint of a single run, which is the other half of
+the measurement. <code>max-parallel</code> on the shard matrix and an adaptive shard count are
+still open, and both trade latency for footprint rather than removing waste &mdash; worth
+re-measuring queue time after this lands before spending that trade.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
