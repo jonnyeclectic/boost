@@ -101,8 +101,15 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   (structural pattern matching, `X | Y` runtime unions in non-annotation context).
 - **Three item kinds, one scanner.** `core/catalog.scan_dir` indexes `skill`
   (SKILL.md), `rule` (.mdc/.cursorrules/.windsurfrules/.clinerules), and
-  `workflow` (commands/agents/workflows Markdown). **Only `skill` installs** —
-  `store.install` refuses non-skill kinds; rules/workflows are search/tap-only.
+  `workflow` (commands/agents/workflows Markdown). **All three install**, and
+  each honors `scope`: `store.install` dispatches to `_install_rule` /
+  `_install_workflow` and only raises for a kind outside those three. They land
+  in different places, which is the part to get right — a skill is copied into
+  the canonical store and symlinked out, a rule is materialised into each
+  agent's context file (`rules.CONTEXT_FILES`, e.g. `~/.claude/CLAUDE.md`), and
+  a workflow is rendered per agent (TOML for Gemini, see
+  `workflows.TOML_COMMAND_AGENTS`). Installing a rule therefore edits a file the
+  user reads every session — treat it as more invasive than a skill, not less.
 
 ## Parallel work & concurrent loops
 
