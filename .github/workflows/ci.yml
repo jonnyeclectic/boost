@@ -333,9 +333,14 @@ jobs:
   #   mutation-scope   can the score have changed at all? (for 38% of this
   #                    repo's merged PRs — docs, roadmap cards, other workflows
   #                    — provably not)
-  #   mutation-shard   six parallel slices of the mutant set. store.py is ~18%
-  #                    of all mutants and cannot be split, so ~5.4x is the real
-  #                    ceiling however many runners are added.
+  #   mutation-shard   six parallel slices of the mutant set. A file heavier
+  #                    than an even share is split per top-level function
+  #                    (mutant names are addressable that way), so store.py —
+  #                    18% of all mutants — is no longer a floor of its own.
+  #                    Each shard writes results for every file it touched;
+  #                    the merge unions them and fails closed on any mutant
+  #                    left unrun, so a partition gap reddens the gate rather
+  #                    than quietly shrinking the denominator.
   #   mutation         THE REQUIRED CHECK: merges the slices and applies the gate.
   #
   # `mutation` is the context named in .github/required-checks.txt, so it must run
@@ -537,6 +542,23 @@ jobs:
       - name: mutation strength gate (>=80% killed)
         if: needs.mutation-scope.outputs.relevant == 'true'
         run: .venv/bin/python scripts/mutation_gate.py --min 80
+      - name: refresh balance hints
+        if: needs.mutation-scope.outputs.relevant == 'true'
+        # Advisory only — scripts/mutation_weights.json is an optimisation, never
+        # a correctness input, so this neither gates nor commits. It is uploaded
+        # so a maintainer can drop a measured file in rather than hand-editing
+        # one: real per-symbol mutant counts, and the per-file DURATIONS that let
+        # the planner balance on time instead of count. `|| true` because a
+        # balance hint is never worth failing a green gate over.
+        run: python3 scripts/mutation_shards.py weights --source mutants || true
+      - name: upload balance hints
+        if: needs.mutation-scope.outputs.relevant == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-weights
+          path: scripts/mutation_weights.json
+          retention-days: 7
+          if-no-files-found: warn
 
   install-smoke:
     # Every gate above runs an editable `pip install -e .`, which cannot catch a
