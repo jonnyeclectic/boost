@@ -304,6 +304,37 @@ class TestWeighting:
         assert weight(repo, repo / "boost_cli/core/a.py") == 90_000
         assert weight(repo, repo / "boost_cli/core/b.py") == 1_000
 
+    def test_a_units_share_prefers_measured_time_over_count(self, tmp_path):
+        # THE SECOND PROXY ERROR: count is as poor a stand-in for time *within*
+        # a file as across the repo. Measured on store.py, per-mutant cost runs
+        # 0.273 s to 3.900 s across its functions — 14.3x — and `install` is 36%
+        # of the file's time from 12% of its mutants. Apportioning by count sent
+        # that function's shard to 8.9 min against a 4.8 min sibling.
+        repo = _repo(tmp_path, {"a.py": _big("f", 2)})
+        (repo / "scripts").mkdir()
+        (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
+            "mutants_by_file": {"a.py": 100},
+            "millis_by_file": {"a.py": 10_000},
+            # equal counts, wildly unequal time
+            "mutants_by_symbol": {"a.py": {"f_0": 50, "f_1": 50}},
+            "millis_by_symbol": {"a.py": {"f_0": 9_000, "f_1": 1_000}},
+        }))
+        path = repo / "boost_cli/core/a.py"
+        slow = ms.unit_weight(repo, ms.Unit(path, "f_0"))
+        fast = ms.unit_weight(repo, ms.Unit(path, "f_1"))
+        assert slow == 9_000 and fast == 1_000, (slow, fast)
+
+    def test_a_units_share_falls_back_to_counts_when_untimed(self, tmp_path):
+        repo = _repo(tmp_path, {"a.py": _big("f", 2)})
+        (repo / "scripts").mkdir()
+        (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
+            "mutants_by_file": {"a.py": 100},
+            "mutants_by_symbol": {"a.py": {"f_0": 75, "f_1": 25}},
+        }))
+        path = repo / "boost_cli/core/a.py"
+        assert ms.unit_weight(repo, ms.Unit(path, "f_0")) == 75
+        assert ms.unit_weight(repo, ms.Unit(path, "f_1")) == 25
+
     def test_a_units_weight_is_a_share_of_its_files(self, tmp_path):
         # Keeping units commensurable with whole files is what lets the packer
         # mix them in one bin.

@@ -39,13 +39,18 @@ Ideal packing needs each file's mutant count, which you only learn by running
 mutmut. Three weights, in order of preference:
 
 1. Recorded **milliseconds**, written by ``weights`` from mutmut's per-mutant
-   durations. Time is what the critical path is made of, and it is *not*
-   proportional to count: measured over the real repo, a split balanced to
-   1.08x of ideal by mutant count was **2.24x** of ideal by time. Weighting on
-   the measured milliseconds instead brings that to 1.04x — a 54% cut in the
-   critical path — because a ``store.py`` mutant re-runs a far larger covering
-   test set than an ``ed25519.py`` one, and a survivor runs its tests to
-   completion where a kill exits early.
+   durations, both per file and per function. Time is what the critical path is
+   made of, and it is *not* proportional to count — a ``store.py`` mutant
+   re-runs a far larger covering test set than an ``ed25519.py`` one, and a
+   survivor runs its tests to completion where a kill exits early.
+
+   Measured, not assumed. Weighting by count balanced the shards to 1.08x of
+   ideal *by count* while leaving them **2.24x** apart *by time*. The same
+   proxy error repeats inside a file: across ``store.py``'s functions the
+   per-mutant cost spans 0.273 s to 3.900 s (14.3x), and ``install`` alone is
+   36% of the file's time from 12% of its mutants — so a count-apportioned
+   split sent its shard to 8.9 minutes against a 4.8-minute sibling. Both
+   levels are therefore weighted on measured time.
 
    Every weight must share a unit, since milliseconds run to five digits where
    counts run to three and one file weighted in time among files weighted in
@@ -142,6 +147,31 @@ def load_symbol_weights(root: Path) -> Dict[str, Dict[str, int]]:
         if isinstance(syms, dict):
             out[name] = {s: int(v) for s, v in syms.items()
                          if isinstance(v, int) and v > 0}
+    return out
+
+
+def load_symbol_durations(root: Path) -> Dict[str, Dict[str, int]]:
+    """Recorded per-FUNCTION run time in milliseconds, if a previous run left any.
+
+    The share basis that matters inside a split file. Mutant count is a poor
+    proxy for time *within* a file as much as across the repo: measured over
+    ``store.py``, per-mutant cost ranges 0.273 s to 3.900 s across its functions
+    — a 14.3x spread — and ``install`` alone is 36% of the file's time from 12%
+    of its mutants. Apportioning by count therefore under-weights it badly, and
+    a shard that drew it ran 8.9 minutes against a 4.8-minute sibling.
+    """
+    path = root / WEIGHTS
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except ValueError:
+        return {}
+    out: Dict[str, Dict[str, int]] = {}
+    for name, syms in (data.get("millis_by_symbol") or {}).items():
+        if isinstance(syms, dict):
+            out[name] = {s: int(v) for s, v in syms.items()
+                         if isinstance(v, (int, float)) and v > 0}
     return out
 
 
@@ -356,14 +386,22 @@ def unit_weight(root: Path, unit: Unit) -> int:
     per-symbol times directly would reintroduce exactly the scale-mixing that
     ``weight_fn`` refuses.
 
-    The share itself comes from recorded per-symbol mutant counts when a
-    previous run left them, and from function body size otherwise — good enough
-    to bootstrap a sensible first split before anything has been measured.
+    The share itself is taken from the best measurement available, in the same
+    order of preference the file-level weights use: recorded per-function
+    milliseconds, then recorded per-function mutant counts, then function body
+    size to bootstrap a sensible first split before anything has been measured.
+
+    Time first is not a refinement, it is the point. Count is as poor a proxy
+    for time *within* a file as across the repo — 14.3x between the cheapest and
+    dearest function of ``store.py`` — so a count-apportioned split leaves the
+    shard holding ``install`` running nearly twice its siblings.
     """
     file_weight = weight_fn(root)(root, unit.path)
     if unit.symbol is None:
         return file_weight
-    recorded = load_symbol_weights(root).get(rel_name(root, unit.path), {})
+    name = rel_name(root, unit.path)
+    recorded = (load_symbol_durations(root).get(name)
+                or load_symbol_weights(root).get(name, {}))
     shares = recorded or symbol_weight(unit.path, top_level_symbols(unit.path))
     total = sum(shares.values())
     if not total:
@@ -693,6 +731,7 @@ def cmd_weights(args: argparse.Namespace) -> int:
     counts = {}
     millis: Dict[str, int] = {}
     by_symbol: Dict[str, Dict[str, int]] = {}
+    millis_by_symbol: Dict[str, Dict[str, int]] = {}
     for meta in sorted(src.rglob("*.py.meta")):
         data = json.loads(meta.read_text())
         codes = data.get("exit_code_by_key", {})
@@ -716,15 +755,27 @@ def cmd_weights(args: argparse.Namespace) -> int:
             # file balances on measured counts rather than on body size. Keys
             # look like `boost_cli.core.store.x_install__mutmut_3`.
             tally: Dict[str, int] = {}
+            times: Dict[str, float] = {}
             for key in codes:
                 head, sep, _n = key.rpartition("__mutmut_")
                 if not sep:
                     continue
                 symbol = head.rsplit(".", 1)[-1]
-                if symbol.startswith("x_"):
-                    tally[symbol[2:]] = tally.get(symbol[2:], 0) + 1
+                if not symbol.startswith("x_"):
+                    continue
+                symbol = symbol[2:]
+                tally[symbol] = tally.get(symbol, 0) + 1
+                spent = durations.get(key)
+                if isinstance(spent, (int, float)) and spent >= 0:
+                    times[symbol] = times.get(symbol, 0.0) + spent
             if tally:
                 by_symbol[name] = tally
+            # Only when every mutant of the file was timed, for the same reason
+            # the file-level figure is: a partial record understates a function
+            # and wins its shard extra work.
+            if times and name in millis:
+                millis_by_symbol[name] = {s: max(round(v * 1000), 1)
+                                          for s, v in times.items()}
     if not counts:
         print("mutation_shards: no .meta results under %s — nothing to record" % src)
         return 1
@@ -734,11 +785,13 @@ def cmd_weights(args: argparse.Namespace) -> int:
                      "Stale entries cost balance, never correctness.",
          "mutants_by_file": counts,
          "mutants_by_symbol": by_symbol,
-         "millis_by_file": millis},
+         "millis_by_file": millis,
+         "millis_by_symbol": millis_by_symbol},
         indent=2, sort_keys=True) + "\n")
     print("wrote %s: %d files, %d mutants, %d with per-symbol counts, "
-          "%d with durations" % (out, len(counts), sum(counts.values()),
-                                 len(by_symbol), len(millis)))
+          "%d timed, %d with per-symbol times"
+          % (out, len(counts), sum(counts.values()), len(by_symbol),
+             len(millis), len(millis_by_symbol)))
     return 0
 
 

@@ -69,13 +69,27 @@ diagnosis above was right and incomplete: counts were balanced to 0.4%, and the 
 spread across shards was still 2.6&times;.
 
 So the second half is weighting by measured time, which a divisible file finally makes possible.
-<code>weights</code> now records mutmut's per-mutant durations and the planner prefers them.
-Against the real numbers from that run: the count-based split, balanced to <b>1.08&times;</b> of
-ideal <i>by count</i>, was <b>2.24&times;</b> of ideal <i>by time</i> &mdash; one shard carrying
-39.3 minutes of test time against a 17.5-minute even share. Re-weighted, the split lands at
-<b>1.04&times;</b> (18.2 against 17.5), a <b>53.6% cut in the critical path</b>. Neither change
-delivers this alone: time-weighting was pointless while a file was indivisible, and splitting alone
-just moved the bottleneck.
+<code>weights</code> now records mutmut's per-mutant durations and the planner prefers them. The
+count-based split, balanced to <b>1.08&times;</b> of ideal <i>by count</i>, was <b>2.24&times;</b> of
+ideal <i>by time</i> &mdash; one shard carrying 39.3 minutes of summed test time against a
+17.5-minute even share.
+
+<b>Measured, that bought less than the arithmetic suggested.</b> Time-weighting moved the critical
+path from 10.3 to <b>9.3</b> minutes (shards 5.2, 5.8, 6.3, 6.8, 6.2, 9.3), 1.41&times; ideal rather
+than the 1.04&times; the summed-time model predicted. Summed test time is not shard wall clock:
+mutmut runs mutants across parallel workers, so a shard's elapsed time is its summed time divided by
+an effective worker count, and the model ignored that. Per-shard fixed overhead was ruled out by
+measurement rather than assumed &mdash; checkout, venv and install together are <b>0.4 minutes</b>,
+against 4.8&ndash;8.9 minutes inside <code>mutmut run</code> itself.
+
+The residual had a specific cause, and it is the same proxy error one level down: a split file's
+time was apportioned across its functions by <em>mutant count</em>. Across
+<code>store.py</code>'s functions the per-mutant cost spans <b>0.273 s to 3.900 s</b> &mdash;
+<b>14.3&times;</b> &mdash; and <code>install</code> alone is <b>36%</b> of the file's time from
+<b>12%</b> of its mutants, so the shard that drew it ran 8.9 minutes against a 4.8-minute sibling.
+<code>weights</code> now records per-<em>function</em> durations too and apportions on those, which
+balances the plan to <b>0.06%</b>. Whether that closes the wall-clock gap is a claim the next run
+gets to settle, not this card.
 
 Two bugs found by running it rather than reasoning about it. mutmut records durations in
 <b>seconds</b>, so summing them into a field named <code>millis</code> understated
