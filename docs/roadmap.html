@@ -112,6 +112,7 @@
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
       <div class="stat"><b>183</b><span>Loop finds</span></div>
+      <div class="stat"><b>180</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1219,7 +1220,7 @@ lock file silently clobbers it and still reports "created," even though it overw
       </article>
 
       <article class="cap rcard" id="dependabot-regeneration-drops-platform-pins">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Build · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Build · Bug</span></div>
         <h3>Dependabot cannot regenerate the hash-pinned locks</h3>
         <p><b>Every Dependabot PR that touches <code>requirements/*.txt</code> is unmergeable</b>, and the
 failure is not in the bumped package. Dependabot re-resolves the lock on Linux and writes that
@@ -1257,9 +1258,22 @@ Dependabot bump can be <i>reproduced</i> rather than merged — take the version
 re-resolve that one package universally, and every other pin (markers included) stays as committed.
 Both open bumps were landed that way: <code>hypothesis</code> 6.161.6 to 6.163.0 and
 <code>twine</code> 6.2.0 to 7.0.0, four changed lines across five locks, with
-<code>colorama</code> and <code>pywin32-ctypes</code> intact. What remains is the config half —
-stopping Dependabot raising these at all — which is deliberately still open because its effect is
-only observable on the next scheduled run.</p>
+<code>colorama</code> and <code>pywin32-ctypes</code> intact.
+<b>Shipped:</b> both remaining halves. The <code>/requirements</code> entry now carries
+<code>open-pull-requests-limit: 0</code>, which switches off <i>version</i> updates — the ones that
+regenerate the lock — while <b>security</b> updates ignore the limit and keep firing, so the entry
+still earns its place. The <code>/</code> entry is untouched; narrowing that one is
+[[dependabot-root-pip-entry-duplicates-requirements]].
+And the guard the card asked for exists: <code>requirements/platform-pins.lock</code> records every
+marker-gated pin <b>by name and marker but not version</b>, so a routine bump leaves it untouched
+and only a change in the <i>shape</i> of a resolution moves a line.
+<code>lock_toolchain.py --audit</code> diffs the locks against it and <b>runs first inside
+<code>--check</code></b>, before uv is invoked at all — it reads only committed files, so it also
+runs in the unit suite and on a runner that could not resolve. A lost pin now fails naming the
+package, the group and the marker it lost, and prints the <code>-P</code> command that reproduces
+the bump properly. A <i>lost</i> pin and a <i>new</i> pin are reported differently on purpose: the
+same textual drift, but one is a broken install on a platform CI never resolves on and the other is
+routine — collapsing them into one "stale" message is how this stayed invisible the first time.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -1281,6 +1295,47 @@ validator that rejects values below 1; reuse it here.</p>
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="scheduled-toolchain-lock-regeneration">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Build · Gap</span></div>
+        <h3>The toolchain lock has no proactive update path any more</h3>
+        <p><code>#342</code> set <code>open-pull-requests-limit: 0</code> on the <code>/requirements</code>
+Dependabot entry, because Dependabot cannot regenerate a hash-pinned universal lock without dropping
+the pins whose environment markers exclude them on the resolving platform (see
+[[dependabot-regeneration-drops-platform-pins]]). That was the right call — every pip bump it raised
+was unmergeable — but it reverses the reason the entry was added in the first place: <b>a pin with no
+update path is only half the job</b>, and the dev/CI toolchain now has none.
+
+The trade is bounded rather than silent, which is why this is <code>Med</code> and not
+<code>High</code>. Dependabot <b>security</b> updates ignore the limit and still fire;
+<code>pip-audit.yml</code> runs weekly against the resolved closure and <b>blocks</b> on a live CVE
+(Dependabot only ever opened a PR); and <code>osv-scanner.yml</code> covers what a PR introduces. So
+the exposure is not "a vulnerable pin sits there unnoticed" — it is
+<b>stale-but-not-vulnerable tooling</b>, drifting further from upstream every week until something
+forces a bump.
+
+The replacement the card already named: regenerate on a schedule with
+<code>scripts/lock_toolchain.py --upgrade</code> and open the PR from that, so the resolution stays
+universal and every conditional pin survives. Four points worth getting right rather than guessing.
+<b>First</b>, it needs <code>uv</code> and the network — the required gate's <code>--check</code>
+already assumes both on CI, but no scheduled job currently sets them up. <b>Second</b>,
+<code>--upgrade</code> re-resolves all five groups, so a weekly cadence would land large multi-group
+diffs; per-group jobs, or a lower cadence, keep a bump reviewable, and the reason <code>-P</code>
+exists at all is that a bare <code>--upgrade</code> buries one package in unrelated churn.
+<b>Third</b>, a new workflow is not free in this repo: it must be zizmor-clean with every
+<code>uses:</code> pinned to a <i>peeled</i> commit SHA, carry narrow <code>permissions</code>, and
+— if it is ever made a required context — grow a <code>merge_group:</code> trigger, which
+<code>check_required_checks.py</code> enforces. <b>Fourth</b>, nothing needs to guard the output:
+<code>lock_toolchain.py --audit</code> and <code>requirements/platform-pins.lock</code> already fail
+closed on a lost marker-gated pin, so a regeneration job that got it wrong would be caught the same
+way a Dependabot PR now is.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">the toolchain lock now has no proactive update path — by choice, but nothing replaces it yet</span>
         </div>
       </article>
 
@@ -3737,6 +3792,46 @@ and the work stays visible.</p>
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="internal-architecture-diagrams">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Onboarding</span></div>
+        <h3>The engine had no architecture diagram &mdash; and the one written rule was documented backwards</h3>
+        <p>boost had <b>no internal architecture diagram of any kind</b>. <code>docs/rag-architecture.md</code>
+covers retrieval and <code>docs/DEBUGGING.md</code> covers diagnostics, but nothing described the
+shape of the thing: 45 modules in <code>boost_cli/core</code>, 78 commands across 12 command
+modules, four agent targets that are deliberately <i>not</i> symmetric, and a
+<code>cli&nbsp;&rarr;&nbsp;commands&nbsp;&rarr;&nbsp;core</code> layering rule that
+<code>import-linter</code> enforces on every build. A new contributor — or a new agent session —
+had to reconstruct all of that from <code>ls</code>.
+
+Shipped as C4-model diagrams in Mermaid under <code>docs/architecture/</code>, so they render on
+GitHub and stay reviewable in a diff rather than being a binary nobody updates: context, containers,
+core components, and a dynamic walk through <code>boost install</code>. Mermaid was already a
+dependency-free choice here — the repo had none before this, so nothing new ships.
+
+Writing them turned up a documentation bug worth more than the diagrams. <code>CLAUDE.md</code>
+stated <b>"Only <code>skill</code> installs — <code>store.install</code> refuses non-skill kinds;
+rules/workflows are search/tap-only."</b> That is backwards: <code>store.install</code> dispatches
+to <code>_install_rule</code> and <code>_install_workflow</code>, every kind honours
+<code>scope</code>, and it raises only for a kind outside the three. The consequence is not
+cosmetic — installing a <i>rule</i> materialises it into the agent's context file, so a
+<code>boost install</code> of a rule appends to <code>~/.claude/CLAUDE.md</code> and is read every
+session afterwards. Every agent reading <code>CLAUDE.md</code> to learn this repo was being told the
+most invasive install kind could not happen. Corrected in the same change, with the landing places
+for all three kinds spelled out.
+
+The diagrams are hand-written rather than generated, which is a deliberate trade: they describe
+structure — layers, boundaries, which component owns which decision — not anything that moves on a
+routine edit, so drift should be rare and visible in review. <code>docs/architecture/README.md</code>
+lists the four claims most worth re-checking against the code when the engine changes, so the
+staleness question has an answer rather than being left to erode.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">45 core modules and an enforced layering rule, with no diagram of either</span>
         </div>
       </article>
 

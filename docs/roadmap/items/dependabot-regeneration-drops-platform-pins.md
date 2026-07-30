@@ -2,15 +2,15 @@
 id: dependabot-regeneration-drops-platform-pins
 board: code
 section: internals
-status: planned
+status: shipped
 category: Build · Bug
 complexity: M
 impact: High
 wow: 3
 note: every pip bump PR is unmergeable — 2 of 2 observed, both red on the install step
 order: 36
-owner:
-pr:
+owner: loop/dependabot-lock-guard
+pr: 342
 title: Dependabot cannot regenerate the hash-pinned locks
 ---
 <b>Every Dependabot PR that touches <code>requirements/*.txt</code> is unmergeable</b>, and the
@@ -49,6 +49,19 @@ Dependabot bump can be <i>reproduced</i> rather than merged — take the version
 re-resolve that one package universally, and every other pin (markers included) stays as committed.
 Both open bumps were landed that way: <code>hypothesis</code> 6.161.6 to 6.163.0 and
 <code>twine</code> 6.2.0 to 7.0.0, four changed lines across five locks, with
-<code>colorama</code> and <code>pywin32-ctypes</code> intact. What remains is the config half —
-stopping Dependabot raising these at all — which is deliberately still open because its effect is
-only observable on the next scheduled run.
+<code>colorama</code> and <code>pywin32-ctypes</code> intact.
+<b>Shipped:</b> both remaining halves. The <code>/requirements</code> entry now carries
+<code>open-pull-requests-limit: 0</code>, which switches off <i>version</i> updates — the ones that
+regenerate the lock — while <b>security</b> updates ignore the limit and keep firing, so the entry
+still earns its place. The <code>/</code> entry is untouched; narrowing that one is
+[[dependabot-root-pip-entry-duplicates-requirements]].
+And the guard the card asked for exists: <code>requirements/platform-pins.lock</code> records every
+marker-gated pin <b>by name and marker but not version</b>, so a routine bump leaves it untouched
+and only a change in the <i>shape</i> of a resolution moves a line.
+<code>lock_toolchain.py --audit</code> diffs the locks against it and <b>runs first inside
+<code>--check</code></b>, before uv is invoked at all — it reads only committed files, so it also
+runs in the unit suite and on a runner that could not resolve. A lost pin now fails naming the
+package, the group and the marker it lost, and prints the <code>-P</code> command that reproduces
+the bump properly. A <i>lost</i> pin and a <i>new</i> pin are reported differently on purpose: the
+same textual drift, but one is a broken install on a platform CI never resolves on and the other is
+routine — collapsing them into one "stale" message is how this stayed invisible the first time.
