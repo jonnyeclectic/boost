@@ -2,14 +2,14 @@
 id: dependabot-regeneration-drops-platform-pins
 board: code
 section: internals
-status: planned
+status: inflight
 category: Build · Bug
 complexity: M
 impact: High
 wow: 3
 note: every pip bump PR is unmergeable — 2 of 2 observed, both red on the install step
 order: 36
-owner:
+owner: loop/dependabot-lock-guard
 pr:
 title: Dependabot cannot regenerate the hash-pinned locks
 ---
