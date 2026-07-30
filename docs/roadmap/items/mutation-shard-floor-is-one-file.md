@@ -88,8 +88,18 @@ time was apportioned across its functions by <em>mutant count</em>. Across
 <b>14.3&times;</b> &mdash; and <code>install</code> alone is <b>36%</b> of the file's time from
 <b>12%</b> of its mutants, so the shard that drew it ran 8.9 minutes against a 4.8-minute sibling.
 <code>weights</code> now records per-<em>function</em> durations too and apportions on those, which
-balances the plan to <b>0.06%</b>. Whether that closes the wall-clock gap is a claim the next run
-gets to settle, not this card.
+balances the plan to <b>0.06%</b>.
+
+<b>That closed most of the gap.</b> The next run came back at 4.9, 5.6, 6.3, 7.2, 7.3,
+<b>7.7</b>&nbsp;minutes &mdash; a critical path of <b>7.7</b> against a 6.5-minute even share, or
+<b>1.19&times;</b>, from 1.5&ndash;1.9&times; before. Measured end to end, the slowest leg went from
+<b>9.3&ndash;11.7 minutes to 7.7</b>, and the shard that used to be <code>store.py</code> alone now
+finishes first. Total work is unchanged at ~39 job-minutes, as it should be &mdash; this moved the
+work around, it did not remove any.
+
+The remaining 1.19&times; is not packing error. The plan is balanced to 0.06% on measured time, so
+what is left is variance between runners and the fact that a mutant's cost is not perfectly stable
+run to run. Chasing it further would mean re-measuring every run rather than better arithmetic.
 
 Two bugs found by running it rather than reasoning about it. mutmut records durations in
 <b>seconds</b>, so summing them into a field named <code>millis</code> understated
