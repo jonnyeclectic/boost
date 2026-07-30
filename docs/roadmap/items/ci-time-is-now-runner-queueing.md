@@ -46,14 +46,24 @@ shards &mdash; declared none, so every push to a pull request left the whole pre
 executing against a commit nobody was waiting on. This session alone pushed four times to one PR,
 which is 24 shard jobs of which 18 were already superseded.
 
-The condition is the load-bearing part, and it is what the tests pin rather than the group name.
-<code>cancel-in-progress: true</code> would also cancel a <b>push to main</b>, which
+Two things keep the release path out of it, and the second is easy to miss. The <b>condition</b>:
+<code>cancel-in-progress: true</code> would also cancel a push to main, which
 <code>publish.yml</code> gates the release on via <code>workflow_run</code> &mdash; a merge that
-silently never ships &mdash; and a <b>merge_group</b> run, where a cancelled run never reports its
-required contexts and the queue then waits forever on a status that is not coming. Both evaluate
-false. A separate assertion sweeps every workflow that triggers on <code>merge_group</code> and
-fails if any of them cancels unconditionally, so the deadlock cannot arrive later through a
-different file.
+silently never ships &mdash; and a <code>merge_group</code> run, where a cancelled run never
+reports its required contexts and the queue then waits forever on a status that is not coming.
+Both evaluate false.
+
+The <b>key</b>: non-PR events group on <code>github.sha</code>, not <code>github.ref</code>.
+<code>cancel-in-progress: false</code> does not mean "never cancel" &mdash; it means a newer run
+<i>waits</i>, and GitHub cancels the older <em>pending</em> run when a third arrives. Keying main
+on its ref would put every main push in one group, so three quick merges would leave a middle
+commit whose <code>ci</code> never completes, and since <code>publish.yml</code> fires on
+<code>workflow_run</code> of <code>ci</code>, that commit would never release. A sha is unique per
+commit, so main and the merge queue never share a group at all.
+
+Both properties are pinned by tests rather than by the comment, and a separate assertion sweeps
+every workflow that triggers on <code>merge_group</code> and fails if any cancels unconditionally
+&mdash; so the deadlock cannot arrive later through a different file.
 
 What this does <em>not</em> do is reduce the footprint of a single run, which is the other half of
 the measurement. <code>max-parallel</code> on the shard matrix and an adaptive shard count are

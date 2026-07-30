@@ -53,11 +53,21 @@ class TestCiCancelsSupersededRuns:
             "every superseded push keeps ~36 checks running against nothing"
 
     def test_the_group_is_per_pull_request(self):
-        # Keyed on the PR number so two PRs never cancel each other, falling
-        # back to the ref for push/merge_group where there is no PR.
+        # Keyed on the PR number so two PRs never cancel each other.
+        assert "github.event.pull_request.number" in concurrency_block(CI)
+
+    def test_non_pr_events_group_on_the_commit_not_the_ref(self):
+        # THE SUBTLE ONE. `cancel-in-progress: false` does not mean "never
+        # cancel" — it means a newer run waits, and GitHub cancels the older
+        # *pending* run when a third arrives. Keying main on `github.ref` puts
+        # every main push in one group, so three quick merges would leave a
+        # middle commit whose ci never completes; publish.yml fires on
+        # `workflow_run` of ci, so that commit would never release. A sha is
+        # unique per commit, so main and the merge queue never share a group.
         block = concurrency_block(CI)
-        assert "github.event.pull_request.number" in block, block
-        assert "github.ref" in block, block
+        assert "github.sha" in block, block
+        assert "github.ref" not in block, \
+            "grouping non-PR runs on the ref can strand a main commit unreleased"
 
     def test_cancellation_is_conditional_not_unconditional(self):
         # `cancel-in-progress: true` would cancel main and merge_group runs too.
