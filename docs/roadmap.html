@@ -2495,7 +2495,7 @@ toward the 5.1-minute even split of the 30.8 minutes of total work.</p>
       </article>
 
       <article class="cap rcard" id="mutation-shard-floor-is-one-file">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CI speed</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI speed</span></div>
         <h3>The mutation gate's floor is a single file &mdash; shard 0 <em>is</em> <code>store.py</code></h3>
         <p>Sharding took the mutation gate from ~28 minutes to ~12 (see
 <code>mutation-gate-was-the-whole-critical-path</code>), but it cannot go lower without
@@ -2524,7 +2524,35 @@ path toward the 6.1-minute even split. Two things must survive the change &mdash
 <code>pattern_for()</code> still has to emit patterns that match nothing else, and
 <code>cmd_merge</code>'s completeness assertion has to keep failing closed, since mutmut counts
 an unrun mutant inside <code>total</code> and a partial merge would silently depress the score
-rather than error.</p>
+rather than error.
+
+<b>Shipped.</b> A file heavier than an even share is now split into one unit per top-level
+function, and those units pack independently. <code>store.py</code>'s 31 functions come out as a
+<b>complete partition</b> &mdash; each assigned exactly once, each matched by exactly one pattern
+&mdash; and spread across all six shards, so no shard is more than <b>27%</b> store.py where one
+was previously <b>100%</b>. By mutant count the critical path drops from <b>1931 to 1786</b>, i.e.
+from 1.08&times; of ideal to <b>1.00&times;</b>, and the packing lands within 0.4% of a perfect
+split (1777&ndash;1786 against an ideal 1779).
+
+Both invariants are asserted rather than argued. Patterns anchor on the
+<code>__mutmut_</code> suffix, which is what stops <code>install</code> swallowing
+<code>install_from_path</code> &mdash; a real pair in this file. And the merge now <b>unions</b>
+each shard's results: every shard writes a <code>.meta</code> listing every key in the file with
+<code>None</code> against what it did not run, so a mutant is only "unrun" when it is
+<code>None</code> everywhere. A function no shard was assigned therefore reddens the gate. That
+was verified adversarially &mdash; a synthetic mutant name outside the enumerated partition matches
+no shard's pattern, stays <code>None</code>, and is reported. Any file whose partition cannot be
+enumerated exactly (a class with methods, a duplicate name, a syntax error) is left whole rather
+than guessed at.
+
+<b>The count-based number understates the win.</b> The planner was already balancing count to
+1.08&times; of ideal &mdash; the 1.5&ndash;1.9&times; wall-clock gap was never count imbalance, it
+was that <code>store.py</code>'s mutants are the slow ones. Spreading them is the actual fix. And
+because a file can now be divided, weighting by <i>seconds</i> finally changes the answer where
+before it could not, so <code>weights</code> also records per-file durations and the planner
+prefers them when every file has one &mdash; all-or-nothing, since milliseconds run to five digits
+where counts run to three. That tier stays dormant until a measured run populates it; CI now
+uploads a refreshed hints file as an artifact so it can be.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
