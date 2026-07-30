@@ -2,15 +2,15 @@
 id: mutation-shard-floor-is-one-file
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: CI speed
 complexity: M
 impact: Med
 wow: 3
 note: shard 0 is store.py alone — 9.3-11.7 min against a 6.1 even split
 order: 61
-owner:
-pr:
+owner: loop/mutation-subfile-shards
+pr: 346
 title: The mutation gate's floor is a single file &mdash; shard 0 <em>is</em> <code>store.py</code>
 ---
 Sharding took the mutation gate from ~28 minutes to ~12 (see
@@ -41,3 +41,61 @@ path toward the 6.1-minute even split. Two things must survive the change &mdash
 <code>cmd_merge</code>'s completeness assertion has to keep failing closed, since mutmut counts
 an unrun mutant inside <code>total</code> and a partial merge would silently depress the score
 rather than error.
+
+<b>Shipped.</b> A file heavier than an even share is now split into one unit per top-level
+function, and those units pack independently. <code>store.py</code>'s 31 functions come out as a
+<b>complete partition</b> &mdash; each assigned exactly once, each matched by exactly one pattern
+&mdash; and spread across all six shards, so no shard is more than <b>27%</b> store.py where one
+was previously <b>100%</b>. By mutant count the critical path drops from <b>1931 to 1786</b>, i.e.
+from 1.08&times; of ideal to <b>1.00&times;</b>, and the packing lands within 0.4% of a perfect
+split (1777&ndash;1786 against an ideal 1779).
+
+Both invariants are asserted rather than argued. Patterns anchor on the
+<code>__mutmut_</code> suffix, which is what stops <code>install</code> swallowing
+<code>install_from_path</code> &mdash; a real pair in this file. And the merge now <b>unions</b>
+each shard's results: every shard writes a <code>.meta</code> listing every key in the file with
+<code>None</code> against what it did not run, so a mutant is only "unrun" when it is
+<code>None</code> everywhere. A function no shard was assigned therefore reddens the gate. That
+was verified adversarially &mdash; a synthetic mutant name outside the enumerated partition matches
+no shard's pattern, stays <code>None</code>, and is reported. Any file whose partition cannot be
+enumerated exactly (a class with methods, a duplicate name, a syntax error) is left whole rather
+than guessed at.
+
+<b>Splitting alone was not enough, and the first green run proved it.</b> With
+<code>store.py</code> divided, <code>mutation-shard (0)</code> fell from 9.3&ndash;11.7 minutes to
+<b>4.7</b> &mdash; it is no longer the slowest leg, which is exactly what the card predicted. But
+shard 3 became the new bottleneck at <b>10.3</b> minutes, leaving the run at 1.6&times; ideal. The
+diagnosis above was right and incomplete: counts were balanced to 0.4%, and the <em>time</em>
+spread across shards was still 2.6&times;.
+
+So the second half is weighting by measured time, which a divisible file finally makes possible.
+<code>weights</code> now records mutmut's per-mutant durations and the planner prefers them. The
+count-based split, balanced to <b>1.08&times;</b> of ideal <i>by count</i>, was <b>2.24&times;</b> of
+ideal <i>by time</i> &mdash; one shard carrying 39.3 minutes of summed test time against a
+17.5-minute even share.
+
+<b>Measured, that bought less than the arithmetic suggested.</b> Time-weighting moved the critical
+path from 10.3 to <b>9.3</b> minutes (shards 5.2, 5.8, 6.3, 6.8, 6.2, 9.3), 1.41&times; ideal rather
+than the 1.04&times; the summed-time model predicted. Summed test time is not shard wall clock:
+mutmut runs mutants across parallel workers, so a shard's elapsed time is its summed time divided by
+an effective worker count, and the model ignored that. Per-shard fixed overhead was ruled out by
+measurement rather than assumed &mdash; checkout, venv and install together are <b>0.4 minutes</b>,
+against 4.8&ndash;8.9 minutes inside <code>mutmut run</code> itself.
+
+The residual had a specific cause, and it is the same proxy error one level down: a split file's
+time was apportioned across its functions by <em>mutant count</em>. Across
+<code>store.py</code>'s functions the per-mutant cost spans <b>0.273 s to 3.900 s</b> &mdash;
+<b>14.3&times;</b> &mdash; and <code>install</code> alone is <b>36%</b> of the file's time from
+<b>12%</b> of its mutants, so the shard that drew it ran 8.9 minutes against a 4.8-minute sibling.
+<code>weights</code> now records per-<em>function</em> durations too and apportions on those, which
+balances the plan to <b>0.06%</b>. Whether that closes the wall-clock gap is a claim the next run
+gets to settle, not this card.
+
+Two bugs found by running it rather than reasoning about it. mutmut records durations in
+<b>seconds</b>, so summing them into a field named <code>millis</code> understated
+<code>store.py</code>'s 2360 seconds of test time as 2.4 &mdash; a 1000&times; mislabel. And
+requiring a duration for <i>every</i> file before trusting the tier was too brittle to fire: one
+file of 46 (<code>util.py</code>) came back short on the first run, which would have silently
+dropped the planner back to counting mutants and looked like the feature simply not working. A
+missing file is now imputed at the measured mean rate, which keeps every weight in one unit
+&mdash; the property that actually matters.
