@@ -30,19 +30,16 @@ forces a bump.
 
 The replacement the card already named: regenerate on a schedule with
 <code>scripts/lock_toolchain.py --upgrade</code> and open the PR from that, so the resolution stays
-universal and every conditional pin survives. Points worth getting right rather than guessing:
-
-<ul>
-<li><b>It needs <code>uv</code> and the network</b>, which the required gate's
-<code>--check</code> already assumes on CI but no scheduled job currently sets up.</li>
-<li><b><code>--upgrade</code> re-resolves all five groups</b>, so a weekly cadence would land large
-multi-group diffs. Per-group jobs, or a lower cadence, keep a bump reviewable — the reason
-<code>-P</code> exists at all is that a bare <code>--upgrade</code> buries one package in churn.</li>
-<li><b>A new workflow is not free here</b>: it must be zizmor-clean with every <code>uses:</code>
-pinned to a <i>peeled</i> commit SHA, carry narrow <code>permissions</code>, and — if it is ever
-made a required context — grow a <code>merge_group:</code> trigger, which
-<code>check_required_checks.py</code> enforces.</li>
-<li><b>Nothing needs to guard the output.</b> <code>lock_toolchain.py --audit</code> and
-<code>requirements/platform-pins.lock</code> already fail closed on a lost marker-gated pin, so a
-regeneration job that got it wrong would be caught the same way a Dependabot PR now is.</li>
-</ul>
+universal and every conditional pin survives. Four points worth getting right rather than guessing.
+<b>First</b>, it needs <code>uv</code> and the network — the required gate's <code>--check</code>
+already assumes both on CI, but no scheduled job currently sets them up. <b>Second</b>,
+<code>--upgrade</code> re-resolves all five groups, so a weekly cadence would land large multi-group
+diffs; per-group jobs, or a lower cadence, keep a bump reviewable, and the reason <code>-P</code>
+exists at all is that a bare <code>--upgrade</code> buries one package in unrelated churn.
+<b>Third</b>, a new workflow is not free in this repo: it must be zizmor-clean with every
+<code>uses:</code> pinned to a <i>peeled</i> commit SHA, carry narrow <code>permissions</code>, and
+— if it is ever made a required context — grow a <code>merge_group:</code> trigger, which
+<code>check_required_checks.py</code> enforces. <b>Fourth</b>, nothing needs to guard the output:
+<code>lock_toolchain.py --audit</code> and <code>requirements/platform-pins.lock</code> already fail
+closed on a lost marker-gated pin, so a regeneration job that got it wrong would be caught the same
+way a Dependabot PR now is.
