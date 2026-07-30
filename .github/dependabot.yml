@@ -7,13 +7,34 @@ updates:
     schedule:
       interval: weekly
   # The hash-pinned dev/CI toolchain (requirements/*.txt, generated from the
-  # *.in files by scripts/lock_toolchain.py). Without this entry the lock would
-  # silently rot — the exact failure mode pinning exists to prevent, so a pin
-  # with no update path is only half the job. Dependabot rewrites the .txt files
-  # including their hashes; `make lint` runs lock_toolchain.py --check, so a bump
-  # that drifts from the .in declarations fails the gate rather than landing.
+  # *.in files by scripts/lock_toolchain.py).
+  #
+  # `open-pull-requests-limit: 0` switches off *version* updates here, and it is
+  # not rate-limiting — Dependabot cannot regenerate these files correctly.
+  # It re-resolves on Linux and commits that resolution, which drops every pin
+  # whose environment marker excludes it there. The locks install with
+  # --require-hashes on Windows and macOS too, so a dropped pin is an install
+  # failure on the platform that needed it: one scheduled run deleted
+  # `colorama ; sys_platform == 'win32'` (pytest's Windows terminal dependency)
+  # from three locks and `pywin32-ctypes` (keyring's Windows backend, and
+  # keyring is twine's own dependency) from release-tools, killing both Windows
+  # test legs and the `metadata` job in their install step — 2 of 2 pip PRs in
+  # that run were unmergeable. scripts/lock_toolchain.py resolves --universal
+  # for every supported platform, which is why it is the source of truth.
+  #
+  # So a bump here is reproduced, not merged: take the version Dependabot would
+  # have proposed and run `python3 scripts/lock_toolchain.py -P <name>`, which
+  # re-resolves that one package universally and leaves every other pin, markers
+  # included, exactly as committed.
+  #
+  # The entry stays because **security** updates ignore this limit and keep
+  # firing, and they are what it is actually worth. Should one arrive it will be
+  # regenerated the same broken way — but `lock_toolchain.py --audit`, which
+  # `make lint` runs before it resolves anything, now fails naming the lost
+  # package instead of letting it surface as an unexplained install error.
   - package-ecosystem: pip
     directory: /requirements
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
   # pyproject.toml's optional extras. Dependabot only scans manifests under the
