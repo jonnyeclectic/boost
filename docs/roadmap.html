@@ -1162,7 +1162,7 @@ every enabled agent. So narrowing is honoured and the newly-enabled-agent path i
       </article>
 
       <article class="cap rcard" id="dependabot-root-pip-entry-duplicates-requirements">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Build · Gap</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Build · Gap</span></div>
         <h3>Dependabot raises every toolchain bump <em>twice</em></h3>
         <p>PR #289 added a third Dependabot entry, <code>package-ecosystem: pip</code> with
 <code>directory: /</code>, to give <code>pyproject.toml</code>'s optional extras the proactive bump
@@ -1193,7 +1193,28 @@ Dependabot's file discovery is what got this wrong in the first place. <b>First<
 <code>/requirements</code> as the single owner of the hash-pinned lock. <b>Second</b>, if proactive
 extras bumps are genuinely wanted, that needs <code>versioning-strategy: increase</code> so open
 lower bounds are raised at all; otherwise accept that this entry is security-only and say so in the
-comment, which is the honest smaller change.</p>
+comment, which is the honest smaller change.
+
+<b>Shipped &mdash; the second one, and <code>#342</code> changed why.</b> That change gave
+<code>/requirements</code> <code>open-pull-requests-limit: 0</code>, which silences the duplicate on
+one side but leaves the <code>/</code> entry as the <em>only</em> remaining path to a
+lock-regenerating pull request &mdash; precisely the thing that cannot be done correctly on a single
+platform. The duplicate stopped being the problem and the survivor became one.
+
+So the version-update side of the <code>/</code> entry is off too, and the reasoning is now written
+where the next person will look. It produces nothing wanted: every constraint under
+<code>[project.optional-dependencies]</code> is an open lower bound or sits in the entry's own
+ignore list, so its set of possible <code>pyproject.toml</code> version updates is <b>empty</b>
+&mdash; none of the eight PRs in that first run touched it. And it produces one thing actively
+harmful: four of those eight were byte-identical lock regenerations. <b>Security</b> updates ignore
+the limit and keep firing, which is the coverage the extras genuinely gained, and
+<code>lock_toolchain.py --audit</code> now catches a security PR that arrives having dropped a
+marker-gated pin.
+
+Both pip entries are pinned at <code>limit: 0</code> by
+<code>tests/unit/test_dependabot_config.py</code>, alongside an assertion that neither entry is
+<em>deleted</em> &mdash; removing them would give up the security coverage that is the whole
+remaining point. Related: [[dependabot-regeneration-drops-platform-pins]].</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
