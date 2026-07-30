@@ -251,19 +251,47 @@ class TestRealTree:
 class TestWeighting:
     """Weight tiers, and the scale-mixing they must not do."""
 
-    def test_milliseconds_are_ignored_unless_every_file_has_them(self, tmp_path):
-        # Milliseconds run to five digits where counts run to three, so ONE
-        # file weighted in ms among files weighted in counts would outweigh the
-        # rest of the repo and take a shard to itself.
+    def test_a_file_missing_a_duration_is_imputed_not_mixed(self, tmp_path):
+        # Milliseconds run to five digits where counts run to three, so a file
+        # weighted in ms beside files weighted in counts would outweigh the
+        # whole repo and take a shard to itself. Impute it at the measured rate
+        # instead — same unit, so the packer stays commensurable.
         repo = _repo(tmp_path, {"a.py": _fn("f"), "b.py": _fn("g")})
         (repo / "scripts").mkdir()
         (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
-            "mutants_by_file": {"a.py": 100, "b.py": 100},
-            "millis_by_file": {"a.py": 90_000},          # partial!
+            "mutants_by_file": {"a.py": 100, "b.py": 50},
+            "millis_by_file": {"a.py": 90_000},          # b.py unmeasured
+        }))
+        weight = ms.weight_fn(repo)
+        assert weight(repo, repo / "boost_cli/core/a.py") == 90_000
+        # 900 ms/mutant measured on a.py, applied to b.py's 50 mutants.
+        assert weight(repo, repo / "boost_cli/core/b.py") == 45_000
+
+    def test_one_unmeasured_file_does_not_disable_time_weighting(self, tmp_path):
+        # THE REGRESSION THIS REPLACES: requiring a complete record meant one
+        # short file of 46 silently dropped the planner back to counting
+        # mutants — which is exactly what the first real run produced
+        # (util.py), and it would have looked like the feature simply not
+        # working.
+        repo = _repo(tmp_path, {"a.py": _fn("f"), "b.py": _fn("g")})
+        (repo / "scripts").mkdir()
+        (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
+            "mutants_by_file": {"a.py": 100, "b.py": 50},
+            "millis_by_file": {"a.py": 90_000},
+        }))
+        weight = ms.weight_fn(repo)
+        assert weight(repo, repo / "boost_cli/core/a.py") > 1000, \
+            "time weighting must still be in play"
+
+    def test_no_durations_at_all_falls_back_to_counts(self, tmp_path):
+        repo = _repo(tmp_path, {"a.py": _fn("f"), "b.py": _fn("g")})
+        (repo / "scripts").mkdir()
+        (repo / "scripts" / "mutation_weights.json").write_text(json.dumps({
+            "mutants_by_file": {"a.py": 100, "b.py": 50},
         }))
         weight = ms.weight_fn(repo)
         assert weight(repo, repo / "boost_cli/core/a.py") == 100
-        assert weight(repo, repo / "boost_cli/core/b.py") == 100
+        assert weight(repo, repo / "boost_cli/core/b.py") == 50
 
     def test_complete_millisecond_coverage_is_used(self, tmp_path):
         repo = _repo(tmp_path, {"a.py": _fn("f"), "b.py": _fn("g")})
@@ -482,13 +510,26 @@ class TestWeightsRecording:
         assert data["millis_by_file"] == {}, \
             "a partial duration record must not weight the file"
 
-    def test_complete_durations_are_summed(self, tmp_path):
+    def test_durations_are_summed_and_converted_to_milliseconds(self, tmp_path):
+        # mutmut records SECONDS as floats (measured: 0.24-7.93 per mutant).
+        # Storing the raw sum under a millis name was a 1000x mislabel — it
+        # made store.py's real 2360 s of test time read as 2.4 s.
         repo = _repo(tmp_path / "r", {"store.py": _fn("install")})
         keys = ["boost_cli.core.store.x_install__mutmut_%d" % n for n in (1, 2)]
         rc, data = self._run(tmp_path, repo, dict.fromkeys(keys, 0),
                              durations={keys[0]: 40, keys[1]: 60})
         assert rc == 0
-        assert data["millis_by_file"]["store.py"] == 100
+        assert data["millis_by_file"]["store.py"] == 100_000
+
+    def test_sub_second_durations_survive_the_conversion(self, tmp_path):
+        # The common case: most mutants take a fraction of a second, and
+        # truncating to whole seconds would round the majority of them to 0.
+        repo = _repo(tmp_path / "r", {"store.py": _fn("install")})
+        keys = ["boost_cli.core.store.x_install__mutmut_%d" % n for n in (1, 2)]
+        rc, data = self._run(tmp_path, repo, dict.fromkeys(keys, 0),
+                             durations={keys[0]: 0.24, keys[1]: 0.26})
+        assert rc == 0
+        assert data["millis_by_file"]["store.py"] == 500
 
     def test_a_malformed_key_is_skipped_not_fatal(self, tmp_path):
         repo = _repo(tmp_path / "r", {"store.py": _fn("install")})

@@ -38,16 +38,26 @@ Balance without a chicken-and-egg
 Ideal packing needs each file's mutant count, which you only learn by running
 mutmut. Three weights, in order of preference:
 
-1. Recorded **milliseconds**, if ``weights`` has a duration for every file.
-   Time is what the critical path is actually made of, and it is not
-   proportional to count: throughput here spans 3.39 to 14.19 mutants/second,
-   because a ``store.py`` mutant re-runs a far larger covering test set than an
-   ``ed25519.py`` one, and a survivor runs its tests to completion where a kill
-   exits early. This tier is all-or-nothing on purpose — milliseconds run to
-   five digits where counts run to three, so one file weighted in time among
-   files weighted in counts would take a shard to itself. (Balancing on seconds
-   was pointless while a file was indivisible, since the floor was the heaviest
-   file either way. Sub-file units are what make it worth doing.)
+1. Recorded **milliseconds**, written by ``weights`` from mutmut's per-mutant
+   durations. Time is what the critical path is made of, and it is *not*
+   proportional to count: measured over the real repo, a split balanced to
+   1.08x of ideal by mutant count was **2.24x** of ideal by time. Weighting on
+   the measured milliseconds instead brings that to 1.04x — a 54% cut in the
+   critical path — because a ``store.py`` mutant re-runs a far larger covering
+   test set than an ``ed25519.py`` one, and a survivor runs its tests to
+   completion where a kill exits early.
+
+   Every weight must share a unit, since milliseconds run to five digits where
+   counts run to three and one file weighted in time among files weighted in
+   counts would take a shard to itself. A file with no recorded duration is
+   therefore **imputed** at the measured mean rate rather than mixed in raw —
+   and rather than disabling the tier outright, which proved far too brittle:
+   on the first real run exactly one file of 46 came back short.
+
+   (Balancing on time was pointless while a file was indivisible, since the
+   floor was the heaviest file either way. Sub-file units are what make it
+   worth doing, and the two together are what deliver: splitting alone moved
+   the bottleneck from shard 0 to shard 3 rather than removing it.)
 2. ``scripts/mutation_weights.json`` — real counts, written by ``weights`` after
    any full run.
 3. Non-comment, non-blank lines. Correlates with the real count at r = 0.96,
@@ -177,12 +187,35 @@ def weight_fn(root: Path):
     millis = load_durations(root)
     recorded = load_weights(root)
     files = [f for f in source_files(root) if not is_init(f)]
-    use_millis = bool(millis) and all(rel_name(root, f) in millis for f in files)
+
+    # A file with no recorded duration is IMPUTED from the measured mean rate
+    # (milliseconds per mutant across everything that was measured) rather than
+    # disabling time-weighting for the whole repo. Requiring a complete record
+    # was too brittle to be useful: on the first real run exactly one file of 46
+    # came back short, which under an all-or-nothing rule would have silently
+    # dropped the planner back to counting mutants. Imputing keeps every weight
+    # in the same unit, which is the property that actually matters.
+    imputed: Dict[str, int] = {}
+    if millis:
+        measured_ms = sum(millis[n] for n in millis if n in recorded)
+        measured_mutants = sum(recorded[n] for n in millis if n in recorded)
+        rate = (measured_ms / measured_mutants) if measured_mutants else 0
+        for f in files:
+            name = rel_name(root, f)
+            if name in millis:
+                continue
+            # Prefer its mutant count at the measured rate; fall back to lines
+            # scaled the same way when even the count is unknown.
+            basis = recorded.get(name) or line_weight(f)
+            imputed[name] = max(round(basis * rate), 1) if rate else 0
+    use_millis = bool(millis) and all(
+        rel_name(root, f) in millis or imputed.get(rel_name(root, f))
+        for f in files)
 
     def weight(root_: Path, path: Path) -> int:
         name = rel_name(root_, path)
         if use_millis:
-            return millis[name] if name in millis else line_weight(path)
+            return millis.get(name) or imputed.get(name) or line_weight(path)
         return recorded.get(name) or line_weight(path)
 
     return weight
@@ -418,11 +451,24 @@ def cmd_plan(args: argparse.Namespace) -> int:
         if split:
             print("split files : %s" % ", ".join(split))
         print("files       : %d" % len(source_files(root)))
-        print("weights     : %s" % ("%d real mutant counts from %s"
-                                    % (len(recorded), WEIGHTS) if recorded
-                                    else "lines of code (no %s yet)" % WEIGHTS))
-        print("total weight: %d" % total)
-        print("ideal shard : %d" % (total // args.shards))
+        # Name the tier actually in play. Reporting "mutant counts" while
+        # packing on milliseconds sends anyone reading this to the wrong file.
+        durations = load_durations(root)
+        if durations:
+            unit = "ms"
+            print("weights     : measured run time — %d files timed, %d imputed"
+                  % (len(durations),
+                     len([f for f in source_files(root) if not is_init(f)])
+                     - len(durations)))
+        elif recorded:
+            unit = "mutants"
+            print("weights     : %d real mutant counts from %s"
+                  % (len(recorded), WEIGHTS))
+        else:
+            unit = "lines"
+            print("weights     : lines of code (no %s yet)" % WEIGHTS)
+        print("total weight: %d %s" % (total, unit))
+        print("ideal shard : %d %s" % (total // args.shards, unit))
         heaviest = max(unit_weight(root, u) for b in bins for u in b)
         print("largest unit: %d  (floor on the slowest shard)" % heaviest)
         print("speedup cap : %.2fx" % (total / max(loads)))
@@ -655,14 +701,17 @@ def cmd_weights(args: argparse.Namespace) -> int:
             name = rel[: -len(".meta")]
             counts[name] = len(codes)
             # Real time spent on this file, which is what the critical path is
-            # made of. mutmut records per-mutant durations; a file is only
-            # time-weighted when every one of its mutants has one, so a partial
-            # record cannot understate a file and win it extra work.
+            # made of. mutmut records per-mutant durations in SECONDS as floats
+            # (measured range here: 0.24 to 7.93 per mutant); milliseconds are
+            # stored so the figure survives as an int without losing the small
+            # ones. A file is only time-weighted when every one of its mutants
+            # has a duration, so a partial record cannot understate a file and
+            # win itself extra work.
             durations = data.get("durations_by_key") or {}
             values = [v for v in durations.values()
                       if isinstance(v, (int, float)) and v >= 0]
             if len(values) == len(codes) and values:
-                millis[name] = max(int(sum(values)), 1)
+                millis[name] = max(round(sum(values) * 1000), 1)
             # Attribute each mutant to the function it belongs to, so a split
             # file balances on measured counts rather than on body size. Keys
             # look like `boost_cli.core.store.x_install__mutmut_3`.
