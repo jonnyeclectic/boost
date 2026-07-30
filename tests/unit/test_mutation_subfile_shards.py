@@ -35,6 +35,34 @@ assert spec.loader is not None
 spec.loader.exec_module(ms)
 
 
+def _tree_is_mutated():
+    """True when this suite is running inside mutmut's rewritten copy.
+
+    The mutation gate runs the unit suite from inside ``mutants/``, where every
+    file under ``boost_cli/core`` has been rewritten — each function replaced by
+    a family of ``x_<name>__mutmut_<n>`` variants. Assertions about the *shape*
+    of the real tree (which file is heaviest, how it partitions) are meaningless
+    against that copy and fail there, which is exactly what happened the first
+    time this landed: all six shards went red on `test_store_py_is_split`.
+
+    Skipping costs nothing. ``setup.cfg`` sets ``source_paths =
+    boost_cli/core/``, so ``scripts/mutation_shards.py`` is never mutated —
+    these tests kill no mutants and exist only to assert this repo's current
+    shape. Everything else in this file builds its own tree under ``tmp_path``
+    and runs identically in both places.
+    """
+    store = ROOT / "boost_cli" / "core" / "store.py"
+    try:
+        return "__mutmut_" in store.read_text(encoding="utf-8")
+    except OSError:
+        return True        # can't tell — don't assert against it
+
+
+real_tree_only = pytest.mark.skipif(
+    _tree_is_mutated(), reason="tree rewritten by mutmut; real-shape assertions "
+                               "do not apply inside mutants/")
+
+
 def _repo(tmp_path, files):
     """A fake checkout: {name: source text}."""
     core = tmp_path / "boost_cli" / "core"
@@ -178,6 +206,7 @@ class TestPatterns:
                     "%s captures %s" % (pat, other)
 
 
+@real_tree_only
 class TestRealTree:
     """Against the actual repo, where the numbers came from."""
 
@@ -470,6 +499,7 @@ class TestWeightsRecording:
         assert data["mutants_by_symbol"]["store.py"] == {"install": 1}
 
 
+@real_tree_only
 @pytest.mark.parametrize("shards", [1, 2, 3, 6, 12])
 def test_the_partition_is_complete_at_every_shard_count(shards):
     """No mutant is dropped or duplicated, whatever the matrix width."""
