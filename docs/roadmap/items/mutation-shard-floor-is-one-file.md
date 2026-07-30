@@ -2,14 +2,14 @@
 id: mutation-shard-floor-is-one-file
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: CI speed
 complexity: M
 impact: Med
 wow: 3
 note: shard 0 is store.py alone — 9.3-11.7 min against a 6.1 even split
 order: 61
-owner:
+owner: loop/mutation-subfile-shards
 pr:
 title: The mutation gate's floor is a single file &mdash; shard 0 <em>is</em> <code>store.py</code>
 ---
