@@ -17,12 +17,11 @@ title: The BM25 index is one JSON blob, and it stops working between 10k and 50k
 <code>json.loads</code> it on every invocation. <code>_CACHE</code>
 (<code>rag.py:275</code>) is process-local, so a long-lived MCP server amortises
 the cost but <b>every cold <code>boost search</code> pays it in full</b>.
-Measured on a synthetic corpus of real repo prose:
-<table><tr><th></th><th>10k items</th><th>50k items</th></tr>
-<tr><td>index on disk</td><td>52.7 MB</td><td><b>270 MB</b></td></tr>
-<tr><td><code>json.loads</code> per search</td><td>2.0–2.9 s</td><td><b>12.2–13.6 s</b></td></tr>
-<tr><td>peak RSS</td><td>702 MB</td><td><b>2.49 GB</b></td></tr>
-<tr><td>BM25 scoring itself</td><td>31 ms</td><td>70 ms</td></tr></table>
+Measured on a synthetic corpus of real repo prose, 10k items &rarr; 50k items:<br>
+index on disk 52.7 MB &rarr; <b>270 MB</b>;<br>
+<code>json.loads</code> per search 2.0&ndash;2.9 s &rarr; <b>12.2&ndash;13.6 s</b>;<br>
+peak RSS 702 MB &rarr; <b>2.49 GB</b>;<br>
+BM25 scoring itself 31 ms &rarr; 70 ms &mdash; cold start dominates by ~200&times;.
 On a real 83-tap install the index is already 132 MB at 11.1k entries. Scaling
 that shape to 50k gives ~594 MB and ~5.7 GB resident. <b>Target RSS, not
 bytes</b>: Python object overhead was measured at a consistent 9.5–9.6× file

@@ -44,6 +44,23 @@ def _write_store(provider="voyage", model="voyage-4", dim=1024,
         con.close()
 
 
+@pytest.fixture(autouse=True)
+def backend(monkeypatch):
+    """Force the sqlite-vec backend to *look* present for every test here.
+
+    `status()` reports the FIRST missing link, so on a runner without the
+    `[rag]` extra every reason collapses to "no-backend" and no other branch is
+    reachable. The extra is optional by design — it has no 3.14t wheel, so the
+    free-threaded canary has none — which makes "is sqlite-vec installed?" the
+    wrong thing for these assertions to depend on. Pin it instead; the genuine
+    no-backend path gets its own test that patches `_load` back to None.
+
+    Only `have_backend()` consults `_load`, and `status()` never opens the store
+    through `_connect`, so a truthy sentinel is enough — no real extension load.
+    """
+    monkeypatch.setattr(dense, "_load", lambda: object())
+
+
 @pytest.fixture
 def keyed(monkeypatch):
     """A live Voyage key, so `embed.provider()` resolves."""
