@@ -89,7 +89,10 @@ toolchain
 toolkits
 traceback
 tracebacks
+typosquat
+typosquatted
 unkilled
+unlinking
 unregister
 unstaged
 untap

@@ -195,7 +195,9 @@ boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 [`docs/index.html`](docs/index.html), and for every flag of every command see
 [`docs/commands.html`](docs/commands.html). For a GIF of one flagship command
 per group — recorded live with [VHS](https://github.com/charmbracelet/vhs) — see
-[`docs/carousel.html`](docs/carousel.html).
+[`docs/carousel.html`](docs/carousel.html). For how boost is put together
+internally — C4 diagrams of the context, containers, engine components and the
+install path — see [`docs/architecture/`](docs/architecture/README.md).
 
 | Group | Commands |
 |---|---|
