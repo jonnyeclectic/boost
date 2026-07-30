@@ -32,6 +32,15 @@ updates:
   # regenerated the same broken way — but `lock_toolchain.py --audit`, which
   # `make lint` runs before it resolves anything, now fails naming the lost
   # package instead of letting it surface as an unexplained install error.
+  #
+  # This does give up *proactive* freshness for the dev toolchain, which is what
+  # the entry was originally added for. That is a bounded trade, not a silent
+  # one: security updates still fire here, pip-audit.yml runs weekly against the
+  # resolved closure and blocks on a live CVE, and osv-scanner.yml covers what a
+  # PR introduces. What is left is stale-but-not-vulnerable tooling, and the
+  # replacement — regenerating on a schedule with `lock_toolchain.py --upgrade`
+  # and opening the PR from that — is tracked as its own roadmap item
+  # (scheduled-toolchain-lock-regeneration).
   - package-ecosystem: pip
     directory: /requirements
     open-pull-requests-limit: 0
