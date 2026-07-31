@@ -412,7 +412,12 @@ def cmd_doctor(argv):
 # first missing link is ever reported, so these never chain.
 _DENSE_FIX = {
     "no-backend": "install the extra: `pip install 'boost-skill-cli[rag]'`",
-    "no-key": "set VOYAGE_API_KEY or OPENAI_API_KEY",
+    # Names the keyless remedy first: since the [rag] extra carries a local
+    # embedding model, an API key is the quality ceiling, not the entry fee.
+    # This reason now means "no key AND no local backend", which in practice is
+    # a partial install or BOOST_NO_EMBED.
+    "no-key": ("reinstall the extra: `pip install 'boost-skill-cli[rag]'` "
+               "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"),
     "no-store": "build it: `boost reindex --dense`",
     "version-changed": "rebuild it: `boost reindex --dense --force`",
     "provider-changed": "rebuild it: `boost reindex --dense --force`",

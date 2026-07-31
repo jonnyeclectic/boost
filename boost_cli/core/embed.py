@@ -1,20 +1,43 @@
 """Optional dense-embedding bridge for RAG Phase 2.
 
 Strategy mirrors ``core.ai``: prefer Voyage AI when ``VOYAGE_API_KEY`` is set,
-else OpenAI when ``OPENAI_API_KEY`` is set, else return ``None`` so every caller
-degrades to the always-on BM25 engine. The embeddings themselves come from an
-HTTP API over ``urllib`` — pure stdlib, no client library. Anthropic exposes no
-embeddings endpoint, hence Voyage (its recommended partner) and OpenAI.
+else OpenAI when ``OPENAI_API_KEY`` is set, else a **local** ONNX model when the
+``[rag]`` extra is installed, else return ``None`` so every caller degrades to
+the always-on BM25 engine. The API embeddings come over ``urllib`` — pure
+stdlib, no client library. Anthropic exposes no embeddings endpoint, hence
+Voyage (its recommended partner) and OpenAI.
 
-``BOOST_NO_EMBED=1`` is a hard kill-switch, matching ``BOOST_NO_AI``.
+Why a local provider exists
+---------------------------
+Without one, dense search needed an account and a key, so in practice every
+keyless user got BM25 — and BM25 answers "my app is slow" with bioinformatics
+packages, because nothing in that query shares vocabulary with the docs. The
+vector *store* was never the gated part: vectors already live on the user's own
+machine in sqlite-vec, keyed on each tap's commit. The only API-bound step is
+turning text into vectors.
+
+That also rules out the obvious shortcut of shipping a prebuilt index instead:
+answering a query means embedding *the query*, so a downloaded index is useless
+without something local to embed with. A local model is the prerequisite, not
+an alternative.
+
+The chain order is load-bearing. Local is tried **last**, so a user who has
+configured Voyage keeps voyage-4 rather than being silently downgraded to a
+384-dim local model. And because ``dense.py`` rebuilds whenever ``model`` or
+``dim`` changes, switching providers can never mix two embedding spaces in one
+index.
+
+``BOOST_NO_EMBED=1`` is a hard kill-switch for all three, matching
+``BOOST_NO_AI``.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import urllib.error
 import urllib.request
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from . import nethttp
 
@@ -28,7 +51,27 @@ OPENAI_URL = "https://api.openai.com/v1/embeddings"
 # voyage-3 has none — so a full index build of a large corpus is free.
 VOYAGE_MODEL = "voyage-4"
 OPENAI_MODEL = "text-embedding-3-small"
-_DIMS = {VOYAGE_MODEL: 1024, OPENAI_MODEL: 1536}
+
+# The keyless path. Small on purpose: skill docs are short and keyword-dense, so
+# a 384-dim model closes most of the gap to a paid API and runs on CPU. Named
+# with its full hub id because that is what ends up recorded in the index
+# metadata — a bare "bge-small-en-v1.5" would collide with any other vendor's
+# rebuild of it, and a rebuild produces different vectors. See core.localembed
+# for the pinned revision and the (133 MB, not 30 MB) download it implies.
+LOCAL_MODEL = "BAAI/bge-small-en-v1.5"
+LOCAL_DIM = 384
+
+_DIMS = {VOYAGE_MODEL: 1024, OPENAI_MODEL: 1536, LOCAL_MODEL: LOCAL_DIM}
+
+# Cached backend class and model instance. Loading an ONNX model is expensive
+# enough that doing it per query would make the local path unusable, and the
+# import itself is retried-on-miss rather than repeated: `provider()` runs on
+# effectively every retrieval call.
+_BACKEND_MISSING = object()
+# Deliberately untyped: the backend is core.localembed, imported lazily, so
+# naming its type here would defeat the point of the lazy import.
+_backend_cache: Any = None
+_model_instance: Any = None
 
 
 def enabled() -> bool:
@@ -36,14 +79,55 @@ def enabled() -> bool:
     return not os.environ.get("BOOST_NO_EMBED")
 
 
+def _load_backend():
+    """The local embedding class, or None when the ``[rag]`` extra is absent.
+
+    ``localembed`` keeps its own imports lazy for the import budget; this is the
+    seam the tests stub, so the unit suite passes with the extra uninstalled.
+    """
+    from . import localembed
+    return localembed if localembed.available() else None
+
+
+def _backend() -> Any:
+    """``_load_backend`` memoised, including the negative result."""
+    global _backend_cache
+    if _backend_cache is None:
+        _backend_cache = _load_backend() or _BACKEND_MISSING
+    return None if _backend_cache is _BACKEND_MISSING else _backend_cache
+
+
+def reset_local_cache() -> None:
+    """Drop the cached backend and model. For tests, and for a provider switch."""
+    global _backend_cache, _model_instance
+    _backend_cache = None
+    _model_instance = None
+    # Nothing to reset when the extra is absent.
+    with contextlib.suppress(Exception):
+        from . import localembed
+        localembed.reset()
+
+
+def local_available() -> bool:
+    """True when the local embedding backend can be imported."""
+    return _backend() is not None
+
+
 def provider() -> Optional[str]:
-    """The active provider name, preferring Voyage, or None when unconfigured."""
+    """The active provider, preferring a configured key, or None when nothing works.
+
+    Order matters: local comes **last** so configuring Voyage keeps voyage-4.
+    A fallback that preempted a paid key would silently downgrade every existing
+    keyed install to a smaller model.
+    """
     if not enabled():
         return None
     if os.environ.get("VOYAGE_API_KEY"):
         return "voyage"
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
+    if local_available():
+        return "local"
     return None
 
 
@@ -59,6 +143,8 @@ def model() -> Optional[str]:
         return VOYAGE_MODEL
     if p == "openai":
         return OPENAI_MODEL
+    if p == "local":
+        return LOCAL_MODEL
     return None
 
 
@@ -72,9 +158,16 @@ def dimension() -> Optional[int]:
 
 
 def fallback_note() -> str:
-    """The one-line hint shown when dense search degrades to BM25."""
-    return ("dense search needs the `rag` extra and VOYAGE_API_KEY or "
-            "OPENAI_API_KEY — using the BM25 full-content engine")
+    """The one-line hint shown when dense search degrades to BM25.
+
+    No longer asks for a key: with a local model in the ``[rag]`` extra the
+    extra alone is enough, and telling a user they need an API account when
+    they do not is worse than saying nothing.
+    """
+    if not enabled():
+        return "dense search is off (BOOST_NO_EMBED) — using the BM25 engine"
+    return ("dense search needs the `[rag]` extra — `pip install "
+            "boost-skill-cli[rag]`; using the BM25 full-content engine")
 
 
 def embed(texts: List[str], input_type: Optional[str] = None,
@@ -91,6 +184,8 @@ def embed(texts: List[str], input_type: Optional[str] = None,
         return None
     if not texts:
         return []
+    if p == "local":
+        return _embed_local(texts)
     if p == "voyage":
         body = {"input": texts.copy(), "model": VOYAGE_MODEL}
         if input_type:
@@ -100,6 +195,46 @@ def embed(texts: List[str], input_type: Optional[str] = None,
     body = {"input": texts.copy(), "model": OPENAI_MODEL}
     return _vectors(_post(OPENAI_URL, os.environ["OPENAI_API_KEY"],
                           body, timeout), len(texts))
+
+
+def _local_model():
+    """The loaded local model, or None if it cannot be built.
+
+    First use downloads the pinned weights and caches them under
+    ``~/.boost/cache/models``, so this can fail on a machine with no network.
+    That is a degrade, not an error: the caller floors to BM25 exactly as it
+    does when no key is set.
+    """
+    return _backend()
+
+
+def _embed_local(texts: List[str]) -> Optional[List[List[float]]]:
+    """Embed locally. None on any failure, so the caller degrades to BM25.
+
+    Validated as strictly as the API path: a short batch would misalign vectors
+    against their chunks — every hit past the gap pointing at the wrong skill —
+    and a wrong-width row would either error inside sqlite-vec or quietly
+    corrupt the space, so both are rejected rather than stored.
+    """
+    backend = _local_model()
+    if backend is None:
+        return None
+    try:
+        rows = backend.encode(texts.copy())
+    except Exception:      # inference failure degrades, never raises
+        return None
+    if rows is None or len(rows) != len(texts):
+        return None
+    out: List[List[float]] = []
+    for row in rows:
+        try:
+            vec = [float(x) for x in row]
+        except (TypeError, ValueError):
+            return None
+        if len(vec) != LOCAL_DIM:
+            return None
+        out.append(vec)
+    return out
 
 
 def _post(url: str, key: str, payload: dict, timeout: int) -> Optional[dict]:

@@ -39,7 +39,21 @@ Changelog = "https://github.com/jonnyeclectic/boost/releases"
 # on-disk vector store. Embeddings come from an API over urllib (Voyage or
 # OpenAI, keyed by env var) — no client library required. Without this extra,
 # or without an embeddings key, search degrades to the always-on BM25 engine.
-rag = ["sqlite-vec>=0.1.6"]
+rag = [
+    "sqlite-vec>=0.1.6",
+    # The keyless embedding path (core/localembed.py): ONNX Runtime plus a
+    # tokenizer, and nothing else. fastembed is the obvious alternative and was
+    # rejected on two measured grounds — it pulls 11 direct dependencies
+    # including Pillow (image embeddings boost will never do), requests (this
+    # codebase uses urllib by design) and loguru (core/logs.py exists); and its
+    # PyPI classifier declares "Other/Proprietary License" despite the project
+    # being Apache-2.0, which check_licenses.py denies with no override for a
+    # wrongly-declared licence. This pair resolves to 20 packages with zero
+    # licence findings. The model weights are fetched and sha256-verified at
+    # runtime, not vendored.
+    "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+]
 # Opt-in eval extras. The Tier 1 gate (scripts/eval_retrieval.py) is pure-stdlib
 # and required in CI; nothing here is imported by the CLI or the required gate.
 # `pip install boost-skill-cli[eval]`. Powers:
@@ -175,6 +189,14 @@ files = ["boost_cli"]
 # absent from a plain checkout — don't fail type-checking when it's missing.
 [[tool.mypy.overrides]]
 module = "boost_cli._version"
+ignore_missing_imports = true
+
+# The [rag] extra's third-party modules. Imported inside functions and absent
+# from a default install by design, so a missing stub is the expected state
+# rather than a finding — the same carve-out pyright already has via
+# reportMissingImports.
+[[tool.mypy.overrides]]
+module = ["onnxruntime", "tokenizers", "numpy"]
 ignore_missing_imports = true
 
 # Every cmd_* function takes a bare `argv`, and mypy's default mode skips the
