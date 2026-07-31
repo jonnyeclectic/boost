@@ -878,24 +878,32 @@ class TestMcp:
         assert configuration._mcp_tool("nonexistent_tool", {}) == (None, False)
 
     def test_tool_descriptions_are_intent_framed(self, sandbox):
-        # the descriptions must tell an agent WHEN to reach for boost (before
-        # reinventing), not just what each tool does — the discoverability fix.
+        # The descriptions must tell an agent WHEN to reach for boost, not just
+        # what each tool does. On Gemini CLI these carry the whole load: it
+        # appends server `instructions` to the GEMINI.md memory tier, so the
+        # function declarations are the only boost text in context at the
+        # moment the tool-call decision is actually made.
         from boost_cli.commands import configuration
         specs = {s["name"]: s["description"].lower()
                  for s in configuration.REGISTRY.specs()}
-        # search carries BOTH triggers: starting a task, and authoring. The
-        # second alone is why the tool sat unused for ordinary work.
-        assert "starting non-trivial work" in specs["boost_search"]
-        assert "first stop before writing" in specs["boost_search"]
-        assert "reinvent" in specs["boost_search"]
-        # list is the cheap half of the task-start check — leverage what is
-        # already installed, not merely "avoid a duplicate install".
-        assert "start" in specs["boost_list"]
-        assert "leverage" in specs["boost_list"]
+        # search leads with the observable trigger and states its cost; a miss
+        # is named as a real outcome so it does not read as a wasted call.
+        assert "has a name" in specs["boost_search"]
+        assert "read-only" in specs["boost_search"]
+        assert "build it yourself" in specs["boost_search"]
+        # authoring survives ONLY here, as a clause — never as a co-equal
+        # trigger. Promoting it back cost boost its primary use once already.
+        assert "from scratch" in specs["boost_search"]
+        # list is the free half of the check — capability already on the box.
+        assert "installed" in specs["boost_list"]
+        assert "read-only" in specs["boost_list"]
+        assert "more than a few steps" in specs["boost_list"]
         # install points back at the search that should precede it
         assert "boost_search" in specs["boost_install"]
-        # info is framed as the vet-before-install step
-        assert "before" in specs["boost_info"] and "install" in specs["boost_info"]
+        # info is a name lookup, NOT a step between search and install. It has
+        # to say so, or an agent reinstates the hop the flow just dropped.
+        assert "by name" in specs["boost_info"]
+        assert "do not need this between a search and an install" in specs["boost_info"]
 
     def test_discover_github_missing_gh_degrades(self, sandbox, monkeypatch):
         from boost_cli.commands import configuration
