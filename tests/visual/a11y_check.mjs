@@ -73,6 +73,21 @@ for (const rel of PAGES) {
   }
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900 });
+  // Emulate prefers-reduced-motion BEFORE navigating. `.js .reveal` fades in
+  // over 600ms (opacity 0 -> 1), and axe computes contrast from the COMPOSITED
+  // colour — so running mid-transition reports --text-3 (#767c96, a genuine
+  // 4.85:1) as whatever partial-opacity blend it caught: #363948, #505467 and
+  // #656a81 were all observed, at 20%, 44% and 72% of the token's luminance.
+  // None of those exist anywhere in the repo, which is what made the failures
+  // look like a phantom.
+  //
+  // boost.css already handles this: its `prefers-reduced-motion: reduce` block
+  // forces `opacity: 1 !important` on .reveal. The sweep simply never asked for
+  // it. Emulating the feature is also more honest than waiting out the
+  // animation — it audits the page as a motion-sensitive user receives it.
+  await page.emulateMediaFeatures([
+    { name: "prefers-reduced-motion", value: "reduce" },
+  ]);
   await page.goto("file://" + file, { waitUntil: "load" });
 
   // Guard: prove the page is actually styled before trusting a contrast result.
