@@ -132,6 +132,31 @@ INSTRUCTIONS = (
 )
 
 
+def engine_note() -> str:
+    """One line telling the agent which retrieval engine `boost_search` will use.
+
+    MCP hosts load `instructions` into the agent's context, and an agent that
+    cannot tell a keyword index from a semantic one will phrase queries for a
+    vector search that is not running — asking "my containers keep restarting"
+    of a BM25 index that needs the word "docker". Naming the engine, and the one
+    command that upgrades it, costs a line and removes the guess.
+
+    Appended at `initialize` rather than baked into INSTRUCTIONS because the
+    answer depends on machine state at connect time, not on the build.
+    """
+    from . import dense
+    st = dense.status()
+    if st.get("ready"):
+        return ("\n\nSEARCH ENGINE: hybrid — BM25 keywords fused with dense "
+                "vectors (%s). Natural-language problem descriptions retrieve "
+                "well; you do not need to guess the skill's vocabulary."
+                % st.get("model"))
+    return ("\n\nSEARCH ENGINE: BM25 keyword matching only — dense vectors are "
+            "not configured, so queries are matched on shared words rather than "
+            "meaning. Prefer concrete terms over paraphrase. To enable semantic "
+            "search, %s." % dense.fix_hint(st.get("reason", "")))
+
+
 def handle_request(req: dict, *, version: str,
                    registry: Registry) -> Optional[dict]:
     """Map one parsed JSON-RPC request to its response dict.
@@ -149,7 +174,7 @@ def handle_request(req: dict, *, version: str,
         resp["result"] = {"protocolVersion": PROTOCOL_VERSION,
                           "capabilities": {"tools": {}},
                           "serverInfo": {"name": "boost", "version": version},
-                          "instructions": INSTRUCTIONS}
+                          "instructions": INSTRUCTIONS + engine_note()}
     elif method == "ping":
         resp["result"] = {}
     elif method == "tools/list":

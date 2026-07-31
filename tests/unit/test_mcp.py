@@ -114,7 +114,7 @@ class TestHandleRequest:
         resp = mcp.handle_request({"id": 1, "method": "initialize"},
                                   version="9.9.9", registry=_reg_with())
         instr = resp["result"]["instructions"]
-        assert instr == mcp.INSTRUCTIONS
+        assert instr.startswith(mcp.INSTRUCTIONS)
         low = instr.lower()
         # ONE trigger, and it must be observable rather than a judgement call.
         # "Non-trivial work" was the old framing and it lost to its own escape
@@ -289,3 +289,55 @@ class TestServeStdio:
             stdin=io.StringIO(json.dumps({"id": 1, "method": "ping"}) + "\n"),
             stdout=BrokenOut())
         assert code == 0   # a dead stdout ends the loop cleanly
+
+
+class TestEngineNote:
+    """`initialize` must tell the agent which retrieval engine it is talking to.
+
+    An agent that cannot distinguish a keyword index from a semantic one phrases
+    queries for the wrong engine — the exact failure the natural-language eval
+    set measures, where BM25 hit@1 collapses on paraphrased queries. The note is
+    appended at connect time because the answer is machine state, not build state.
+    """
+
+    def test_bm25_only_says_so_and_names_the_upgrade(self, sandbox, monkeypatch):
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "status",
+                            lambda: {"ready": False, "reason": "no-store"})
+        note = mcp.engine_note()
+        assert "BM25 keyword matching only" in note
+        assert "boost reindex --dense" in note        # the one next action
+
+    def test_ready_says_hybrid_and_names_the_model(self, sandbox, monkeypatch):
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "status",
+                            lambda: {"ready": True, "model": "bge-small"})
+        note = mcp.engine_note()
+        assert "hybrid" in note
+        assert "bge-small" in note
+        assert "not configured" not in note
+
+    def test_note_is_appended_to_instructions_not_baked_in(self, sandbox,
+                                                           monkeypatch):
+        # Guards the reason it lives at initialize: two hosts on one machine
+        # must be able to get different answers as the store is built.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "status", lambda: {"ready": False,
+                                                      "reason": "no-store"})
+        off = mcp.handle_request({"id": 1, "method": "initialize"},
+                                 version="9.9.9", registry=_reg_with())
+        monkeypatch.setattr(dense, "status", lambda: {"ready": True,
+                                                      "model": "bge-small"})
+        on = mcp.handle_request({"id": 1, "method": "initialize"},
+                                version="9.9.9", registry=_reg_with())
+        assert off["result"]["instructions"] != on["result"]["instructions"]
+        assert "SEARCH ENGINE" not in mcp.INSTRUCTIONS   # the constant stays static
+
+    def test_note_never_claims_a_key_is_required(self, sandbox, monkeypatch):
+        # Same stale-advice trap fix_hint exists to prevent, on a second surface.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "status",
+                            lambda: {"ready": False, "reason": "no-backend"})
+        note = mcp.engine_note()
+        assert "pip install" in note
+        assert "VOYAGE_API_KEY" not in note

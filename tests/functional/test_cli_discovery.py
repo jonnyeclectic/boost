@@ -1084,7 +1084,15 @@ class TestReindex:
         r = boost("search", "brainstorming")
         assert "ranked by full-content BM25" in r.out
 
-    def test_dense_skipped_without_embeddings_key(self, boost, tapped):
+    def test_dense_skipped_when_no_backend_at_all(self, boost, tapped, monkeypatch):
+        """No key and no local model: BM25 still builds, dense says why it didn't.
+
+        `local_available` is forced off because the [rag] extra now ships a
+        model — without this the command really does build a dense index here,
+        and the assertion below was passing only where the extra was absent.
+        """
+        from boost_cli.core import embed
+        monkeypatch.setattr(embed, "local_available", lambda: False)
         r = boost("reindex", "--dense")
         assert "indexed" in r.out                 # BM25 still builds
         assert "dense index skipped" in r.out
