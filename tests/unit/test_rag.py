@@ -964,7 +964,10 @@ class TestEngineRouting:
         rag._save([{"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 1,
                     "snip": "s", "tf": {"react": 1}}], {})
 
-    def test_prefers_dense_when_ready(self, sandbox, monkeypatch):
+    def test_dense_alone_when_bm25_has_no_index(self, sandbox, monkeypatch):
+        # Renamed: this never set up a BM25 index, so it was measuring "dense
+        # is the only engine available", not a preference between the two.
+        # There is no preference any more — with both present they fuse.
         monkeypatch.setattr(dense_mod, "ready", lambda: True)
         picked = [{"entry": {"name": "d", "tap": "x/y"}, "score": 9.0,
                    "snippet": "D"}]
