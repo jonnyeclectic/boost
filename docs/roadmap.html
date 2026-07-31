@@ -1681,7 +1681,24 @@ than a description of them, and <code>lock_toolchain.py --audit</code> then runs
 normal PR gate once a human opens it.
 
 Either way the freshness gap this item exists to close narrows from "nobody is watching" to "a
-human clicks a button", which is the honest available improvement while the setting stands.</p>
+human clicks a button", which is the honest available improvement while the setting stands.
+
+
+<b>The blocker is gone.</b> This card is gated on the same repository setting as
+<code>demo-cannot-open-its-own-pr</code>, and the API now reports
+<code>can_approve_pull_request_reviews: <b>true</b></code>. Confirmed working rather than merely
+configured: <code>#353</code> was opened by <code>github-actions[bot]</code>.
+
+So the &ldquo;honest available improvement while the setting stands&rdquo; compromise described above
+&mdash; a workflow that only reports drift and waits for a human to click a button &mdash; is no
+longer the ceiling. A scheduled job can now regenerate the lock and open its own PR, which is what
+this card originally asked for.
+
+Deliberately left unimplemented here. It needs a real decision about cadence and about what happens
+when the regenerated lock fails <code>lock_toolchain.py --check</code> on a runner, and shipping an
+untested scheduled workflow that opens PRs against <code>main</code> is worse than shipping nothing.
+The value of this note is that the next person picking it up starts from &ldquo;build it&rdquo;
+rather than from &ldquo;it cannot be built&rdquo;.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -3318,7 +3335,7 @@ concrete proof that the original recommendation would have blocked every release
       </article>
 
       <article class="cap rcard" id="demo-cannot-open-its-own-pr">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI reporting</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI reporting</span></div>
         <h3><code>demo.yml</code> still fails on every push &mdash; and the fix is not in the workflow</h3>
         <p><code>demo-gif-workflow-has-never-succeeded</code> (shipped, PR&nbsp;294) fixed the recorder:
 <code>charmbracelet/vhs-action</code>'s broken ffmpeg installer was replaced with apt plus
@@ -3366,7 +3383,19 @@ permission: since <code>#349</code> switched off Dependabot's version updates fo
 toolchain, the replacement is a scheduled job that regenerates the lock and proposes it &mdash; and
 that job cannot open a pull request either. So this toggle now gates two items rather than one, and
 the second is a supply-chain freshness gap rather than a docs asset. That does not make the
-decision automatic, but it does change what is on each side of it.</p>
+decision automatic, but it does change what is on each side of it.
+
+
+<b>Unblocked, and already working &mdash; the setting was flipped.</b> This card's blocker is
+<code>can_approve_pull_request_reviews: false</code>. The API now reports it as <b><code>true</code></b>,
+and the effect is visible rather than theoretical: <code>demo.yml</code>'s recent runs are green, and
+<b>PR <code>#353</code> was opened by <code>github-actions[bot]</code></b> &mdash; the exact action
+this card says is impossible.
+
+Nothing in the tree needed changing. Recording it as shipped rather than deleting it, because the
+card's analysis was right about <em>where</em> the blocker was: the earlier investigation had chased
+<code>demo.yml</code>'s own <code>permissions:</code> block, and the note that no edit to the workflow
+could fix a repository-level setting is what stopped that from being a long false lead.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -3376,7 +3405,7 @@ decision automatic, but it does change what is on each side of it.</p>
       </article>
 
       <article class="cap rcard" id="merged-loop-branches-are-never-pruned">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Hygiene · DX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Hygiene · DX</span></div>
         <h3>68 of the repo's 77 branches are merged <code>loop/*</code> branches nobody deletes</h3>
         <p>The repository carries <b>77 branches, 70 of them <code>loop/*</code></b>. Classifying each by the
 state of its pull request: <b>68 have a merged PR</b> and are safe to delete, <b>1</b> has an open
@@ -3409,7 +3438,30 @@ manually.
 Low impact and near-zero risk to fix &mdash; flip <code>delete_branch_on_merge</code> to true and
 the backlog can be pruned by listing merged PR head refs. The reason it is worth doing at all is
 that CLAUDE.md tells every agent to run <code>git worktree list</code> and inspect branch state
-before touching a tree, and 68 stale entries make that check noisier for every concurrent loop.</p>
+before touching a tree, and 68 stale entries make that check noisier for every concurrent loop.
+
+<b>Shipped &mdash; and the premise had gone stale, which is why it was worth re-checking rather than
+assuming.</b> This card's core claim is that <code>delete_branch_on_merge</code> is <code>false</code>.
+It is now <b><code>true</code></b>, and the backlog it describes is gone: against the card's
+<b>77 branches, 70 of them <code>loop/*</code></b>, the repository today carries <b>5 branches, 2
+<code>loop/*</code></b>.
+
+Two stragglers predating the setting change were still present and are now deleted:
+<code>evals-harness</code> (PR <code>#317</code>, merged) and <code>mcp-task-entrance</code>
+(PR <code>#318</code>, merged). Both were classified the way this card insists on &mdash; by
+<b>pull-request state</b>, not commit reachability &mdash; because the squash-merge point above is
+real: <code>compare(main...branch).ahead_by</code> reports every merged branch as permanently ahead,
+so reachability would have reported 0 of them deletable.
+
+Three branches remain and are deliberately <em>not</em> deleted: <code>bot/demo-gif</code> has an
+open PR (<code>#353</code>), and <code>badges</code>, <code>loop/keyless-card-dedupe</code> and
+<code>loop/sbom-in-release-job</code> have <b>no PR on record</b>. A branch with no PR cannot be shown
+to be merged, and deleting it could destroy unmerged work &mdash; so the safe rule is to leave it for
+a human, which is also why no automated pruner is proposed here.
+
+<b>No automation was added.</b> The repository setting does the job going forward; a workflow that
+deleted branches on a schedule would add a way to lose work in exchange for tidying a list that is
+now five entries long.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -5769,7 +5821,7 @@ same-repo PRs and red CI.</p>
       </article>
 
       <article class="cap rcard" id="code-scanning-rule-can-be-restored">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release safety</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Release safety</span></div>
         <h3>The <code>code_scanning</code> ruleset rule can go back on &mdash; but only scoped to CodeQL</h3>
         <p>Repairing the <code>main</code> ruleset dropped its <code>code_scanning</code> rule in favour of
 <code>codeql-analyze</code> as a required status check (see
@@ -5802,7 +5854,23 @@ path filters and runs on <code>push</code>, <code>pull_request</code> and
 <code>merge_group</code>, so it always reports and cannot produce the never-reports deadlock this
 repo has hit twice. And it catches something the status check does not &mdash;
 <code>codeql-analyze</code> passes when the <em>job</em> succeeds, including when it succeeds
-having found error-severity alerts.</p>
+having found error-severity alerts.
+
+<b>Done &mdash; the rule is back, and scoped exactly as this card prescribed.</b> Read from the live
+<code>main</code> ruleset (id <code>19130332</code>): it carries a <code>code_scanning</code> rule
+whose <code>code_scanning_tools</code> list is <b><code>CodeQL</code> alone</b>, at
+<code>security_alerts_threshold: high_or_higher</code> and <code>alerts_threshold: errors</code>.
+Scorecard is not in the list, which is the single decision this card exists to get right.
+
+The safety precondition still holds and was re-checked rather than assumed: <b>CodeQL has 0 open
+alerts</b>, while Scorecard has <b>4 open</b> (down from the 7 recorded above), every one still a
+posture metric that must not be dismissed. Had Scorecard been added to that tool list, those four
+would block every merge in the repository immediately &mdash; the failure mode this card correctly
+identifies as the reason the work looked blocked.
+
+No change was needed. Recording it as shipped so the board stops advertising work that is already
+in place, and so the tool-list constraint stays written down: anyone re-editing this rule through the
+GitHub UI will be offered Scorecard right next to CodeQL in the picker.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

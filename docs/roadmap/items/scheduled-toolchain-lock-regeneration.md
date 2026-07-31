@@ -71,3 +71,19 @@ normal PR gate once a human opens it.
 Either way the freshness gap this item exists to close narrows from "nobody is watching" to "a
 human clicks a button", which is the honest available improvement while the setting stands.
 
+
+<b>The blocker is gone.</b> This card is gated on the same repository setting as
+<code>demo-cannot-open-its-own-pr</code>, and the API now reports
+<code>can_approve_pull_request_reviews: <b>true</b></code>. Confirmed working rather than merely
+configured: <code>#353</code> was opened by <code>github-actions[bot]</code>.
+
+So the &ldquo;honest available improvement while the setting stands&rdquo; compromise described above
+&mdash; a workflow that only reports drift and waits for a human to click a button &mdash; is no
+longer the ceiling. A scheduled job can now regenerate the lock and open its own PR, which is what
+this card originally asked for.
+
+Deliberately left unimplemented here. It needs a real decision about cadence and about what happens
+when the regenerated lock fails <code>lock_toolchain.py --check</code> on a runner, and shipping an
+untested scheduled workflow that opens PRs against <code>main</code> is worse than shipping nothing.
+The value of this note is that the next person picking it up starts from &ldquo;build it&rdquo;
+rather than from &ldquo;it cannot be built&rdquo;.
