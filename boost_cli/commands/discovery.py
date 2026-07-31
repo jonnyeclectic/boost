@@ -194,6 +194,38 @@ def _hint_semantic_search(engine: str) -> None:
         out.info(out.role(line, "muted"))
 
 
+def _shard_io(args) -> int:
+    """`--export-shard` / `--import-shard`, the two halves of a prebuilt shard.
+
+    Embedding is ~1.2 s/chunk on CPU — 74 minutes for 743 entries — so without
+    a way to move vectors between machines the keyless tier is available in
+    principle and unreachable in practice. Import validates rather than trusts;
+    see `dense.import_shard` for why a mismatched shard must be refused instead
+    of merged.
+    """
+    from ..core import dense
+    if args.export_shard:
+        shard = dense.export_shard(args.export_shard)
+        if not shard.get("chunks"):
+            raise BoostError("no vectors for %r" % args.export_shard,
+                            hint="build them first with `boost reindex --dense`")
+        print(json.dumps(shard))
+        return 0
+    path = Path(args.import_shard)
+    try:
+        shard = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BoostError("cannot read shard %s: %s" % (path, exc)) from exc
+    tap = str(shard.get("tap") or "")
+    commit = rag._tap_commits().get(tap.replace("/", "__"), "")
+    ok, reason = dense.import_shard(shard, commit=commit)
+    if not ok:
+        raise BoostError("shard refused — %s" % reason,
+                        hint="`boost reindex --dense` embeds it locally instead")
+    out.ok("%s: %s" % (tap, reason))
+    return 0
+
+
 def cmd_reindex(argv):
     """Build/refresh the full-content (RAG) search index over tapped items."""
     p = cliparse.parser(
@@ -203,10 +235,19 @@ def cmd_reindex(argv):
                    help="reindex every tap, ignoring cached commits")
     p.add_argument("--dense", action="store_true",
                    help="also embed chunks into the opt-in dense vector store "
-                        "(needs the `rag` extra and an embeddings API key)")
+                        "(needs the `rag` extra; no API key required)")
+    p.add_argument("--export-shard", metavar="TAP",
+                   help="write TAP's prebuilt vectors to stdout as JSON, for "
+                        "publishing so others need not re-embed them")
+    p.add_argument("--import-shard", metavar="FILE",
+                   help="merge a prebuilt vector shard, skipping the embed "
+                        "cost; refused unless it matches this store's backend "
+                        "and the tap's current commit")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
+    if args.export_shard or args.import_shard:
+        return _shard_io(args)
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to index",
                         hint="add the recommended registries with `boost tap --defaults`")

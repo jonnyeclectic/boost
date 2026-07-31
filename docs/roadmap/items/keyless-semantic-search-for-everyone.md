@@ -306,3 +306,28 @@ deltas.
 <b>Claim released.</b> Steps 1, 4 and 6 have shipped; steps 2, 3 and 5 are unowned and open. Step 2
 is the one to take next and it is better justified than when it was written: embedding measured at
 ~1.2 s/chunk locally, so prebuilt per-registry shards are a requirement rather than an optimisation.
+
+<b>Step 2, the shard mechanism, is shipped.</b> <code>boost reindex --export-shard TAP</code> writes
+one registry's vectors as JSON; <code>--import-shard FILE</code> merges them. Measured end to end on
+the real store: exporting <code>anthropics/skills</code> gives <b>262 chunks in 0.63 MB</b>, and
+importing it into a fresh <code>BOOST_HOME</code> takes <b>0.12 s</b> against roughly five minutes to
+embed the same rows locally. That ratio is the whole point of the step.
+
+<b>Import refuses rather than degrades.</b> A shard carries the provider, model, dimension and the
+registry commit it was built from, and all four are checked. Mixing vectors from a different
+embedding space would not raise &mdash; it would quietly return nonsense rankings, which is worse
+than failing &mdash; and accepting a shard from a stale commit would let <code>build()</code> mark
+that tap &ldquo;reused&rdquo; and never re-embed it, pinning the user to old vectors indefinitely.
+Verified: a shard with a doctored commit is rejected with a message naming both hashes.
+
+<b>What this does NOT remove: the query-side model download.</b> A shard eliminates the
+<em>document</em> embedding cost, but a keyless user still needs the ~133&nbsp;MB local model to embed
+their own <em>query</em>. Confirmed by importing into a fresh <code>BOOST_HOME</code>, where retrieval
+returned zero hits until the model was present &mdash; <code>dense.status()</code> reported
+<code>ready</code> the whole time, because the store genuinely was ready. The card's framing of
+&ldquo;the only API-bound step is turning text into vectors&rdquo; is right, but that step runs on
+both sides, and only the document half can be shipped ahead of time.
+
+<b>Still open in step 2:</b> the CI workflow that publishes shards as release artifacts, and the
+<code>boost tap</code> integration that fetches one automatically. Both are now plumbing on top of a
+verified mechanism rather than open questions. Steps 3 and 5 are untouched.

@@ -73,7 +73,52 @@ for (const rel of PAGES) {
   }
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900 });
+  // Emulate prefers-reduced-motion BEFORE navigating. `.js .reveal` fades in
+  // over 600ms (opacity 0 -> 1), and axe computes contrast from the COMPOSITED
+  // colour — so running mid-transition reports --text-3 (#767c96, a genuine
+  // 4.85:1) as whatever partial-opacity blend it caught: #363948, #505467 and
+  // #656a81 were all observed, at 20%, 44% and 72% of the token's luminance.
+  // None of those exist anywhere in the repo, which is what made the failures
+  // look like a phantom.
+  //
+  // boost.css already handles this: its `prefers-reduced-motion: reduce` block
+  // forces `opacity: 1 !important` on .reveal. The sweep simply never asked for
+  // it. Emulating the feature is also more honest than waiting out the
+  // animation — it audits the page as a motion-sensitive user receives it.
+  await page.emulateMediaFeatures([
+    { name: "prefers-reduced-motion", value: "reduce" },
+  ]);
   await page.goto("file://" + file, { waitUntil: "load" });
+
+  // Guard: prove the page is actually styled before trusting a contrast result.
+  // Most pages link ../style/boost.css RELATIVELY over file://, which only
+  // works because of --allow-file-access-from-files, and that flag has
+  // intermittently not taken effect on the runner. Colours then fall back to
+  // browser defaults and axe reports a dozen confident, specific, entirely
+  // fictional violations against values that appear nowhere in this repo
+  // (#505467, #656a81 — the real --text-3 is #767c96 at 4.85:1, comfortably AA).
+  //
+  // Probe --bg, NOT --text-3: docs/commands.html is generated self-contained
+  // with its tokens inline and defines no --text-3 at all, so keying on that
+  // token failed a page that was perfectly styled. --bg is defined by both the
+  // shared sheet and every inline :root block, so it detects an unstyled page
+  // without assuming where the styling came from.
+  //
+  // Failing here is the whole point: "not styled" is one line a maintainer can
+  // act on, where the alternative sends them auditing a colour that has been
+  // correct for months.
+  const styled = await page.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--bg").trim());
+  if (!styled) {
+    console.error(`FAIL ${rel} — page is unstyled (--bg unresolved); `
+      + `every contrast result here would be meaningless, so it is reported `
+      + `as a load failure rather than as violations`);
+    violatingNodes++;
+    await page.close();
+    continue;
+  }
+
   await page.evaluate(axeSource);
   const result = await page.evaluate(
     async (tags) => await window.axe.run(document, { runOnly: { type: "tag", values: tags } }),

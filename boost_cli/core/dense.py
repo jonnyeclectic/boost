@@ -12,6 +12,7 @@ are the expensive step, so an unchanged tap is never re-embedded.
 """
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 from pathlib import Path
@@ -341,6 +342,116 @@ def build(entries: Optional[List[dict]] = None,
             "provider": prov,
             "model": mdl,
         }
+    finally:
+        con.close()
+
+
+def export_shard(tap: str) -> dict:
+    """One tap's vectors plus the provenance needed to validate them later.
+
+    Embedding is the expensive half of the keyless tier — measured at ~1.2 s per
+    chunk on CPU, so 74 minutes for 743 entries — while querying is milliseconds.
+    A shard lets that cost be paid once in CI and downloaded by everyone else.
+
+    The provenance fields are not decoration: vectors are only comparable inside
+    the embedding space that produced them, so provider/model/dim have to travel
+    with the rows, and the registry commit has to travel too or a stale shard
+    would be indistinguishable from a current one.
+    """
+    # Plain sqlite3, NOT _connect: exporting reads `chunks`, `meta` and the
+    # stored embedding blobs, all ordinary tables. Routing through _connect
+    # would make export impossible without the sqlite-vec extension — the same
+    # trap `_recorded_meta` documents — and a machine that built vectors and
+    # then dropped the extra is exactly the one whose shard is worth having.
+    if not db_path().exists():
+        return {"tap": tap, "chunks": []}
+    try:
+        con = sqlite3.connect(str(db_path()))
+    except sqlite3.Error:
+        return {"tap": tap, "chunks": []}
+    try:
+        meta = _read_meta(con)
+        commits = meta.get("commits")
+        commit = ""
+        if isinstance(commits, dict):
+            commit = str(commits.get(tap.replace("/", "__")) or "")
+        chunks = []
+        for row in con.execute(
+                "SELECT c.name, c.tap, c.path, c.kind, c.cix, c.snip, v.embedding "
+                "FROM chunks c JOIN vec_chunks v ON v.rowid = c.id "
+                "WHERE c.tap = ? ORDER BY c.id", (tap,)):
+            name, ctap, path, kind, cix, snip, emb = row
+            chunks.append({
+                "name": name, "tap": ctap, "path": path, "kind": kind,
+                "cix": cix, "snip": snip,
+                # base64 so the shard is plain JSON and can be published as a
+                # release artifact without a binary format of its own.
+                "embedding": base64.b64encode(bytes(emb)).decode("ascii"),
+            })
+        return {"tap": tap, "commit": commit,
+                "provider": meta.get("provider"), "model": meta.get("model"),
+                "dim": meta.get("dim"), "version": INDEX_VERSION,
+                "chunks": chunks}
+    except sqlite3.Error:
+        return {"tap": tap, "chunks": []}
+    finally:
+        con.close()
+
+
+def import_shard(shard: dict, commit: str) -> Tuple[bool, str]:
+    """Merge a prebuilt shard into this machine's store. ``(ok, reason)``.
+
+    Refuses rather than degrades. A vector is only meaningful against others
+    from the same embedding space, so a shard from a different provider, model
+    or dimension cannot be mixed in: doing so would not raise, it would quietly
+    return nonsense rankings, which is the worse failure. A shard whose commit
+    does not match the tap as it stands now is refused for a different reason —
+    accepting it would let `build()` mark that tap "reused" and never re-embed
+    it, pinning the user to stale vectors indefinitely.
+    """
+    for field in ("provider", "model", "dim"):
+        if shard.get(field) in (None, ""):
+            return False, "shard is missing %s" % field
+    if str(shard.get("commit") or "") != commit:
+        return False, ("commit mismatch: shard %r, tap %r"
+                       % (shard.get("commit"), commit))
+    con = _connect()
+    if con is None:
+        return False, "no vector backend available"
+    try:
+        meta = _read_meta(con)
+        # An empty store has no opinion yet, so it adopts the shard's backend.
+        if meta.get("provider"):
+            for field in ("provider", "model", "dim"):
+                if meta.get(field) != shard.get(field):
+                    return False, ("%s mismatch: store %r, shard %r"
+                                   % (field, meta.get(field), shard.get(field)))
+        dim = int(shard["dim"])
+        _ensure_schema(con, dim)
+        # Replace, never append: re-importing must not double a tap's rows.
+        _delete_taps(con, [str(shard.get("tap") or "")])
+        mod = _load()
+        for c in shard.get("chunks") or []:
+            cur = con.execute(
+                "INSERT INTO chunks (name, tap, path, kind, cix, snip) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (c.get("name"), c.get("tap"), c.get("path"), c.get("kind"),
+                 c.get("cix"), c.get("snip")))
+            blob = base64.b64decode(c["embedding"])
+            con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
+                        (cur.lastrowid, blob))
+        commits = meta.get("commits")
+        commits = dict(commits) if isinstance(commits, dict) else {}
+        commits[str(shard.get("tap") or "").replace("/", "__")] = commit
+        _write_meta(con, {"version": INDEX_VERSION,
+                          "provider": shard.get("provider"),
+                          "model": shard.get("model"), "dim": dim,
+                          "commits": commits})
+        con.commit()
+        _ = mod          # extension loaded by _connect; kept for symmetry
+        return True, "imported %d chunks" % len(shard.get("chunks") or [])
+    except sqlite3.Error as exc:
+        return False, "store error: %s" % exc
     finally:
         con.close()
 

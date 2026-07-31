@@ -219,17 +219,33 @@ def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
 
 
 def _postings_to_doc_tf(raw: dict) -> Dict[int, Dict[str, int]]:
-    """Invert persisted postings back to per-doc term frequencies."""
+    """Invert persisted postings back to per-doc term frequencies.
+
+    Pure: it inverts whatever ``raw`` carries and reads nothing. An earlier
+    version fell back to the SQLite store with ``or``, which made a caller
+    passing ``{}`` silently receive tens of thousands of postings from the live
+    index — invisible in CI, where no store exists, and wrong everywhere else.
+    Callers that need the store now say so; see :func:`_kept_docs`.
+    """
     doc_tf: Dict[int, Dict[str, int]] = defaultdict(dict)
-    for term, plist in (raw.get("postings") or _all_postings()).items():
+    for term, plist in (raw.get("postings") or {}).items():
         for doc_id, tf in plist:
             doc_tf[doc_id][term] = tf
     return doc_tf
 
 
 def _kept_docs(raw: dict, keep_safe: set) -> List[dict]:
-    """Recover cached docs (with term freqs) for taps that did not change."""
-    doc_tf = _postings_to_doc_tf(raw)
+    """Recover cached docs (with term freqs) for taps that did not change.
+
+    Term frequencies live in the SQLite postings store since they left the JSON
+    index, so an index without an inline ``postings`` key is normal rather than
+    empty — this is the caller that reaches for the store, explicitly.
+    """
+    # Key ABSENCE, not falsiness: an index carrying an explicit empty
+    # `postings` is stating it has none, and must not be answered from the
+    # store. Only an index with no such key predates the SQLite move.
+    doc_tf = _postings_to_doc_tf(
+        raw if "postings" in raw else {"postings": _all_postings()})
     return [{**meta, "tf": doc_tf.get(doc_id, {})}
             for doc_id, meta in enumerate(raw.get("docs", []))
             if meta["t"].replace("/", "__") in keep_safe]
