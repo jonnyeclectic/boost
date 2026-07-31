@@ -112,3 +112,25 @@ Constraints this must respect: the shipped runtime is stdlib-only and
 harness to extend rather than invent. Related:
 [[dense-search-fallback-and-stale-tap-pruning]] and
 [[cache-the-catalog-entry-set-across-rag-queries]].
+
+<b>A sibling item proposes a different backend</b>, and landed from another loop while this was in
+review: [[keyless-dense-tier-local-static-embeddings]] argues for a <i>static</i> model
+(model2vec/potion class) &mdash; a lookup table rather than a transformer, pure stdlib, no
+<code>numpy</code>, no <code>onnxruntime</code>, ~1&nbsp;ms per query, reranking BM25's top-200. The
+two are not the same design and the comparison is worth settling with the eval (step 6) rather than
+by argument.
+
+One of its objections applies directly to what shipped here and was worth measuring rather than
+waving away: it holds that <code>import numpy</code> alone costs 180&ndash;390&nbsp;ms cold, which
+would disqualify a transformer from a one-shot CLI path. Measured on this machine, best of three
+cold processes: <code>import numpy</code> <b>51&nbsp;ms</b>, <code>import onnxruntime</code>
+<b>62&nbsp;ms</b>, and a complete cold <code>embed()</code> &mdash; process start, ONNX session
+build over the 133&nbsp;MB graph, tokenize, infer &mdash; <b>233&nbsp;ms</b>. So the objection does
+not reproduce here, though import cost is genuinely machine- and version-dependent and their number
+may be real on theirs. 233&nbsp;ms is also very likely <i>faster</i> than the Voyage round trip it
+sits beside, and it is paid only by users who installed the extra.
+
+The static approach still wins on cost and would win outright if the quality gap is small &mdash;
+which is exactly what the eval should decide. Its own card is right that neither should ship a
+retrieval <i>claim</i> before that eval exists.
+
