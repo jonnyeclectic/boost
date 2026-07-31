@@ -2608,7 +2608,7 @@ extra ships it.</p>
       </article>
 
       <article class="cap rcard" id="pytest-tmpdir-cve-blocked-by-py39-floor">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Supply chain</span></div>
+        <div class="head"><span class="pill declined">Declined</span><span class="cat">Supply chain</span></div>
         <h3>The <code>pytest</code> tmpdir CVE has no fix at our Python floor</h3>
         <p>CVE-2025-71176 — pytest through 9.0.2 relies on the predictable
 <code>/tmp/pytest-of-{user}</code> path, letting a <b>local</b> user cause a denial of
@@ -2630,7 +2630,22 @@ ephemeral VMs where the local-attacker precondition does not hold. <b>Dismissed 
 Revisit when either the 3.9 floor is dropped or a patched 8.x lands. If the floor must stay
 and the alert must clear, the real mitigation is pointing pytest at a private base
 temp dir (<code>--basetemp</code> / <code>PYTEST_DEBUG_TEMPROOT</code>) so the predictable
-path is never used — that fixes the behaviour without satisfying Dependabot's version check.</p>
+path is never used — that fixes the behaviour without satisfying Dependabot's version check.
+
+<b>Declined &mdash; recorded as a decision rather than left to look like pending work.</b> The
+alert is already dismissed upstream as <code>tolerable_risk</code>; leaving the card
+<code>planned</code> made the board advertise work that nobody intends to do and that no code change
+could complete.
+
+The revisit condition was re-checked rather than assumed: this card says revisit &ldquo;when either
+the 3.9 floor is dropped or a patched 8.x lands&rdquo;. PyPI's latest 8.x is still
+<b><code>8.4.2</code></b> &mdash; no <code>8.4.3</code>, no <code>8.5</code> &mdash; and the advisory
+marks every 8.x vulnerable, so there is nothing to move to. The 3.9 floor is a deliberate
+compatibility promise in <code>pyproject.toml</code>, not an oversight.
+
+Reopen this if either condition changes. The residual exposure is unchanged and remains
+contributor-facing only: <code>[project].dependencies</code> is empty, so nobody installing
+<code>boost-skill-cli</code> ever receives pytest.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -4506,7 +4521,7 @@ three states: a <b>failing</b> actionlint now fails <code>make</code> (exit 2) i
       </article>
 
       <article class="cap rcard" id="mcp-check-skills-before-starting-a-task">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Interop · Adoption</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop · Adoption</span></div>
         <h3>MCP — check for a skill when a task starts, not only when authoring one</h3>
         <p><a href="#mcp-search-before-reinventing">The previous pass</a> gave the MCP server
 <code>initialize</code> <code>instructions</code> and intent-framed tool descriptions, but
@@ -4522,7 +4537,20 @@ duplicate install" to "leverage a capability you already have" — it is the fre
 check. A closing proportion note bounds it, because an unbounded <em>always check first</em>
 turns every trivial turn into a tool call and an agent that learns to ignore the guidance
 ignores all of it. Both triggers and the bound are pinned by tests, so dropping either
-regresses.</p>
+regresses.
+
+<b>Shipped &mdash; the claim was stale, not the work.</b> PR <code>#318</code> merged and its branch
+is gone, but this item sat at <code>inflight</code> under that branch name, so the board advertised
+live work as taken. Verified against the code rather than the PR state alone:
+<code>mcp.INSTRUCTIONS</code> leads with using an installed skill, names <code>boost_list</code> for
+what is usable right now, and carries the proportion bound this card asks for &mdash; &ldquo;Skip it
+for a question, a one-line edit, or a command you were just handed.&rdquo; The trigger is pinned by
+<code>test_instructions_lead_with_using_a_skill_not_authoring_one</code>.
+
+One note for anyone reading both cards: <code>mcp-one-benefit-nameable-task</code> (<code>#355</code>,
+later) <em>superseded</em> this card's &ldquo;two declared triggers&rdquo; framing by demoting
+authoring to a clause on <code>boost_search</code>, on the grounds that it was the rarer moment
+crowding out the common one. The task-start trigger this card argued for is what survived.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -4586,7 +4614,7 @@ open: <code>zizmor</code> and <code>gitleaks</code> run only in CI and have no M
       </article>
 
       <article class="cap rcard" id="mcp-one-benefit-nameable-task">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Interop · Adoption</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop · Adoption</span></div>
         <h3>MCP — one benefit, one observable trigger (and stop routing through boost_info)</h3>
         <p>Gemini CLI used the boost MCP server only when asked by hand, never on its own.
 Two causes, and neither was fixed by writing more instructions.
@@ -4616,7 +4644,15 @@ already returns each hit's description, the only field that changes an install d
 so the hop bought a round-trip and a decision point and nothing else. It stays registered
 for looking up a name from elsewhere, and its description now says so. All of it is
 pinned by tests, including negative assertions so authoring and the info hop cannot
-creep back.</p>
+creep back.
+
+<b>Shipped &mdash; the claim was stale, not the work.</b> PR <code>#355</code> merged and its branch
+is gone, yet this item still read as owned. Every element is verifiable in
+<code>mcp.INSTRUCTIONS</code> today: the stated cost (&ldquo;read-only, take about a second, and
+install nothing&rdquo;), the miss protocol (&ldquo;Finding nothing is a good outcome, not a wasted
+call&rdquo;), &ldquo;The task stays yours&rdquo;, and <code>boost_info</code> absent from the
+advertised flow &mdash; which <code>test_instructions_route_search_straight_to_install</code> pins
+with a negative assertion so the hop cannot creep back.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
