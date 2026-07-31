@@ -102,6 +102,106 @@ def _chunk_texts(entry: dict, tap_paths: Optional[Dict[str, Path]]
     return chunk(body) or [body]
 
 
+def _recorded_meta() -> dict:
+    """What an existing store says it was built with, read WITHOUT sqlite-vec.
+
+    Deliberately not routed through :func:`_connect`, which loads the extension
+    and returns ``None`` without it: the most useful diagnostic line ("your
+    store was built with voyage-3") would then vanish in exactly the case that
+    needs it — a user who dropped the ``[rag]`` extra and wants to know why
+    dense went quiet. ``meta`` is a plain table, so plain sqlite3 can read it.
+    """
+    p = db_path()
+    if not p.exists():
+        return {}
+    try:
+        con = sqlite3.connect(str(p))
+    except sqlite3.Error:
+        return {}
+    try:
+        meta = _read_meta(con)
+        try:
+            meta["_chunks"] = con.execute(
+                "SELECT COUNT(*) FROM chunks").fetchone()[0]
+        except sqlite3.DatabaseError:
+            meta["_chunks"] = 0
+        return meta
+    except sqlite3.DatabaseError:
+        # A truncated or non-sqlite file: report "no store", never raise into
+        # a health check whose whole job is to survive a broken install.
+        return {}
+    finally:
+        con.close()
+
+
+def status() -> dict:
+    """Why dense retrieval is, or is not, serving queries.
+
+    Pure inspection — never builds, never embeds, never needs the extra. Three
+    independent things must line up (the ``[rag]`` extra, an embeddings key, a
+    built store whose space matches the live one) and every one of them fails
+    *silently* today, because :func:`rag.retrieve_any` floors to BM25 and
+    returns. ``reason`` names which link is missing so a caller can say so.
+
+    ``degraded`` is the load-bearing distinction: a user who never configured
+    dense search is *healthy* (BM25 is the documented default), while a user
+    who did all three steps and is still on BM25 has a real problem no other
+    surface reports. Only the latter should move an exit code.
+    """
+    have_be = have_backend()
+    prov, mdl, dim = embed.provider(), embed.model(), embed.dimension()
+    meta = _recorded_meta()
+    b_prov = meta.get("provider")
+    b_mdl = meta.get("model")
+    b_dim = meta.get("dim")
+    b_ver = meta.get("version")
+    commits = meta.get("commits")
+    chunks = int(meta.get("_chunks") or 0)
+    store_exists = bool(meta)
+
+    # Order matters: report the *first* missing link, so the message names the
+    # next action rather than a downstream symptom of the same gap.
+    if not have_be:
+        reason: Optional[str] = "no-backend"
+    elif prov is None:
+        reason = "no-key"
+    elif not store_exists:
+        reason = "no-store"
+    elif b_ver != INDEX_VERSION:
+        reason = "version-changed"
+    elif b_prov != prov:
+        reason = "provider-changed"
+    elif b_mdl != mdl:
+        reason = "model-changed"
+    elif b_dim != dim:
+        reason = "dim-changed"
+    elif chunks <= 0:
+        reason = "empty"
+    else:
+        reason = None
+
+    # Unconfigured is not degraded; a built-but-unusable store is. Vectors on
+    # disk are the proof of intent — the user paid to embed them, so anything
+    # that stops them serving (a dropped extra, an unset key, a changed model)
+    # is a real fault. Without a store there is nothing to have regressed:
+    # "no-store" is an unfinished setup, and it is the one reason that implies
+    # store_exists is False, so this single clause covers every case.
+    degraded = store_exists and reason is not None
+
+    return {
+        "backend": have_be,
+        "provider": prov, "model": mdl, "dim": dim,
+        "store_exists": store_exists,
+        "built_provider": b_prov, "built_model": b_mdl,
+        "built_dim": b_dim, "built_version": b_ver,
+        "chunks": chunks,
+        "taps": len(commits) if isinstance(commits, dict) else 0,
+        "ready": reason is None,
+        "reason": reason,
+        "degraded": degraded,
+    }
+
+
 def ready() -> bool:
     """True when a usable, provider-matched vector index exists on disk."""
     if not have_backend() or not embed.available() or not db_path().exists():
