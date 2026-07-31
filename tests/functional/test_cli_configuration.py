@@ -503,7 +503,7 @@ class TestCompletions:
                     if l.startswith('complete -W "'))
         names = set(line.split('"')[1].split())
         assert names == {n for n, _g, _m, _s in COMMANDS}
-        assert len(names) == 78
+        assert len(names) == 79
         assert "# install: boost completions bash >> ~/.bashrc" in r.out
 
     def test_zsh_compdef_with_summaries(self, boost, sandbox):
@@ -511,14 +511,14 @@ class TestCompletions:
         assert r.out.splitlines()[0] == "#compdef boost"
         assert "'install:Install a skill from a tap registry'" in r.out
         entries = [l for l in r.out.splitlines() if l.startswith("    '")]
-        assert len(entries) == 78
+        assert len(entries) == 79
         assert "_describe -t commands 'boost command' _boost_commands" in r.out
 
     def test_fish_complete_lines(self, boost, sandbox):
         r = boost("completions", "fish")
         lines = [l for l in r.out.splitlines()
                  if l.startswith("complete -c boost -n __fish_use_subcommand -a ")]
-        assert len(lines) == 78
+        assert len(lines) == 79
         assert ("complete -c boost -n __fish_use_subcommand -a install "
                 "-d 'Install a skill from a tap registry'") in lines
 

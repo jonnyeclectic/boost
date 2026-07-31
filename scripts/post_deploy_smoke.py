@@ -43,6 +43,7 @@ PAGES = (
     "docs/index.html",
     "docs/roadmap.html",
     "docs/demo.html",
+    "docs/chat.html",
     "docs/design-roadmap.html",
     "docs/commands.html",
     "docs/adapters.html",

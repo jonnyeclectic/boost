@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — how chat works</title>
+<meta name="description" content="boost chat answers questions about skills from retrieval, and refuses to name a skill that does not exist.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="../style/boost.css">
+<style>
+  .crumbs { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); margin-bottom: 4px; }
+  .flow { display: grid; gap: 10px; margin: 28px 0; }
+  .step { display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
+          padding: 14px 16px; background: var(--panel); border: 1px solid var(--line);
+          border-radius: 10px; }
+  .step .n { font-family: var(--mono); font-size: 12px; color: var(--amber); padding-top: 2px; }
+  .step h3 { margin: 0 0 4px; font-size: 15px; }
+  .step p { margin: 0; font-size: 13.5px; color: var(--text-2); }
+  .step.reject { border-color: rgba(244,114,208,.35); }
+  .step.reject .n { color: var(--pink, #f472d0); }
+  pre.sample { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+               padding: 16px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px;
+               color: var(--text-2); }
+  pre.sample b { color: var(--amber); font-weight: normal; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<main id="main">
+<section>
+  <div class="wrap">
+    <p class="crumbs"><a href="index.html">boost</a> / chat</p>
+    <h1>How <code>chat</code> works</h1>
+    <p class="lede">Ask about skills in plain language. Every answer is assembled from what
+      retrieval actually returned — and an answer that names a skill the catalogue does not
+      contain is thrown away rather than shown.</p>
+
+    <pre class="sample"><b>$ boost chat "how do I review a diff for security problems?"</b>
+
+code-reviewer checks a diff against project standards and flags anti-patterns,
+while security-auditor is the one aimed specifically at injection flaws and
+leaked credentials. Run security-auditor before merging anything sensitive.
+
+sources · ranked by hybrid RRF (BM25 + dense)
+  security-auditor   workflow  (NeoLabHQ/context-engineering-kit)
+  code-reviewer      workflow  (ChrisWiles/claude-code-showcase)
+  review-local-changes  skill  (NeoLabHQ/context-engineering-kit)</pre>
+
+    <h2>The problem it is built around</h2>
+    <p>boost is a package manager. A chatbot that invents a plausible-sounding skill name is not a
+      cosmetic bug: the user goes looking for <code>docker-compose-expert</code>, does not find it,
+      and either concludes the catalogue is broken or installs something adjacent from a tap nobody
+      vetted. Typosquatting is a real hazard here — <code>core/typosquat.py</code> exists for it — so
+      an assistant that manufactures names is <em>actively dangerous</em>, not merely unhelpful.</p>
+    <p>So <code>chat</code> is built as a retrieval system that happens to speak, rather than a
+      model that happens to search.</p>
+
+    <h2>What happens to your question</h2>
+    <div class="flow">
+      <div class="step">
+        <span class="n">1</span>
+        <div>
+          <h3>Expand, if it is a follow-up</h3>
+          <p>“what about the second one?” carries almost no searchable terms, so a short question
+            inherits the subject of the previous one. Only the immediately preceding turn — two
+            questions back is usually a different subject, and blending them retrieves for neither.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="n">2</span>
+        <div>
+          <h3>Retrieve with whatever engine you have</h3>
+          <p>The same <code>retrieve_any</code> the CLI and MCP server use: hybrid BM25 + dense when
+            both are built, either one alone otherwise, and the frontmatter scan on a fresh install.
+            The answer reports which engine ran, so a weak result is attributable.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="n">3</span>
+        <div>
+          <h3>Ask the model to summarise <em>that set</em></h3>
+          <p>The model is never asked “what skill does X?”. It is handed a numbered list of
+            retrieved candidates and asked to answer from it. Nothing outside the list can be
+            recommended, because nothing outside it is in the prompt.</p>
+        </div>
+      </div>
+      <div class="step reject">
+        <span class="n">4</span>
+        <div>
+          <h3>Reject invented names</h3>
+          <p>Every skill-shaped token in the reply must name something in the retrieved set. One
+            that does not is unrecoverable — there is no honest way to show prose pointing at a
+            skill that does not exist — so the reply is discarded, not patched.</p>
+        </div>
+      </div>
+      <div class="step reject">
+        <span class="n">5</span>
+        <div>
+          <h3>Reject ungrounded prose</h3>
+          <p>A reply can name only real skills and still describe them wrongly. The prose is scored
+            against the candidate text with the same faithfulness gate <code>boost explain</code>
+            uses, and anything under the threshold is dropped.</p>
+        </div>
+      </div>
+      <div class="step">
+        <span class="n">6</span>
+        <div>
+          <h3>Cite, always</h3>
+          <p>Name, kind and tap for every skill the answer drew on. The next thing you do with an
+            answer is install code that will run inside your agent, so a claim has to be checkable
+            against a real catalogue entry.</p>
+        </div>
+      </div>
+    </div>
+
+    <h2>Without an API key</h2>
+    <p>Steps 3 to 5 are skipped and the answer is the retrieved matches themselves — names,
+      descriptions and taps, plus the command to install one. That is a real answer rather than an
+      apology, and it is what every keyless install gets. Setting
+      <code>BOOST_NO_AI=1</code> forces the same path deliberately.</p>
+    <p>The AI path improves the prose. It is never load-bearing for correctness: if the model is
+      unavailable, empty, wrong, or fabricating, you still get the grounded matches.</p>
+
+    <h2>When an answer is downgraded, it says so</h2>
+    <p>A silently downgraded answer looks identical to a confident one, so a rejected reply is
+      reported rather than swallowed. <code>--json</code> carries the same signal as
+      <code>grounded: false</code>, which is what a caller should branch on rather than parsing the
+      prose.</p>
+
+    <h2>Try it</h2>
+    <pre class="sample">boost chat                                  <b># interactive</b>
+boost chat "which skill writes commit messages?"
+boost chat --json "extract text from a pdf"  <b># machine-readable</b>
+boost chat -k 3 --no-sources "review my diff"</pre>
+    <p>See <a href="commands.html">the command reference</a> for every flag, and
+      <a href="demo.html">the browser demo</a> to try the retrieval half without installing
+      anything.</p>
+  </div>
+</section>
+</main>
+<script src="../style/boost.js" defer></script>
+</body>
+</html>

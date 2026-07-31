@@ -181,7 +181,7 @@ for both — edit items, run `build_roadmap.py`, never touch the HTML by hand.
 ## Architecture
 
 **CLI dispatch.** `boost_cli/cli.py` holds `COMMANDS`, the single
-source-of-truth list of `(name, group, module, summary)` for all 78 commands.
+source-of-truth list of `(name, group, module, summary)` for all 79 commands.
 Each command is implemented as `def cmd_<name_with_underscores>(argv) -> int`
 inside `boost_cli/commands/<module>.py`, and `_dispatch` imports that module
 lazily on invocation — so `boost --help` stays instant and command modules are
