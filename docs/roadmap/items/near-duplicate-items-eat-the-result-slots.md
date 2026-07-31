@@ -2,14 +2,14 @@
 id: near-duplicate-items-eat-the-result-slots
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: Search · Ranking
 complexity: M
 impact: High
 wow: 4
 note: 56.3% of entries share a name
 order: 71
-owner:
+owner: loop/entry-key-collision
 pr:
 title: Near-duplicate items consume the top-10, and it gets worse with every tap
 ---
@@ -61,3 +61,33 @@ the fix at deduplication before ranking rather than at the fusion rule.
 Worth re-measuring on the 83-tap install with the same script (<code>rrf_fuse</code> is public) to
 turn this bound into a curve.
 
+
+<b>The key half is shipped; the ranking half is not.</b> This card names two things to get right,
+and the second &mdash; <code>(tap, name)</code> is not a unique key &mdash; turned out to be a
+correctness bug rather than a ranking one, so it was fixed first and separately.
+
+Both engines built <code>live = {(name, tap): entry}</code> as a dict comprehension, so the last
+entry silently won. Reproduced on the pinned 6-tap corpus: 743 entries collapse to 694 pairs, leaving
+<b>49 entries (6.6%) unreachable</b> &mdash; the card's 14.0% at 83 taps, at small scale. It is not
+only that a copy is hidden: a query matching a shadowed entry's <em>body</em> was reported under the
+surviving entry's name, description and path. The clearest pair, same tap and same name, is two
+genuinely different rules:
+<code>docs/rules/backend/nodejs/express-mongodb/admin-interface-rule.mdc</code> and
+<code>docs/rules/backend/nodejs/fullstack-mern-guide/admin-interface-rule.mdc</code>.
+
+<code>rag.entry_key</code> is now the single identity function shared by BM25, dense and RRF, keyed
+on <code>(tap, skill_md)</code> &mdash; 743/743 distinct here and 11,147/11,147 on the 83-tap
+install, exactly as this card predicted. Both index versions are bumped, and <code>dense.build</code>
+now wipes on a version change: it compared only provider/model/dim, and since
+<code>_ensure_schema</code> uses <code>CREATE TABLE IF NOT EXISTS</code> an existing store would have
+crashed on the first insert with &ldquo;no column named path&rdquo;.
+
+Measured cost: <b>none</b>. Over the pinned corpus BM25 scores 1.000 / 0.780 / 0.860 / 0.895 both
+before and after, so recovering 49 entries did not disturb ranking. Several fixtures were modelling
+data a real catalog cannot produce &mdash; every entry sharing <code>skill_md="s"</code>, two skills
+at one path &mdash; and were corrected.
+
+<b>Still open:</b> the ranking half. Clustering on content hash, picking a winner with a quality
+prior, and the 83-tap re-measurement of the fusion bound are all untouched. Note the two are
+independent: dedup <em>merges</em> copies that are genuinely the same, whereas this fix stops copies
+that were never the same from being merged by accident.
