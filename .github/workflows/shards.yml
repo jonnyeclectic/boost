@@ -57,9 +57,16 @@ jobs:
         # already covers the golden targets, and is the corpus every other gate
         # measures against — so a shard exists for the registries a new user is
         # most likely to tap first.
+        # Inputs reach the shell through `env`, never through `${{ }}`
+        # interpolation: a workflow_dispatch input is attacker-controlled text,
+        # and interpolating it into `run:` splices it into the script itself.
+        # zizmor flags this as template-injection, correctly — the first draft
+        # of this file had exactly that hole.
+        env:
+          REGISTRIES_INPUT: ${{ inputs.registries }}
         run: |
-          if [ -n "${{ inputs.registries }}" ]; then
-            repos="${{ inputs.registries }}"
+          if [ -n "$REGISTRIES_INPUT" ]; then
+            repos="$REGISTRIES_INPUT"
           else
             repos=$(grep -v '^#' tests/eval/taps.txt | grep -v '^[[:space:]]*$' | tr '\n' ' ')
           fi
@@ -94,15 +101,17 @@ jobs:
       - name: tap and embed
         env:
           BOOST_HOME: ${{ runner.temp }}/boost-home
+          REGISTRY: ${{ matrix.registry }}      # via env, not interpolation
         run: |
-          .venv/bin/python -m boost_cli tap "${{ matrix.registry }}"
+          .venv/bin/python -m boost_cli tap "$REGISTRY"
           .venv/bin/python -m boost_cli reindex --dense
       - name: export the shard
         env:
           BOOST_HOME: ${{ runner.temp }}/boost-home
+          REGISTRY: ${{ matrix.registry }}
         run: |
-          safe=$(printf '%s' "${{ matrix.registry }}" | tr '/' '__')
-          .venv/bin/python -m boost_cli reindex --export-shard "${{ matrix.registry }}" > "$safe.shard.json"
+          safe=$(printf '%s' "$REGISTRY" | tr '/' '__')
+          .venv/bin/python -m boost_cli reindex --export-shard "$REGISTRY" > "$safe.shard.json"
           python3 - "$safe.shard.json" <<'PY'
           import json, sys
           # Fail here rather than publish an unusable artifact: a shard without
