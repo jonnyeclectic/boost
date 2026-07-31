@@ -33,7 +33,7 @@ from . import ai, catalog, frontmatter, gitutil, paths, registry, util
 # v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
 # chars) so `retrieve` can window it onto the query terms; bump forces a
 # one-time reindex.
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -162,25 +162,49 @@ def index_path() -> Path:
     return paths.cache_dir() / "rag_index.json"
 
 
+def surface(entry: dict) -> str:
+    """The item's own identifying text, indexed alongside its body.
+
+    A chunked index got name matching for free: the name sat in whichever chunk
+    happened to contain it. One document per entry has to state it, and the
+    de-hyphenated form matters because `tokenize` does not split on hyphens —
+    without it the query "code reviewer" cannot match the item `code-reviewer`.
+    """
+    name = entry.get("name", "")
+    return " ".join([name, name.replace("-", " ").replace("_", " "),
+                     entry.get("description") or ""])
+
+
 def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
-    """Chunk + tokenize every entry into scored documents (one per chunk)."""
+    """Tokenize every entry into ONE scored document.
+
+    Chunking cost far more than it bought. Each 1000-char window carried its own
+    copy of the shared per-doc fields and its own `snip`, which is how a 743-entry
+    corpus became 3,740 documents and how the roadmap item measured a real
+    83-tap install at 132 MB and 8-13 s of `json.loads` on *every cold search* —
+    against 31-70 ms of actual BM25 scoring.
+
+    The one thing chunking genuinely provided was locality: a term only had to
+    beat the length normalisation of its own window, not of an entire long
+    document. BM25's `b` parameter already handles that, and `retrieve` was
+    collapsing chunks back to one hit per entry anyway (max score across
+    chunks), so the extra documents were discarded at query time.
+    """
     docs: List[dict] = []
     for e in entries:
         body = read_body(e, tap_paths)
-        pieces = chunk(body) or [body]
-        for ci, piece in enumerate(pieces):
-            tf: Dict[str, int] = defaultdict(int)
-            for tok in tokenize(piece):
-                tf[tok] += 1
-            if not tf:
-                continue
-            docs.append({
-                "n": e["name"], "t": e["tap"], "f": e["skill_md"],
-                "k": e.get("kind", "skill"),
-                "c": ci, "l": sum(tf.values()),
-                "snip": piece[:SNIP_STORE].strip(),  # windowed at retrieve time
-                "tf": dict(tf),  # noqa: FURB123  tf is a defaultdict; .copy() would keep the factory
-            })
+        tf: Dict[str, int] = defaultdict(int)
+        for tok in tokenize(surface(e) + "\n" + body):
+            tf[tok] += 1
+        if not tf:
+            continue
+        docs.append({
+            "n": e["name"], "t": e["tap"], "f": e["skill_md"],
+            "k": e.get("kind", "skill"),
+            "c": 0, "l": sum(tf.values()),
+            "snip": body[:SNIP_STORE].strip(),  # windowed at retrieve time
+            "tf": dict(tf),  # noqa: FURB123  tf is a defaultdict; .copy() would keep the factory
+        })
     return docs
 
 
