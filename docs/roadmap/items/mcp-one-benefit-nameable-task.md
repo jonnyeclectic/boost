@@ -2,14 +2,14 @@
 id: mcp-one-benefit-nameable-task
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Interop · Adoption
 complexity: S
 impact: High
 wow: 3
 note: agent reflex
 order: 74
-owner: loop/mcp-nameable-task
+owner:
 pr: 355
 title: MCP — one benefit, one observable trigger (and stop routing through boost_info)
 ---
@@ -42,3 +42,11 @@ so the hop bought a round-trip and a decision point and nothing else. It stays r
 for looking up a name from elsewhere, and its description now says so. All of it is
 pinned by tests, including negative assertions so authoring and the info hop cannot
 creep back.
+
+<b>Shipped &mdash; the claim was stale, not the work.</b> PR <code>#355</code> merged and its branch
+is gone, yet this item still read as owned. Every element is verifiable in
+<code>mcp.INSTRUCTIONS</code> today: the stated cost (&ldquo;read-only, take about a second, and
+install nothing&rdquo;), the miss protocol (&ldquo;Finding nothing is a good outcome, not a wasted
+call&rdquo;), &ldquo;The task stays yours&rdquo;, and <code>boost_info</code> absent from the
+advertised flow &mdash; which <code>test_instructions_route_search_straight_to_install</code> pins
+with a negative assertion so the hop cannot creep back.
