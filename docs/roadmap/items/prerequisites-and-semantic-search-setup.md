@@ -10,7 +10,7 @@ wow: 3
 note: silent BM25-only is the default outcome
 order: 58
 owner: loop/semantic-search-setup
-pr: 361
+pr: 364
 title: Nothing tells a user semantic search is off — not the README, not <code>search</code>, not <code>/mcp</code>
 ---
 <b>Shipped.</b> Dense retrieval needs things to line up — the <code>[rag]</code>
