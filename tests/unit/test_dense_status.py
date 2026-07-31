@@ -18,7 +18,7 @@ import sqlite3
 
 import pytest
 
-from boost_cli.core import dense, logs, paths
+from boost_cli.core import dense, embed, logs, paths
 
 
 def _write_store(provider="voyage", model="voyage-4", dim=1024,
@@ -71,8 +71,17 @@ def keyed(monkeypatch):
 
 # ------------------------------------------------------- nothing configured
 
-def test_no_key_reports_no_key_and_is_not_an_error(sandbox):
-    """The default for almost every user: BM25 by choice, not by breakage."""
+def test_nothing_available_at_all_reports_no_key(sandbox, monkeypatch):
+    """No key AND no local backend — in practice a partial install or BOOST_NO_EMBED.
+
+    `local_available()` is forced off rather than left to the ambient
+    interpreter on purpose. This test used to assert "no-key" unconditionally,
+    which made its result depend on whether the [rag] extra happened to be
+    installed: green on CI (extra absent) and red on any machine that had run
+    `pip install 'boost-skill-cli[rag]'`. An assertion that flips with the
+    environment is not testing the code.
+    """
+    monkeypatch.setattr(embed, "local_available", lambda: False)
     st = dense.status()
     assert st["reason"] == "no-key"
     assert st["ready"] is False
@@ -80,6 +89,25 @@ def test_no_key_reports_no_key_and_is_not_an_error(sandbox):
     assert st["model"] is None
     # Opt-in means opt-in: never dress a deliberate default up as a problem.
     assert st["degraded"] is False
+
+
+def test_local_backend_alone_gets_past_no_key(sandbox, monkeypatch):
+    """The keyless path: the extra's bundled model counts as a provider.
+
+    This is the behaviour change that made the old assertion wrong. With a local
+    backend present and no key set, the missing link is the *store*, not a key —
+    so `boost doctor` must send the user to `reindex --dense` rather than to a
+    billing page.
+    """
+    monkeypatch.setattr(embed, "local_available", lambda: True)
+    st = dense.status()
+    assert st["reason"] == "no-store"
+    assert st["provider"] == "local"
+    assert st["model"] == embed.LOCAL_MODEL
+    assert st["ready"] is False
+    # Still not degraded: never having reindexed is an unfinished setup, not a fault.
+    assert st["degraded"] is False
+    assert "reindex --dense" in dense.fix_hint(st["reason"])
 
 
 def test_no_store_is_named_separately_from_no_key(sandbox, keyed):

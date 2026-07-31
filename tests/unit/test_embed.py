@@ -70,11 +70,36 @@ class TestProviderSelection:
         assert embed.model() == embed.OPENAI_MODEL
         assert embed.dimension() == 1536
 
-    def test_none_when_unconfigured(self, sandbox):
+    def test_none_when_nothing_is_available(self, sandbox, monkeypatch):
+        """Unconfigured now means no key AND no local backend.
+
+        Forcing `local_available` off matters: since the [rag] extra started
+        bundling a local model, "no key" alone no longer implies "no provider".
+        Left ambient this asserted the opposite of the truth on any machine with
+        the extra installed, and stayed green on CI only because CI does not
+        install it.
+        """
+        monkeypatch.setattr(embed, "local_available", lambda: False)
         assert embed.provider() is None
         assert embed.model() is None
         assert embed.dimension() is None
         assert embed.available() is False
+
+    def test_local_is_the_provider_when_only_the_extra_is_present(self, sandbox,
+                                                                  monkeypatch):
+        """The keyless tier: the bundled model is a real provider, not a stub."""
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        assert embed.provider() == "local"
+        assert embed.model() == embed.LOCAL_MODEL
+        assert embed.dimension() == embed.LOCAL_DIM
+        assert embed.available() is True
+
+    def test_a_key_still_outranks_the_local_backend(self, sandbox, monkeypatch):
+        """A fallback that preempted a paid key would silently downgrade every
+        existing keyed install to a smaller model."""
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        monkeypatch.setenv("VOYAGE_API_KEY", "v")
+        assert embed.provider() == "voyage"
 
     def test_kill_switch_disables_even_with_key(self, sandbox, monkeypatch):
         monkeypatch.setenv("VOYAGE_API_KEY", "v")

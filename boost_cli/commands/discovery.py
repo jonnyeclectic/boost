@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import urllib.parse
@@ -122,6 +123,7 @@ def cmd_search(argv):
     if not scored:
         out.info("no matches for %r" % query)
         out.info(out.role("try `boost discover %s` to search all of GitHub" % query, "muted"))
+        _hint_semantic_search(engine)
         return 0
     # The CLI's long-standing wording for the BM25 engine differs from the label
     # rag/eval use ("BM25 full-content"), and both are load-bearing: the latter
@@ -154,7 +156,42 @@ def cmd_search(argv):
                  + out.truncate(e["description"] or "", desc_w) + tag)
     out.info(out.role("%d match%s · ranked by %s"
                    % (len(scored), "" if len(scored) == 1 else "es", ranker), "muted"))
+    _hint_semantic_search(engine)
     return 0
+
+
+def _hint_semantic_search(engine: str) -> None:
+    """Say that a better engine exists, when BM25 answered alone.
+
+    `boost search` reported which engine *ran* and never that a better one was
+    available, so a user who installed the extra but never reindexed had no way
+    to learn the semantic search they think they enabled has never once run.
+    That is the silent half of the three-things-must-line-up problem, and
+    `boost doctor` was the only surface that said anything about it.
+
+    Deliberately quiet: one muted line, only when dense contributed nothing, and
+    naming the ONE next action rather than the whole setup. The remedy comes
+    from core.dense.fix_hint — the same table doctor reads — so the two surfaces
+    can never disagree about whether an API key is needed.
+    """
+    if engine != "BM25 full-content":
+        # Anything else either already used vectors ("dense vectors", "hybrid
+        # RRF") or is the frontmatter fallback, where the BM25 index failed to
+        # build — a louder problem that this hint would only paper over.
+        return
+    from ..core import dense
+    st = dense.status()
+    if st.get("ready"):
+        return
+    # Wrap to the pane like every other row here: at COLUMNS=60 the longest
+    # remedy is 82 characters and would be the one line in this output that
+    # blows the terminal width. `break_long_words=False` keeps the shell command
+    # runnable — a copy-pasteable `pip install ...` matters more than a hard
+    # clamp, and _FIX is tested to hold no token long enough to overflow.
+    msg = "semantic search is off — %s" % dense.fix_hint(st.get("reason", ""))
+    for line in textwrap.wrap(msg, max(out.term_width(), 20),
+                              break_long_words=False, break_on_hyphens=False):
+        out.info(out.role(line, "muted"))
 
 
 def cmd_reindex(argv):

@@ -134,6 +134,36 @@ def _recorded_meta() -> dict:
         con.close()
 
 
+# Why dense retrieval isn't serving, keyed by the `reason` status() returns.
+# Each names the ONE next action; the reason order in status() guarantees only
+# the first missing link is ever reported, so these never chain.
+#
+# Lives here rather than in a command module because two surfaces need the same
+# answer — `boost doctor` and `boost search` — and two copies would drift, which
+# is how a surface ends up telling a user to set an API key that the [rag]
+# extra's local model already made unnecessary.
+_FIX = {
+    "no-backend": "install the extra: `pip install 'boost-skill-cli[rag]'`",
+    # Names the keyless remedy first: since the [rag] extra carries a local
+    # embedding model, an API key is the quality ceiling, not the entry fee.
+    # This reason means "no key AND no local backend", which in practice is a
+    # partial install or BOOST_NO_EMBED.
+    "no-key": ("reinstall the extra: `pip install 'boost-skill-cli[rag]'` "
+               "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"),
+    "no-store": "build it: `boost reindex --dense`",
+    "version-changed": "rebuild it: `boost reindex --dense --force`",
+    "provider-changed": "rebuild it: `boost reindex --dense --force`",
+    "model-changed": "rebuild it: `boost reindex --dense --force`",
+    "dim-changed": "rebuild it: `boost reindex --dense --force`",
+    "empty": "rebuild it: `boost reindex --dense --force`",
+}
+
+
+def fix_hint(reason: str) -> str:
+    """The single next action for a `status()` reason, or a safe default."""
+    return _FIX.get(reason, "see `boost reindex --dense`")
+
+
 def status() -> dict:
     """Why dense retrieval is, or is not, serving queries.
 

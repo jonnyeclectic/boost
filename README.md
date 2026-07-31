@@ -68,16 +68,36 @@ pipx upgrade boost-skill-cli        # or: pip install --upgrade boost-skill-cli
 The default install is **zero-dependency** (pure stdlib). `boost search` and the
 `boost_search` MCP tool rank results with a built-in full-content BM25 engine —
 the index builds automatically on your first search, so BM25 is the default with
-no setup (`boost reindex` just forces a rebuild). For optional **dense semantic
-search**, install the `[rag]` extra and set an embeddings key — retrieval then
-embeds every skill and ranks by vector similarity, falling back to BM25 whenever
-the extra or key is absent:
+no setup (`boost reindex` just forces a rebuild).
+
+### Configuring semantic search
+
+BM25 matches words. It is very good when your query shares vocabulary with the
+docs and poor when it doesn't — ask it *"my app is slow"* and it has nothing to
+match on. Semantic search ranks by meaning instead, and boost fuses the two so
+each covers the other's blind spot.
+
+**No API key is required.** Two steps:
 
 ```bash
-pip install "boost-skill-cli[rag]"            # adds the sqlite-vec vector store
-export VOYAGE_API_KEY=...                      # or OPENAI_API_KEY
-boost reindex --dense                          # embed chunks into the vector store
+pip install "boost-skill-cli[rag]"   # vector store + local embedding model
+boost reindex --dense                # embed your tapped registries
 ```
+
+The first search after that downloads a small embedding model once (~133 MB,
+sha256-pinned, cached under `~/.boost/cache/models`) and runs it on CPU. Nothing
+is sent anywhere.
+
+| | required | what you get |
+|---|---|---|
+| BM25 | nothing — it is the default | keyword matching, always on |
+| `[rag]` extra + `reindex --dense` | no account, no key | meaning-based search, fused with BM25 |
+| `VOYAGE_API_KEY` or `OPENAI_API_KEY` | an account | a larger embedding model; same behaviour otherwise |
+
+A key is a **quality upgrade, not an entry fee** — set one and boost prefers it
+automatically, re-embedding on the next `reindex --dense`. Every layer degrades
+rather than failing: no extra, no key, or no built store each fall back to BM25,
+and `boost doctor` reports which engine is actually serving and why.
 
 Want the whole ecosystem instead of the starter set? boost ships a **curated
 registry catalog** — 460+ classified GitHub registries of skills, Cursor/Windsurf

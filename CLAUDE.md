@@ -228,9 +228,16 @@ each agent's skills dir, and updating the lock file.
 **Search has two engines**, both in `core/`: `rag.py` is the always-on,
 zero-dependency BM25 engine (full-content index, auto-builds on first
 search — this is what the required `eval` gate floors at recall@k ≥ 0.85).
-`dense.py` is optional dense/vector retrieval behind the `[rag]` extra plus
-an embeddings key (`VOYAGE_API_KEY`/`OPENAI_API_KEY`); it's used when both
-are present and falls back to BM25 otherwise. `core/ai.py` wraps the
+`dense.py` is optional dense/vector retrieval behind the `[rag]` extra —
+**no API key required**: `embed.py` tries Voyage, then OpenAI, then a local
+`BAAI/bge-small-en-v1.5` that ships with the extra, so a key is a quality
+upgrade rather than the entry fee. When both engines are built, `retrieve_any`
+fuses them with reciprocal rank fusion (`rag.rrf_fuse`, `RRF_K = 60`) and
+reports `hybrid RRF`; it degrades to whichever single engine is ready, and to
+BM25 alone otherwise. `dense.status()` names which of the three links (extra,
+backend, built store) is missing, and `dense.fix_hint()` maps that to the one
+next action — both `boost doctor` and `boost search` read that same table, so
+they can't give contradictory advice. `core/ai.py` wraps the
 opt-in LLM-assisted paths (`search --smart`, `explain`, `distill`, `infer`,
 `absorb`, `evolve`, `simulate`, …), shelling out to the `claude` CLI or
 `ANTHROPIC_API_KEY` when available and degrading to heuristics when not.
