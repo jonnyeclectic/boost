@@ -83,10 +83,15 @@ class TestProviderSelection:
         assert embed.provider() is None
         assert embed.available() is False
 
-    def test_fallback_note_mentions_extra_and_keys(self):
+    def test_fallback_note_names_the_extra_and_not_a_key(self):
+        # This assertion used to require the note name VOYAGE_API_KEY and
+        # OPENAI_API_KEY. That encoded the old contract — dense search needs an
+        # account — which a local provider makes false. Telling a user to go get
+        # an API key when the extra alone would do is wrong advice, so the note
+        # names the extra and the test pins the new contract.
         note = embed.fallback_note()
         assert "rag" in note
-        assert "VOYAGE_API_KEY" in note and "OPENAI_API_KEY" in note
+        assert "VOYAGE_API_KEY" not in note and "OPENAI_API_KEY" not in note
 
 
 class TestEmbed:

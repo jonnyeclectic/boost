@@ -149,3 +149,24 @@ class TestDiagnose:
         # colon with no explanation — worse than the message it replaced.
         for committed, fresh in (("", ""), ("x", "y"), (CARD % "a", CARD % "a")):
             assert self._lines(committed, fresh)
+
+
+def test_every_item_file_is_named_for_its_id():
+    """The filename must equal the `id`, because the filename is the protocol.
+
+    CLAUDE.md coordinates parallel loops through these files: two loops claiming
+    different items edit different files and merge cleanly, two claiming the
+    same item conflict on purpose. That only works if the path is derivable from
+    the id — otherwise a second loop cannot tell whether an item is already
+    claimed without opening all 200-odd files.
+
+    207 of 208 already followed the convention when this was added; the one that
+    did not was a temp filename that reached main because nothing checked.
+    """
+    import re
+    bad = []
+    for path in sorted(_ITEMS.glob("*.md")):
+        m = re.search(r"^id: *(\S+)", path.read_text(encoding="utf-8"), re.M)
+        if m and m.group(1) != path.stem:
+            bad.append("%s declares id %r" % (path.name, m.group(1)))
+    assert not bad, "item filenames must match their id: %s" % "; ".join(bad)

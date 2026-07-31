@@ -75,6 +75,36 @@ in one function and independently shippable; 5 and 6 are separable. Expect this 
 into per-step items as each is picked up &mdash; the value of keeping it whole here is that the
 steps only make sense against each other.
 
+<b>Step 1 is shipped</b>, with two corrections to the plan above that surfaced only by measuring.
+
+<b><code>fastembed</code> cannot be used here.</b> Its PyPI classifier declares <code>License ::
+Other/Proprietary License</code> even though the project is Apache-2.0, and
+<code>scripts/check_licenses.py</code> denies that with no override &mdash;
+<code>UNDECLARED_OK</code> exists for a package declaring <i>nothing</i> (the <code>ragas</code>
+precedent), not for one declaring the wrong thing. Its tree also drags in
+<code>py-rust-stemmers</code>, which declares no licence at all, plus Pillow,
+<code>requests</code> and <code>loguru</code>, none of which boost has a use for. Measured with the
+repo's own gate: the fastembed closure is <b>32 packages with 2 findings</b>, ONNX Runtime plus a
+tokenizer is <b>20 packages with 0</b>. The lean pair shipped, at the cost of ~150 lines of
+download/pool/normalise in <code>core/localembed.py</code>.
+
+<b>The model is 133 MB, not ~30 MB.</b> That figure describes the <i>quantized</i> rebuild third
+parties publish; BAAI's own ONNX export is 133,093,490 bytes. boost fetches the authoritative one
+and sha256-verifies it against a pinned repository revision &mdash; a project with signed taps and
+hash-pinned locks has no business taking model weights from a re-uploader to save a one-time
+download. Quantization is a genuine follow-up, but it changes the vectors, so it needs its own eval
+rather than a swap.
+
+Two details worth recording for whoever takes step 4. BGE is <b>CLS-pooled</b>, not mean-pooled:
+mean pooling would still emit 384 plausible-looking floats and quietly worse retrieval, which is
+the kind of error an eval catches and a unit test does not. And the chain puts local <b>last</b>,
+so a user with a Voyage key keeps voyage-4 instead of being silently downgraded.
+
+Verified end to end against the real weights: 384 dimensions as declared, L2 norm 1.000000, and
+<code>sim("making my application faster", "application performance tuning") = <b>0.7691</b></code>
+against <code>sim(&hellip;, "quantum computing circuit simulation") = <b>0.5338</b></code> &mdash;
+the exact failure this card opened with, now ordered correctly.
+
 Constraints this must respect: the shipped runtime is stdlib-only and
 <code>[project].dependencies</code> is empty, so a local model belongs behind an extra like
 <code>[rag]</code>, with the keyless path degrading to BM25 exactly as it does now. The required
