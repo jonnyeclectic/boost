@@ -46,13 +46,37 @@ updates:
     open-pull-requests-limit: 0
     schedule:
       interval: weekly
-  # pyproject.toml's optional extras. Dependabot only scans manifests under the
-  # declared `directory`, so the /requirements entry above never sees the repo
-  # root — [rag], [bdd] and [perf] got no proactive bump PRs at all, only
-  # reactive pip-audit CVE flags. Contributor-facing only: [project].dependencies
-  # is empty, so none of this reaches anyone who `pip install boost-skill-cli`.
+  # pyproject.toml's optional extras — [rag], [bdd] and [perf], which had no
+  # proactive coverage at all before this entry, only reactive pip-audit CVE
+  # flags. Contributor-facing only: [project].dependencies is empty, so none of
+  # this reaches anyone who `pip install boost-skill-cli`.
+  #
+  # `open-pull-requests-limit: 0` for the same reason as /requirements above,
+  # and the observed behaviour is why it is not redundant with it. Two things
+  # were learned from the first scheduled run after this entry landed:
+  #
+  #   1. It cannot deliver what it was added for. Every constraint under
+  #      [project.optional-dependencies] is either an open lower bound
+  #      (sqlite-vec>=0.1.6) or in this entry's own ignore list below, and
+  #      Dependabot does not raise a *version* PR when the declared range
+  #      already admits the newest release. The set of pyproject version
+  #      updates it can ever produce is EMPTY — none of the eight PRs that run
+  #      produced touched pyproject.toml.
+  #   2. It does not respect the directory boundary the way the comment here
+  #      used to claim. Four of those eight were byte-identical duplicates of
+  #      the /requirements entry's PRs (#300/#303 hypothesis, #301/#302 twine),
+  #      so this entry regenerates the hash-pinned locks too — the exact thing
+  #      that cannot be done correctly on one platform, and that
+  #      scripts/lock_toolchain.py exists to do properly.
+  #
+  # So the version-update side of this entry produces nothing wanted and one
+  # thing actively harmful. Security updates ignore the limit and keep firing,
+  # which is the coverage the extras actually gained here; `lock_toolchain.py
+  # --audit` (run by `make lint` before it resolves anything) is what catches a
+  # security PR that arrives having dropped a marker-gated pin.
   - package-ecosystem: pip
     directory: /
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     ignore:

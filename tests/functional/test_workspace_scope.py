@@ -265,3 +265,66 @@ def test_doctor_reports_intact_project_skills(boost, tapped, repo):
     boost("install", "brainstorming", "--local")
     res = boost("doctor")
     assert "project skill" in res.out and "intact" in res.out
+
+
+# ── declared MCP servers stay in the repo ────────────────────────────────
+
+def _declare_mcp(tapped, skill: str, server: str = "gh"):
+    """Give a skill in the tap clone an .mcp.json sidecar declaring a server."""
+    from boost_cli.core import catalog, mcpdecl
+    matches = catalog.find(skill)
+    assert matches, skill
+    src = store.source_dir_for(matches[0])
+    (src / mcpdecl.SIDECAR).write_text(json.dumps(
+        {mcpdecl.SERVERS_KEY: {server: {"command": "npx", "args": ["-y", server]}}}),
+        encoding="utf-8")
+
+
+def test_a_local_install_records_mcp_servers_in_the_repo(boost, tapped, repo):
+    """THE BUG: --local promised repo-scoped and registered machine-wide.
+
+    A project install must leave its declared servers in the repo's own
+    .mcp.json — committable, reviewable, and arriving with a teammate's clone —
+    rather than in this machine's user-scope host config.
+    """
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming")
+    boost("install", "brainstorming", "--local")
+    sidecar = repo / mcpdecl.SIDECAR
+    assert sidecar.is_file(), "no .mcp.json written into the repo"
+    servers = json.loads(sidecar.read_text())[mcpdecl.SERVERS_KEY]
+    assert "gh" in servers
+    assert servers["gh"][mcpdecl.MARKER_KEY] == "brainstorming", \
+        "the entry must name the skill that asked for it, so uninstall can reverse it"
+
+
+def test_uninstalling_locally_removes_the_servers_it_added(boost, tapped, repo):
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming")
+    boost("install", "brainstorming", "--local")
+    boost("uninstall", "brainstorming", "--local")
+    servers = json.loads((repo / mcpdecl.SIDECAR).read_text())[mcpdecl.SERVERS_KEY]
+    assert "gh" not in servers, \
+        "a skill removed from the repo must stop launching its server"
+
+
+def test_uninstall_leaves_a_hand_written_server_alone(boost, tapped, repo):
+    from boost_cli.core import mcpdecl
+    (repo / mcpdecl.SIDECAR).write_text(json.dumps(
+        {mcpdecl.SERVERS_KEY: {"mine": {"command": "my-own-thing"}}}),
+        encoding="utf-8")
+    _declare_mcp(tapped, "brainstorming")
+    boost("install", "brainstorming", "--local")
+    boost("uninstall", "brainstorming", "--local")
+    servers = json.loads((repo / mcpdecl.SIDECAR).read_text())[mcpdecl.SERVERS_KEY]
+    assert servers["mine"] == {"command": "my-own-thing"}, \
+        "boost must only reverse what boost wrote"
+
+
+def test_a_user_install_writes_no_sidecar_into_the_repo(boost, tapped, repo):
+    # The complement: user scope must not start scattering .mcp.json files into
+    # whatever directory the install happened to run from.
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming")
+    boost("install", "brainstorming")
+    assert not (repo / mcpdecl.SIDECAR).exists()

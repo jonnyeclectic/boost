@@ -123,7 +123,33 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     rows = res.mcp_servers
     if not rows or no_mcp or os.environ.get("BOOST_NO_MCP_OFFER"):
         return
-    from ..core import mcpdecl
+    from ..core import mcpdecl, scopes
+    # A project-scoped install already recorded these in the repo's .mcp.json
+    # (store.register_project_mcp), which is the committable, reviewable
+    # registration `--scope project` promises. Offering a `<host> mcp add` on
+    # top would register the same servers a second time, machine-wide — which
+    # is the bug this path had: the offer never looked at res.scope at all.
+    if res.scope == scopes.SCOPE_PROJECT:
+        # Report what was RECORDED, not what was declared. The two differ when
+        # the sidecar could not be written — a read-only checkout, a root-owned
+        # .mcp.json — and claiming success there would be the worse failure,
+        # because the skill really is installed and the servers really are not.
+        wanted = [r["name"] for r in mcpdecl.registrable(rows)]
+        if not wanted:
+            return
+        out.info("")
+        if res.mcp_recorded:
+            out.ok("recorded %s in %s"
+                   % (_plural(len(res.mcp_recorded), "MCP server"),
+                      mcpdecl.SIDECAR))
+            out.dim("  %s — commit it to share with the team"
+                    % ", ".join(res.mcp_recorded))
+        else:
+            out.warn("could not write %s — %s not registered"
+                     % (mcpdecl.SIDECAR, ", ".join(wanted)))
+            out.dim("  the skill is installed; fix the file's permissions and "
+                    "reinstall to record them")
+        return
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
     for row in rows:
@@ -142,22 +168,32 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     targets = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
         or mcphost.hosts()
     where = " · ".join(mcphost.label(h) for h in targets)
-    if not out.confirm("register %s with %s now?"
+    # Name the scope. The prompt used to say only "register N servers with
+    # Claude Code now?", which is the one detail the answer turns on — this
+    # writes a registration every project on this machine will then launch.
+    if not out.confirm("register %s with %s, for every project on this machine?"
                        % (_plural(len(wirable), "server"), where), default=False):
         out.dim("  skipped — `%s mcp add …` when you're ready"
                 % mcphost.cli(targets[0]))
         return
     for row in wirable:
         for host in targets:
-            _register_mcp_server(row["name"], row["spec"], host=host)
+            _register_mcp_server(row["name"], row["spec"], host=host,
+                                 scope=res.scope)
 
 
-def _register_mcp_server(name: str, spec: dict, host: str = "claude") -> None:
-    """Run one `<host> mcp add` for a skill-declared server. Never raises."""
+def _register_mcp_server(name: str, spec: dict, host: str = "claude",
+                         scope: str = "user") -> None:
+    """Run one `<host> mcp add` for a skill-declared server. Never raises.
+
+    ``scope`` is threaded from the install rather than defaulted, because
+    ``register_argv``'s own default is ``"user"`` and silently taking it is how
+    a ``--scope project`` install ended up registering machine-wide.
+    """
     import subprocess
 
     from ..core import mcpdecl, mcphost
-    argv = mcpdecl.register_argv(name, spec, host=host)
+    argv = mcpdecl.register_argv(name, spec, host=host, scope=scope)
     if not shutil.which(mcphost.cli(host)):
         out.warn("`%s` CLI not found — run this yourself:" % mcphost.cli(host))
         out.info("  " + " ".join(argv))
