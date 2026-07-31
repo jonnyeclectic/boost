@@ -24,6 +24,8 @@ from __future__ import annotations
 import json
 import sqlite3
 
+import pytest
+
 from boost_cli.core import dense, paths
 
 
@@ -57,7 +59,7 @@ def _store(provider="local", model="bge", dim=3, rows=(("a", "acme/skills"),),
 
 
 class TestExport:
-    def test_a_shard_carries_only_the_named_tap(self, sandbox):
+    def test_a_shard_carries_only_the_named_tap(self, sandbox, with_backend):
         _store(rows=(("a", "acme/skills"), ("b", "other/repo")))
         shard = dense.export_shard("acme/skills")
         assert {r["tap"] for r in shard["chunks"]} == {"acme/skills"}
@@ -84,6 +86,21 @@ class TestExport:
         assert dense.export_shard("nobody/nothing")["chunks"] == []
 
 
+@pytest.fixture()
+def with_backend(monkeypatch):
+    """Pretend the vec0 extension is loadable.
+
+    Import writes vectors, so it needs the extension for real — but these tests
+    are about the *validation* that happens before any write, and CI has no
+    extension. Without this they fail with "no vector backend available"
+    instead of exercising the check they are named for, which is how they
+    passed locally and reddened three macOS legs plus the canary.
+    """
+    monkeypatch.setattr(dense, "_load", lambda: object())
+    monkeypatch.setattr(dense, "_connect",
+                        lambda: sqlite3.connect(str(dense.db_path())))
+
+
 class TestImportRefusesMismatchedVectors:
     """The failure that must never happen quietly."""
 
@@ -94,14 +111,14 @@ class TestImportRefusesMismatchedVectors:
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is False and "provider" in reason
 
-    def test_a_different_model_is_refused(self, sandbox):
+    def test_a_different_model_is_refused(self, sandbox, with_backend):
         _store(provider="local", model="bge", dim=3)
         shard = {"tap": "x/y", "provider": "local", "model": "other-model",
                  "dim": 3, "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is False and "model" in reason
 
-    def test_a_different_dimension_is_refused(self, sandbox):
+    def test_a_different_dimension_is_refused(self, sandbox, with_backend):
         # Would corrupt the vec0 table outright, not merely rank badly.
         _store(dim=3)
         shard = {"tap": "x/y", "provider": "local", "model": "bge",
@@ -109,7 +126,7 @@ class TestImportRefusesMismatchedVectors:
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is False and "dim" in reason
 
-    def test_a_stale_commit_is_refused(self, sandbox):
+    def test_a_stale_commit_is_refused(self, sandbox, with_backend):
         # Accepting it would mark the tap "reused" and it would never re-embed.
         _store()
         shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
@@ -117,7 +134,7 @@ class TestImportRefusesMismatchedVectors:
         ok, reason = dense.import_shard(shard, commit="new")
         assert ok is False and "commit" in reason
 
-    def test_a_matching_shard_is_accepted(self, sandbox):
+    def test_a_matching_shard_is_accepted(self, sandbox, with_backend):
         _store()
         shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
                  "commit": "c1", "chunks": []}
@@ -129,12 +146,18 @@ class TestImportIntoAnEmptyStore:
     """The case that matters most: a user who has never embedded anything."""
 
     def test_it_adopts_the_shard_backend_when_there_is_no_store(self, sandbox):
+        # Not stubbed: with no store at all, import has to CREATE the vec0
+        # virtual table, which only the real extension can do. Skipping where
+        # it is absent is honest — faking it here would assert nothing about
+        # the path that actually runs.
+        if not dense.have_backend():
+            pytest.skip("sqlite-vec extension not loadable here")
         shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
                  "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is True, reason
 
-    def test_imported_rows_are_queryable_and_credited_to_their_tap(self, sandbox):
+    def test_imported_rows_are_queryable_and_credited_to_their_tap(self, sandbox, with_backend):
         _store(rows=(("a", "acme/skills"),))
         shard = dense.export_shard("acme/skills")
         shard["tap"] = "mirror/repo"
@@ -150,7 +173,7 @@ class TestImportIntoAnEmptyStore:
             con.close()
         assert n == 1
 
-    def test_reimporting_replaces_rather_than_duplicates(self, sandbox):
+    def test_reimporting_replaces_rather_than_duplicates(self, sandbox, with_backend):
         _store(rows=(("a", "acme/skills"),))
         shard = dense.export_shard("acme/skills")
         dense.import_shard(shard, commit="c1")
@@ -165,7 +188,7 @@ class TestImportIntoAnEmptyStore:
 
 
 class TestRoundTrip:
-    def test_export_then_import_preserves_the_vector_bytes(self, sandbox):
+    def test_export_then_import_preserves_the_vector_bytes(self, sandbox, with_backend):
         _store(dim=3)
         shard = dense.export_shard("acme/skills")
         before = shard["chunks"][0]["embedding"]
@@ -173,7 +196,7 @@ class TestRoundTrip:
         after = dense.export_shard("acme/skills")["chunks"][0]["embedding"]
         assert after == before
 
-    def test_a_shard_is_json_serialisable(self, sandbox):
+    def test_a_shard_is_json_serialisable(self, sandbox, with_backend):
         # It has to survive being published as a release artifact.
         _store()
         json.dumps(dense.export_shard("acme/skills"))
