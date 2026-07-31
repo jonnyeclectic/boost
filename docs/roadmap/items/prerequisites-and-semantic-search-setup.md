@@ -2,14 +2,14 @@
 id: prerequisites-and-semantic-search-setup
 board: code
 section: docsite
-status: planned
+status: inflight
 category: Docs · Setup
 complexity: M
 impact: High
 wow: 3
 note: silent BM25-only is the default outcome
 order: 58
-owner:
+owner: loop/semantic-search-setup
 pr:
 title: Nothing tells a user semantic search is off — not the README, not <code>search</code>, not <code>/mcp</code>
 ---
