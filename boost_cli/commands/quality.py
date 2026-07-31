@@ -365,9 +365,25 @@ def cmd_doctor(argv):
     if not rotation:
         bad("journal is overdue for rotation — run `boost heal`")
 
+    # Which search engine will actually answer a query. Dense retrieval needs
+    # three things to line up and every one of them fails silently, so doctor
+    # is where the answer belongs — `search` only ever reports the engine that
+    # already ran, never that a configured one never got the chance.
+    _report_search_engine(bad)
+
     lp = logs.log_path()
     if lp.exists():
-        out.ok("diagnostic log at %s" % _tilde(lp))
+        # Existence is not health: a log the process cannot open makes every
+        # invocation print a PermissionError traceback from the logging module
+        # while this check happily reported a ✓ for the same file. Diagnostics
+        # are the first thing consulted when something else breaks, so a log
+        # that silently accepts nothing has to read as a fault.
+        if os.access(str(lp), os.W_OK):
+            out.ok("diagnostic log at %s" % _tilde(lp))
+        else:
+            bad("diagnostic log %s is not writable — every invocation is "
+                "failing to record; fix its permissions (chmod u+w)"
+                % _tilde(lp))
     crashes = sorted(paths.logs_dir().glob("crash-*.log")) \
         if paths.logs_dir().is_dir() else []
     if crashes:
@@ -389,6 +405,59 @@ def cmd_doctor(argv):
                 "%d issue%s need attention — see the suggestions above"
                 % (issues, _s(issues)))
     return 1 if issues else 0
+
+
+# Why dense retrieval isn't serving, keyed by `dense.status()["reason"]`. Each
+# names the ONE next action; the reason order in `status()` guarantees only the
+# first missing link is ever reported, so these never chain.
+_DENSE_FIX = {
+    "no-backend": "install the extra: `pip install 'boost-skill-cli[rag]'`",
+    "no-key": "set VOYAGE_API_KEY or OPENAI_API_KEY",
+    "no-store": "build it: `boost reindex --dense`",
+    "version-changed": "rebuild it: `boost reindex --dense --force`",
+    "provider-changed": "rebuild it: `boost reindex --dense --force`",
+    "model-changed": "rebuild it: `boost reindex --dense --force`",
+    "dim-changed": "rebuild it: `boost reindex --dense --force`",
+    "empty": "rebuild it: `boost reindex --dense --force`",
+}
+
+
+def _report_search_engine(bad) -> None:
+    """Report the engine `boost search` will use, and why it isn't the best one.
+
+    Only a *degraded* dense tier counts against doctor's exit code: BM25 is the
+    documented default and most users never opt in, so an unconfigured tier is
+    healthy. Vectors already on disk that have stopped serving are not.
+    """
+    # Local import: the dense/embedding engines are opt-in and stay out of
+    # startup for every other command (scripts/import_budget.py enforces it).
+    from ..core import dense
+    st = dense.status()
+
+    if st["ready"]:
+        out.ok("semantic search active — %s %s (%d-d), %d chunk%s across %d tap%s"
+               % (st["provider"], st["model"], st["dim"] or 0,
+                  st["chunks"], _s(st["chunks"]), st["taps"], _s(st["taps"])))
+        return
+
+    fix = _DENSE_FIX.get(str(st["reason"]), "see `boost reindex --dense`")
+    if st["degraded"]:
+        # The store was built and is now dead weight: say what it holds, what
+        # changed, and that search has silently been on BM25 the whole time.
+        built = st["built_model"] or st["built_provider"] or "an older build"
+        detail = "built with %s" % built
+        if st["reason"] == "model-changed":
+            detail += ", live key is %s" % st["model"]
+        elif st["reason"] == "provider-changed":
+            detail += ", live key is %s" % st["provider"]
+        elif st["reason"] == "empty":
+            detail += " but holds no vectors"
+        bad("semantic search silently off — %d-chunk vector store %s; "
+            "searches are using BM25. %s" % (st["chunks"], detail, fix))
+        return
+
+    out.info("semantic search not configured — using the full-content BM25 "
+             "engine (%s)" % fix)
 
 
 def _print_skipped(skipped: List[dict]) -> None:
