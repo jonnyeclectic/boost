@@ -3440,7 +3440,39 @@ at one path &mdash; and were corrected.
 <b>Still open:</b> the ranking half. Clustering on content hash, picking a winner with a quality
 prior, and the 83-tap re-measurement of the fusion bound are all untouched. Note the two are
 independent: dedup <em>merges</em> copies that are genuinely the same, whereas this fix stops copies
-that were never the same from being merged by accident.</p>
+that were never the same from being merged by accident.
+
+<b>The curve this card asked for.</b> The note above measured 0 duplicate slots over the pinned
+6-tap corpus and said, correctly, that absence at 6 taps says nothing about 83. Re-measured over 77
+tapped registries sampled across the shipped list, with the same 50 natural-language queries,
+counting how many of the ten slots a user sees are second-or-later copies of a name already in that
+same result list:
+
+<code>6 taps</code>: 1,122 entries, 0.0% sharing a name, <b>0.00</b> duplicate slots/query &middot;
+<code>12</code>: 14,194 entries, 77.8%, <b>4.28</b> &middot;
+<code>25</code>: 16,633, 77.9%, 4.12 &middot;
+<code>40</code>: 17,470, 74.7%, 3.88 &middot;
+<code>60</code>: 29,137, 83.9%, 5.08 &middot;
+<code>77</code>: 29,938 entries, 82.7% sharing a name, <b>4.94</b> duplicate slots/query</code>.
+
+So at realistic corpus size <b>roughly half the ten slots a user sees are repeat copies of a name
+already in the list</b>, worst observed 9 of 10 (&ldquo;our full-text queries have got slow as the
+index grew&rdquo;). The card's thesis holds, and more sharply than its own 56.3% figure suggested.
+
+<b>But the driver is not tap count.</b> Entries jump 1,122 &rarr; 14,194 between 6 and 12 taps, so
+the sample is not uniform: a single awesome-list-style rule registry contributes more entries than
+the entire 6-tap eval corpus. Duplicate pressure is a step function of <em>which</em> registries are
+tapped, not a smooth function of how many &mdash; it appears the moment one duplicate-heavy registry
+is added and then stays flat at ~4-5 slots per query from 12 taps to 77. Any dedup benefit should be
+reported against a stated tap set for that reason, and a user who taps only curated skill registries
+may never see the problem at all.
+
+<b>What this does not settle.</b> The measurement counts repeated <em>names</em>, which is the
+symptom the card names, not content-identical bodies &mdash; two rules that share a name and
+genuinely differ (the <code>admin-interface-rule</code> pair fixed in <code>#366</code>) are counted
+here as duplicate slots but must <em>not</em> be merged. That is precisely why the card asks for
+clustering on content hash rather than on name, and this curve is an upper bound on what dedup could
+reclaim, not a target.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
