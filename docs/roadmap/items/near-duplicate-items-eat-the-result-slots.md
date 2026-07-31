@@ -9,7 +9,7 @@ impact: High
 wow: 4
 note: 56.3% of entries share a name
 order: 71
-owner: loop/entry-key-collision
+owner: loop/content-hash-dedup
 pr:
 title: Near-duplicate items consume the top-10, and it gets worse with every tap
 ---
@@ -123,3 +123,39 @@ genuinely differ (the <code>admin-interface-rule</code> pair fixed in <code>#366
 here as duplicate slots but must <em>not</em> be merged. That is precisely why the card asks for
 clustering on content hash rather than on name, and this curve is an upper bound on what dedup could
 reclaim, not a target.
+
+<b>Shipped: content-hash dedup, measured 4.94 &rarr; 0.60 duplicate slots per query</b> over the
+77-tap corpus (worst case 9 of 10 &rarr; 4). The residual 0.60 is correct rather than leftover: those
+are entries sharing a <em>name</em> whose bodies genuinely differ, which must stay separate.
+
+Two measurements settled the design the card left open (&ldquo;content hash <em>or</em> canonical
+name&rdquo;). Of 29,938 entries, <b>78.3% are byte-identical duplicates</b> &mdash; 14,153 distinct
+bodies, largest cluster <b>40 copies</b> &mdash; while 82.7% share a name. That ~4.4% gap is real
+distinct content, so name clustering would merge exactly the pairs <code>#366</code> proved must not
+be merged. And clustering on content cannot make the opposite mistake here: the number of content
+clusters spanning more than one name is <b>0</b>, so collapsing by body never merges two
+differently-named items. Content hashing is strictly the safer of the two options the card offered,
+which was not obvious before measuring.
+
+The quality prior is <code>curated</code>: inside a cluster every copy is byte-identical, so the one
+worth surfacing is the one from a tap the user marked trusted. The cluster keeps its best score when
+that swap happens, so promoting the trusted copy never demotes the result.
+
+Mechanically, the body hash is computed in <code>_make_docs</code> where the body is already read
+&mdash; doing it at query time would mean re-reading ~30k files to answer one search &mdash; and
+persisted per document (<code>INDEX_VERSION</code> 4 &rarr; 5). Dense hits carry no hash of their own
+and do not need a second schema: <code>content_hashes()</code> serves one map to every engine from
+the BM25 index, so the engines can never disagree about which copies are identical. Dedup runs inside
+<code>retrieve</code> <em>and</em> at the <code>retrieve_any</code> seam, because fusion can
+reintroduce a copy BM25 already dropped &mdash; the copies are distinct <code>(tap, path)</code>
+keys, so RRF has no reason to treat them as one. Collapsing happens before <code>k</code> is applied,
+or the duplicates would still consume the slots they were removed from.
+
+Cost on the pinned eval corpus: <b>none</b> &mdash; 0.978 / 0.791 / 0.854 / 0.882, identical to
+before, all four floors passing. That corpus has little content duplication, which is exactly why the
+83-tap measurement had to exist.
+
+<b>Still open:</b> a richer quality prior than <code>curated</code> (the card names stars, recency,
+maintenance; only <code>curated</code> is available on an entry today), and
+<code>core/typosquat.py</code>'s confusion machinery for near-identical rather than byte-identical
+bodies. Both are refinements &mdash; the byte-identical case is 78.3% of the problem.

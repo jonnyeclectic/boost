@@ -741,9 +741,11 @@ class TestSavePayload:
         assert sorted(raw["postings"]["foo"]) == [[0, 1], [1, 2]]
         assert raw["postings"]["bar"] == [[0, 1]]
         assert raw["docs"][0] == {"n": "a", "t": "x/y", "f": "a/SKILL.md",
-                                  "k": "skill", "c": 0, "l": 2, "snip": "sa"}
+                                  "h": "", "k": "skill", "c": 0, "l": 2,
+                                  "snip": "sa"}
         assert raw["docs"][1] == {"n": "b", "t": "x/y", "f": "b.mdc",
-                                  "k": "rule", "c": 3, "l": 4, "snip": "sb"}
+                                  "h": "", "k": "rule", "c": 3, "l": 4,
+                                  "snip": "sb"}
 
     def test_empty_docs_avg_len_zero(self, sandbox):
         rag._save([], {})
