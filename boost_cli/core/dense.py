@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from . import catalog, embed, paths
-from .rag import Hit, chunk, read_body
+from .rag import Hit, chunk, entry_key, read_body
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2
 _BATCH = 128            # texts per embedding request
 _POOL = 8              # chunk over-fetch factor for KNN before per-entry reduce
 
@@ -64,7 +64,7 @@ def _connect() -> Optional[sqlite3.Connection]:
 def _ensure_schema(con: sqlite3.Connection, dim: int) -> None:
     con.execute(
         "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY AUTOINCREMENT,"
-        " name TEXT, tap TEXT, kind TEXT, cix INTEGER, snip TEXT)")
+        " name TEXT, tap TEXT, path TEXT, kind TEXT, cix INTEGER, snip TEXT)")
     con.execute("CREATE INDEX IF NOT EXISTS chunks_tap ON chunks(tap)")
     con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
     con.execute(
@@ -283,7 +283,14 @@ def build(entries: Optional[List[dict]] = None,
         return None
     try:
         meta = _read_meta(con)
-        same_backend = (meta.get("provider") == prov
+        # The stored INDEX_VERSION has to be part of this. `_ensure_schema` uses
+        # CREATE TABLE IF NOT EXISTS, so it cannot add a column to a store built
+        # by an older boost — leaving the build to fail on the first INSERT with
+        # "table chunks has no column named path". `status()` already treated a
+        # version change as a reason to rebuild; only the build path did not.
+        same_version = meta.get("version") == INDEX_VERSION
+        same_backend = (same_version
+                        and meta.get("provider") == prov
                         and meta.get("model") == mdl
                         and meta.get("dim") == dim)
         if force or not same_backend:
@@ -323,7 +330,7 @@ def build(entries: Optional[List[dict]] = None,
         con.commit()
         total = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
         return {
-            "entries": len({(e["name"], e["tap"]) for e in entries}),
+            "entries": len({entry_key(e) for e in entries}),
             "chunks": total,
             "added": added,
             "taps": len(commits),
@@ -384,10 +391,10 @@ def _embed_and_store(con: sqlite3.Connection, entries: List[dict],
             continue
         for (e, ci, text), vec in zip(batch, vecs):
             cur = con.execute(
-                "INSERT INTO chunks (name, tap, kind, cix, snip) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (e["name"], e["tap"], e.get("kind", "skill"), ci,
-                 text[:200].strip()))
+                "INSERT INTO chunks (name, tap, path, kind, cix, snip) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (e["name"], e["tap"], e["skill_md"],
+                 e.get("kind", "skill"), ci, text[:200].strip()))
             con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
                         (cur.lastrowid, mod.serialize_float32(vec)))
             added += 1
@@ -423,31 +430,33 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
         if not knn:
             return []
         by_id = {r[0]: (r[1], r[2], r[3], r[4]) for r in con.execute(
-            "SELECT id, name, tap, kind, snip FROM chunks WHERE id IN (%s)"  # noqa: S608  interpolates only `?` placeholders; ids are bound params
+            "SELECT id, tap, path, kind, snip FROM chunks WHERE id IN (%s)"  # noqa: S608  interpolates only `?` placeholders; ids are bound params
             % ",".join("?" * len(knn)), [rid for rid, _d in knn])}
     finally:
         con.close()
 
     entries = catalog.all_entries() if entries is None else entries
-    live = {(e["name"], e["tap"]): e for e in entries}
+    live = {entry_key(e): e for e in entries}
     best: Dict[Tuple[str, str], Tuple[float, str]] = {}
     for rid, dist in knn:
         meta = by_id.get(rid)
         if meta is None:
             continue
-        name, tap, ckind, snip = meta
+        tap, path, ckind, snip = meta
         if kind is not None and ckind != kind:
             continue
-        key = (name, tap)
+        key = (tap, path)
         if key not in live:
             continue
         score = 1.0 - dist                       # cosine distance -> similarity
         prev = best.get(key)
         if prev is None or score > prev[0]:
             best[key] = (score, snip)
-    ranked = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0][0]))
+    # Tie-break on the displayed name (see rag.retrieve for why).
+    ranked = sorted(best.items(),
+                    key=lambda kv: (-kv[1][0], live[kv[0]]["name"], kv[0]))
     hits: List[Hit] = [
-        {"entry": live[(name, tap)], "score": score,
+        {"entry": live[key], "score": score,
          "snippet": snip}  # type: ignore[typeddict-item]
-        for (name, tap), (score, snip) in ranked[:k]]
+        for key, (score, snip) in ranked[:k]]
     return hits
