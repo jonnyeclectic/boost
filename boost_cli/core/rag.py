@@ -15,13 +15,14 @@ no AI -> the BM25 order is returned as-is.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
 from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, cast
 
 try:  # TypedDict lives in typing on 3.9+, kept optional for safety
     from typing import TypedDict
@@ -33,7 +34,7 @@ from . import ai, catalog, frontmatter, gitutil, paths, registry, util
 # v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
 # chars) so `retrieve` can window it onto the query terms; bump forces a
 # one-time reindex.
-INDEX_VERSION = 4
+INDEX_VERSION = 5
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -62,10 +63,13 @@ _STOPWORDS = frozenset({
 })
 
 
-class Hit(TypedDict):  # type: ignore[misc]
+class Hit(TypedDict, total=False):  # type: ignore[misc]
     entry: dict     # the live catalog entry (name, tap, kind, skill_md, ...)
     score: float    # BM25 relevance (higher = better)
     snippet: str    # best-matching passage, for display + rerank context
+    content: str    # digest of the body, for collapsing byte-identical copies.
+                    # Optional: dense hits arrive without one and have it
+                    # attached from the BM25 index (see `_with_content`).
 
 
 # --------------------------------------------------------------- tokenizing
@@ -193,13 +197,16 @@ def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
     docs: List[dict] = []
     for e in entries:
         body = read_body(e, tap_paths)
+        # Hashed here because the body is already in hand; doing it at query
+        # time would mean re-reading ~30k files to answer one search.
+        digest = hashlib.sha256(body.strip().encode("utf-8", "replace")).hexdigest()[:16]
         tf: Dict[str, int] = defaultdict(int)
         for tok in tokenize(surface(e) + "\n" + body):
             tf[tok] += 1
         if not tf:
             continue
         docs.append({
-            "n": e["name"], "t": e["tap"], "f": e["skill_md"],
+            "n": e["name"], "t": e["tap"], "f": e["skill_md"], "h": digest,
             "k": e.get("kind", "skill"),
             "c": 0, "l": sum(tf.values()),
             "snip": body[:SNIP_STORE].strip(),  # windowed at retrieve time
@@ -268,6 +275,7 @@ def _save(docs: List[dict], commits: Dict[str, str]) -> None:
             postings[term].append([doc_id, tf])
         total_len += d["l"]
         meta_docs.append({"n": d["n"], "t": d["t"], "f": d["f"], "k": d["k"],
+                          "h": d.get("h", ""),
                           "c": d["c"], "l": d["l"], "snip": d["snip"]})
     payload = {
         "version": INDEX_VERSION,
@@ -418,6 +426,54 @@ def entry_key(entry: dict) -> Tuple[str, str]:
     return (entry["tap"], entry["skill_md"])
 
 
+def dedupe_by_content(hits: List[Hit], limit: int) -> List[Hit]:
+    """Collapse byte-identical copies, then take ``limit``.
+
+    Measured over 77 tapped registries: 78.3% of 29,938 entries are
+    byte-identical duplicates (largest cluster 40 copies), and the
+    natural-language query set averaged 4.94 of 10 result slots consumed by a
+    repeat — worst case 9 of 10. Registries mirror each other, so N copies of one
+    rule across N taps ate N of the ten slots a user sees.
+
+    Clustering is on the **body**, never the name. 82.7% of entries share a name
+    but only 78.3% share a body, and that ~4.4% gap is real distinct content —
+    the ``admin-interface-rule`` pair fixed in #366 is two different rules under
+    one name. Clustering on content cannot make that mistake: of 14,153 distinct
+    bodies, the number of clusters spanning more than one name is zero.
+
+    Within a cluster every copy is byte-identical, so *which* one survives is
+    purely about where the user would rather install from: a ``curated`` tap wins
+    over a better-ranked uncurated one. The cluster keeps its best score either
+    way, so promoting the trusted copy never demotes the result.
+
+    A hit with no recorded content hash is always kept — two unknowns must not
+    collapse into each other, which would hide real results.
+    """
+    best: Dict[str, int] = {}          # content hash -> index into `out`
+    out: List[Hit] = []
+    for hit in hits:
+        digest = hit.get("content")
+        if not digest:
+            out.append(hit)            # unknown content is never a match
+            continue
+        seen = best.get(digest)
+        if seen is None:
+            best[digest] = len(out)
+            out.append(hit)
+            continue
+        # Same body already shown. Keep its rank, but prefer a curated source.
+        kept = out[seen]
+        if hit["entry"].get("curated") and not kept["entry"].get("curated"):
+            # cast, not a literal annotation: `Hit` is total=False for the
+            # optional `content` key, and NotRequired needs 3.11 while boost
+            # targets 3.9.
+            out[seen] = cast(Hit, {"entry": hit["entry"],
+                                   "score": kept["score"],
+                                   "snippet": kept["snippet"],
+                                   "content": digest})
+    return out[:limit]
+
+
 def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
              entries: Optional[List[dict]] = None) -> List[Hit]:
     """Top-k full-content hits for ``query``. ``[]`` if the index is empty."""
@@ -430,7 +486,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     entries = catalog.all_entries() if entries is None else entries
     live = {entry_key(e): e for e in entries}
     docs = raw["docs"]
-    best: Dict[Tuple[str, str], Tuple[float, str]] = {}
+    best: Dict[Tuple[str, str], Tuple[float, str, str]] = {}
     for doc_id, score in _bm25(terms, raw).items():
         d = docs[doc_id]
         if kind is not None and d["k"] != kind:
@@ -440,17 +496,20 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
             continue
         prev = best.get(key)
         if prev is None or score > prev[0]:
-            best[key] = (score, d["snip"])
+            best[key] = (score, d["snip"], d.get("h", ""))
     # Tie-break on the displayed name, not the identity key: the key is now
     # (tap, path), and ordering by it would silently reshuffle equal-scoring
     # results relative to every previous release.
     ranked = sorted(best.items(),
                     key=lambda kv: (-kv[1][0], live[kv[0]]["name"], kv[0]))
+    # Over-fetch, then collapse byte-identical copies before taking k — the
+    # duplicates have to be removed from the pool, not from the visible page,
+    # or they still consume the slots they were removed from.
     hits: List[Hit] = [
-        {"entry": live[key], "score": score,
+        {"entry": live[key], "score": score, "content": digest,
          "snippet": _passage(snip, terms)}  # type: ignore[typeddict-item]
-        for key, (score, snip) in ranked[:k]]
-    return hits
+        for key, (score, snip, digest) in ranked]
+    return dedupe_by_content(hits, k)
 
 
 def rerank(query: str, hits: List[Hit], limit: int = 10) -> Tuple[List[Hit], str]:
@@ -516,6 +575,39 @@ def rrf_fuse(rankings: List[List[Hit]], limit: int = 60) -> List[Hit]:
     return fused
 
 
+def content_hashes() -> Dict[Tuple[str, str], str]:
+    """``entry_key`` -> content hash, read from the BM25 index.
+
+    The dense store does not carry the hash and does not need to: BM25 indexes
+    the same entries and auto-builds on first search, so one map serves every
+    engine. Keeping it in one place also means the two engines can never
+    disagree about which copies are identical.
+    """
+    raw = _load_raw()
+    if not raw:
+        return {}
+    return {(d["t"], d["f"]): d["h"]
+            for d in raw.get("docs", []) if d.get("h")}
+
+
+def _with_content(hits: List[Hit]) -> List[Hit]:
+    """Attach content hashes to hits that lack them (dense, and fused output)."""
+    if all(h.get("content") for h in hits):
+        return hits
+    hashes = content_hashes()
+    if not hashes:
+        return hits
+    filled: List[Hit] = []
+    for h in hits:
+        if h.get("content"):
+            filled.append(h)
+            continue
+        filled.append(cast(Hit, {
+            "entry": h["entry"], "score": h["score"], "snippet": h["snippet"],
+            "content": hashes.get(entry_key(h["entry"]), "")}))
+    return filled
+
+
 def retrieve_any(query: str, k: int = 60, kind: Optional[str] = None,
                  entries: Optional[List[dict]] = None
                  ) -> Tuple[Optional[List[Hit]], str]:
@@ -551,13 +643,18 @@ def retrieve_any(query: str, k: int = 60, kind: Optional[str] = None,
     # counts as a ranking to fuse.
     bm25_hits = retrieve(query, k=pool, kind=kind,
                          entries=entries) if ready() else None
+    # Dedupe at this seam as well as inside `retrieve`, because dense hits carry
+    # no hash of their own and fusion can reintroduce a duplicate that BM25
+    # already dropped — the copies are distinct `(tap, path)` keys, so RRF has
+    # no reason to treat them as one.
     if dense_hits and bm25_hits:
-        return (rrf_fuse([bm25_hits, dense_hits], limit=k),
+        fused = rrf_fuse([bm25_hits, dense_hits], limit=max(k, RRF_K))
+        return (dedupe_by_content(_with_content(fused), k),
                 "hybrid RRF (BM25 + dense)")
     if dense_hits:
-        return dense_hits[:k], "dense vectors"
+        return dedupe_by_content(_with_content(dense_hits), k), "dense vectors"
     if bm25_hits is not None:
-        return bm25_hits[:k], "BM25 full-content"
+        return bm25_hits[:k], "BM25 full-content"     # already deduped
     return None, ""
 
 
