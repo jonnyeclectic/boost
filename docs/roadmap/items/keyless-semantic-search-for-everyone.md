@@ -194,3 +194,32 @@ A rerun stored all 3740, and two 30-batch replays never reproduced a failure, so
 resource pressure rather than a defect &mdash; the retry path (no commit recorded for a failed tap)
 did its job. The figures above come from a complete index.
 
+<b>Step 4 shipped, measured against the same 91 queries.</b> <code>retrieve_any</code> no longer
+picks an engine; it over-fetches <code>RRF_K</code>=60 from each and fuses by reciprocal rank,
+<code>1/(60+rank)</code> summed, keyed on <code>(name, tap)</code> &mdash; the key both engines
+already dedupe on. Adding a <code>hybrid</code> column to the eval:
+<code>catalog.search</code> hit@1 0.714; BM25 hit@1 0.780, recall 1.000, MRR 0.860, nDCG 0.895;
+dense hit@1 0.780, recall 0.956, MRR 0.853, nDCG 0.876; <b>hybrid hit@1 0.813, recall 0.978, MRR
+0.883, nDCG 0.905</b>.
+
+Hybrid leads on <code>hit@1</code>, MRR and nDCG, and gives up 2 queries of recall to BM25.
+<b>Neither difference is significant</b> by the bar set above: +3 net queries on hit@1 and &minus;2
+on recall, both inside the ~6-query floor for <em>p</em>&lt;0.05 at this <em>n</em>. So the case for
+fusing is not "it scores higher" &mdash; it is that fusing is the only option that is <em>at or near
+best on both query shapes</em>, where preferring either engine is measurably wrong for half of them.
+
+<b>This reverses a deliberate earlier decision</b>, and that is worth flagging rather than burying:
+<code>test_a_non_empty_dense_result_is_still_final</code> existed precisely to stop
+<code>retrieve_any</code> "always running BM25 too". Its premise was that a dense hit is the better
+answer, which the tie above retires. The other half of that fix &mdash; an <em>empty</em> dense
+result is a thin index, not a verdict, and must fall through to BM25 &mdash; still stands and is
+still tested.
+
+<b>One honest counter-observation.</b> On two hand-picked human-phrased queries, fusion at k=3
+<em>lost</em> the best dense hit: <code>"my app is slow"</code> dropped
+<code>performance-optimization</code> and <code>"I need to make my website accessible"</code>
+dropped <code>accessibility-guidelines</code>, in both cases because a junk BM25 rank-1 outweighed a
+good dense rank-2. That is exactly the tradeoff this card predicted &mdash; "rank fusion discards
+confidence" &mdash; and it is an anecdote at n=2 against a measured win at n=91, so it did not block
+shipping. It is the strongest argument for the query set step 6 still needs, and the first thing to
+re-measure once that exists.
