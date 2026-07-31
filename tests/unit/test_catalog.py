@@ -21,10 +21,11 @@ def write_skill(dirpath, fm=None, body="Some body line\n"):
     (dirpath / "SKILL.md").write_text(text, encoding="utf-8")
 
 
-def _entry(name, tap, desc="", curated=False, version="1.0.0", meta=None):
+def _entry(name, tap, desc="", curated=False, version="1.0.0", meta=None,
+           rel_dir="."):
     return {"name": name, "description": desc, "version": version, "tap": tap,
-            "curated": curated, "rel_dir": ".", "skill_md": "SKILL.md",
-            "meta": meta or {}}
+            "curated": curated, "rel_dir": rel_dir,
+            "skill_md": rel_dir.rstrip("/") + "/SKILL.md", "meta": meta or {}}
 
 
 def _fake_taps(*specs):
@@ -541,6 +542,109 @@ class TestResolveOne:
             catalog.resolve_one("dup")
         assert ei.value.message == "'dup' exists in multiple taps: owner/alpha, beta"
         assert ei.value.hint == "qualify it, e.g. `owner/alpha:dup`"
+
+
+class TestResolveOneVendoredCopies:
+    """One tap shipping the same skill at several paths must not dead-end.
+
+    Registries commonly vendor their own skills into plugin bundles, so a repo
+    holds `skills/x/SKILL.md` *and* `plugins/pack/skills/x/SKILL.md` with
+    identical frontmatter. Found by dogfooding: installing
+    `debugging-and-error-recovery` reported it in "multiple taps" while naming
+    one tap three times, then hinted a qualification that re-raised the very
+    same error.
+    """
+
+    def _vendored(self):
+        # The real shape from lingxling/awesome-skills-cn: three paths, one
+        # description, one version — nothing a user could choose between.
+        return [_entry("dbg", "t", desc="same", rel_dir=d) for d in (
+            "antigravity/plugins/pack-claude/skills/dbg",
+            "antigravity/skills/dbg",
+            "antigravity/plugins/pack/skills/dbg")]
+
+    def test_indistinguishable_copies_in_one_tap_resolve(self, sandbox):
+        # The disambiguation prompt was unanswerable: same name, description,
+        # version and meta. Picking one is strictly better than refusing.
+        _fake_taps(("t", self._vendored()))
+        assert catalog.resolve_one("dbg")["name"] == "dbg"
+
+    def test_the_shallowest_copy_wins_and_is_stable(self, sandbox):
+        # Deterministic on purpose — a resolver that varied with dict order
+        # would install a different directory run to run. Shallowest path is
+        # the canonical copy; the vendored ones sit deeper by construction.
+        _fake_taps(("t", self._vendored()))
+        first = catalog.resolve_one("dbg")["rel_dir"]
+        assert first == "antigravity/skills/dbg"
+        _fake_taps(("t", list(reversed(self._vendored()))))
+        assert catalog.resolve_one("dbg")["rel_dir"] == first
+
+    def test_equal_depth_copies_break_the_tie_lexicographically(self, sandbox):
+        # Without the second sort key the pick would fall back to dict order,
+        # which is stable within a run and therefore looks fine in a test while
+        # still varying across machines.
+        _fake_taps(("t", [_entry("dbg", "t", desc="same", rel_dir=d)
+                          for d in ("z/dbg", "m/dbg", "a/dbg")]))
+        assert catalog.resolve_one("dbg")["rel_dir"] == "a/dbg"
+
+    def test_same_tap_but_genuinely_different_still_asks(self, sandbox):
+        # Differing descriptions mean the user CAN tell them apart, so the
+        # choice is theirs to make. Collapsing here would silently install one
+        # of two real alternatives.
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError):
+            catalog.resolve_one("dbg")
+
+    def test_identical_across_taps_still_asks(self, sandbox):
+        # Provenance is the whole point of a tap. Two registries shipping
+        # byte-identical text are still two different supply chains, and
+        # typosquatting makes that distinction load-bearing (see typosquat.py).
+        _fake_taps(("owner/alpha", [_entry("dup", "owner/alpha", desc="same")]),
+                   ("owner/beta", [_entry("dup", "owner/beta", desc="same")]))
+        with pytest.raises(BoostError):
+            catalog.resolve_one("dup")
+
+    def test_a_tap_is_never_listed_twice(self, sandbox):
+        # "exists in multiple taps: t, t, t" is simply false.
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("dbg")
+        assert ei.value.message.count("t,") == 0
+        assert "multiple taps" not in ei.value.message
+
+    def test_one_tap_error_names_the_paths_not_a_useless_qualifier(self, sandbox):
+        # The old hint said "qualify by tap" when every candidate shared a tap,
+        # so following it reproduced the error verbatim. What distinguishes
+        # these rows is their path, so that is what the user must be shown.
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("dbg")
+        shown = ei.value.message + " " + (ei.value.hint or "")
+        assert "a/dbg" in shown and "b/dbg" in shown
+        assert "qualify it" not in shown
+
+    def test_an_already_qualified_name_is_not_qualified_twice(self, sandbox):
+        # A bare tap TAIL can still be ambiguous across owners, so a qualified
+        # input can reach the multi-tap branch — which is where the hint used
+        # to emit `owner/skills:skills:dbg`, a string that can never resolve.
+        _fake_taps(("owner/skills", [_entry("dbg", "owner/skills")]),
+                   ("other/skills", [_entry("dbg", "other/skills")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("skills:dbg")
+        assert ei.value.hint.endswith(":dbg`"), ei.value.hint
+        assert "skills:skills" not in ei.value.hint
+
+    def test_the_one_tap_error_names_the_bare_skill(self, sandbox):
+        # Pins that the message reports the skill, not the tap prefix sliced
+        # off the qualified input.
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("t:dbg")
+        assert ei.value.message.startswith("'dbg' matches 2 ")
 
 
 class TestSearchRanking:
