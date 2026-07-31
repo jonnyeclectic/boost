@@ -2,7 +2,7 @@
 id: a11y-sweep-flakes-on-color-contrast
 board: code
 section: internals
-status: planned
+status: shipped
 category: CI · Flake
 complexity: S
 impact: Med
@@ -119,3 +119,14 @@ guaranteed to see.
 
 The <code>#385</code> guard stays: it is orthogonal, it caught a real mis-assumption about
 <code>commands.html</code> on its first run, and an unstyled page still deserves to fail loudly.
+
+<b>Closed.</b> The cause is understood (reveal-animation compositing), the fix shipped in
+<code>#388</code>, and the <code>#385</code> stylesheet guard stays as an orthogonal safety net.
+Verified on <code>#388</code>: all seven pages ran the real axe check &mdash;
+<code>a11y-check: OK &mdash; 7 pages clean</code> &mdash; including <code>docs/roadmap.html</code>,
+the page that had failed on the two runs immediately before.
+
+Worth keeping the trail: this card went through <b>three</b> wrong diagnoses before the right one
+&mdash; a genuine contrast defect, then a stylesheet-load failure, then the animation. Each was
+killed by measurement rather than argument, and the one that cracked it was noticing a
+<em>third</em> phantom colour, because a fixed browser fallback cannot drift.
