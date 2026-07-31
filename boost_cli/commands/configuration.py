@@ -937,16 +937,24 @@ def _tool_discover_github(args: dict):
                      for h in hits), False
 
 
+# These descriptions do more work than they look like they should. Gemini CLI
+# appends a server's `initialize` instructions to the GEMINI.md *memory* tier
+# (McpClientManager.getMcpInstructions -> categorizeMemoryContents), gated on
+# folder trust — so that block reads as background documentation, sits far from
+# the decision point, and vanishes entirely in an untrusted folder. The function
+# declarations are the only boost text reliably in context at the moment an
+# agent chooses a tool, so each one repeats the trigger, the cost and the
+# miss protocol rather than deferring to the server instructions.
 REGISTRY.register(
     "boost_search",
-    "Find an existing, installable skill instead of improvising one. Reach for "
-    "this at two moments: (1) when starting non-trivial work — check whether a "
-    "vetted skill already covers the task before planning it yourself; (2) as "
-    "the FIRST STOP before writing a skill, subagent, slash-command, rule, or "
-    "any reusable block of agent instructions from scratch. Searches thousands "
-    "of curated AI-agent skills across the configured registries and returns "
-    "ranked matches you can install in one call — don't reinvent one that "
-    "already exists.",
+    "Check whether someone already wrote down how to do this. Searches "
+    "thousands of vetted, installable AI-agent skills across the configured "
+    "registries and returns ranked matches. Worth one call whenever the task "
+    "in front of you has a name you could say out loud — \"set up code "
+    "review\", \"add commit conventions\", \"debug flaky tests\" — and before "
+    "writing a skill, subagent, slash-command or rule from scratch. Read-only, "
+    "no side effects, installs nothing. Returning nothing relevant is a fine "
+    "answer: it means build it yourself.",
     {"type": "object",
      "properties": {"query": {"type": "string",
                               "description": "what the skill should do (a task, "
@@ -955,17 +963,18 @@ REGISTRY.register(
     _tool_search)
 REGISTRY.register(
     "boost_list",
-    "List the skills already installed and usable right now. Check at the "
-    "START of a task to leverage a capability you already have — an installed "
-    "skill is a vetted procedure you can follow immediately, at no cost — and "
-    "again before installing, to avoid duplicating something you have.",
+    "The skills already installed on this machine and usable right now — "
+    "capability you have but may not know about. Read-only, instant, installs "
+    "nothing. Worth a call at the start of any task that will take more than a "
+    "few steps, before planning it from memory.",
     {"type": "object", "properties": {}},
     _tool_list)
 REGISTRY.register(
     "boost_info",
-    "Vet a skill before installing it: its description, source tap, version and "
-    "declared capabilities. Use after boost_search to decide whether a candidate "
-    "fits before boost_install.",
+    "Look up one skill by name: description, source tap, version, and whether "
+    "it is already installed. Use it when you have a name from somewhere else "
+    "and want the details. You do not need this between a search and an "
+    "install — boost_search already returns each match's description.",
     {"type": "object",
      "properties": {"name": {"type": "string", "description": "skill name"}},
      "required": ["name"]},

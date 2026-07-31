@@ -110,30 +110,53 @@ class TestHandleRequest:
 
     def test_initialize_returns_server_instructions(self):
         # MCP hosts load `instructions` into the agent's context — this is where
-        # boost earns the "search before reinventing" reflex.
+        # boost earns the "check for a skill before doing the work" reflex.
         resp = mcp.handle_request({"id": 1, "method": "initialize"},
                                   version="9.9.9", registry=_reg_with())
         instr = resp["result"]["instructions"]
         assert instr == mcp.INSTRUCTIONS
         low = instr.lower()
-        # THREE triggers must survive here. Authoring alone was the original
-        # framing and it under-fired: agents reached for boost only when about
-        # to write a skill, never to check whether one already covered the work
-        # in front of them. Dropping any trigger regresses that.
-        assert "starting a task" in low            # trigger 1: leverage first
-        assert "boost_list" in instr               # ...what is already installed
-        assert "before you write a new skill" in low   # trigger 2: authoring
-        assert "boost_search" in instr             # the concrete first action
-        assert "already exists" in low             # the "don't reinvent" frame
-        # Trigger 3 closes the hole the other two leave open: both fire at a
-        # recognized task boundary, so a turn that starts trivial and escalates
-        # is never re-evaluated. Observed in practice — a one-line question grew
-        # into hours of retrieval work and the check never fired, because the
-        # proportionality carve-out below had already excused the opening turn.
-        assert "scope growth" in low               # trigger 3: escalation
-        assert "grows into one" in low             # ...wired into Proportion
+        # ONE trigger, and it must be observable rather than a judgement call.
+        # "Non-trivial work" was the old framing and it lost to its own escape
+        # hatch: deciding a task is non-trivial takes judgement, while "this
+        # turn looks small" is free — and every turn looks small when it opens.
+        # A task having a NAME is something an agent can pattern-match without
+        # deciding anything.
+        assert "has a name" in low
+        assert "boost_list" in instr and "boost_search" in instr
+        # The cost has to be stated. An unknown-cost call with an unknown hit
+        # rate gets skipped, however good the pitch above it.
+        assert "read-only" in low
+        # ...as does the miss protocol. Without it a zero-result search reads as
+        # a wasted turn, so the next task skips the check to avoid repeating it.
+        assert "finding nothing" in low
+        # Non-capturing, and load-bearing rather than merely polite: an agent
+        # that expects a hit to seize the task is safer not looking.
+        assert "the task stays yours" in low
+        # Escalation still has to be caught — both other moments fire at a task
+        # boundary, so a turn that starts small and grows is never re-checked.
+        assert "turns out to be a large one" in low
         # ...and it must stay bounded, or an agent learns to ignore all of it.
-        assert "skip the check for trivial" in low
+        assert "skip it for a question" in low
+
+    def test_instructions_lead_with_using_a_skill_not_authoring_one(self):
+        # Authoring used to be a co-equal numbered trigger, which cost the
+        # instructions their point: boost's primary benefit is finding a skill
+        # for the task in front of you, and "am I about to write a skill?" is
+        # both rarer and a different question. It survives only as a clause on
+        # boost_search's own description, never as a trigger here.
+        low = mcp.INSTRUCTIONS.lower()
+        assert "before you write a new skill" not in low
+        assert "authoring" not in low
+
+    def test_instructions_route_search_straight_to_install(self):
+        # boost_info sat between search and install in the advertised flow, but
+        # search already returns each hit's description — the only field that
+        # changes an install decision — so the hop bought a round-trip and a
+        # decision point and nothing else. It stays a registered tool for
+        # looking up a name from elsewhere; it is not a step.
+        assert "boost_search -> boost_install" in mcp.INSTRUCTIONS
+        assert "boost_info" not in mcp.INSTRUCTIONS
 
     def test_protocol_version_constant(self):
         assert mcp.PROTOCOL_VERSION == "2024-11-05"

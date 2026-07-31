@@ -238,9 +238,17 @@ A host whose CLI isn't installed is skipped, not an error — name it explicitly
 
 Six tools are exposed: `boost_search`, `boost_list`, `boost_info`,
 `boost_install`, `boost_doctor`, and `boost_discover_github`. The server also
-returns MCP `instructions`, which both hosts load into the model's context — it
-tells the agent *when* boost is relevant, so a matching skill gets found at the
-start of a task rather than after the work is already reconstructed by hand.
+returns MCP `instructions`, which tell the agent *when* boost is relevant, so a
+matching skill gets found at the start of a task rather than after the work is
+already reconstructed by hand.
+
+The two hosts place those instructions differently, and it matters. Claude Code
+loads them as server instructions in the system prompt. Gemini CLI appends them
+to its **memory tier** alongside `GEMINI.md`, and only in a trusted folder — so
+outside one they are dropped silently. Each tool's own description therefore
+repeats its trigger rather than relying on the server text, because a tool
+description is the only part that is always in context at the moment the agent
+chooses a tool.
 
 Verify the wiring with `claude mcp list` or `gemini mcp list` — boost should show
 as **Connected**. (Gemini only connects stdio servers in a trusted folder; run
