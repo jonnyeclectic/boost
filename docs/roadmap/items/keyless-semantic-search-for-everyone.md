@@ -353,3 +353,34 @@ reports.
 
 <b>Steps 1, 2, 3, 4 and 6 are now done; step 5 (a hosted demo) is the remainder</b>, along with the
 CI workflow that publishes shards as release artifacts, which is noted under step 2.
+
+<b>Step 2's publishing half is shipped &mdash; <code>.github/workflows/shards.yml</code>.</b> Weekly
+plus on-demand, it taps each registry, embeds it, exports a shard and uploads it as an artifact.
+
+<b>It is deliberately not chained off release, and that is the load-bearing decision.</b>
+<code>publish.yml</code> already sits at <code>ci &rarr; release &rarr; sbom</code>, GitHub's
+documented three-level <code>workflow_run</code> limit; a fourth link would silently never fire.
+<code>sbom.yml</code>'s header records exactly what that looks like in this repo &mdash; 253
+releases, 0 runs, 0 assets, a control that appeared present and produced nothing. Shards are keyed on
+a <em>registry's</em> commit anyway, not on a boost release, so coupling them to our version cadence
+would be wrong even if the chain allowed it. Same reasoning for uploading artifacts rather than
+release assets: attaching them to a release would re-publish unchanged vectors on every version bump.
+
+<b>Scale drove the shape.</b> At the measured ~1.2&nbsp;s/chunk, the 20-tap corpus is ~3.4&nbsp;h
+against the 6&nbsp;h job limit and the full 466-registry catalogue is far past it. So the workflow
+fans out <b>one job per registry</b> (<code>fail-fast: false</code>, so one bad registry cannot lose
+the others' work) rather than embedding everything in a single job.
+
+<b>Two things were caught by testing the pieces locally rather than trusting the YAML.</b> The
+matrix-planning step used <code>printf '%s\n' $repos</code>, which relies on word-splitting that does
+not survive quoting: it produced a <b>one-entry matrix holding all twenty repos as a single
+string</b> &mdash; one job attempting the entire corpus, straight past the job limit, and it would
+have looked like a plausible timeout rather than a bug. Splitting in Python fixes it. The shard
+validation step was also run against a real 262-chunk shard and against a provenance-stripped copy,
+to confirm it accepts one and rejects the other; a shard missing <code>provider</code>,
+<code>model</code>, <code>dim</code> or <code>commit</code> cannot be validated on import and would be
+refused by every consumer, silently, forever.
+
+<b>Unproven until it runs:</b> the workflow has never executed. The pieces are tested, the YAML
+parses and the pinned action SHAs match the repo's existing ones, but the first real run is the first
+end-to-end exercise. <b>Step 5 (a hosted demo) is now the only part of this epic left.</b>
