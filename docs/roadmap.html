@@ -1721,10 +1721,10 @@ a one-line <code>logger.debug(...)</code> in each except branch.</p>
       </article>
 
       <article class="cap rcard" id="eval-corpus-cannot-see-real-retrieval">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Eval</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Quality · Eval</span></div>
         <h3>The eval gate reports a perfect score on a corpus 4× smaller than a real user's</h3>
         <p><code>make eval</code> reports BM25 <code>recall@10 = 1.000</code> against the
-pinned 23-tap corpus in <code>tests/eval/taps.txt</code>. Run the same script
+pinned corpus in <code>tests/eval/taps.txt</code>. Run the same script
 against a real 83-tap install and it reports <b>0.720</b> — below the gate's own
 0.85 floor — with <code>hit@1 0.407</code>, <code>MRR 0.526</code>,
 <code>nDCG 0.566</code>, and <code>rule</code> the weakest kind at 0.500 recall /
@@ -1759,7 +1759,7 @@ leaked one &mdash; so a surface-only index cannot answer them. It was written be
 against it and scored once, which is the same fitting-and-reporting discipline this group needs.
 
 It corroborates this card's thesis from a second, independent direction. This card shows the gate
-blind to <b>corpus size</b>: 1.000 on 23 taps against 0.720 on 83. The natural set shows it blind to
+blind to <b>corpus size</b>: 1.000 on a handful of taps against 0.720 on 83. The natural set shows it blind to
 <b>query shape</b> on the <em>same</em> corpus &mdash; BM25 scores recall 1.000 / hit@1 0.780 on the
 keyword golden set and <b>0.690 / 0.240</b> on natural-language queries over identical data. Two
 different axes, same conclusion: the number the gate reports is not a number about retrieval.
@@ -1793,11 +1793,42 @@ natural set would have silently overwritten the keyword set's numbers with them.
 keyed by <code>name@content-digest</code>, so editing a query in place invalidates its baseline
 rather than quietly re-grading against numbers that no longer describe it.
 
-<b>Still open:</b> the corpus-size half (23 taps versus a real 83) and
+<b>Still open:</b> the corpus-size half and
 <code>--regression-eps 1</code>, which is a symptom of the corpus tracking upstream HEAD rather than
 pinned commits. Pinning <code>taps.txt</code> by commit SHA is the change that would make
 regression-vs-baseline meaningful again; the absolute floors added here are drift-tolerant by
-construction and do not depend on it.</p>
+construction and do not depend on it.
+
+
+<b>The corpus-size half is shipped, and the tap count in this card was wrong.</b>
+<code>tests/eval/taps.txt</code> never held 23 repos &mdash; it held <b>six</b>. Twenty-three was the
+file's total line count, seventeen of which are comments, and the number propagated from here into
+<code>CLAUDE.md</code>. The error understated the card's own case rather than overstating it: the
+comparison was six taps against a real eighty-three, not twenty-three.
+
+Grown to <b>twenty</b> taps (10,145 entries, 79.7% sharing a name), and the effect on the required
+gate is the finding this card predicted. Same golden set, same queries, only the corpus changed:
+
+<code>recall@10 0.978 &rarr; <b>0.863</b></code> &middot;
+<code>hit@1 0.791 &rarr; <b>0.473</b></code> &middot;
+<code>MRR 0.854 &rarr; <b>0.607</b></code> &middot;
+<code>nDCG 0.882 &rarr; <b>0.662</b></code>
+
+<b>Three of the four floors fail outright once the corpus is realistic.</b> The floors have been
+re-derived against the twenty-tap numbers at the same ~10% relative headroom, so the gate now floors
+something a user would recognise. Lowering a threshold normally deserves suspicion, so the reasoning
+is stated plainly: the old floors were calibrated against a corpus small enough that BM25 scored
+1.000, and a floor calibrated on an unrepresentative corpus measures the corpus. The absolute drop is
+recorded here precisely so it reads as a finding rather than as goalposts being moved.
+
+That <b>hit@1 0.473</b> is the honest headline: at twenty taps, fewer than half of these queries put
+the right item first. It is not a regression &mdash; it is what users already had, now visible. Cost
+to CI is ~20 s of tapping on a cold run (measured ~1 s/repo) and nothing on a warm local one.
+
+<b>Still open:</b> twenty taps is closer to eighty-three than six was, but it is not eighty-three,
+and <code>--regression-eps 1</code> still stands down regression detection because the corpus tracks
+upstream HEAD rather than pinned commits. Pinning by SHA remains the change that would make
+regression-vs-baseline meaningful.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>

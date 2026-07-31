@@ -47,7 +47,7 @@ It is five gates and **all must pass**:
 | Gate       | Command                                        | Threshold |
 |------------|------------------------------------------------|-----------|
 | `lint`     | `ruff check boost_cli tests` + `mypy`          | zero errors |
-| `eval`     | `ensure_eval_corpus.sh` + `eval_retrieval.py --build -k 10` with four floors | BM25 recall@k **≥ 0.85**, hit@1 ≥ 0.65, MRR ≥ 0.74, nDCG@k ≥ 0.78 |
+| `eval`     | `ensure_eval_corpus.sh` + `eval_retrieval.py --build -k 10` with four floors | BM25 recall@k **≥ 0.78**, hit@1 ≥ 0.40, MRR ≥ 0.52, nDCG@k ≥ 0.58 |
 | `test`     | `pytest tests/unit tests/functional --cov`     | **80%** coverage (`fail_under = 80`) |
 | `smoke`    | `bash tests/smoke.sh`                           | 0 failed |
 | `mutation` | `python3 scripts/mutation_gate.py --run --min 80` | **80%** of `boost_cli/core` mutants killed |
@@ -60,10 +60,14 @@ time and never ranks it first scores recall@10 1.000 with hit@1 0.000, and
 passed. The golden set grades real catalog items **by name**, so it needs a
 corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
 `tests/eval/taps.txt` (the minimal set covering all golden targets — `boost tap
---defaults` is NOT enough, it omits every rule/workflow repo). Measured over
-that corpus BM25 scores 1.000 / 0.780 / 0.860 / 0.895, and each floor sits about
-0.12 under its measured value — loose enough that upstream drift can't flake the
-build, tight enough to catch a collapse. Regression-vs-baseline stays relaxed
+--defaults` is NOT enough, it omits every rule/workflow repo). The list is
+**twenty** repos: the first six cover every golden target, the rest exist so the
+corpus is a realistic size. That matters more than it sounds — over the six
+alone BM25 scored 1.000 / 0.791 / 0.854 / 0.882, and over the twenty it scores
+**0.863 / 0.473 / 0.607 / 0.662** on the same golden set, so three of the four
+old floors fail once the corpus stops being tiny. Each floor now sits ~10% under
+its measured value — loose enough that upstream drift can't flake the build,
+tight enough to catch a collapse. Regression-vs-baseline stays relaxed
 (`--regression-eps 1`) because the corpus tracks upstream HEAD rather than
 pinned commits, so the absolute floors are the real gate.
 
