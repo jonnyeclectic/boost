@@ -73,3 +73,29 @@ would otherwise never match <code>code-reviewer</code>) and the description alon
 binary format are both untouched, as is moving <code>snip</code> text off the hot path. So is
 <code>build()</code>'s O(entire-corpus) incremental path, which still inverts every posting to
 reindex one changed file.
+
+<b>Where the bytes are now, measured after win (1).</b> This card sends win (2) after two targets:
+postings, and <code>snip</code> text (&ldquo;46.7 MB of the 132 MB&rdquo;, ~35%). That split was a
+property of the <em>chunked</em> index, where every 1000-char window carried its own snippet. With
+one document per entry the balance moves sharply, measured on the pinned 6-tap corpus at 2.05 MB
+total: <b>postings 1.31 MB (64%)</b>, doc metadata 0.46 MB (22%), <b>snips 0.29 MB (14%)</b>, over
+743 documents and 15,639 distinct terms.
+
+So unchunking already collected most of the snippet win, and <b>postings are now the dominant lever
+by a wide margin</b>. Anyone picking up win (2) should size it against 64%, not chase snip at an
+assumed 35%.
+
+<b>FTS5 probe result.</b> Confirmed present on both interpreters available here &mdash; CPython 3.14
+(bundled SQLite 3.53.4) and the macOS system Python 3.9 (SQLite 3.54.0). That supports the card's
+design instruction rather than replacing it: it is still a per-build property, so the runtime probe
+stays required. A distro CPython compiled without <code>ENABLE_FTS5</code> is the case the probe
+exists for.
+
+<b>On the incremental path.</b> The O(entire-corpus) reindex noted above is not separable from win
+(2). <code>_kept_docs</code> calls <code>_postings_to_doc_tf</code> because per-document term
+frequencies exist <em>only</em> inside the postings on disk, so recovering them for the unchanged
+taps means scanning every posting whatever the filter. Narrowing the inversion to kept doc ids saves
+memory but not the scan, and in the common case (one tap of many changed) nearly every document is
+kept, so it saves little of that either. Denormalising <code>tf</code> back into the documents would
+fix it directly but roughly duplicates the 64% that postings already occupy. The real fix is the
+storage format, which is win (2) &mdash; worth treating them as one item rather than two.
