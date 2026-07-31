@@ -104,7 +104,7 @@ def with_backend(monkeypatch):
 class TestImportRefusesMismatchedVectors:
     """The failure that must never happen quietly."""
 
-    def test_a_different_provider_is_refused(self, sandbox):
+    def test_a_different_provider_is_refused(self, sandbox, with_backend):
         _store(provider="local", model="bge", dim=3)
         shard = {"tap": "x/y", "provider": "voyage", "model": "voyage-4",
                  "dim": 3, "commit": "c1", "chunks": []}
@@ -150,8 +150,14 @@ class TestImportIntoAnEmptyStore:
         # virtual table, which only the real extension can do. Skipping where
         # it is absent is honest — faking it here would assert nothing about
         # the path that actually runs.
-        if not dense.have_backend():
+        con = dense._connect()
+        if con is None:
+            # NOT have_backend(): that only checks the import succeeds. On
+            # macOS runners sqlite_vec imports and then fails to LOAD, so
+            # have_backend() is True while _connect() is None — which is the
+            # condition that actually decides whether this can run.
             pytest.skip("sqlite-vec extension not loadable here")
+        con.close()
         shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
                  "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
