@@ -105,16 +105,22 @@ dist-check:
 #
 # recall@k alone could not fail this build for a ranker that found the right
 # answer every time and never ranked it first — recall@10 1.000 with hit@1
-# 0.000 passed. Measured on this corpus BM25 scores 1.000 / 0.780 / 0.860 /
-# 0.895, so each floor sits ~0.12 below its measured value: loose enough that
-# upstream repo drift cannot flake the build, tight enough that a collapse
-# fails it. Regression-vs-baseline stays relaxed (--regression-eps 1) because
-# the corpus tracks upstream HEAD rather than pinned commits; the absolute
-# floors are the real gate, and they are drift-tolerant by construction.
+# 0.000 passed.
+#
+# The floors are calibrated against a TWENTY-tap corpus, not the six it used to
+# be. Over six repos BM25 scored 1.000 / 0.791 / 0.854 / 0.882; over twenty it
+# scores 0.863 / 0.473 / 0.607 / 0.662 on the same golden set. The second set is
+# what a real user sees, so flooring against the first was measuring the corpus
+# rather than the retrieval — three of the four old floors fail outright once
+# the corpus is realistic. Each floor now sits ~10% below its measured value:
+# loose enough that upstream repo drift cannot flake the build, tight enough
+# that a collapse fails it. Regression-vs-baseline stays relaxed
+# (--regression-eps 1) because the corpus tracks upstream HEAD rather than
+# pinned commits; the absolute floors are the real gate.
 eval:
 	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
 	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 \
-	  --fail-under 0.85 --floor hit@1=0.65 --floor MRR=0.74 --floor nDCG@k=0.78 \
+	  --fail-under 0.78 --floor hit@1=0.40 --floor MRR=0.52 --floor nDCG@k=0.58 \
 	  --regression-eps 1
 
 # Tier 2a: LLM rerank lift over BM25 on the same golden set. Opt-in and

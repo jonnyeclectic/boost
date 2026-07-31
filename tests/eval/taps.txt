@@ -2,9 +2,12 @@
 #
 # The golden set (golden.jsonl) grades real catalog items by NAME, so the gate
 # needs the repos that actually contain those items tapped before it can score.
-# This is the minimal set of repos that covers all 77 golden targets across the
-# skill / rule / workflow kinds. Over it, BM25 recall@10 == 1.000, so the 0.85
-# floor gate has a wide margin and tolerates upstream drift.
+# The first six repos are the minimal set covering all 77 golden targets across
+# the skill / rule / workflow kinds. The rest exist to make the corpus a
+# realistic size, which is the whole point: over the six alone BM25 scored
+# recall@10 1.000 / hit@1 0.791, and the same gate over these twenty scores
+# 0.863 / 0.473. A user with twenty taps gets the second number, so flooring
+# against the first was measuring the corpus rather than the retrieval.
 #
 # NOTE: `boost tap --defaults` is NOT sufficient — it taps only skill repos and
 # scores 0.000 on every rule and workflow query (overall recall ~0.33). That is
@@ -14,6 +17,10 @@
 #   BOOST_HOME=/tmp/evalhome bash scripts/ensure_eval_corpus.sh
 #   BOOST_HOME=/tmp/evalhome python3 scripts/eval_retrieval.py --build --save-baseline
 #
+# Cost: tapping is ~1 s/repo (measured 6 in 6.3 s, 14 more in 20.4 s), so this
+# adds roughly 20 s to a cold CI run and nothing to a warm local one (the
+# sentinel in ensure_eval_corpus.sh skips re-tapping).
+#
 # Future hardening: pin each repo to a commit SHA for full reproducibility.
 anthropics/skills
 0xfurai/claude-code-subagents
@@ -21,3 +28,19 @@ NeoLabHQ/context-engineering-kit
 Aaronontheweb/dotnet-cursor-rules
 ChrisWiles/claude-code-showcase
 LessUp/awesome-cursorrules-zh
+
+# --- scale: not golden targets, present so the corpus is a realistic size ---
+aliarghyani/vue-cursor-rules
+affaan-m/ECC
+BagelHole/DevOps-Security-Agent-Skills
+composio-community/awesome-codex-skills
+first-fluke/oh-my-agent
+iktakahiro/python-fastapi-ddd-skill
+langchain-ai/skills-benchmarks
+minio/skills
+OneWave-AI/claude-skills
+quarkusio/quarkusdev-skills
+sickn33/antigravity-awesome-skills
+tuanhaviet22/magento-skills
+anthropics/claude-agent-sdk-python
+eclosion-labs/terraform-cursor-plugin
