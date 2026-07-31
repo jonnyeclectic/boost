@@ -2,7 +2,7 @@
 id: merged-loop-branches-are-never-pruned
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Hygiene · DX
 complexity: S
 impact: Low
@@ -45,3 +45,26 @@ Low impact and near-zero risk to fix &mdash; flip <code>delete_branch_on_merge</
 the backlog can be pruned by listing merged PR head refs. The reason it is worth doing at all is
 that CLAUDE.md tells every agent to run <code>git worktree list</code> and inspect branch state
 before touching a tree, and 68 stale entries make that check noisier for every concurrent loop.
+
+<b>Shipped &mdash; and the premise had gone stale, which is why it was worth re-checking rather than
+assuming.</b> This card's core claim is that <code>delete_branch_on_merge</code> is <code>false</code>.
+It is now <b><code>true</code></b>, and the backlog it describes is gone: against the card's
+<b>77 branches, 70 of them <code>loop/*</code></b>, the repository today carries <b>5 branches, 2
+<code>loop/*</code></b>.
+
+Two stragglers predating the setting change were still present and are now deleted:
+<code>evals-harness</code> (PR <code>#317</code>, merged) and <code>mcp-task-entrance</code>
+(PR <code>#318</code>, merged). Both were classified the way this card insists on &mdash; by
+<b>pull-request state</b>, not commit reachability &mdash; because the squash-merge point above is
+real: <code>compare(main...branch).ahead_by</code> reports every merged branch as permanently ahead,
+so reachability would have reported 0 of them deletable.
+
+Three branches remain and are deliberately <em>not</em> deleted: <code>bot/demo-gif</code> has an
+open PR (<code>#353</code>), and <code>badges</code>, <code>loop/keyless-card-dedupe</code> and
+<code>loop/sbom-in-release-job</code> have <b>no PR on record</b>. A branch with no PR cannot be shown
+to be merged, and deleting it could destroy unmerged work &mdash; so the safe rule is to leave it for
+a human, which is also why no automated pruner is proposed here.
+
+<b>No automation was added.</b> The repository setting does the job going forward; a workflow that
+deleted branches on a schedule would add a way to lose work in exchange for tidying a list that is
+now five entries long.

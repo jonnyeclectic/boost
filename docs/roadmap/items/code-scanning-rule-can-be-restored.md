@@ -2,7 +2,7 @@
 id: code-scanning-rule-can-be-restored
 board: code
 section: trust
-status: planned
+status: shipped
 category: Release safety
 complexity: S
 impact: Med
@@ -45,3 +45,19 @@ path filters and runs on <code>push</code>, <code>pull_request</code> and
 repo has hit twice. And it catches something the status check does not &mdash;
 <code>codeql-analyze</code> passes when the <em>job</em> succeeds, including when it succeeds
 having found error-severity alerts.
+
+<b>Done &mdash; the rule is back, and scoped exactly as this card prescribed.</b> Read from the live
+<code>main</code> ruleset (id <code>19130332</code>): it carries a <code>code_scanning</code> rule
+whose <code>code_scanning_tools</code> list is <b><code>CodeQL</code> alone</b>, at
+<code>security_alerts_threshold: high_or_higher</code> and <code>alerts_threshold: errors</code>.
+Scorecard is not in the list, which is the single decision this card exists to get right.
+
+The safety precondition still holds and was re-checked rather than assumed: <b>CodeQL has 0 open
+alerts</b>, while Scorecard has <b>4 open</b> (down from the 7 recorded above), every one still a
+posture metric that must not be dismissed. Had Scorecard been added to that tool list, those four
+would block every merge in the repository immediately &mdash; the failure mode this card correctly
+identifies as the reason the work looked blocked.
+
+No change was needed. Recording it as shipped so the board stops advertising work that is already
+in place, and so the tool-list constraint stays written down: anyone re-editing this rule through the
+GitHub UI will be offered Scorecard right next to CodeQL in the picker.

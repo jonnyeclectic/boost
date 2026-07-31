@@ -2,7 +2,7 @@
 id: demo-cannot-open-its-own-pr
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: CI reporting
 complexity: S
 impact: Med
@@ -61,3 +61,14 @@ that job cannot open a pull request either. So this toggle now gates two items r
 the second is a supply-chain freshness gap rather than a docs asset. That does not make the
 decision automatic, but it does change what is on each side of it.
 
+
+<b>Unblocked, and already working &mdash; the setting was flipped.</b> This card's blocker is
+<code>can_approve_pull_request_reviews: false</code>. The API now reports it as <b><code>true</code></b>,
+and the effect is visible rather than theoretical: <code>demo.yml</code>'s recent runs are green, and
+<b>PR <code>#353</code> was opened by <code>github-actions[bot]</code></b> &mdash; the exact action
+this card says is impossible.
+
+Nothing in the tree needed changing. Recording it as shipped rather than deleting it, because the
+card's analysis was right about <em>where</em> the blocker was: the earlier investigation had chased
+<code>demo.yml</code>'s own <code>permissions:</code> block, and the note that no edit to the workflow
+could fix a repository-level setting is what stopped that from being a long false lead.
