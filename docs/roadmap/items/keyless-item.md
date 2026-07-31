@@ -82,3 +82,21 @@ Constraints this must respect: the shipped runtime is stdlib-only and
 harness to extend rather than invent. Related:
 [[dense-search-fallback-and-stale-tap-pruning]] and
 [[cache-the-catalog-entry-set-across-rag-queries]].
+
+<b>Measure it honestly &mdash; a prior attempt's numbers did not survive.</b> A competing
+static-embedding design was explored and its headline result, <b>+11.0 recall / +15.9 hit@1</b>,
+<em>failed verification</em>. Three ways, each of which any keyless approach here can repeat.
+Its baseline used a kind oracle the real search path does not have, so the comparison was never
+against what a user experiences. Both the blend weight (<code>w_dense=0.7</code>) and the rerank
+pool depth were <b>argmax'd on the same 82 queries they were then reported on</b>, which is fitting
+and reporting on one set. And at n=82 on a binary metric the smallest net win reaching
+<em>p</em>&lt;0.05 is <b>6 queries</b>: <code>hit@1</code> (+13 net) clears that, recall (+9) sits
+at the resolution floor and should not have been the headline.
+
+So step 6 needs a method, not just a number: <b>McNemar</b> on paired outcomes, a blend weight held
+out from the queries it is scored on, and <code>hit@1</code> led rather than recall. Test dense
+<em>alone</em> before any blend, so a fusion win cannot be credited to the embedder. One structural
+risk is worth carrying forward too: a skill's name is only ~10.5% of a mean-pooled surface vector
+while 106 description clusters are shared across 270 distinct names, so a lift measured on a small
+corpus may <em>shrink</em> rather than hold as the index grows toward 50k items. That is an argument
+for measuring at scale before believing a small-corpus result, whichever embedder ships.
