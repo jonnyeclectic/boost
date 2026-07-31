@@ -2,7 +2,7 @@
 id: near-duplicate-items-eat-the-result-slots
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Search · Ranking
 complexity: M
 impact: High
@@ -187,3 +187,24 @@ before and after, because the prior only chooses between copies that are already
 <code>core/typosquat.py</code>'s confusion machinery would apply. Stars and recency, which the card
 also names, have no shipped data source today &mdash; adding one is its own piece of work rather than
 a tweak to this.
+
+<b>Both halves this card asked for are on <code>main</code>, and the card simply never got flipped.</b>
+It set two requirements. <em>Cluster on content rather than name, and pick a winner with a quality
+prior</em> &mdash; <code>rag.dedupe_by_content</code> (<code>#370</code>) does exactly that: it keys
+on the body digest, keeps the cluster's best score, and breaks ties with <code>source_rank</code> so
+a curated tap outranks a better-placed uncurated copy. <em>Stop keying on
+<code>(tap, name)</code></em> &mdash; fixed in <code>#366</code>, which moved the key to
+<code>(tap, skill_md)</code> after the collision hit 14.0% of entries.
+
+<b>The measurement moved too, and it moved against the original framing.</b> The card was written
+from an 83-tap install at 56.3% shared names. Re-measured over 77 registries the figure is
+<b>78.3% of 29,938 entries byte-identical</b>, with the natural-language query set averaging
+<b>4.94 of 10 slots</b> consumed by a repeat before dedup and <b>0.60 after</b>. What made
+content-clustering safe rather than merely appealing is a separate count: of 14,153 distinct bodies,
+the number of clusters spanning more than one name is <b>zero</b> &mdash; so collapsing identical
+bodies cannot merge two genuinely different skills, which name-clustering would have done.
+
+<b>Related follow-on:</b> the same duplicate shape reaches <code>resolve_one</code>, where a tap that
+vendors its own skills produced an unanswerable disambiguation prompt. Tracked separately in
+<code>resolve-vendored-duplicate-copies</code>.
+

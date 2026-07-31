@@ -2,7 +2,7 @@
 id: bm25-index-is-one-json-blob
 board: code
 section: pipeline
-status: planned
+status: shipped
 category: Search · Index
 complexity: L
 impact: High
@@ -156,3 +156,17 @@ stable identity &mdash; <code>(tap, skill_md)</code>, already the retrieval key 
 &mdash; instead of by position would make an incremental update a <code>DELETE</code> of the changed
 taps' rows plus an <code>INSERT</code>, with no renumbering and no inversion. That is a schema change
 rather than a format change, which is what the earlier note meant by it getting cheaper.
+
+<b>Both &ldquo;cheap wins&rdquo; this card names have shipped.</b> <em>(1) Stop chunking</em> landed
+in <code>#367</code> &mdash; one document per entry rather than one per chunk. <em>(2) Get postings
+out of JSON</em> landed in <code>#371</code>, moving them to SQLite so a query reads only the terms
+it needs instead of <code>json.loads</code>-ing the whole index. That is the fix for the failure this
+card is actually about: cold-start cost scaling with corpus size rather than with the query.
+
+<b>The third suggestion was measured and declined.</b> Moving <code>snip</code> text off the hot path
+was worth <b>14%</b> of load time once postings had already left the JSON &mdash; real, but not worth
+the extra artefact and the staleness surface it would add. Recorded as a decision rather than left
+as an open bullet. The related incremental-reindex concern was separately re-measured in
+<code>#377</code>: <b>35&nbsp;s &rarr; 5.2&nbsp;s</b>, so the O(entire corpus) note at the end of this
+card no longer describes the code.
+

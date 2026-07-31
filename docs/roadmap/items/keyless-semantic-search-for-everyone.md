@@ -387,10 +387,17 @@ end-to-end exercise.
 
 <b>Step 5 is shipped as a keyword demo, and the card should say plainly what that does and does not
 deliver.</b> <code>docs/demo.html</code> runs BM25 in the browser over a real 743-item, six-registry
-catalogue &mdash; a 1.27&nbsp;MB index that gzips to <b>320&nbsp;KB</b>, built by
-<code>scripts/build_demo_index.py</code> from the same index the CLI uses. Nothing installs, nothing
-leaves the visitor's machine, and GitHub Pages already served <code>docs/</code> so no new hosting
-was needed.
+catalogue &mdash; a 1.27&nbsp;MB index, built by <code>scripts/build_demo_index.py</code> from the
+same index the CLI uses. Nothing installs, nothing leaves the visitor's machine, and GitHub Pages
+already served <code>docs/</code> so no new hosting was needed.
+
+<b>The transfer figure was wrong, and the way it was wrong is the useful part.</b> This card and the
+page both claimed <b>320&nbsp;KB</b> gzipped, taken from a local <code>gzip -6</code> run
+(319.0&nbsp;KB; <code>-9</code> gives 310.2&nbsp;KB). Fetching the deployed asset with
+<code>Accept-Encoding: gzip</code> returns <b>340,866 bytes &mdash; 333&nbsp;KB</b>, because a CDN
+trades compression ratio for speed. So the published number understated what a visitor actually
+downloads by 4%, and only measuring the <em>served</em> artefact caught it. Both places now quote
+the wire figure.
 
 <b>Parity is the claim that had to be earned.</b> The page asserts it runs &ldquo;the same BM25
 ranking <code>boost search</code> runs&rdquo;, which is only worth saying if it is true, so the JS
