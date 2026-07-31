@@ -96,7 +96,19 @@ def with_backend(monkeypatch):
     instead of exercising the check they are named for, which is how they
     passed locally and reddened three macOS legs plus the canary.
     """
-    monkeypatch.setattr(dense, "_load", lambda: object())
+    class _FakeVec:
+        """Enough of sqlite_vec for the paths under test.
+
+        `serialize_float32` is real: tests that WRITE vectors reach it, and a
+        bare object() stub only survived while every test stopped at validation.
+        """
+
+        @staticmethod
+        def serialize_float32(vec):
+            import struct
+            return struct.pack("%df" % len(vec), *vec)
+
+    monkeypatch.setattr(dense, "_load", lambda: _FakeVec)
     monkeypatch.setattr(dense, "_connect",
                         lambda: sqlite3.connect(str(dense.db_path())))
 
@@ -240,3 +252,66 @@ class TestWorksWithoutTheExtension:
                  "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is False and "backend" in reason
+
+
+class TestDeltaTopUp:
+    """An imported shard must make `build` skip that tap and embed only the rest.
+
+    This is step 3 of the keyless epic — "when a tap runs ahead of its published
+    shard, or is a registry CI has never seen, embed just those files on the
+    spot". It works because `import_shard` records the tap's commit in the same
+    `meta.commits` map that `build` consults, so a shard is indistinguishable
+    from locally-built vectors as far as reuse is concerned.
+
+    That coupling is easy to break silently: an import that forgot to record the
+    commit would still produce a working store, and the only symptom would be
+    re-embedding the shard's chunks on the next build — minutes of wasted CPU
+    that nothing reports. Hence a test.
+    """
+
+    def _tap_seen(self, monkeypatch, commits):
+        from boost_cli.core import rag
+        monkeypatch.setattr(rag, "_tap_commits", lambda: commits)
+        monkeypatch.setattr(rag, "_tap_paths", lambda: {})
+
+    def test_an_imported_shard_is_reused_not_re_embedded(self, sandbox,
+                                                         with_backend,
+                                                         monkeypatch):
+        from boost_cli.core import embed
+        _store(rows=(("a", "acme/skills"),))
+        embedded = []
+        monkeypatch.setattr(embed, "embed",
+                            lambda texts, **kw: embedded.extend(texts) or
+                            [[0.1, 0.2, 0.3] for _ in texts])
+        monkeypatch.setattr(embed, "available", lambda: True)
+        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: "bge")
+        self._tap_seen(monkeypatch, {"acme__skills": "c1"})
+        entries = [{"name": "a", "tap": "acme/skills", "kind": "skill",
+                    "skill_md": "a/SKILL.md", "_body": "text", "description": ""}]
+        stats = dense.build(entries=entries, force=False)
+        assert stats is not None
+        assert "acme__skills" in stats["reused"]
+        assert embedded == [], "re-embedded a tap the shard already covered"
+
+    def test_a_tap_the_shard_does_not_cover_is_still_embedded(self, sandbox,
+                                                              with_backend,
+                                                              monkeypatch):
+        # The other half: shards cover the popular registries, the local model
+        # makes the long tail self-serve. If this regressed, an uncatalogued
+        # registry would be a dead end for a keyless user.
+        from boost_cli.core import embed
+        _store(rows=(("a", "acme/skills"),))
+        monkeypatch.setattr(embed, "embed",
+                            lambda texts, **kw: [[0.1, 0.2, 0.3] for _ in texts])
+        monkeypatch.setattr(embed, "available", lambda: True)
+        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: "bge")
+        self._tap_seen(monkeypatch, {"acme__skills": "c1", "new__repo": "z9"})
+        entries = [{"name": "b", "tap": "new/repo", "kind": "skill",
+                    "skill_md": "b/SKILL.md", "_body": "text", "description": ""}]
+        stats = dense.build(entries=entries, force=False)
+        assert stats is not None
+        assert "new/repo" in stats["reindexed"]

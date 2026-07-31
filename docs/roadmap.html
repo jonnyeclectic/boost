@@ -918,7 +918,29 @@ both sides, and only the document half can be shipped ahead of time.
 
 <b>Still open in step 2:</b> the CI workflow that publishes shards as release artifacts, and the
 <code>boost tap</code> integration that fetches one automatically. Both are now plumbing on top of a
-verified mechanism rather than open questions. Steps 3 and 5 are untouched.</p>
+verified mechanism rather than open questions. Steps 3 and 5 are untouched.
+
+<b>Step 3 works, and it did not need new code &mdash; it needed proving.</b> Local delta top-up falls
+out of the shard mechanism plus the commit-keyed reuse <code>build()</code> already had:
+<code>import_shard</code> records the tap's commit in the same <code>meta.commits</code> map
+<code>build()</code> consults, so an imported shard is indistinguishable from locally-built vectors
+as far as reuse is concerned.
+
+Measured end to end with a stubbed embedder, on a store holding an imported shard for
+<code>anthropics/skills</code> plus a freshly tapped <code>Aaronontheweb/dotnet-cursor-rules</code>:
+<b>158 chunks embedded &mdash; the new tap only &mdash; and the shard's 262 untouched</b>. The
+resulting store is one coherent embedding space: 420 vectors, both taps' commits recorded, single
+provider/model/dim. That is exactly the shape this step asks for &mdash; shards cover the popular
+registries, the local model makes the long tail self-serve, and cost scales with what a user taps
+rather than with the ecosystem.
+
+Two tests now pin it, because the coupling is the kind that breaks silently: an import that forgot to
+record the commit would still produce a <em>working</em> store, and the only symptom would be
+re-embedding the shard's chunks on every later build &mdash; minutes of wasted CPU that nothing
+reports.
+
+<b>Steps 1, 2, 3, 4 and 6 are now done; step 5 (a hosted demo) is the remainder</b>, along with the
+CI workflow that publishes shards as release artifacts, which is noted under step 2.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
