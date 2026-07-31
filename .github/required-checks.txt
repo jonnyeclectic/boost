@@ -61,6 +61,11 @@ codeql-analyze
 pip-audit
 metadata
 scan-pr / osv-scan
+# The real-weights ONNX contract. Required because the failure it catches is silent:
+# a model that loads and returns plausible 384-float vectors, just not the right ones.
+# It fetches 133 MB from HuggingFace, cached on the pinned MODEL_REV, so a cache hit
+# needs no network and an upstream outage only bites when that revision is bumped.
+onnx-inference
 
 # --- docs + site ------------------------------------------------------------
 # NOT REQUIREABLE — every one of these is path-filtered, so it reports on some

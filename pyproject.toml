@@ -212,6 +212,12 @@ check_untyped_defs = true
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider"
 filterwarnings = ["error::DeprecationWarning:boost_cli.*"]
+# Registered so an unknown-mark warning cannot become an error here. The mark
+# only selects; the actual guard is the BOOST_ONNX_E2E env gate on the module,
+# so a plain `pytest` never downloads 133 MB of weights by surprise.
+markers = [
+    "onnx: needs onnxruntime + the real pinned BGE weights (opt-in, see tests/unit/test_localembed_e2e.py)",
+]
 
 [tool.coverage.run]
 source = ["boost_cli"]

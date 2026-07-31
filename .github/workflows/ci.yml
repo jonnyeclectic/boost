@@ -798,3 +798,77 @@ jobs:
         # touches no real agent config. --no-capture-stderr keeps a failing
         # step's own diagnostics in the log next to the scenario that failed.
         run: .venv/bin/behave tests/bdd/features --no-capture-stderr
+
+  onnx-inference:
+    # The only job that runs the real ONNX graph. Every other leg installs just
+    # `sqlite-vec` from the [rag] extra, so since the local embedder shipped
+    # nothing in CI has loaded the actual weights — the stubbed suite declares
+    # its own tensor shapes, which is right for what it tests and blind to
+    # whether onnxruntime accepts this export at all.
+    #
+    # One leg, not the matrix: onnxruntime has no free-threaded 3.14t wheel and
+    # the value here is the model contract, which is platform-independent. The
+    # matrix keeps testing that a machine WITHOUT the extra degrades cleanly,
+    # which is the more common user state.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: read the pinned model revision
+        # Read from localembed.py rather than duplicated here: MODEL_REV is what
+        # keys the on-disk cache, so a hard-coded key would silently serve stale
+        # weights for a new revision — the one cache bug that would make this
+        # job pass against the wrong model.
+        id: rev
+        run: |
+          rev=$(python -c "from boost_cli.core import localembed; print(localembed.MODEL_REV)")
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+      - name: cache the pinned BGE weights (133 MB)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.boost-home/cache/models
+          # Revision-keyed, so bumping MODEL_REV misses the cache and refetches
+          # instead of reusing the old graph under a new name.
+          key: bge-weights-${{ steps.rev.outputs.rev }}
+      - name: install the [rag] extra in full
+        # Unlocked and best-effort in spirit like the other extras, but NOT
+        # `|| true` here: this job exists to run inference, so a failed install
+        # must fail loudly rather than skip into a green tick.
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -e '.[rag]'
+          .venv/bin/pip -q install -r requirements/test-tools.txt
+      - name: real-weights inference contract
+        # BOOST_HOME redirects the model cache into the workspace so the cache
+        # action can see it; BOOST_ONNX_E2E is the opt-in the test module gates
+        # on, so this is the only place the 133 MB download is ever paid for.
+        #
+        # The skip check matters more than it looks. Every guard in that module
+        # — missing extra, failed download — degrades to *skip* by design, and a
+        # fully-skipped pytest run exits 0. So the job would report green in
+        # precisely the circumstances it exists to catch. Run once, then read
+        # the summary: passes required, skips fatal.
+        env:
+          BOOST_HOME: ${{ github.workspace }}/.boost-home
+          BOOST_ONNX_E2E: "1"
+        run: |
+          set -o pipefail
+          .venv/bin/pytest tests/unit/test_localembed_e2e.py -v --no-header \
+            | tee onnx-result.txt
+          if grep -qE '[0-9]+ skipped' onnx-result.txt; then
+            echo "::error::inference tests skipped — the [rag] extra or the pinned weights never loaded, so this job proved nothing"
+            exit 1
+          fi
+          grep -qE '[0-9]+ passed' onnx-result.txt
