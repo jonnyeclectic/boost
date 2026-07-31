@@ -965,18 +965,23 @@ class TestSearchForwarding:
         rag.search("q", limit=1, smart=False)
         assert cap["k"] == 60               # max(60, 4)
 
-    def test_forwards_query_and_limit_to_rerank(self, sandbox, monkeypatch):
+    def test_forwards_query_limit_and_engine_to_rerank(self, sandbox, monkeypatch):
+        # `engine` joined the signature so a degraded rerank can report what
+        # actually retrieved instead of assuming BM25; asserted here because
+        # dropping it again would be silent — search would still return a
+        # plausible label, just the wrong one.
         self._ready_index()
         monkeypatch.setattr(rag, "retrieve", lambda *a, **k: [_hit("a", 1.0)])
         cap = {}
 
-        def spyr(query, hits, limit=10):
-            cap.update(query=query, limit=limit)
+        def spyr(query, hits, limit=10, engine="BM25 full-content"):
+            cap.update(query=query, limit=limit, engine=engine)
             return ([], "x")
         monkeypatch.setattr(rag, "rerank", spyr)
         rag.search("theq", limit=5)         # smart defaults to True
         assert cap["query"] == "theq"
         assert cap["limit"] == 5
+        assert cap["engine"] == "BM25 full-content"   # what this index is
 
 
 class TestIndexPath:

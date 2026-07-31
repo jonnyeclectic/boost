@@ -209,3 +209,95 @@ class TestRetrieveAnyFuses:
         rag.retrieve_any("q", kind="rule", entries=ents)
         assert ("bm25", "rule", ents) in seen
         assert ("dense", "rule", ents) in seen
+
+
+class TestRerankPreservesTheEngineLabel:
+    """The engine that actually retrieved must survive the rerank stage.
+
+    ``rerank`` hard-coded ``"BM25 full-content"`` on both of its degrade paths,
+    and ``search`` discards ``retrieve_any``'s label whenever ``smart`` is on —
+    which is the default, and what the MCP ``boost_search`` tool uses. So a user
+    whose dense store and fusion were working perfectly, but who had no
+    ``ANTHROPIC_API_KEY``, was told they were on BM25.
+
+    That is the same class of silent misreport the dense-status work existed to
+    kill: the label is the only signal a user has about which engine answered,
+    and a wrong one sends the investigation somewhere else entirely. Worse here
+    than a missing label, because it names a specific wrong engine confidently.
+    """
+
+    @staticmethod
+    def _hits():
+        return [_hit("a", 2.0), _hit("b", 1.0)]
+
+    def test_no_ai_reports_the_engine_that_retrieved(self, monkeypatch):
+        # THE regression. Fusion ran, the LLM was absent, and the old code
+        # answered "BM25 full-content" — naming an engine that did not rank
+        # these hits alone.
+        monkeypatch.setattr(rag.ai, "available", lambda: False)
+        _out, label = rag.rerank("q", self._hits(), limit=5,
+                                 engine="hybrid RRF (BM25 + dense)")
+        assert label == "hybrid RRF (BM25 + dense)"
+
+    def test_no_ai_reports_dense_when_dense_retrieved(self, monkeypatch):
+        monkeypatch.setattr(rag.ai, "available", lambda: True)
+        monkeypatch.setattr(rag.ai, "ask", lambda *_a, **_k: "not json at all")
+        _out, label = rag.rerank("q", self._hits(), limit=5,
+                                 engine="dense vectors")
+        assert label == "dense vectors"
+
+    def test_an_unparseable_reply_keeps_the_engine_too(self, monkeypatch):
+        # The second degrade path: the model answered, but not with a JSON
+        # array. Ordering falls back, so the label must fall back with it.
+        monkeypatch.setattr(rag.ai, "available", lambda: True)
+        monkeypatch.setattr(rag.ai, "ask", lambda *_a, **_k: "sorry, I can't")
+        _out, label = rag.rerank("q", self._hits(), limit=5,
+                                 engine="hybrid RRF (BM25 + dense)")
+        assert label == "hybrid RRF (BM25 + dense)"
+
+    def test_a_successful_rerank_still_says_claude(self, monkeypatch):
+        # The LLM really did decide the order here, so crediting the retrieval
+        # engine instead would be the same bug pointing the other way.
+        monkeypatch.setattr(rag.ai, "available", lambda: True)
+        monkeypatch.setattr(rag.ai, "ask", lambda *_a, **_k: '["b", "a"]')
+        out, label = rag.rerank("q", self._hits(), limit=5,
+                                engine="hybrid RRF (BM25 + dense)")
+        assert _names(out) == ["b", "a"]
+        assert label == "Claude relevance"
+
+    def test_the_default_keeps_existing_callers_honest(self, monkeypatch):
+        # Back-compat: an omitted engine still reads "BM25 full-content", so
+        # this is additive for anything that calls rerank directly.
+        monkeypatch.setattr(rag.ai, "available", lambda: False)
+        _out, label = rag.rerank("q", self._hits(), limit=5)
+        assert label == "BM25 full-content"
+
+
+class TestSearchReportsTheTruthEndToEnd:
+    """`search` is where the label is chosen, so the bug is only really fixed
+    if it survives the whole path an MCP call takes."""
+
+    @staticmethod
+    def _wire(monkeypatch, engine_hits, ai_ok):
+        from boost_cli.core import dense as dense_mod
+        monkeypatch.setattr(rag, "ready", lambda: True)
+        monkeypatch.setattr(rag, "retrieve", lambda *_a, **_k: list(engine_hits))
+        monkeypatch.setattr(dense_mod, "ready", lambda: True)
+        monkeypatch.setattr(dense_mod, "retrieve", lambda *_a, **_k: list(engine_hits))
+        monkeypatch.setattr(rag.ai, "available", lambda: ai_ok)
+
+    def test_fused_retrieval_without_a_key_is_not_called_bm25(self, monkeypatch):
+        # Exactly the MCP boost_search path: smart defaults on, no key.
+        self._wire(monkeypatch, [_hit("a"), _hit("b")], ai_ok=False)
+        result = rag.search("q", limit=5)
+        assert result is not None
+        _hits, label = result
+        assert label != "BM25 full-content"
+        assert "dense" in label, label
+
+    def test_smart_off_is_unaffected(self, monkeypatch):
+        self._wire(monkeypatch, [_hit("a")], ai_ok=True)
+        result = rag.search("q", limit=5, smart=False)
+        assert result is not None
+        _hits, label = result
+        assert "dense" in label, label
