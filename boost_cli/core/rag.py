@@ -33,7 +33,7 @@ from . import ai, catalog, frontmatter, gitutil, paths, registry, util
 # v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
 # chars) so `retrieve` can window it onto the query terms; bump forces a
 # one-time reindex.
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -175,7 +175,8 @@ def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
             if not tf:
                 continue
             docs.append({
-                "n": e["name"], "t": e["tap"], "k": e.get("kind", "skill"),
+                "n": e["name"], "t": e["tap"], "f": e["skill_md"],
+                "k": e.get("kind", "skill"),
                 "c": ci, "l": sum(tf.values()),
                 "snip": piece[:SNIP_STORE].strip(),  # windowed at retrieve time
                 "tf": dict(tf),  # noqa: FURB123  tf is a defaultdict; .copy() would keep the factory
@@ -226,7 +227,7 @@ def build(entries: Optional[List[dict]] = None, force: bool = False) -> dict:
     _save(docs, commits)
     reindexed = sorted({e["tap"] for e in fresh})
     return {
-        "entries": len({(e["name"], e["tap"]) for e in entries}),
+        "entries": len({entry_key(e) for e in entries}),
         "docs": len(docs),
         "taps": len(commits),
         "reindexed": reindexed,
@@ -242,7 +243,7 @@ def _save(docs: List[dict], commits: Dict[str, str]) -> None:
         for term, tf in d["tf"].items():
             postings[term].append([doc_id, tf])
         total_len += d["l"]
-        meta_docs.append({"n": d["n"], "t": d["t"], "k": d["k"],
+        meta_docs.append({"n": d["n"], "t": d["t"], "f": d["f"], "k": d["k"],
                           "c": d["c"], "l": d["l"], "snip": d["snip"]})
     payload = {
         "version": INDEX_VERSION,
@@ -365,6 +366,34 @@ def _passage(text: str, terms: Sequence[str], width: int = SNIP_WIDTH) -> str:
     return lead + snip + tail
 
 
+def entry_key(entry: dict) -> Tuple[str, str]:
+    """Identity of a catalog entry: the tap it came from and its file.
+
+    NOT ``(name, tap)``, which both engines used and which is not unique. On the
+    pinned 6-tap eval corpus 743 entries collapse to 694 such pairs; on a real
+    83-tap install the roadmap item measures 1,557 of 11,147 (14.0%) colliding,
+    worst case ``('survivorforge/cursor-rules', 'rule')`` x47. One tap can
+    legitimately ship two different files under one name —
+
+        docs/rules/backend/nodejs/express-mongodb/admin-interface-rule.mdc
+        docs/rules/backend/nodejs/fullstack-mern-guide/admin-interface-rule.mdc
+
+    — and keying on the name made the second shadow the first in a dict
+    comprehension, so a query matching the first's body was reported under the
+    second's name and description. ``skill_md`` is the tap-relative path, so
+    ``(tap, skill_md)`` is 743/743 and 11,147/11,147 distinct respectively.
+
+    Deliberately strict. An earlier draft fell back to the name when
+    ``skill_md`` was missing, on the theory that a malformed row should not
+    crash a search. It is the worse failure: the index side and the entry side
+    then degrade differently, the keys stop matching, and retrieval silently
+    returns *nothing* — which takes far longer to diagnose than a KeyError
+    naming the field. Every catalog entry has ``skill_md`` (743/743 on the eval
+    corpus), and INDEX_VERSION rejects any index built without it.
+    """
+    return (entry["tap"], entry["skill_md"])
+
+
 def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
              entries: Optional[List[dict]] = None) -> List[Hit]:
     """Top-k full-content hits for ``query``. ``[]`` if the index is empty."""
@@ -375,24 +404,28 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     if not terms:
         return []
     entries = catalog.all_entries() if entries is None else entries
-    live = {(e["name"], e["tap"]): e for e in entries}
+    live = {entry_key(e): e for e in entries}
     docs = raw["docs"]
     best: Dict[Tuple[str, str], Tuple[float, str]] = {}
     for doc_id, score in _bm25(terms, raw).items():
         d = docs[doc_id]
         if kind is not None and d["k"] != kind:
             continue
-        key = (d["n"], d["t"])
+        key = (d["t"], d["f"])
         if key not in live:
             continue
         prev = best.get(key)
         if prev is None or score > prev[0]:
             best[key] = (score, d["snip"])
-    ranked = sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0][0]))
+    # Tie-break on the displayed name, not the identity key: the key is now
+    # (tap, path), and ordering by it would silently reshuffle equal-scoring
+    # results relative to every previous release.
+    ranked = sorted(best.items(),
+                    key=lambda kv: (-kv[1][0], live[kv[0]]["name"], kv[0]))
     hits: List[Hit] = [
-        {"entry": live[(name, tap)], "score": score,
+        {"entry": live[key], "score": score,
          "snippet": _passage(snip, terms)}  # type: ignore[typeddict-item]
-        for (name, tap), (score, snip) in ranked[:k]]
+        for key, (score, snip) in ranked[:k]]
     return hits
 
 
@@ -435,9 +468,9 @@ def rrf_fuse(rankings: List[List[Hit]], limit: int = 60) -> List[Hit]:
     calibration step that has to be fitted and re-fitted per corpus; rank
     fusion sidesteps it entirely and is the respected zero-tuning default.
 
-    Entries are identified by ``(name, tap)`` — the same key both engines
-    already dedupe on — and the first ranking's hit object wins, so the caller
-    passes BM25 first and keeps its query-term-highlighted snippet for display.
+    Entries are identified by ``entry_key`` — the same key both engines dedupe
+    on — and the first ranking's hit object wins, so the caller passes BM25
+    first and keeps its query-term-highlighted snippet for display.
 
     The returned ``score`` is the fused rank score, not a BM25 score: it exists
     to order these hits against each other, and comparing it to a raw BM25
@@ -448,7 +481,7 @@ def rrf_fuse(rankings: List[List[Hit]], limit: int = 60) -> List[Hit]:
     for hits in rankings:
         for rank, hit in enumerate(hits, start=1):
             entry = hit["entry"]
-            key = (entry["name"], entry["tap"])
+            key = entry_key(entry)
             scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
             chosen.setdefault(key, hit)
     ordered = sorted(scores, key=lambda key: (-scores[key], key[0], key[1]))

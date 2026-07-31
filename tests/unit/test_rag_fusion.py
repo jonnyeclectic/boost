@@ -28,7 +28,8 @@ from boost_cli.core import rag
 
 
 def _hit(name: str, score: float = 1.0, tap: str = "t") -> dict:
-    return {"entry": {"name": name, "tap": tap, "kind": "skill"},
+    return {"entry": {"name": name, "tap": tap, "kind": "skill",
+                      "skill_md": "skills/%s/SKILL.md" % name},
             "score": score, "snippet": "%s snippet" % name}
 
 
@@ -204,7 +205,7 @@ class TestRetrieveAnyFuses:
         monkeypatch.setattr(dense_mod, "retrieve",
                             lambda _q, k=60, kind=None, entries=None:
                             (seen.append(("dense", kind, entries)), [_hit("b")])[1])
-        ents = [{"name": "a", "tap": "t"}]
+        ents = [{"name": "a", "tap": "t", "skill_md": "skills/a/SKILL.md"}]
         rag.retrieve_any("q", kind="rule", entries=ents)
         assert ("bm25", "rule", ents) in seen
         assert ("dense", "rule", ents) in seen

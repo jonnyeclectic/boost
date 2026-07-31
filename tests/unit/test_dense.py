@@ -71,8 +71,12 @@ def _toy_embed(texts, input_type=None, timeout=60):
 
 
 def _e(name, body, tap="acme/skills", kind="skill"):
-    return {"name": name, "tap": tap, "kind": kind, "skill_md": "s",
-            "_body": body}
+    # Each entry gets its own `skill_md`. The shared "s" this used to hard-code
+    # is not data a real catalog can produce — two skills cannot live at one
+    # path — and once entries are identified by (tap, skill_md) it collapsed
+    # every fixture entry onto a single key.
+    return {"name": name, "tap": tap, "kind": kind,
+            "skill_md": "skills/%s/SKILL.md" % name, "_body": body}
 
 
 @pytest.fixture()

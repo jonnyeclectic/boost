@@ -695,20 +695,20 @@ class TestPostingsAndKept:
         assert rag._kept_docs({}, set()) == []
 
     def test_kept_docs_recovers_tf_and_defaults_empty(self):
-        raw = {"docs": [{"t": "x/y", "n": "a", "k": "skill", "c": 0,
-                         "l": 1, "snip": "s"}], "postings": {}}
+        raw = {"docs": [{"t": "x/y", "n": "a", "f": "a/SKILL.md", "k": "skill",
+                         "c": 0, "l": 1, "snip": "s"}], "postings": {}}
         assert rag._kept_docs(raw, {"x__y"}) == [
-            {"t": "x/y", "n": "a", "k": "skill", "c": 0, "l": 1,
-             "snip": "s", "tf": {}}]
+            {"t": "x/y", "n": "a", "f": "a/SKILL.md", "k": "skill", "c": 0,
+             "l": 1, "snip": "s", "tf": {}}]
 
 
 class TestSavePayload:
     def test_full_payload_structure(self, sandbox):
         docs = [
-            {"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 2, "snip": "sa",
-             "tf": {"foo": 1, "bar": 1}},
-            {"n": "b", "t": "x/y", "k": "rule", "c": 3, "l": 4, "snip": "sb",
-             "tf": {"foo": 2}},
+            {"n": "a", "t": "x/y", "f": "a/SKILL.md", "k": "skill", "c": 0,
+             "l": 2, "snip": "sa", "tf": {"foo": 1, "bar": 1}},
+            {"n": "b", "t": "x/y", "f": "b.mdc", "k": "rule", "c": 3,
+             "l": 4, "snip": "sb", "tf": {"foo": 2}},
         ]
         rag._save(docs, {"x__y": "c1"})
         raw = json.loads(rag.index_path().read_text(encoding="utf-8"))
@@ -723,10 +723,10 @@ class TestSavePayload:
         assert raw["stats"]["avg_len"] == pytest.approx((2 + 4) / 2)
         assert sorted(raw["postings"]["foo"]) == [[0, 1], [1, 2]]
         assert raw["postings"]["bar"] == [[0, 1]]
-        assert raw["docs"][0] == {"n": "a", "t": "x/y", "k": "skill",
-                                  "c": 0, "l": 2, "snip": "sa"}
-        assert raw["docs"][1] == {"n": "b", "t": "x/y", "k": "rule",
-                                  "c": 3, "l": 4, "snip": "sb"}
+        assert raw["docs"][0] == {"n": "a", "t": "x/y", "f": "a/SKILL.md",
+                                  "k": "skill", "c": 0, "l": 2, "snip": "sa"}
+        assert raw["docs"][1] == {"n": "b", "t": "x/y", "f": "b.mdc",
+                                  "k": "rule", "c": 3, "l": 4, "snip": "sb"}
 
     def test_empty_docs_avg_len_zero(self, sandbox):
         rag._save([], {})
@@ -738,8 +738,8 @@ class TestSavePayload:
     def test_save_invalidates_stale_cache_entry(self, sandbox):
         key = str(rag.index_path())
         rag._CACHE[key] = (1.0, {"stale": True})
-        rag._save([{"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 1,
-                    "snip": "s", "tf": {"z": 1}}], {})
+        rag._save([{"n": "a", "t": "x/y", "f": "a/SKILL.md", "k": "skill",
+                    "c": 0, "l": 1, "snip": "s", "tf": {"z": 1}}], {})
         assert key not in rag._CACHE
 
 
@@ -753,8 +753,8 @@ class TestLoadRaw:
         assert rag._load_raw() is None
 
     def test_pops_cache_when_file_disappears(self, sandbox):
-        rag._save([{"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 1,
-                    "snip": "s", "tf": {"z": 1}}], {})
+        rag._save([{"n": "a", "t": "x/y", "f": "a/SKILL.md", "k": "skill",
+                    "c": 0, "l": 1, "snip": "s", "tf": {"z": 1}}], {})
         key = str(rag.index_path())
         assert rag._load_raw() is not None
         assert key in rag._CACHE
@@ -764,8 +764,8 @@ class TestLoadRaw:
 
     def test_reparses_when_mtime_changes(self, sandbox):
         import os
-        rag._save([{"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 1,
-                    "snip": "s", "tf": {"z": 1}}], {})
+        rag._save([{"n": "a", "t": "x/y", "f": "a/SKILL.md", "k": "skill",
+                    "c": 0, "l": 1, "snip": "s", "tf": {"z": 1}}], {})
         first = rag._load_raw()
         assert first["stats"]["docs"] == 1          # cached (mtime, A)
         p = rag.index_path()
@@ -804,9 +804,9 @@ class TestRetrieveInternals:
     def test_max_score_per_item_kept_across_chunks(self, sandbox):
         # two chunks of one item; first (doc 0) is the better snippet
         self._save_docs([
-            {"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 3,
+            {"n": "a", "t": "x/y", "f": "a/SKILL.md", "k": "skill", "c": 0, "l": 3,
              "snip": "FIRST", "tf": {"widget": 1}},
-            {"n": "a", "t": "x/y", "k": "skill", "c": 1, "l": 3,
+            {"n": "a", "t": "x/y", "f": "a/SKILL.md", "k": "skill", "c": 1, "l": 3,
              "snip": "SECOND", "tf": {"widget": 1}},
         ])
         hits = rag.retrieve("widget", entries=[_entry("a", tap="x/y")])
@@ -815,9 +815,9 @@ class TestRetrieveInternals:
 
     def test_ranks_by_score_not_name(self, sandbox):
         self._save_docs([
-            {"n": "aaa", "t": "x/y", "k": "skill", "c": 0, "l": 5,
+            {"n": "aaa", "t": "x/y", "f": "aaa/SKILL.md", "k": "skill", "c": 0, "l": 5,
              "snip": "sa", "tf": {"widget": 1}},
-            {"n": "zzz", "t": "x/y", "k": "skill", "c": 0, "l": 5,
+            {"n": "zzz", "t": "x/y", "f": "zzz/SKILL.md", "k": "skill", "c": 0, "l": 5,
              "snip": "sz", "tf": {"widget": 5}},
         ])
         hits = rag.retrieve("widget", entries=[_entry("aaa", tap="x/y"),
@@ -827,9 +827,9 @@ class TestRetrieveInternals:
     def test_kind_filter_continues_past_wrong_kind(self, sandbox):
         # the wrong-kind doc has the lower id: a `break` would drop the match
         self._save_docs([
-            {"n": "ra", "t": "x/y", "k": "rule", "c": 0, "l": 1, "snip": "r",
+            {"n": "ra", "t": "x/y", "f": "ra/SKILL.md", "k": "rule", "c": 0, "l": 1, "snip": "r",
              "tf": {"widget": 1}},
-            {"n": "sk", "t": "x/y", "k": "skill", "c": 0, "l": 1, "snip": "s",
+            {"n": "sk", "t": "x/y", "f": "sk/SKILL.md", "k": "skill", "c": 0, "l": 1, "snip": "s",
              "tf": {"widget": 1}},
         ])
         hits = rag.retrieve("widget", kind="skill",
@@ -840,9 +840,9 @@ class TestRetrieveInternals:
     def test_absent_from_live_set_continues(self, sandbox):
         # doc 0 is not in the live set; a `break` would drop the live doc 1
         self._save_docs([
-            {"n": "gone", "t": "x/y", "k": "skill", "c": 0, "l": 1,
+            {"n": "gone", "t": "x/y", "f": "gone/SKILL.md", "k": "skill", "c": 0, "l": 1,
              "snip": "g", "tf": {"widget": 1}},
-            {"n": "live", "t": "x/y", "k": "skill", "c": 0, "l": 1,
+            {"n": "live", "t": "x/y", "f": "live/SKILL.md", "k": "skill", "c": 0, "l": 1,
              "snip": "L", "tf": {"widget": 1}},
         ])
         hits = rag.retrieve("widget", entries=[_entry("live", tap="x/y")])
@@ -909,8 +909,8 @@ class TestRerankExact:
 
 class TestSearchForwarding:
     def _ready_index(self):
-        rag._save([{"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 1,
-                    "snip": "s", "tf": {"z": 1}}], {})
+        rag._save([{"n": "a", "t": "x/y", "f": "a/SKILL.md", "k": "skill",
+                    "c": 0, "l": 1, "snip": "s", "tf": {"z": 1}}], {})
 
     def test_forwards_retrieve_args(self, sandbox, monkeypatch):
         self._ready_index()
@@ -961,8 +961,8 @@ class TestEngineRouting:
     """search() prefers the dense backend, floors to BM25, else falls back."""
 
     def _bm25_ready(self):
-        rag._save([{"n": "a", "t": "x/y", "k": "skill", "c": 0, "l": 1,
-                    "snip": "s", "tf": {"react": 1}}], {})
+        rag._save([{"n": "a", "t": "x/y", "f": "a/SKILL.md", "k": "skill",
+                    "c": 0, "l": 1, "snip": "s", "tf": {"react": 1}}], {})
 
     def test_dense_alone_when_bm25_has_no_index(self, sandbox, monkeypatch):
         # Renamed: this never set up a BM25 index, so it was measuring "dense
@@ -1035,7 +1035,8 @@ class TestEngineRouting:
         self._bm25_ready()
         monkeypatch.setattr(dense_mod, "ready", lambda: True)
         monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: [
-            {"entry": {"name": "d", "tap": "x/y"}, "score": 9.0, "snippet": "D"}])
+            {"entry": {"name": "d", "tap": "x/y", "skill_md": "d/SKILL.md"},
+             "score": 9.0, "snippet": "D"}])
         hits, label = rag.search("react", smart=False,
                                  entries=[_entry("a", tap="x/y")])
         assert "hybrid" in label.lower(), label

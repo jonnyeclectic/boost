@@ -77,7 +77,8 @@ class _FakeCon:
 
 
 def _e(name, body, tap="acme/skills", kind="skill"):
-    return {"name": name, "tap": tap, "kind": kind, "skill_md": "s",
+    return {"name": name, "tap": tap, "kind": kind,
+            "skill_md": "skills/%s/SKILL.md" % name,
             "_body": body}
 
 
@@ -315,9 +316,9 @@ class TestRetrieveRanking:
         self._con(
             wired,
             knn=[(1, 0.0), (2, 0.5), (3, 0.9)],
-            chunks=[(1, "jest", "acme/skills", "skill", "s1"),
-                    (2, "pytest", "acme/skills", "skill", "s2"),
-                    (3, "ghost", "gone/tap", "skill", "s3")])
+            chunks=[(1, "acme/skills", "skills/jest/SKILL.md", "skill", "s1"),
+                    (2, "acme/skills", "skills/pytest/SKILL.md", "skill", "s2"),
+                    (3, "gone/tap", "skills/ghost/SKILL.md", "skill", "s3")])
         hits = dense.retrieve("q", entries=_ENTRIES)
         assert [h["entry"]["name"] for h in hits] == ["jest", "pytest"]
         assert hits[0]["score"] == pytest.approx(1.0)
@@ -329,8 +330,8 @@ class TestRetrieveRanking:
         self._con(
             wired,
             knn=[(1, 0.9), (2, 0.1)],            # same entry, two chunks
-            chunks=[(1, "jest", "acme/skills", "skill", "low"),
-                    (2, "jest", "acme/skills", "skill", "high")])
+            chunks=[(1, "acme/skills", "skills/jest/SKILL.md", "skill", "low"),
+                    (2, "acme/skills", "skills/jest/SKILL.md", "skill", "high")])
         hits = dense.retrieve("q", entries=[_ENTRIES[0]])
         assert len(hits) == 1
         assert hits[0]["score"] == pytest.approx(0.9)   # 1 - 0.1, the max
@@ -340,8 +341,8 @@ class TestRetrieveRanking:
         self._con(
             wired,
             knn=[(1, 0.0), (2, 0.0)],
-            chunks=[(1, "jest", "acme/skills", "skill", "s1"),
-                    (2, "pyrule", "acme/skills", "rule", "s2")])
+            chunks=[(1, "acme/skills", "skills/jest/SKILL.md", "skill", "s1"),
+                    (2, "acme/skills", "skills/pyrule/SKILL.md", "rule", "s2")])
         entries = [_e("jest", ""), _e("pyrule", "", kind="rule")]
         hits = dense.retrieve("q", kind="skill", entries=entries)
         assert [h["entry"]["name"] for h in hits] == ["jest"]
@@ -350,8 +351,8 @@ class TestRetrieveRanking:
         self._con(
             wired,
             knn=[(1, 0.0), (2, 0.5)],
-            chunks=[(1, "jest", "acme/skills", "skill", "s1"),
-                    (2, "pytest", "acme/skills", "skill", "s2")])
+            chunks=[(1, "acme/skills", "skills/jest/SKILL.md", "skill", "s1"),
+                    (2, "acme/skills", "skills/pytest/SKILL.md", "skill", "s2")])
         assert len(dense.retrieve("q", k=1, entries=_ENTRIES)) == 1
 
     def test_empty_knn_returns_empty_list(self, wired):
@@ -363,7 +364,7 @@ class TestRetrieveRanking:
         self._con(
             wired,
             knn=[(1, 0.0), (99, 0.5)],
-            chunks=[(1, "jest", "acme/skills", "skill", "s1")])
+            chunks=[(1, "acme/skills", "skills/jest/SKILL.md", "skill", "s1")])
         hits = dense.retrieve("q", entries=_ENTRIES)
         assert [h["entry"]["name"] for h in hits] == ["jest"]
 
@@ -397,8 +398,8 @@ class TestBuildWithoutExtension:
         def _plain_schema(con, dim):
             con.execute(
                 "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY"
-                " AUTOINCREMENT, name TEXT, tap TEXT, kind TEXT, cix INTEGER,"
-                " snip TEXT)")
+                " AUTOINCREMENT, name TEXT, tap TEXT, path TEXT, kind TEXT,"
+                " cix INTEGER, snip TEXT)")
             con.execute(
                 "CREATE INDEX IF NOT EXISTS chunks_tap ON chunks(tap)")
             con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY,"
