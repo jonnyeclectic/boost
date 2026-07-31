@@ -1128,8 +1128,13 @@ class TestReindex:
         boost("reindex", "--dense")
         assert dense.ready() is True
         r = boost("search", "brainstorming")
-        assert "ranked by dense vectors" in r.out
-        assert "full-content BM25" not in r.out
+        # Both indexes are built here, so retrieve_any fuses rather than
+        # picking: the label names both engines. It used to read "ranked by
+        # dense vectors", from when a ready dense store ended the search —
+        # see rag.retrieve_any for why the golden-set tie retired that.
+        assert "ranked by hybrid RRF (BM25 + dense)" in r.out
+        assert "ranked by BM25 full-content" not in r.out, \
+            "a built dense store must still contribute, not be bypassed"
 
     def test_empty_store_warns_instead_of_reporting_success(
             self, boost, tapped, monkeypatch):

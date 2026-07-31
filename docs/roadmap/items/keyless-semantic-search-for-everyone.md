@@ -194,3 +194,69 @@ A rerun stored all 3740, and two 30-batch replays never reproduced a failure, so
 resource pressure rather than a defect &mdash; the retry path (no commit recorded for a failed tap)
 did its job. The figures above come from a complete index.
 
+<b>Step 4 shipped, measured against the same 91 queries.</b> <code>retrieve_any</code> no longer
+picks an engine; it over-fetches <code>RRF_K</code>=60 from each and fuses by reciprocal rank,
+<code>1/(60+rank)</code> summed, keyed on <code>(name, tap)</code> &mdash; the key both engines
+already dedupe on. Adding a <code>hybrid</code> column to the eval:
+<code>catalog.search</code> hit@1 0.714; BM25 hit@1 0.780, recall 1.000, MRR 0.860, nDCG 0.895;
+dense hit@1 0.780, recall 0.956, MRR 0.853, nDCG 0.876; <b>hybrid hit@1 0.813, recall 0.978, MRR
+0.883, nDCG 0.905</b>.
+
+Hybrid leads on <code>hit@1</code>, MRR and nDCG, and gives up 2 queries of recall to BM25.
+<b>Neither difference is significant</b> by the bar set above: +3 net queries on hit@1 and &minus;2
+on recall, both inside the ~6-query floor for <em>p</em>&lt;0.05 at this <em>n</em>. So the case for
+fusing is not "it scores higher" &mdash; it is that fusing is the only option that is <em>at or near
+best on both query shapes</em>, where preferring either engine is measurably wrong for half of them.
+
+<b>This reverses a deliberate earlier decision</b>, and that is worth flagging rather than burying:
+<code>test_a_non_empty_dense_result_is_still_final</code> existed precisely to stop
+<code>retrieve_any</code> "always running BM25 too". Its premise was that a dense hit is the better
+answer, which the tie above retires. The other half of that fix &mdash; an <em>empty</em> dense
+result is a thin index, not a verdict, and must fall through to BM25 &mdash; still stands and is
+still tested.
+
+<b>One honest counter-observation.</b> On two hand-picked human-phrased queries, fusion at k=3
+<em>lost</em> the best dense hit: <code>"my app is slow"</code> dropped
+<code>performance-optimization</code> and <code>"I need to make my website accessible"</code>
+dropped <code>accessibility-guidelines</code>, in both cases because a junk BM25 rank-1 outweighed a
+good dense rank-2. That is exactly the tradeoff this card predicted &mdash; "rank fusion discards
+confidence" &mdash; and it is an anecdote at n=2 against a measured win at n=91, so it did not block
+shipping. It is the strongest argument for the query set step 6 still needs, and the first thing to
+re-measure once that exists.
+
+<b>Step 6's real deliverable, and it settles the question.</b> The missing piece was never a number
+&mdash; it was a query set of the shape this feature exists for.
+<code>tests/eval/golden-natural.jsonl</code> is 50 queries written from each target's own
+<code>description</code> and nothing else, phrased as a user problem, with the target's distinctive
+name tokens deliberately excluded (a query containing "docker" finds <code>docker-expert</code> by
+string match and measures nothing). The whole set was written <em>before</em> any engine was run
+against it and scored once, so it could not be selected to flatter a result already seen. A
+mechanical check caught five queries that had leaked a name token and they were rewritten.
+
+Over the same corpus at k=10, 50 queries: <code>catalog.search</code> recall 0.330 hit@1 0.080;
+<b>BM25 recall 0.690 hit@1 0.240</b>; <b>dense recall 0.760 hit@1 0.420</b>;
+<b>hybrid RRF recall 0.820 hit@1 0.420</b> MRR 0.559 nDCG 0.614.
+
+<b>BM25 collapses on this shape</b> &mdash; hit@1 falls from 0.780 on the keyword set to
+<b>0.240</b> here, recall from 1.000 to 0.690. And dense beats it by <b>+9 net queries</b> on hit@1
+(21 of 50 against 12), which clears the ~6-query significance floor this card set. <b>That is the
+first significant retrieval difference anyone has measured in this repo</b>, and it is in the
+opposite direction from the keyword set.
+
+So the two sets together say something neither says alone. On keyword queries BM25 and dense tie and
+hybrid edges ahead; on natural queries BM25 is far behind and hybrid is at-or-above dense on every
+metric. <b>Hybrid is the only engine that is at or near best on both shapes</b> &mdash; which is
+precisely the argument step 4 was shipped on, now with a significant margin behind it rather than
++3 queries inside the noise.
+
+One caveat the slice exposes: <code>skill</code> queries score hit@1 0.459 against
+<code>workflow</code> 0.308. The workflows in this corpus are overwhelmingly
+<code>&lt;technology&gt;-expert</code> agents, so a problem-phrased query has to bridge from a
+symptom to a product name with no shared vocabulary at all &mdash; the hardest case, and the one
+where a larger embedding model would most likely show its value. Worth re-running against Voyage
+before concluding the local model is enough.
+
+The set is deliberately <b>not</b> wired into <code>make eval</code> or the required gate: it needs
+the <code>[rag]</code> extra and a built store, and its purpose is comparing engines rather than
+flooring one. Run it with <code>--golden tests/eval/golden-natural.jsonl</code>.
+
