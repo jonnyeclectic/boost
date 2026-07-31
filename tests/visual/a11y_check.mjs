@@ -74,6 +74,31 @@ for (const rel of PAGES) {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900 });
   await page.goto("file://" + file, { waitUntil: "load" });
+
+  // Guard: prove the shared stylesheet actually applied before trusting a
+  // single contrast result. Every page links ../style/boost.css RELATIVELY over
+  // file://, which only works because of --allow-file-access-from-files, and
+  // that flag has intermittently not taken effect on the runner. When it
+  // fails, `var(--text-3)` resolves to a browser default and axe reports a
+  // dozen confident, specific, entirely fictional contrast violations against
+  // colours that appear nowhere in this repository (#505467, #656a81 — the
+  // real token is #767c96 at 4.85:1, comfortably AA).
+  //
+  // Failing here is the whole point: "stylesheet did not load" is one line a
+  // maintainer can act on, where the alternative sends them auditing a colour
+  // that has been correct for months.
+  const styled = await page.evaluate(() =>
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--text-3").trim());
+  if (!styled) {
+    console.error(`FAIL ${rel} — style/boost.css did not apply `
+      + `(--text-3 unresolved); every contrast result on this page would be `
+      + `meaningless, so the run is aborted rather than reported`);
+    violatingNodes++;
+    await page.close();
+    continue;
+  }
+
   await page.evaluate(axeSource);
   const result = await page.evaluate(
     async (tags) => await window.axe.run(document, { runOnly: { type: "tag", values: tags } }),
