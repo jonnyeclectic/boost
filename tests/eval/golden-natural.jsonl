@@ -1,0 +1,84 @@
+# Natural-language retrieval judgments — the queries golden.jsonl does not contain.
+#
+# WHY THIS FILE EXISTS. golden.jsonl grades catalog items by NAME, and its queries
+# carry the vocabulary of the docs they target ("generate algorithmic art with
+# p5.js flow fields"). That is BM25's home ground: measured over the pinned
+# corpus it scores recall 1.000 there, which CLAUDE.md records as expected. So
+# the set cannot distinguish retrieval engines on the thing the keyless dense
+# work was built for — a user describing a PROBLEM in their own words.
+#
+# METHOD, stated so it can be checked rather than trusted:
+#   1. Every query was written from the target's own `description` field and
+#      nothing else. No retrieval was run against any engine while composing —
+#      the whole set was written first and scored once, so the queries could not
+#      be selected to flatter a result already seen. That ordering is the point;
+#      see keyless-semantic-search-for-everyone for why fitting and reporting on
+#      one set is the failure mode here.
+#   2. Queries deliberately AVOID the target's distinctive name tokens. A query
+#      containing "docker" finds docker-expert by string match and measures
+#      nothing. "my containers keep restarting" is the question a user actually
+#      has.
+#   3. Where two items genuinely serve one intent (mcp-builder and build-mcp are
+#      near-duplicates in this corpus), both are listed relevant. Grading one as
+#      wrong would penalise an engine for a corpus duplication, not a retrieval
+#      failure.
+#
+# HOW TO RUN. Needs the pinned corpus (scripts/ensure_eval_corpus.sh) and, for
+# the dense/hybrid columns, the [rag] extra plus a built store:
+#   python3 scripts/eval_retrieval.py --golden tests/eval/golden-natural.jsonl -k 10
+# NOT wired into `make eval` or the required gate: that gate must stay
+# deterministic and offline-ish, and this set is for comparing engines rather
+# than flooring one. Adding it to the gate would also floor a number nobody has
+# argued for yet.
+#
+# One JSON object per line: {query, relevant[], kind, note}
+{"query": "my writing is too wordy and people skim past the important parts", "relevant": ["write-concisely"], "kind": "skill", "note": "clarity, no shared vocabulary with the name"}
+{"query": "an error surfaces deep in the call stack and I cannot tell what originally triggered it", "relevant": ["root-cause-tracing"], "kind": "skill", "note": "tracing back from a symptom"}
+{"query": "I keep patching symptoms instead of whatever is actually wrong underneath", "relevant": ["why", "root-cause-tracing"], "kind": "skill", "note": "five-whys intent"}
+{"query": "what convention should I follow for the messages I write when recording changes in git", "relevant": ["commit"], "kind": "skill", "note": "conventional commits"}
+{"query": "I keep stashing half-finished work every time I have to switch branches", "relevant": ["git-worktrees"], "kind": "skill", "note": "worktrees without naming them"}
+{"query": "I want to attach review status to a commit without rewriting any history", "relevant": ["git-notes"], "kind": "skill", "note": "metadata on commits"}
+{"query": "check what I changed for injection flaws and leaked credentials before it goes in", "relevant": ["security-auditor"], "kind": "workflow", "note": "vulnerability review"}
+{"query": "am I actually exercising the risky paths or only the easy ones", "relevant": ["test-coverage-reviewer"], "kind": "workflow", "note": "coverage quality"}
+{"query": "read through my diff and tell me what is broken in it", "relevant": ["bug-hunter"], "kind": "workflow", "note": "defect finding"}
+{"query": "does this change follow the conventions the rest of the project uses", "relevant": ["code-reviewer"], "kind": "workflow", "note": "guideline adherence"}
+{"query": "I need a single page covering what went wrong, why it happened and what we will do", "relevant": ["analyse-problem"], "kind": "skill", "note": "A3 report"}
+{"query": "help me lay out everything that might be contributing, grouped into categories", "relevant": ["cause-and-effect"], "kind": "skill", "note": "fishbone"}
+{"query": "I want to run small controlled experiments and keep iterating on the result", "relevant": ["plan-do-check-act"], "kind": "skill", "note": "PDCA"}
+{"query": "drive my locally running site in a real browser and confirm it behaves", "relevant": ["webapp-testing"], "kind": "skill", "note": "playwright without the word"}
+{"query": "get the text out of a scanned document so I can search it", "relevant": ["pdf"], "kind": "skill", "note": "extraction"}
+{"query": "I need to edit a Word file programmatically", "relevant": ["docx"], "kind": "skill", "note": "office format"}
+{"query": "read numbers out of a spreadsheet and write some back", "relevant": ["xlsx"], "kind": "skill", "note": "office format"}
+{"query": "put together a slide deck for a presentation", "relevant": ["pptx"], "kind": "skill", "note": "office format"}
+{"query": "make a short looping animation small enough to post in chat", "relevant": ["slack-gif-creator"], "kind": "skill", "note": "gif constraints"}
+{"query": "make this match our company colours and typefaces", "relevant": ["brand-guidelines"], "kind": "skill", "note": "brand application"}
+{"query": "the interface looks generic and I want it to feel deliberate", "relevant": ["frontend-design"], "kind": "skill", "note": "visual design intent"}
+{"query": "expose an external API as tools an assistant can call", "relevant": ["mcp-builder", "build-mcp"], "kind": "skill", "note": "two near-duplicate items in this corpus"}
+{"query": "the model keeps ignoring part of my instructions", "relevant": ["prompt-engineering"], "kind": "skill", "note": "prompt authoring"}
+{"query": "I am running out of room in the window and important details get dropped", "relevant": ["context-engineering"], "kind": "skill", "note": "context limits"}
+{"query": "I want to package a repeatable procedure so it can be reused later", "relevant": ["skill-creator", "create-skill"], "kind": "skill", "note": "duplicate intent in corpus"}
+{"query": "how do I tell whether my changes to the instructions actually helped", "relevant": ["agent-evaluation"], "kind": "skill", "note": "measuring prompt changes"}
+{"query": "run something automatically every time before code is committed", "relevant": ["create-hook"], "kind": "skill", "note": "git hooks"}
+{"query": "turn this ticket into a proper technical specification", "relevant": ["analyze-issue"], "kind": "skill", "note": "issue to spec"}
+{"query": "open a change request with the right template filled in", "relevant": ["create-pr"], "kind": "skill", "note": "PR creation"}
+{"query": "gather all the unresolved feedback on my change into a task list", "relevant": ["load-pr-comments"], "kind": "skill", "note": "review comments"}
+{"query": "the written guides no longer match what the code does", "relevant": ["update-docs"], "kind": "skill", "note": "stale documentation"}
+{"query": "walk me through writing a guide together step by step", "relevant": ["doc-coauthoring"], "kind": "skill", "note": "structured authoring"}
+{"query": "this needs careful multi-step logic rather than a quick guess", "relevant": ["thought-based-reasoning"], "kind": "skill", "note": "reasoning depth"}
+{"query": "I want several different perspectives to argue about my design before I commit to it", "relevant": ["critique"], "kind": "skill", "note": "multi-judge debate"}
+{"query": "look back over what you just produced and improve on it", "relevant": ["reflect"], "kind": "skill", "note": "self-refinement"}
+{"query": "keep this lesson around so the same mistake is not repeated", "relevant": ["memorize"], "kind": "skill", "note": "persisting insights"}
+{"query": "some of the decisions we recorded are probably out of date now", "relevant": ["decay"], "kind": "skill", "note": "evidence freshness"}
+{"query": "generate visuals from code with a bit of controlled randomness", "relevant": ["algorithmic-art"], "kind": "skill", "note": "creative coding"}
+{"query": "produce a good looking printable document rather than a web page", "relevant": ["canvas-design"], "kind": "skill", "note": "print output"}
+{"query": "apply one consistent look across slides, documents and pages", "relevant": ["theme-factory"], "kind": "skill", "note": "theming"}
+{"query": "what does calling the model actually cost per token", "relevant": ["claude-api"], "kind": "skill", "note": "pricing reference"}
+{"query": "my containers keep restarting and I cannot work out why", "relevant": ["docker-expert"], "kind": "workflow", "note": "avoids the word docker"}
+{"query": "the layout falls apart on a narrow screen", "relevant": ["css-expert"], "kind": "workflow", "note": "responsive layout"}
+{"query": "I want automated tests that click through the app like a person would", "relevant": ["cypress-expert"], "kind": "workflow", "note": "e2e testing"}
+{"query": "our full-text queries have got slow as the index grew", "relevant": ["elasticsearch-expert"], "kind": "workflow", "note": "search performance"}
+{"query": "how should I choose partition and sort keys for this access pattern", "relevant": ["dynamodb-expert"], "kind": "workflow", "note": "key design"}
+{"query": "my shell script fails silently in the pipeline and I never notice", "relevant": ["bash-expert"], "kind": "workflow", "note": "defensive scripting"}
+{"query": "I need to configure a fleet of servers repeatably without doing it by hand", "relevant": ["ansible-expert"], "kind": "workflow", "note": "config management"}
+{"query": "keep database schema versions in step across environments", "relevant": ["flyway-expert"], "kind": "workflow", "note": "migrations"}
+{"query": "background jobs are piling up and not getting processed", "relevant": ["celery-expert", "bullmq-expert"], "kind": "workflow", "note": "two queue libraries, both defensible"}

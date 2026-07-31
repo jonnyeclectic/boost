@@ -223,3 +223,40 @@ good dense rank-2. That is exactly the tradeoff this card predicted &mdash; "ran
 confidence" &mdash; and it is an anecdote at n=2 against a measured win at n=91, so it did not block
 shipping. It is the strongest argument for the query set step 6 still needs, and the first thing to
 re-measure once that exists.
+
+<b>Step 6's real deliverable, and it settles the question.</b> The missing piece was never a number
+&mdash; it was a query set of the shape this feature exists for.
+<code>tests/eval/golden-natural.jsonl</code> is 50 queries written from each target's own
+<code>description</code> and nothing else, phrased as a user problem, with the target's distinctive
+name tokens deliberately excluded (a query containing "docker" finds <code>docker-expert</code> by
+string match and measures nothing). The whole set was written <em>before</em> any engine was run
+against it and scored once, so it could not be selected to flatter a result already seen. A
+mechanical check caught five queries that had leaked a name token and they were rewritten.
+
+Over the same corpus at k=10, 50 queries: <code>catalog.search</code> recall 0.330 hit@1 0.080;
+<b>BM25 recall 0.690 hit@1 0.240</b>; <b>dense recall 0.760 hit@1 0.420</b>;
+<b>hybrid RRF recall 0.820 hit@1 0.420</b> MRR 0.559 nDCG 0.614.
+
+<b>BM25 collapses on this shape</b> &mdash; hit@1 falls from 0.780 on the keyword set to
+<b>0.240</b> here, recall from 1.000 to 0.690. And dense beats it by <b>+9 net queries</b> on hit@1
+(21 of 50 against 12), which clears the ~6-query significance floor this card set. <b>That is the
+first significant retrieval difference anyone has measured in this repo</b>, and it is in the
+opposite direction from the keyword set.
+
+So the two sets together say something neither says alone. On keyword queries BM25 and dense tie and
+hybrid edges ahead; on natural queries BM25 is far behind and hybrid is at-or-above dense on every
+metric. <b>Hybrid is the only engine that is at or near best on both shapes</b> &mdash; which is
+precisely the argument step 4 was shipped on, now with a significant margin behind it rather than
++3 queries inside the noise.
+
+One caveat the slice exposes: <code>skill</code> queries score hit@1 0.459 against
+<code>workflow</code> 0.308. The workflows in this corpus are overwhelmingly
+<code>&lt;technology&gt;-expert</code> agents, so a problem-phrased query has to bridge from a
+symptom to a product name with no shared vocabulary at all &mdash; the hardest case, and the one
+where a larger embedding model would most likely show its value. Worth re-running against Voyage
+before concluding the local model is enough.
+
+The set is deliberately <b>not</b> wired into <code>make eval</code> or the required gate: it needs
+the <code>[rag]</code> extra and a built store, and its purpose is comparing engines rather than
+flooring one. Run it with <code>--golden tests/eval/golden-natural.jsonl</code>.
+
