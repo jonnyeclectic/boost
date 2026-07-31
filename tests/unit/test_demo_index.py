@@ -13,6 +13,7 @@ expects.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -93,9 +94,15 @@ class TestGeneratorIsReproducible:
     def test_the_builder_refuses_without_an_index(self, tmp_path):
         # Emitting an empty demo index would ship a search box that finds
         # nothing, which is worse than failing the build.
-        env = {"BOOST_HOME": str(tmp_path), "PATH": "/usr/bin:/bin",
-               "HOME": str(tmp_path)}
+        #
+        # The environment is INHERITED and then overridden, not built from
+        # scratch: a hand-made {PATH, HOME} dict kills Python on Windows before
+        # it runs a line ("_Py_HashRandomization_Init: failed to get random
+        # numbers"), because it drops SystemRoot. The test then "passes" its
+        # returncode check for entirely the wrong reason.
+        env = dict(os.environ, BOOST_HOME=str(tmp_path))
         proc = subprocess.run([sys.executable, "scripts/build_demo_index.py"],
-                              cwd=str(ROOT), env=env, capture_output=True, text=True)
+                              cwd=str(ROOT), env=env, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace")
         assert proc.returncode == 1
         assert "no BM25 index" in proc.stderr or "no postings" in proc.stderr
