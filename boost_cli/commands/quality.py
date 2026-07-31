@@ -407,24 +407,8 @@ def cmd_doctor(argv):
     return 1 if issues else 0
 
 
-# Why dense retrieval isn't serving, keyed by `dense.status()["reason"]`. Each
-# names the ONE next action; the reason order in `status()` guarantees only the
-# first missing link is ever reported, so these never chain.
-_DENSE_FIX = {
-    "no-backend": "install the extra: `pip install 'boost-skill-cli[rag]'`",
-    # Names the keyless remedy first: since the [rag] extra carries a local
-    # embedding model, an API key is the quality ceiling, not the entry fee.
-    # This reason now means "no key AND no local backend", which in practice is
-    # a partial install or BOOST_NO_EMBED.
-    "no-key": ("reinstall the extra: `pip install 'boost-skill-cli[rag]'` "
-               "(or set VOYAGE_API_KEY / OPENAI_API_KEY for a larger model)"),
-    "no-store": "build it: `boost reindex --dense`",
-    "version-changed": "rebuild it: `boost reindex --dense --force`",
-    "provider-changed": "rebuild it: `boost reindex --dense --force`",
-    "model-changed": "rebuild it: `boost reindex --dense --force`",
-    "dim-changed": "rebuild it: `boost reindex --dense --force`",
-    "empty": "rebuild it: `boost reindex --dense --force`",
-}
+# The remedy table moved to core.dense.fix_hint so `boost search` reports the
+# same next action as `boost doctor` — see that function for why.
 
 
 def _report_search_engine(bad) -> None:
@@ -445,7 +429,7 @@ def _report_search_engine(bad) -> None:
                   st["chunks"], _s(st["chunks"]), st["taps"], _s(st["taps"])))
         return
 
-    fix = _DENSE_FIX.get(str(st["reason"]), "see `boost reindex --dense`")
+    fix = dense.fix_hint(st["reason"])
     if st["degraded"]:
         # The store was built and is now dead weight: say what it holds, what
         # changed, and that search has silently been on BM25 the whole time.

@@ -222,9 +222,9 @@
           <!-- embed -->
           <rect x="480" y="200" width="180" height="86" rx="12" fill="rgba(244,114,208,.07)" stroke="#f472d0" stroke-width="1.2"/>
           <text x="570" y="228" text-anchor="middle" class="head">embed (urllib)</text>
-          <text x="570" y="248" text-anchor="middle" class="lbl-s">Voyage · OpenAI</text>
-          <text x="570" y="265" text-anchor="middle" class="lbl-t" textLength="164" lengthAdjust="spacingAndGlyphs">voyage-3 1024 / t-e-3-small 1536</text>
-          <text x="570" y="280" text-anchor="middle" class="note">opt-in · needs key</text>
+          <text x="570" y="248" text-anchor="middle" class="lbl-s">Voyage · OpenAI · local</text>
+          <text x="570" y="265" text-anchor="middle" class="lbl-t" textLength="164" lengthAdjust="spacingAndGlyphs">voyage-4 1024 / bge-small 384</text>
+          <text x="570" y="280" text-anchor="middle" class="note">opt-in · no key needed</text>
           <line x1="420" y1="170" x2="480" y2="235" stroke="#f472d0" stroke-width="1.4" marker-end="url(#iap)"/>
 
           <!-- dense store -->
@@ -590,13 +590,15 @@ _MCP_TOOLS = REGISTRY.specs()       <span class="cm"># list stays in sync</span>
           <summary>Search by meaning, not words <span class="topic-tag">dense</span></summary>
           <div class="body"><p>An optional upgrade turns every skill into a point in "meaning space,"
             so "test my React app" can find a <code>jest</code> skill even with no shared words —
-            it just finds the nearest points. It's optional because it needs an extra install and a key.</p></div>
+            it just finds the nearest points. It's optional because it needs an extra install — but not a key.</p></div>
         </details>
         <details class="card tech">
           <summary>Dense embeddings + sqlite-vec <span class="topic-tag">Phase 2 · [rag]</span></summary>
           <div class="body"><p>Chunks are embedded via <code>embed</code> over urllib — preferring
-            <code>VOYAGE_API_KEY</code> (<code>voyage-3</code>, 1024-d) then <code>OPENAI_API_KEY</code>
-            (<code>text-embedding-3-small</code>, 1536-d) — and stored in a <code>sqlite-vec</code>
+            <code>VOYAGE_API_KEY</code> (<code>voyage-4</code>, 1024-d), then <code>OPENAI_API_KEY</code>
+            (<code>text-embedding-3-small</code>, 1536-d), and falling back to a local
+            <code>BAAI/bge-small-en-v1.5</code> (384-d) that ships with the extra and needs no
+            key at all — and stored in a <code>sqlite-vec</code>
             <code>vec0(… distance_metric=cosine)</code> table. Retrieval does a KNN over-fetch
             (<code>max(k×8, 200)</code>) then reduces per-entry. A provider/dimension change
             invalidates the store so stale vectors are never served.</p></div>

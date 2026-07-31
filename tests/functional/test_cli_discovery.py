@@ -1162,3 +1162,53 @@ class TestReindex:
         assert "dense vector store is empty" in r.out
         assert "--force" in r.out
         assert dense.ready() is False
+
+
+class TestSearchSemanticHint:
+    """`boost search` must say a better engine exists, not just which one ran.
+
+    The gap this closes: search reported "ranked by full-content BM25" and
+    stopped. A user who installed the [rag] extra but never ran `boost reindex
+    --dense` saw nothing to suggest the semantic search they think they enabled
+    has never once run — `boost doctor` was the only surface that said so, and
+    nobody runs doctor after a search that merely felt mediocre.
+
+    The hint is deliberately quiet, so these tests pin the *silences* as hard as
+    the message: no hint when vectors already served, and none in --json.
+    """
+
+    def test_bm25_only_search_says_semantic_is_off(self, boost, tapped):
+        boost("reindex")
+        r = boost("search", "brainstorming")
+        assert "ranked by full-content BM25" in r.out      # unchanged
+        assert "semantic search is off" in r.out
+
+    def test_hint_names_the_one_next_action(self, boost, tapped):
+        # Without the extra the remedy is the install; with it, the reindex.
+        # Either way exactly one command is named, never the whole setup.
+        boost("reindex")
+        r = boost("search", "brainstorming")
+        line = next(ln for ln in r.out.splitlines() if "semantic search is off" in ln)
+        assert "pip install" in line or "boost reindex --dense" in line
+
+    def test_zero_results_still_hints(self, boost, tapped):
+        # The strongest case for the hint: a keyword engine finding nothing is
+        # exactly the shape of query a semantic one exists to answer.
+        r = boost("search", "zzzznotathinginanycatalog")
+        assert "no matches" in r.out
+        assert "semantic search is off" in r.out
+
+    def test_json_output_carries_no_hint(self, boost, tapped):
+        # --json is parsed by other programs; a stray human line corrupts it.
+        boost("reindex")
+        r = boost("search", "brainstorming", "--json")
+        assert "semantic search is off" not in r.out
+        json.loads(r.out)                                  # still valid JSON
+
+    def test_no_hint_once_dense_is_ready(self, boost, tapped, monkeypatch):
+        # The inverse: a user who finished the setup must never be nagged.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "status", lambda: {"ready": True, "reason": None})
+        boost("reindex")
+        r = boost("search", "brainstorming")
+        assert "semantic search is off" not in r.out
