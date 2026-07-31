@@ -1961,7 +1961,35 @@ runs fine locally (<code>npm ci</code> with <code>npm_config_cache</code> redire
 <em>newly created</em> <code>userDataDir</code> each time, because Chrome on macOS is a
 single-instance app: launching the bundle binary attaches to the running instance instead of starting
 an isolated one. Nothing to fix in the harness &mdash; it is why the reproduction loop belongs on a
-Linux runner (or against Chrome for Testing), not on a developer laptop with Chrome open.</p>
+Linux runner (or against Chrome for Testing), not on a developer laptop with Chrome open.
+
+<b>Cause found &mdash; and my earlier &ldquo;maybe axe is right about the contrast&rdquo; caveat was
+wrong.</b> It is a harness defect, and the harness predicted it in a comment.
+
+<code>a11y_check.mjs</code> loads each page over <code>file://</code> and passes
+<code>--allow-file-access-from-files</code>, with this note: &ldquo;without this Chrome treats each
+file as its own opaque origin and the stylesheet never applies, <em>which would make every contrast
+result meaningless</em>.&rdquo; That is exactly what happens intermittently. Every failing element
+resolves its colour from <code>var(--text-3)</code>, defined once in
+<code>style/boost.css</code> and linked <em>relatively</em> (<code>../style/boost.css</code>).
+
+The arithmetic settles it. The shipped token is <code>#767c96</code>, which is
+<b>4.85:1 on <code>#07080f</code> &mdash; passing AA</b>, and it was already raised once from
+<code>#676d86</code> (3.9:1) by <code>#243</code>. The colours axe reported &mdash;
+<code>#505467</code> on <code>roadmap.html</code>, <code>#656a81</code> on <code>mcp-hub.html</code>
+&mdash; <b>appear nowhere in this repository</b>. They are Chrome's unstyled fallbacks. So both
+&ldquo;contrast failures&rdquo; were the same defect: the stylesheet silently not applying.
+
+<b>The fix is therefore not a colour and not a settle delay.</b> Both would be treating a symptom.
+The real options are to stop depending on a flag that intermittently fails &mdash; serve the docs
+over a throwaway <code>http://</code> origin for the sweep, or inline the stylesheet into a temporary
+copy &mdash; and, more importantly, to <b>fail loudly when it happens</b>: assert that a known token
+resolves before running axe at all, so an unstyled page reports &ldquo;stylesheet did not load&rdquo;
+rather than twenty plausible-looking contrast violations against colours that do not exist.
+
+That guard matters more than the flake. Without it the sweep produces confident, specific,
+<em>entirely wrong</em> findings &mdash; which is what sent me to check a token that had been correct
+for months.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
