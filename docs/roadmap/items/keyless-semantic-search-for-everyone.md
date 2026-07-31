@@ -2,7 +2,7 @@
 id: keyless-semantic-search-for-everyone
 board: code
 section: internals
-status: next
+status: shipped
 category: Retrieval · Architecture
 complexity: L
 impact: High
@@ -383,4 +383,34 @@ refused by every consumer, silently, forever.
 
 <b>Unproven until it runs:</b> the workflow has never executed. The pieces are tested, the YAML
 parses and the pinned action SHAs match the repo's existing ones, but the first real run is the first
-end-to-end exercise. <b>Step 5 (a hosted demo) is now the only part of this epic left.</b>
+end-to-end exercise.
+
+<b>Step 5 is shipped as a keyword demo, and the card should say plainly what that does and does not
+deliver.</b> <code>docs/demo.html</code> runs BM25 in the browser over a real 743-item, six-registry
+catalogue &mdash; a 1.27&nbsp;MB index that gzips to <b>320&nbsp;KB</b>, built by
+<code>scripts/build_demo_index.py</code> from the same index the CLI uses. Nothing installs, nothing
+leaves the visitor's machine, and GitHub Pages already served <code>docs/</code> so no new hosting
+was needed.
+
+<b>Parity is the claim that had to be earned.</b> The page asserts it runs &ldquo;the same BM25
+ranking <code>boost search</code> runs&rdquo;, which is only worth saying if it is true, so the JS
+scorer and tokenizer are ports of <code>rag._bm25</code> and <code>rag.tokenize</code> rather than
+approximations &mdash; same <code>k1=1.2</code>, <code>b=0.75</code>, same idf, same stopwords.
+Verified by running both implementations over six queries and diffing the results:
+<b>top-5 identical on 6/6</b>. Ten tests pin the contract that makes that possible.
+
+<b>What it deliberately does not demo is the semantic half</b>, and the page says so with numbers
+rather than hedging. Embedding a <em>query</em> needs the ~133&nbsp;MB local model; shipping that to
+a visitor is not a free tier, and a hosted inference endpoint means someone pays per query. The page
+therefore states the measured gap it cannot show &mdash; on natural-language queries BM25 scores
+<code>hit@1 0.340</code> against hybrid's <code>0.440</code> &mdash; and links the eval page for the
+full comparison. A demo that quietly implied it was showing semantic search would misrepresent the
+product to exactly the audience the epic is trying to reach.
+
+<b>A cheaper path exists and is recorded rather than taken.</b> A model2vec-class model is ~8&nbsp;MB
+and would make a genuine in-browser semantic demo plausible &mdash; but that rests on the unverified
+~29&nbsp;ms/doc claim in <code>keyless-dense-tier-local-static-embeddings</code>, and it would make
+the docs site load its first external dependency, a property every page currently holds. Worth
+revisiting once that card is measured.
+
+<b>All six steps of this epic are now done.</b>

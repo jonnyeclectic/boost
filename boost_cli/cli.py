@@ -90,6 +90,7 @@ COMMANDS = [
     ("taps",        "tap", "taps", "List all configured registry taps"),
     ("outdated",    "tap", "taps", "Show skills with available updates"),
     # Intelligence (8)
+    ("chat",        "ai", "intelligence", "Ask about skills in plain language (RAG-grounded)"),
     ("distill",     "ai", "intelligence", "Merge multiple skills into one deduplicated skill"),
     ("simulate",    "ai", "intelligence", "Preview how a skill would change Claude's behavior"),
     ("infer",       "ai", "intelligence", "Generate a SKILL.md from your codebase patterns"),

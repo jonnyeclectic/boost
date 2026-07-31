@@ -28,8 +28,12 @@ from ..core import (
     journal,
     lockfile,
     paths,
+    registry,
     store,
     util,
+)
+from ..core import (
+    chat as chat_engine,
 )
 from ..core import output as out
 from ..errors import BoostError
@@ -1035,3 +1039,98 @@ def _repo_activity(since: str) -> Tuple[Optional[int], Optional[int]]:
     if proc.returncode == 0:
         files = len({ln.strip() for ln in proc.stdout.splitlines() if ln.strip()})
     return commits, files
+
+
+def _print_reply(reply: chat_engine.Reply, show_sources: bool) -> None:
+    """Render one answer: the prose, then where it came from.
+
+    Citations are not decoration here. The next thing a user does with an answer
+    is install code that runs inside their agent, so every recommendation has to
+    be checkable against a real catalogue entry.
+    """
+    for line in reply.text.splitlines():
+        out.info(line)
+    if show_sources and reply.skills:
+        out.info("")
+        out.info(out.role("sources · ranked by %s" % reply.engine, "muted"))
+        for cite in chat_engine.citations(reply.skills):
+            out.info(out.role("  %s  %s  (%s)"
+                              % (cite["name"], cite["kind"], cite["tap"]), "muted"))
+    if reply.source == "extractive" and not reply.grounded:
+        # The model answered and was rejected. Saying so beats silently showing
+        # a downgraded answer that looks identical to a confident one.
+        out.warn("the AI reply named something outside the retrieved skills — "
+                 "showing the grounded matches instead")
+
+
+def cmd_chat(argv: List[str]) -> int:
+    """Ask about skills in plain language; answers are grounded in retrieval."""
+    ap = cliparse.parser(
+        prog="boost chat",
+        description="Ask about skills in plain language")
+    ap.add_argument("question", nargs="*", metavar="QUESTION",
+                    help="ask once and exit; omit for an interactive session")
+    ap.add_argument("-k", "--limit", type=int, default=chat_engine.TOP_K,
+                    metavar="N", help="candidate skills to consider (default %d)"
+                                      % chat_engine.TOP_K)
+    ap.add_argument("--no-sources", action="store_true",
+                    help="hide the citation block under each answer")
+    ap.add_argument("--json", action="store_true", dest="as_json",
+                    help="machine-readable answer (implies one-shot)")
+    args = ap.parse_args(argv)
+
+    if not registry.list_taps():
+        raise BoostError("no taps configured — nothing to chat about",
+                        hint="add the recommended registries with `boost tap --defaults`")
+
+    question = " ".join(args.question).strip()
+    if args.as_json:
+        if not question:
+            raise BoostError("--json needs a question",
+                            hint='try: boost chat --json "how do I review a diff?"')
+        reply = chat_engine.answer(question, k=args.limit)
+        print(json.dumps({
+            "question": question,
+            "answer": reply.text,
+            "engine": reply.engine,
+            "source": reply.source,
+            "grounded": reply.grounded,
+            "skills": chat_engine.citations(reply.skills),
+        }))
+        return 0
+
+    if question:
+        _print_reply(chat_engine.answer(question, k=args.limit), not args.no_sources)
+        return 0
+
+    return _chat_session(args)
+
+
+def _chat_session(args) -> int:
+    """The interactive loop. Kept separate so cmd_chat stays a dispatcher.
+
+    History is bounded by chat_engine.HISTORY_TURNS — this is a lookup
+    assistant, and a long transcript encourages answering from the conversation
+    rather than from what retrieval actually returned.
+    """
+    if not ai.available():
+        # Worth saying up front rather than letting every answer look terse for
+        # an unexplained reason.
+        out.info(out.role("no AI configured — answers are the grounded matches "
+                          "themselves (%s)" % ai.fallback_note(), "muted"))
+    out.info(out.role("ask about skills; blank line or Ctrl-D to exit", "muted"))
+    history: List[chat_engine.Turn] = []
+    while True:
+        try:
+            question = input("\n> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            out.info("")
+            return 0
+        if not question:
+            return 0
+        reply = chat_engine.answer(question, history=history, k=args.limit)
+        out.info("")
+        _print_reply(reply, not args.no_sources)
+        history.append(chat_engine.Turn(question, reply.text))
+        for follow in chat_engine.suggest_followups(reply.skills)[:2]:
+            out.info(out.role("  try: %s" % follow, "muted"))
