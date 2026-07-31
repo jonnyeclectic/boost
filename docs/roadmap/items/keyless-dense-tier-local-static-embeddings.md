@@ -56,3 +56,12 @@ cannot go in the default wheel — the shipped runtime is 0.79 MB and every merg
 to main cuts a release, so +17.4 MB × ~24 releases/day exhausts PyPI's 10 GB
 project quota in under a month; it needs a separate, rarely-released data
 package behind an extra.
+<b>Related, and partly overtaken:</b> [[keyless-semantic-search-for-everyone]] shipped a keyless
+path using a <i>transformer</i> (BGE via ONNX Runtime, in the <code>[rag]</code> extra) while this
+item was open. That does not settle the question this card asks &mdash; a static lookup table is
+still far cheaper, and this card's discipline about not shipping a retrieval claim before the eval
+still stands. What it does change is the baseline: "keyless" is no longer the differentiator, so the
+case for a static model now rests on <b>cost</b> (~1&nbsp;ms and no runtime dependency, against a
+measured 233&nbsp;ms cold and 34&nbsp;MB of wheels) rather than on availability. Status left alone
+deliberately &mdash; this is another loop's item to own.
+
