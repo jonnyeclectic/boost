@@ -136,3 +136,23 @@ off the hot path (only 14% of the JSON half now, so much smaller than this card 
 the O(entire-corpus) incremental reindex &mdash; which got cheaper as a side effect, since
 per-document term frequencies are now queryable <em>by document</em> rather than only recoverable by
 inverting every posting. Unowned.
+
+<b>The incremental-reindex figures above are now stale &mdash; re-measured.</b> This card records
+&ldquo;35 s and 1.72 GB RSS at 11.1k entries to reindex a single changed file&rdquo;. On the current
+code at 10,145 entries, a rebuild that reuses <em>every</em> tap and reindexes <b>nothing</b> costs
+<b>5.20 s and 684 MB peak RSS</b>, against 8.15 s for a full forced build. So the two shipped wins
+cut it roughly <b>6.7&times; in time and 2.5&times; in memory</b> without targeting it: unchunking
+removed ~5&times; the documents, and moving postings to SQLite removed the giant JSON parse.
+
+<b>The defect itself is unchanged.</b> 5.20 s to reindex zero files is still O(entire corpus) &mdash;
+<code>_kept_docs</code> calls <code>_postings_to_doc_tf</code>, which inverts every posting in the
+store to recover term frequencies for the taps that did not change. What moved is the priority: this
+is a 5-second annoyance rather than the 35-second crisis the card describes, so it should be weighed
+against the other open work rather than assumed urgent.
+
+<b>The fix is now a smaller change than it was.</b> Postings live in SQLite keyed by document
+position, so the blocker is that a rebuild renumbers every document. Keying rows by the entry's
+stable identity &mdash; <code>(tap, skill_md)</code>, already the retrieval key since <code>#366</code>
+&mdash; instead of by position would make an incremental update a <code>DELETE</code> of the changed
+taps' rows plus an <code>INSERT</code>, with no renumbering and no inversion. That is a schema change
+rather than a format change, which is what the earlier note meant by it getting cheaper.
