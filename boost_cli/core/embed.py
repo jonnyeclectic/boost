@@ -32,6 +32,7 @@ index.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import urllib.error
@@ -101,11 +102,10 @@ def reset_local_cache() -> None:
     global _backend_cache, _model_instance
     _backend_cache = None
     _model_instance = None
-    try:
+    # Nothing to reset when the extra is absent.
+    with contextlib.suppress(Exception):
         from . import localembed
         localembed.reset()
-    except Exception:      # nothing to reset without the extra
-        pass
 
 
 def local_available() -> bool:
@@ -220,7 +220,7 @@ def _embed_local(texts: List[str]) -> Optional[List[List[float]]]:
     if backend is None:
         return None
     try:
-        rows = backend.encode(list(texts))
+        rows = backend.encode(texts.copy())
     except Exception:      # inference failure degrades, never raises
         return None
     if rows is None or len(rows) != len(texts):

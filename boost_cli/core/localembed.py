@@ -101,7 +101,7 @@ def _verified(path: Path, size: int, digest: str) -> bool:
         if path.stat().st_size != size:
             return False
         h = hashlib.sha256()
-        with open(path, "rb") as fh:
+        with path.open("rb") as fh:
             for block in iter(lambda: fh.read(1 << 20), b""):
                 h.update(block)
         return h.hexdigest() == digest
@@ -121,7 +121,7 @@ def _fetch(rel: str, dest: Path, size: int, digest: str) -> bool:
     try:
         dest.parent.mkdir(parents=True, exist_ok=True)
         with nethttp.urlopen(_BASE + rel, timeout=600) as resp, \
-                open(tmp, "wb") as out:
+                tmp.open("wb") as out:
             shutil.copyfileobj(resp, out, 1 << 20)
     except Exception:      # network/disk failure degrades to BM25
         tmp.unlink(missing_ok=True)
@@ -202,7 +202,7 @@ def encode(texts: List[str]) -> Optional[List[List[float]]]:
     if session is None or tok is None:      # unreachable after _load(); for type narrowing
         return None
     try:
-        encoded = tok.encode_batch(list(texts))
+        encoded = tok.encode_batch(texts.copy())
         feed = {}
         wanted = {i.name for i in session.get_inputs()}
         cols = {
