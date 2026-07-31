@@ -393,7 +393,7 @@ class TestLoad:
         monkeypatch.setattr(localembed, "ensure_model",
                             lambda: localembed.model_dir())
         localembed._load()
-        assert tok.truncation == localembed.MAX_TOKENS
+        assert tok.truncation == 512      # literal: see TestPinnedConstants
         assert tok.padded is True
 
     def test_a_missing_model_stops_the_load(self, monkeypatch):
@@ -448,3 +448,44 @@ class TestFetchRenameFailure:
         dest = tmp_path / "f"
         assert localembed._fetch("f", dest, len(BODY), DIGEST) is False
         assert list(tmp_path.glob("*.part")) == []
+
+
+class TestPinnedConstants:
+    """The supply-chain pins, asserted against literals.
+
+    Deliberately duplicating the values rather than comparing a constant to
+    itself. These identify exactly which bytes get loaded into an ONNX runtime,
+    so changing one should require changing this test too — a deliberate act
+    with a diff, not a silent edit. (The truncation test above compares against
+    a literal for the same reason: `tok.truncation == MAX_TOKENS` would pass
+    for any value of MAX_TOKENS.)
+    """
+
+    def test_the_model_repo_and_revision_are_pinned(self):
+        assert localembed.MODEL_REPO == "BAAI/bge-small-en-v1.5"
+        assert localembed.MODEL_REV == "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+        assert len(localembed.MODEL_REV) == 40, "must be a full commit sha"
+
+    def test_the_url_resolves_the_pinned_revision(self):
+        assert localembed._BASE == (
+            "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/"
+            "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a/")
+
+    def test_the_weight_hashes_are_pinned(self):
+        # Verified against huggingface.co's own paths-info for this revision.
+        assert localembed.FILES["onnx/model.onnx"] == (
+            133093490,
+            "828e1496d7fabb79cfa4dcd84fa38625c0d3d21da474a00f08db0f559940cf35")
+        assert localembed.FILES["tokenizer.json"] == (
+            711396,
+            "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66")
+
+    def test_every_pin_is_a_full_sha256(self):
+        for rel, (size, digest) in localembed.FILES.items():
+            assert size > 0, rel
+            assert len(digest) == 64 and all(c in "0123456789abcdef" for c in digest), rel
+
+    def test_the_token_limit_matches_the_model(self):
+        # BGE's positional embeddings stop at 512; a larger value would be
+        # accepted by the tokenizer and rejected by the graph at runtime.
+        assert localembed.MAX_TOKENS == 512
