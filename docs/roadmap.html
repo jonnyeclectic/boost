@@ -1541,7 +1541,34 @@ exists at all is that a bare <code>--upgrade</code> buries one package in unrela
 <code>check_required_checks.py</code> enforces. <b>Fourth</b>, nothing needs to guard the output:
 <code>lock_toolchain.py --audit</code> and <code>requirements/platform-pins.lock</code> already fail
 closed on a lost marker-gated pin, so a regeneration job that got it wrong would be caught the same
-way a Dependabot PR now is.</p>
+way a Dependabot PR now is.
+
+<b>Blocked on a repository setting, and it is the same one that blocks
+[[demo-cannot-open-its-own-pr]].</b> The obvious shape for this &mdash; a scheduled job that runs
+<code>lock_toolchain.py --upgrade</code> and opens a pull request &mdash; cannot work here.
+Actions&nbsp;&rarr;&nbsp;General&nbsp;&rarr;&nbsp;Workflow permissions&nbsp;&rarr;&nbsp;"Allow
+GitHub Actions to create and approve pull requests" is off; the API reports
+<code>can_approve_pull_request_reviews: false</code>, and <code>demo.yml</code> already fails on
+every push to <code>main</code> with <code>GitHub Actions is not permitted to create or approve
+pull requests</code>. Declaring <code>pull-requests: write</code> does not help, as that card
+established at length. Building this the obvious way would produce a second workflow that is
+correct in the file and inert in reality.
+
+So the two items are coupled: flipping that one toggle unblocks both, which is worth knowing when
+weighing it &mdash; the decision is no longer about a demo GIF alone. That card is right that it is
+a real decision, since the toggle grants <em>every</em> workflow the ability to open pull requests.
+
+<b>Two designs that respect the constraint</b>, if the toggle stays off. Actions can still
+<em>push a branch</em>, so the job can regenerate the lock, commit to
+<code>chore/toolchain-lock-YYYY-MM-DD</code> and stop &mdash; leaving a one-click "Compare &amp;
+pull request", with the expensive part (resolving five groups universally with <code>uv</code>)
+already done. Or it can open an <em>issue</em> containing the diff, which
+<code>issues: write</code> does permit. The branch is better: it carries the actual bytes rather
+than a description of them, and <code>lock_toolchain.py --audit</code> then runs against it as a
+normal PR gate once a human opens it.
+
+Either way the freshness gap this item exists to close narrows from "nobody is watching" to "a
+human clicks a button", which is the honest available improvement while the setting stands.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -3083,7 +3110,13 @@ cancel each other, which is where demo's <code>cancelled</code> runs come from. 
 
 Worth reconciling while here: the tree disagrees with itself on the history.
 <code>demo-gif-workflow-has-never-succeeded</code> says "3 runs, 3 failures", while
-<code>demo.yml</code> and <code>ci-failure-issue.yml</code> both say six of six.</p>
+<code>demo.yml</code> and <code>ci-failure-issue.yml</code> both say six of six.
+<b>It is not only the demo any more.</b> [[scheduled-toolchain-lock-regeneration]] needs the same
+permission: since <code>#349</code> switched off Dependabot's version updates for the pinned
+toolchain, the replacement is a scheduled job that regenerates the lock and proposes it &mdash; and
+that job cannot open a pull request either. So this toggle now gates two items rather than one, and
+the second is a supply-chain freshness gap rather than a docs asset. That does not make the
+decision automatic, but it does change what is on each side of it.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
