@@ -149,6 +149,28 @@ class TestHandleRequest:
         assert "before you write a new skill" not in low
         assert "authoring" not in low
 
+    def test_instructions_do_not_understate_what_a_search_costs(self):
+        # The first version of this block said both tools "take about a second".
+        # boost_list does; boost_search does NOT -- it reranks with an LLM by
+        # default, measured at ~12s median against 0.10s without. Shipping a
+        # false cost in the text whose whole job is making the tool worth
+        # reaching for is the one lie that discredits the rest of it, and an
+        # agent that budgeted a second gets a surprise instead of a decision.
+        low = mcp.INSTRUCTIONS.lower()
+        assert "about a second" not in low
+        # State it, and state why it is worth paying rather than just warning.
+        assert "seconds" in low
+        assert "ranks them with an llm" in low or "reranks" in low
+        assert "read-only" in low          # the part that WAS true stays
+
+    def test_instructions_still_separate_the_free_tool_from_the_slow_one(self):
+        # boost_list really is instant, and collapsing the two costs into one
+        # number is what produced the wrong claim. Naming them separately is
+        # what lets an agent reach for the cheap one freely.
+        low = mcp.INSTRUCTIONS.lower()
+        assert "boost_list" in low and "boost_search" in low
+        assert "instant" in low
+
     def test_instructions_route_search_straight_to_install(self):
         # boost_info sat between search and install in the advertised flow, but
         # search already returns each hit's description — the only field that
