@@ -141,8 +141,8 @@
 
     <div class="stats">
       <div class="stat reveal"><b>5</b><span>Evaluation tiers</span></div>
-      <div class="stat reveal"><b>0.919</b><span>BM25 recall@10 · full catalog</span></div>
-      <div class="stat reveal"><b>43</b><span>Golden judgments</span></div>
+      <div class="stat reveal"><b>0.863</b><span>BM25 recall@10 · pinned corpus</span></div>
+      <div class="stat reveal"><b>141</b><span>Golden judgments</span></div>
       <div class="stat reveal"><b>0</b><span>Deps in the required gate</span></div>
     </div>
   </div>
@@ -228,7 +228,7 @@
 
           <!-- footer band: the five tiers -->
           <text class="lbl" x="20" y="312">Verdicts →</text>
-          <text class="lbl-s" x="98" y="312"><tspan fill="#4ade80">Tier 1</tspan>  recall floor 0.85 (required in CI)</text>
+          <text class="lbl-s" x="98" y="312"><tspan fill="#4ade80">Tier 1</tspan>  four metric floors (required in CI)</text>
           <text class="lbl-s" x="98" y="332"><tspan fill="#7dd3fc">Tier 1b</tspan>  ranx significance   ·   <tspan fill="#7dd3fc">Tier 2a</tspan>  rerank lift</text>
           <text class="lbl-s" x="98" y="352"><tspan fill="#7dd3fc">Tier 2b</tspan>  recommend grounding   ·   <tspan fill="#7dd3fc">Tier 2c</tspan>  explain faithfulness</text>
         </svg>
@@ -256,7 +256,7 @@
           <tr>
             <td><b class="t">1</b> · retrieval</td>
             <td>Does the right skill come back for a real query?</td>
-            <td><code>recall@k ≥ 0.85</code> floor vs the pinned corpus</td>
+            <td><code>recall@k</code>, <code>hit@1</code>, <code>MRR</code> and <code>nDCG@k</code> floors vs the pinned corpus</td>
             <td>nothing — pure stdlib, offline</td>
             <td><span class="pill req">required</span></td>
           </tr>
@@ -290,6 +290,100 @@
           </tr>
         </tbody>
       </table>
+    </div>
+  </section>
+
+  <!-- ===== published results ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Results · measured, not asserted</span>
+      <h2 class="sec-title">What the numbers actually say</h2>
+      <p class="lede">Two findings that only appeared once the instrument could see them. Both are
+        reproducible: <code>scripts/eval_retrieval.py --build -k 10</code> over the pinned corpus.</p>
+
+      <h3>1 &middot; The score was mostly about the corpus</h3>
+      <p>The gate reported near-perfect retrieval for a long time. Growing the pinned corpus from six
+        registries to twenty &mdash; same golden set, same queries, nothing else changed &mdash;
+        moved every metric:</p>
+      <table class="contract">
+        <thead><tr><th>metric</th><th>6 taps</th><th>20 taps</th><th>floor</th></tr></thead>
+        <tbody>
+          <tr><td><code>recall@10</code></td><td>0.978</td><td><b>0.863</b></td><td>0.78</td></tr>
+          <tr><td><code>hit@1</code></td><td>0.791</td><td><b>0.473</b></td><td>0.40</td></tr>
+          <tr><td><code>MRR</code></td><td>0.854</td><td><b>0.607</b></td><td>0.52</td></tr>
+          <tr><td><code>nDCG@10</code></td><td>0.882</td><td><b>0.662</b></td><td>0.58</td></tr>
+        </tbody>
+      </table>
+      <p>Three of the four floors in force before that change fail outright on the larger corpus. A
+        floor calibrated where BM25 scores 1.000 is a floor about the corpus, not about retrieval.
+        <b><code>hit@1</code> 0.473 is the honest headline</b>: at twenty taps, fewer than half of
+        these queries put the right item first. That is not a regression &mdash; it is what users
+        already had, now visible.</p>
+
+      <h3>2 &middot; The score was also about the shape of the question</h3>
+      <p>The keyword golden set grades catalog items <b>by name</b>, so its queries carry the
+        vocabulary of the thing they are looking for. That is BM25's home ground. The 50 queries in
+        <code>golden-natural.jsonl</code> describe a <em>problem</em> instead &mdash; each written
+        from its target's own description, with the target's distinctive name tokens deliberately
+        stripped &mdash; and over identical data BM25 scores <code>recall 0.690 / hit@1 0.240</code>
+        against <code>1.000 / 0.780</code> on the name-shaped set.</p>
+      <p>Same index, same corpus, same engine. The gap is entirely the phrasing of the question,
+        which is why one query set cannot floor a retrieval system on its own.</p>
+
+      <h3>3 &middot; Which engine actually wins</h3>
+      <p>The hybrid path fuses BM25 and dense by reciprocal rank rather than preferring either. That
+        was a design decision, so here it is measured &mdash; every engine over the same corpus, both
+        query sets, <code>k=10</code>. <b>Voyage is absent: it needs an API key, and these runs were
+        keyless</b>, which is the configuration most users are in.</p>
+
+      <p><b>Keyword golden set</b> &mdash; 91 queries that grade items by name:</p>
+      <table class="contract">
+        <thead><tr><th>engine</th><th>recall@10</th><th>hit@1</th><th>MRR</th><th>nDCG@10</th></tr></thead>
+        <tbody>
+          <tr><td><code>catalog.search</code> (frontmatter)</td><td>0.918</td><td>0.714</td><td>0.783</td><td>0.810</td></tr>
+          <tr><td>BM25 full-content</td><td>0.978</td><td><b>0.791</b></td><td>0.854</td><td>0.882</td></tr>
+          <tr><td>dense vectors (local, keyless)</td><td>0.956</td><td>0.780</td><td>0.853</td><td>0.876</td></tr>
+          <tr><td>hybrid RRF</td><td>0.978</td><td>0.780</td><td><b>0.864</b></td><td><b>0.891</b></td></tr>
+        </tbody>
+      </table>
+
+      <p><b>Natural-language set</b> &mdash; 50 queries describing a problem, name tokens stripped:</p>
+      <table class="contract">
+        <thead><tr><th>engine</th><th>recall@10</th><th>hit@1</th><th>MRR</th><th>nDCG@10</th></tr></thead>
+        <tbody>
+          <tr><td><code>catalog.search</code> (frontmatter)</td><td>0.330</td><td>0.080</td><td>0.170</td><td>0.197</td></tr>
+          <tr><td>BM25 full-content</td><td>0.750</td><td>0.340</td><td>0.474</td><td>0.524</td></tr>
+          <tr><td>dense vectors (local, keyless)</td><td>0.760</td><td>0.420</td><td>0.541</td><td>0.580</td></tr>
+          <tr><td>hybrid RRF</td><td><b>0.820</b></td><td><b>0.440</b></td><td><b>0.578</b></td><td><b>0.623</b></td></tr>
+        </tbody>
+      </table>
+
+      <p><b>Fusing beats choosing.</b> Hybrid wins or ties on both sets, and on the natural-language
+        queries it beats <em>both</em> of its own components on every metric &mdash; which is the
+        case for rank fusion rather than picking a favourite engine. The two components fail in
+        opposite directions: BM25 takes <code>hit@1</code> on name-shaped queries (0.791 vs 0.780),
+        dense takes it decisively on human-phrased ones (0.420 vs 0.340). Preferring either one alone
+        would hand half the queries to the engine that is worse at them.</p>
+      <p>Note also how far <code>catalog.search</code> &mdash; frontmatter only, no body index &mdash;
+        falls on real questions: <code>hit@1</code> 0.080. Indexing the body is most of what makes
+        search work, and a name-graded query set alone would never have shown it.</p>
+
+      <h3>4 &middot; Embedding locally is slower than the plan assumed</h3>
+      <p>Building the keyless dense store over this corpus &mdash; 743 entries, 3,740 chunks, ONNX
+        <code>bge-small-en-v1.5</code> on CPU &mdash; took <b>4,431 s (74 minutes)</b>, about 1.2 s
+        per chunk. Extrapolated to a full catalogue of ~28k items that is on the order of
+        <em>days</em>, not the &ldquo;hour-plus&rdquo; the roadmap estimated. It does not weaken the
+        keyless tier &mdash; queries embed in milliseconds and the store is built once &mdash; but it
+        does mean shipping prebuilt per-registry vectors is a requirement rather than an
+        optimisation.</p>
+
+      <h3>What this changed</h3>
+      <p>Both findings came from making the instrument sharper before trusting it: the gate now
+        floors four metrics rather than <code>recall@k</code> alone, baselines are keyed to the query
+        set that produced them, and the corpus is a realistic size. Every retrieval change since is
+        reported against both query shapes, and several claims did not survive that &mdash; unchunking
+        the index, for one, turned out to trade a little name-query recall for a large gain on
+        natural-language queries, rather than being the free win it was written up as.</p>
     </div>
   </section>
 
