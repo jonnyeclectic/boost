@@ -120,8 +120,22 @@ class TestProviderSelection:
 
 
 class TestEmbed:
-    def test_none_without_provider(self, sandbox):
+    def test_none_without_provider(self, sandbox, monkeypatch):
+        # `local_available` is forced off for the same reason as the tests in
+        # TestProviderSelection: since the [rag] extra bundles a local model,
+        # "no key" no longer implies "no provider", and `embed` returns real
+        # vectors rather than None once anything has warmed that backend. Left
+        # ambient this passed or failed depending on test ORDER, which made it
+        # a latent flake rather than an assertion about the code.
+        monkeypatch.setattr(embed, "local_available", lambda: False)
         assert embed.embed(["hi"]) is None
+
+    def test_the_local_backend_alone_still_embeds(self, sandbox, monkeypatch):
+        # The other half: with no key but the extra present, embedding works.
+        # That is the keyless tier, and nothing else in this file covers it.
+        monkeypatch.setattr(embed, "local_available", lambda: True)
+        monkeypatch.setattr(embed, "_embed_local", lambda texts, **kw: [[0.1]])
+        assert embed.embed(["hi"]) == [[0.1]]
 
     def test_empty_batch_is_empty_list(self, sandbox, monkeypatch):
         monkeypatch.setenv("OPENAI_API_KEY", "o")
