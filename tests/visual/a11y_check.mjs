@@ -75,25 +75,30 @@ for (const rel of PAGES) {
   await page.setViewport({ width: 1280, height: 900 });
   await page.goto("file://" + file, { waitUntil: "load" });
 
-  // Guard: prove the shared stylesheet actually applied before trusting a
-  // single contrast result. Every page links ../style/boost.css RELATIVELY over
-  // file://, which only works because of --allow-file-access-from-files, and
-  // that flag has intermittently not taken effect on the runner. When it
-  // fails, `var(--text-3)` resolves to a browser default and axe reports a
-  // dozen confident, specific, entirely fictional contrast violations against
-  // colours that appear nowhere in this repository (#505467, #656a81 — the
-  // real token is #767c96 at 4.85:1, comfortably AA).
+  // Guard: prove the page is actually styled before trusting a contrast result.
+  // Most pages link ../style/boost.css RELATIVELY over file://, which only
+  // works because of --allow-file-access-from-files, and that flag has
+  // intermittently not taken effect on the runner. Colours then fall back to
+  // browser defaults and axe reports a dozen confident, specific, entirely
+  // fictional violations against values that appear nowhere in this repo
+  // (#505467, #656a81 — the real --text-3 is #767c96 at 4.85:1, comfortably AA).
   //
-  // Failing here is the whole point: "stylesheet did not load" is one line a
-  // maintainer can act on, where the alternative sends them auditing a colour
-  // that has been correct for months.
+  // Probe --bg, NOT --text-3: docs/commands.html is generated self-contained
+  // with its tokens inline and defines no --text-3 at all, so keying on that
+  // token failed a page that was perfectly styled. --bg is defined by both the
+  // shared sheet and every inline :root block, so it detects an unstyled page
+  // without assuming where the styling came from.
+  //
+  // Failing here is the whole point: "not styled" is one line a maintainer can
+  // act on, where the alternative sends them auditing a colour that has been
+  // correct for months.
   const styled = await page.evaluate(() =>
     getComputedStyle(document.documentElement)
-      .getPropertyValue("--text-3").trim());
+      .getPropertyValue("--bg").trim());
   if (!styled) {
-    console.error(`FAIL ${rel} — style/boost.css did not apply `
-      + `(--text-3 unresolved); every contrast result on this page would be `
-      + `meaningless, so the run is aborted rather than reported`);
+    console.error(`FAIL ${rel} — page is unstyled (--bg unresolved); `
+      + `every contrast result here would be meaningless, so it is reported `
+      + `as a load failure rather than as violations`);
     violatingNodes++;
     await page.close();
     continue;
