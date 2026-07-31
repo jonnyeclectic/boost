@@ -10,7 +10,7 @@ wow: 3
 note: agent reflex
 order: 74
 owner: loop/mcp-nameable-task
-pr: 
+pr: 355
 title: MCP — one benefit, one observable trigger (and stop routing through boost_info)
 ---
 Gemini CLI used the boost MCP server only when asked by hand, never on its own.
