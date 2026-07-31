@@ -9,7 +9,7 @@ impact: High
 wow: 5
 note: the vector store was never the problem — only turning text into vectors needs a key
 order: 0
-owner:
+owner: loop/publish-the-eval
 pr:
 title: Semantic search is gated behind an API key it does not need
 ---
@@ -273,3 +273,32 @@ it, and tune only if the eval says so&rdquo; &mdash; was followed: the benchmark
 the gate work in <code>#365</code>, which floors four metrics instead of recall alone and keys
 baselines to their query set, so BM25-vs-dense-vs-hybrid comparisons are at least falsifiable. What
 step 6 still wants is the published write-up rather than the instrument.
+
+<b>Step 6 is shipped &mdash; the eval is published in <code>docs/eval.html</code>, and it settles
+step 4 with data.</b> Every engine, same corpus, both query sets, <code>k=10</code>. Voyage is
+absent because it needs a key and these runs were keyless, which is the configuration this whole
+epic exists to serve.
+
+On the <b>keyword</b> set (91 queries, graded by name): BM25 <code>0.978 / 0.791 / 0.854 / 0.882</code>,
+dense <code>0.956 / 0.780 / 0.853 / 0.876</code>, hybrid <code>0.978 / 0.780 / <b>0.864</b> /
+<b>0.891</b></code>. On the <b>natural-language</b> set (50 queries, name tokens stripped): BM25
+<code>0.750 / 0.340 / 0.474 / 0.524</code>, dense <code>0.760 / 0.420 / 0.541 / 0.580</code>, hybrid
+<code><b>0.820 / 0.440 / 0.578 / 0.623</b></code>.
+
+<b>Fusing beats choosing, which is what step 4 claimed.</b> Hybrid wins or ties on both sets, and on
+human-phrased queries it beats <em>both</em> of its own components on every metric. The components
+fail in opposite directions exactly as predicted &mdash; BM25 takes hit@1 on name-shaped queries
+(0.791 vs 0.780), dense takes it on human-phrased ones (0.420 vs 0.340) &mdash; so preferring either
+would hand half the queries to the engine that is worse at them. The k=60 default was shipped
+unchanged and the eval did not ask for it to be tuned.
+
+<b>One estimate in this card was badly wrong.</b> Step 2 says embedding the full catalogue on a
+laptop is &ldquo;an hour-plus, which no one will wait for&rdquo;. Measured: building the keyless
+store over <em>743 entries</em> (3,740 chunks, ONNX <code>bge-small-en-v1.5</code> on CPU) took
+<b>4,431 s &mdash; 74 minutes</b>, about 1.2 s per chunk. Extrapolated to ~28k items that is on the
+order of <em>days</em>. This does not weaken the keyless tier: queries embed in milliseconds and the
+store is built once. It does mean <b>step 2 (prebuilt per-registry shards) is a requirement rather
+than an optimisation</b>, and step 3 (local delta top-up) has to stay scoped to genuinely small
+deltas.
+
+<b>Still open:</b> steps 2, 3 and 5.
