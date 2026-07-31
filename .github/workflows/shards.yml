@@ -1,0 +1,137 @@
+name: shards
+
+# Publish prebuilt dense-vector shards, so a keyless user gets semantic search
+# without paying to embed the catalogue themselves.
+#
+# WHY THIS EXISTS. Embedding is ~1.2 s/chunk on CPU — measured at 4,431 s for
+# 743 entries with the shipped ONNX bge-small-en-v1.5. Importing the same rows
+# takes 0.12 s. Without published shards the keyless tier is available in
+# principle and unreachable in practice, which is why step 2 of the
+# keyless-semantic-search roadmap item is a requirement rather than an
+# optimisation.
+#
+# TRIGGER — deliberately NOT chained off release. publish.yml already sits at
+# `ci -> release -> sbom`, which is GitHub's documented three-level
+# workflow_run chain limit; a fourth link would silently never fire. sbom.yml's
+# header records what that failure looks like here: 253 releases, 0 runs, 0
+# assets — a control that looked present and produced nothing. Shards are also
+# keyed on a REGISTRY's commit, not on a boost release, so tying them to our
+# release cadence would be wrong even if the chain allowed it.
+#
+# SCALE — one job per registry, not one job for everything. A 20-tap corpus is
+# ~3.4 h of embedding against the 6 h job limit, and the full 466-registry
+# catalogue is far beyond it. The matrix keeps each job to one registry (the
+# largest pinned tap is ~75 min) and lets failures be per-registry rather than
+# all-or-nothing.
+
+on:
+  workflow_dispatch:
+    inputs:
+      registries:
+        description: "Space-separated owner/repo list (default: the pinned eval corpus)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 4 * * 0"        # weekly, Sunday 04:00 UTC — registries move slowly
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shards-${{ github.ref }}
+  cancel-in-progress: false    # never kill a half-finished embed run
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: pick
+        name: choose the registries to shard
+        # Defaults to tests/eval/taps.txt because that list is already pinned,
+        # already covers the golden targets, and is the corpus every other gate
+        # measures against — so a shard exists for the registries a new user is
+        # most likely to tap first.
+        # Inputs reach the shell through `env`, never through `${{ }}`
+        # interpolation: a workflow_dispatch input is attacker-controlled text,
+        # and interpolating it into `run:` splices it into the script itself.
+        # zizmor flags this as template-injection, correctly — the first draft
+        # of this file had exactly that hole.
+        env:
+          REGISTRIES_INPUT: ${{ inputs.registries }}
+        run: |
+          if [ -n "$REGISTRIES_INPUT" ]; then
+            repos="$REGISTRIES_INPUT"
+          else
+            repos=$(grep -v '^#' tests/eval/taps.txt | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+          fi
+          # Split on whitespace in Python, not the shell: `printf '%s\n' $repos`
+          # relies on word-splitting that does not survive quoting, and produced
+          # a ONE-entry matrix holding all 20 repos as a single string — one job
+          # trying to embed every registry, straight past the 6 h job limit.
+          json=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1].split()))' "$repos")
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
+          echo "sharding: $repos"
+
+  build:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 330        # under the 6 h ceiling, over the ~75 min worst tap
+    strategy:
+      fail-fast: false          # one bad registry must not lose the others' work
+      max-parallel: 4
+      matrix:
+        registry: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: install boost + the [rag] extra
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -e '.[rag]'
+      - name: tap and embed
+        env:
+          BOOST_HOME: ${{ runner.temp }}/boost-home
+          REGISTRY: ${{ matrix.registry }}      # via env, not interpolation
+        run: |
+          .venv/bin/python -m boost_cli tap "$REGISTRY"
+          .venv/bin/python -m boost_cli reindex --dense
+      - name: export the shard
+        env:
+          BOOST_HOME: ${{ runner.temp }}/boost-home
+          REGISTRY: ${{ matrix.registry }}
+        run: |
+          safe=$(printf '%s' "$REGISTRY" | tr '/' '__')
+          .venv/bin/python -m boost_cli reindex --export-shard "$REGISTRY" > "$safe.shard.json"
+          python3 - "$safe.shard.json" <<'PY'
+          import json, sys
+          # Fail here rather than publish an unusable artifact: a shard without
+          # provenance cannot be validated on import and would be refused by
+          # every consumer, silently, forever.
+          shard = json.load(open(sys.argv[1]))
+          missing = [k for k in ("provider", "model", "dim", "commit") if not shard.get(k)]
+          assert not missing, "shard is missing %s" % missing
+          assert shard.get("chunks"), "shard has no chunks"
+          print("shard ok: %d chunks, %s @ %s"
+                % (len(shard["chunks"]), shard["model"], shard["commit"][:8]))
+          PY
+      - name: upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          # Artifacts, not Release assets: shards are keyed on a REGISTRY commit
+          # and refresh on their own cadence, so attaching them to a boost
+          # release would tie two unrelated lifecycles together and re-publish
+          # unchanged vectors on every version bump.
+          name: shard-${{ strategy.job-index }}
+          path: "*.shard.json"
+          if-no-files-found: error
+          retention-days: 90
