@@ -130,6 +130,27 @@ not reproduce here, though import cost is genuinely machine- and version-depende
 may be real on theirs. 233&nbsp;ms is also very likely <i>faster</i> than the Voyage round trip it
 sits beside, and it is paid only by users who installed the extra.
 
+<b>If step 6 is the tie-break, it needs a method and not just a number.</b> The sibling item already
+produced one cautionary result worth inheriting rather than repeating: its own headline, <b>+11.0
+recall / +15.9 hit@1</b>, did not survive verification. Three failures, none specific to a static
+model, all reachable from here. Its baseline used a kind oracle the live search path does not have,
+so the comparison was never against what a user experiences. The blend weight
+(<code>w_dense=0.7</code>) <em>and</em> the rerank pool depth were both tuned by argmax on the same
+82 queries they were then reported on &mdash; fitting and reporting on one set. And at n=82 on a
+binary metric, the smallest net win reaching <em>p</em>&lt;0.05 is <b>6 queries</b>: its
+<code>hit@1</code> (+13 net) clears that bar, while recall (+9) sits at the resolution floor and
+should not have led.
+
+So four constraints on step 6, whichever backend wins. Report <b>McNemar</b> on paired per-query
+outcomes rather than two independent-looking averages, since the engines are scored on the same
+queries. Hold the blend weight and pool depth <b>out</b> of the query set they are scored on. Lead
+with <code>hit@1</code> &mdash; on a golden set this size, recall moves inside its own noise. And
+measure each engine <b>alone</b> before any fusion, so a hybrid win cannot be quietly credited to
+the embedder that did not earn it. One structural caveat also transfers: a skill's name is only
+~10.5% of a mean-pooled surface vector while 106 description clusters are shared across 270 distinct
+names, so a lift measured on today's corpus may <em>shrink</em> rather than hold as the index grows
+toward 50k items &mdash; an argument for re-measuring at scale before believing any of this.
+
 The static approach still wins on cost and would win outright if the quality gap is small &mdash;
 which is exactly what the eval should decide. Its own card is right that neither should ship a
 retrieval <i>claim</i> before that eval exists.
