@@ -15,10 +15,12 @@ no AI -> the BM25 order is returned as-is.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import math
 import re
+import sqlite3
 from collections import defaultdict
 from collections.abc import Sequence
 from pathlib import Path
@@ -34,7 +36,7 @@ from . import ai, catalog, frontmatter, gitutil, paths, registry, util
 # v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
 # chars) so `retrieve` can window it onto the query terms; bump forces a
 # one-time reindex.
-INDEX_VERSION = 5
+INDEX_VERSION = 6
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -218,7 +220,7 @@ def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
 def _postings_to_doc_tf(raw: dict) -> Dict[int, Dict[str, int]]:
     """Invert persisted postings back to per-doc term frequencies."""
     doc_tf: Dict[int, Dict[str, int]] = defaultdict(dict)
-    for term, plist in raw.get("postings", {}).items():
+    for term, plist in (raw.get("postings") or _all_postings()).items():
         for doc_id, tf in plist:
             doc_tf[doc_id][term] = tf
     return doc_tf
@@ -266,6 +268,94 @@ def build(entries: Optional[List[dict]] = None, force: bool = False) -> dict:
     }
 
 
+def postings_path() -> Path:
+    return paths.cache_dir() / "rag_postings.sqlite"
+
+
+def _write_postings(postings: Dict[str, List[List[int]]]) -> None:
+    """Persist the term -> [(doc, tf)] map to SQLite, replacing any existing one.
+
+    Postings were the largest part of the JSON index — measured 64% of it after
+    unchunking — and `json.loads` had to materialise every one of them to answer
+    a query that touches a handful of terms. On a real 83-tap install that was
+    8-13 s and multiple GB resident per cold `boost search`, against 31-70 ms of
+    actual scoring.
+
+    SQLite is used purely as an indexed key-value store here, not as a search
+    engine: BM25 scoring stays in `_bm25` byte for byte, so this changes cold
+    start cost and nothing about which results come back.
+    """
+    paths.ensure_dirs()
+    final = postings_path()
+    tmp = final.with_suffix(".sqlite.tmp")
+    with contextlib.suppress(OSError):
+        tmp.unlink()
+    con = sqlite3.connect(str(tmp))
+    try:
+        # No durability needed: this file is a derived cache, and a crash
+        # mid-build leaves the .tmp behind rather than a torn index.
+        con.execute("PRAGMA journal_mode=OFF")
+        con.execute("PRAGMA synchronous=OFF")
+        con.execute("CREATE TABLE postings (term TEXT, doc INTEGER, tf INTEGER)")
+        con.executemany(
+            "INSERT INTO postings (term, doc, tf) VALUES (?, ?, ?)",
+            ((term, doc, tf) for term, plist in postings.items()
+             for doc, tf in plist))
+        # Built after the insert: maintaining it per-row is far slower.
+        con.execute("CREATE INDEX postings_term ON postings(term)")
+        con.commit()
+    finally:
+        con.close()
+    tmp.replace(final)          # atomic swap, same as the JSON half
+
+
+def read_postings(terms: Sequence[str]) -> Dict[str, List[List[int]]]:
+    """Postings for just these terms — the whole point of the SQLite store.
+
+    A query touches a handful of terms out of tens of thousands, so this reads
+    kilobytes where the JSON index read the entire file.
+    """
+    uniq = sorted(set(terms))
+    if not uniq:
+        return {}
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+    except sqlite3.Error:
+        return {}
+    out: Dict[str, List[List[int]]] = defaultdict(list)
+    try:
+        # Chunked: SQLite caps host parameters (999 on older builds), and a
+        # long query can exceed it.
+        for i in range(0, len(uniq), 500):
+            batch = uniq[i:i + 500]
+            q = ("SELECT term, doc, tf FROM postings WHERE term IN (%s)"  # noqa: S608  interpolates only `?` placeholders; terms are bound params
+                 % ",".join("?" * len(batch)))
+            for term, doc, tf in con.execute(q, batch):
+                out[term].append([doc, tf])
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+    return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
+
+
+def _all_postings() -> Dict[str, List[List[int]]]:
+    """Every posting — only the incremental rebuild path needs this."""
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+    except sqlite3.Error:
+        return {}
+    out: Dict[str, List[List[int]]] = defaultdict(list)
+    try:
+        for term, doc, tf in con.execute("SELECT term, doc, tf FROM postings"):
+            out[term].append([doc, tf])
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+    return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
+
+
 def _save(docs: List[dict], commits: Dict[str, str]) -> None:
     postings: Dict[str, List[List[int]]] = defaultdict(list)
     meta_docs: List[dict] = []
@@ -287,12 +377,12 @@ def _save(docs: List[dict], commits: Dict[str, str]) -> None:
         "stats": {"docs": len(docs),
                   "avg_len": (total_len / len(docs)) if docs else 0.0},
         "docs": meta_docs,
-        "postings": dict(postings.items()),
     }
     paths.ensure_dirs()
     p = index_path()
     # Atomic swap: a bare write_text here can leave a truncated/corrupt index
     # on disk if the process dies mid-write or a query reads concurrently.
+    _write_postings(postings)
     util.atomic_write_text(p, json.dumps(payload))
     # Drop the mtime-keyed cache so a reindex is visible to an immediately
     # following query even when the filesystem mtime granularity is coarse.
@@ -330,9 +420,14 @@ def _load_raw() -> Optional[dict]:
 
 
 def ready() -> bool:
-    """True when a usable index exists on disk."""
+    """True when a usable index exists on disk.
+
+    Both halves are required: the JSON carries the documents, the SQLite file
+    carries the postings, and scoring needs both. A docs-only index reports not
+    ready rather than silently returning zero hits for every query.
+    """
     raw = _load_raw()
-    return bool(raw and raw.get("docs"))
+    return bool(raw and raw.get("docs") and postings_path().exists())
 
 
 def ensure() -> bool:
@@ -354,11 +449,17 @@ def ensure() -> bool:
     return ready()
 
 
-def _bm25(query_terms: List[str], raw: dict) -> Dict[int, float]:
+def _bm25(query_terms: List[str], raw: dict,
+          postings: Dict[str, List[List[int]]]) -> Dict[int, float]:
+    """Score documents for ``query_terms``. Pure: postings are passed in.
+
+    Reading them inside would hide I/O in the one function whose arithmetic is
+    pinned exactly (`TestBm25Math`), and would tie the scorer to where postings
+    happen to live — which is the thing this change moved.
+    """
     docs = raw["docs"]
     n = len(docs)
     avg = raw.get("stats", {}).get("avg_len") or 1.0
-    postings = raw["postings"]
     scores: Dict[int, float] = defaultdict(float)
     for term in set(query_terms):
         plist = postings.get(term)
@@ -487,7 +588,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     live = {entry_key(e): e for e in entries}
     docs = raw["docs"]
     best: Dict[Tuple[str, str], Tuple[float, str, str]] = {}
-    for doc_id, score in _bm25(terms, raw).items():
+    for doc_id, score in _bm25(terms, raw, read_postings(terms)).items():
         d = docs[doc_id]
         if kind is not None and d["k"] != kind:
             continue

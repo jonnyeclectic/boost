@@ -3605,7 +3605,38 @@ taps means scanning every posting whatever the filter. Narrowing the inversion t
 memory but not the scan, and in the common case (one tap of many changed) nearly every document is
 kept, so it saves little of that either. Denormalising <code>tf</code> back into the documents would
 fix it directly but roughly duplicates the 64% that postings already occupy. The real fix is the
-storage format, which is win (2) &mdash; worth treating them as one item rather than two.</p>
+storage format, which is win (2) &mdash; worth treating them as one item rather than two.
+
+<b>Win (2) is shipped: postings now live in SQLite, and a query reads its terms rather than the whole
+index.</b> Measured on the pinned corpus &mdash; JSON 2.05 MB &rarr; <b>0.76 MB</b>, load
+0.015 s &rarr; <b>0.0013 s</b>, cold retrieve <b>0.0003 s</b>.
+
+<b>SQLite as a key-value store, not as FTS5.</b> The card offered FTS5 or a binary format, and FTS5
+was the tempting one &mdash; it is compiled in, verified on CPython 3.14 (SQLite 3.53.4) and system
+3.9 (3.54.0). But FTS5 replaces BM25 with <em>its own</em> ranking: different tokenizer, different
+parameters, different results. The measured problem is cold-start cost, not scoring quality, so
+adopting FTS5 would risk what works to fix what does not. Here <code>_bm25</code> is unchanged byte
+for byte, and the eval gate proves the change is behaviour-neutral: 0.978 / 0.791 / 0.854 / 0.882,
+identical before and after. <code>_bm25</code> also now takes postings as an <em>argument</em>, so
+the one function whose arithmetic is pinned exactly contains no I/O and is not coupled to where
+postings are stored.
+
+<b>The honest cost: total disk goes up.</b> The store is 3.89 MB against 1.31 MB of JSON postings,
+because SQLite keeps the term string on every row plus an index over it. Total on-disk is 4.65 MB
+versus 2.05 MB. This card says <b>&ldquo;target RSS, not bytes&rdquo;</b> and that is why the trade
+is the right way round &mdash; the hot path now reads kilobytes instead of materialising megabytes of
+Python objects &mdash; but it is a real cost, not a free win. Interning terms into a
+<code>term_id</code> table would recover most of it and is the obvious follow-up if the size matters.
+
+<b>Both halves are now required.</b> <code>ready()</code> checks for the postings store as well as
+the documents, so a docs-only index reports not-ready instead of silently scoring every query to
+zero hits. <code>INDEX_VERSION</code> 5 &rarr; 6 forces the one-time rebuild.
+
+<b>Still open:</b> <code>snip</code> text off the hot path &mdash; now only 14% of the JSON half, so
+much smaller than this card assumed &mdash; and the O(entire-corpus) incremental reindex. The latter
+is closer than it was: per-document term frequencies are now queryable by document rather than only
+recoverable by inverting every posting, so scoping the rebuild to the changed taps is a tractable
+follow-up rather than a format change.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
