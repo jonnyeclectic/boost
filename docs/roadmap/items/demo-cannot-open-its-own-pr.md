@@ -54,3 +54,10 @@ cancel each other, which is where demo's <code>cancelled</code> runs come from. 
 Worth reconciling while here: the tree disagrees with itself on the history.
 <code>demo-gif-workflow-has-never-succeeded</code> says "3 runs, 3 failures", while
 <code>demo.yml</code> and <code>ci-failure-issue.yml</code> both say six of six.
+<b>It is not only the demo any more.</b> [[scheduled-toolchain-lock-regeneration]] needs the same
+permission: since <code>#349</code> switched off Dependabot's version updates for the pinned
+toolchain, the replacement is a scheduled job that regenerates the lock and proposes it &mdash; and
+that job cannot open a pull request either. So this toggle now gates two items rather than one, and
+the second is a supply-chain freshness gap rather than a docs asset. That does not make the
+decision automatic, but it does change what is on each side of it.
+
