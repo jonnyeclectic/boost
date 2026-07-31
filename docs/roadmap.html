@@ -889,7 +889,11 @@ store is built once. It does mean <b>step 2 (prebuilt per-registry shards) is a 
 than an optimisation</b>, and step 3 (local delta top-up) has to stay scoped to genuinely small
 deltas.
 
-<b>Still open:</b> steps 2, 3 and 5.</p>
+<b>Still open:</b> steps 2, 3 and 5.
+
+<b>Claim released.</b> Steps 1, 4 and 6 have shipped; steps 2, 3 and 5 are unowned and open. Step 2
+is the one to take next and it is better justified than when it was written: embedding measured at
+~1.2 s/chunk locally, so prebuilt per-registry shards are a requirement rather than an optimisation.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -3468,7 +3472,7 @@ deliberate, and idempotence was the piece missing from it.</p>
       </article>
 
       <article class="cap rcard" id="near-duplicate-items-eat-the-result-slots">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Ranking</span></div>
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Ranking</span></div>
         <h3>Near-duplicate items consume the top-10, and it gets worse with every tap</h3>
         <p>Measured on a real 83-tap install: 11,147 catalog entries carry only 6,997
 unique names — <b>1.593 copies per name, and 56.3% of entries share a name with
@@ -3615,7 +3619,12 @@ before, all four floors passing. That corpus has little content duplication, whi
 <b>Still open:</b> a richer quality prior than <code>curated</code> (the card names stars, recency,
 maintenance; only <code>curated</code> is available on an entry today), and
 <code>core/typosquat.py</code>'s confusion machinery for near-identical rather than byte-identical
-bodies. Both are refinements &mdash; the byte-identical case is 78.3% of the problem.</p>
+bodies. Both are refinements &mdash; the byte-identical case is 78.3% of the problem.
+
+<b>Claim released.</b> The key fix and content-hash dedup have merged; what is left is a richer
+quality prior than <code>curated</code> and near-identical (rather than byte-identical) clustering.
+Unowned and ready for anyone &mdash; the byte-identical case was 78.3% of the problem, so the
+remainder is refinement rather than the bulk.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -3625,7 +3634,7 @@ bodies. Both are refinements &mdash; the byte-identical case is 78.3% of the pro
       </article>
 
       <article class="cap rcard" id="bm25-index-is-one-json-blob">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Index</span></div>
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Index</span></div>
         <h3>The BM25 index is one JSON blob, and it stops working between 10k and 50k items</h3>
         <p><code>rag.py</code> persists the whole index as a single JSON file and
 <code>json.loads</code> it on every invocation. <code>_CACHE</code>
@@ -3743,7 +3752,13 @@ zero hits. <code>INDEX_VERSION</code> 5 &rarr; 6 forces the one-time rebuild.
 much smaller than this card assumed &mdash; and the O(entire-corpus) incremental reindex. The latter
 is closer than it was: per-document term frequencies are now queryable by document rather than only
 recoverable by inverting every posting, so scoping the rebuild to the changed taps is a tractable
-follow-up rather than a format change.</p>
+follow-up rather than a format change.
+
+<b>Claim released.</b> Both &ldquo;cheap wins&rdquo; have merged. What is left is <code>snip</code>
+off the hot path (only 14% of the JSON half now, so much smaller than this card first assumed) and
+the O(entire-corpus) incremental reindex &mdash; which got cheaper as a side effect, since
+per-document term frequencies are now queryable <em>by document</em> rather than only recoverable by
+inverting every posting. Unowned.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -3805,7 +3820,20 @@ still far cheaper, and this card's discipline about not shipping a retrieval cla
 still stands. What it does change is the baseline: "keyless" is no longer the differentiator, so the
 case for a static model now rests on <b>cost</b> (~1&nbsp;ms and no runtime dependency, against a
 measured 233&nbsp;ms cold and 34&nbsp;MB of wheels) rather than on availability. Status left alone
-deliberately &mdash; this is another loop's item to own.</p>
+deliberately &mdash; this is another loop's item to own.
+
+
+<b>Unblocked, and the case for it got stronger.</b> This card says &ldquo;do not ship this before the
+eval and dedup items&rdquo;. Both have now landed: the eval gate floors four metrics over a
+realistic-sized corpus with baselines keyed to their query set, and content-hash dedup has merged.
+
+The new evidence is a timing measurement. Building the <em>shipped</em> ONNX keyless store over 743
+entries (3,740 chunks, <code>bge-small-en-v1.5</code> on CPU) took <b>4,431 s &mdash; 74 minutes</b>,
+about 1.2 s per chunk. This card's static-embedding proposal claims ~29 ms/doc in pure Python. If
+that holds it is a difference of more than an order of magnitude on the doc side, which is exactly
+the cost that makes prebuilt shards mandatory today. Worth measuring the model2vec path directly
+before committing &mdash; but the gap it claims to close is now a measured number rather than an
+estimate.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>

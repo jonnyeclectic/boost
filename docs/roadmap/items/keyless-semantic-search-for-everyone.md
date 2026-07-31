@@ -9,7 +9,7 @@ impact: High
 wow: 5
 note: the vector store was never the problem — only turning text into vectors needs a key
 order: 0
-owner: loop/publish-the-eval
+owner:
 pr:
 title: Semantic search is gated behind an API key it does not need
 ---
@@ -302,3 +302,7 @@ than an optimisation</b>, and step 3 (local delta top-up) has to stay scoped to 
 deltas.
 
 <b>Still open:</b> steps 2, 3 and 5.
+
+<b>Claim released.</b> Steps 1, 4 and 6 have shipped; steps 2, 3 and 5 are unowned and open. Step 2
+is the one to take next and it is better justified than when it was written: embedding measured at
+~1.2 s/chunk locally, so prebuilt per-registry shards are a requirement rather than an optimisation.
