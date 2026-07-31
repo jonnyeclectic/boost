@@ -155,3 +155,42 @@ The static approach still wins on cost and would win outright if the quality gap
 which is exactly what the eval should decide. Its own card is right that neither should ship a
 retrieval <i>claim</i> before that eval exists.
 
+<b>Step 6, run against those four constraints &mdash; and it does not say what this card assumed.</b>
+Corpus rebuilt from <code>tests/eval/taps.txt</code> (6 taps, 743 entries, 3740 passages embedded
+locally), k=10, 91 golden queries. Each engine measured <em>alone</em>, no fusion:
+<code>catalog.search</code> hit@1 0.714, recall 0.918, MRR 0.783; <b>BM25 full-content hit@1
+0.780</b>, recall 1.000, MRR 0.860; <b>dense (local bge-small) hit@1 0.780</b>, recall 0.956, MRR
+0.853.
+
+Leading with <code>hit@1</code> as instructed: <b>71 queries each &mdash; an exact tie.</b> Recall
+differs by 4 queries (91 against 87) and MRR by 0.6, both under the ~6-query floor this card sets
+for <em>p</em>&lt;0.05 at this <em>n</em>. So the honest reading is <b>no significant difference
+between BM25 and local dense on the golden set</b> &mdash; not a win for either. An earlier draft of
+this note claimed BM25 won; that was the recall number leading, which is exactly the error the four
+constraints above were written to prevent.
+
+<b>The more useful result is that the golden set cannot grade this feature at all.</b> It scores
+real catalog items <em>by name</em>, which is BM25's strength by construction &mdash;
+<code>CLAUDE.md</code> already records that BM25 recall over this corpus is 1.000. It contains none
+of the human-phrased queries the keyless work exists for, and on those the two engines separate
+sharply: <code>"my app is slow"</code> returns <code>phoenix-docker-setup</code>,
+<code>guidelines</code>, <code>solidjs---error-boundaries</code> from BM25 against
+<code>analyse-problem</code>, <b><code>performance-optimization</code></b>,
+<code>fastapi-best-practices</code> from dense; <code>"I need to make my website accessible"</code>
+returns <code>do-and-judge</code>, <code>write-concisely</code>, <code>do-in-steps</code> against
+<b><code>accessibility-guidelines</code></b> first. That is a demonstration, not a measurement
+&mdash; there is no scored query set of that shape yet, which is the point.
+
+Three consequences. <b>Step 6's first deliverable is a query set, not a number</b>: golden queries
+in the human-phrased style, or the eval keeps answering a question nobody asked. <b>Step 4 (RRF)
+gains support</b> &mdash; a tie on keyword queries plus a qualitative dense win on human ones is the
+"two engines fail in opposite directions" case, and fusing is the response to it. And <b>the current
+preference order deserves a look</b>: <code>rag.retrieve_any</code> takes dense whenever it is ready
+and non-empty, so shipping step 1 without step 4 silently moved keyword queries onto the engine that
+is, at best, tied for them.
+
+<b>Method note.</b> The first indexing pass reported 3 taps failed to embed (2716 of 3740 passages).
+A rerun stored all 3740, and two 30-batch replays never reproduced a failure, so it was transient
+resource pressure rather than a defect &mdash; the retry path (no commit recorded for a failed tap)
+did its job. The figures above come from a complete index.
+
