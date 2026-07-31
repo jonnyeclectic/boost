@@ -36,7 +36,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from . import nethttp
 
@@ -67,8 +67,10 @@ _DIMS = {VOYAGE_MODEL: 1024, OPENAI_MODEL: 1536, LOCAL_MODEL: LOCAL_DIM}
 # import itself is retried-on-miss rather than repeated: `provider()` runs on
 # effectively every retrieval call.
 _BACKEND_MISSING = object()
-_backend_cache: object = None
-_model_instance = None
+# Deliberately untyped: the backend is core.localembed, imported lazily, so
+# naming its type here would defeat the point of the lazy import.
+_backend_cache: Any = None
+_model_instance: Any = None
 
 
 def enabled() -> bool:
@@ -86,7 +88,7 @@ def _load_backend():
     return localembed if localembed.available() else None
 
 
-def _backend():
+def _backend() -> Any:
     """``_load_backend`` memoised, including the negative result."""
     global _backend_cache
     if _backend_cache is None:

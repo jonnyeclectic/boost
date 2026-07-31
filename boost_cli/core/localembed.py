@@ -155,7 +155,10 @@ def _load():
     if _session is not None and _tokenizer is not None:
         return True
     onnxruntime, tokenizers = _deps()
-    if onnxruntime is None:
+    # Both, not just the first: they are returned as a pair and a partial
+    # install (onnxruntime present, tokenizers missing) would otherwise reach
+    # `tokenizers.Tokenizer` on a None.
+    if onnxruntime is None or tokenizers is None:
         return False
     root = ensure_model()
     if root is None:
@@ -210,10 +213,22 @@ def encode(texts: List[str]) -> Optional[List[List[float]]]:
         for name, col in cols.items():
             if name in wanted:
                 feed[name] = _as_i64(col)
-        out = session.run(None, feed)[0]
-        return [_normalise([float(x) for x in row[0]]) for row in out]
+        return cls_pool(session.run(None, feed)[0])
     except Exception:      # inference failure degrades to BM25
         return None
+
+
+def cls_pool(out) -> List[List[float]]:
+    """Last hidden state -> one L2-normalised CLS vector per row.
+
+    Kept pure and separate from :func:`encode` so the part that decides *what a
+    sentence embedding is* can be tested without an ONNX runtime — it is the
+    step most likely to be silently wrong, since taking the mean instead of the
+    first token still yields plausible-looking vectors of the right width.
+
+    ``out`` is (batch, tokens, hidden); ``row[0]`` is the [CLS] token.
+    """
+    return [_normalise([float(x) for x in row[0]]) for row in out]
 
 
 def _as_i64(rows):
