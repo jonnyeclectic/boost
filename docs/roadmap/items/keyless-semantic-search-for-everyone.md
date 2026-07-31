@@ -260,3 +260,16 @@ The set is deliberately <b>not</b> wired into <code>make eval</code> or the requ
 the <code>[rag]</code> extra and a built store, and its purpose is comparing engines rather than
 flooring one. Run it with <code>--golden tests/eval/golden-natural.jsonl</code>.
 
+
+<b>Step 4 is shipped too.</b> <code>rag.rrf_fuse</code> landed in <code>#360</code> with
+<code>RRF_K = 60</code>, fusing on ranks exactly as described above, and
+<code>retrieve_any</code> reports <code>hybrid RRF</code> when both engines are built. Recording it
+here because this card still read as though only step 1 were done, and the next loop scanning for
+work would have rebuilt it. The step's own instruction &mdash; &ldquo;ship the k=60 default, benchmark
+it, and tune only if the eval says so&rdquo; &mdash; was followed: the benchmark is
+<code>tests/eval/golden-natural.jsonl</code>, and k=60 is untouched.
+
+<b>Steps 2, 3, 5 and 6 remain open.</b> Note that step 6 (publish the eval) is now partly answered by
+the gate work in <code>#365</code>, which floors four metrics instead of recall alone and keys
+baselines to their query set, so BM25-vs-dense-vs-hybrid comparisons are at least falsifiable. What
+step 6 still wants is the published write-up rather than the instrument.

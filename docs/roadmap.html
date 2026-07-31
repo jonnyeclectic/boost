@@ -846,7 +846,21 @@ before concluding the local model is enough.
 
 The set is deliberately <b>not</b> wired into <code>make eval</code> or the required gate: it needs
 the <code>[rag]</code> extra and a built store, and its purpose is comparing engines rather than
-flooring one. Run it with <code>--golden tests/eval/golden-natural.jsonl</code>.</p>
+flooring one. Run it with <code>--golden tests/eval/golden-natural.jsonl</code>.
+
+
+<b>Step 4 is shipped too.</b> <code>rag.rrf_fuse</code> landed in <code>#360</code> with
+<code>RRF_K = 60</code>, fusing on ranks exactly as described above, and
+<code>retrieve_any</code> reports <code>hybrid RRF</code> when both engines are built. Recording it
+here because this card still read as though only step 1 were done, and the next loop scanning for
+work would have rebuilt it. The step's own instruction &mdash; &ldquo;ship the k=60 default, benchmark
+it, and tune only if the eval says so&rdquo; &mdash; was followed: the benchmark is
+<code>tests/eval/golden-natural.jsonl</code>, and k=60 is untouched.
+
+<b>Steps 2, 3, 5 and 6 remain open.</b> Note that step 6 (publish the eval) is now partly answered by
+the gate work in <code>#365</code>, which floors four metrics instead of recall alone and keys
+baselines to their query set, so BM25-vs-dense-vs-hybrid comparisons are at least falsifiable. What
+step 6 still wants is the published write-up rather than the instrument.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -3497,7 +3511,33 @@ would otherwise never match <code>code-reviewer</code>) and the description alon
 <b>Still open:</b> win (2), getting postings out of JSON &mdash; the FTS5 probe and the mmap-able
 binary format are both untouched, as is moving <code>snip</code> text off the hot path. So is
 <code>build()</code>'s O(entire-corpus) incremental path, which still inverts every posting to
-reindex one changed file.</p>
+reindex one changed file.
+
+<b>Where the bytes are now, measured after win (1).</b> This card sends win (2) after two targets:
+postings, and <code>snip</code> text (&ldquo;46.7 MB of the 132 MB&rdquo;, ~35%). That split was a
+property of the <em>chunked</em> index, where every 1000-char window carried its own snippet. With
+one document per entry the balance moves sharply, measured on the pinned 6-tap corpus at 2.05 MB
+total: <b>postings 1.31 MB (64%)</b>, doc metadata 0.46 MB (22%), <b>snips 0.29 MB (14%)</b>, over
+743 documents and 15,639 distinct terms.
+
+So unchunking already collected most of the snippet win, and <b>postings are now the dominant lever
+by a wide margin</b>. Anyone picking up win (2) should size it against 64%, not chase snip at an
+assumed 35%.
+
+<b>FTS5 probe result.</b> Confirmed present on both interpreters available here &mdash; CPython 3.14
+(bundled SQLite 3.53.4) and the macOS system Python 3.9 (SQLite 3.54.0). That supports the card's
+design instruction rather than replacing it: it is still a per-build property, so the runtime probe
+stays required. A distro CPython compiled without <code>ENABLE_FTS5</code> is the case the probe
+exists for.
+
+<b>On the incremental path.</b> The O(entire-corpus) reindex noted above is not separable from win
+(2). <code>_kept_docs</code> calls <code>_postings_to_doc_tf</code> because per-document term
+frequencies exist <em>only</em> inside the postings on disk, so recovering them for the unchanged
+taps means scanning every posting whatever the filter. Narrowing the inversion to kept doc ids saves
+memory but not the scan, and in the common case (one tap of many changed) nearly every document is
+kept, so it saves little of that either. Denormalising <code>tf</code> back into the documents would
+fix it directly but roughly duplicates the 64% that postings already occupy. The real fix is the
+storage format, which is win (2) &mdash; worth treating them as one item rather than two.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
