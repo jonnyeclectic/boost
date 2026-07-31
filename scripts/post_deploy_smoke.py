@@ -42,6 +42,7 @@ PAGES = (
     "",                       # the bare site root (a meta-refresh to the guide)
     "docs/index.html",
     "docs/roadmap.html",
+    "docs/demo.html",
     "docs/design-roadmap.html",
     "docs/commands.html",
     "docs/adapters.html",
