@@ -49,3 +49,14 @@ is worse than a slow one: the natural response is to dismiss it as noise, and th
 <code>color-contrast</code> regression gets dismissed with it. Note also that 3.57:1 is genuinely
 below AA — if the flake turns out to be axe correctly catching a contrast defect that it usually
 <em>misses</em>, the fix is the token, not the harness.
+
+<b>Reproduction attempt: blocked on macOS, do it on a runner.</b> The pinned harness installs and
+runs fine locally (<code>npm ci</code> with <code>npm_config_cache</code> redirected &mdash;
+<code>~/.npm/_cacache</code> is not writable in the agent sandbox), and
+<code>BOOST_CHROME_BIN</code> accepts
+<code>/Applications/Google Chrome.app/Contents/MacOS/Google Chrome</code>. But every launch dies with
+<code>The browser is already running for &lt;fresh profile dir&gt;</code>, on a
+<em>newly created</em> <code>userDataDir</code> each time, because Chrome on macOS is a
+single-instance app: launching the bundle binary attaches to the running instance instead of starting
+an isolated one. Nothing to fix in the harness &mdash; it is why the reproduction loop belongs on a
+Linux runner (or against Chrome for Testing), not on a developer laptop with Chrome open.
