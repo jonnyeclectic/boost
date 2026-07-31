@@ -145,6 +145,22 @@ def dense_ranker(k: int) -> Ranker:
         [h["entry"]["name"] for h in (dense.retrieve(q, k=max(k * 4, 60)) or [])])
 
 
+def hybrid_ranker(k: int) -> Ranker:
+    """BM25 and dense fused by reciprocal rank (rag.rrf_fuse).
+
+    Measured as its own engine rather than inferred from the other two: a
+    hybrid win must not be creditable to whichever component did not earn it,
+    which is why each engine is also reported alone.
+    """
+    def rank(q: str) -> List[str]:
+        pool = max(k * 4, 60)
+        b = rag.retrieve(q, k=pool)
+        d = dense.retrieve(q, k=pool) or []
+        return _dedupe([h["entry"]["name"]
+                        for h in rag.rrf_fuse([b, d], limit=pool)])
+    return rank
+
+
 def rerank_ranker(k: int) -> Ranker:
     """BM25 shortlist reordered by the LLM rerank stage (Tier 2a)."""
     def rank(q: str) -> List[str]:
@@ -369,7 +385,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)
     ap.add_argument("-k", type=int, default=10, help="cutoff for @k metrics")
     ap.add_argument("--engines", default="auto",
-                    help="comma list of catalog,bm25,dense (default: auto)")
+                    help="comma list of catalog,bm25,dense,hybrid (default: auto)")
     ap.add_argument("--build", action="store_true",
                     help="(re)build the BM25 index before evaluating")
     ap.add_argument("--rerank", action="store_true",
@@ -406,10 +422,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if (args.engines == "auto" or "dense" in wanted) and dense.ready():
         if "dense" not in wanted:
             wanted.append("dense")
+    if (args.engines == "auto" or "hybrid" in wanted) and dense.ready():
+        if "hybrid" not in wanted:
+            wanted.append("hybrid")
     factory = {"catalog": catalog_ranker, "bm25": bm25_ranker,
-               "dense": dense_ranker}
+               "dense": dense_ranker, "hybrid": hybrid_ranker}
     labels = {"catalog": "catalog.search", "bm25": "BM25 full-content",
-              "dense": "dense vectors"}
+              "dense": "dense vectors", "hybrid": "hybrid RRF"}
 
     results: List[dict] = []
     per_cases: Dict[str, List[dict]] = {}

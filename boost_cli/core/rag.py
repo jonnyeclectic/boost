@@ -421,10 +421,48 @@ def rerank(query: str, hits: List[Hit], limit: int = 10) -> Tuple[List[Hit], str
     return (picked + rest)[:limit], "Claude relevance"
 
 
+# The damping constant from the original reciprocal-rank-fusion paper. It is
+# why plain RRF needs no tuning: large enough that the top few ranks are close
+# together, so one engine's confident #1 cannot bury the other engine's #2.
+RRF_K = 60
+
+
+def rrf_fuse(rankings: List[List[Hit]], limit: int = 60) -> List[Hit]:
+    """Fuse ranked hit lists by reciprocal rank: ``sum 1/(RRF_K + rank)``.
+
+    Fuses on **ranks, not scores**, which is the whole point. A BM25 score and
+    a cosine similarity are on incomparable scales, so blending them needs a
+    calibration step that has to be fitted and re-fitted per corpus; rank
+    fusion sidesteps it entirely and is the respected zero-tuning default.
+
+    Entries are identified by ``(name, tap)`` — the same key both engines
+    already dedupe on — and the first ranking's hit object wins, so the caller
+    passes BM25 first and keeps its query-term-highlighted snippet for display.
+
+    The returned ``score`` is the fused rank score, not a BM25 score: it exists
+    to order these hits against each other, and comparing it to a raw BM25
+    score from elsewhere would be meaningless.
+    """
+    scores: Dict[Tuple[str, str], float] = {}
+    chosen: Dict[Tuple[str, str], Hit] = {}
+    for hits in rankings:
+        for rank, hit in enumerate(hits, start=1):
+            entry = hit["entry"]
+            key = (entry["name"], entry["tap"])
+            scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
+            chosen.setdefault(key, hit)
+    ordered = sorted(scores, key=lambda key: (-scores[key], key[0], key[1]))
+    fused: List[Hit] = [
+        {"entry": chosen[key]["entry"], "score": scores[key],
+         "snippet": chosen[key]["snippet"]}  # type: ignore[typeddict-item]
+        for key in ordered[:limit]]
+    return fused
+
+
 def retrieve_any(query: str, k: int = 60, kind: Optional[str] = None,
                  entries: Optional[List[dict]] = None
                  ) -> Tuple[Optional[List[Hit]], str]:
-    """Prefer the opt-in dense backend, floor to BM25.
+    """Fuse BM25 and dense when both are available; floor to whichever is.
 
     Returns ``(hits, engine_label)``; ``hits`` is ``None`` only when no index of
     any kind exists so the caller can fall back to ``catalog.search``.
@@ -432,21 +470,37 @@ def retrieve_any(query: str, k: int = 60, kind: Optional[str] = None,
     Public because every retrieval entry point must make the same engine
     choice: `cmd_search` calling ``retrieve`` directly meant the CLI could
     never use a built dense index, while the MCP path could.
+
+    This used to *prefer* dense whenever it was ready. The golden-set eval
+    retired that: over 91 queries BM25 and local dense tie on hit@1, with the
+    recall and MRR gaps inside the noise floor, while human-phrased queries
+    separate them sharply in opposite directions. Preferring either one hands
+    half the queries to the engine that is worse at them, so they are fused.
+
+    Both engines are over-fetched to ``RRF_K`` before fusing. Fusing only the
+    top-k of each would discard exactly the candidates the other engine was
+    going to promote, which is most of the value.
     """
     from . import dense
-    if dense.ready():
-        hits = dense.retrieve(query, k=k, kind=kind, entries=entries)
-        # An empty list is not the same answer as None. ``dense.retrieve``
-        # returns ``[]`` whenever every KNN neighbour was dropped for a kind
-        # mismatch or for no longer being live, which is a *thin index*, not a
-        # verdict on the query — and taking it as final short-circuits the
-        # documented "everything degrades to BM25" contract, so `boost search`
-        # answered "no results" while a perfectly good BM25 index sat unused.
-        # Only a non-empty dense result is final.
-        if hits:
-            return hits, "dense vectors"
-    if ready():
-        return retrieve(query, k=k, kind=kind, entries=entries), "BM25 full-content"
+    pool = max(k, RRF_K)
+    dense_hits = dense.retrieve(query, k=pool, kind=kind,
+                                entries=entries) if dense.ready() else None
+    # An empty list is not the same answer as None. ``dense.retrieve`` returns
+    # ``[]`` whenever every KNN neighbour was dropped for a kind mismatch or
+    # for no longer being live, which is a *thin index*, not a verdict on the
+    # query — and taking it as final short-circuits the documented "everything
+    # degrades to BM25" contract, so `boost search` answered "no results" while
+    # a perfectly good BM25 index sat unused. Only a non-empty dense result
+    # counts as a ranking to fuse.
+    bm25_hits = retrieve(query, k=pool, kind=kind,
+                         entries=entries) if ready() else None
+    if dense_hits and bm25_hits:
+        return (rrf_fuse([bm25_hits, dense_hits], limit=k),
+                "hybrid RRF (BM25 + dense)")
+    if dense_hits:
+        return dense_hits[:k], "dense vectors"
+    if bm25_hits is not None:
+        return bm25_hits[:k], "BM25 full-content"
     return None, ""
 
 

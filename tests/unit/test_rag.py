@@ -1018,18 +1018,26 @@ class TestEngineRouting:
         monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: [])
         assert rag.search("react", smart=False) is None
 
-    def test_a_non_empty_dense_result_is_still_final(self, sandbox, monkeypatch):
-        # The fix must not turn into "always run BM25 too": a real dense hit
-        # ends the search, even with a BM25 index present that would rank
-        # something else first.
+    def test_a_non_empty_dense_result_is_now_fused_not_final(self, sandbox,
+                                                             monkeypatch):
+        # SUPERSEDED CONTRACT, deliberately. This used to assert that a real
+        # dense hit ended the search — "the fix must not turn into 'always run
+        # BM25 too'". The golden-set eval retired the premise: dense does not
+        # beat BM25 there (hit@1 0.780 each over 91 queries), so ending the
+        # search on a dense hit hands keyword queries to an engine that is at
+        # best tied for them. Both rankings are now fused by RRF.
+        #
+        # The half of the old fix that still stands is tested above: an EMPTY
+        # dense result is not a verdict, and must still fall through to BM25.
         self._bm25_ready()
         monkeypatch.setattr(dense_mod, "ready", lambda: True)
         monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: [
             {"entry": {"name": "d", "tap": "x/y"}, "score": 9.0, "snippet": "D"}])
         hits, label = rag.search("react", smart=False,
                                  entries=[_entry("a", tap="x/y")])
-        assert label == "dense vectors"
-        assert [h["entry"]["name"] for h in hits] == ["d"]
+        assert "hybrid" in label.lower(), label
+        assert "d" in [h["entry"]["name"] for h in hits], \
+            "the dense hit must survive fusion, not be dropped"
 
 
 class TestAtomicIndexSave:
