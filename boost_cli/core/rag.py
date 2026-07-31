@@ -23,6 +23,7 @@ import re
 import sqlite3
 from collections import defaultdict
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, cast
 
@@ -31,7 +32,7 @@ try:  # TypedDict lives in typing on 3.9+, kept optional for safety
 except ImportError:  # pragma: no cover - 3.9+ always has it
     TypedDict = None  # type: ignore
 
-from . import ai, catalog, frontmatter, gitutil, paths, registry, util
+from . import ai, catalog, config, frontmatter, gitutil, paths, registry, util
 
 # v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
 # chars) so `retrieve` can window it onto the query terms; bump forces a
@@ -527,6 +528,50 @@ def entry_key(entry: dict) -> Tuple[str, str]:
     return (entry["tap"], entry["skill_md"])
 
 
+@lru_cache(maxsize=1)
+def _confidence_map() -> Dict[str, str]:
+    """``tap name -> confidence`` from the shipped registry catalog.
+
+    Cached because dedup asks per hit and the catalog is 466 rows; parsing it
+    inside a search loop would be a real cost for a value that cannot change
+    while the process runs.
+    """
+    out: Dict[str, str] = {}
+    for row in config.load_registry_catalog():
+        name = row.get("name")
+        conf = row.get("confidence")
+        if name and conf:
+            out[str(name)] = str(conf)
+    return out
+
+
+def registry_confidence(tap: str) -> Optional[str]:
+    """The shipped confidence for a tap, or None if it is not catalogued."""
+    return _confidence_map().get(tap)
+
+
+# Lower sorts better. Unknown registries rank below every known one rather than
+# above, so an uncatalogued tap never outranks a vetted one by default.
+_CONFIDENCE_ORDER = {"high": 0, "med": 1, "low": 2}
+
+
+def source_rank(entry: dict) -> Tuple[int, int]:
+    """How much this copy's *source* is worth, for choosing between identical bodies.
+
+    Only ever used inside a content cluster, where every candidate has the same
+    body — so this decides where the user installs from, not what they find.
+
+    The user's own ``curated`` flag comes first and the shipped ``confidence``
+    second, deliberately: a maintainer opinion baked into the package should
+    never override a decision the machine's owner made with `boost tap
+    --curated`.
+    """
+    curated = 0 if entry.get("curated") else 1
+    conf = _CONFIDENCE_ORDER.get(registry_confidence(entry.get("tap", "")) or "",
+                                 len(_CONFIDENCE_ORDER))
+    return (curated, conf)
+
+
 def dedupe_by_content(hits: List[Hit], limit: int) -> List[Hit]:
     """Collapse byte-identical copies, then take ``limit``.
 
@@ -562,9 +607,9 @@ def dedupe_by_content(hits: List[Hit], limit: int) -> List[Hit]:
             best[digest] = len(out)
             out.append(hit)
             continue
-        # Same body already shown. Keep its rank, but prefer a curated source.
+        # Same body already shown. Keep its rank, but prefer a better source.
         kept = out[seen]
-        if hit["entry"].get("curated") and not kept["entry"].get("curated"):
+        if source_rank(hit["entry"]) < source_rank(kept["entry"]):
             # cast, not a literal annotation: `Hit` is total=False for the
             # optional `content` key, and NotRequired needs 3.11 while boost
             # targets 3.9.

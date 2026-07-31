@@ -3635,7 +3635,30 @@ bodies. Both are refinements &mdash; the byte-identical case is 78.3% of the pro
 <b>Claim released.</b> The key fix and content-hash dedup have merged; what is left is a richer
 quality prior than <code>curated</code> and near-identical (rather than byte-identical) clustering.
 Unowned and ready for anyone &mdash; the byte-identical case was 78.3% of the problem, so the
-remainder is refinement rather than the bulk.</p>
+remainder is refinement rather than the bulk.
+
+<b>The quality prior is now richer than the <code>curated</code> flag alone.</b> Inside a cluster
+every copy is byte-identical, so which one survives is not a relevance question &mdash; it decides
+where the user installs from. Two signals exist and they are not the same thing: the entry's own
+<code>curated</code> flag, which is a decision this machine's owner made with
+<code>boost tap --curated</code>, and <code>confidence</code> in the shipped
+<code>registries.json</code> (high / med / low across 466 registries, currently 268 / 153 / 45).
+
+<code>rag.source_rank</code> orders on the user's flag <em>first</em> and the shipped confidence
+second, deliberately: a maintainer opinion baked into the package should never override a choice made
+on the user's own machine. An uncatalogued registry ranks below every catalogued one rather than
+above, so an unknown tap never wins by default, and equal trust falls back to ranking order so the
+result stays deterministic when there is no signal at all. The catalog is read once
+(<code>lru_cache</code>) because dedup asks per hit and parsing 466 rows inside a search loop would
+be a real cost for a value that cannot change while the process runs.
+
+Retrieval quality is untouched by construction &mdash; the gate reads 0.863 / 0.473 / 0.607 / 0.662
+before and after, because the prior only chooses between copies that are already identical.
+
+<b>Still open:</b> near-identical rather than byte-identical clustering, where
+<code>core/typosquat.py</code>'s confusion machinery would apply. Stars and recency, which the card
+also names, have no shipped data source today &mdash; adding one is its own piece of work rather than
+a tweak to this.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
