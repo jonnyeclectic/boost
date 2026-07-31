@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import urllib.parse
@@ -182,8 +183,15 @@ def _hint_semantic_search(engine: str) -> None:
     st = dense.status()
     if st.get("ready"):
         return
-    out.info(out.role("semantic search is off — %s"
-                      % dense.fix_hint(st.get("reason", "")), "muted"))
+    # Wrap to the pane like every other row here: at COLUMNS=60 the longest
+    # remedy is 82 characters and would be the one line in this output that
+    # blows the terminal width. `break_long_words=False` keeps the shell command
+    # runnable — a copy-pasteable `pip install ...` matters more than a hard
+    # clamp, and _FIX is tested to hold no token long enough to overflow.
+    msg = "semantic search is off — %s" % dense.fix_hint(st.get("reason", ""))
+    for line in textwrap.wrap(msg, max(out.term_width(), 20),
+                              break_long_words=False, break_on_hyphens=False):
+        out.info(out.role(line, "muted"))
 
 
 def cmd_reindex(argv):

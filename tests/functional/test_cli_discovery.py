@@ -1194,10 +1194,16 @@ class TestSearchSemanticHint:
     def test_hint_names_the_one_next_action(self, boost, tapped):
         # Without the extra the remedy is the install; with it, the reindex.
         # Either way exactly one command is named, never the whole setup.
+        #
+        # Matched against the whole output with whitespace collapsed, because
+        # the hint legitimately wraps across lines in a narrow pane — asserting
+        # on a single line made this test fail at COLUMNS=40 for a layout the
+        # code was getting right.
         boost("reindex")
         r = boost("search", "brainstorming")
-        line = next(ln for ln in r.out.splitlines() if "semantic search is off" in ln)
-        assert "pip install" in line or "boost reindex --dense" in line
+        flat = " ".join(r.out.split())
+        assert "semantic search is off" in flat
+        assert "pip install" in flat or "boost reindex --dense" in flat
 
     def test_zero_results_still_hints(self, boost, tapped):
         # The strongest case for the hint: a keyword engine finding nothing is

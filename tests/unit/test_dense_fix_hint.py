@@ -94,3 +94,38 @@ class TestFallback:
         # `status()` returns None for a healthy install; a caller passing that
         # straight through must not crash the command it was decorating.
         assert dense.fix_hint(None) == "see `boost reindex --dense`"  # type: ignore[arg-type]
+
+
+class TestFitsANarrowTerminal:
+    """No remedy may contain a token too long to wrap into a narrow pane.
+
+    `boost search` wraps this text with `break_long_words=False` so the shell
+    command it names stays copy-pasteable. That choice only holds the
+    terminal-width invariant if no single whitespace-delimited token is itself
+    wider than the pane — otherwise the wrapped line overflows and the hint
+    becomes the one row in the output that breaks the layout, which is exactly
+    how this shipped broken the first time (caught by the free-threaded canary
+    at COLUMNS=60, not locally at 80).
+    """
+
+    # The narrowest pane the search output is tested against.
+    NARROW = 60
+
+    @pytest.mark.parametrize("reason", ALL_REASONS)
+    def test_no_token_is_wider_than_a_narrow_pane(self, reason):
+        prefix = "semantic search is off — "
+        longest = max(dense.fix_hint(reason).split(), key=len)
+        assert len(longest) <= self.NARROW, (
+            "%r contains the token %r (%d chars), which cannot wrap into a "
+            "%d-column terminal without being broken mid-command"
+            % (reason, longest, len(longest), self.NARROW))
+        # The prefix shares the first line, so it must not crowd out the text.
+        assert len(prefix) < self.NARROW
+
+    @pytest.mark.parametrize("reason", ALL_REASONS)
+    def test_every_hint_wraps_within_a_narrow_pane(self, reason):
+        import textwrap
+        msg = "semantic search is off — %s" % dense.fix_hint(reason)
+        for line in textwrap.wrap(msg, self.NARROW, break_long_words=False,
+                                  break_on_hyphens=False):
+            assert len(line) <= self.NARROW, "overflowing line: %r" % line
