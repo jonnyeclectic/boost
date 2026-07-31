@@ -233,7 +233,7 @@ class TestBm25Math:
         idf = math.log(1 + (1 - 1 + 0.5) / (1 + 0.5))
         denom = 1 + 1.2 * (1 - 0.75 + 0.75 * 2 / 1.0)
         expected = idf * (1 * (1.2 + 1)) / denom
-        assert rag._bm25(["x"], raw)[0] == pytest.approx(expected)
+        assert rag._bm25(["x"], raw, raw["postings"])[0] == pytest.approx(expected)
 
     def test_avg_len_floor_is_one(self):
         # avg_len 0.0 must floor to 1.0, not 2.0
@@ -242,7 +242,7 @@ class TestBm25Math:
         idf = math.log(1 + (1 - 1 + 0.5) / (1 + 0.5))
         denom = 1 + 1.2 * (1 - 0.75 + 0.75 * 2 / 1.0)
         expected = idf * (1 * (1.2 + 1)) / denom
-        assert rag._bm25(["x"], raw)[0] == pytest.approx(expected)
+        assert rag._bm25(["x"], raw, raw["postings"])[0] == pytest.approx(expected)
 
     def test_zero_length_doc_floors_to_one_exactly(self):
         # dl floors to 1 (not 2) when the stored length is 0
@@ -251,7 +251,7 @@ class TestBm25Math:
         idf = math.log(1 + (1 - 1 + 0.5) / (1 + 0.5))
         denom = 3 + 1.2 * (1 - 0.75 + 0.75 * 1 / 1.0)
         expected = idf * (3 * (1.2 + 1)) / denom
-        assert rag._bm25(["x"], raw)[0] == pytest.approx(expected)
+        assert rag._bm25(["x"], raw, raw["postings"])[0] == pytest.approx(expected)
 
     def test_exact_scores(self):
         raw = {
@@ -259,7 +259,7 @@ class TestBm25Math:
             "stats": {"avg_len": 3.0},
             "postings": {"react": [[0, 1]], "test": [[0, 1], [1, 2]]},
         }
-        scores = rag._bm25(["react", "test"], raw)
+        scores = rag._bm25(["react", "test"], raw, raw["postings"])
         idf_r = math.log(1 + (2 - 1 + 0.5) / (1 + 0.5))
         idf_t = math.log(1 + (2 - 2 + 0.5) / (2 + 0.5))
         denom0 = 1 + 1.2 * (1 - 0.75 + 0.75 * 2 / 3.0)   # dl=2
@@ -272,13 +272,13 @@ class TestBm25Math:
     def test_absent_term_scores_nothing(self):
         raw = {"docs": [{"l": 3}], "stats": {"avg_len": 3.0},
                "postings": {"react": [[0, 1]]}}
-        assert dict(rag._bm25(["missing"], raw)) == {}
+        assert dict(rag._bm25(["missing"], raw, raw["postings"])) == {}
 
     def test_zero_length_doc_uses_floor(self):
         raw = {"docs": [{"l": 0}], "stats": {"avg_len": 0.0},
                "postings": {"x": [[0, 1]]}}
         # must not ZeroDivisionError (dl and avg both floor to 1)
-        assert rag._bm25(["x"], raw)[0] > 0
+        assert rag._bm25(["x"], raw, raw["postings"])[0] > 0
 
 
 class TestIncremental:
@@ -738,8 +738,12 @@ class TestSavePayload:
                                  "k1": rag.K1, "b": rag.B}
         assert raw["stats"]["docs"] == 2
         assert raw["stats"]["avg_len"] == pytest.approx((2 + 4) / 2)
-        assert sorted(raw["postings"]["foo"]) == [[0, 1], [1, 2]]
-        assert raw["postings"]["bar"] == [[0, 1]]
+        # The JSON no longer carries postings; they are queried per-term from
+        # the SQLite store, which is the whole point of moving them.
+        assert "postings" not in raw
+        assert rag.read_postings(["foo"])["foo"] == [[0, 1], [1, 2]]
+        assert rag.read_postings(["bar"])["bar"] == [[0, 1]]
+        assert rag.read_postings(["nope"]) == {}
         assert raw["docs"][0] == {"n": "a", "t": "x/y", "f": "a/SKILL.md",
                                   "h": "", "k": "skill", "c": 0, "l": 2,
                                   "snip": "sa"}
@@ -752,7 +756,11 @@ class TestSavePayload:
         raw = json.loads(rag.index_path().read_text(encoding="utf-8"))
         assert raw["stats"]["avg_len"] == 0.0
         assert raw["docs"] == []
-        assert raw["postings"] == {}
+        assert "postings" not in raw
+        # An empty corpus still writes the store, so `ready()` can distinguish
+        # "indexed nothing" from "never indexed".
+        assert rag.postings_path().exists()
+        assert rag.read_postings(["anything"]) == {}
 
     def test_save_invalidates_stale_cache_entry(self, sandbox):
         key = str(rag.index_path())
@@ -1086,7 +1094,9 @@ class TestAtomicIndexSave:
         rag.build(entries=entries, force=True)
         p = rag.index_path()
         payload = json.loads(p.read_text(encoding="utf-8"))  # parseable ⇒ not truncated
-        assert payload["docs"] and "postings" in payload
+        # Postings moved to their own SQLite store; the JSON is documents only.
+        assert payload["docs"] and "postings" not in payload
+        assert rag.postings_path().exists()
         # atomic_write_text writes to ".<name>.*.tmp" then os.replace — the
         # temp file must not survive a successful save.
         assert list(p.parent.glob("." + p.name + ".*")) == []
@@ -1097,3 +1107,76 @@ class TestAtomicIndexSave:
         rag.build(entries=entries, force=True)  # second save swaps in place
         payload = json.loads(rag.index_path().read_text(encoding="utf-8"))
         assert payload["stats"]["docs"] >= 2
+
+
+class TestPostingsStore:
+    """Postings live in SQLite so a query reads its terms, not the whole index.
+
+    They were the largest part of the JSON index — 64% of it after unchunking —
+    and `json.loads` had to materialise every one to answer a query touching a
+    handful of terms. On a real 83-tap install that was 8-13 s and multiple GB
+    resident per cold search, against 31-70 ms of scoring.
+
+    Scoring itself is unchanged, which is the property these tests protect:
+    `_bm25` takes postings as an argument, so moving where they are stored
+    cannot alter what comes back.
+    """
+
+    def _built(self):
+        rag._save([{"n": "a", "t": "x/y", "f": "a/SKILL.md", "h": "h1",
+                    "k": "skill", "c": 0, "l": 2, "snip": "sa",
+                    "tf": {"react": 2, "test": 1}},
+                   {"n": "b", "t": "x/y", "f": "b/SKILL.md", "h": "h2",
+                    "k": "skill", "c": 0, "l": 1, "snip": "sb",
+                    "tf": {"test": 3}}], {})
+        rag._CACHE.clear()
+
+    def test_only_the_asked_for_terms_come_back(self, sandbox):
+        self._built()
+        got = rag.read_postings(["react"])
+        assert set(got) == {"react"}, "read more than the query needed"
+
+    def test_a_term_maps_to_every_doc_that_has_it(self, sandbox):
+        self._built()
+        assert sorted(rag.read_postings(["test"])["test"]) == [[0, 1], [1, 3]]
+
+    def test_an_absent_term_is_simply_missing(self, sandbox):
+        self._built()
+        assert rag.read_postings(["nonesuch"]) == {}
+
+    def test_no_terms_is_no_query(self, sandbox):
+        self._built()
+        assert rag.read_postings([]) == {}
+
+    def test_more_terms_than_sqlite_takes_as_parameters(self, sandbox):
+        # SQLite caps host parameters (999 on older builds); the reader chunks.
+        self._built()
+        many = ["t%d" % i for i in range(2500)] + ["react"]
+        assert set(rag.read_postings(many)) == {"react"}
+
+    def test_a_rebuild_replaces_rather_than_appends(self, sandbox):
+        self._built()
+        rag._save([{"n": "a", "t": "x/y", "f": "a/SKILL.md", "h": "h1",
+                    "k": "skill", "c": 0, "l": 1, "snip": "sa",
+                    "tf": {"react": 1}}], {})
+        rag._CACHE.clear()
+        assert rag.read_postings(["react"])["react"] == [[0, 1]]
+        assert rag.read_postings(["test"]) == {}, "stale postings survived"
+
+    def test_no_temp_file_survives_a_successful_write(self, sandbox):
+        self._built()
+        p = rag.postings_path()
+        assert p.exists()
+        assert list(p.parent.glob(p.name + ".tmp")) == []
+
+    def test_a_missing_store_reads_as_empty_not_an_error(self, sandbox):
+        # Degrading to "no hits" beats raising out of a user's search.
+        assert not rag.postings_path().exists()
+        assert rag.read_postings(["react"]) == {}
+
+    def test_ready_is_false_without_the_postings_store(self, sandbox):
+        self._built()
+        rag.postings_path().unlink()
+        rag._CACHE.clear()
+        assert rag.ready() is False, \
+            "a docs-only index would score every query to zero hits"
