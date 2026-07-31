@@ -289,6 +289,32 @@ def find(name: str, tap: Optional[str] = None) -> List[dict]:
     return matches
 
 
+def _identity(entry: dict) -> str:
+    """What a user could actually use to tell two candidates apart.
+
+    Deliberately the *displayed* metadata — name, description, version and
+    frontmatter — not the file bytes, which a catalog entry does not carry.
+    That is the honest test for "this prompt is unanswerable": if two rows
+    render identically everywhere boost shows them, asking the user to choose
+    between them cannot succeed.
+    """
+    return json.dumps([entry.get("name", ""), entry.get("description", "") or "",
+                       str(entry.get("version", "")), entry.get("meta") or {}],
+                      sort_keys=True, default=str)
+
+
+def _canonical(matches: List[dict]) -> dict:
+    """The shallowest copy, ties broken lexicographically.
+
+    Registries vendor their own skills into plugin bundles, so the top-level
+    `skills/x` is the original and `plugins/pack/skills/x` is the copy. Sorting
+    makes the pick deterministic: resolving on dict order would install a
+    different directory from one run to the next.
+    """
+    return min(matches, key=lambda e: (str(e.get("rel_dir", "")).count("/"),
+                                       str(e.get("rel_dir", ""))))
+
+
 def resolve_one(name: str) -> dict:
     """Find exactly one entry or raise with a helpful hint."""
     matches = find(name)
@@ -301,9 +327,30 @@ def resolve_one(name: str) -> dict:
             hint = "no taps configured — start with `boost tap --defaults`"
         raise BoostError("no skill named %r in any tap" % name, hint=hint)
     if len(matches) > 1:
+        # `name` may already be tap-qualified; hints must re-qualify the BARE
+        # name or they emit `t:t:x`, which can never resolve.
+        bare = name.rsplit(":", 1)[-1]
+        # Order-preserving, so the first tap named stays the one the hint
+        # suggests. Sorting here would silently change the existing message.
+        taps = list(dict.fromkeys(e["tap"] for e in matches))
+        if len(taps) == 1:
+            # One tap holding the same name several times. If the rows are
+            # indistinguishable it is a vendored copy and there is nothing to
+            # choose between them, so choose.
+            if len({_identity(e) for e in matches}) == 1:
+                return _canonical(matches)
+            # Genuinely different skills sharing a name inside one registry:
+            # boost cannot pick, and telling the user to "qualify by tap" is
+            # advice that reproduces this very error. Name the paths instead.
+            paths = ", ".join(sorted(str(e.get("rel_dir", "?")) for e in matches))
+            raise BoostError(
+                "%r matches %d different skills in %s: %s"
+                % (bare, len(matches), taps[0], paths),
+                hint="that registry ships one name twice — inspect the paths above "
+                     "and raise it with the tap")
         raise BoostError(
-            "%r exists in multiple taps: %s" % (name, ", ".join(e["tap"] for e in matches)),
-            hint="qualify it, e.g. `%s:%s`" % (matches[0]["tap"], name))
+            "%r exists in multiple taps: %s" % (name, ", ".join(taps)),
+            hint="qualify it, e.g. `%s:%s`" % (taps[0], bare))
     return matches[0]
 
 
