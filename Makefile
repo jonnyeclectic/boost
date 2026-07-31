@@ -98,15 +98,24 @@ dist-check:
 	$(VENV)/bin/check-wheel-contents dist/*.whl
 	$(VENV)/bin/pyroma --min 8 dist/*.tar.gz
 
-# Tier 1 retrieval quality gate: golden-set recall@k over a pinned corpus
-# (tests/eval/taps.txt). Part of `check` and required in CI (the lint job).
-# Taps the pinned repos into a sandboxed $(EVAL_HOME) first (network on the
-# first run; a sentinel skips re-tapping after), then floors BM25 recall@k at
-# 0.85. Regression-vs-baseline is relaxed here (drift tolerance); the absolute
-# floor is the gate.
+# Tier 1 retrieval quality gate over a pinned corpus (tests/eval/taps.txt).
+# Part of `check` and required in CI (the lint job). Taps the pinned repos into
+# a sandboxed $(EVAL_HOME) first (network on the first run; a sentinel skips
+# re-tapping after), then floors FOUR metrics on BM25, not just recall.
+#
+# recall@k alone could not fail this build for a ranker that found the right
+# answer every time and never ranked it first — recall@10 1.000 with hit@1
+# 0.000 passed. Measured on this corpus BM25 scores 1.000 / 0.780 / 0.860 /
+# 0.895, so each floor sits ~0.12 below its measured value: loose enough that
+# upstream repo drift cannot flake the build, tight enough that a collapse
+# fails it. Regression-vs-baseline stays relaxed (--regression-eps 1) because
+# the corpus tracks upstream HEAD rather than pinned commits; the absolute
+# floors are the real gate, and they are drift-tolerant by construction.
 eval:
 	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
-	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 --fail-under 0.85 --regression-eps 1
+	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_retrieval.py --build -k 10 \
+	  --fail-under 0.85 --floor hit@1=0.65 --floor MRR=0.74 --floor nDCG@k=0.78 \
+	  --regression-eps 1
 
 # Tier 2a: LLM rerank lift over BM25 on the same golden set. Opt-in and
 # key-gated — needs the `claude` CLI on PATH or ANTHROPIC_API_KEY; skips

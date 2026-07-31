@@ -13,8 +13,16 @@ the math, this asks "does the right skill actually come back for a real question
             dense.retrieve (cosine, auto-skipped when no embeddings provider)
   metrics   recall@k · hit@1 · MRR · nDCG@k  (binary relevance, averaged;
             also sliced per item kind: skill / rule / workflow)
-  baseline  --save-baseline pins current scores; later runs flag regressions
-  gate      --fail-under floors mean recall@k for CI (a `make eval` target)
+  baseline  --save-baseline pins current scores; later runs flag regressions.
+            Baselines are keyed by query set (name + content digest), because a
+            baseline is a statement about a specific list of questions: grading
+            the natural-language set against the keyword set's numbers reported
+            eight confident regressions that were only the difference between
+            two question sets.
+  gate      --fail-under floors mean recall@k; --floor NAME=VALUE floors any
+            metric and is repeatable. recall alone could not fail a build for a
+            ranker scoring recall@10 1.000 with hit@1 0.000 — always finding the
+            answer, never ranking it first (a `make eval` target).
 
 Tier 1b (opt-in, offline): --stats runs a paired Student's t-test between the
 engines with `ranx`, so a metric gap is reported as statistically *significant*
@@ -32,12 +40,14 @@ Usage:
   python3 scripts/eval_retrieval.py --build            # build index, then eval
   python3 scripts/eval_retrieval.py --save-baseline    # pin a baseline
   python3 scripts/eval_retrieval.py --fail-under 0.85  # CI gate on recall@k
+  python3 scripts/eval_retrieval.py --floor hit@1=0.65 # gate any metric
   python3 scripts/eval_retrieval.py --build --stats    # Tier 1b significance
   python3 scripts/eval_retrieval.py --rerank           # Tier 2a rerank lift
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -253,15 +263,108 @@ def load_baseline() -> Optional[dict]:
         return None
 
 
-def save_baseline(k: int, results: List[dict]) -> None:
-    payload = {"k": k, "engines": {r["engine"]: r["agg"]["overall"]
-                                   for r in results}}
-    BASELINE.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print("\nbaseline written -> %s" % BASELINE.relative_to(ROOT))
+def golden_key(golden: Path) -> str:
+    """Identity of a query set: its name plus a digest of its contents.
+
+    A baseline is a set of numbers about a specific list of questions, so it is
+    only comparable to a run over that same list. Keying on the *content* and
+    not just the filename matters because editing a query in place changes what
+    the numbers mean while leaving the path identical.
+    """
+    try:
+        digest = hashlib.sha256(golden.read_bytes()).hexdigest()[:12]
+    except OSError:
+        digest = "missing"
+    return "%s@%s" % (golden.name, digest)
 
 
-def check_regressions(results: List[dict], eps: float) -> List[str]:
+def baseline_for(golden: Path) -> Optional[dict]:
+    """The recorded numbers for this query set, or None if there are none.
+
+    Reads the current keyed layout and the original flat one. A flat baseline
+    predates multi-set support, so it can only have come from the default
+    keyword set — applying it to any other set is what produced eight confident
+    but meaningless "REGRESSION" lines when the natural-language set was run.
+    """
     base = load_baseline()
+    if not base:
+        return None
+    if "sets" in base:
+        entry = base["sets"].get(golden_key(golden))
+        return entry if isinstance(entry, dict) else None
+    if golden.name == DEFAULT_GOLDEN.name:
+        return base
+    return None
+
+
+def save_baseline(k: int, results: List[dict], golden: Path) -> None:
+    """Pin this run's scores under its query set, leaving other sets alone."""
+    payload = load_baseline() or {}
+    if "sets" not in payload:
+        # Migrate a flat baseline in place rather than dropping it: it is the
+        # keyword set's history and is still the thing `make eval` compares to.
+        migrated = {}
+        if payload.get("engines"):
+            migrated[golden_key(DEFAULT_GOLDEN)] = payload
+        payload = {"sets": migrated}
+    payload["sets"][golden_key(golden)] = {
+        "k": k,
+        "golden": golden.name,
+        "engines": {r["engine"]: r["agg"]["overall"] for r in results},
+    }
+    BASELINE.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    # relative_to raises when BASELINE has been pointed outside the repo, which
+    # is how the unit tests isolate it — the path is cosmetic, so degrade to it.
+    try:
+        shown = BASELINE.relative_to(ROOT)
+    except ValueError:
+        shown = BASELINE
+    print("\nbaseline written -> %s (%s)" % (shown, golden.name))
+
+
+def parse_floors(pairs: Sequence[str]) -> Dict[str, float]:
+    """Turn `--floor name=value` arguments into a metric -> minimum mapping."""
+    floors: Dict[str, float] = {}
+    for raw in pairs:
+        name, sep, value = raw.partition("=")
+        if not sep:
+            raise SystemExit("--floor needs NAME=VALUE, got %r" % raw)
+        metric = name.strip()
+        # Validated here rather than only at gate time so a typo fails before
+        # the run, not after several minutes of tapping and retrieval.
+        if metric not in METRICS:
+            raise SystemExit("unknown metric %r in --floor (known: %s)"
+                             % (metric, ", ".join(sorted(METRICS))))
+        try:
+            floors[metric] = float(value)
+        except ValueError:
+            raise SystemExit("--floor %s: %r is not a number" % (name, value))
+    return floors
+
+
+def check_floors(result: dict, floors: Dict[str, float]) -> List[str]:
+    """Every metric below its floor, not just the first.
+
+    `--fail-under` floored `recall@k` alone, so a ranker that found the right
+    answer every time and never ranked it first — recall@10 1.000, hit@1 0.000 —
+    passed the gate. All four metrics are already computed and printed; the only
+    thing missing was the ability to fail on them.
+    """
+    overall = result["agg"]["overall"]
+    breaches: List[str] = []
+    for metric, minimum in sorted(floors.items()):
+        if metric not in METRICS:
+            raise SystemExit("unknown metric %r in --floor (known: %s)"
+                             % (metric, ", ".join(sorted(METRICS))))
+        got = overall[metric]
+        if got < minimum:
+            breaches.append("%s = %.3f  (min %.3f)" % (metric, got, minimum))
+    return breaches
+
+
+def check_regressions(results: List[dict], eps: float,
+                      golden: Path) -> List[str]:
+    base = baseline_for(golden)
     if not base:
         return []
     problems: List[str] = []
@@ -396,6 +499,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="exit 1 if primary-engine mean recall@k < X")
     ap.add_argument("--regression-eps", type=float, default=0.02, metavar="E",
                     help="fail if any metric drops > E below the baseline")
+    ap.add_argument("--floor", action="append", default=[], metavar="NAME=VAL",
+                    help="floor a metric, repeatable (e.g. --floor hit@1=0.65). "
+                         "Unlike --fail-under this works on any metric.")
     ap.add_argument("--misses", action="store_true", help="list non-#1 cases")
     ap.add_argument("--stats", action="store_true",
                     help="Tier 1b: ranx significance test between engines "
@@ -403,6 +509,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable JSON")
     args = ap.parse_args(argv)
 
+    floors = parse_floors(args.floor)          # fail fast on a bad --floor
     rows = load_golden(args.golden)
 
     if args.build or not rag.ready():
@@ -466,24 +573,34 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print_stats_human(report, order, args.k)
 
     if args.save_baseline:
-        save_baseline(args.k, results)
+        save_baseline(args.k, results, args.golden)
 
     # ---- gates ----
     exit_code = 0
     primary = results[-1]                       # BM25 is the always-on baseline
-    problems = check_regressions(results, args.regression_eps)
+    problems = check_regressions(results, args.regression_eps, args.golden)
     if problems and not args.save_baseline:
         print("\nREGRESSION vs baseline:", file=sys.stderr)
         for p in problems:
             print("  - %s" % p, file=sys.stderr)
         exit_code = 1
+    # --fail-under is the original recall-only gate, kept so existing callers
+    # keep working; --floor is the general form and can gate any metric.
     if args.fail_under is not None:
-        got = primary["agg"]["overall"]["recall@k"]
-        ok = got >= args.fail_under
+        floors.setdefault("recall@k", args.fail_under)
+    if floors:
+        breaches = check_floors(primary, floors)
         if not args.json:
-            print("\nGATE recall@%d = %.3f  (min %.3f)  ->  %s"
-                  % (args.k, got, args.fail_under, "PASS" if ok else "FAIL"))
-        if not ok:
+            print("\nGATE %s (k=%d)" % (primary["engine"], args.k))
+            for metric, minimum in sorted(floors.items()):
+                got = primary["agg"]["overall"][metric]
+                print("  %-9s %.3f  (min %.3f)  ->  %s"
+                      % (metric, got, minimum,
+                         "PASS" if got >= minimum else "FAIL"))
+        if breaches:
+            print("\nFLOOR BREACHED:", file=sys.stderr)
+            for b in breaches:
+                print("  - %s" % b, file=sys.stderr)
             exit_code = 1
     return exit_code
 

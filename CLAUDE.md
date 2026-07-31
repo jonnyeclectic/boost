@@ -47,20 +47,33 @@ It is five gates and **all must pass**:
 | Gate       | Command                                        | Threshold |
 |------------|------------------------------------------------|-----------|
 | `lint`     | `ruff check boost_cli tests` + `mypy`          | zero errors |
-| `eval`     | `ensure_eval_corpus.sh` + `eval_retrieval.py --build -k 10 --fail-under 0.85` | BM25 recall@k **≥ 0.85** over the pinned corpus |
+| `eval`     | `ensure_eval_corpus.sh` + `eval_retrieval.py --build -k 10` with four floors | BM25 recall@k **≥ 0.85**, hit@1 ≥ 0.65, MRR ≥ 0.74, nDCG@k ≥ 0.78 |
 | `test`     | `pytest tests/unit tests/functional --cov`     | **80%** coverage (`fail_under = 80`) |
 | `smoke`    | `bash tests/smoke.sh`                           | 0 failed |
 | `mutation` | `python3 scripts/mutation_gate.py --run --min 80` | **80%** of `boost_cli/core` mutants killed |
 
 The `eval` gate is the Tier 1 retrieval-quality check: it runs boost's RAG
-engines over the golden set (`tests/eval/golden.jsonl`) and floors BM25
-recall@k. The golden set grades real catalog items **by name**, so it needs a
+engines over the golden set (`tests/eval/golden.jsonl`) and floors **four**
+metrics on BM25 — recall@k, hit@1, MRR and nDCG@k. Flooring recall alone was a
+hole rather than a simplification: a ranker that finds the right answer every
+time and never ranks it first scores recall@10 1.000 with hit@1 0.000, and
+passed. The golden set grades real catalog items **by name**, so it needs a
 corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
 `tests/eval/taps.txt` (the minimal set covering all golden targets — `boost tap
---defaults` is NOT enough, it omits every rule/workflow repo). Over that corpus
-BM25 recall is 1.000, so the 0.85 floor has wide margin; regression-vs-baseline
-is relaxed in the gate (`--regression-eps 1`) so upstream repo drift can't flake
-it. Edit `taps.txt` → regenerate `tests/eval/baseline.json`. It runs in CI's
+--defaults` is NOT enough, it omits every rule/workflow repo). Measured over
+that corpus BM25 scores 1.000 / 0.780 / 0.860 / 0.895, and each floor sits about
+0.12 under its measured value — loose enough that upstream drift can't flake the
+build, tight enough to catch a collapse. Regression-vs-baseline stays relaxed
+(`--regression-eps 1`) because the corpus tracks upstream HEAD rather than
+pinned commits, so the absolute floors are the real gate.
+
+**Baselines are keyed by query set** (`name@content-digest`), so one file holds
+both `golden.jsonl` and `golden-natural.jsonl` without either overwriting the
+other. Before that, running the natural-language set printed eight confident
+"REGRESSION vs baseline" lines that were only the gap between two different
+question sets. Add `--floor NAME=VALUE` (repeatable) to gate any metric; a
+misspelled metric name is a hard error rather than a silently skipped floor.
+Edit `taps.txt` → regenerate `tests/eval/baseline.json`. It runs in CI's
 `lint` job (pure-stdlib BM25, no `ANTHROPIC_API_KEY`; needs network to tap). The
 opt-in evals stay out of `check` and all degrade cleanly:
 
