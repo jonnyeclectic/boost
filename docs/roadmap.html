@@ -3436,7 +3436,7 @@ that were never the same from being merged by accident.</p>
       </article>
 
       <article class="cap rcard" id="bm25-index-is-one-json-blob">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Index</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Index</span></div>
         <h3>The BM25 index is one JSON blob, and it stops working between 10k and 50k items</h3>
         <p><code>rag.py</code> persists the whole index as a single JSON file and
 <code>json.loads</code> it on every invocation. <code>_CACHE</code>
@@ -3467,7 +3467,37 @@ out of the hot path.
 Also note <code>build()</code>'s incremental path is O(entire corpus): reusing
 unchanged taps runs <code>_kept_docs</code> → <code>_postings_to_doc_tf</code>,
 which inverts every posting in the index — measured 35 s and 1.72 GB RSS at
-11.1k entries to reindex a single changed file.</p>
+11.1k entries to reindex a single changed file.
+
+<b>Win (1) is shipped, and the &ldquo;better on every metric&rdquo; claim did not survive
+re-measurement.</b> On the pinned 6-tap corpus unchunking is a <em>trade</em>, not a free win, and
+which way it falls depends entirely on the shape of the query.
+
+On the keyword golden set &mdash; which grades items by <b>name</b> &mdash; recall@10 fell
+1.000 &rarr; <b>0.978</b> and nDCG 0.895 &rarr; 0.882, while hit@1 rose 0.780 &rarr; <b>0.791</b>.
+On the 50 natural-language queries in <code>golden-natural.jsonl</code>, over identical data, every
+metric improved and not marginally: recall 0.690 &rarr; <b>0.750</b>, hit@1 0.240 &rarr; <b>0.340</b>,
+MRR 0.382 &rarr; 0.474, nDCG 0.446 &rarr; 0.524. That +0.100 hit@1 is 5 of 50 queries, which is at
+the edge of what 50 queries can resolve &mdash; worth stating rather than rounding up.
+
+Index cost on the same corpus: <b>5.3 MB &rarr; 2.1 MB</b> and 3,740 documents &rarr; 743, one per
+entry, with load time 0.032 s &rarr; 0.015 s. The card's headline figures are from an 83-tap install
+where the constant factors are far larger; this is the small-scale confirmation of the same shape,
+not a substitute for it.
+
+Chunking's one real contribution was locality &mdash; a term only had to beat the length
+normalisation of its own 1000-char window. BM25's <code>b</code> already does that, and
+<code>retrieve</code> collapsed chunks back to one hit per entry regardless, so the extra documents
+were built, stored, re-parsed on every cold search and then discarded. What chunking <em>did</em>
+provide for free was name matching, since the name sat in whichever chunk contained it; one document
+per entry has to state the surface explicitly, so <code>rag.surface</code> indexes the name, its
+de-hyphenated form (<code>tokenize</code> does not split hyphens, so &ldquo;code reviewer&rdquo;
+would otherwise never match <code>code-reviewer</code>) and the description alongside the body.
+
+<b>Still open:</b> win (2), getting postings out of JSON &mdash; the FTS5 probe and the mmap-able
+binary format are both untouched, as is moving <code>snip</code> text off the hot path. So is
+<code>build()</code>'s O(entire-corpus) incremental path, which still inverts every posting to
+reindex one changed file.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>

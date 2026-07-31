@@ -605,18 +605,35 @@ class TestMakeDocs:
         docs = rag._make_docs([e], {})
         assert docs[0]["snip"] == "Q" * rag.SNIP_STORE
 
-    def test_long_body_yields_multiple_chunks(self, monkeypatch):
+    def test_one_document_per_entry_however_long_the_body(self, monkeypatch):
+        # Inverted deliberately. This asserted `len(docs) > 1`, the chunking the
+        # index no longer does: each window carried its own copy of the shared
+        # fields and its own snippet, and `retrieve` collapsed them back to one
+        # hit per entry anyway, so the extra documents were built, stored,
+        # re-parsed on every cold search, and then discarded.
         monkeypatch.setattr(rag, "read_body", lambda e, tp: "widget " * 400)
-        e = _entry("n")
-        docs = rag._make_docs([e], {})
-        assert len(docs) > 1                    # chunk() or [body], not `and`
+        docs = rag._make_docs([_entry("n")], {})
+        assert len(docs) == 1
+        assert docs[0]["tf"]["widget"] == 400
+
+    def test_the_entry_surface_is_indexed_with_the_body(self, monkeypatch):
+        # A chunked index matched names for free — the name sat in whatever
+        # chunk contained it. One doc per entry has to state the surface, or
+        # searching for an item by its own name stops working.
+        monkeypatch.setattr(rag, "read_body", lambda e, tp: "unrelated prose")
+        docs = rag._make_docs(
+            [_entry("code-reviewer", desc="reviews diffs")], {})
+        tf = docs[0]["tf"]
+        assert "reviewer" in tf, "the de-hyphenated name must be searchable"
+        assert "diffs" in tf, "the description must be searchable"
 
     def test_empty_chunk_is_skipped_not_break(self, monkeypatch):
         body = ("the " * 220) + "\n\n" + ("widget " * 130)
         monkeypatch.setattr(rag, "read_body", lambda e, tp: body)
         e = _entry("n")
         docs = rag._make_docs([e], {})
-        # first chunk is all stopwords (empty tf) -> `continue`, keep going
+        # An all-stopword passage contributes no terms; the entry still yields
+        # its one document, carrying the terms from the rest of the body.
         assert len(docs) == 1
         assert "widget" in docs[0]["tf"]
 
