@@ -674,11 +674,22 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     return dedupe_by_content(hits, k)
 
 
-def rerank(query: str, hits: List[Hit], limit: int = 10) -> Tuple[List[Hit], str]:
-    """Reorder the shortlist with the LLM bridge; degrade to BM25 order."""
+def rerank(query: str, hits: List[Hit], limit: int = 10,
+           engine: str = "BM25 full-content") -> Tuple[List[Hit], str]:
+    """Reorder the shortlist with the LLM bridge; degrade to ``engine`` order.
+
+    ``engine`` is the label from whichever retrieval actually produced ``hits``.
+    Both degrade paths below return it rather than a hard-coded string: this
+    function does not know how the shortlist was built, and guessing was wrong
+    for every user whose dense store worked. Naming a specific wrong engine is
+    worse than naming none — the label is the only signal about which engine
+    answered, so a confident "BM25 full-content" sent debugging somewhere else.
+
+    The default keeps direct callers unchanged; ``search`` passes the real one.
+    """
     top = hits[:max(limit, 15)]
     if not ai.available():
-        return hits[:limit], "BM25 full-content"
+        return hits[:limit], engine
     listing = "\n".join(
         "- %s [%s]: %s" % (h["entry"]["name"], h["entry"].get("kind", "skill"),
                            (h["snippet"] or h["entry"].get("description", ""))[:180])
@@ -691,7 +702,9 @@ def rerank(query: str, hits: List[Hit], limit: int = 10) -> Tuple[List[Hit], str
         max_tokens=400)
     order = _json_array(reply)
     if not order:
-        return hits[:limit], "BM25 full-content"
+        # The model answered but not with a JSON array, so the ordering falls
+        # back to whatever retrieval produced — and so must the label.
+        return hits[:limit], engine
     by_name = {h["entry"]["name"]: h for h in hits}
     picked = [by_name[str(n)] for n in order if str(n) in by_name]
     rest = [h for h in hits if h["entry"]["name"]
@@ -832,7 +845,9 @@ def search(query: str, limit: int = 10, kind: Optional[str] = None,
     if hits is None:
         return None
     if smart:
-        return rerank(query, hits, limit)
+        # Hand the retrieval label down rather than dropping it: when the
+        # rerank degrades, this is the only thing that knows what actually ran.
+        return rerank(query, hits, limit, engine=engine)
     return hits[:limit], engine
 
 
