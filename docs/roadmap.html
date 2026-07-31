@@ -1735,7 +1735,26 @@ size (57 entries, 1 tap), not metric design, so the work is to grow an
 instrument that exists rather than to build one. Also needed: queries that
 <em>only</em> body text can satisfy. The golden set grades items by name, so it
 scores a surface-only index <em>above</em> the full-content one and would
-cheerfully greenlight deleting body indexing altogether.</p>
+cheerfully greenlight deleting body indexing altogether.
+<b>Half of the "also needed" already exists.</b> This card asks for queries that <em>only</em> body
+text can satisfy, on the grounds that a name-graded set would greenlight deleting body indexing.
+<code>tests/eval/golden-natural.jsonl</code> (shipped in <code>#360</code>) is 50 such queries: each
+is written from its target's own <code>description</code> and has the target's distinctive
+<b>name tokens deliberately stripped</b> &mdash; a mechanical check rejected five drafts that had
+leaked one &mdash; so a surface-only index cannot answer them. It was written before any engine ran
+against it and scored once, which is the same fitting-and-reporting discipline this group needs.
+
+It corroborates this card's thesis from a second, independent direction. This card shows the gate
+blind to <b>corpus size</b>: 1.000 on 23 taps against 0.720 on 83. The natural set shows it blind to
+<b>query shape</b> on the <em>same</em> corpus &mdash; BM25 scores recall 1.000 / hit@1 0.780 on the
+keyword golden set and <b>0.690 / 0.240</b> on natural-language queries over identical data. Two
+different axes, same conclusion: the number the gate reports is not a number about retrieval.
+
+What it does <b>not</b> fix is the corpus-size half, which is this card's own finding and remains
+open &mdash; 50 queries over 6 taps cannot speak to an 83-tap install. The two are complementary
+rather than overlapping, and combining them (natural-language queries over a realistically sized
+corpus) is the instrument this group actually wants. Also unaddressed here: the kind oracle, the
+recall-only floor and <code>--regression-eps 1</code> are all still exactly as described above.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
