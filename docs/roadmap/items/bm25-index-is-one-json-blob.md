@@ -2,14 +2,14 @@
 id: bm25-index-is-one-json-blob
 board: code
 section: pipeline
-status: inflight
+status: planned
 category: Search · Index
 complexity: L
 impact: High
 wow: 5
 note: 2.5 GB RSS per search at 50k items
 order: 72
-owner: loop/postings-out-of-json
+owner:
 pr:
 title: The BM25 index is one JSON blob, and it stops working between 10k and 50k items
 ---
@@ -130,3 +130,9 @@ much smaller than this card assumed &mdash; and the O(entire-corpus) incremental
 is closer than it was: per-document term frequencies are now queryable by document rather than only
 recoverable by inverting every posting, so scoping the rebuild to the changed taps is a tractable
 follow-up rather than a format change.
+
+<b>Claim released.</b> Both &ldquo;cheap wins&rdquo; have merged. What is left is <code>snip</code>
+off the hot path (only 14% of the JSON half now, so much smaller than this card first assumed) and
+the O(entire-corpus) incremental reindex &mdash; which got cheaper as a side effect, since
+per-document term frequencies are now queryable <em>by document</em> rather than only recoverable by
+inverting every posting. Unowned.

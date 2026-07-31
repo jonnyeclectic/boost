@@ -65,3 +65,15 @@ case for a static model now rests on <b>cost</b> (~1&nbsp;ms and no runtime depe
 measured 233&nbsp;ms cold and 34&nbsp;MB of wheels) rather than on availability. Status left alone
 deliberately &mdash; this is another loop's item to own.
 
+
+<b>Unblocked, and the case for it got stronger.</b> This card says &ldquo;do not ship this before the
+eval and dedup items&rdquo;. Both have now landed: the eval gate floors four metrics over a
+realistic-sized corpus with baselines keyed to their query set, and content-hash dedup has merged.
+
+The new evidence is a timing measurement. Building the <em>shipped</em> ONNX keyless store over 743
+entries (3,740 chunks, <code>bge-small-en-v1.5</code> on CPU) took <b>4,431 s &mdash; 74 minutes</b>,
+about 1.2 s per chunk. This card's static-embedding proposal claims ~29 ms/doc in pure Python. If
+that holds it is a difference of more than an order of magnitude on the doc side, which is exactly
+the cost that makes prebuilt shards mandatory today. Worth measuring the model2vec path directly
+before committing &mdash; but the gap it claims to close is now a measured number rather than an
+estimate.

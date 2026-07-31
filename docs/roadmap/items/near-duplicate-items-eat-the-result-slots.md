@@ -2,14 +2,14 @@
 id: near-duplicate-items-eat-the-result-slots
 board: code
 section: pipeline
-status: inflight
+status: planned
 category: Search · Ranking
 complexity: M
 impact: High
 wow: 4
 note: 56.3% of entries share a name
 order: 71
-owner: loop/content-hash-dedup
+owner:
 pr:
 title: Near-duplicate items consume the top-10, and it gets worse with every tap
 ---
@@ -159,3 +159,8 @@ before, all four floors passing. That corpus has little content duplication, whi
 maintenance; only <code>curated</code> is available on an entry today), and
 <code>core/typosquat.py</code>'s confusion machinery for near-identical rather than byte-identical
 bodies. Both are refinements &mdash; the byte-identical case is 78.3% of the problem.
+
+<b>Claim released.</b> The key fix and content-hash dedup have merged; what is left is a richer
+quality prior than <code>curated</code> and near-identical (rather than byte-identical) clustering.
+Unowned and ready for anyone &mdash; the byte-identical case was 78.3% of the problem, so the
+remainder is refinement rather than the bulk.
