@@ -816,7 +816,15 @@ REGISTRY = mcp.Registry()
 def _tool_search(args: dict):
     query = str(args.get("query", ""))
     rag.ensure()  # build the full-content index on first use (BM25 by default)
-    rag_result = rag.search(query, limit=10)
+    # smart=True is stated, not inherited. It is `rag.search`'s default, so this
+    # path was spending an LLM call per search by accident of a signature —
+    # while the CLI makes the user ask for it with `--smart`. Measured on the
+    # 91-query golden set, the rerank moves hit@1 from 0.791 to 0.945, and an
+    # agent acts on the top result rather than scanning ten, so it is the one
+    # caller for whom the seconds are clearly worth it. Written down here so
+    # the asymmetry with the CLI is a decision someone can revisit, not a
+    # default nobody chose. It degrades on its own when no AI is configured.
+    rag_result = rag.search(query, limit=10, smart=True)
     if rag_result is not None:  # full-content index is built
         hits, _ranker = rag_result
         if not hits:
@@ -953,8 +961,10 @@ REGISTRY.register(
     "in front of you has a name you could say out loud — \"set up code "
     "review\", \"add commit conventions\", \"debug flaky tests\" — and before "
     "writing a skill, subagent, slash-command or rule from scratch. Read-only, "
-    "no side effects, installs nothing. Returning nothing relevant is a fine "
-    "answer: it means build it yourself.",
+    "no side effects, installs nothing. Takes a few seconds because it ranks "
+    "the matches with an LLM, which is what makes the top result worth acting "
+    "on. Returning nothing relevant is a fine answer: it means build it "
+    "yourself.",
     {"type": "object",
      "properties": {"query": {"type": "string",
                               "description": "what the skill should do (a task, "
