@@ -111,7 +111,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>192</b><span>Loop finds</span></div>
+      <div class="stat"><b>193</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -975,10 +975,17 @@ end-to-end exercise.
 
 <b>Step 5 is shipped as a keyword demo, and the card should say plainly what that does and does not
 deliver.</b> <code>docs/demo.html</code> runs BM25 in the browser over a real 743-item, six-registry
-catalogue &mdash; a 1.27&nbsp;MB index that gzips to <b>320&nbsp;KB</b>, built by
-<code>scripts/build_demo_index.py</code> from the same index the CLI uses. Nothing installs, nothing
-leaves the visitor's machine, and GitHub Pages already served <code>docs/</code> so no new hosting
-was needed.
+catalogue &mdash; a 1.27&nbsp;MB index, built by <code>scripts/build_demo_index.py</code> from the
+same index the CLI uses. Nothing installs, nothing leaves the visitor's machine, and GitHub Pages
+already served <code>docs/</code> so no new hosting was needed.
+
+<b>The transfer figure was wrong, and the way it was wrong is the useful part.</b> This card and the
+page both claimed <b>320&nbsp;KB</b> gzipped, taken from a local <code>gzip -6</code> run
+(319.0&nbsp;KB; <code>-9</code> gives 310.2&nbsp;KB). Fetching the deployed asset with
+<code>Accept-Encoding: gzip</code> returns <b>340,866 bytes &mdash; 333&nbsp;KB</b>, because a CDN
+trades compression ratio for speed. So the published number understated what a visitor actually
+downloads by 4%, and only measuring the <em>served</em> artefact caught it. Both places now quote
+the wire figure.
 
 <b>Parity is the claim that had to be earned.</b> The page asserts it runs &ldquo;the same BM25
 ranking <code>boost search</code> runs&rdquo;, which is only worth saying if it is true, so the JS
@@ -3728,7 +3735,7 @@ deliberate, and idempotence was the piece missing from it.</p>
       </article>
 
       <article class="cap rcard" id="near-duplicate-items-eat-the-result-slots">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Ranking</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Ranking</span></div>
         <h3>Near-duplicate items consume the top-10, and it gets worse with every tap</h3>
         <p>Measured on a real 83-tap install: 11,147 catalog entries carry only 6,997
 unique names — <b>1.593 copies per name, and 56.3% of entries share a name with
@@ -3903,7 +3910,27 @@ before and after, because the prior only chooses between copies that are already
 <b>Still open:</b> near-identical rather than byte-identical clustering, where
 <code>core/typosquat.py</code>'s confusion machinery would apply. Stars and recency, which the card
 also names, have no shipped data source today &mdash; adding one is its own piece of work rather than
-a tweak to this.</p>
+a tweak to this.
+
+<b>Both halves this card asked for are on <code>main</code>, and the card simply never got flipped.</b>
+It set two requirements. <em>Cluster on content rather than name, and pick a winner with a quality
+prior</em> &mdash; <code>rag.dedupe_by_content</code> (<code>#370</code>) does exactly that: it keys
+on the body digest, keeps the cluster's best score, and breaks ties with <code>source_rank</code> so
+a curated tap outranks a better-placed uncurated copy. <em>Stop keying on
+<code>(tap, name)</code></em> &mdash; fixed in <code>#366</code>, which moved the key to
+<code>(tap, skill_md)</code> after the collision hit 14.0% of entries.
+
+<b>The measurement moved too, and it moved against the original framing.</b> The card was written
+from an 83-tap install at 56.3% shared names. Re-measured over 77 registries the figure is
+<b>78.3% of 29,938 entries byte-identical</b>, with the natural-language query set averaging
+<b>4.94 of 10 slots</b> consumed by a repeat before dedup and <b>0.60 after</b>. What made
+content-clustering safe rather than merely appealing is a separate count: of 14,153 distinct bodies,
+the number of clusters spanning more than one name is <b>zero</b> &mdash; so collapsing identical
+bodies cannot merge two genuinely different skills, which name-clustering would have done.
+
+<b>Related follow-on:</b> the same duplicate shape reaches <code>resolve_one</code>, where a tap that
+vendors its own skills produced an unanswerable disambiguation prompt. Tracked separately in
+<code>resolve-vendored-duplicate-copies</code>.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -3913,7 +3940,7 @@ a tweak to this.</p>
       </article>
 
       <article class="cap rcard" id="bm25-index-is-one-json-blob">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Index</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Index</span></div>
         <h3>The BM25 index is one JSON blob, and it stops working between 10k and 50k items</h3>
         <p><code>rag.py</code> persists the whole index as a single JSON file and
 <code>json.loads</code> it on every invocation. <code>_CACHE</code>
@@ -4057,7 +4084,20 @@ position, so the blocker is that a rebuild renumbers every document. Keying rows
 stable identity &mdash; <code>(tap, skill_md)</code>, already the retrieval key since <code>#366</code>
 &mdash; instead of by position would make an incremental update a <code>DELETE</code> of the changed
 taps' rows plus an <code>INSERT</code>, with no renumbering and no inversion. That is a schema change
-rather than a format change, which is what the earlier note meant by it getting cheaper.</p>
+rather than a format change, which is what the earlier note meant by it getting cheaper.
+
+<b>Both &ldquo;cheap wins&rdquo; this card names have shipped.</b> <em>(1) Stop chunking</em> landed
+in <code>#367</code> &mdash; one document per entry rather than one per chunk. <em>(2) Get postings
+out of JSON</em> landed in <code>#371</code>, moving them to SQLite so a query reads only the terms
+it needs instead of <code>json.loads</code>-ing the whole index. That is the fix for the failure this
+card is actually about: cold-start cost scaling with corpus size rather than with the query.
+
+<b>The third suggestion was measured and declined.</b> Moving <code>snip</code> text off the hot path
+was worth <b>14%</b> of load time once postings had already left the JSON &mdash; real, but not worth
+the extra artefact and the staleness surface it would add. Recorded as a decision rather than left
+as an open bullet. The related incremental-reindex concern was separately re-measured in
+<code>#377</code>: <b>35&nbsp;s &rarr; 5.2&nbsp;s</b>, so the O(entire corpus) note at the end of this
+card no longer describes the code.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -4896,7 +4936,7 @@ with a negative assertion so the hop cannot creep back.</p>
       </article>
 
       <article class="cap rcard" id="mcp-search-cost-was-understated">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Interop · Adoption</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop · Adoption</span></div>
         <h3>The MCP instructions understated what a search costs by 100x</h3>
         <p><a href="#mcp-one-benefit-nameable-task">The nameable-task rewrite</a> gave the MCP
 server a stated cost, on the reasoning that an unknown-price call with an unknown hit
@@ -4926,12 +4966,69 @@ but now it is a decision someone can revisit.
 <b>What is still unmeasured:</b> the lift is over <em>raw BM25</em>, the pipeline that
 stopped shipping when RRF fusion landed. Whether it survives over the fused ranking
 needs the arm that
-<a href="#keyless-semantic-search-for-everyone">step 6</a> is already committed to.</p>
+<a href="#keyless-semantic-search-for-everyone">step 6</a> is already committed to.
+
+<b>Shipped in <code>#391</code></b> (<code>6dc1600</code>, &ldquo;state what a search really costs,
+and choose the default&rdquo;). The card sat at <code>inflight</code> after the PR merged, which is
+the failure mode a claimed item has: nothing re-checks a status once the work lands, so the board
+kept advertising work that was already done.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">the instructions claimed a second; it is twelve</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="resolve-vendored-duplicate-copies">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Catalog · DX</span></div>
+        <h3><code>install</code> dead-ends on a registry that vendors its own skills</h3>
+        <p><b>Found by using boost, not by reading it.</b> Installing
+<code>debugging-and-error-recovery</code> failed with <code>exists in multiple taps:
+addyosmani/agent-skills, lingxling/awesome-skills-cn, lingxling/awesome-skills-cn,
+lingxling/awesome-skills-cn</code> &mdash; one tap named <b>three times</b>, under a heading that
+says &ldquo;multiple taps&rdquo;. Following the hint made it worse, and this is the part that
+matters: qualifying by tap re-raised <b>the identical error</b>, now hinting
+<code>lingxling/awesome-skills-cn:lingxling/awesome-skills-cn:debugging-and-error-recovery</code>
+&mdash; a string that can never resolve. The escape route from the error was the error.
+
+<b>Three defects behind one symptom.</b> The message joined <code>e["tap"]</code> across matches
+with no dedupe, so a repeated tap read as repeated registries. The hint re-qualified
+<code>name</code> rather than the bare name, so an already-qualified input got a second prefix. And
+&ldquo;qualify it by tap&rdquo; is not advice at all when every candidate <em>shares</em> a tap.
+
+<b>The cause is a registry convention, not a corrupt cache.</b>
+<code>lingxling/awesome-skills-cn</code> vendors its own skills into plugin bundles, so the same
+skill exists at <code>antigravity/skills/dbg</code>, <code>.../plugins/pack/skills/dbg</code> and
+<code>.../plugins/pack-claude/skills/dbg</code> &mdash; three paths, one identical
+<code>search_blob</code>. boost was asking the user to choose between three rows that render
+identically everywhere it displays them. That prompt is unanswerable by construction.
+
+<b>So it now chooses, but only where choosing is safe.</b> When every candidate shares a tap
+<em>and</em> is indistinguishable on name, description, version and frontmatter, boost resolves to
+the shallowest path &mdash; the original, since vendored copies sit deeper by construction &mdash;
+tie-broken lexicographically so the pick cannot drift with dict order between machines. The earlier
+duplicate census is what makes this safe rather than merely convenient: of 29,938 entries, 78.3%
+are byte-identical duplicates and <b>zero</b> content-clusters span more than one name, so
+collapsing identical rows can never merge two genuinely different skills.
+
+<b>Two cases deliberately still refuse.</b> Identical content in <em>different</em> taps stays an
+error &mdash; two registries shipping the same text are still two supply chains, and
+<code>typosquat.py</code> exists because that distinction is load-bearing. Same tap but genuinely
+different rows also stays an error, since the user can tell them apart and the choice is theirs;
+that case now names the conflicting <em>paths</em>, because the path is the only thing that
+distinguishes them, instead of offering a tap qualifier that cannot help.
+
+<b>Nine tests, written before the fix.</b> Five failed against the old resolver and the two
+&ldquo;still refuses&rdquo; guards passed from the start, which is what showed the change was
+additive rather than a loosening. Verified end to end against the real catalogue: the qualified
+form now resolves to <code>antigravity-awesome-skills/skills/debugging-and-error-recovery</code>,
+the top-level copy.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">found by dogfooding — the fix hint re-raised the error it was fixing</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
