@@ -1226,3 +1226,63 @@ class TestSearchSemanticHint:
         boost("reindex")
         r = boost("search", "brainstorming")
         assert "semantic search is off" not in r.out
+
+
+class TestReindexShards:
+    """`--export-shard` / `--import-shard`, the user-facing half of shards.
+
+    The engine is covered in tests/unit/test_dense_shards.py; this pins the CLI
+    contract — exit codes, JSON on stdout, and that a refused shard reports why
+    rather than half-importing.
+    """
+
+    def test_exporting_a_tap_with_no_vectors_fails_with_a_hint(self, boost,
+                                                               tapped):
+        r = boost("reindex", "--export-shard", "acme/skills", expect=1)
+        assert "no vectors" in r.err
+        assert "reindex --dense" in r.err        # names the one next action
+
+    def test_export_writes_json_to_stdout(self, boost, tapped, monkeypatch):
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "export_shard", lambda tap: {
+            "tap": tap, "commit": "c1", "provider": "local", "model": "bge",
+            "dim": 3, "chunks": [{"name": "a", "tap": tap, "path": "a/SKILL.md",
+                                  "kind": "skill", "cix": 0, "snip": "s",
+                                  "embedding": "AAAA"}]})
+        r = boost("reindex", "--export-shard", "acme/skills")
+        payload = json.loads(r.out)              # must be parseable, not pretty
+        assert payload["tap"] == "acme/skills"
+        assert len(payload["chunks"]) == 1
+
+    def test_importing_a_missing_file_is_an_error(self, boost, tapped, tmp_path):
+        r = boost("reindex", "--import-shard", str(tmp_path / "nope.json"),
+                  expect=1)
+        assert "cannot read shard" in r.err
+
+    def test_importing_malformed_json_is_an_error(self, boost, tapped, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        r = boost("reindex", "--import-shard", str(bad), expect=1)
+        assert "cannot read shard" in r.err
+
+    def test_a_refused_shard_reports_the_reason(self, boost, tapped, tmp_path,
+                                                monkeypatch):
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit: (False, "dim mismatch"))
+        f = tmp_path / "s.json"
+        f.write_text(json.dumps({"tap": "acme/skills"}), encoding="utf-8")
+        r = boost("reindex", "--import-shard", str(f), expect=1)
+        assert "dim mismatch" in r.err
+        assert "reindex --dense" in r.err        # the fallback that always works
+
+    def test_a_good_shard_reports_what_landed(self, boost, tapped, tmp_path,
+                                              monkeypatch):
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit: (True, "imported 7 chunks"))
+        f = tmp_path / "s.json"
+        f.write_text(json.dumps({"tap": "acme/skills"}), encoding="utf-8")
+        r = boost("reindex", "--import-shard", str(f))
+        assert "imported 7 chunks" in r.out
+        assert "acme/skills" in r.out

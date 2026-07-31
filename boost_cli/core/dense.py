@@ -358,8 +358,16 @@ def export_shard(tap: str) -> dict:
     with the rows, and the registry commit has to travel too or a stale shard
     would be indistinguishable from a current one.
     """
-    con = _connect()
-    if con is None:
+    # Plain sqlite3, NOT _connect: exporting reads `chunks`, `meta` and the
+    # stored embedding blobs, all ordinary tables. Routing through _connect
+    # would make export impossible without the sqlite-vec extension — the same
+    # trap `_recorded_meta` documents — and a machine that built vectors and
+    # then dropped the extra is exactly the one whose shard is worth having.
+    if not db_path().exists():
+        return {"tap": tap, "chunks": []}
+    try:
+        con = sqlite3.connect(str(db_path()))
+    except sqlite3.Error:
         return {"tap": tap, "chunks": []}
     try:
         meta = _read_meta(con)
@@ -384,6 +392,8 @@ def export_shard(tap: str) -> dict:
                 "provider": meta.get("provider"), "model": meta.get("model"),
                 "dim": meta.get("dim"), "version": INDEX_VERSION,
                 "chunks": chunks}
+    except sqlite3.Error:
+        return {"tap": tap, "chunks": []}
     finally:
         con.close()
 

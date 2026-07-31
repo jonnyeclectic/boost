@@ -177,3 +177,37 @@ class TestRoundTrip:
         # It has to survive being published as a release artifact.
         _store()
         json.dumps(dense.export_shard("acme/skills"))
+
+
+class TestWorksWithoutTheExtension:
+    """Export must not require sqlite-vec — CI and most users don't have it.
+
+    `export_shard` reads `chunks`, `meta` and the stored blobs, all ordinary
+    tables, so routing it through `_connect` (which loads the extension and
+    returns None without it) made every field vanish on a runner. That is how
+    this shipped broken the first time: it passed locally, where the extra is
+    installed, and failed six CI jobs. `_recorded_meta` documents the same trap.
+    """
+
+    def test_export_still_returns_rows_with_no_extension(self, sandbox,
+                                                         monkeypatch):
+        _store(rows=(("a", "acme/skills"),))
+        monkeypatch.setattr(dense, "_load", lambda: None)
+        assert dense._connect() is None          # precondition: no extension
+        shard = dense.export_shard("acme/skills")
+        assert len(shard["chunks"]) == 1
+        assert shard["provider"] == "local"
+        assert shard["commit"] == "c1"
+
+    def test_export_of_a_missing_store_is_empty_not_an_error(self, sandbox):
+        # No store on disk at all: a shard request must degrade, not raise.
+        assert dense.export_shard("acme/skills")["chunks"] == []
+
+    def test_import_still_needs_the_extension(self, sandbox, monkeypatch):
+        # The asymmetry is deliberate: writing vectors needs the vec0 virtual
+        # table, so import cannot degrade the way export can.
+        monkeypatch.setattr(dense, "_load", lambda: None)
+        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
+                 "commit": "c1", "chunks": []}
+        ok, reason = dense.import_shard(shard, commit="c1")
+        assert ok is False and "backend" in reason
