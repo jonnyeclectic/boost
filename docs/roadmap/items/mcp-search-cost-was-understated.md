@@ -2,14 +2,14 @@
 id: mcp-search-cost-was-understated
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Interop · Adoption
 complexity: S
 impact: Medium
 wow: 2
 note: the instructions claimed a second; it is twelve
 order: 76
-owner: loop/mcp-true-cost
+owner: 
 pr: 
 title: The MCP instructions understated what a search costs by 100x
 ---
@@ -42,3 +42,9 @@ but now it is a decision someone can revisit.
 stopped shipping when RRF fusion landed. Whether it survives over the fused ranking
 needs the arm that
 <a href="#keyless-semantic-search-for-everyone">step 6</a> is already committed to.
+
+<b>Shipped in <code>#391</code></b> (<code>6dc1600</code>, &ldquo;state what a search really costs,
+and choose the default&rdquo;). The card sat at <code>inflight</code> after the PR merged, which is
+the failure mode a claimed item has: nothing re-checks a status once the work lands, so the board
+kept advertising work that was already done.
+
