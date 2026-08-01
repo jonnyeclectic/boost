@@ -52,18 +52,38 @@ def _read(p: Path) -> str:
         raise BoostError("cannot read %s: %s" % (_tilde(p), e)) from e
 
 
+def _for_tap(entry, qualifier):
+    """``entry`` unless a ``tap:`` qualifier was given that it does not satisfy.
+
+    A qualifier has to be honored against the *installed* record, not only the
+    catalog: with one skill installed from tap A and asked about via
+    ``tap-b:skill``, tap A's lock entry is the wrong answer, and reporting it
+    would describe another tap's install as this one's.
+    """
+    if entry and qualifier and not catalog.tap_matches(
+            str(entry.get("tap") or ""), qualifier):
+        return None
+    return entry
+
+
 def _resolve_skill_md(name: str):
     """Locate a skill's SKILL.md — installed store first, then tap clones.
 
+    ``name`` may be tap-qualified (``owner/repo:skill``). The catalog reads that
+    form directly, but the lock file and the canonical store are keyed by the
+    bare name — and ``skill_store_dir`` rejects the qualified string outright,
+    since it is not a safe path component.
+
     Returns (path, lock_entry_or_None, catalog_entry_or_None).
     """
-    lock = lockfile.get_skill(name)
+    qualifier, bare = catalog.split_name(name)
+    lock = _for_tap(lockfile.get_skill(bare), qualifier)
     if lock:
         # The single place skill content is served from — so it is the single
         # place to refuse serving a tree that has drifted from its locked digest
         # (a no-op unless enforcement is switched on).
-        integrity.enforce(name, lock)
-        p = store.skill_store_dir(name) / "SKILL.md"
+        integrity.enforce(bare, lock)
+        p = store.skill_store_dir(bare) / "SKILL.md"
         if p.exists():
             return p, lock, None
     entry = catalog.resolve_one(name)
@@ -218,20 +238,27 @@ def cmd_info(argv):
     ap.add_argument("name")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
-    name = args.name
-    lock = lockfile.get_skill(name)
+    # The name may arrive tap-qualified (`owner/repo:skill`) — exactly what the
+    # ambiguity error hints at when one name lives in several taps. Split once
+    # here: the qualified form is a *catalog* lookup key, while the lock file
+    # and the canonical store are keyed by the bare name (and `skill_store_dir`
+    # rejects the qualified string, since `owner/repo:skill` is not a safe path
+    # component). Everything below this line works from the bare name.
+    qualifier, name = catalog.split_name(args.name)
+    lock = _for_tap(lockfile.get_skill(name), qualifier)
     # A project-scoped skill is installed — just not at user scope. Without this
     # `boost info` would call it "not installed" while it sits in the repo, and
     # the install banner's own "next: boost info <name>" would lead nowhere.
     pbase = scopes.project_root()
-    plock = projectlock.get_skill(pbase, name) if pbase is not None else None
+    plock = (_for_tap(projectlock.get_skill(pbase, name), qualifier)
+             if pbase is not None else None)
     if lock:
-        matches = catalog.find(name)
+        matches = catalog.find(args.name)
         same_tap = [e for e in matches if e["tap"] == lock.get("tap")]
         candidates = same_tap or matches
         cat = candidates[0] if candidates else None
     else:
-        cat = catalog.resolve_one(name)   # raises if unknown anywhere
+        cat = catalog.resolve_one(args.name)   # raises if unknown anywhere
 
     sdir = store.skill_store_dir(name)
     skill_dir = sdir if lock and sdir.is_dir() else None
