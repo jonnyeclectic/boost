@@ -7,10 +7,10 @@ category: Eval · Correctness
 complexity: M
 impact: High
 wow: 4
-note: the mechanism ships; which of 59 code-reviewers each query means is still a human call
+note: 28 of 50 rows pinned mechanically with zero change to any number; 22 are genuine judgment calls
 order: 81
 owner: loop/golden-name-grading
-pr:
+pr: 412
 title: The golden set grades by name, and 35 of 53 names are ambiguous
 ---
 <b>The eval scores a hit when the top result carries the right <em>name</em>. Most of those names do
@@ -84,3 +84,24 @@ statement about intent. Guessing it would bake one opinion into the number the p
 invisibly. The harness is ready for those decisions one row at a time; each added exemplar tightens
 the metric and none of them destabilise it.
 
+<b>Progress: 28 of the 50 rows are now pinned, and pinning them changed nothing.</b> Measured over
+the SHA-pinned corpus, 28 rows have the property that every name in their <code>relevant</code> list
+resolves to exactly <b>one body</b> &mdash; so the exemplar is a lookup, not a judgment, and grading
+by content class must return the same verdict as grading by name. It does: the natural-language set
+scores <b>0.350 / 0.160 / 0.245 / 0.259</b> before and after, identical to three decimal places.
+That equality is the point of shipping them &mdash; the rows are now explicit about which skill they
+mean, at zero cost to comparability.
+
+<b>The remaining 22 are the real content of this card.</b> <code>code-reviewer</code> is 13 distinct
+skills in this corpus, <code>update-docs</code> 10, <code>commit</code> 4. There is no shortcut
+available: their descriptions share a median similarity of about <b>0.15</b>, so these are genuine
+forks rather than one skill re-published, and no rule separates them without someone saying what the
+question meant. The menu is generated rather than written down, because the candidate set is a fact
+about the corpus that is tapped:
+
+<code>python3 scripts/eval_retrieval.py --golden tests/eval/golden-natural.jsonl --worksheet</code>
+
+<b>What unblocked this.</b> Not the judgment calls &mdash; [[eval-deduped-ranked-lists-by-name]].
+A half-migrated set was averaging two different rank conventions, because name-graded rows collapsed
+homonyms into one rank slot while exemplar-graded rows gave every distractor mirror its own. Until
+both used one convention, migrating rows one at a time produced a number that meant nothing.

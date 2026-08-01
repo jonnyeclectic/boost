@@ -28,6 +28,7 @@ exemplar-graded row and a name-graded row be averaged into one number.
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -176,6 +177,50 @@ class TestIdentityIsTheBodyNotTheName:
         one = _entry("p", "owner/z", "p/SKILL.md")
         two = _entry("q", "owner/z", "q/SKILL.md")
         assert m.grade_key(row, one, HASHES) != m.grade_key(row, two, HASHES)
+
+
+class TestTheWorksheetShowsWhatIsLeftToDecide:
+    """Pinning the remaining rows is a judgment, so hand over a menu, not a task.
+
+    28 of the 50 natural-language rows resolved to exactly one body and were
+    pinned mechanically. The other 22 do not: `code-reviewer` alone is 13
+    different skills here, and their descriptions share a median similarity of
+    about 0.15, so there is no "same skill re-published" shortcut to take. The
+    menu is generated rather than written into the golden file as a comment, so
+    it keeps describing the corpus that is actually tapped instead of rotting.
+    """
+
+    def test_an_ambiguous_row_lists_every_candidate_body(self):
+        m = _load()
+        rows = [m.prepare_row({"query": "q", "relevant": ["code-reviewer"]}, HASHES)]
+        sheet = m.exemplar_worksheet(rows, [A, B, C, OTHER], HASHES)
+        assert len(sheet) == 1
+        specs = {c["spec"] for c in sheet[0]["candidates"]}
+        assert specs == {"owner/a::code-reviewer/SKILL.md",
+                         "owner/b::code-reviewer/SKILL.md"}
+
+    def test_mirrors_are_one_candidate_not_two(self):
+        # owner/c is byte-identical to owner/a; offering both would be offering
+        # the same decision twice.
+        m = _load()
+        rows = [m.prepare_row({"query": "q", "relevant": ["code-reviewer"]}, HASHES)]
+        assert m.exemplar_worksheet(rows, [A, C], HASHES) == []
+
+    def test_a_row_that_already_pins_an_exemplar_is_done(self):
+        m = _load()
+        rows = [m.prepare_row({"query": "q", "relevant": ["code-reviewer"],
+                               "exemplar": "owner/a::code-reviewer/SKILL.md"},
+                              HASHES)]
+        assert m.exemplar_worksheet(rows, [A, B, C], HASHES) == []
+
+    def test_the_shipped_set_leaves_exactly_the_rows_it_documents(self):
+        # Guards the split: if a future edit pins one of the 22 or unpins one of
+        # the 28, this is the line that says so.
+        path = _ROOT / "tests" / "eval" / "golden-natural.jsonl"
+        rows = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()
+                if ln.strip() and not ln.startswith("#")]
+        assert len(rows) == 50
+        assert len([r for r in rows if r.get("exemplar")]) == 28
 
 
 class TestDedupeKeepsTheBestRank:
