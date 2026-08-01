@@ -72,3 +72,18 @@ Nothing in the tree needed changing. Recording it as shipped rather than deletin
 card's analysis was right about <em>where</em> the blocker was: the earlier investigation had chased
 <code>demo.yml</code>'s own <code>permissions:</code> block, and the note that no edit to the workflow
 could fix a repository-level setting is what stopped that from being a long false lead.
+
+<b>Update &mdash; the repository setting this card called immovable has been turned on.</b> The API
+now reports <code>can_approve_pull_request_reviews: <b>true</b></code>, <code>demo.yml</code>
+succeeds on every push to <code>main</code>, and it has opened real pull requests as
+<code>github-actions[bot]</code> (<code>#353</code>, <code>#394</code>). So the coupled item
+[[scheduled-toolchain-lock-regeneration]] was unblocked too, and shipped on the strength of it.
+
+<b>What did not change is the check-run consequence</b>, which is worth keeping on the record
+because it is invisible: a PR opened this way lands with <b>zero</b> check runs, since
+<code>create-pull-request</code> pushes with <code>GITHUB_TOKEN</code> and a
+<code>GITHUB_TOKEN</code> push never triggers workflows. Measured on both bot PRs &mdash;
+<code>ffc07b0</code> and <code>a9da922</code> each had 0, and the same commits had 27 after an
+<i>Update branch</i>. An empty check list is indistinguishable from "CI has not started yet", so a
+bot PR can look ready to merge while nothing has run.
+

@@ -2,12 +2,12 @@
 id: scheduled-toolchain-lock-regeneration
 board: code
 section: internals
-status: planned
+status: shipped
 category: Build · Gap
 complexity: M
 impact: Med
 wow: 2
-note: the toolchain lock now has no proactive update path — by choice, but nothing replaces it yet
+note: the blocker this card recorded had already been lifted — re-checked, not assumed
 order: 36
 owner:
 pr:
@@ -87,3 +87,42 @@ when the regenerated lock fails <code>lock_toolchain.py --check</code> on a runn
 untested scheduled workflow that opens PRs against <code>main</code> is worse than shipping nothing.
 The value of this note is that the next person picking it up starts from &ldquo;build it&rdquo;
 rather than from &ldquo;it cannot be built&rdquo;.
+
+<b>Shipped as <code>.github/workflows/lock-refresh.yml</code>, and the first thing that had to be
+re-checked was this card's own blocker.</b> It states the work is blocked because
+Actions&nbsp;&rarr;&nbsp;Workflow permissions forbids creating pull requests, citing
+<code>can_approve_pull_request_reviews: false</code>. That is no longer true: the API now returns
+<b><code>true</code></b>, <code>demo.yml</code> succeeds on every push to <code>main</code>, and it
+opened <code>#353</code> and <code>#394</code> as <code>github-actions[bot]</code>. A blocker
+recorded once is a claim with an expiry date; this one had quietly lapsed, and the card would have
+kept the item shelved indefinitely.
+
+<b>One PR for all five groups &mdash; a deliberate departure from what this card proposed.</b> The
+card suggested per-group jobs so a bump stays reviewable. Two things measured while building it
+argue the other way. <code>lock_toolchain.py</code> has <b>no per-group flag</b>
+(<code>--upgrade</code> always re-resolves all five), so a five-job matrix would run the same
+resolution five times and commit one file from each. And a PR opened this way arrives with
+<b>zero check runs</b> &mdash; <code>create-pull-request</code> pushes with
+<code>GITHUB_TOKEN</code>, which never triggers workflows &mdash; so every one of them costs a human
+a manual <i>Update branch</i> before CI reports at all. Five PRs a month is five full CI runs and
+five manual unblocks to review what is usually a list of version bumps. Reviewability is bought
+instead with a <b>monthly</b> cadence and a per-group diffstat in the PR body.
+
+<b>The other three constraints this card named were met as written.</b> <code>uv</code> and the
+network are provisioned the same way <code>ci.yml</code> does it (<code>pip install uv</code>, then
+the script). <code>--audit</code> runs as its own invocation, because the script refuses it
+alongside <code>--upgrade</code> &mdash; auditing a file mid-replacement reads the old bytes &mdash;
+and a failure there means no PR is opened. Every <code>uses:</code> is pinned to the same peeled
+SHAs the repo already uses, permissions are <code>contents: read</code> at the top with the two
+writes scoped to the one job, and no <code>merge_group:</code> trigger is needed because this is not
+a required context (<code>check_required_checks.py</code> passes).
+
+<b>Verified before pushing:</b> the workflow parses, and <code>zizmor</code> reports <b>no
+findings</b>. That clean result was itself checked rather than trusted &mdash; re-running the
+scanner against a copy with <code>${{ github.event.head_commit.message }}</code> spliced into a
+<code>run:</code> block produces a high-severity <code>template-injection</code>, so the scanner is
+genuinely reading this file. That check exists because an earlier workflow in this repo
+(<code>shards.yml</code>) shipped exactly that hole.
+
+<b>Unproven until it runs:</b> the first scheduled execution is the first end-to-end exercise.
+
