@@ -64,7 +64,10 @@ DEFAULT_GOLDEN = ROOT / "tests" / "eval" / "golden.jsonl"
 BASELINE = ROOT / "tests" / "eval" / "baseline.json"
 KINDS = ("skill", "rule", "workflow")
 
-Ranker = Callable[[str], List[str]]
+# Rankers yield catalog ENTRIES, not names: the grading key depends on the
+# row being graded (a name, or a content class when it pins an exemplar),
+# so the ranker cannot decide it.
+Ranker = Callable[[str], List[dict]]
 
 
 # --------------------------------------------------------------- metrics
@@ -110,49 +113,115 @@ METRICS: Dict[str, Callable[[Sequence[str], set, int], float]] = {
 
 # --------------------------------------------------------------- data + engines
 
-def load_golden(path: Path) -> List[dict]:
+# --------------------------------------------------------------- grading keys
+# Grading was by NAME, and names here are not identifying: measured over a real
+# 71,655-entry catalogue, 35 of the 53 golden target names resolve to more than
+# one body, and `code-reviewer` alone is 79 copies across 59 distinct skills. A
+# query graded against that name scored a hit when any of the 59 ranked first,
+# so every number was an upper bound.
+#
+# A row may now pin an `exemplar` — "tap::skill_md", the entry the query was
+# actually written about. Grading then runs on the CONTENT CLASS of that entry:
+# byte-identical mirrors from other registries still count (refusing them would
+# punish a correct answer for arriving from a mirror), while a different skill
+# sharing the name does not.
+#
+# Rows without an exemplar keep name grading byte-for-byte, so published
+# baselines stay comparable and the two styles can coexist during a migration.
+
+_EXEMPLAR_SEP = "::"
+
+
+def prepare_row(row: dict, hashes: dict) -> dict:
+    """Attach grading state to a golden row. Raises on an unresolvable exemplar.
+
+    Failing loudly is the point: a silent fall back to name grading would turn a
+    typo into a quietly weaker gate that still reports a number.
+    """
+    row = dict(row)
+    row["relevant_set"] = set(row["relevant"])
+    row.setdefault("kind", "skill")
+    spec = row.get("exemplar")
+    if not spec:
+        row["class_hashes"] = None
+        return row
+    specs = [spec] if isinstance(spec, str) else list(spec)
+    classes = set()
+    for one in specs:
+        if _EXEMPLAR_SEP not in one:
+            raise SystemExit(
+                "golden exemplar %r must be 'tap%sskill_md'" % (one, _EXEMPLAR_SEP))
+        tap, path = one.split(_EXEMPLAR_SEP, 1)
+        digest = hashes.get((tap, path))
+        if not digest:
+            raise SystemExit(
+                "golden exemplar %r resolves to no indexed entry — check the "
+                "tap is cloned and the path is exact" % one)
+        classes.add(digest)
+    row["class_hashes"] = classes
+    return row
+
+
+def grade_key(row: dict, entry: dict, hashes: dict) -> str:
+    """The token this entry contributes to a ranked list, for scoring.
+
+    ``hashes`` is passed rather than read from module state: the map is the
+    thing that decides whether two entries are the same skill, so a caller must
+    not be able to grade against a different one by accident.
+    """
+    classes = row.get("class_hashes")
+    if not classes:
+        return str(entry.get("name", ""))
+    digest = hashes.get((entry.get("tap", ""), entry.get("skill_md", "")))
+    if digest and digest in classes:
+        return "cls:%s" % sorted(classes)[0]
+    # Distinct, so two different homonyms never collapse into one another and
+    # inflate recall.
+    return "not:%s::%s" % (entry.get("tap", ""), entry.get("skill_md", ""))
+
+
+def relevant_keys(row: dict) -> set:
+    classes = row.get("class_hashes")
+    if not classes:
+        return set(row["relevant_set"])
+    return {"cls:%s" % sorted(classes)[0]}
+
+
+def dedupe_keys(keys):
+    """Collapse to the first (best-ranked) occurrence of each key."""
+    seen: set = set()
+    out: List[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def load_golden(path: Path, hashes: Optional[dict] = None) -> List[dict]:
+    # One pass over the BM25 index, not one per row.
+    hashes = rag.content_hashes() if hashes is None else hashes
     rows: List[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        obj = json.loads(line)
-        obj["relevant_set"] = set(obj["relevant"])
-        obj.setdefault("kind", "skill")
-        rows.append(obj)
+        rows.append(prepare_row(json.loads(line), hashes))
     if not rows:
         raise SystemExit("no golden cases in %s" % path)
     return rows
 
 
-def _dedupe(names: Sequence[str]) -> List[str]:
-    """Collapse to first (best-ranked) occurrence of each name.
-
-    The same skill name ships from several taps, so retrieval returns one hit
-    per (name, tap); grading is by name, so a repeat would otherwise be counted
-    twice (recall > 1).
-    """
-    seen: set = set()
-    out: List[str] = []
-    for n in names:
-        if n not in seen:
-            seen.add(n)
-            out.append(n)
-    return out
-
-
 def catalog_ranker(k: int) -> Ranker:
-    return lambda q: _dedupe([e["name"] for e, _s in catalog.search(q)])
+    return lambda q: [e for e, _s in catalog.search(q)]
 
 
 def bm25_ranker(k: int) -> Ranker:
-    return lambda q: _dedupe(
-        [h["entry"]["name"] for h in rag.retrieve(q, k=max(k * 4, 60))])
+    return lambda q: [h["entry"] for h in rag.retrieve(q, k=max(k * 4, 60))]
 
 
 def dense_ranker(k: int) -> Ranker:
-    return lambda q: _dedupe(
-        [h["entry"]["name"] for h in (dense.retrieve(q, k=max(k * 4, 60)) or [])])
+    return lambda q: [h["entry"] for h in (dense.retrieve(q, k=max(k * 4, 60)) or [])]
 
 
 def hybrid_ranker(k: int) -> Ranker:
@@ -166,8 +235,7 @@ def hybrid_ranker(k: int) -> Ranker:
         pool = max(k * 4, 60)
         b = rag.retrieve(q, k=pool)
         d = dense.retrieve(q, k=pool) or []
-        return _dedupe([h["entry"]["name"]
-                        for h in rag.rrf_fuse([b, d], limit=pool)])
+        return [h["entry"] for h in rag.rrf_fuse([b, d], limit=pool)]
     return rank
 
 
@@ -176,7 +244,7 @@ def rerank_ranker(k: int) -> Ranker:
     def rank(q: str) -> List[str]:
         hits = rag.retrieve(q, k=max(k * 4, 60))
         reranked, _label = rag.rerank(q, hits, limit=max(k, 15))
-        return _dedupe([h["entry"]["name"] for h in reranked])
+        return [h["entry"] for h in reranked]
     return rank
 
 
@@ -185,9 +253,11 @@ def rerank_ranker(k: int) -> Ranker:
 def evaluate(rows: List[dict], ranker: Ranker, k: int) -> Tuple[List[dict], dict]:
     """Run every golden query through `ranker`; return per-case + aggregates."""
     per_case: List[dict] = []
+    hashes = rag.content_hashes()
     for row in rows:
-        ranked = ranker(row["query"])
-        rel = row["relevant_set"]
+        entries = ranker(row["query"])
+        ranked = dedupe_keys([grade_key(row, e, hashes) for e in entries])
+        rel = relevant_keys(row)
         per_case.append({
             "query": row["query"], "kind": row["kind"],
             "relevant": sorted(rel), "top": ranked[:k],
