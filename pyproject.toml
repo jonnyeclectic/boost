@@ -266,11 +266,9 @@ type = "layers"
 # mutation-tested engine, commands/ is thin glue on top of it.
 layers = ["cli", "commands", "core"]
 containers = ["boost_cli"]
-# The one intentional upward edge: `boost completions` reads COMMANDS — the
-# command registry, which lives in cli.py by design (see CLAUDE.md) — to list
-# every command. That single metadata lookup is allowlisted; any other
-# commands -> cli import is still a violation.
-ignore_imports = ["boost_cli.commands.configuration -> boost_cli.cli"]
+# No exceptions. The one upward edge that used to be allowlisted — `boost
+# completions` importing COMMANDS out of cli.py — is gone: the command registry
+# is now passed into core.complete as data, so nothing reaches up.
 
 # interrogate: docstring-coverage floor for the engine. core/ is the
 # mutation-tested, contract-heavy layer — a public function without a word of

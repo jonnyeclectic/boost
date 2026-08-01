@@ -198,6 +198,21 @@ def _unknown(name: str) -> int:
     return 2
 
 
+def _complete_candidates(argv: List[str]) -> int:
+    """`boost __complete <words…>` — one candidate per line, for a shell.
+
+    Runs on every TAB, so it never fails loudly: core.complete swallows its own
+    errors and a traceback here would land in the line the user is typing.
+    """
+    from .core import complete
+    for candidate in complete.candidates(argv.copy(), COMMANDS):
+        print(candidate)
+    return 0
+
+
+_PLUMBING = {"__complete": _complete_candidates}
+
+
 def _dispatch(name: str, argv: List[str], soft: bool = False) -> int:
     _group, module, _summary = _BY_NAME[name]
     mod = importlib.import_module("boost_cli.commands.%s" % module)
@@ -248,6 +263,11 @@ def main(argv: List[str] | None = None) -> int:
         print_help()
         return 0
     name, rest = argv[0], argv[1:]
+    if name in _PLUMBING:
+        # Before the _BY_NAME guard (it is not a command) and before
+        # log_invocation: this runs on every TAB, and logging a line per
+        # keystroke would bury the diagnostic log in completion noise.
+        return _PLUMBING[name](rest)
     if name not in _BY_NAME:
         return _unknown(name)
     logs.log_invocation([name, *rest])

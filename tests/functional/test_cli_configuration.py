@@ -496,42 +496,73 @@ class TestOnboardOverwrite:
 # ---------------------------------------------------------------- completions
 
 class TestCompletions:
-    def test_bash_lists_all_commands(self, boost, sandbox):
-        from boost_cli.cli import COMMANDS
+    """The scripts are shims now; what they must do is delegate.
+
+    The previous tests asserted the emitted *text* — that a bash wordlist
+    equalled COMMANDS, that there were 79 zsh entries. Every one passed while
+    `boost install <TAB>` offered command names in bash, local filenames in
+    zsh and nothing in fish, because none of them asked what a shell would
+    actually propose. Behaviour is pinned in tests/unit/test_complete.py; these
+    pin the contract that the script is a shim rather than a second copy of the
+    command list.
+    """
+
+    def test_each_shell_delegates_to_the_completer(self, boost, sandbox):
+        for shell in ("bash", "zsh", "fish"):
+            r = boost("completions", shell)
+            assert "__complete" in r.out, shell
+
+    def test_no_script_embeds_a_static_command_list(self, boost, sandbox):
+        # A baked-in list silently drifts from cli.COMMANDS the next time a
+        # command is added — which is how flags came to be missing entirely.
+        for shell in ("bash", "zsh", "fish"):
+            r = boost("completions", shell)
+            assert "uninstall" not in r.out, shell
+
+    def test_bash_installs_a_function_not_a_wordlist(self, boost, sandbox):
+        # `complete -W` is position-independent by definition, so it re-offers
+        # command names where an argument belongs. Only `-F` can be contextual.
         r = boost("completions", "bash")
-        line = next(l for l in r.out.splitlines()
-                    if l.startswith('complete -W "'))
-        names = set(line.split('"')[1].split())
-        assert names == {n for n, _g, _m, _s in COMMANDS}
-        assert len(names) == 79
-        assert "# install: boost completions bash >> ~/.bashrc" in r.out
+        assert "complete -F _boost_complete boost" in r.out
+        assert "complete -W" not in r.out
 
-    def test_zsh_compdef_with_summaries(self, boost, sandbox):
+    def test_zsh_preserves_an_empty_current_word(self, boost, sandbox):
+        # Unquoted, zsh drops the empty word, so `boost install <TAB>` arrives
+        # as two words and completes command names instead of skills. Verified
+        # against real zsh; this pins the quoting that fixes it.
         r = boost("completions", "zsh")
-        assert r.out.splitlines()[0] == "#compdef boost"
-        assert "'install:Install a skill from a tap registry'" in r.out
-        entries = [l for l in r.out.splitlines() if l.startswith("    '")]
-        assert len(entries) == 79
-        assert "_describe -t commands 'boost command' _boost_commands" in r.out
+        assert '"${(@)words[1,$CURRENT]}"' in r.out
 
-    def test_fish_complete_lines(self, boost, sandbox):
+    def test_fish_disables_the_filename_fallback(self, boost, sandbox):
+        # Without -f, fish offers local filenames once the subcommand is typed.
         r = boost("completions", "fish")
-        lines = [l for l in r.out.splitlines()
-                 if l.startswith("complete -c boost -n __fish_use_subcommand -a ")]
-        assert len(lines) == 79
-        assert ("complete -c boost -n __fish_use_subcommand -a install "
-                "-d 'Install a skill from a tap registry'") in lines
+        assert "complete -c boost -f" in r.out
 
     def test_bad_shell_rc2_and_shell_env_default(self, boost, sandbox,
                                                  monkeypatch):
         r = boost("completions", "powershell", expect=2)
         assert "invalid choice" in r.err
         monkeypatch.setenv("SHELL", "/usr/local/bin/fish")
-        r = boost("completions")
-        assert "# boost fish completion" in r.out
+        assert "fish" in boost("completions").out
         monkeypatch.setenv("SHELL", "/bin/weirdsh")
-        r = boost("completions")
-        assert "# boost bash completion" in r.out
+        assert "_boost_complete" in boost("completions").out
+
+
+class TestHiddenCompleter:
+    def test_it_prints_one_candidate_per_line(self, boost, sandbox):
+        r = boost("__complete", "boost", "inst")
+        assert "install" in r.out.split("\n")
+
+    def test_it_is_not_advertised_as_a_command(self, boost, sandbox):
+        # It is not a row in cli.COMMANDS, so it must not reach --help,
+        # docs/commands.html, or the command counts.
+        assert "__complete" not in boost("--help").out
+
+    def test_it_exits_zero_on_nonsense(self, boost, sandbox):
+        # Called on every TAB: a non-zero exit or a traceback would land in
+        # the line the user is typing.
+        assert boost("__complete").out == ""
+        assert boost("__complete", "boost", "nosuchcommand", "x").out == ""
 
 
 # ---------------------------------------------------------------- schedule
