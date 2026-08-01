@@ -28,7 +28,16 @@
 
   .rgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
 
-  .rcard { padding: 24px 22px; }
+  /* Offscreen cards cost layout and paint on a board that only grows: 200
+     cards, 500 KB of markup, and the performance budget (minScore 0.85)
+     went red on a 1.2% addition. content-visibility skips rendering work
+     for anything not near the viewport while keeping the text in the DOM,
+     so find-in-page, anchor links and assistive tech still reach it —
+     unlike display:none. contain-intrinsic-size: auto lets the browser
+     remember each card's real height after first render, so the scrollbar
+     does not jump (a wrong fixed guess would trade layout cost for CLS). */
+  .rcard { padding: 24px 22px;
+           content-visibility: auto; contain-intrinsic-size: auto 320px; }
   .rcard .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
   .rcard h3 { font-size: 17.5px; font-weight: 750; letter-spacing: -.01em; line-height: 1.3; }
   .rcard p { font-size: 14px; color: var(--text-2); margin-top: 0; line-height: 1.6; }
@@ -513,7 +522,6 @@ message, so routing it through the helper would change user-facing errors.</p></
       <article class="cap rcard" id="bring-commands-under-mutation-testing">
         <div class="head"><span class="pill declined">Declined</span><span class="cat">Testing · Gap</span></div>
         <h3>Bring <code>commands/</code> under mutation testing</h3>
-        <details class="cardbody"><summary>Write-up</summary>
         <p>The ~8,100-line command layer has <strong>zero</strong> mutation coverage: mutmut is
            scoped to <code>core/</code> only. A blocking 80% floor was attempted and the
            baseline has now actually been <em>measured</em> — it does not clear the bar, and
@@ -572,7 +580,7 @@ message, so routing it through the helper would change user-facing errors.</p></
            <code>core/</code> — which <em>is</em> mutation-gated at 80% — and keeps
            <code>commands/</code> as thin CLI glue. The uncovered layer is the one deliberately
            designed to hold the least logic, and it still carries 91.5% line coverage from the
-           functional suite.</p></details>
+           functional suite.</p>
         <div class="meta">
           <span class="m">Complexity <b>XL</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -3421,7 +3429,6 @@ extra ships it.</p></details>
       <article class="cap rcard" id="pytest-tmpdir-cve-blocked-by-py39-floor">
         <div class="head"><span class="pill declined">Declined</span><span class="cat">Supply chain</span></div>
         <h3>The <code>pytest</code> tmpdir CVE has no fix at our Python floor</h3>
-        <details class="cardbody"><summary>Write-up</summary>
         <p>CVE-2025-71176 — pytest through 9.0.2 relies on the predictable
 <code>/tmp/pytest-of-{user}</code> path, letting a <b>local</b> user cause a denial of
 service or possibly gain privileges. Dependabot alert #1 (medium), raised against
@@ -3457,7 +3464,7 @@ compatibility promise in <code>pyproject.toml</code>, not an oversight.
 
 Reopen this if either condition changes. The residual exposure is unchanged and remains
 contributor-facing only: <code>[project].dependencies</code> is empty, so nobody installing
-<code>boost-skill-cli</code> ever receives pytest.</p></details>
+<code>boost-skill-cli</code> ever receives pytest.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -4768,7 +4775,6 @@ card no longer describes the code.</p></details>
       <article class="cap rcard" id="keyless-dense-tier-local-static-embeddings">
         <div class="head"><span class="pill declined">Declined</span><span class="cat">Search · Retrieval</span></div>
         <h3>Semantic search for users who will never set an API key</h3>
-        <details class="cardbody"><summary>Write-up</summary>
         <p>Dense retrieval today needs the <code>[rag]</code> extra <em>and</em> a
 <code>VOYAGE_API_KEY</code>/<code>OPENAI_API_KEY</code> <em>and</em> a built
 store. Most users will do none of that, so the default experience is BM25
@@ -4911,7 +4917,7 @@ mean-pool &rarr; L2, mmap'd, F32 and F16) is proven workable if a future model j
 <b>What would reopen this.</b> A static model that actually separates on this task &mdash; the bar
 is beating <code>0.260</code> as a reranker, not merely producing plausible cosines. The two hand
 pairs looked fine for both models (0.224 related vs -0.001 unrelated for the code model), which is
-exactly why plausible similarity was not accepted as evidence.</p></details>
+exactly why plausible similarity was not accepted as evidence.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
