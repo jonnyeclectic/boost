@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>boost — Framework adapters (boost adapt)</title>
 <meta name="description" content="How `boost adapt` renders one authored skill into another agent framework's native source — CrewAI, the OpenAI Agents SDK — as a deterministic, zero-dependency string transform, with architecture and sequence diagrams and the exact field mapping.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2340cbe3' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
 <!-- Shared Aurora design system. Recolour everything by editing style/boost.css. -->
 <link rel="stylesheet" href="../style/boost.css">
 <style>
@@ -64,6 +64,7 @@
 </style>
 </head>
 <body>
+<a class="skip" href="#top">Skip to content</a>
 
 <header>
   <div class="wrap site-nav">
@@ -140,7 +141,7 @@
           </defs>
 
           <!-- source -->
-          <rect x="40" y="132" width="150" height="76" rx="12" fill="rgba(34,211,238,.08)" stroke="#22d3ee" stroke-width="1.3"/>
+          <rect x="40" y="132" width="150" height="76" rx="12" fill="rgba(64,203,227,.08)" stroke="#40cbe3" stroke-width="1.3"/>
           <text x="115" y="164" text-anchor="middle" class="head">SKILL.md</text>
           <text x="115" y="184" text-anchor="middle" class="lbl-s">name · description</text>
           <text x="115" y="199" text-anchor="middle" class="lbl-s">+ markdown body</text>
@@ -151,7 +152,7 @@
           <text x="375" y="66" class="lbl">boost install</text>
           <text x="375" y="84" class="lbl-t mono">store.install → symlink</text>
 
-          <rect x="600" y="30" width="300" height="82" rx="10" fill="rgba(34,211,238,.05)" stroke="#22d3ee" stroke-width="1.1"/>
+          <rect x="600" y="30" width="300" height="82" rx="10" fill="rgba(64,203,227,.05)" stroke="#40cbe3" stroke-width="1.1"/>
           <text x="616" y="52" class="head">Editor agents <tspan class="lbl-t">(file consumers)</tspan></text>
           <text x="616" y="74" class="lbl-s mono">~/.claude/skills/ · Cursor · Windsurf</text>
           <text x="616" y="94" class="lbl-t">copied verbatim — no transform</text>
@@ -159,13 +160,13 @@
 
           <!-- adapt lane -->
           <line x1="190" y1="190" x2="360" y2="230" stroke="#3a4363" stroke-width="1.4" marker-end="url(#a)"/>
-          <rect x="360" y="210" width="200" height="72" rx="10" fill="rgba(168,85,247,.08)" stroke="#a855f7" stroke-width="1.2"/>
+          <rect x="360" y="210" width="200" height="72" rx="10" fill="rgba(204,158,255,.08)" stroke="#cc9eff" stroke-width="1.2"/>
           <text x="375" y="234" class="lbl">boost adapt --to X</text>
           <text x="375" y="253" class="lbl-t mono">adapters.render(fmt, …)</text>
           <text x="375" y="270" class="lbl-t mono">_py_str · _ident</text>
 
-          <rect x="600" y="176" width="300" height="56" rx="10" fill="rgba(244,114,208,.06)" stroke="#f472d0" stroke-width="1.1"/>
-          <text x="616" y="198" class="head" fill="#f472d0">CrewAI</text>
+          <rect x="600" y="176" width="300" height="56" rx="10" fill="rgba(245,143,215,.06)" stroke="#f58fd7" stroke-width="1.1"/>
+          <text x="616" y="198" class="head" fill="#f58fd7">CrewAI</text>
           <text x="616" y="218" class="lbl-s mono">from crewai import Agent</text>
           <line x1="560" y1="238" x2="600" y2="212" stroke="#3a4363" stroke-width="1.4" marker-end="url(#a)"/>
 
@@ -202,9 +203,9 @@
           <g text-anchor="middle">
             <rect x="40"  y="34" width="100" height="30" rx="7" fill="rgba(255,255,255,.05)" stroke="#4a5578"/>
             <text x="90"  y="54" class="lbl">cmd_adapt</text>
-            <rect x="240" y="34" width="120" height="30" rx="7" fill="rgba(34,211,238,.07)" stroke="#22d3ee"/>
+            <rect x="240" y="34" width="120" height="30" rx="7" fill="rgba(64,203,227,.07)" stroke="#40cbe3"/>
             <text x="300" y="54" class="lbl">resolve+parse</text>
-            <rect x="450" y="34" width="120" height="30" rx="7" fill="rgba(168,85,247,.08)" stroke="#a855f7"/>
+            <rect x="450" y="34" width="120" height="30" rx="7" fill="rgba(204,158,255,.08)" stroke="#cc9eff"/>
             <text x="510" y="54" class="lbl">render_crewai</text>
             <rect x="665" y="34" width="110" height="30" rx="7" fill="rgba(250,204,21,.07)" stroke="#facc15"/>
             <text x="720" y="54" class="lbl">stdout / file</text>
@@ -220,8 +221,8 @@
             <line x1="90"  y1="172" x2="510" y2="172" stroke="#7dd3fc" stroke-width="1.3" marker-end="url(#a)"/>
             <text x="105" y="166">adapters.render("crewai", …)</text>
 
-            <line x1="510" y1="210" x2="510" y2="210" stroke="#a855f7"/>
-            <rect x="470" y="196" width="200" height="26" rx="6" fill="rgba(168,85,247,.10)" stroke="#a855f7"/>
+            <line x1="510" y1="210" x2="510" y2="210" stroke="#cc9eff"/>
+            <rect x="470" y="196" width="200" height="26" rx="6" fill="rgba(204,158,255,.10)" stroke="#cc9eff"/>
             <text x="480" y="213" class="lbl-t mono">_py_str() quotes · _ident() names</text>
 
             <line x1="510" y1="250" x2="720" y2="250" stroke="#7dd3fc" stroke-width="1.3" marker-end="url(#a)"/>

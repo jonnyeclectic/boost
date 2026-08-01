@@ -743,7 +743,7 @@ class TestBrowseAurora:
         from boost_cli.core import output as out
         rgb = discovery._curses_rgb1000()
         assert set(rgb) == set(out.TOKENS)
-        # cyan #22d3ee scaled 0..255 -> 0..1000
+        # cyan #40cbe3 scaled 0..255 -> 0..1000
         r, g, b = out.TOKENS["cyan"]
         assert rgb["cyan"] == (round(r / 255 * 1000), round(g / 255 * 1000),
                                round(b / 255 * 1000))

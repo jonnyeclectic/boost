@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2340cbe3' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="boost is a package manager for AI coding skills — find, install, and govern the SKILL.md, rule, and workflow files that Claude Code, Cursor, and Windsurf run on, wired into every agent in one pass.">
 <title>boost — Homebrew for AI coding skills</title>
@@ -30,9 +30,9 @@
     content: "";
     position: fixed; inset: -25vmax; z-index: 0; pointer-events: none;
     background:
-      radial-gradient(38vmax 38vmax at 12% 6%,  rgba(34,211,238,.20), transparent 60%),
-      radial-gradient(34vmax 34vmax at 90% 16%, rgba(168,85,247,.18), transparent 60%),
-      radial-gradient(30vmax 30vmax at 62% 104%, rgba(244,114,208,.14), transparent 62%);
+      radial-gradient(38vmax 38vmax at 12% 6%,  rgba(64,203,227,.20), transparent 60%),
+      radial-gradient(34vmax 34vmax at 90% 16%, rgba(204,158,255,.18), transparent 60%),
+      radial-gradient(30vmax 30vmax at 62% 104%, rgba(245,143,215,.14), transparent 62%);
     filter: blur(34px) saturate(135%);
     animation: aurora-drift 42s ease-in-out infinite;
     will-change: transform;
@@ -99,7 +99,7 @@
   /* ---------- shared section chrome ---------- */
   section { padding: 110px 0 20px; }
   .sec-sub code {
-    color: var(--cyan); background: rgba(34,211,238,.09);
+    color: var(--cyan); background: rgba(64,203,227,.09);
     padding: 1px 7px; border-radius: 6px; font-size: .88em;
   }
   .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
@@ -132,20 +132,22 @@
   .btn-grad {
     color: #05141a;
     background: linear-gradient(92deg, var(--blue), var(--pink));
-    box-shadow: 0 8px 30px rgba(236,72,153,.28);
+    box-shadow: 0 1px 2px rgba(4,5,10,.6), 0 10px 30px -10px rgba(64,203,227,.45);
   }
-  .btn-grad:hover { box-shadow: 0 10px 36px rgba(236,72,153,.4); }
+  .btn-grad:hover { box-shadow: 0 1px 2px rgba(4,5,10,.6), 0 14px 38px -12px rgba(204,158,255,.55); }
   .btn-ghost:hover { border-color: rgba(255,255,255,.2); }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 72px; }
   .stat {
-    background:
-      radial-gradient(240px circle at var(--mx,-200px) var(--my,-200px), rgba(34,211,238,.14), transparent 45%),
-      var(--panel);
+    background: var(--surface-1);
+    box-shadow: inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 -1px 0 0 rgba(0,0,0,.3);
     border: 1px solid var(--line); border-radius: 16px;
     padding: 26px 22px; text-align: center;
-    transition: border-color .2s ease;
+    transition: background .28s var(--ease), border-color .28s var(--ease),
+                box-shadow .3s var(--ease);
   }
-  .stat:hover { border-color: var(--line-hi); }
+  @media (hover: hover) {
+    .stat:hover { background: var(--surface-2); border-color: var(--line-hi); }
+  }
 
   /* ---------- concept ---------- */
   .concept-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; margin-top: 64px; }
@@ -153,7 +155,7 @@
   .concept-copy p b { color: var(--text); font-weight: 650; }
   .concept-copy .chip-code {
     font-family: var(--mono); font-size: .86em; color: var(--cyan);
-    background: rgba(34,211,238,.09); padding: 1px 7px; border-radius: 6px;
+    background: rgba(64,203,227,.09); padding: 1px 7px; border-radius: 6px;
   }
   .analogy { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
   .analogy span {
@@ -166,11 +168,9 @@
 
   /* mac-style window */
   .window {
-    background:
-      radial-gradient(420px circle at var(--mx,-300px) var(--my,-300px), rgba(34,211,238,.09), transparent 50%),
-      var(--term-bg);
-    border: 1px solid rgba(255,255,255,.12); border-radius: 12px;
-    box-shadow: 0 24px 70px rgba(0,0,0,.5);
+    background: var(--term-bg);
+    border: 1px solid var(--line-hi); border-radius: 12px;
+    box-shadow: 0 1px 2px rgba(4,5,10,.6), 0 24px 60px -20px rgba(4,5,10,.8);
     overflow: hidden;
   }
   .window .bar {
@@ -193,9 +193,8 @@
   .flow-row.two { grid-template-columns: 1fr 1fr; }
   .flow-row.three { grid-template-columns: 1fr 1fr 1fr; }
   .node {
-    background:
-      radial-gradient(220px circle at var(--mx,-200px) var(--my,-200px), rgba(34,211,238,.12), transparent 45%),
-      rgba(19,19,28,.85);
+    background: var(--surface-1);
+    box-shadow: inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 -1px 0 0 rgba(0,0,0,.3);
     border: 1px solid var(--line); border-radius: 14px;
     padding: 22px 20px; text-align: center;
   }
@@ -208,7 +207,7 @@
   .node p { font-size: 13.5px; color: var(--text-2); margin-top: 6px; }
   .node.src   { border-color: rgba(96,165,250,.5);  box-shadow: 0 0 32px rgba(96,165,250,.07); }
   .node.mid   { border-color: rgba(255,255,255,.14); }
-  .node.store { border-color: rgba(34,211,238,.55); box-shadow: 0 0 32px rgba(34,211,238,.07); }
+  .node.store { border-color: rgba(64,203,227,.55); box-shadow: 0 0 32px rgba(64,203,227,.07); }
   .node.lock  { border-color: rgba(56,189,248,.55); }
   .node.agent { border-color: rgba(74,222,128,.5);  box-shadow: 0 0 32px rgba(74,222,128,.06); }
   .node.agent h4 { color: #d9fbe5; }
@@ -256,23 +255,23 @@
   .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 20px; }
   .cmd {
     position: relative;
-    background:
-      radial-gradient(200px circle at var(--mx,-200px) var(--my,-200px), rgba(34,211,238,.13), transparent 45%),
-      var(--panel-solid);
+    background: var(--surface-1);
     border: 1px solid var(--line-soft);
     border-radius: 12px; padding: 16px 18px 15px 20px; overflow: hidden;
-    transition: border-color .18s ease;
+    transition: background .18s var(--ease), border-color .18s var(--ease);
   }
   .cmd::before {
     content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     background: var(--gc, var(--cyan)); opacity: .85; border-radius: 3px 0 0 3px;
   }
-  .cmd:hover { border-color: var(--line); }
+  @media (hover: hover) {
+    .cmd:hover { background: var(--surface-2); border-color: var(--line-hi); }
+  }
   .cmd .name { font-family: var(--mono); font-size: 14.5px; }
   .cmd .name .v { color: #85859c; }
   .cmd .name b { color: var(--cyan); font-weight: 700; }
   .cmd p { font-size: 13.5px; color: var(--text-2); margin-top: 6px; line-height: 1.5; }
-  .cmd mark { background: rgba(34,211,238,.25); color: var(--text); border-radius: 3px; padding: 0 1px; }
+  .cmd mark { background: rgba(64,203,227,.25); color: var(--text); border-radius: 3px; padding: 0 1px; }
   .no-results { text-align: center; color: var(--text-2); padding: 60px 0 30px; display: none; }
   .no-results code { color: var(--cyan); }
 
@@ -280,13 +279,19 @@
   .caps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 64px; }
   .cap {
     position: relative;
-    background:
-      radial-gradient(320px circle at var(--mx,-200px) var(--my,-200px), rgba(34,211,238,.13), transparent 45%),
-      var(--panel);
+    background: var(--surface-1);
+    box-shadow: inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 -1px 0 0 rgba(0,0,0,.3);
     border: 1px solid var(--line); border-radius: 18px; padding: 30px 26px;
-    transition: border-color .2s ease, transform .2s ease;
+    transition: transform .28s var(--ease), background .28s var(--ease),
+                border-color .28s var(--ease), box-shadow .3s var(--ease);
   }
-  .cap:hover { border-color: var(--line-hi); transform: translateY(-2px); }
+  @media (hover: hover) {
+    .cap:hover {
+      transform: translateY(-2px);
+      background: var(--surface-2); border-color: var(--line-hi);
+      box-shadow: 0 1px 2px rgba(4,5,10,.5), 0 8px 24px -12px rgba(4,5,10,.7);
+    }
+  }
   .cap .ic {
     width: 46px; height: 46px; border-radius: 13px;
     display: flex; align-items: center; justify-content: center;
@@ -313,13 +318,13 @@
   .reg tbody tr:last-child td { border-bottom: none; }
   .reg .tapname {
     font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--cyan);
-    background: rgba(34,211,238,.09); border: 1px solid rgba(34,211,238,.25);
+    background: rgba(64,203,227,.09); border: 1px solid rgba(64,203,227,.25);
     border-radius: 8px; padding: 4px 11px; white-space: nowrap;
   }
   .reg .repo { font-family: var(--mono); font-size: 13px; color: var(--text-2); }
   .reg .cnt {
     font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--cyan);
-    border: 1px solid rgba(34,211,238,.35); border-radius: 999px; padding: 4px 12px;
+    border: 1px solid rgba(64,203,227,.35); border-radius: 999px; padding: 4px 12px;
     font-variant-numeric: tabular-nums; white-space: nowrap;
   }
   .reg .focus { color: var(--text-2); font-size: 14px; }
@@ -370,6 +375,7 @@
 </style>
 </head>
 <body>
+<a class="skip" href="#top">Skip to content</a>
 
 <header>
   <div class="wrap nav">
@@ -649,7 +655,7 @@ facilitate structured divergent thinking:
             protocol, serve a catalog over HTTP, or auto-sync on a schedule.</p>
           <div class="tags"><code>migrate</code><code>mcp</code><code>protocol</code><code>serve</code><code>schedule</code></div>
         </div>
-        <div class="cap reveal" style="--ic-bg: rgba(34,211,238,.12); --ic-fg: #7dd3fc;">
+        <div class="cap reveal" style="--ic-bg: rgba(64,203,227,.12); --ic-fg: #7dd3fc;">
           <div class="ic">∿</div>
           <h3>Reproducible &amp; recoverable</h3>
           <p>A v3 lock file pins exact state. Preview diffs before syncing,
@@ -797,7 +803,7 @@ pipx upgrade boost-skill-cli        <span class="cm"># or: pip install --upgrade
 <script>
 // ---------- command data (mirrors boost_cli/cli.py exactly) ----------
 const GROUPS = {
-  pkg:  { icon: "pkg",  color: "#22d3ee", title: "Package Management",
+  pkg:  { icon: "pkg",  color: "#40cbe3", title: "Package Management",
           desc: "Install, remove, update & move skills across agents" },
   find: { icon: "find", color: "#60a5fa", title: "Discovery & Search",
           desc: "Find the right skill across taps and all of GitHub" },
@@ -907,21 +913,12 @@ const noResEl = document.getElementById("no-results");
 const filterEl = document.getElementById("cmd-filter");
 let activeGroup = "all";
 
-// ---------- cursor spotlight (living glass, mirrors style/boost.js) ----------
-// Writes element-local pointer coords into --mx / --my, which the radial-gradient
-// backgrounds on .stat/.cap/.cmd/.node/.window read to follow the cursor.
-const prefersReduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-function bindSpot(el) {
-  el.addEventListener("pointermove", (e) => {
-    const r = el.getBoundingClientRect();
-    el.style.setProperty("--mx", (e.clientX - r.left) + "px");
-    el.style.setProperty("--my", (e.clientY - r.top) + "px");
-  });
-  el.addEventListener("pointerleave", () => {
-    el.style.removeProperty("--mx");
-    el.style.removeProperty("--my");
-  });
-}
+// The cursor spotlight that lived here is gone, along with the radial-gradient
+// backgrounds it drove. It bound a pointermove listener per card — and rebound
+// one per command card on every keystroke in the filter — to write two custom
+// properties per event, which recalculates style on the moved element on every
+// frame. None of it was visible on a touch screen. The surfaces it painted
+// now come from the shared stylesheet.
 
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -967,7 +964,6 @@ function render() {
       `</div></div>`;
   }
   groupsEl.innerHTML = html;
-  if (!prefersReduce) groupsEl.querySelectorAll(".cmd").forEach(bindSpot);
   noResEl.style.display = shown ? "none" : "block";
   countEl.textContent = ql || activeGroup !== "all"
     ? `${shown} command${shown === 1 ? "" : "s"} across ${shownGroups.size} group${shownGroups.size === 1 ? "" : "s"}`
@@ -991,11 +987,6 @@ pillsEl.addEventListener("click", (e) => {
 filterEl.addEventListener("input", render);
 renderPills();
 render();
-
-// spotlight on the static glass surfaces (command cards are bound inside render)
-if (!prefersReduce) {
-  document.querySelectorAll(".stat, .cap, .node, .window").forEach(bindSpot);
-}
 
 // registry counts
 document.querySelectorAll("[data-count]").forEach((el) => {

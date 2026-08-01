@@ -151,12 +151,12 @@ class TestAurora:
     def test_truecolor_cyan_exact_hex(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         assert output.aurora("x", "cyan", FakeStream(tty=True)) == (
-            "\033[38;2;34;211;238mx\033[0m")
+            "\033[38;2;64;203;227mx\033[0m")
 
     def test_truecolor_pink_exact_hex(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         assert output.aurora("x", "pink", FakeStream(tty=True)) == (
-            "\033[38;2;244;114;208mx\033[0m")
+            "\033[38;2;245;143;215mx\033[0m")
 
     def test_basic_cyan_uses_16color_fallback(self, monkeypatch):
         monkeypatch.delenv("COLORTERM", raising=False)
@@ -230,9 +230,9 @@ class TestRoles:
 
 class TestTokens:
     def test_known_hexes(self):
-        assert output.TOKENS["cyan"] == (0x22, 0xd3, 0xee)
-        assert output.TOKENS["violet"] == (0xa8, 0x55, 0xf7)
-        assert output.TOKENS["pink"] == (0xf4, 0x72, 0xd0)
+        assert output.TOKENS["cyan"] == (0x40, 0xcb, 0xe3)
+        assert output.TOKENS["violet"] == (0xcc, 0x9e, 0xff)
+        assert output.TOKENS["pink"] == (0xf5, 0x8f, 0xd7)
         assert output.TOKENS["green"] == (0x4a, 0xde, 0x80)
         assert output.TOKENS["yellow"] == (0xfa, 0xcc, 0x15)
 
@@ -268,17 +268,17 @@ class TestGradient:
     def test_truecolor_first_char_is_cyan_stop(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         assert output.gradient("boost", FakeStream(tty=True)).startswith(
-            "\033[38;2;34;211;238mb")
+            "\033[38;2;64;203;227mb")
 
     def test_truecolor_last_char_is_pink_stop(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         assert output.gradient("boost", FakeStream(tty=True)).endswith(
-            "\033[38;2;244;114;208mt\033[0m")
+            "\033[38;2;245;143;215mt\033[0m")
 
     def test_single_char_uses_first_stop(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         assert output.gradient("Z", FakeStream(tty=True)) == (
-            "\033[38;2;34;211;238mZ\033[0m")
+            "\033[38;2;64;203;227mZ\033[0m")
 
     def test_exactly_one_reset_at_end(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
@@ -288,7 +288,7 @@ class TestGradient:
     def test_midpoint_char_hits_violet_stop(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         # "abc": i=1 -> t=0.5 -> lands exactly on the middle (violet) stop.
-        assert "\033[38;2;168;85;247mb" in output.gradient(
+        assert "\033[38;2;204;158;255mb" in output.gradient(
             "abc", FakeStream(tty=True))
 
     def test_two_char_spans_full_gradient(self, monkeypatch):
@@ -296,17 +296,17 @@ class TestGradient:
         # n == 2 boundary: first char = cyan stop, second = pink stop — not both
         # collapsed onto the first stop.
         assert output.gradient("ab", FakeStream(tty=True)) == (
-            "\033[38;2;34;211;238ma\033[38;2;244;114;208mb\033[0m")
+            "\033[38;2;64;203;227ma\033[38;2;245;143;215mb\033[0m")
 
     def test_exact_interpolation_across_all_chars(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         # Pins every character's interpolated color so any drift in the
         # per-char gradient math (segment, local-t, lerp rounding) is caught.
         assert output.gradient("abcd", FakeStream(tty=True)) == (
-            "\033[38;2;34;211;238ma"
-            "\033[38;2;123;127;244mb"
-            "\033[38;2;193;95;234mc"
-            "\033[38;2;244;114;208md"
+            "\033[38;2;64;203;227ma"
+            "\033[38;2;157;173;246mb"
+            "\033[38;2;218;153;242mc"
+            "\033[38;2;245;143;215md"
             "\033[0m")
 
 
@@ -319,7 +319,7 @@ class TestHeadingAndVerdictColor:
         self._force_truecolor(monkeypatch)
         output.heading("Section")
         out = capsys.readouterr().out
-        assert out.startswith("\033[38;2;34;211;238m==>\033[0m ")
+        assert out.startswith("\033[38;2;64;203;227m==>\033[0m ")
         assert "Section" in out
 
     def test_verdict_ok_green_dot_and_green_text(self, monkeypatch, capsys):
@@ -400,7 +400,7 @@ class TestBadge:
     def test_default_hue_is_cyan(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
-        assert output.badge("x") == "\033[38;2;34;211;238m[x]\033[0m"
+        assert output.badge("x") == "\033[38;2;64;203;227m[x]\033[0m"
 
     def test_truecolor_wraps_label_in_brackets(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
@@ -448,8 +448,8 @@ class TestPanel:
     def test_border_is_aurora_tinted_when_truecolor(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
-        # top-left corner painted cyan #22d3ee
-        assert output.panel("x").startswith("\033[38;2;34;211;238m╭")
+        # top-left corner painted cyan #40cbe3
+        assert output.panel("x").startswith("\033[38;2;64;203;227m╭")
 
     def test_title_is_bold_when_forced(self, monkeypatch):
         monkeypatch.setenv("COLORTERM", "truecolor")

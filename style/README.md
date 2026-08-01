@@ -38,11 +38,11 @@ changing their **values** — never the selectors.
 
 | Token       | Value     | Role                          |
 |-------------|-----------|-------------------------------|
-| `--cyan`    | `#22d3ee` | primary accent                |
-| `--violet`  | `#a855f7` | secondary accent              |
-| `--pink`    | `#f472d0` | tertiary accent               |
+| `--cyan`    | `#40cbe3` | primary accent                |
+| `--violet`  | `#cc9eff` | secondary accent              |
+| `--pink`    | `#f58fd7` | tertiary accent               |
 | `--bg`      | `#07080f` | near-black page ground        |
-| `--text`    | `#e9ebf5` | primary ink                   |
+| `--text`    | `#d6d9e3` | primary ink                   |
 | `--grad`    | cyan → violet → pink | the signature gradient |
 
 Neutrals are intentionally cool (a slight blue bias), not pure grey, so they
