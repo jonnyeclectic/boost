@@ -4,11 +4,36 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 
 import pytest
 
 from boost_cli.core import paths
+
+
+@pytest.fixture()
+def rival_tap(boost, tapped, tmp_path):
+    """A second real tap that also ships `brainstorming`, at a louder version.
+
+    Two taps carrying one name is the only way to reach the ambiguity error —
+    and its hint — so the qualified-name path needs a genuine second clone
+    rather than a hand-written cache.
+    """
+    root = tmp_path / "rival-tap"
+    (root / "skills" / "brainstorming").mkdir(parents=True)
+    (root / "skills" / "brainstorming" / "SKILL.md").write_text(
+        "---\nname: brainstorming\ndescription: A rival ideation skill\n"
+        "version: 9.9.9\n---\n\n# Brainstorming\n\nThe other tap's copy.\n",
+        encoding="utf-8")
+    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "rival@boost.test")
+    run("git", "config", "user.name", "Rival Tap")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "rival skills")
+    boost("tap", root)
+    return "rival-tap"
 
 
 def _lock():
@@ -172,6 +197,58 @@ class TestInfo:
         assert "no skill named 'definitely-nope' in any tap" in r.err
 
 
+class TestInfoQualifiedName:
+    """`boost info owner/repo:skill` — the form the ambiguity error tells the
+    user to type, which `info` itself used to reject as an invalid skill name
+    because it fed the qualified string straight to `store.skill_store_dir`."""
+
+    def test_ambiguity_hint_is_a_runnable_command(self, boost, rival_tap):
+        # The headline regression: whatever the hint tells you to type must work.
+        r = boost("info", "brainstorming", expect=1)
+        assert "exists in multiple taps" in r.err
+        m = re.search(r"qualify it, e\.g\. `([^`]+)`", r.err)
+        assert m, "no qualified-name hint in: %s" % r.err
+        r2 = boost("info", m.group(1))
+        assert "invalid skill name" not in r2.err
+        assert "brainstorming" in r2.out
+
+    def test_qualifier_selects_the_named_tap(self, boost, rival_tap):
+        r = boost("info", "rival-tap:brainstorming")
+        assert re.search(r"latest\s+9\.9\.9", r.out)
+        assert re.search(r"tap\s+rival-tap", r.out)
+        assert "A rival ideation skill" in r.out
+        r = boost("info", "fixture-tap:brainstorming")
+        assert re.search(r"latest\s+1\.4\.0", r.out)
+        assert re.search(r"tap\s+fixture-tap", r.out)
+
+    def test_json_name_is_the_bare_skill_name(self, boost, rival_tap):
+        data = json.loads(boost("info", "rival-tap:brainstorming", "--json").out)
+        # The qualified string is a lookup key, never the skill's identity —
+        # `--json | jq .name` has to feed back into `boost install`.
+        assert data["name"] == "brainstorming"
+        assert data["tap"] == "rival-tap"
+        assert data["latest"] == "9.9.9"
+
+    def test_finds_the_installed_copy_when_the_tap_agrees(self, boost, rival_tap):
+        boost("install", "fixture-tap:brainstorming")
+        r = boost("info", "fixture-tap:brainstorming")
+        assert "[installed]" in r.out
+        assert "~/.agents/skills/brainstorming" in r.out
+
+    def test_another_taps_copy_is_not_reported_installed(self, boost, rival_tap):
+        # brainstorming IS installed — but from fixture-tap. Asking about
+        # rival-tap's must not describe fixture-tap's install as its own.
+        boost("install", "fixture-tap:brainstorming")
+        r = boost("info", "rival-tap:brainstorming")
+        assert "[not installed]" in r.out
+        assert re.search(r"latest\s+9\.9\.9", r.out)
+
+    def test_unknown_skill_in_a_real_tap_still_errors(self, boost, rival_tap):
+        r = boost("info", "rival-tap:definitely-nope", expect=1)
+        assert "no skill named" in r.err
+        assert "invalid skill name" not in r.err
+
+
 # ── cat ──────────────────────────────────────────────────────────────────
 
 class TestCat:
@@ -191,6 +268,23 @@ class TestCat:
     def test_unknown_rc1(self, boost, tapped):
         r = boost("cat", "nope", expect=1)
         assert "no skill named 'nope' in any tap" in r.err
+
+    def test_qualified_name_picks_the_named_taps_copy(self, boost, rival_tap):
+        # cat/preview/explain/deps share _resolve_skill_md, so the qualifier has
+        # to reach the store lookup there too — not just in `info`.
+        assert "The other tap's copy." in boost("cat", "rival-tap:brainstorming").out
+        assert "Diverge — generate widely" in boost("cat", "fixture-tap:brainstorming").out
+
+    def test_qualified_name_prefers_the_installed_copy_of_that_tap(self, boost,
+                                                                   rival_tap):
+        boost("install", "fixture-tap:brainstorming")
+        store_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        store_md.write_text(store_md.read_text(encoding="utf-8") + "\nlocal edit\n",
+                            encoding="utf-8")
+        # fixture-tap's copy is the installed one -> served from the store.
+        assert "local edit" in boost("cat", "fixture-tap:brainstorming").out
+        # rival-tap's is not installed -> served from its clone, unedited.
+        assert "local edit" not in boost("cat", "rival-tap:brainstorming").out
 
 
 # ── edit ─────────────────────────────────────────────────────────────────

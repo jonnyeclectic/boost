@@ -438,6 +438,53 @@ class TestEntrySetCache:
         assert str(tap.cache_file) not in catalog._ENTRY_CACHE
 
 
+class TestSplitName:
+    """The `tap:skill` grammar, factored out of find() so the lock file and the
+    canonical store — both keyed by the *bare* name — split it identically."""
+
+    def test_unqualified_name_has_no_tap(self):
+        assert catalog.split_name("differential-review") == (None, "differential-review")
+
+    def test_owner_repo_qualifier(self):
+        assert catalog.split_name("trailofbits/skills:differential-review") \
+            == ("trailofbits/skills", "differential-review")
+
+    def test_bare_repo_qualifier(self):
+        assert catalog.split_name("skills:differential-review") \
+            == ("skills", "differential-review")
+
+    def test_splits_on_the_last_colon(self):
+        # rsplit, not split: the skill name is always the final segment.
+        assert catalog.split_name("a:b:c") == ("a:b", "c")
+
+    def test_empty_qualifier_is_not_none(self):
+        # ":x" must stay distinguishable from "x" — find() overrides its `tap`
+        # kwarg only when a qualifier was actually present, and "" is falsy.
+        assert catalog.split_name(":x") == ("", "x")
+
+
+class TestTapMatches:
+    def test_exact_owner_repo(self):
+        assert catalog.tap_matches("trailofbits/skills", "trailofbits/skills") is True
+
+    def test_bare_repo_tail(self):
+        assert catalog.tap_matches("trailofbits/skills", "skills") is True
+
+    def test_owner_alone_does_not_select(self):
+        assert catalog.tap_matches("trailofbits/skills", "trailofbits") is False
+
+    def test_different_owner_same_tail_needs_the_tail(self):
+        assert catalog.tap_matches("vibeeval/vibecosystem", "trailofbits/skills") is False
+
+    def test_empty_tap_name_never_matches(self):
+        assert catalog.tap_matches("", "skills") is False
+
+    def test_two_empties_do_not_match_each_other(self):
+        # Pins the `bool(tap_name)` guard: without it a tap-less lock entry
+        # ("" tap) would satisfy an empty qualifier by string equality.
+        assert catalog.tap_matches("", "") is False
+
+
 class TestAllEntriesAndFind:
     def test_all_entries_config_order(self, sandbox):
         _fake_taps(
