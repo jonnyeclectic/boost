@@ -7,7 +7,7 @@ category: Search · Retrieval
 complexity: L
 impact: High
 wow: 5
-note: semantic search with no key, no billing, no deps
+note: spike done: the perf claims were 6-22x conservative, but rerank added +0 at real scale
 order: 73
 owner:
 pr:
@@ -77,3 +77,48 @@ that holds it is a difference of more than an order of magnitude on the doc side
 the cost that makes prebuilt shards mandatory today. Worth measuring the model2vec path directly
 before committing &mdash; but the gap it claims to close is now a measured number rather than an
 estimate.
+
+<b>Spike done &mdash; the prerequisites this card set have all shipped, so the measurement it asked
+for was finally runnable.</b> It says &ldquo;do not ship before the eval and dedup items&rdquo;;
+dedup landed in <code>#370</code>, the index format in <code>#367</code>/<code>#371</code>, the
+published eval in <code>#373</code>. What follows is <code>potion-retrieval-32M</code> (MIT, 63,091
+&times; 512 F32 lookup table &mdash; confirmed a single tensor, no transformer) driven by a
+hand-written pure-stdlib loader: WordPiece &rarr; gather rows &rarr; mean-pool &rarr; L2, mmap'd,
+no numpy.
+
+<b>The two unverified performance claims were not just right, they were conservative.</b> Query
+embedding measured <b>0.16&nbsp;ms</b> against the card's <code>~1&nbsp;ms</code>. Document
+embedding measured <b>1.34&nbsp;ms</b> on a synthetic 105-token doc and <b>3.27&nbsp;ms</b> on 300
+real catalogue entries (median 61 tokens), against the card's <code>~29&nbsp;ms</code>.
+
+<b>That reverses one of this card's design arguments.</b> The doc-side cost was the reason prebuilt
+artifacts looked mandatory: &ldquo;29&nbsp;ms/doc in pure Python is ~24&nbsp;min for 50k
+single-core&rdquo;. At the measured 3.27&nbsp;ms it is <b>2.7&nbsp;min</b> &mdash; roughly the time
+a first <code>boost tap --defaults</code> already takes. Local embedding is therefore viable on the
+user's own machine, and shipped shards become a genuine optimisation rather than a requirement. (Not
+to be confused with the ONNX <code>bge-small</code> path measured at ~1.2&nbsp;s/chunk in
+<code>keyless-semantic-search-for-everyone</code>; that number stands, and the gap between them
+<em>is</em> the case for the static model.)
+
+<b>But reranking bought nothing at real scale, which is the result that matters.</b> Over the 50
+natural-language golden queries against a real <b>71,655-entry</b> catalogue, reranking BM25's
+top-200 by cosine scored <code>hit@1</code> <b>2/50</b> &mdash; identical to BM25's own
+<b>2/50</b>, a net change of <b>+0 queries</b> where this card's own statistics note says 6 net
+queries is the smallest win reaching p&lt;0.05. On two hand-checked pairs the ordering was right but
+the margin was thin (related 0.154 vs unrelated 0.097).
+
+<b>Stated limits, because this does not settle the question.</b> The document vector was built from
+<code>name + description</code> truncated to 1,500 characters, not the full body the real dense path
+indexes, so this measures a weaker representation than the one being proposed. No blend was tried
+&mdash; pure rerank, no <code>w_dense</code> &mdash; and this card explicitly asks for a held-out
+blend weight and McNemar. What it does establish is that the <em>cheap</em> version of the idea does
+not pay for itself, so the remaining work is representation and blending, not inference speed.
+
+<b>An unrelated finding fell out of it, and it is the more important one.</b> BM25 scored
+<code>hit@1</code> <b>0.040</b> here against the <b>0.340</b> published in <code>#373</code>. Both
+are correct: the published figure is measured over the pinned 6-tap eval corpus of <b>743</b>
+entries, and this run used a real 77-tap install &mdash; <b>96&times; larger</b>. Golden targets are
+all present and rank 7th, 8th, 38th, 163rd rather than 1st. The eval corpus is not a scale model of
+a real install, and the gate's floors describe a catalogue two orders of magnitude smaller than the
+one users have. Tracked separately in [[eval-corpus-is-96x-smaller-than-a-real-install]].
+
