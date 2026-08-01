@@ -17,6 +17,7 @@ from .. import __version__, cliparse
 from ..core import (
     agents,
     catalog,
+    complete,
     config,
     frontmatter,
     gitutil,
@@ -537,33 +538,15 @@ def cmd_completions(argv) -> int:
     p.add_argument("shell", nargs="?", choices=("bash", "zsh", "fish"),
                    default=None, help="target shell (default: from $SHELL)")
     args = p.parse_args(argv)
-    from ..cli import COMMANDS
 
     shell = args.shell or Path(os.environ.get("SHELL", "")).name
     if shell not in ("bash", "zsh", "fish"):
         shell = "bash"
-
-    names = [n for n, _g, _m, _s in COMMANDS]
-    if shell == "bash":
-        lines = ["# boost bash completion",
-                 'complete -W "%s" boost' % " ".join(names)]
-        hint = "boost completions bash >> ~/.bashrc"
-    elif shell == "zsh":
-        lines = ["#compdef boost", "", "_boost() {", "  local -a _boost_commands",
-                 "  _boost_commands=("]
-        lines += ["    '%s:%s'" % (n, _sq(s)) for n, _g, _m, s in COMMANDS]
-        lines += ["  )", "  if (( CURRENT == 2 )); then",
-                  "    _describe -t commands 'boost command' _boost_commands",
-                  "  else", "    _files", "  fi", "}", "", '_boost "$@"']
-        hint = "boost completions zsh > ~/.zfunc/_boost   (with fpath+=~/.zfunc before compinit)"
-    else:
-        lines = ["# boost fish completion"]
-        lines += ["complete -c boost -n __fish_use_subcommand -a %s -d '%s'"
-                  % (n, s.replace("\\", "\\\\").replace("'", "\\'"))
-                  for n, _g, _m, s in COMMANDS]
-        hint = "boost completions fish > ~/.config/fish/completions/boost.fish"
-    print("\n".join(lines))
-    out.dim("# install: " + hint)
+    # The script is a thin shim that calls `boost __complete`; the candidate
+    # rules live in core/complete.py so all three shells share one tested
+    # implementation instead of three hand-maintained static lists.
+    print(complete.script(shell).rstrip())
+    out.dim("# install: " + complete.INSTALL_HINT[shell])
     return 0
 
 
