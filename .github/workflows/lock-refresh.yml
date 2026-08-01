@@ -1,0 +1,111 @@
+name: lock-refresh
+
+# Regenerate the hash-pinned toolchain lock on a schedule, and open a PR with it.
+#
+# WHY THIS EXISTS. #342 set `open-pull-requests-limit: 0` on the /requirements
+# Dependabot entry, because Dependabot cannot regenerate a universal lock without
+# dropping the pins whose environment markers exclude them on the resolving
+# platform — every pip bump it raised was unmergeable. That was the right call,
+# but it left the dev/CI toolchain with NO proactive update path. Dependabot
+# *security* updates ignore the limit and still fire, and pip-audit.yml blocks
+# weekly on a live CVE, so the exposure is not "a vulnerable pin sits unnoticed"
+# — it is stale-but-not-vulnerable tooling drifting from upstream until
+# something forces a bump.
+#
+# `lock_toolchain.py --upgrade` is the supported way to re-resolve: it keeps the
+# resolution `--universal`, so every marker-gated pin survives and the file is
+# byte-identical no matter who regenerates it.
+#
+# ONE PR, ALL FIVE GROUPS — a deliberate departure from the roadmap card, which
+# suggested per-group jobs to keep a bump reviewable. Two things measured while
+# building this argue against that here. `lock_toolchain.py` has no per-group
+# flag (`--upgrade` always re-resolves all five), so a five-job matrix would run
+# the same resolution five times and commit one file each. And a PR opened by
+# this workflow arrives with ZERO check runs — `create-pull-request` pushes with
+# GITHUB_TOKEN, which never triggers workflows — so each one costs a human a
+# manual "Update branch" before CI reports at all. Five PRs a month means five
+# full CI runs and five manual unblocks to review what is almost always a list
+# of version bumps. Reviewability is bought instead with a monthly cadence and a
+# per-group diffstat in the PR body.
+#
+# NOTHING HERE GUARDS THE OUTPUT, because something already does:
+# `lock_toolchain.py --audit` and requirements/platform-pins.lock fail closed on
+# a lost marker-gated pin — the exact failure that made Dependabot unusable —
+# and `--check` runs on the pull request this opens.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Monthly. The lock covers dev/CI tooling only, nothing that ships to users,
+    # and a cadence that outruns review just teaches people to rubber-stamp.
+    # Urgency is a different control's job (pip-audit.yml, weekly, blocking).
+    - cron: "0 5 1 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lock-refresh
+  cancel-in-progress: false      # never kill a half-written lock
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write            # push the branch carrying the regenerated lock
+      pull-requests: write       # open the PR that carries it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: re-resolve every group
+        run: |
+          python -m pip -q install uv
+          python scripts/lock_toolchain.py --upgrade
+      - name: audit the regenerated locks
+        # A separate invocation on purpose: the script refuses --audit together
+        # with --upgrade, because auditing a file you are mid-way through
+        # replacing reads the old bytes. Failing here means a pin was lost to
+        # platform-specific resolution, so no PR is opened at all.
+        run: python scripts/lock_toolchain.py --audit
+      - name: summarise what moved
+        id: diff
+        run: |
+          {
+            echo "changed<<LOCKDIFF"
+            git --no-pager diff --stat -- requirements/ || true
+            echo "LOCKDIFF"
+          } >> "$GITHUB_OUTPUT"
+          git --no-pager diff --stat -- requirements/ >> "$GITHUB_STEP_SUMMARY" || true
+      - name: open a PR if the lock moved
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: requirements/
+          branch: bot/lock-refresh
+          delete-branch: true
+          commit-message: "build(deps): refresh the hash-pinned toolchain lock"
+          title: "build(deps): refresh the hash-pinned toolchain lock"
+          body: |
+            Scheduled re-resolution of `requirements/*.txt` via
+            `scripts/lock_toolchain.py --upgrade`, which keeps the resolution
+            `--universal` so every marker-gated pin survives. `--audit` passed on
+            the runner before this PR was opened.
+
+            ```
+            ${{ steps.diff.outputs.changed }}
+            ```
+
+            **This PR arrives with no check runs.** `create-pull-request` pushes
+            with `GITHUB_TOKEN`, and a `GITHUB_TOKEN` push never triggers
+            workflows, so required contexts will not report until someone presses
+            **Update branch**. That is a platform rule, not a misconfiguration
+            here — and an empty check list looks identical to "CI has not started
+            yet". Do not read a green-looking page as a passing one; make CI
+            actually run before merging.
+
+            Close it if the bump is not wanted; the next scheduled run re-opens
+            from current upstream.
