@@ -10,7 +10,7 @@ wow: 4
 note: 28 of 50 rows pinned mechanically with zero change to any number; 22 are genuine judgment calls
 order: 81
 owner: loop/golden-name-grading
-pr:
+pr: 412
 title: The golden set grades by name, and 35 of 53 names are ambiguous
 ---
 <b>The eval scores a hit when the top result carries the right <em>name</em>. Most of those names do
