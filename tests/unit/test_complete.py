@@ -42,8 +42,15 @@ class TestCommandNames:
         assert "search" not in got
 
     def test_the_hidden_completer_is_never_offered(self, sandbox):
-        # Offering `__complete` would advertise plumbing as a command.
+        # It stays out by not being a COMMANDS row at all, which is also what
+        # keeps it out of --help and docs/commands.html (pinned functionally).
         assert "__complete" not in complete.candidates(["boost", ""], COMMANDS)
+
+    def test_matching_is_a_prefix_not_a_substring(self, sandbox):
+        # `boost tap<TAB>` must not offer `untap`: a shell inserts the common
+        # prefix of what it is given, so substring matches corrupt the line.
+        got = complete.candidates(["boost", "tap"], COMMANDS)
+        assert "tap" in got and "untap" not in got
 
 
 class TestArgumentsAreContextual:
@@ -66,6 +73,13 @@ class TestArgumentsAreContextual:
         _tap("t", ["brainstorming", "code-reviewer"])
         got = complete.candidates(["boost", "install", "code"], COMMANDS)
         assert got == ["code-reviewer"]
+
+    def test_catalogue_matching_is_a_prefix_not_a_substring(self, sandbox):
+        # "review" appears *inside* code-reviewer; only review-swarm starts
+        # with it, and offering both would insert a wrong common prefix.
+        _tap("t", ["code-reviewer", "review-swarm"])
+        assert complete.candidates(["boost", "install", "review"],
+                                   COMMANDS) == ["review-swarm"]
 
     def test_untap_offers_configured_taps(self, sandbox):
         _tap("owner/repo", ["x"])
@@ -142,3 +156,76 @@ class TestCandidatesAreShellSafe:
         # The point of the rewrite: one completer in Python, three thin shims.
         # A script that embeds its own static list would drift from COMMANDS.
         assert "__complete" in complete.script(shell)
+
+
+class TestInstalledAndTapSources:
+    """Paths verified in a real shell but not, until now, in a test.
+
+    `uninstall <TAB>` offering the *catalogue* rather than what is installed
+    would be confidently wrong — every name would look valid and most would
+    fail. These were exercised by driving bash; a coverage check showed the
+    unit suite never touched them, which is how the original defect survived.
+    """
+
+    def test_uninstall_offers_installed_skills_not_the_catalogue(
+            self, sandbox, monkeypatch):
+        _tap("t", ["in-the-catalogue"])
+        monkeypatch.setattr(complete.store, "installed",
+                            lambda: {"already-installed": {}})
+        got = complete.candidates(["boost", "uninstall", ""], COMMANDS)
+        assert got == ["already-installed"]
+        assert "in-the-catalogue" not in got
+
+    def test_installed_names_are_sorted(self, sandbox, monkeypatch):
+        # The shells render in the order given; unsorted output looks random.
+        monkeypatch.setattr(complete.store, "installed",
+                            lambda: {"zeta": {}, "alpha": {}, "mid": {}})
+        assert complete.candidates(["boost", "uninstall", ""], COMMANDS) == [
+            "alpha", "mid", "zeta"]
+
+    def test_tap_names_are_sorted(self, sandbox):
+        _tap("zzz/repo", ["x"])
+        cfg = config.load()
+        cfg["taps"].append({"name": "aaa/repo", "url": "u", "curated": False})
+        config.save(cfg)
+        assert complete.candidates(["boost", "untap", ""], COMMANDS) == [
+            "aaa/repo", "zzz/repo"]
+
+
+class TestFlagLookupDegrades:
+    """Every branch returns [] rather than raising — it runs on a keystroke."""
+
+    def test_an_unknown_command_has_no_flags(self, sandbox):
+        assert complete.candidates(["boost", "nosuch", "--"], COMMANDS) == []
+
+    def test_a_command_whose_function_is_missing_has_no_flags(self, sandbox):
+        # A COMMANDS row can name a cmd_* that does not exist yet; the
+        # dispatcher already tolerates it, so completion must too.
+        rows = [*COMMANDS, ("ghost", "cfg", "configuration", "unbuilt")]
+        assert complete.candidates(["boost", "ghost", "--"], rows) == []
+
+    def test_source_that_cannot_be_read_has_no_flags(self, sandbox, monkeypatch):
+        import inspect
+        def boom(_f):
+            raise OSError("no source available")     # e.g. a frozen build
+        monkeypatch.setattr(inspect, "getsource", boom)
+        assert complete.candidates(["boost", "search", "--"], COMMANDS) == []
+
+    def test_short_flags_are_not_offered(self, sandbox):
+        # `-k` and friends are ambiguous across commands and add noise; the
+        # long form is what documentation and muscle memory use.
+        got = complete.candidates(["boost", "search", "-"], COMMANDS)
+        assert all(g.startswith("--") for g in got), got
+
+
+class TestScriptSelection:
+    def test_an_unknown_shell_falls_back_to_bash(self):
+        assert complete.script("nushell") == complete.script("bash")
+
+    def test_every_shell_has_an_install_hint(self):
+        for shell in ("bash", "zsh", "fish"):
+            assert shell in complete.INSTALL_HINT[shell]
+
+    def test_refresh_reports_what_it_wrote(self, sandbox):
+        _tap("t", ["one", "two"])
+        assert complete.refresh_names() == 2

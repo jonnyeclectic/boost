@@ -44,18 +44,16 @@ _CATALOG_ARG = ("install", "info", "cat", "preview", "explain", "why",
 _INSTALLED_ARG = ("uninstall", "reinstall", "pin", "unpin", "edit", "verify")
 _TAP_ARG = ("untap",)
 
-# `boost __complete` is plumbing the shells call; offering it as a command would
-# advertise an internal to every user who presses TAB.
-HIDDEN = ("__complete",)
-
-
 def names_file() -> Path:
     """Flat newline-delimited catalogue names, one per line."""
     return paths.cache_dir() / "_names.txt"
 
 
 def _command_names(commands: Registry) -> List[str]:
-    return [n for n, _g, _m, _s in commands if n not in HIDDEN]
+    # No hidden-name filter here: `__complete` is dispatched in cli.main()
+    # without a COMMANDS row precisely so it stays out of --help, the generated
+    # docs, the counts *and* this list. One mechanism, not two.
+    return [n for n, _g, _m, _s in commands]
 
 
 def refresh_names() -> int:
