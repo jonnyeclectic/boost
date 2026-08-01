@@ -10,7 +10,7 @@ wow: 4
 note: 62% of the required gate's corpus was one unpinned third-party repo, against a 1.15-query margin
 order: 82
 owner: loop/pin-eval-corpus
-pr:
+pr: 410
 title: The &ldquo;pinned&rdquo; eval corpus pinned names, not commits
 ---
 <b>The required <code>eval</code> gate called its corpus pinned. It pinned repository
