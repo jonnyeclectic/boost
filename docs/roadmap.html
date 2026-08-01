@@ -125,7 +125,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>198</b><span>Loop finds</span></div>
+      <div class="stat"><b>200</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2133,6 +2133,73 @@ regression-vs-baseline meaningful.</p></details>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">gate reports 1.000 while users get 0.720</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="info-rejects-the-qualified-name-it-recommends">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>boost info</code> rejects the tap-qualified name its own error tells you to type</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p>A name carried by more than one tap produces an error whose hint names the way out — and the
+way out did not work:
+
+<code>$ boost info differential-review</code><br>
+<code>Error: 'differential-review' exists in multiple taps: trailofbits/skills, vibeeval/vibecosystem, lingxling/awesome-skills-cn</code><br>
+<code>&nbsp;&nbsp;hint: qualify it, e.g. `trailofbits/skills:differential-review`</code><br>
+<code>$ boost info trailofbits/skills:differential-review</code><br>
+<code>Error: invalid skill name 'trailofbits/skills:differential-review'</code>
+
+<b>Two consumers, two grammars.</b> <code>cmd_info</code> handed the raw argument to both
+<code>catalog.resolve_one</code>, which has understood <code>owner/repo:skill</code> all along
+(<code>find()</code> did <code>name.rsplit(":", 1)</code> inline), and
+<code>store.skill_store_dir</code>, which validates its argument as a <em>single path
+component</em> and so rejected the qualified string outright via
+<code>util.is_safe_component</code>. That second call sat <em>outside</em> the
+<code>if lock:</code> guard, so it ran on every invocation — meaning the failure had nothing to
+do with being installed, and the hint named a command the command itself refused.
+<code>boost install</code> was never affected: it works from <code>entry["name"]</code> after
+resolving, not from <code>argv</code>.
+
+This is the consumer-side half of
+<a href="#ambiguous-tap-short-name-resolution">ambiguous-tap-short-name-resolution</a>. That
+item made both <em>resolvers</em> tier their tap matching so an ambiguous short name errors
+instead of guessing; it had no reason to look at whether the callers could actually spell the
+qualified form it started recommending. Tiering the resolver and rejecting the qualified name
+at the caller are individually defensible and jointly a dead end.
+
+<b>Shipped.</b> The <code>tap:skill</code> grammar moves out of <code>find()</code>'s body into
+<code>catalog.split_name</code> and <code>catalog.tap_matches</code>, so everything keyed by the
+<em>bare</em> name — the lock file, the canonical store — splits it exactly the way
+<code>find()</code> does. <code>cmd_info</code> and <code>_resolve_skill_md</code> now split
+once: qualified form for catalog lookups, bare name for the lock and the store.
+<code>split_name</code> returns <code>None</code> rather than <code>""</code> for an unqualified
+name, so <code>find()</code> keeps overriding its <code>tap</code> kwarg only when a qualifier
+was really present and its behaviour is unchanged.
+
+A second defect surfaced while fixing the first. Honouring the qualifier only in the catalog
+lookup would leave the <em>installed</em> record unfiltered — with a skill installed from one
+tap, <code>boost info tap-b:skill</code> would have reported tap A's install as tap B's own.
+<code>_for_tap</code> drops a lock entry whose tap the qualifier does not select, the project
+lock gets the same treatment, and <code>_resolve_skill_md</code> shares it so
+<code>cat</code>/<code>preview</code>/<code>explain</code>/<code>deps</code> follow suit.
+<code>edit</code> and <code>tag</code> are deliberately untouched — they act only on installed
+items, where the bare name is already unambiguous.
+
+<b>The regression test runs the hint.</b> Rather than assert the fix, it parses the suggested
+command out of stderr and executes it, so hint and behaviour cannot drift apart again:
+<code>m = re.search(r"qualify it, e\.g\. `([^`]+)`", r.err)</code> then <code>boost("info",
+m.group(1))</code>. A <code>rival_tap</code> fixture — a second real git tap also shipping
+<code>brainstorming</code> — covers qualifier-selects-the-named-tap, <code>--json</code>
+reporting the bare name, finding the installed copy when the tap agrees, and <em>not</em>
+reporting another tap's install as this one's. The unit tests target the mutants the gate would
+otherwise leave alive: <code>rsplit</code> vs <code>split</code>, the <code>bool(tap_name)</code>
+guard, and <code>split("/")[-1]</code> vs <code>[0]</code>. <code>mutmut results</code> lists no
+survivors in either new function.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">fixed — one grammar, split once, and the hint is now a runnable command</span>
         </div>
       </article>
 
@@ -5476,6 +5543,47 @@ open: <code>zizmor</code> and <code>gitleaks</code> run only in CI and have no M
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">fixed — shellcheck is pinned in lint-tools and both gates now assert it is there</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="chat-cites-sources-by-a-number-it-never-prints">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <h3><code>boost chat</code> cites its sources by a number it never prints</h3>
+        <p><code>boost chat</code> answers with numbered references to the sources beneath it, and the
+source list is rendered unnumbered — so every citation points at nothing:
+
+<code>$ boost chat "how do I review a diff for security problems?"</code><br>
+<code>&nbsp;&nbsp;Use <b>differential-review</b> (#3) &hellip; Alternatively, <b>review-swarm</b> (#2) &hellip;</code><br>
+<code>&nbsp;&nbsp;sources · ranked by hybrid RRF (BM25 + dense)</code><br>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;code-reviewer&nbsp;&nbsp;workflow&nbsp;&nbsp;(davila7/claude-code-templates)</code><br>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;review-swarm&nbsp;&nbsp;skill&nbsp;&nbsp;(lingxling/awesome-skills-cn)</code><br>
+<code>&nbsp;&nbsp;&nbsp;&nbsp;differential-review&nbsp;&nbsp;skill&nbsp;&nbsp;(vibeeval/vibecosystem)</code>
+
+The numbers are not wrong — <code>#2</code> and <code>#3</code> are the right rows by position.
+They are simply <em>unresolvable</em>, because the renderer never emits the index the prompt
+told the model it could cite. The reader has to count rows to decode an answer that was written
+to be scanned. Either number the list or stop citing by number; the two halves currently
+disagree about which contract is in force.
+
+<b>Second, smaller defect in the same output.</b> The recommended <code>differential-review</code>
+is carried by three taps, so the bare name chat handed back was not directly actionable —
+<code>boost info differential-review</code> on it errors with an ambiguity. Since chat already
+knows which tap each retrieved row came from (it prints it, in parentheses, on the very next
+line), it can hand back the qualified <code>tap:skill</code> form when a name is ambiguous and
+the follow-up command will work first time. That form is only worth emitting now that
+<a href="#info-rejects-the-qualified-name-it-recommends">info accepts it</a>; before that fix,
+qualifying the name would have traded one dead end for another.
+
+<b>Not yet located.</b> There is no <code>chat</code> row in <code>cli.py</code>'s
+<code>COMMANDS</code> table and no <code>commands/chat.py</code> in this repository — the
+observed behaviour comes from an installed <code>boost-skill-cli</code> build. Whoever picks
+this up should start from <code>pip show -f boost-skill-cli</code> to find the source, and
+should treat "is this command still shipping?" as the first question rather than an assumption.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">observed in the field — the citations point at nothing</span>
         </div>
       </article>
 
