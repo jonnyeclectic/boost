@@ -13,44 +13,30 @@ owner:
 pr:
 title: 62% of the required gate's corpus is a single third-party repository
 ---
-<b>Pinning the eval corpus to commit SHAs fixed drift. It did not fix concentration, and it cannot
-fix availability.</b> The twenty repositories in <code>tests/eval/taps.txt</code> resolve to 10,152
-entries, and they are not remotely evenly sized:
-<code>sickn33/antigravity-awesome-skills</code> is <b>6,309 of them &mdash; 62%</b>.
-<code>affaan-m/ECC</code> is another 1,616 (16%). Two strangers' repositories are <b>78%</b> of what
-this project measures retrieval quality against, and neither is a registry the project has any
-relationship with.
+<b>Pinning the eval corpus to commit SHAs fixed drift. It did not fix concentration, and cannot fix
+availability.</b> The twenty repositories in <code>tests/eval/taps.txt</code> resolve to 10,152
+entries, wildly unevenly: <code>sickn33/antigravity-awesome-skills</code> is <b>6,309 of them
+(62%)</b> and <code>affaan-m/ECC</code> another 1,616 (16%). Two strangers' repositories are
+<b>78%</b> of what this project measures retrieval quality against.
 
-<b>The failure mode is a red required check on every open pull request, at once.</b>
-<code>scripts/ensure_eval_corpus.sh</code> runs under <code>set -euo pipefail</code> and clones each
-row; a clone that fails raises and takes the script with it. Verified rather than reasoned about
-&mdash; putting one unreachable repository in the list and running the script exits <b>1</b>, which
-fails CI's <code>lint</code> job, which is a required context. A pinned SHA does not help here: a
-commit still has to be <em>fetchable</em>, and a repository that is deleted, renamed, or switched to
-private takes its history with it. Nothing about this is hypothetical for a corpus built from twenty
-personal repositories &mdash; one of the twenty was already absent from the machine that measured
-it.
+<b>The failure mode is every open PR going red at once.</b>
+<code>ensure_eval_corpus.sh</code> runs under <code>set -euo pipefail</code> and a failed clone takes
+it with it &mdash; verified, not assumed: one unreachable repo in the list exits <b>1</b>, failing
+CI's <code>lint</code> job, a required context. A pinned SHA does not help, because a commit still
+has to be <em>fetchable</em>, and a repo that is deleted, renamed or made private takes its history
+along. Not hypothetical for twenty personal repos: one was already missing from the machine that
+measured this.
 
-<b>Why the concentration matters even while everything is up.</b> The gate's numbers are
-substantially a statement about one person's repository. If they restructure it &mdash; not delete
-it, just reorganise &mdash; the pin holds the old tree, so the gate keeps measuring a snapshot that
-diverges further from anything real, which is [[eval-corpus-pins-have-no-refresh-path]]'s subject.
-And the fact that 62% of the corpus is one publisher's house style is itself a sampling bias in
-every recall number the project reports.
+<b>It also biases the numbers while everything is up.</b> 62% of the corpus being one publisher's
+house style is a sampling bias in every recall figure the project reports.
 
-<b>Options, none obviously right.</b> <em>Vendor the corpus</em> &mdash; commit the SKILL.md files
-the gate needs into the repo, removing the network and the third parties entirely, at the cost of
-size and of a corpus that no longer resembles a real tap. <em>Cache it</em> &mdash; restore the
-clones from a CI cache keyed on the taps file, so an upstream disappearance degrades to a stale
-corpus instead of a red gate, though a cold cache still fails. <em>Rebalance</em> &mdash; drop or
-split the two dominant repos so no single source exceeds some share, which costs corpus size and is
-arbitrary about where the line goes. <em>Fail soft</em> &mdash; let the corpus build tolerate N
-missing repos and report the shortfall, which keeps merges flowing but silently weakens the gate,
-the failure mode this whole line of work has been removing.
+<b>Options, none obviously right.</b> <em>Vendor</em> the needed files into the repo &mdash; no
+network, no third parties, but a corpus that no longer resembles a real tap. <em>Cache</em> the
+clones in CI keyed on the taps file, so a disappearance degrades to a stale corpus rather than a red
+gate, though a cold cache still fails. <em>Rebalance</em> so no single source exceeds some share,
+costing corpus size and drawing an arbitrary line. <em>Fail soft</em> on N missing repos, which keeps
+merges flowing but silently weakens the gate &mdash; the failure mode this line of work has been
+removing. Not proposed: dropping or lowering the gate.
 
-<b>Not proposed:</b> dropping the gate, or lowering it. The measurement is worth having; what is
-wrong is that its availability depends on people who have never heard of this project.
-
-<b>Provenance.</b> Found while pinning the corpus in
-[[eval-corpus-was-not-actually-pinned]] &mdash; the per-repo entry counts had to be printed to
-verify the pins, and the distribution was the surprise.
+<b>Provenance.</b> The per-repo counts had to be printed to verify the pins in
+[[eval-corpus-was-not-actually-pinned]]; the distribution was the surprise.
