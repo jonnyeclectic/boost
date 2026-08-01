@@ -117,6 +117,27 @@ def _as_int(value, default: int) -> int:
 _SETTLED = ("shipped",)
 
 
+# Block-level tags that cannot appear inside a paragraph. Every card body is
+# emitted inside <p> whatever its status, so any of these implicitly closes it
+# and leaves a stray </p> — invalid HTML that only html-validate catches, in a
+# different required workflow, minutes after every roadmap script has reported
+# clean. Two cards tripped it while being written, so the generator refuses.
+_BLOCK_TAGS = ("pre", "table", "div", "ul", "ol", "blockquote", "hr",
+               "h1", "h2", "h3", "h4", "h5", "h6", "p")
+_BLOCK_RE = re.compile(r"<(%s)[\s/>]" % "|".join(_BLOCK_TAGS), re.IGNORECASE)
+
+
+def check_body_is_inline(where: str, body: str) -> None:
+    """Raise if ``body`` contains a tag that a `<p>` cannot hold."""
+    found = _BLOCK_RE.search(body or "")
+    if found:
+        raise RoadmapError(
+            "%s: card bodies render inside <p>, so <%s> is invalid there — it "
+            "implicitly closes the paragraph and html-validate fails the build. "
+            "Use inline markup (<code>, <b>, <em>, &middot; separators)."
+            % (where, found.group(1)))
+
+
 def _body_html(status: str, body: str) -> str:
     """A card body, collapsed once the work is finished.
 
@@ -134,6 +155,7 @@ def _body_html(status: str, body: str) -> str:
     not reduce transfer size or DOM node count, and it is not meant to — neither
     is what the measurement blamed.
     """
+    check_body_is_inline("", body)
     if status not in _SETTLED:
         return "        <p>%s</p>" % body
     # The <summary> carries real text rather than a bare marker: an unlabelled

@@ -125,7 +125,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>198</b><span>Loop finds</span></div>
+      <div class="stat"><b>200</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2267,11 +2267,17 @@ killed by measurement rather than argument, and the one that cracked it was noti
 
       <article class="cap rcard" id="eval-corpus-is-96x-smaller-than-a-real-install">
         <div class="head"><span class="pill planned">Planned</span><span class="cat">Eval · Correctness</span></div>
-        <h3>The eval corpus is 96&times; smaller than a real install, and the floors describe the small one</h3>
+        <h3>The eval gate would not pass on the catalogue its own users have</h3>
         <p><b>The required <code>eval</code> gate measures a catalogue almost nobody has.</b>
-<code>tests/eval/taps.txt</code> pins 20 registries resolving to <b>743</b> entries. A real install
-that has run <code>boost tap</code> a few times is far bigger &mdash; the machine this was measured
-on carries <b>71,655</b> entries across 77 taps, <b>96&times;</b> larger.
+<code>tests/eval/taps.txt</code>'s twenty registries resolve to <b>10,152</b> entries. A real install
+that has run <code>boost tap</code> a few times is bigger &mdash; the machine this was measured on
+carries <b>71,655</b> across 445 taps, <b>7.1&times;</b> larger.
+
+<b>CORRECTION (this card was wrong by 13&times;).</b> It opened by saying the twenty registries
+resolve to 743 entries and a real install is <b>96&times;</b> larger, and the title said so too. 743
+is the count of the <em>six-repo minimal set</em>, not the twenty &mdash; the twenty are 10,152, so
+the real multiple is <b>7.1&times;</b>. The error survived because nothing materialised the corpus
+to check; [[eval-corpus-was-not-actually-pinned]] came out of finally doing that.
 
 <b>The gap changes the answer, not just the margin.</b> Over the same 50 natural-language golden
 queries, BM25 scores <code>hit@1</code> <b>0.340</b> on the pinned corpus (published in
@@ -2331,12 +2337,32 @@ this card, and worth its own.
 subset, so these are the ranking effects of added <em>candidates</em>, not a byte-exact simulation
 of a small install. Distractors are sampled uniformly from real entries rather than composed as a
 plausible tap set. And n=50, so one query is &plusmn;0.02 &mdash; the endpoints are far apart enough
-to carry the conclusion, the middle steps are not individually significant.</p>
+to carry the conclusion, the middle steps are not individually significant.
+
+<b>The point survives the correction, and gets sharper.</b> 7&times; is a smaller gap than 96&times;,
+but the question was never the ratio &mdash; it is whether the floors mean anything at a user's
+scale. Measured on the same 91-query required set, per-corpus index and IDF, BM25 scores:
+
+<b>pinned gate corpus (10,152)</b> &mdash; recall@10 <code>0.852</code> &middot; hit@1 <code>0.473</code> &middot; MRR <code>0.605</code> &middot; nDCG@10 <code>0.657</code>. <b>A real install (71,655)</b> &mdash; <code>0.709</code> &middot; <code>0.341</code> &middot; <code>0.451</code> &middot; <code>0.504</code>. <b>The gate's floors</b> &mdash; <code>0.78</code> &middot; <code>0.40</code> &middot; <code>0.52</code> &middot; <code>0.58</code>.
+
+<b>All four floors fail on the larger corpus.</b> Not narrowly &mdash; recall misses by 0.071 and
+every other metric by more. So this is not &ldquo;the number would be lower&rdquo;: the quality bar
+this project ships and gates every merge on is one its own users' catalogues would not clear.
+
+<b>What that does <em>not</em> mean, measured rather than assumed.</b> The card used to claim every
+retrieval decision validated on the small corpus &mdash; blend weights, pool depth, whether a
+reranker earns its keep &mdash; inherits its looseness. Tested directly by running both engines at
+both scales, the small corpus picks the <em>same winner</em>: BM25 beats <code>catalog.search</code>
+on all four metrics at 10,152 <em>and</em> at 71,655. The margin collapses (MRR 0.605 vs 0.562
+becomes 0.451 vs 0.382), the ordering does not. So the gate is a poor estimate of <em>absolute</em>
+quality and a serviceable one for <em>comparing</em> engines &mdash; which is the weaker, and
+correct, version of the original claim. Limits: two engines only, since dense/hybrid needs an
+embeddings key; and the finer decisions named above are not tested by an engine A-vs-B comparison.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">measured the falloff — hit@1 0.420 at 53 entries, 0.020 at 60k, no plateau</span>
+          <span class="m">7x not 96x — but all four floors FAIL on a real install, while the engine ranking holds</span>
         </div>
       </article>
 
@@ -2552,6 +2578,107 @@ rank conventions. Measuring that is what exposed the name-collapse underneath it
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">13 different skills named code-reviewer shared one rank slot — where "recall is 1.000" came from</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="eval-corpus-is-one-strangers-repo">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Eval · Correctness</span></div>
+        <h3>62% of the required gate's corpus is a single third-party repository</h3>
+        <p><b>Pinning the eval corpus to commit SHAs fixed drift. It did not fix concentration, and it cannot
+fix availability.</b> The twenty repositories in <code>tests/eval/taps.txt</code> resolve to 10,152
+entries, and they are not remotely evenly sized:
+<code>sickn33/antigravity-awesome-skills</code> is <b>6,309 of them &mdash; 62%</b>.
+<code>affaan-m/ECC</code> is another 1,616 (16%). Two strangers' repositories are <b>78%</b> of what
+this project measures retrieval quality against, and neither is a registry the project has any
+relationship with.
+
+<b>The failure mode is a red required check on every open pull request, at once.</b>
+<code>scripts/ensure_eval_corpus.sh</code> runs under <code>set -euo pipefail</code> and clones each
+row; a clone that fails raises and takes the script with it. Verified rather than reasoned about
+&mdash; putting one unreachable repository in the list and running the script exits <b>1</b>, which
+fails CI's <code>lint</code> job, which is a required context. A pinned SHA does not help here: a
+commit still has to be <em>fetchable</em>, and a repository that is deleted, renamed, or switched to
+private takes its history with it. Nothing about this is hypothetical for a corpus built from twenty
+personal repositories &mdash; one of the twenty was already absent from the machine that measured
+it.
+
+<b>Why the concentration matters even while everything is up.</b> The gate's numbers are
+substantially a statement about one person's repository. If they restructure it &mdash; not delete
+it, just reorganise &mdash; the pin holds the old tree, so the gate keeps measuring a snapshot that
+diverges further from anything real, which is [[eval-corpus-pins-have-no-refresh-path]]'s subject.
+And the fact that 62% of the corpus is one publisher's house style is itself a sampling bias in
+every recall number the project reports.
+
+<b>Options, none obviously right.</b> <em>Vendor the corpus</em> &mdash; commit the SKILL.md files
+the gate needs into the repo, removing the network and the third parties entirely, at the cost of
+size and of a corpus that no longer resembles a real tap. <em>Cache it</em> &mdash; restore the
+clones from a CI cache keyed on the taps file, so an upstream disappearance degrades to a stale
+corpus instead of a red gate, though a cold cache still fails. <em>Rebalance</em> &mdash; drop or
+split the two dominant repos so no single source exceeds some share, which costs corpus size and is
+arbitrary about where the line goes. <em>Fail soft</em> &mdash; let the corpus build tolerate N
+missing repos and report the shortfall, which keeps merges flowing but silently weakens the gate,
+the failure mode this whole line of work has been removing.
+
+<b>Not proposed:</b> dropping the gate, or lowering it. The measurement is worth having; what is
+wrong is that its availability depends on people who have never heard of this project.
+
+<b>Provenance.</b> Found while pinning the corpus in
+[[eval-corpus-was-not-actually-pinned]] &mdash; the per-repo entry counts had to be printed to
+verify the pins, and the distribution was the surprise.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">one third-party repo is 62% of the gate's corpus, and if it disappears every PR goes red</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="eval-corpus-pins-have-no-refresh-path">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Eval · Correctness</span></div>
+        <h3>Nothing refreshes the eval corpus pins, so the gate measures one frozen day</h3>
+        <p><b>Pinning the corpus traded one problem for its opposite, and the trade should be recorded rather
+than discovered.</b> Before, <code>tests/eval/taps.txt</code> named twenty repositories and the gate
+measured whatever they contained that morning &mdash; reproducible only by luck. Now every row
+carries a commit SHA, so the gate measures exactly one snapshot: <b>2026-08-01</b>. That is the
+point. The cost is that <em>nothing will ever move it</em>. There is no scheduled job, no reminder,
+and no check that notices the pins ageing, so the default outcome is a corpus that is
+indefinitely old while the ecosystem it is supposed to represent moves on.
+
+<b>Why this is worth a card rather than a shrug.</b> The gate's job is to answer &ldquo;does the
+right skill come back for a real question&rdquo;. Skills are written by other people, continuously
+&mdash; the corpus grew by thousands of entries in the months before it was pinned. A frozen corpus
+answers that question about a world that no longer exists, and does it with total confidence,
+because every number is perfectly reproducible. Reproducible and representative are different
+properties and this change bought the first with the second.
+
+<b>The precedent already exists in this repo.</b> <code>lock-refresh.yml</code> solves the same
+shape of problem for the hash-pinned toolchain: pins that must not drift on their own, but must not
+rot either, so a monthly job re-resolves them and opens a pull request a human reviews. The same
+shape fits here &mdash; re-resolve each row to its current upstream HEAD, regenerate
+<code>tests/eval/baseline.json</code>, and open a PR whose diff is exactly &ldquo;here is what
+moving the corpus does to the numbers&rdquo;. That diff is arguably more valuable than the refresh:
+it is a direct measurement of how retrieval quality tracks a changing catalogue, which nothing
+currently reports.
+
+<b>What makes it not a copy-paste of that workflow.</b> A refreshed corpus changes the gate's
+numbers, and the floors sit close enough to matter &mdash; measured 0.852 against a 0.78 floor, and
+the numbers move the wrong way as the corpus grows, which
+[[eval-corpus-is-96x-smaller-than-a-real-install]] measures as all four floors failing at 7&times;
+the size. So an automated refresh can propose a corpus that turns the required gate red through no
+fault of any change in this repository, and the PR has to make that legible instead of looking like
+a routine bump. It also compounds with
+[[eval-corpus-is-one-strangers-repo]]: re-resolving pins is exactly when a repository that has
+disappeared upstream gets discovered, which is either the feature or the outage depending on how the
+job reports it.
+
+<b>Provenance.</b> The direct consequence of [[eval-corpus-was-not-actually-pinned]], noted while
+writing it: that card's &ldquo;stated limits&rdquo; says moving a pin is now a deliberate edit and
+calls the cost intended. It is intended, and it is also a thing nobody has been assigned.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the corpus is now frozen at one August 2026 snapshot, and nothing will ever move it</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

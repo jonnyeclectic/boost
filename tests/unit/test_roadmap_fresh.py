@@ -79,6 +79,36 @@ def test_every_code_item_has_required_fields():
 
 @pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
                     reason="repo-root files not reachable (e.g. mutation sandbox)")
+def test_a_card_body_may_not_contain_a_block_element():
+    """Every body is emitted inside `<p>`, whatever the status.
+
+    So a `<pre>`, `<table>` or `<ul>` in an item file implicitly closes that
+    paragraph and leaves a stray `</p>`, which html-validate fails the build on
+    — in a *separate* required workflow, several minutes after the roadmap
+    scripts have all reported clean. That happened twice while writing these
+    cards. Failing at generation time instead names the file.
+    """
+    builder = _load_builder()
+    for board in ("code", "design"):
+        for item in builder.load_items(board):
+            with pytest.raises(builder.RoadmapError) as ei:
+                builder.check_body_is_inline(item["_file"], "x <pre>y</pre>")
+            assert item["_file"] in str(ei.value)
+            builder.check_body_is_inline(item["_file"], item["body"])
+            break
+
+
+@pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
+                    reason="repo-root files not reachable (e.g. mutation sandbox)")
+def test_every_shipped_card_body_is_inline():
+    builder = _load_builder()
+    for board in ("code", "design"):
+        for item in builder.load_items(board):
+            builder.check_body_is_inline(item["_file"], item["body"])
+
+
+@pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
+                    reason="repo-root files not reachable (e.g. mutation sandbox)")
 def test_every_design_item_has_required_fields():
     builder = _load_builder()
     for item in builder.load_items("design"):

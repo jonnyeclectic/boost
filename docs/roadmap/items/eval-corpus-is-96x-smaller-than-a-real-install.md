@@ -7,16 +7,22 @@ category: Eval · Correctness
 complexity: M
 impact: High
 wow: 4
-note: measured the falloff — hit@1 0.420 at 53 entries, 0.020 at 60k, no plateau
+note: 7x not 96x — but all four floors FAIL on a real install, while the engine ranking holds
 order: 80
 owner:
 pr:
-title: The eval corpus is 96&times; smaller than a real install, and the floors describe the small one
+title: The eval gate would not pass on the catalogue its own users have
 ---
 <b>The required <code>eval</code> gate measures a catalogue almost nobody has.</b>
-<code>tests/eval/taps.txt</code> pins 20 registries resolving to <b>743</b> entries. A real install
-that has run <code>boost tap</code> a few times is far bigger &mdash; the machine this was measured
-on carries <b>71,655</b> entries across 77 taps, <b>96&times;</b> larger.
+<code>tests/eval/taps.txt</code>'s twenty registries resolve to <b>10,152</b> entries. A real install
+that has run <code>boost tap</code> a few times is bigger &mdash; the machine this was measured on
+carries <b>71,655</b> across 445 taps, <b>7.1&times;</b> larger.
+
+<b>CORRECTION (this card was wrong by 13&times;).</b> It opened by saying the twenty registries
+resolve to 743 entries and a real install is <b>96&times;</b> larger, and the title said so too. 743
+is the count of the <em>six-repo minimal set</em>, not the twenty &mdash; the twenty are 10,152, so
+the real multiple is <b>7.1&times;</b>. The error survived because nothing materialised the corpus
+to check; [[eval-corpus-was-not-actually-pinned]] came out of finally doing that.
 
 <b>The gap changes the answer, not just the margin.</b> Over the same 50 natural-language golden
 queries, BM25 scores <code>hit@1</code> <b>0.340</b> on the pinned corpus (published in
@@ -78,3 +84,22 @@ of a small install. Distractors are sampled uniformly from real entries rather t
 plausible tap set. And n=50, so one query is &plusmn;0.02 &mdash; the endpoints are far apart enough
 to carry the conclusion, the middle steps are not individually significant.
 
+<b>The point survives the correction, and gets sharper.</b> 7&times; is a smaller gap than 96&times;,
+but the question was never the ratio &mdash; it is whether the floors mean anything at a user's
+scale. Measured on the same 91-query required set, per-corpus index and IDF, BM25 scores:
+
+<b>pinned gate corpus (10,152)</b> &mdash; recall@10 <code>0.852</code> &middot; hit@1 <code>0.473</code> &middot; MRR <code>0.605</code> &middot; nDCG@10 <code>0.657</code>. <b>A real install (71,655)</b> &mdash; <code>0.709</code> &middot; <code>0.341</code> &middot; <code>0.451</code> &middot; <code>0.504</code>. <b>The gate's floors</b> &mdash; <code>0.78</code> &middot; <code>0.40</code> &middot; <code>0.52</code> &middot; <code>0.58</code>.
+
+<b>All four floors fail on the larger corpus.</b> Not narrowly &mdash; recall misses by 0.071 and
+every other metric by more. So this is not &ldquo;the number would be lower&rdquo;: the quality bar
+this project ships and gates every merge on is one its own users' catalogues would not clear.
+
+<b>What that does <em>not</em> mean, measured rather than assumed.</b> The card used to claim every
+retrieval decision validated on the small corpus &mdash; blend weights, pool depth, whether a
+reranker earns its keep &mdash; inherits its looseness. Tested directly by running both engines at
+both scales, the small corpus picks the <em>same winner</em>: BM25 beats <code>catalog.search</code>
+on all four metrics at 10,152 <em>and</em> at 71,655. The margin collapses (MRR 0.605 vs 0.562
+becomes 0.451 vs 0.382), the ordering does not. So the gate is a poor estimate of <em>absolute</em>
+quality and a serviceable one for <em>comparing</em> engines &mdash; which is the weaker, and
+correct, version of the original claim. Limits: two engines only, since dense/hybrid needs an
+embeddings key; and the finer decisions named above are not tested by an engine A-vs-B comparison.
