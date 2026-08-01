@@ -203,18 +203,27 @@ jobs:
       # cancels out of the ratio. Pure stdlib, same PYTHONPATH shim as eval.
       - name: perf gate (scaling ratios)
         run: PYTHONPATH=. python scripts/perf_gate.py -v
-      # Tier 1 retrieval quality gate: golden-set recall@k over a PINNED corpus.
+      # Tier 1 retrieval quality gate: golden-set retrieval over a PINNED corpus.
       # The golden set grades real catalog items by name, so the repos holding
-      # them (tests/eval/taps.txt) are tapped first — deterministic given that
-      # pinned set (pure-stdlib BM25; no ANTHROPIC_API_KEY). Gates BM25 recall
-      # >=0.85 (measured 1.000 over the pinned corpus, wide margin). Regression-
-      # vs-baseline is relaxed (--regression-eps 1) so upstream repo drift can't
-      # flake the gate red on an unrelated PR. PYTHONPATH=. makes boost_cli
-      # importable without an editable install.
+      # them (tests/eval/taps.txt) are tapped first and checked out at the commit
+      # each row pins — deterministic given that set (pure-stdlib BM25; no
+      # ANTHROPIC_API_KEY). Regression-vs-baseline stays relaxed
+      # (--regression-eps 1); the absolute floors are the real gate.
+      #
+      # THE FLAGS MUST MATCH `make eval` — tests/unit/test_eval_corpus.py fails
+      # the build if they drift. They had drifted: this step floored recall alone
+      # at 0.85 and claimed "measured 1.000 over the pinned corpus, wide margin",
+      # while the corpus actually scores 0.863 — a buffer of 1.15 queries out of
+      # 91. So the required check was tighter than the documented gate on one
+      # metric and absent on the other three, the ones that exist to catch a
+      # ranker that finds the answer every time and never ranks it first.
+      # PYTHONPATH=. makes boost_cli importable without an editable install.
       - name: retrieval quality gate (Tier 1 golden set)
         run: |
           bash scripts/ensure_eval_corpus.sh
-          PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 --fail-under 0.85 --regression-eps 1
+          PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 \
+            --fail-under 0.78 --floor hit@1=0.40 --floor MRR=0.52 --floor nDCG@k=0.58 \
+            --regression-eps 1
 
   evals:
     # Evaluation-harness gate: recall@5/@10, MRR, nDCG@5/@10 with graded (3/2/1)

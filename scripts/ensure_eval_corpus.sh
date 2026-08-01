@@ -7,6 +7,11 @@
 # offline) after the first run. CI runs on a fresh $HOME and always taps. Set
 # FORCE=1 to re-tap. Honors $PYTHON (defaults to python3) so make can pass its
 # venv interpreter.
+#
+# The tap list carries a commit SHA per repo, and the loop that reads it lives in
+# scripts/eval_corpus.py rather than here: the format needs parsing and the pin
+# needs a fetch-then-checkout, neither of which a shell loop can be unit-tested
+# on. This file keeps what it is good at — the sentinel and the environment.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -19,11 +24,7 @@ if [ -z "${FORCE:-}" ] && [ -f "$sentinel" ]; then
   exit 0
 fi
 
-while IFS= read -r repo || [ -n "$repo" ]; do
-  case "$repo" in ''|\#*) continue ;; esac
-  echo "tap $repo"
-  PYTHONPATH="$root" "$py" -m boost_cli tap "$repo"
-done < "$root/tests/eval/taps.txt"
+PYTHONPATH="$root" "$py" "$root/scripts/eval_corpus.py" --ensure
 
 mkdir -p "$home"
 : > "$sentinel"

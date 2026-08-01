@@ -1,5 +1,10 @@
 # Pinned corpus for the Tier 1 retrieval-quality gate (scripts/eval_retrieval.py).
 #
+# Format: `owner/repo <40-char commit SHA>`, one per line. Materialise it with
+#   bash scripts/ensure_eval_corpus.sh
+# which taps each repo and then checks it out at the pinned commit
+# (scripts/eval_corpus.py).
+#
 # The golden set (golden.jsonl) grades real catalog items by NAME, so the gate
 # needs the repos that actually contain those items tapped before it can score.
 # The first six repos are the minimal set covering all 77 golden targets across
@@ -9,38 +14,55 @@
 # 0.863 / 0.473. A user with twenty taps gets the second number, so flooring
 # against the first was measuring the corpus rather than the retrieval.
 #
+# WHY THE SHAs. This list pinned repo *names* only, and tapping shallow-clones
+# whatever the default branch points at, so the corpus was reproducible only for
+# as long as twenty third parties happened not to push. Nothing had drifted when
+# this was written — today's scores match the committed baseline exactly — but
+# the size is worth stating, because it is not what anyone assumed: these twenty
+# repos are **10,152 entries**, and ONE of them, sickn33/antigravity-awesome-
+# skills, is 6,309 of those — 62% of the gate's corpus in a single third-party
+# repository. affaan-m/ECC is another 1,616 (16%).
+#
+# The margin that protects is thin. BM25 scores recall@10 0.863 over this corpus;
+# CI floored it at 0.85, which is a buffer of 1.15 queries out of 91 — one golden
+# query can drop out of the top 10 and the gate still passes, two cannot. A
+# single upstream push to the repo holding 62% of the corpus could therefore turn
+# a required check red on a pull request that touched nothing to do with
+# retrieval. Pinning removes that coupling, and makes every number in this header
+# reproducible rather than "true on the day it was measured".
+#
 # NOTE: `boost tap --defaults` is NOT sufficient — it taps only skill repos and
 # scores 0.000 on every rule and workflow query (overall recall ~0.33). That is
 # why this explicit list exists.
 #
-# If you edit this list, regenerate the baseline:
+# If you edit this list — including moving a pin — regenerate the baseline:
 #   BOOST_HOME=/tmp/evalhome bash scripts/ensure_eval_corpus.sh
 #   BOOST_HOME=/tmp/evalhome python3 scripts/eval_retrieval.py --build --save-baseline
 #
 # Cost: tapping is ~1 s/repo (measured 6 in 6.3 s, 14 more in 20.4 s), so this
 # adds roughly 20 s to a cold CI run and nothing to a warm local one (the
-# sentinel in ensure_eval_corpus.sh skips re-tapping).
-#
-# Future hardening: pin each repo to a commit SHA for full reproducibility.
-anthropics/skills
-0xfurai/claude-code-subagents
-NeoLabHQ/context-engineering-kit
-Aaronontheweb/dotnet-cursor-rules
-ChrisWiles/claude-code-showcase
-LessUp/awesome-cursorrules-zh
+# sentinel in ensure_eval_corpus.sh skips re-tapping). Pinning adds at most one
+# `git fetch --depth 1 <sha>` per repo, and none when the shallow clone already
+# carries the pinned commit.
+anthropics/skills b29e7cf65e5cb78a5ac33d582270551bc74a14eb
+0xfurai/claude-code-subagents 9236d10702cdbba37eaa34515f1e1dbff8452506
+NeoLabHQ/context-engineering-kit 555b95263ecf13d2ad9be14df676a1263d5a62b2
+Aaronontheweb/dotnet-cursor-rules 9be2d201482bdafca8c687359f0ef0a71895d7af
+ChrisWiles/claude-code-showcase a95518f0cb67e86230119da40429169bc4c35a6f
+LessUp/awesome-cursorrules-zh cd6a1f34f4f9eed7a01084751b9f6514eee1882d
 
 # --- scale: not golden targets, present so the corpus is a realistic size ---
-aliarghyani/vue-cursor-rules
-affaan-m/ECC
-BagelHole/DevOps-Security-Agent-Skills
-composio-community/awesome-codex-skills
-first-fluke/oh-my-agent
-iktakahiro/python-fastapi-ddd-skill
-langchain-ai/skills-benchmarks
-minio/skills
-OneWave-AI/claude-skills
-quarkusio/quarkusdev-skills
-sickn33/antigravity-awesome-skills
-tuanhaviet22/magento-skills
-anthropics/claude-agent-sdk-python
-eclosion-labs/terraform-cursor-plugin
+aliarghyani/vue-cursor-rules 92609798e192312ce16edb78aa5424a8caaa415b
+affaan-m/ECC e4e4163101f162881e628f300a9ca4e6a940bcea
+BagelHole/DevOps-Security-Agent-Skills 0365f57a079b1332f95cf26e31dd2d5332a8399f
+composio-community/awesome-codex-skills 0930e1373789d2eda449039f7ac154b33031de89
+first-fluke/oh-my-agent 3016e9df463f28f8c9c33f4e810a1901425a8bb0
+iktakahiro/python-fastapi-ddd-skill aa498d4c81acae475e05528520009c275cbe554f
+langchain-ai/skills-benchmarks 064a5087fda3472a6b2883be7841441d038d2e2f
+minio/skills d54382989a5ccc5fcc7de2905f7454f944a28d76
+OneWave-AI/claude-skills 27f8cdcea225e627a73de89b9a3d477af9e249da
+quarkusio/quarkusdev-skills b7c025b996bb4b9c3054740b242d1f368ae0eadd
+sickn33/antigravity-awesome-skills d43065e483d9057e5c5dd50ca3647652ca7c0b43
+tuanhaviet22/magento-skills 32d21015bd8eb46b8351fc87a8988ddca44de0f7
+anthropics/claude-agent-sdk-python f8b9ec923982082a02c485924e0f60367949c3a1
+eclosion-labs/terraform-cursor-plugin bcaad7033598c7bbb4efd73483b49962bd3398d9

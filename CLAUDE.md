@@ -68,8 +68,16 @@ alone BM25 scored 1.000 / 0.791 / 0.854 / 0.882, and over the twenty it scores
 old floors fail once the corpus stops being tiny. Each floor now sits ~10% under
 its measured value — loose enough that upstream drift can't flake the build,
 tight enough to catch a collapse. Regression-vs-baseline stays relaxed
-(`--regression-eps 1`) because the corpus tracks upstream HEAD rather than
-pinned commits, so the absolute floors are the real gate.
+(`--regression-eps 1`), so the absolute floors are the real gate.
+
+**Every row of `taps.txt` pins a commit SHA**, and `scripts/eval_corpus.py`
+checks each clone out at it — the corpus is 10,152 entries, of which one
+third-party repo is 6,309 (62%), so an unpinned list left a required check
+hostage to someone else's push. CI and `make eval` must invoke the gate with
+identical floors; `tests/unit/test_eval_corpus.py` fails the build if they
+diverge, which they had (CI floored recall alone at 0.85 against a measured
+0.863 — a buffer of 1.15 queries out of 91 — and applied none of the other
+three). Moving a pin means regenerating the baseline; the file says how.
 
 **Baselines are keyed by query set** (`name@content-digest`), so one file holds
 both `golden.jsonl` and `golden-natural.jsonl` without either overwriting the
