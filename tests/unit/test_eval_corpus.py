@@ -142,6 +142,8 @@ class TestTheGateIsDefinedOnce:
         floors["recall@k"] = under.group(1)
         return floors
 
+    @pytest.mark.skipif(not (_ROOT / "Makefile").exists(),
+                        reason="repo-root Makefile not reachable")
     def test_ci_and_make_floor_the_same_metrics_at_the_same_values(self):
         makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
         recipe = makefile.split("\neval:", 1)[1].split("\n\n", 1)[0]
