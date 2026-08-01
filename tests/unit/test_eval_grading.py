@@ -8,9 +8,22 @@ different skills ranked first, which makes every published number an upper
 bound.
 
 These tests pin the fix (an optional per-row `exemplar` that grades by content
-class, so mirrors of one skill still count and homonyms do not) *and* the
-property that matters more: with no exemplar, grading is byte-for-byte what it
-was, so the published baselines stay comparable.
+class, so mirrors of one skill still count and homonyms do not) and the property
+that a row without an exemplar still grades *relevance* by name, so the golden
+sets can migrate a row at a time.
+
+They also pin the second half, which the first pass got wrong. A grade key does
+two jobs: it decides whether an entry is relevant, and it is the identity the
+ranked list is de-duplicated on. Keying both on the name meant 13 genuinely
+different skills called `code-reviewer` collapsed into ONE rank slot — the eval
+crediting a ranker for a compression that exists only in the scoring code, and
+over the pinned corpus that inflated recall@10 by about one query (0.863 vs
+0.852). Exemplar rows had the mirror-image bug: their distractors keyed on
+`tap::skill_md`, so byte-identical mirrors of a distractor each took a slot.
+
+Relevance is therefore decided by name (or class), while identity is always the
+entry's content hash — one convention for every row, which is what lets an
+exemplar-graded row and a name-graded row be averaged into one number.
 """
 from __future__ import annotations
 
@@ -117,6 +130,52 @@ class TestExemplarsFailLoudly:
         with pytest.raises(SystemExit):
             m.prepare_row({"query": "q", "relevant": ["x"],
                            "exemplar": "no-separator"}, HASHES)
+
+
+class TestIdentityIsTheBodyNotTheName:
+    """One de-duplication convention, whether or not the row pins an exemplar."""
+
+    def test_two_different_skills_sharing_a_name_take_two_slots(self):
+        # The inflation: owner/a and owner/b are different `code-reviewer`s. A
+        # user scrolling results sees two entries, so the eval must too.
+        m = _load()
+        row = m.prepare_row({"query": "q", "relevant": ["something-else"]}, HASHES)
+        assert len(m.dedupe_keys([m.grade_key(row, A, HASHES),
+                                  m.grade_key(row, B, HASHES)])) == 2
+
+    def test_a_byte_identical_mirror_takes_one_slot(self):
+        # owner/c mirrors owner/a. Counting it twice would punish nothing and
+        # reward nothing — it is the same skill arriving from two registries.
+        m = _load()
+        row = m.prepare_row({"query": "q", "relevant": ["something-else"]}, HASHES)
+        assert len(m.dedupe_keys([m.grade_key(row, A, HASHES),
+                                  m.grade_key(row, C, HASHES)])) == 1
+
+    def test_distractor_mirrors_collapse_for_an_exemplar_row_too(self):
+        # The mirror-image bug: keyed on tap::skill_md, two mirrors of a
+        # DISTRACTOR each took a rank slot, pushing the target later.
+        m = _load()
+        row = m.prepare_row(
+            {"query": "q", "relevant": ["code-reviewer"],
+             "exemplar": "owner/b::code-reviewer/SKILL.md"}, HASHES)
+        assert len(m.dedupe_keys([m.grade_key(row, A, HASHES),
+                                  m.grade_key(row, C, HASHES)])) == 1
+
+    def test_a_relevant_entry_is_still_keyed_by_its_name(self):
+        # Relevance semantics are unchanged: recall over a multi-name `relevant`
+        # list still needs each distinct name found.
+        m = _load()
+        row = m.prepare_row({"query": "q", "relevant": ["code-reviewer"]}, HASHES)
+        assert m.grade_key(row, A, HASHES) == "code-reviewer"
+
+    def test_an_entry_with_no_content_hash_still_gets_a_unique_key(self):
+        # Degrade, don't collide: an unhashed entry must not merge with another
+        # unhashed one and silently shorten the ranked list.
+        m = _load()
+        row = m.prepare_row({"query": "q", "relevant": ["x"]}, HASHES)
+        one = _entry("p", "owner/z", "p/SKILL.md")
+        two = _entry("q", "owner/z", "q/SKILL.md")
+        assert m.grade_key(row, one, HASHES) != m.grade_key(row, two, HASHES)
 
 
 class TestDedupeKeepsTheBestRank:
