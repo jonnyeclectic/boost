@@ -190,3 +190,84 @@ class TestSourceText:
         # A blank line reads as "no such skill"; the placeholder keeps the
         # numbering honest and tells the model there is nothing to summarise.
         assert "no description" in chat.source_text([_entry("bare")])
+
+
+class TestGroundingDoesNotFlagOrdinaryEnglish:
+    """A hyphenated word is not a skill name.
+
+    Reported from real use: every AI reply was rejected with "named something
+    outside the retrieved skills". The catalogue's own descriptions are full of
+    hyphenated compounds — "read-only", "multi-agent", "pre-deployment",
+    "risk-adaptive", "test-driven" — and the first version of
+    :func:`ungrounded_names` flagged any hyphenated token that was not itself a
+    catalogue name. So a reply that faithfully quoted its sources was scored as
+    fabricating, and the AI path degraded to extractive for essentially every
+    query in this domain.
+
+    The fix is that the *sources* ground the reply, not just the name list:
+    a term that appears in the retrieved text came from the retrieved text.
+    """
+
+    ENTRIES = ({"name": "code-reviewer", "tap": "t",
+                "description": "Parallel read-only multi-agent review of a git diff, "
+                               "risk-adaptive and pre-deployment focused."},)
+
+    def test_compounds_quoted_from_the_sources_are_grounded(self):
+        reply = ("The read-only multi-agent code-reviewer fits — it is "
+                 "risk-adaptive and pre-deployment focused.")
+        assert chat.ungrounded_names(reply, self.ENTRIES) == []
+
+    def test_a_genuinely_invented_name_is_still_caught(self):
+        # The whole point of the check: boost is a package manager, so a
+        # plausible-but-absent name sends the user hunting for a skill that
+        # does not exist, or to a typosquat.
+        reply = "Use docker-compose-expert for that."
+        assert "docker-compose-expert" in chat.ungrounded_names(reply, self.ENTRIES)
+
+    def test_a_near_miss_is_not_grounded_by_a_longer_real_name(self):
+        # A substring scan would treat "code-review" as grounded because
+        # "code-reviewer" contains it — exactly the near-miss shape a
+        # typosquat has, so matching is on whole tokens.
+        reply = "Install code-review for that."
+        assert "code-review" in chat.ungrounded_names(reply, self.ENTRIES)
+
+    def test_grounding_is_case_insensitive(self):
+        reply = "Read-Only review is what Code-Reviewer does."
+        assert chat.ungrounded_names(reply, self.ENTRIES) == []
+
+    def test_a_name_never_needs_the_description_to_be_grounded(self):
+        entries = [{"name": "tdd-workflow", "tap": "t", "description": ""}]
+        assert chat.ungrounded_names("Try tdd-workflow.", entries) == []
+
+
+class TestLongDescriptionsAreReadable:
+    """Catalogue descriptions are untrusted text and some are enormous.
+
+    Measured over a real 71,655-entry catalogue: 22.7% of descriptions exceed
+    300 characters, the longest is 5,771, and 635 contain literal ``\\n``
+    escape sequences. One such entry rendered as a screenful of embedded
+    ``<example>`` blocks, which is what a user actually saw — the answer was
+    correct and unreadable.
+    """
+
+    def test_a_long_description_is_truncated(self):
+        entry = {"name": "x", "tap": "t", "description": "word " * 400}
+        line = chat._describe(entry)
+        assert len(line) < 300, len(line)
+
+    def test_truncation_is_marked_rather_than_silent(self):
+        entry = {"name": "x", "tap": "t", "description": "word " * 400}
+        assert chat._describe(entry).rstrip().endswith("…")
+
+    def test_a_short_description_is_left_alone(self):
+        entry = {"name": "x", "tap": "t", "description": "Short and useful."}
+        assert chat._describe(entry).endswith("Short and useful.")
+
+    def test_embedded_newlines_collapse_to_one_line(self):
+        # Both real newlines and the literal two-character \n seen in 635
+        # entries, which reach the terminal as visible backslash-n noise.
+        entry = {"name": "x", "tap": "t",
+                 "description": "first\nsecond\\nthird\r\nfourth"}
+        line = chat._describe(entry)
+        assert "\n" not in line and "\\n" not in line
+        assert "first second third fourth" in line

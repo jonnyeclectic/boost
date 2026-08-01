@@ -52,6 +52,18 @@ MIN_FAITHFULNESS = 0.60
 # conversation instead of from what retrieval actually returned.
 HISTORY_TURNS = 4
 
+# A catalogue-name shape: lowercase, hyphenated, e.g. `code-reviewer`.
+_NAME = r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+"
+_TOKEN = re.compile(r"\b%s\b" % _NAME)
+
+# Emphasis around a name-shaped token: `x`, **x**, *x*.
+_EMPHASISED = re.compile(r"`(%(n)s)`|\*\*(%(n)s)\*\*|\*(%(n)s)\*" % {"n": _NAME}, re.IGNORECASE)
+
+# Verbs that introduce a recommendation. What follows one is a claim about what
+# to install, which is the phrasing a reader acts on.
+_RECOMMENDS = re.compile(
+    r"\b(?:use|using|install|try|run|pick|choose|recommends?)\b", re.IGNORECASE)
+
 _SYSTEM = (
     "You help a developer pick an AI coding-agent skill from a catalogue. "
     "Answer ONLY from the numbered skills provided. Never invent a skill name. "
@@ -132,10 +144,36 @@ def retrieve(question: str, history: Sequence[Turn] = (),
     return [h["entry"] for h in hits[:k]], engine
 
 
+# Catalogue descriptions are untrusted upstream text and some are enormous:
+# measured over a real 71,655-entry catalogue, 22.7% exceed 300 characters and
+# the longest is 5,771. One entry rendered as a screenful of embedded
+# `<example>` blocks — a correct answer nobody could read.
+DESC_CHARS = 200
+
+
+def _one_line(text: str) -> str:
+    """Collapse a description to a single line of plain text.
+
+    Handles real newlines *and* the literal two-character ``\\n`` that 635
+    entries carry from double-escaped upstream frontmatter — those reach a
+    terminal as visible backslash-n noise rather than as line breaks.
+    """
+    return " ".join(text.replace("\\n", " ").replace("\\t", " ").split())
+
+
 def _describe(entry: dict) -> str:
-    """One catalogue entry as a line of prompt/answer text."""
+    """One catalogue entry as a line of prompt/answer text.
+
+    Truncation is marked with an ellipsis rather than silent: the reader needs
+    to know there is more to the description before deciding, and `boost info
+    <name>` is where the full text lives.
+    """
+    desc = _one_line(entry.get("description") or "")
+    if len(desc) > DESC_CHARS:
+        # Cut on a word boundary so the tail is not a severed token.
+        desc = desc[:DESC_CHARS].rsplit(" ", 1)[0] + " …"
     return "%s (%s) — %s" % (entry.get("name", "?"), entry.get("tap", "?"),
-                             (entry.get("description") or "").strip() or "no description")
+                             desc or "no description")
 
 
 def source_text(entries: Sequence[dict]) -> str:
@@ -143,22 +181,74 @@ def source_text(entries: Sequence[dict]) -> str:
     return "\n".join("%d. %s" % (i, _describe(e)) for i, e in enumerate(entries, 1))
 
 
-def ungrounded_names(reply: str, entries: Sequence[dict]) -> List[str]:
-    """Skill-shaped tokens in ``reply`` that name nothing in ``entries``.
+def grounding_text(entries: Sequence[dict]) -> str:
+    """The text a reply is checked against — untruncated, unlike the prompt.
 
-    Catalogue names are lowercase hyphenated words (``code-reviewer``,
-    ``pdf``), which is a distinctive enough shape to spot in prose. Anything
-    matching that shape and not present in the candidate set is a name the model
-    supplied itself — the exact failure that sends a user hunting for a skill
-    that does not exist.
-
-    Deliberately narrow: it only flags *hyphenated* tokens. A single ordinary
-    word cannot be told apart from prose, so this under-reports rather than
-    firing on innocent sentences, and the faithfulness score covers the rest.
+    These must be different strings. The prompt is trimmed to keep an answer
+    readable, but checking a reply against the *trimmed* text would score a
+    faithful sentence as unfaithful purely because its evidence fell past
+    :data:`DESC_CHARS` — the truncation would manufacture the very failure the
+    check exists to detect.
     """
-    known = {str(e.get("name", "")).lower() for e in entries}
-    candidates = set(re.findall(r"\b[a-z][a-z0-9]*(?:-[a-z0-9]+)+\b", reply.lower()))
-    return sorted(c for c in candidates if c not in known)
+    return "\n".join(
+        "%s %s" % (e.get("name", ""), _one_line(e.get("description") or ""))
+        for e in entries)
+
+
+def claimed_names(reply: str) -> set:
+    """Name-shaped tokens the reply presents *as skills to install*.
+
+    Not every hyphenated word is a claim. Descriptions in this catalogue are
+    thick with ordinary compounds — "read-only", "multi-agent", "single-pass",
+    "security-focused" — and treating each as a possible fabricated skill name
+    rejected essentially every real answer (reported from live use). The harm
+    this guards against is specific: a reader acting on a recommendation and
+    hunting for a package that does not exist. So a token counts as claimed when
+    it is emphasised, or when it sits in the clause a recommending verb
+    introduces — "try code-reviewer or docker-compose-expert" claims both.
+
+    Scanning the whole clause rather than just the next word is what catches the
+    second item in a list, which is exactly where an invention tends to hide.
+    Prose that merely *describes* ("a read-only multi-agent review") claims
+    nothing and is left to :func:`faithfulness.score`, the second gate.
+    """
+    out = {next(g for g in m.groups() if g).lower()
+           for m in _EMPHASISED.finditer(reply)}
+    for verb in _RECOMMENDS.finditer(reply):
+        # Stop at the sentence end: a later sentence is a new statement, not
+        # part of this recommendation.
+        clause = re.split(r"[.;!?\n]", reply[verb.end():], maxsplit=1)[0]
+        out |= {t.lower() for t in _TOKEN.findall(clause)}
+    return out
+
+
+def ungrounded_names(reply: str, entries: Sequence[dict]) -> List[str]:
+    """Skill-shaped tokens in ``reply`` that appear nowhere in ``entries``.
+
+    Catalogue names are lowercase hyphenated words (``code-reviewer``), which is
+    a distinctive enough shape to spot in prose. A token of that shape that
+    appears in neither the retrieved names nor the retrieved *text* is one the
+    model supplied itself — the failure that sends a user hunting for a skill
+    which does not exist, or toward a typosquat (see ``core/typosquat.py``).
+
+    THE SOURCES GROUND THE REPLY, NOT JUST THE NAMES. An earlier version checked
+    only against the name list, so ordinary hyphenated English quoted straight
+    out of a description — "read-only", "multi-agent", "pre-deployment" — scored
+    as fabricated. In this catalogue those compounds are everywhere, so a
+    faithful reply was rejected almost every time and the AI path silently
+    degraded to extractive for nearly every real query. Reported from live use.
+
+    Deliberately narrow in the other direction too: it only flags *hyphenated*
+    tokens, because a single ordinary word cannot be told apart from prose. This
+    under-reports rather than firing on innocent sentences, and
+    :func:`faithfulness.score` covers the rest.
+    """
+    # Whole tokens, not a substring scan. `x in "…"` would treat an invented
+    # `code-review` as grounded because `code-reviewer` contains it — precisely
+    # the near-miss shape a typosquat has.
+    grounded = set(_TOKEN.findall(grounding_text(entries).lower()))
+    grounded |= {str(e.get("name", "")).lower() for e in entries}
+    return sorted(c for c in claimed_names(reply) if c not in grounded)
 
 
 def _extractive(question: str, entries: Sequence[dict]) -> str:
@@ -208,7 +298,7 @@ def answer(question: str, history: Sequence[Turn] = (),
         # A manufactured name is unrecoverable — there is no honest way to show
         # prose that points at a skill which does not exist.
         return Reply(extractive, entries.copy(), engine, "extractive", False)
-    if faithfulness.score(reply, source) < MIN_FAITHFULNESS:
+    if faithfulness.score(reply, grounding_text(entries)) < MIN_FAITHFULNESS:
         return Reply(extractive, entries.copy(), engine, "extractive", False)
     return Reply(reply, entries.copy(), engine, "ai", True)
 
