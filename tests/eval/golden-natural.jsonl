@@ -31,25 +31,45 @@
 # than flooring one. Adding it to the gate would also floor a number nobody has
 # argued for yet.
 #
-# One JSON object per line: {query, relevant[], kind, note}
-{"query": "my writing is too wordy and people skim past the important parts", "relevant": ["write-concisely"], "kind": "skill", "note": "clarity, no shared vocabulary with the name"}
-{"query": "an error surfaces deep in the call stack and I cannot tell what originally triggered it", "relevant": ["root-cause-tracing"], "kind": "skill", "note": "tracing back from a symptom"}
-{"query": "I keep patching symptoms instead of whatever is actually wrong underneath", "relevant": ["why", "root-cause-tracing"], "kind": "skill", "note": "five-whys intent"}
+# GRADING. A row may pin an `exemplar` — "tap::skill_md", the entry the query was
+# written about — and is then graded on that entry's CONTENT CLASS: byte-identical
+# mirrors from other registries still count, a different skill sharing the name
+# does not. 28 of these 50 rows carry one. They were not chosen: over the pinned
+# corpus each of their relevant names resolves to exactly ONE body, so the pin is
+# a lookup rather than a judgment, and the pinned taps.txt is what makes that
+# reproducible.
+#
+# The other 22 are genuinely undecided. `code-reviewer` is 13 different skills
+# here, `update-docs` 10, `commit` 4, and their descriptions share a median
+# similarity of ~0.15 — there is no "same skill re-published" shortcut. Deciding
+# which one a question meant is a statement about intent, and guessing it would
+# bake one opinion into a published number. To see the menu:
+#
+#   python3 scripts/eval_retrieval.py --golden tests/eval/golden-natural.jsonl --worksheet
+#
+# which prints every candidate body and its description. It is generated rather
+# than listed here on purpose: the candidate set is a fact about the corpus that
+# is tapped, so written down it would be wrong the first time a pin moves.
+#
+# One JSON object per line: {query, relevant[], exemplar?, kind, note}
+{"query": "my writing is too wordy and people skim past the important parts", "relevant": ["write-concisely"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/docs/skills/write-concisely/SKILL.md", "kind": "skill", "note": "clarity, no shared vocabulary with the name"}
+{"query": "an error surfaces deep in the call stack and I cannot tell what originally triggered it", "relevant": ["root-cause-tracing"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/kaizen/skills/root-cause-tracing/SKILL.md", "kind": "skill", "note": "tracing back from a symptom"}
+{"query": "I keep patching symptoms instead of whatever is actually wrong underneath", "relevant": ["why", "root-cause-tracing"], "exemplar": ["NeoLabHQ/context-engineering-kit::plugins/kaizen/skills/why/SKILL.md", "NeoLabHQ/context-engineering-kit::plugins/kaizen/skills/root-cause-tracing/SKILL.md"], "kind": "skill", "note": "five-whys intent"}
 {"query": "what convention should I follow for the messages I write when recording changes in git", "relevant": ["commit"], "kind": "skill", "note": "conventional commits"}
-{"query": "I keep stashing half-finished work every time I have to switch branches", "relevant": ["git-worktrees"], "kind": "skill", "note": "worktrees without naming them"}
-{"query": "I want to attach review status to a commit without rewriting any history", "relevant": ["git-notes"], "kind": "skill", "note": "metadata on commits"}
+{"query": "I keep stashing half-finished work every time I have to switch branches", "relevant": ["git-worktrees"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/git/skills/git-worktrees/SKILL.md", "kind": "skill", "note": "worktrees without naming them"}
+{"query": "I want to attach review status to a commit without rewriting any history", "relevant": ["git-notes"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/git/skills/git-notes/SKILL.md", "kind": "skill", "note": "metadata on commits"}
 {"query": "check what I changed for injection flaws and leaked credentials before it goes in", "relevant": ["security-auditor"], "kind": "workflow", "note": "vulnerability review"}
-{"query": "am I actually exercising the risky paths or only the easy ones", "relevant": ["test-coverage-reviewer"], "kind": "workflow", "note": "coverage quality"}
+{"query": "am I actually exercising the risky paths or only the easy ones", "relevant": ["test-coverage-reviewer"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/review/agents/test-coverage-reviewer.md", "kind": "workflow", "note": "coverage quality"}
 {"query": "read through my diff and tell me what is broken in it", "relevant": ["bug-hunter"], "kind": "workflow", "note": "defect finding"}
 {"query": "does this change follow the conventions the rest of the project uses", "relevant": ["code-reviewer"], "kind": "workflow", "note": "guideline adherence"}
-{"query": "I need a single page covering what went wrong, why it happened and what we will do", "relevant": ["analyse-problem"], "kind": "skill", "note": "A3 report"}
-{"query": "help me lay out everything that might be contributing, grouped into categories", "relevant": ["cause-and-effect"], "kind": "skill", "note": "fishbone"}
-{"query": "I want to run small controlled experiments and keep iterating on the result", "relevant": ["plan-do-check-act"], "kind": "skill", "note": "PDCA"}
+{"query": "I need a single page covering what went wrong, why it happened and what we will do", "relevant": ["analyse-problem"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/kaizen/skills/analyse-problem/SKILL.md", "kind": "skill", "note": "A3 report"}
+{"query": "help me lay out everything that might be contributing, grouped into categories", "relevant": ["cause-and-effect"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/kaizen/skills/cause-and-effect/SKILL.md", "kind": "skill", "note": "fishbone"}
+{"query": "I want to run small controlled experiments and keep iterating on the result", "relevant": ["plan-do-check-act"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/kaizen/skills/plan-do-check-act/SKILL.md", "kind": "skill", "note": "PDCA"}
 {"query": "drive my locally running site in a real browser and confirm it behaves", "relevant": ["webapp-testing"], "kind": "skill", "note": "playwright without the word"}
 {"query": "get the text out of a scanned document so I can search it", "relevant": ["pdf"], "kind": "skill", "note": "extraction"}
-{"query": "I need to edit a Word file programmatically", "relevant": ["docx"], "kind": "skill", "note": "office format"}
-{"query": "read numbers out of a spreadsheet and write some back", "relevant": ["xlsx"], "kind": "skill", "note": "office format"}
-{"query": "put together a slide deck for a presentation", "relevant": ["pptx"], "kind": "skill", "note": "office format"}
+{"query": "I need to edit a Word file programmatically", "relevant": ["docx"], "exemplar": "anthropics/skills::skills/docx/SKILL.md", "kind": "skill", "note": "office format"}
+{"query": "read numbers out of a spreadsheet and write some back", "relevant": ["xlsx"], "exemplar": "anthropics/skills::skills/xlsx/SKILL.md", "kind": "skill", "note": "office format"}
+{"query": "put together a slide deck for a presentation", "relevant": ["pptx"], "exemplar": "anthropics/skills::skills/pptx/SKILL.md", "kind": "skill", "note": "office format"}
 {"query": "make a short looping animation small enough to post in chat", "relevant": ["slack-gif-creator"], "kind": "skill", "note": "gif constraints"}
 {"query": "make this match our company colours and typefaces", "relevant": ["brand-guidelines"], "kind": "skill", "note": "brand application"}
 {"query": "the interface looks generic and I want it to feel deliberate", "relevant": ["frontend-design"], "kind": "skill", "note": "visual design intent"}
@@ -58,27 +78,27 @@
 {"query": "I am running out of room in the window and important details get dropped", "relevant": ["context-engineering"], "kind": "skill", "note": "context limits"}
 {"query": "I want to package a repeatable procedure so it can be reused later", "relevant": ["skill-creator", "create-skill"], "kind": "skill", "note": "duplicate intent in corpus"}
 {"query": "how do I tell whether my changes to the instructions actually helped", "relevant": ["agent-evaluation"], "kind": "skill", "note": "measuring prompt changes"}
-{"query": "run something automatically every time before code is committed", "relevant": ["create-hook"], "kind": "skill", "note": "git hooks"}
-{"query": "turn this ticket into a proper technical specification", "relevant": ["analyze-issue"], "kind": "skill", "note": "issue to spec"}
+{"query": "run something automatically every time before code is committed", "relevant": ["create-hook"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/customaize-agent/skills/create-hook/SKILL.md", "kind": "skill", "note": "git hooks"}
+{"query": "turn this ticket into a proper technical specification", "relevant": ["analyze-issue"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/git/skills/analyze-issue/SKILL.md", "kind": "skill", "note": "issue to spec"}
 {"query": "open a change request with the right template filled in", "relevant": ["create-pr"], "kind": "skill", "note": "PR creation"}
-{"query": "gather all the unresolved feedback on my change into a task list", "relevant": ["load-pr-comments"], "kind": "skill", "note": "review comments"}
+{"query": "gather all the unresolved feedback on my change into a task list", "relevant": ["load-pr-comments"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/git/skills/load-pr-comments/SKILL.md", "kind": "skill", "note": "review comments"}
 {"query": "the written guides no longer match what the code does", "relevant": ["update-docs"], "kind": "skill", "note": "stale documentation"}
 {"query": "walk me through writing a guide together step by step", "relevant": ["doc-coauthoring"], "kind": "skill", "note": "structured authoring"}
-{"query": "this needs careful multi-step logic rather than a quick guess", "relevant": ["thought-based-reasoning"], "kind": "skill", "note": "reasoning depth"}
-{"query": "I want several different perspectives to argue about my design before I commit to it", "relevant": ["critique"], "kind": "skill", "note": "multi-judge debate"}
-{"query": "look back over what you just produced and improve on it", "relevant": ["reflect"], "kind": "skill", "note": "self-refinement"}
-{"query": "keep this lesson around so the same mistake is not repeated", "relevant": ["memorize"], "kind": "skill", "note": "persisting insights"}
-{"query": "some of the decisions we recorded are probably out of date now", "relevant": ["decay"], "kind": "skill", "note": "evidence freshness"}
+{"query": "this needs careful multi-step logic rather than a quick guess", "relevant": ["thought-based-reasoning"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/customaize-agent/skills/thought-based-reasoning/SKILL.md", "kind": "skill", "note": "reasoning depth"}
+{"query": "I want several different perspectives to argue about my design before I commit to it", "relevant": ["critique"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/reflexion/skills/critique/SKILL.md", "kind": "skill", "note": "multi-judge debate"}
+{"query": "look back over what you just produced and improve on it", "relevant": ["reflect"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/reflexion/skills/reflect/SKILL.md", "kind": "skill", "note": "self-refinement"}
+{"query": "keep this lesson around so the same mistake is not repeated", "relevant": ["memorize"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/reflexion/skills/memorize/SKILL.md", "kind": "skill", "note": "persisting insights"}
+{"query": "some of the decisions we recorded are probably out of date now", "relevant": ["decay"], "exemplar": "NeoLabHQ/context-engineering-kit::plugins/fpf/skills/decay/SKILL.md", "kind": "skill", "note": "evidence freshness"}
 {"query": "generate visuals from code with a bit of controlled randomness", "relevant": ["algorithmic-art"], "kind": "skill", "note": "creative coding"}
 {"query": "produce a good looking printable document rather than a web page", "relevant": ["canvas-design"], "kind": "skill", "note": "print output"}
 {"query": "apply one consistent look across slides, documents and pages", "relevant": ["theme-factory"], "kind": "skill", "note": "theming"}
 {"query": "what does calling the model actually cost per token", "relevant": ["claude-api"], "kind": "skill", "note": "pricing reference"}
 {"query": "my containers keep restarting and I cannot work out why", "relevant": ["docker-expert"], "kind": "workflow", "note": "avoids the word docker"}
-{"query": "the layout falls apart on a narrow screen", "relevant": ["css-expert"], "kind": "workflow", "note": "responsive layout"}
-{"query": "I want automated tests that click through the app like a person would", "relevant": ["cypress-expert"], "kind": "workflow", "note": "e2e testing"}
-{"query": "our full-text queries have got slow as the index grew", "relevant": ["elasticsearch-expert"], "kind": "workflow", "note": "search performance"}
-{"query": "how should I choose partition and sort keys for this access pattern", "relevant": ["dynamodb-expert"], "kind": "workflow", "note": "key design"}
-{"query": "my shell script fails silently in the pipeline and I never notice", "relevant": ["bash-expert"], "kind": "workflow", "note": "defensive scripting"}
-{"query": "I need to configure a fleet of servers repeatably without doing it by hand", "relevant": ["ansible-expert"], "kind": "workflow", "note": "config management"}
-{"query": "keep database schema versions in step across environments", "relevant": ["flyway-expert"], "kind": "workflow", "note": "migrations"}
-{"query": "background jobs are piling up and not getting processed", "relevant": ["celery-expert", "bullmq-expert"], "kind": "workflow", "note": "two queue libraries, both defensible"}
+{"query": "the layout falls apart on a narrow screen", "relevant": ["css-expert"], "exemplar": "0xfurai/claude-code-subagents::agents/css-expert.md", "kind": "workflow", "note": "responsive layout"}
+{"query": "I want automated tests that click through the app like a person would", "relevant": ["cypress-expert"], "exemplar": "0xfurai/claude-code-subagents::agents/cypress-expert.md", "kind": "workflow", "note": "e2e testing"}
+{"query": "our full-text queries have got slow as the index grew", "relevant": ["elasticsearch-expert"], "exemplar": "0xfurai/claude-code-subagents::agents/elasticsearch-expert.md", "kind": "workflow", "note": "search performance"}
+{"query": "how should I choose partition and sort keys for this access pattern", "relevant": ["dynamodb-expert"], "exemplar": "0xfurai/claude-code-subagents::agents/dynamodb-expert.md", "kind": "workflow", "note": "key design"}
+{"query": "my shell script fails silently in the pipeline and I never notice", "relevant": ["bash-expert"], "exemplar": "0xfurai/claude-code-subagents::agents/bash-expert.md", "kind": "workflow", "note": "defensive scripting"}
+{"query": "I need to configure a fleet of servers repeatably without doing it by hand", "relevant": ["ansible-expert"], "exemplar": "0xfurai/claude-code-subagents::agents/ansible-expert.md", "kind": "workflow", "note": "config management"}
+{"query": "keep database schema versions in step across environments", "relevant": ["flyway-expert"], "exemplar": "0xfurai/claude-code-subagents::agents/flyway-expert.md", "kind": "workflow", "note": "migrations"}
+{"query": "background jobs are piling up and not getting processed", "relevant": ["celery-expert", "bullmq-expert"], "exemplar": ["0xfurai/claude-code-subagents::agents/celery-expert.md", "0xfurai/claude-code-subagents::agents/bullmq-expert.md"], "kind": "workflow", "note": "two queue libraries, both defensible"}

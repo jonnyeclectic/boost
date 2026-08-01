@@ -213,6 +213,46 @@ def relevant_keys(row: dict) -> set:
     return {"cls:%s" % sorted(classes)[0]}
 
 
+def exemplar_worksheet(rows: List[dict], entries: List[dict],
+                       hashes: dict) -> List[dict]:
+    """Rows still graded by name whose name resolves to several bodies.
+
+    Pinning those is a judgment about what the question meant, not a lookup, so
+    this hands over the menu rather than guessing: for each undecided row, every
+    distinct body a relevant name resolves to, with its description.
+
+    Generated rather than committed as a comment in the golden file, because the
+    candidate list is a fact about the corpus that is currently tapped. Written
+    down, it would be wrong the first time a pin moves.
+    """
+    by_name: Dict[str, List[dict]] = {}
+    for entry in entries:
+        by_name.setdefault(str(entry.get("name", "")), []).append(entry)
+    sheet: List[dict] = []
+    for row in rows:
+        if row.get("class_hashes"):
+            continue                       # already decided
+        seen: Dict[str, dict] = {}
+        for name in row["relevant_set"]:
+            for entry in by_name.get(name, []):
+                digest = hashes.get((entry.get("tap", ""), entry.get("skill_md", "")))
+                if digest and digest not in seen:
+                    seen[digest] = entry
+        if len(seen) < 2:
+            continue                       # determined, or absent entirely
+        sheet.append({
+            "query": row["query"],
+            "candidates": [
+                {"spec": "%s%s%s" % (e.get("tap", ""), _EXEMPLAR_SEP,
+                                     e.get("skill_md", "")),
+                 "description": (e.get("description") or "").strip().split("\n")[0]}
+                for e in sorted(seen.values(),
+                                key=lambda x: (x.get("tap", ""), x.get("skill_md", "")))
+            ],
+        })
+    return sheet
+
+
 def dedupe_keys(keys):
     """Collapse to the first (best-ranked) occurrence of each key."""
     seen: set = set()
@@ -603,6 +643,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="Tier 1b: ranx significance test between engines "
                          "(opt-in [eval] extra; degrades if ranx absent)")
     ap.add_argument("--json", action="store_true", help="machine-readable JSON")
+    ap.add_argument("--worksheet", action="store_true",
+                    help="list the golden rows still graded by name whose name "
+                         "resolves to several bodies, with the candidates")
     args = ap.parse_args(argv)
 
     floors = parse_floors(args.floor)          # fail fast on a bad --floor
@@ -615,6 +658,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.json:
             print("  indexed %d entries -> %d chunks across %d taps"
                   % (stats["entries"], stats["docs"], stats["taps"]))
+
+    if args.worksheet:
+        sheet = exemplar_worksheet(rows, catalog.all_entries(), rag.content_hashes())
+        if args.json:
+            print(json.dumps(sheet, indent=2))
+            return 0
+        print("%d of %d rows still graded by name resolve to several bodies.\n"
+              % (len(sheet), len(rows)))
+        for case in sheet:
+            print("  %s" % case["query"])
+            for cand in case["candidates"]:
+                print("      %s" % cand["spec"])
+                if cand["description"]:
+                    print("          %s" % cand["description"][:96])
+            print()
+        return 0
 
     if args.rerank:
         return run_rerank_lift(rows, args.k, args.json)
