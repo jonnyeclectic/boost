@@ -126,8 +126,14 @@ METRICS: Dict[str, Callable[[Sequence[str], set, int], float]] = {
 # punish a correct answer for arriving from a mirror), while a different skill
 # sharing the name does not.
 #
-# Rows without an exemplar keep name grading byte-for-byte, so published
-# baselines stay comparable and the two styles can coexist during a migration.
+# Rows without an exemplar still decide RELEVANCE by name, so the sets can
+# migrate a row at a time. What is no longer name-keyed is IDENTITY: the ranked
+# list de-duplicates on the content hash for every row, exemplar or not. Keying
+# both on the name collapsed 13 different `code-reviewer`s into one rank slot
+# and inflated recall@10 by about one query (0.863 -> 0.852 over the pinned
+# corpus); keying an exemplar row's distractors on tap::skill_md did the
+# opposite, giving byte-identical mirrors a slot each. Mixed sets could not be
+# averaged into one number until both used the same convention.
 
 _EXEMPLAR_SEP = "::"
 
@@ -165,19 +171,39 @@ def prepare_row(row: dict, hashes: dict) -> dict:
 def grade_key(row: dict, entry: dict, hashes: dict) -> str:
     """The token this entry contributes to a ranked list, for scoring.
 
+    The key does two jobs, and they need different answers. It decides whether
+    an entry is RELEVANT — by name, or by content class when the row pins an
+    exemplar — and it is the IDENTITY the ranked list is de-duplicated on.
+
+    Keying both on the name conflated them: 13 genuinely different skills named
+    `code-reviewer` collapsed into one rank slot, so the eval credited the
+    ranker with a compression that exists only here. Measured over the pinned
+    corpus that was worth about one query of recall@10 (0.863 against 0.852).
+    Exemplar rows had the inverse bug — their distractors keyed on
+    ``tap::skill_md``, so byte-identical mirrors each took a slot and pushed the
+    target later.
+
+    So: relevance by name or class, identity always by content hash. One
+    convention for every row, which is what allows an exemplar-graded row and a
+    name-graded row to be averaged into the same number.
+
     ``hashes`` is passed rather than read from module state: the map is the
     thing that decides whether two entries are the same skill, so a caller must
     not be able to grade against a different one by accident.
     """
-    classes = row.get("class_hashes")
-    if not classes:
-        return str(entry.get("name", ""))
     digest = hashes.get((entry.get("tap", ""), entry.get("skill_md", "")))
-    if digest and digest in classes:
-        return "cls:%s" % sorted(classes)[0]
-    # Distinct, so two different homonyms never collapse into one another and
-    # inflate recall.
-    return "not:%s::%s" % (entry.get("tap", ""), entry.get("skill_md", ""))
+    classes = row.get("class_hashes")
+    if classes:
+        if digest and digest in classes:
+            return "cls:%s" % sorted(classes)[0]
+    elif str(entry.get("name", "")) in row["relevant_set"]:
+        return str(entry.get("name", ""))
+    if digest:
+        return "body:%s" % digest
+    # No hash (an entry the index never saw): fall back to a key that is unique
+    # per entry. Colliding here would silently shorten the ranked list and
+    # flatter every metric computed from it.
+    return "nohash:%s::%s" % (entry.get("tap", ""), entry.get("skill_md", ""))
 
 
 def relevant_keys(row: dict) -> set:

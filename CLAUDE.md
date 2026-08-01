@@ -63,12 +63,22 @@ corpus: `scripts/ensure_eval_corpus.sh` first taps the pinned repo list in
 --defaults` is NOT enough, it omits every rule/workflow repo). The list is
 **twenty** repos: the first six cover every golden target, the rest exist so the
 corpus is a realistic size. That matters more than it sounds — over the six
-alone BM25 scored 1.000 / 0.791 / 0.854 / 0.882, and over the twenty it scores
-**0.863 / 0.473 / 0.607 / 0.662** on the same golden set, so three of the four
-old floors fail once the corpus stops being tiny. Each floor now sits ~10% under
-its measured value — loose enough that upstream drift can't flake the build,
-tight enough to catch a collapse. Regression-vs-baseline stays relaxed
-(`--regression-eps 1`), so the absolute floors are the real gate.
+alone (743 entries) BM25 scores 0.978 / 0.791 / 0.854 / 0.882, and over the
+twenty (10,152) it scores **0.852 / 0.473 / 0.605 / 0.657** on the same golden
+set, so three of the four old floors fail once the corpus stops being tiny.
+
+**The ranked list de-duplicates on the content hash, not the name.** A grade key
+decides both relevance and identity, and keying identity on the name collapsed
+13 different skills called `code-reviewer` into one rank slot — crediting the
+ranker with a compression that existed only in the scoring code, and worth about
+one query of recall@10. That is where the old "recall is 1.000" folklore came
+from; the six-repo corpus measures 0.978 once mirrors collapse and homonyms do
+not. Relevance is still decided by name (or by content class when a golden row
+pins an `exemplar`), so the sets can migrate a row at a time.
+
+Each floor sits ~10% under its measured value — loose enough that upstream drift
+can't flake the build, tight enough to catch a collapse. Regression-vs-baseline
+stays relaxed (`--regression-eps 1`), so the absolute floors are the real gate.
 
 **Every row of `taps.txt` pins a commit SHA**, and `scripts/eval_corpus.py`
 checks each clone out at it — the corpus is 10,152 entries, of which one
