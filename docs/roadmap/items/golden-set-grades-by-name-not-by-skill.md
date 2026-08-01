@@ -99,7 +99,7 @@ forks rather than one skill re-published, and no rule separates them without som
 question meant. The menu is generated rather than written down, because the candidate set is a fact
 about the corpus that is tapped:
 
-<pre>python3 scripts/eval_retrieval.py --golden tests/eval/golden-natural.jsonl --worksheet</pre>
+<code>python3 scripts/eval_retrieval.py --golden tests/eval/golden-natural.jsonl --worksheet</code>
 
 <b>What unblocked this.</b> Not the judgment calls &mdash; [[eval-deduped-ranked-lists-by-name]].
 A half-migrated set was averaging two different rank conventions, because name-graded rows collapsed
