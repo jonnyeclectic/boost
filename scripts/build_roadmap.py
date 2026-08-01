@@ -112,6 +112,37 @@ def _as_int(value, default: int) -> int:
 # --------------------------------------------------------------------------- #
 # Rendering — code board (roadmap.html)                                        #
 # --------------------------------------------------------------------------- #
+# Statuses whose body is collapsed. Only `shipped` — 188 of 192 cards, so it is
+# effectively the whole win, while anything a reader might act on stays open.
+_SETTLED = ("shipped",)
+
+
+def _body_html(status: str, body: str) -> str:
+    """A card body, collapsed once the work is finished.
+
+    WHY, with the numbers. Closing an item well means recording what was
+    measured and what turned out to be wrong, so bodies grow and finished cards
+    never stop costing. Measured on the Lighthouse run that first breached the
+    `minScore 0.85` floor (perf 0.74): 1.6 s of main-thread work, of which
+    `styleLayout` was 705 ms and `paintCompositeRender` 393 ms, against 20 ms of
+    script evaluation. The page is not slow because of bytes or JavaScript — it
+    is slow because the browser lays out and paints 6,316 elements.
+
+    A *closed* `<details>` is the cheap fix for exactly that shape: the subtree
+    still parses and still ships, so every word stays greppable and findable by
+    the browser's own find-in-page, but it is never laid out or painted. It does
+    not reduce transfer size or DOM node count, and it is not meant to — neither
+    is what the measurement blamed.
+    """
+    if status not in _SETTLED:
+        return "        <p>%s</p>" % body
+    # The <summary> carries real text rather than a bare marker: an unlabelled
+    # triangle is a keyboard and screen-reader trap, and the a11y sweep covers
+    # this page.
+    return ('        <details class="cardbody"><summary>Write-up</summary>\n'
+            "        <p>%s</p></details>" % body)
+
+
 def render_code_card(item: dict) -> str:
     status = str(item.get("status", "planned"))
     if status not in STATUS_LABEL:
@@ -128,7 +159,7 @@ def render_code_card(item: dict) -> str:
         '        <div class="head"><span class="pill %s">%s</span>'
         '<span class="cat">%s</span></div>' % (status, label, item.get("category", "")),
         "        <h3>%s</h3>" % item.get("title", ""),
-        "        <p>%s</p>" % item["body"],
+        _body_html(status, item["body"]),
         '        <div class="meta">',
         '          <span class="m">Complexity <b>%s</b></span>' % item.get("complexity", ""),
         '          <span class="m%s">Impact <b>%s</b></span>' % (imp_cls, impact),

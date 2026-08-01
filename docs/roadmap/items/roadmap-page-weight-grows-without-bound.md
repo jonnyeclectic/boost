@@ -2,12 +2,12 @@
 id: roadmap-page-weight-grows-without-bound
 board: code
 section: docsite
-status: planned
+status: shipped
 category: Docs · Performance
 complexity: M
 impact: High
 wow: 2
-note: it is now the cause — lighthouse 0.74/0.77/0.81 against a 0.85 floor
+note: it was never the bytes — 705 ms of styleLayout was, and 55.5% of elements now skip it
 order: 76
 owner:
 pr:
@@ -70,4 +70,36 @@ is what was spent.
 card properly means recording what was measured and what turned out wrong, and every such paragraph
 now pushes a shared gate closer to red. That is an argument for the <code>&lt;details&gt;</code>
 lever rather than for writing less.
+
+<b>Shipped &mdash; and the measurement corrected the card's own framing.</b> This item is titled for
+page <em>weight</em>, and every earlier paragraph reasons about kilobytes. Reading the Lighthouse
+artefact from the failing run shows bytes were never the mechanism. Of 1.6&nbsp;s of main-thread
+work: <code>styleLayout</code> <b>705&nbsp;ms</b>, <code>paintCompositeRender</code>
+<b>393&nbsp;ms</b>, <code>parseHTML</code> 83&nbsp;ms, <code>scriptEvaluation</code>
+<b>20&nbsp;ms</b>. The page was slow because the browser <em>lays out and paints</em> 6,316 elements,
+not because it downloads 440&nbsp;KB and not because of JavaScript.
+
+<b>The weighted losses name the same thing.</b> Reconstructing the 0.74: TBT 0.58 &times; 30%, LCP
+0.69 &times; 25%, FCP 0.47 &times; 10%, SI 0.93 &times; 10%, CLS 1.00 &times; 25% &rarr; 0.7365.
+Worth noting <code>dom-size</code> scored <b>0</b> at 6,316 elements but is <em>unweighted</em> in
+the performance category &mdash; so the obvious-looking number was not the one costing the score,
+which is exactly the trap of optimising against a diagnostic instead of the metric.
+
+<b>The fix is the cheapest lever this card already proposed, for a better reason than it gave.</b>
+<code>build_roadmap.py</code> now wraps a <code>shipped</code> card's body in a closed
+<code>&lt;details&gt;</code> &mdash; <b>188 of 192 cards</b>. A closed <code>&lt;details&gt;</code>
+subtree still parses and still ships, so every word stays greppable and findable by the browser's own
+find-in-page, but it is never laid out or painted: <b>3,764 of 6,781 elements (55.5%)</b> now skip
+both. Anything a reader might act on &mdash; <code>planned</code>, <code>next</code>,
+<code>inflight</code> &mdash; stays expanded.
+
+<b>The page got bigger, and that is the point.</b> 440.3&nbsp;KB &rarr; <b>453.5&nbsp;KB</b>, because
+188 <code>&lt;summary&gt;</code> elements cost ~13&nbsp;KB. Under the original framing that reads as
+a regression; under the measurement it is irrelevant, because transfer was never what breached the
+floor. Had this been fixed by chasing kilobytes, the work would have been aimed at the one number
+the score does not weigh.
+
+<b>Not claimed:</b> a resulting Lighthouse score. It could not be reproduced locally (no Chrome in
+this sandbox), so the element count is the measured claim and CI's own <code>lighthouse</code> job is
+the verdict.
 
