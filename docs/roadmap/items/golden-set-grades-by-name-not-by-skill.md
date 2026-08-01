@@ -2,14 +2,14 @@
 id: golden-set-grades-by-name-not-by-skill
 board: code
 section: internals
-status: planned
+status: inflight
 category: Eval · Correctness
 complexity: M
 impact: High
 wow: 4
-note: 35 of 53 golden targets are homonyms — code-reviewer is 79 copies across 59 different skills
+note: the mechanism ships; which of 59 code-reviewers each query means is still a human call
 order: 81
-owner:
+owner: loop/golden-name-grading
 pr:
 title: The golden set grades by name, and 35 of 53 names are ambiguous
 ---
@@ -55,3 +55,32 @@ could not get below 51,657 entries without dropping a golden target &mdash; <b>1
 skill matching one of these names. It also qualifies an earlier claim of mine: &ldquo;all 50 targets
 are present&rdquo;, reported while diagnosing the static-embedding spike, was true but matched by
 name, so it was weaker evidence than it read as.
+
+<b>The mechanism ships; the judgment does not, and that split is deliberate.</b> A golden row may now
+carry an <code>exemplar</code> &mdash; <code>"tap::skill_md"</code>, the entry the query was actually
+written about. Grading then runs on that entry's <b>content class</b>: a byte-identical mirror from
+another registry still counts, because refusing it would punish a correct answer for arriving from a
+mirror, while a <em>different</em> skill sharing the name does not. Rows with no exemplar keep name
+grading unchanged, so the two styles coexist during a migration.
+
+<b>Backward compatibility is the property that had to hold, and it was verified rather than
+asserted:</b> running the suite end to end after the refactor gives BM25 <code>hit@1</code>
+<b>0.341</b>, against <b>0.340</b> published in <code>#373</code>. Nothing about the reported
+numbers moves until an exemplar is added.
+
+<b>Rankers now yield entries rather than names.</b> They could not decide the grading key themselves
+once it became row-dependent, and the old <code>_dedupe</code> helper &mdash; whose own docstring
+conceded &ldquo;grading is by name, so a repeat would otherwise be counted twice&rdquo; &mdash; is
+replaced by <code>dedupe_keys</code>, which collapses mirrors under class grading and keeps
+homonyms distinct so recall cannot count one hit twice.
+
+<b>Exemplars fail loudly.</b> One naming an entry that is not indexed, or missing the separator,
+exits with the offending string. Falling back to name grading on a typo would produce a quietly
+weaker gate that still reports a number, which is the failure this card exists to end.
+
+<b>What is left is 50 judgment calls, and they are not mine to make.</b> Choosing which of 59
+<code>code-reviewer</code>s a query about reviewing a diff for security problems refers to is a
+statement about intent. Guessing it would bake one opinion into the number the project publishes,
+invisibly. The harness is ready for those decisions one row at a time; each added exemplar tightens
+the metric and none of them destabilise it.
+

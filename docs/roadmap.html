@@ -2319,7 +2319,7 @@ to carry the conclusion, the middle steps are not individually significant.</p>
       </article>
 
       <article class="cap rcard" id="golden-set-grades-by-name-not-by-skill">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Eval · Correctness</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Eval · Correctness</span></div>
         <h3>The golden set grades by name, and 35 of 53 names are ambiguous</h3>
         <p><b>The eval scores a hit when the top result carries the right <em>name</em>. Most of those names do
 not identify a skill.</b> Measured over a real 71,655-entry catalogue against the 50
@@ -2362,12 +2362,40 @@ about the intended skill.
 could not get below 51,657 entries without dropping a golden target &mdash; <b>119</b> taps ship a
 skill matching one of these names. It also qualifies an earlier claim of mine: &ldquo;all 50 targets
 are present&rdquo;, reported while diagnosing the static-embedding spike, was true but matched by
-name, so it was weaker evidence than it read as.</p>
+name, so it was weaker evidence than it read as.
+
+<b>The mechanism ships; the judgment does not, and that split is deliberate.</b> A golden row may now
+carry an <code>exemplar</code> &mdash; <code>"tap::skill_md"</code>, the entry the query was actually
+written about. Grading then runs on that entry's <b>content class</b>: a byte-identical mirror from
+another registry still counts, because refusing it would punish a correct answer for arriving from a
+mirror, while a <em>different</em> skill sharing the name does not. Rows with no exemplar keep name
+grading unchanged, so the two styles coexist during a migration.
+
+<b>Backward compatibility is the property that had to hold, and it was verified rather than
+asserted:</b> running the suite end to end after the refactor gives BM25 <code>hit@1</code>
+<b>0.341</b>, against <b>0.340</b> published in <code>#373</code>. Nothing about the reported
+numbers moves until an exemplar is added.
+
+<b>Rankers now yield entries rather than names.</b> They could not decide the grading key themselves
+once it became row-dependent, and the old <code>_dedupe</code> helper &mdash; whose own docstring
+conceded &ldquo;grading is by name, so a repeat would otherwise be counted twice&rdquo; &mdash; is
+replaced by <code>dedupe_keys</code>, which collapses mirrors under class grading and keeps
+homonyms distinct so recall cannot count one hit twice.
+
+<b>Exemplars fail loudly.</b> One naming an entry that is not indexed, or missing the separator,
+exits with the offending string. Falling back to name grading on a typo would produce a quietly
+weaker gate that still reports a number, which is the failure this card exists to end.
+
+<b>What is left is 50 judgment calls, and they are not mine to make.</b> Choosing which of 59
+<code>code-reviewer</code>s a query about reviewing a diff for security problems refers to is a
+statement about intent. Guessing it would bake one opinion into the number the project publishes,
+invisibly. The harness is ready for those decisions one row at a time; each added exemplar tightens
+the metric and none of them destabilise it.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">35 of 53 golden targets are homonyms — code-reviewer is 79 copies across 59 different skills</span>
+          <span class="m">the mechanism ships; which of 59 code-reviewers each query means is still a human call</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -4410,7 +4438,7 @@ card no longer describes the code.</p></details>
       </article>
 
       <article class="cap rcard" id="keyless-dense-tier-local-static-embeddings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Retrieval</span></div>
+        <div class="head"><span class="pill declined">Declined</span><span class="cat">Search · Retrieval</span></div>
         <h3>Semantic search for users who will never set an API key</h3>
         <p>Dense retrieval today needs the <code>[rag]</code> extra <em>and</em> a
 <code>VOYAGE_API_KEY</code>/<code>OPENAI_API_KEY</code> <em>and</em> a built
@@ -4519,12 +4547,47 @@ are correct: the published figure is measured over the pinned 6-tap eval corpus 
 entries, and this run used a real 77-tap install &mdash; <b>96&times; larger</b>. Golden targets are
 all present and rank 7th, 8th, 38th, 163rd rather than 1st. The eval corpus is not a scale model of
 a real install, and the gate's floors describe a catalogue two orders of magnitude smaller than the
-one users have. Tracked separately in [[eval-corpus-is-96x-smaller-than-a-real-install]].</p>
+one users have. Tracked separately in [[eval-corpus-is-96x-smaller-than-a-real-install]].
+
+<b>Declined on measurement, after a second model was tried specifically to avoid declining on one
+data point.</b> The card's premise is that a local static model buys keyless <em>semantic</em>
+search. Tested against the 50 natural-language golden queries over the pinned 20-tap corpus (3,843
+entries as those registries stand today), with BM25 at <code>hit@1</code> <b>0.260</b> as the
+baseline in every run:
+
+<code>potion-retrieval-32M</code> (retrieval-tuned, 63,091&times;512 F32) scored dense <b>0.220</b>,
+hybrid RRF <b>0.260</b>. <code>potion-code-16M-v2</code> (code-domain, 63,457&times;256 F16 &mdash;
+chosen because this catalogue <em>is</em> coding-agent skills, which is the strongest hypothesis for
+why a general retrieval model would underperform here) scored dense <b>0.240</b>, hybrid
+<b>0.260</b>. A third representation &mdash; name+description only, over the full 71,655-entry
+catalogue &mdash; reranked BM25's top-200 to <b>+0 net queries</b>.
+
+<b>So: two models, three representations, no measurable gain, and fusion never beats BM25 alone.</b>
+The code model is one query better than the retrieval model, which at n=50 is inside the noise
+(&plusmn;0.02 per query) and should not be read as a trend.
+
+<b>The contrast is what makes this a decline rather than a shrug.</b> The published eval measures a
+<em>real</em> embedding model at hybrid <b>0.440</b> against BM25 <b>0.340</b> &mdash; a genuine
++0.100. Static embeddings reproduce the <em>cost profile</em> that made the keyless tier attractive
+(0.16&nbsp;ms/query, 3.3&nbsp;ms/doc, no dependency) but not the <em>quality</em> that made it worth
+having. Cheap and no better than what ships today is not a tier; it is a second code path to
+maintain for nothing.
+
+<b>What survives.</b> The performance findings stand on their own and are already recorded above:
+doc-side embedding is ~24&times; faster than the card assumed, which is why prebuilt shards are an
+optimisation rather than a requirement for the <em>real</em> models in
+[[keyless-semantic-search-for-everyone]]. The pure-stdlib loader (WordPiece &rarr; gather &rarr;
+mean-pool &rarr; L2, mmap'd, F32 and F16) is proven workable if a future model justifies it.
+
+<b>What would reopen this.</b> A static model that actually separates on this task &mdash; the bar
+is beating <code>0.260</code> as a reranker, not merely producing plausible cosines. The two hand
+pairs looked fine for both models (0.224 related vs -0.001 unrelated for the code model), which is
+exactly why plausible similarity was not accepted as evidence.</p>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★★</b></span>
-          <span class="m">spike done: the perf claims were 6-22x conservative, but rerank added +0 at real scale</span>
+          <span class="m">two models, three representations — no measurable gain over BM25, and fusion only ties</span>
         </div>
       </article>
 
