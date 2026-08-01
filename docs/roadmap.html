@@ -111,7 +111,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>193</b><span>Loop finds</span></div>
+      <div class="stat"><b>194</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5031,6 +5031,66 @@ the top-level copy.</p>
           <span class="m">found by dogfooding — the fix hint re-raised the error it was fixing</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="completions-complete-only-command-names">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · DX</span></div>
+        <h3><code>boost completions</code> completes command names and nothing else</h3>
+        <p><b><code>boost install &lt;TAB&gt;</code> should offer skill names. It does not, and what it offers
+instead is different in each shell.</b> boost is a package manager, so completing an installable
+name is the single highest-value completion it could ship &mdash; and it is the one that is wrong in
+the most confusing way.
+
+<b>Measured against the generated scripts</b> (79 commands, <code>docs/commands.html</code> as the
+flag inventory):
+
+all three shells complete <b>79 of 79</b> command names and <b>0</b> flags, and for
+<code>boost install &lt;TAB&gt;</code> <code>bash</code> re-offers the 79 command names,
+<code>zsh</code> offers <b>local filenames</b>, and <code>fish</code> offers nothing.
+
+<b>The command-name half genuinely works</b> &mdash; all three emit exactly the 79 names in
+<code>cli.COMMANDS</code>, verified equal as a set, and zsh and fish carry the one-line summaries.
+Nothing below is a regression; it is scope that was never built.
+
+<b>Each shell fails structurally, not by accident.</b> bash emits
+<code>complete -W "&lt;79 names&gt;" boost</code> with no <code>-F</code> function, and a
+<code>-W</code> wordlist is position-independent by definition &mdash; bash offers the same list at
+argument 1 and argument 5, so after <code>boost install</code> it re-offers command names. zsh
+guards on <code>(( CURRENT == 2 ))</code> and falls through to <code>_files</code>, which is why it
+proposes the contents of your working directory where a skill name belongs &mdash; the most
+misleading of the three, because it looks like a real answer. fish registers every completion under
+<code>__fish_use_subcommand</code>, so it has nothing to say past the first word.
+
+<b>The flag surface is entirely absent.</b> <code>docs/commands.html</code> documents <b>82 distinct
+long flags</b>; the completion scripts contain zero. <code>boost search --&lt;TAB&gt;</code>
+completes nothing in all three shells.
+
+<b>The tests pass and prove the wrong thing, which is why this survived.</b> Four tests in
+<code>TestCompletions</code> assert the emitted text &mdash; that the wordlist equals
+<code>COMMANDS</code>, that there are 79 zsh entries, that fish emits 79 lines. Every one is about
+what the generator <em>prints</em>; none is about what a shell would <em>propose</em>. A test suite
+can be green and thorough about the wrong layer.
+
+<b>Suggested shape: one completer in Python, three thin shims.</b> Add a hidden
+<code>boost __complete &lt;words&gt;</code> that takes the current argv and returns candidates, and
+reduce each shell script to a delegation (<code>-F</code> for bash, <code>_boost</code> calling it
+for zsh, a function for fish). That puts the logic in <code>core/</code> where the mutation gate
+reaches it and where it can be unit-tested in Python, instead of triplicating context rules across
+three shell dialects that cannot share a test. It also lets candidates be <em>dynamic</em>:
+installed skills for <code>uninstall</code>, catalog names for <code>install</code> and
+<code>info</code>, tap names for <code>untap</code>, profiles for <code>profile</code>.
+
+<b>Two constraints worth stating before anyone starts.</b> Completion runs on every keystroke-ish
+TAB, so the candidate path must not pay catalog-scan cost &mdash; it needs the cached catalog, and a
+budget (target &lt;100&nbsp;ms) measured rather than assumed. And <code>__complete</code> must never
+fail loudly: a completer that prints a traceback into the user's prompt is worse than one that
+returns nothing, so it should exit 0 with empty output on any error.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">79 command names complete; 82 flags and every argument do not</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -5528,12 +5588,35 @@ as one-line entries linking to their item file, or paginate by section. All thre
 item files are the merge-conflict-free part of this design.
 
 <b>Do not raise the Lighthouse floor to fix this.</b> The floor is calibrated and honest; a page that
-outgrows it should be made smaller, not re-graded.</p>
+outgrows it should be made smaller, not re-graded.
+
+<b>Update &mdash; the prediction above came true, and the card's own headline claim is now false.</b>
+This card argued page weight &ldquo;is <em>not</em> the cause now&rdquo; of any
+<code>lighthouse</code> failure, and that it would become the cause eventually. Eventually arrived on
+<code>#395</code>: <code>docs/roadmap.html</code> scored <b>0.74, 0.77, 0.81</b> against the
+<code>minScore 0.85</code> floor &mdash; <b>all three runs below the floor</b>, not a single sample
+dipping under load. The board was <b>433.7&nbsp;KB / 192 cards</b> at that point, against the
+407.6&nbsp;KB / 189 recorded when this card was filed.
+
+<b>The distinction that matters for whoever picks this up:</b> the earlier <code>#386</code> failure
+really was runner variance &mdash; <code>#388</code> passed at a very slightly <em>larger</em> size,
+which is what ruled weight out then. This one is not the same shape. <code>main</code> passed at
+<b>430.0&nbsp;KB</b> one minute earlier on the same runner class, and <code>#395</code>'s
+<em>best</em> of three runs was below <code>main</code>'s worst. So the honest reading is not
+&ldquo;+3.7&nbsp;KB broke it&rdquo; &mdash; a 0.9% size change cannot move a score that far. It is
+that the page now sits <b>on the cliff</b>, with roughly 0.07 of run-to-run spread straddling the
+floor, so it fails intermittently and will fail more often as cards accrue. Headroom, not the mean,
+is what was spent.
+
+<b>This also raises the cost of documenting work well</b>, which is the uncomfortable part: closing a
+card properly means recording what was measured and what turned out wrong, and every such paragraph
+now pushes a shared gate closer to red. That is an argument for the <code>&lt;details&gt;</code>
+lever rather than for writing less.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
-          <span class="m">Impact <b>Med</b></span>
+          <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">302 KB to 410 KB in one session; 164 shipped cards render in full</span>
+          <span class="m">it is now the cause — lighthouse 0.74/0.77/0.81 against a 0.85 floor</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
