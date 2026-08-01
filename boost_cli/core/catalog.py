@@ -271,10 +271,38 @@ def all_entries() -> List[dict]:
     return out
 
 
+def split_name(name: str) -> Tuple[Optional[str], str]:
+    """Split a possibly tap-qualified name into ``(tap, bare_name)``.
+
+    ``'owner/repo:skill'`` -> ``('owner/repo', 'skill')``; an unqualified name
+    -> ``(None, name)``. The single place the ``tap:skill`` grammar is spelled
+    out, so a caller that must look the name up somewhere keyed by the *bare*
+    name — the lock file, the canonical store — splits it exactly the way
+    :func:`find` does. ``None`` rather than ``""`` for the unqualified case, so
+    a caller can tell "no qualifier given" from the degenerate ``":skill"``.
+    """
+    if ":" in name:
+        tap, bare = name.rsplit(":", 1)
+        return tap, bare
+    return None, name
+
+
+def tap_matches(tap_name: str, qualifier: str) -> bool:
+    """True when ``qualifier`` selects the single tap ``tap_name``.
+
+    The one-candidate form of :func:`find`'s tap filter — an exact
+    ``owner/repo`` or the bare repo tail. Not a substitute for find's tiering,
+    which picks the *best* tap among several; here there is only one to accept
+    or reject, so the two tiers collapse into one test.
+    """
+    return bool(tap_name) and qualifier in (tap_name, tap_name.split("/")[-1])
+
+
 def find(name: str, tap: Optional[str] = None) -> List[dict]:
     """Exact-name lookup. Supports 'owner/repo:skill' qualified form."""
-    if ":" in name:
-        tap, name = name.rsplit(":", 1)
+    qualifier, bare = split_name(name)
+    if qualifier is not None:
+        tap, name = qualifier, bare
     matches = [e for e in all_entries() if e["name"] == name]
     if tap:
         # Same tiering as registry.get: a qualified owner/repo beats a bare
