@@ -7,7 +7,7 @@ category: Build · Gap
 complexity: M
 impact: Med
 wow: 2
-note: the blocker this card recorded had already been lifted — re-checked, not assumed
+note: shipped and now proven — first real run opened #405, audit passed, zero pins dropped
 order: 36
 owner:
 pr:
@@ -125,4 +125,26 @@ genuinely reading this file. That check exists because an earlier workflow in th
 (<code>shards.yml</code>) shipped exactly that hole.
 
 <b>Unproven until it runs:</b> the first scheduled execution is the first end-to-end exercise.
+
+<b>Proven &mdash; the &ldquo;unproven until it runs&rdquo; caveat above is now closed.</b> The
+workflow's first real execution opened <code>#405</code>, and it validated on every point the design
+turned on. <code>--audit</code> passed on the runner and <b>zero pins were dropped</b>, which is the
+exact failure that made Dependabot unusable here. Six packages moved
+(<code>cryptography</code>&nbsp;49&rarr;50, <code>mutmut</code>&nbsp;3.6&rarr;3.7,
+<code>libcst</code>&nbsp;1.8.6&rarr;1.9.0, <code>hypothesis</code>, <code>filelock</code>,
+<code>pip</code>) across four groups; <code>lint-tools</code> did not move at all.
+
+<b>The prediction written into the PR body held exactly.</b> That body warns the reader that the PR
+arrives with no check runs because <code>create-pull-request</code> pushes with
+<code>GITHUB_TOKEN</code>; the real PR arrived with <code>total_count: 0</code>. Predicting it in
+advance is the difference between a documented platform rule and a confusing discovery &mdash; an
+empty check list is indistinguishable from &ldquo;CI has not started yet&rdquo;, and a reader who
+did not know that could merge a toolchain bump believing it was green.
+
+<b>Following the workflow's own advice caught the thing worth catching.</b> Rather than merging on a
+page with no checks, <i>Update branch</i> was pressed to make CI actually run &mdash; and the
+riskiest part of the bump was <code>mutmut</code>&nbsp;3.7 with <code>libcst</code>&nbsp;1.9, since
+the mutation gate runs on both. It passed, and the bump merged as <code>#405</code>. The one-PR
+choice also held up in practice: the per-group diffstat in the body made a 4-file, +296/-311 change
+reviewable at a glance.
 
