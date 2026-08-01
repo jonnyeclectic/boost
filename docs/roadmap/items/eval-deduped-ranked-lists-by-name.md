@@ -10,7 +10,7 @@ wow: 4
 note: 13 different skills named code-reviewer shared one rank slot — where "recall is 1.000" came from
 order: 83
 owner: loop/eval-dedup-by-body
-pr:
+pr: 411
 title: The eval de-duplicated its ranked list by name, so homonyms shared a rank
 ---
 <b>A grade key does two jobs, and they needed different answers.</b> It decides whether an entry is
