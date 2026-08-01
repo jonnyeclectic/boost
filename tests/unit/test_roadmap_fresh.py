@@ -170,3 +170,59 @@ def test_every_item_file_is_named_for_its_id():
         if m and m.group(1) != path.stem:
             bad.append("%s declares id %r" % (path.name, m.group(1)))
     assert not bad, "item filenames must match their id: %s" % "; ".join(bad)
+
+
+class TestShippedBodiesCollapse:
+    """Finished cards ship their text but must not pay to render it.
+
+    Measured from the Lighthouse artefact of the run that first failed the
+    ``minScore 0.85`` floor (perf 0.74 on ``docs/roadmap.html``): of 1.6 s of
+    main-thread work, ``styleLayout`` was 705 ms and ``paintCompositeRender``
+    393 ms, against 20 ms of script evaluation. The cost is laying out and
+    painting 6,316 elements, not bytes and not JavaScript — so the fix is to
+    stop *rendering* finished cards, which a closed ``<details>`` does while
+    leaving every word in the source.
+    """
+
+    def _card(self, builder, **over):
+        item = {"id": "x", "status": "shipped", "category": "C", "title": "T",
+                "body": "BODY-TEXT", "complexity": "S", "impact": "Med",
+                "wow": 1, "note": "n", "_file": "x.md"}
+        item.update(over)
+        return builder.render_code_card(item)
+
+    def test_a_shipped_card_collapses_its_body(self):
+        html = self._card(_load_builder())
+        assert "<details" in html and "</details>" in html
+
+    def test_the_text_is_still_in_the_source(self):
+        # The point is to skip layout, not to hide the writing: closing a card
+        # well means recording what was measured, and that has to stay
+        # findable with the browser's own find-in-page and by grep.
+        assert "BODY-TEXT" in self._card(_load_builder())
+
+    def test_it_is_closed_so_layout_is_actually_skipped(self):
+        # An `open` details lays out exactly like a <p> and saves nothing.
+        html = self._card(_load_builder())
+        assert "<details open" not in html
+
+    def test_unfinished_cards_stay_expanded(self):
+        # Planned/next/inflight work is what a reader came for; collapsing it
+        # would trade a real page for a score.
+        for status in ("planned", "next", "inflight"):
+            html = self._card(_load_builder(), status=status)
+            assert "<details" not in html, status
+            assert "BODY-TEXT" in html
+
+    def test_the_summary_is_labelled(self):
+        # A bare <summary> renders as an unlabelled triangle, which is a
+        # keyboard/screen-reader trap and would fail the a11y sweep.
+        html = self._card(_load_builder())
+        start = html.index("<summary")
+        text = html[start:html.index("</summary>", start)]
+        assert len(text.split(">", 1)[1].strip()) >= 4, text
+
+    def test_the_anchor_survives(self):
+        # Cards deep-link each other by id; the drift diagnosis also keys on
+        # this exact opening tag.
+        assert '<article class="cap rcard" id="x">' in self._card(_load_builder())
