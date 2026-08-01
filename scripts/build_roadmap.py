@@ -112,9 +112,15 @@ def _as_int(value, default: int) -> int:
 # --------------------------------------------------------------------------- #
 # Rendering — code board (roadmap.html)                                        #
 # --------------------------------------------------------------------------- #
-# Statuses whose body is collapsed. Only `shipped` — 188 of 192 cards, so it is
-# effectively the whole win, while anything a reader might act on stays open.
-_SETTLED = ("shipped",)
+# Statuses whose body is collapsed: the ones that are FINISHED, so a reader has
+# nothing to act on. `declined` earns its place on measurement rather than
+# symmetry — of the 38,831 characters of card body still being laid out, the
+# three declined cards were 18,604 of them (48%), one alone at 10,888. A decline
+# is a closed investigation with a long write-up of what was measured, which is
+# the same cost shape as a shipped card, and this page's Lighthouse performance
+# budget (minScore 0.85) had so little headroom that adding two cards failed it
+# twice in a row. Open statuses stay expanded: their body is the thing to act on.
+_SETTLED = ("shipped", "declined")
 
 
 # Block-level tags that cannot appear inside a paragraph. Every card body is
