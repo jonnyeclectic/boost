@@ -85,52 +85,50 @@ PROTOCOL_VERSION = "2024-11-05"
 # is relevant — the difference between a search tool that sits unused and one an
 # agent reaches for. Framed by the agent's triggers, not boost's nouns.
 #
-# It declares TWO triggers, and the first exists because the second alone was
-# not enough. Framed only as "before you author a skill", agents reached for
-# boost exclusively when they were already about to write one — which is the
-# rarer moment. The common one is starting ordinary work that an installed or
-# installable skill already covers, and nothing was telling them to look. The
-# closing proportion note is load-bearing in the other direction: an unbounded
-# "always check first" turns every trivial turn into a tool call, and an agent
-# that learns to ignore the guidance ignores all of it.
+# ONE benefit, stated once: find a skill for the task in front of you. Earlier
+# passes gave equal billing to "before you author a skill", and that cost more
+# than it bought — authoring is the rarer moment, and an agent handed two
+# triggers matches the one it can recognise fastest, which was the wrong one.
+# Authoring now lives as a clause on boost_search's own description.
+#
+# The trigger is observable rather than a judgement call. "Before non-trivial
+# work" lost to its own escape hatch every time: deciding a task is non-trivial
+# takes judgement, while "this turn looks small" is free, and every turn looks
+# small when it opens. Whether the task has a NAME can be pattern-matched
+# without deciding anything, and a named task is exactly the kind someone has
+# already written down.
+#
+# Three things below are load-bearing, not padding. The stated COST kills the
+# hesitation over an unknown-price call. The MISS PROTOCOL stops a zero-result
+# search reading as a wasted turn — without it one empty search teaches an agent
+# to stop checking. And "the task stays yours" is what makes an agent willing to
+# look at all: one that expects a hit to seize the work is safer not looking.
+# The closing bound names concrete shapes instead of the word "trivial", which
+# an unbounded "always check first" needs or the guidance gets ignored wholesale.
 INSTRUCTIONS = (
-    "boost is a package manager for AI-agent skills: reusable, version-tracked "
-    "capabilities (skills, rules, slash-commands, subagents) from curated "
-    "registries.\n"
+    "boost is a shared shelf of vetted, version-tracked skills for AI coding "
+    "agents — procedures someone already worked out, ready to follow.\n"
     "\n"
-    "Three moments make boost relevant. The first is the one usually missed:\n"
+    "THE CHECK: if the task in front of you has a name — \"set up code "
+    "review\", \"add commit conventions\", \"write a migration\", \"debug "
+    "flaky tests\" — someone has probably already written it down. Call "
+    "boost_list for what is installed on this machine and boost_search for "
+    "what exists. Both are read-only, take about a second, and install "
+    "nothing.\n"
     "\n"
-    "1. STARTING A TASK. Before doing non-trivial work — building a feature, "
-    "setting up tooling or CI, reviewing code, debugging a class of problem, "
-    "writing docs — stop and check whether a skill already covers it. Call "
-    "boost_list for what is installed and usable right now, and boost_search "
-    "for what could be. A matching skill is a procedure someone already got "
-    "right and vetted; following it beats reconstructing the same steps from "
-    "memory.\n"
+    "Finding nothing is a good outcome, not a wasted call: it tells you to "
+    "build it yourself, now knowing that nothing already covers it. Finding "
+    "something is a head start, not an instruction — read it, take what fits, "
+    "discard the rest. The task stays yours.\n"
     "\n"
-    "2. AUTHORING. Before you write a new skill, subagent, slash-command, "
-    "rule, or any reusable block of agent instructions — or when the user "
-    "describes a repeatable workflow (\"set up code review\", \"add a commit "
-    "convention\") — call boost_search FIRST to check whether a vetted one "
-    "already exists. Installing beats hand-writing: an installed skill is "
-    "version-pinned, wired into every agent on this machine, policy-governed, "
-    "and shareable with the team.\n"
+    "Two moments beat the odds: the first step of anything that will take more "
+    "than a few steps, and the moment a small task turns out to be a large "
+    "one. The second matters because the first only fires at a boundary you "
+    "recognized at the time — a question that became an investigation never "
+    "got one.\n"
     "\n"
-    "3. SCOPE GROWTH. A turn that began trivial and grew is still a task "
-    "start — it just did not look like one at the time. When a question "
-    "becomes an investigation, a one-line fix becomes a refactor, or a quick "
-    "check turns into hours of work, run the check at the moment the scope "
-    "changes rather than treating the original framing as settled. The most "
-    "expensive misses are the tasks nobody checked because they were not "
-    "tasks when they began.\n"
-    "\n"
-    "Typical flow: boost_search -> boost_info -> boost_install. Only build "
-    "from scratch when a search turns up nothing relevant.\n"
-    "\n"
-    "Proportion: skip the check for trivial or one-off turns — answering a "
-    "question, a small edit, running a command you were just handed. Checking "
-    "once when a task starts, or when it grows into one, is the habit; "
-    "checking before every tool call is noise."
+    "Flow: boost_search -> boost_install. Skip it for a question, a one-line "
+    "edit, or a command you were just handed."
 )
 
 
