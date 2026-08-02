@@ -8,9 +8,16 @@
 //   BOOST_CHROME_BIN=/path/to/chrome node ...      # explicit binary
 //
 // Runs against the LOCAL working tree (file://), so a PR's CSS/HTML changes
-// are what gets checked — no deploy needed. Pages: the four hand-authored
-// Aurora surfaces (index, adapters, eval, mcp-hub). The generated boards are
-// covered by their build --check instead.
+// are what gets checked — no deploy needed.
+//
+// Pages: all nine, generated ones included. The list used to hold only the four
+// hand-authored surfaces, on the reasoning that "the generated boards are
+// covered by their build --check instead". They are not: `--check` proves the
+// HTML still matches the generator, which stays true when the bug IS the
+// generator. commands.html shipped `grid-template-columns: … 1fr` for months —
+// a track that will not shrink below its widest unbreakable flag name — and
+// scrolled sideways 241px at 320px wide, 171px at 390px, 61px at 768px. Every
+// width was already in WIDTHS below; only the page was missing.
 import { launch } from "puppeteer-core";
 import { mkdirSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
@@ -20,7 +27,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const OUT = resolve(root, "tests/visual/out");
 mkdirSync(OUT, { recursive: true });
 
-const PAGES = ["docs/index.html", "docs/adapters.html", "docs/eval.html", "docs/mcp-hub.html"];
+const PAGES = [
+  "docs/index.html", "docs/adapters.html", "docs/eval.html", "docs/mcp-hub.html",
+  "docs/commands.html", "docs/demo.html", "docs/chat.html",
+  "docs/roadmap.html", "docs/design-roadmap.html",
+];
 const WIDTHS = [375, 768, 1024, 1280, 1680];
 
 const CANDIDATE_BINS = [
