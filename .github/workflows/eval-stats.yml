@@ -34,7 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: read
+      # write so the scheduled run can commit the refreshed metrics; every
+      # other trigger skips those steps.
+      contents: write
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
@@ -67,3 +69,30 @@ jobs:
       - name: report to run summary
         if: always()
         run: .venv/bin/python scripts/eval_stats_summary.py stats.json >> "$GITHUB_STEP_SUMMARY"
+
+      # ---- publish the numbers -------------------------------------------
+      # docs/eval-latest.json is the small public payload the docs site and the
+      # portfolio read, so the figures either page shows are the ones this run
+      # measured rather than whatever was hand-typed when the page was written.
+      # Scheduled runs only: a pull_request run must not commit to main, and a
+      # PR's numbers are not "the current state" anyway.
+      - name: refresh docs/eval-latest.json
+        if: github.event_name != 'pull_request'
+        run: |
+          .venv/bin/python scripts/publish_eval_json.py \
+            --generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      - name: commit if it changed
+        if: github.event_name != 'pull_request'
+        env:
+          # Contents write is scoped to this step's job, declared below.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet -- docs/eval-latest.json; then
+            echo "eval-latest.json unchanged"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/eval-latest.json
+          git commit -m "chore(eval): refresh published metrics"
+          git push origin HEAD:main
