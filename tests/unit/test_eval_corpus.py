@@ -39,6 +39,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "eval_corpus.py"
 _ENSURE = _ROOT / "scripts" / "ensure_eval_corpus.sh"
 _TAPS = _ROOT / "tests" / "eval" / "taps.txt"
+_REFRESH = _ROOT / ".github/workflows/eval-corpus-refresh.yml"
 
 pytestmark = pytest.mark.skipif(
     not _SCRIPT.exists(), reason="repo-root script not reachable")
@@ -284,6 +285,73 @@ class TestRelock:
         assert m.relock_text(text, counts) == text
 
 
+class TestRefreshRewritesThePins:
+    """`--relock` re-measures the same trees; `--refresh` moves to new ones."""
+
+    def test_a_new_sha_is_written(self):
+        m = _load()
+        old, new = "a" * 40, "b" * 40
+        out = m.relock_text("owner/repo %s 1\n" % old, {"owner/repo": 2},
+                            {"owner/repo": new})
+        assert m.parse_taps(out) == [("owner/repo", new, 2)]
+
+    def test_a_row_with_no_new_sha_keeps_its_pin(self):
+        m = _load()
+        old = "a" * 40
+        out = m.relock_text("owner/repo %s 1\n" % old, {"owner/repo": 2},
+                            {"other/repo": "b" * 40})
+        assert m.parse_taps(out) == [("owner/repo", old, 2)]
+
+    def test_a_malformed_new_sha_is_refused_before_it_is_written(self):
+        # `git rev-parse` returning "" or an error string must never reach the
+        # file: it would parse as a bad pin on the next run, at which point the
+        # corpus that produced it is gone.
+        m = _load()
+        with pytest.raises(SystemExit) as ei:
+            m.relock_text("owner/repo %s 1\n" % ("a" * 40), {"owner/repo": 1},
+                          {"owner/repo": "HEAD"})
+        assert "owner/repo" in str(ei.value)
+
+
+class TestTheRefreshSummary:
+    """The diff IS the finding, so the body has to state it, not imply it."""
+
+    def _rows(self):
+        return [("a/a", "1" * 40, 100), ("b/b", "2" * 40, 50)]
+
+    def test_an_unchanged_row_says_so(self):
+        m = _load()
+        rows = self._rows()
+        text = m.refresh_summary(rows, {}, {"a/a": 100, "b/b": 50})
+        assert "| `a/a` | unchanged | 100 |" in text
+        assert "**0 of 2 repositories moved.**" in text
+
+    def test_a_moved_pin_shows_both_shas_abbreviated(self):
+        m = _load()
+        text = m.refresh_summary(self._rows(), {"a/a": "3" * 40},
+                                 {"a/a": 100, "b/b": 50})
+        assert "`1111111` → `3333333`" in text
+        assert "**1 of 2 repositories moved.**" in text
+
+    def test_an_entry_delta_is_signed(self):
+        m = _load()
+        text = m.refresh_summary(self._rows(), {"a/a": "3" * 40},
+                                 {"a/a": 112, "b/b": 50})
+        assert "100 → 112 (+12)" in text
+
+    def test_a_shrinking_repo_is_reported_as_a_loss(self):
+        m = _load()
+        text = m.refresh_summary(self._rows(), {"a/a": "3" * 40},
+                                 {"a/a": 88, "b/b": 50})
+        assert "100 → 88 (-12)" in text
+
+    def test_the_corpus_total_is_stated_with_its_delta(self):
+        m = _load()
+        text = m.refresh_summary(self._rows(), {"a/a": "3" * 40},
+                                 {"a/a": 112, "b/b": 50})
+        assert "Corpus 150 → 162 entries (+12)." in text
+
+
 class TestFailuresAreClassified:
     """An unreachable third party and a broken ranker are not the same red."""
 
@@ -350,6 +418,22 @@ class TestTheGateIsDefinedOnce:
         # Anchor on the step, not the prose: the comment block above it names
         # the gate too, and now carries the caching rationale between them.
         step = ci.split("- name: retrieval quality gate", 1)[1].split("\n\n", 1)[0]
+        assert self._flags(step) == self._flags(recipe)
+
+    @pytest.mark.skipif(not _REFRESH.exists(), reason="refresh workflow absent")
+    def test_the_corpus_refresh_scores_against_the_same_floors(self):
+        """Otherwise its PASS/FAIL banner is about a different gate.
+
+        The refresh job runs the eval non-blocking and puts the verdict at the
+        top of the PR body, which is the whole point of the job — a reviewer
+        decides from that banner whether the new corpus is acceptable. Floors
+        that drifted from the required ones would make the banner confidently
+        wrong in either direction.
+        """
+        makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
+        recipe = makefile.split("\neval:", 1)[1].split("\n\n", 1)[0]
+        wf = _REFRESH.read_text(encoding="utf-8")
+        step = wf.split("- name: score the refreshed corpus", 1)[1]
         assert self._flags(step) == self._flags(recipe)
 
 
