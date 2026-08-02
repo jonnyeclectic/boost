@@ -199,8 +199,19 @@ def read_tokens(css_text: str) -> dict:
 # explicitly rather than testing the cross-product keeps the gate honest: a pair
 # that never co-occurs is not a real contrast failure, and flagging it would
 # train people to ignore this check.
+#
+# The hover surface is checked as well as the resting one. Only listing the
+# resting surface let --text-3 pass at 4.53:1 and then fail at 4.15:1 the moment
+# a card lit up under the cursor — the gate was blind to the state a reader is
+# actually in while reading a card.
 PAIRS = (
     ("--text", "--bg"), ("--text-2", "--bg"), ("--text-3", "--bg"),
+    ("--text", "--surface-1"), ("--text-2", "--surface-1"),
+    ("--text-3", "--surface-1"),
+    ("--text", "--surface-2"), ("--text-2", "--surface-2"),
+    ("--text-3", "--surface-2"),
+    ("--text", "--surface-3"), ("--text-2", "--surface-3"),
+    ("--text-3", "--surface-3"),
     ("--text", "--panel-solid"), ("--text-2", "--panel-solid"),
     ("--text-3", "--panel-solid"),
     ("--cyan", "--bg"), ("--violet", "--bg"), ("--pink", "--bg"),

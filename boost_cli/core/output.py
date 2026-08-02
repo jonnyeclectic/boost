@@ -106,9 +106,9 @@ def rgb(r: int, g: int, b: int) -> str:
 # style/boost.css and must be kept in lockstep with it; everything else here
 # (the gradient, brand tints, badges) is derived from them, never re-typed.
 TOKENS = {
-    "cyan":   (0x22, 0xd3, 0xee),   # --cyan   #22d3ee
-    "violet": (0xa8, 0x55, 0xf7),   # --violet #a855f7
-    "pink":   (0xf4, 0x72, 0xd0),   # --pink   #f472d0
+    "cyan":   (0x40, 0xcb, 0xe3),   # --cyan   #40cbe3
+    "violet": (0xcc, 0x9e, 0xff),   # --violet #cc9eff
+    "pink":   (0xf5, 0x8f, 0xd7),   # --pink   #f58fd7
     "green":  (0x4a, 0xde, 0x80),   # --green  #4ade80
     "yellow": (0xfa, 0xcc, 0x15),   # --yellow #facc15
 }

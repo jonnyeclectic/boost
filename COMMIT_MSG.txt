@@ -1,0 +1,29 @@
+Split site navigation from in-page navigation
+
+docs/index.html's bar carried eighteen links: six anchors into its own
+sections, eleven destinations, and the CTA. At 1280 that wraps to two
+rows, and the two kinds of link behave completely differently when
+clicked. Every other page's bar held nine, so the home page was also the
+one page whose chrome looked different from the rest of the site.
+
+The bar is now the same eight destinations everywhere: the primary path
+through the docs, one row at every width. Its six section anchors are a
+jump row under the hero, where in-page links point at in-page targets.
+
+demo.html ("Try the search") and chat.html ("How chat works") were
+reachable only from index.html's bar — from any other page there was no
+way to reach them at all. Both are now in the bar and in the footer
+index, which is on every page.
+
+Roadmap, Design and Carousel move out of the bar and stay in the footer
+index. A bar that lists every page is a site index, and there is already
+one of those at the bottom of every page; three meta pages were crowding
+out the demo. Any of them goes back in one line.
+
+Verified: a11y_check (10 pages, 24 contrast pairs), check_anchors (every
+local link and anchor resolves), build_roadmap --check,
+build_command_reference --check, and pytest tests/unit tests/functional.
+The two TestServe failures are the sandbox refusing socket.bind(), not
+this change.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>

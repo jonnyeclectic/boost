@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>boost — how the evaluation system works</title>
 <meta name="description" content="boost grades its own retrieval and recommendation quality: a required, deterministic golden-set gate plus opt-in significance testing and LLM-judged faithfulness. Architecture, sequence diagrams, and a simple-vs-technical cheat sheet.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2322d3ee' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2340cbe3' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
 <!-- Shared Aurora design system. Recolour everything by editing style/boost.css. -->
 <link rel="stylesheet" href="../style/boost.css">
 <style>
@@ -32,7 +32,7 @@
   .prose p { margin-top: 14px; }
   .prose b { color: var(--text); }
   .prose code, .lead code { font-family: var(--mono); font-size: .86em; color: var(--sky);
-          background: rgba(34,211,238,.09); padding: 1px 6px; border-radius: 6px; }
+          background: rgba(64,203,227,.09); padding: 1px 6px; border-radius: 6px; }
 
   /* Diagram frame: a glass surface that scrolls its own wide SVG (body never scrolls X). */
   .diagram { margin: 40px auto 0; padding: 24px; border: 1px solid var(--line);
@@ -43,7 +43,7 @@
 
   /* SVG shared type + shapes via CSS classes (keeps the markup lean, on-palette). */
   svg .box   { fill: rgba(255,255,255,.03); stroke: var(--line); }
-  svg .box-hi { fill: rgba(34,211,238,.07); stroke: rgba(34,211,238,.38); }
+  svg .box-hi { fill: rgba(64,203,227,.07); stroke: rgba(64,203,227,.38); }
   svg .box-gate { fill: rgba(74,222,128,.06); stroke: rgba(74,222,128,.42); }
   svg .head  { font-family: var(--sans); font-size: 13.5px; font-weight: 700; fill: var(--text); }
   svg .lbl   { font-family: var(--mono); font-size: 12px; fill: var(--text); }
@@ -109,6 +109,7 @@
 </style>
 </head>
 <body>
+<a class="skip" href="#top">Skip to content</a>
 
 <header>
   <div class="wrap site-nav">
@@ -116,12 +117,11 @@
     <ul>
       <li><a href="index.html">Guide</a></li>
       <li><a href="commands.html">Commands</a></li>
-      <li><a href="roadmap.html">Roadmap</a></li>
-      <li><a href="design-roadmap.html">Design</a></li>
-      <li><a href="mcp-hub.html">MCP Hub</a></li>
-      <li><a href="#top" aria-current="page">Evaluation</a></li>
+      <li><a href="demo.html">Try the search</a></li>
+      <li><a href="chat.html">How chat works</a></li>
+      <li><a aria-current="page" href="#top">Evaluation</a></li>
       <li><a href="adapters.html">Adapters</a></li>
-      <li><a href="carousel.html">Carousel</a></li>
+      <li><a href="mcp-hub.html">MCP&nbsp;Hub</a></li>
       <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
     </ul>
   </div>
@@ -182,7 +182,7 @@
               <path d="M0,0 L7,3 L0,6 Z" fill="#7dd3fc"></path>
             </marker>
             <marker id="ahc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
-              <path d="M0,0 L7,3 L0,6 Z" fill="#22d3ee"></path>
+              <path d="M0,0 L7,3 L0,6 Z" fill="#40cbe3"></path>
             </marker>
           </defs>
 
@@ -400,7 +400,7 @@
         <svg viewBox="0 0 840 400" role="img" aria-label="Tier 1 CI gate sequence diagram">
           <defs>
             <marker id="sm" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
-              <path d="M0,0 L7,3 L0,6 Z" fill="#22d3ee"></path>
+              <path d="M0,0 L7,3 L0,6 Z" fill="#40cbe3"></path>
             </marker>
             <marker id="sr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
               <path d="M0,0 L7,3 L0,6 Z" fill="#4ade80"></path>
@@ -578,11 +578,13 @@
     <nav class="foot-links" aria-label="Documentation">
       <a href="index.html">Guide</a>
       <a href="commands.html">Commands</a>
+      <a href="demo.html">Try the search</a>
+      <a href="chat.html">How chat works</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a aria-current="page" href="#top">Evaluation</a>
+      <a href="adapters.html">Adapters</a>
       <a href="roadmap.html">Roadmap</a>
       <a href="design-roadmap.html">Design</a>
-      <a href="mcp-hub.html">MCP Hub</a>
-      <a href="#top" aria-current="page">Evaluation</a>
-      <a href="adapters.html">Adapters</a>
       <a href="carousel.html">Carousel</a>
     </nav>
     <p class="foot-legal">

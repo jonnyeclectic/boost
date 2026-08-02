@@ -17,21 +17,39 @@
    ========================================================================== */
 
 :root {
-  /* --- ground & ink --- */
+  /* --- ground & ink ---
+     Surfaces are an opaque ladder, not translucent glass. On a dark ground the
+     eye reads depth as surface *lightness*; a white-alpha panel over a drifting
+     aurora took its colour from whatever happened to be behind it, so two cards
+     side by side were never the same shade and a card on a card had no edge. */
   --bg:          #07080f;   /* near-black page ground */
-  --panel:       rgb(255 255 255 / 3.5%);
-  --panel-solid: #0f1120;
-  --line:        rgb(255 255 255 / 9%);
-  --line-soft:   rgb(255 255 255 / 5%);
-  --line-hi:     rgb(255 255 255 / 22%);
-  --text:        #e9ebf5;
+  --surface-1:   #0f121d;   /* resting card    */
+  --surface-2:   #181b28;   /* hover / raised  */
+  --surface-3:   #202533;   /* chip / popover  */
+  /* --panel and --panel-solid predate the ladder and are still named by ~25
+     declarations across docs/, so both resolve to the resting surface rather
+     than being removed. Literal hex, not var(): scripts/a11y_check.py reads
+     token values straight out of this file and only understands plain hex. */
+  --panel:       #0f121d;
+  --panel-solid: #0f121d;
+  --line-soft:   #1d202a;
+  --line:        #272b37;
+  --line-hi:     #474c5d;
+  --text:        #d6d9e3;
   --text-2:      #9298b0;
-  --text-3:      #767c96;   /* muted; ≥4.5:1 on --bg (WCAG AA) — was #676d86 (3.9:1) */
+  --text-3:      #858da8;   /* ≥4.5:1 on every surface, including the --surface-2
+                               hover state. #767c96 cleared --bg at 4.85:1 but
+                               dropped to 4.15:1 the moment a card lit up. */
 
   /* --- the triad: the whole identity lives in these three --- */
-  --cyan:        #22d3ee;   /* primary accent */
-  --violet:      #a855f7;
-  --pink:        #f472d0;
+  --cyan:        #40cbe3;   /* primary accent */
+  --violet:      #cc9eff;
+  --pink:        #f58fd7;
+  /* Equalised for lightness. The old triad ranged from L≈78 (cyan) to L≈55
+     (violet), so a gradient across it read as a bright end and a dark end
+     rather than one ribbon, and violet-on-black sat near the AA floor.
+     boost_cli/core/output.py mirrors these three for the terminal --
+     tests/unit/test_token_parity.py fails if the two drift apart. */
 
   /* --- extended accents --- */
   --blue:        #38bdf8;
@@ -40,6 +58,10 @@
   --yellow:      #facc15;
 
   /* --- signature gradient --- */
+  /* Interpolating in OKLCH holds lightness across the ramp; sRGB dips through a
+     desaturated grey between cyan and violet. The sRGB value here is the
+     fallback for engines without <color-interpolation-method>; the @supports
+     block after this rule upgrades it where the syntax is understood. */
   --grad: linear-gradient(96deg, var(--cyan) 0%, var(--violet) 52%, var(--pink) 100%);
 
   /* --- terminal surfaces --- */
@@ -50,10 +72,30 @@
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 
-  /* --- rhythm --- */
+  /* --- rhythm & motion --- */
+  --ease:      cubic-bezier(.2, .7, .2, 1);
   --radius:    16px;
   --radius-lg: 18px;
   --maxw:      1120px;
+}
+
+/* Upgrade the signature gradient to OKLCH interpolation only where the engine
+   understands it. This has to be @supports rather than two --grad declarations
+   in :root, and the difference is not stylistic. A custom property accepts
+   almost any token sequence, so an engine WITHOUT <color-interpolation-method>
+   still stores `linear-gradient(96deg in oklch, ...)` happily; it only fails
+   later, when `background: var(--grad)` substitutes it and the result is
+   invalid at computed-value time. That does not fall back to the earlier
+   declaration — the background resolves to its initial value and the gradient
+   disappears entirely. So the redeclaration form silently removed the very
+   fallback its comment claimed to keep, on exactly the old engines it was for.
+   (It also tripped stylelint's declaration-block-no-duplicate-custom-properties,
+   which is what surfaced it; a stylelint-disable would have quieted the linter
+   and left the bug.) */
+@supports (background: linear-gradient(in oklch, red, blue)) {
+  :root {
+    --grad: linear-gradient(96deg in oklch, var(--cyan) 0%, var(--violet) 52%, var(--pink) 100%);
+  }
 }
 
 /* ---------- reset ---------- */
@@ -73,10 +115,33 @@ body {
 a    { color: inherit; }
 code { font-family: var(--mono); }
 
+::selection { background: rgb(64 203 227 / 28%); color: var(--text); }
+
+/* White, not accent-coloured. A cyan ring around the cyan .btn-grad reads as a
+   slightly fatter button rather than a focus state; white is hue-independent,
+   so one rule works on every surface and against every accent. */
 :focus-visible {
-  outline: 2px solid var(--cyan);
+  outline: 3px solid #e9ebf5;
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 6px;
+}
+
+/* Skip link. The docs nav carries fourteen links, so without this a keyboard
+   visitor tabs the entire bar again on every page. Expects the target markup
+   `<a class="skip" href="#top">` as the first child of <body>. */
+.skip {
+  position: absolute; left: 24px; top: -60px; z-index: 100;
+  padding: 10px 18px; border-radius: 10px;
+  background: var(--surface-2); border: 1px solid var(--line-hi);
+  color: var(--text); text-decoration: none; font-size: 14px;
+  transition: top .18s var(--ease);
+}
+.skip:focus-visible { top: 12px; }
+
+/* Visually hidden but announced — for live regions and icon-button names. */
+.vh {
+  position: absolute; width: 1px; height: 1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
 
 /* ============================================================================
@@ -86,28 +151,34 @@ code { font-family: var(--mono); }
    ========================================================================== */
 body::before {
   content: "";
-  position: fixed; inset: -25vmax; z-index: 0; pointer-events: none;
+  position: fixed; inset: -12vmax; z-index: 0; pointer-events: none;
   background:
-    radial-gradient(38vmax 38vmax at 12% 6%,   rgb(34 211 238 / 20%), transparent 60%),
-    radial-gradient(34vmax 34vmax at 90% 16%,  rgb(168 85 247 / 18%), transparent 60%),
-    radial-gradient(30vmax 30vmax at 62% 104%, rgb(244 114 208 / 14%), transparent 62%);
-  filter: blur(34px) saturate(135%);
+    radial-gradient(42vmax 38vmax at 10%   4%, rgb(64 203 227 / 22%),  transparent 62%),
+    radial-gradient(38vmax 34vmax at 92%  14%, rgb(204 158 255 / 18%), transparent 62%),
+    radial-gradient(34vmax 30vmax at 20%  48%, rgb(245 143 215 / 10%), transparent 64%),
+    radial-gradient(40vmax 34vmax at 88%  74%, rgb(64 203 227 / 12%),  transparent 62%),
+    radial-gradient(30vmax 28vmax at 55% 104%, rgb(245 143 215 / 13%), transparent 64%);
+  /* No blur(). A radial-gradient has no edge to soften, so a 34px blur over a
+     viewport-sized layer bought nothing and cost a full-surface re-raster on
+     every frame of a 42s animation. Five wider, fainter blobs cover the long
+     middle of a docs page, where three left a visible dead band. */
+  filter: saturate(130%);
   animation: aurora-drift 42s ease-in-out infinite;
   will-change: transform;
 }
+/* Film grain, not a tech grid. The 46px lattice drew hard lines straight
+   through card edges and headline counters; grain reads as paper texture and
+   also breaks up the banding a wide dark gradient shows on 8-bit panels. */
 body::after {
   content: "";
   position: fixed; inset: 0; z-index: 0; pointer-events: none;
-  background-image:
-    linear-gradient(rgb(255 255 255 / 2.8%) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(255 255 255 / 2.8%) 1px, transparent 1px);
-  background-size: 46px 46px;
-  -webkit-mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgb(0 0 0 / 30%) 60%, rgb(0 0 0 / 10%) 100%);
-          mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgb(0 0 0 / 30%) 60%, rgb(0 0 0 / 10%) 100%);
+  opacity: .26; mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
 }
 @keyframes aurora-drift {
   0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  50%      { transform: translate3d(2.5vmax, -2vmax, 0) scale(1.08); }
+  50%      { transform: translate3d(2.5vmax, -2vmax, 0) scale(1.06); }
 }
 
 /* ---------- layout container ---------- */
@@ -125,9 +196,8 @@ body::after {
 .eyebrow {
   display: block; text-align: center; margin-bottom: 18px;
   font-family: var(--mono); font-size: 12px; font-weight: 700;
-  letter-spacing: .24em; text-transform: uppercase;
-  background: var(--grad);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
+  letter-spacing: .16em; text-transform: uppercase;
+  color: var(--text-3);
 }
 .sec-title {
   font-size: clamp(30px, 4.5vw, 50px); font-weight: 800;
@@ -143,10 +213,22 @@ body::after {
   padding: 1px 7px; border-radius: 6px; font-size: .88em;
 }
 
-/* Gradient-clipped text — apply to any inline span or heading part. */
+/* Gradient-clipped text — apply to any inline span or heading part.
+
+   This is the only place the gradient touches type. It is the loudest device in
+   the system and it does not survive repetition: when the eyebrow, the headline
+   and every stat number were all painted with it, none of them was emphasis.
+   One instance per page, on the thing the page is actually about.
+
+   background-clip:text zeroes the text fill, which also zeroes the selection
+   highlight, so ::selection has to put a colour back. */
 .grad-text {
   background: var(--grad);
   -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.grad-text::selection {
+  -webkit-text-fill-color: var(--text); color: var(--text);
+  background: rgb(64 203 227 / 28%);
 }
 
 /* ============================================================================
@@ -155,19 +237,17 @@ body::after {
 .badge {
   display: inline-flex; align-items: center; gap: 8px;
   font-family: var(--mono); font-size: 12.5px; color: #c9e9f5;
-  border: 1px solid rgb(34 211 238 / 40%); border-radius: 999px;
+  border: 1px solid rgb(64 203 227 / 40%); border-radius: 999px;
   padding: 7px 16px;
-  background: rgb(34 211 238 / 7%);
-  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  background: rgb(64 203 227 / 7%);
 }
+/* The dot used to breathe on a 3.4s loop. Perpetual ambient motion in the
+   corner of the eye is a distraction with no state behind it — nothing about
+   the page changes on that cycle — and it kept a compositor layer alive for
+   the life of the tab. A lit dot says "live" on its own. */
 .badge::before {
   content: ""; width: 7px; height: 7px; border-radius: 50%;
   background: var(--cyan); box-shadow: 0 0 10px var(--cyan);
-  animation: badge-breathe 3.4s ease-in-out infinite;
-}
-@keyframes badge-breathe {
-  0%, 100% { opacity: .45; transform: scale(.82); }
-  50%      { opacity: 1;   transform: scale(1.15); }
 }
 
 /* ============================================================================
@@ -178,17 +258,23 @@ body::after {
   font-size: 15.5px; font-weight: 650; text-decoration: none;
   padding: 14px 26px; border-radius: 12px; border: 1px solid transparent;
   cursor: pointer;
-  transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease;
+  transition: transform .15s var(--ease), box-shadow .15s var(--ease),
+              border-color .15s var(--ease), background .15s var(--ease);
 }
 .btn:hover { transform: translateY(-1px); }
+/* Two shadows, not one: a tight dark contact shadow seats the button on the
+   page, and the coloured bloom sits behind it. A coloured glow alone left the
+   button floating with nothing under it. */
 .btn-grad {
   color: #05141a;
   background: linear-gradient(96deg, var(--cyan), var(--violet));
-  box-shadow: 0 8px 30px rgb(34 211 238 / 32%);
+  box-shadow: 0 1px 2px rgb(4 5 10 / 60%), 0 10px 30px -10px rgb(64 203 227 / 45%);
 }
-.btn-grad:hover { box-shadow: 0 12px 40px rgb(168 85 247 / 50%); }
-.btn-ghost { color: var(--text); border-color: var(--line); background: var(--panel); }
-.btn-ghost:hover { border-color: rgb(255 255 255 / 20%); }
+.btn-grad:hover {
+  box-shadow: 0 1px 2px rgb(4 5 10 / 60%), 0 14px 38px -12px rgb(204 158 255 / 55%);
+}
+.btn-ghost { color: var(--text); border-color: var(--line); background: var(--surface-1); }
+.btn-ghost:hover { background: var(--surface-2); border-color: var(--line-hi); }
 
 /* ============================================================================
    Stat cards
@@ -202,9 +288,10 @@ body::after {
 }
 .stat b {
   display: block; font-size: clamp(28px, 3.4vw, 42px); font-weight: 800;
-  letter-spacing: -.02em; font-variant-numeric: tabular-nums;
-  background: var(--grad);
-  -webkit-background-clip: text; background-clip: text; color: transparent;
+  letter-spacing: -.02em; color: var(--text);
+  /* slashed-zero so a stat of 0 is never read as O; tabular so a row of
+     numbers lines up on its digits instead of shimmering column to column. */
+  font-variant-numeric: slashed-zero tabular-nums;
 }
 .stat span {
   display: block; margin-top: 8px; font-size: 11px; font-weight: 650;
@@ -273,46 +360,60 @@ a.cap, a.glass { text-decoration: none; }
 .cm   { color: #9d9dbd; font-style: italic; }  /* comment */
 
 /* ============================================================================
-   Living glass — cursor-following spotlight + lift on hover
-   Applies to .glass and the built-in surfaces. boost.js writes --mx / --my
-   (pointer position within the element); with no JS the spotlight simply
-   never appears and the hover lift still works.
+   Surfaces — lit from above, raised on hover
+
+   What this replaced: every card was translucent glass with a cursor-following
+   radial spotlight, plus a 22px accent bloom on hover. Three problems.
+
+   The spotlight was invisible on touch, which is most traffic, and it fired a
+   pointermove listener per card that wrote two custom properties per event —
+   a style recalculation on the moved element on every frame of every hover.
+
+   backdrop-filter on a dozen cards forces each into its own compositor layer
+   and re-blurs whatever the drifting aurora put behind it. That is the single
+   most expensive thing this sheet could ask a laptop GPU to do, in exchange
+   for a tint the reader cannot name.
+
+   And a violet bloom is not a shadow. A shadow says "this is nearer"; a glow
+   says "this is emitting light". Every card glowing means none of them is.
+
+   So: opaque surfaces one rung up the ladder, a 1px light bevel on the top
+   edge and an occlusion line on the bottom (the cheap trick that sells "lit
+   from above"), and hover moves the card one rung and adds a real dark shadow.
    ========================================================================== */
 .glass, .cap, .stat {
-  position: relative; overflow: hidden;
-  backdrop-filter: blur(14px) saturate(130%);
-  -webkit-backdrop-filter: blur(14px) saturate(130%);
-  transition: transform .3s cubic-bezier(.2,.7,.2,1), border-color .3s ease,
-              background .3s ease, box-shadow .35s ease;
+  position: relative;
+  background: var(--surface-1);
+  box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 6%),   /* top bevel        */
+              inset 0 -1px 0 0 rgb(0 0 0 / 30%);       /* bottom occlusion */
+  transition: transform .28s var(--ease), border-color .28s var(--ease),
+              background .28s var(--ease), box-shadow .3s var(--ease);
 }
-.glass > *, .cap > *, .stat > * { position: relative; z-index: 1; }
-.glass::before, .cap::before, .stat::before {
-  content: ""; position: absolute; inset: 0; z-index: 0; border-radius: inherit;
-  pointer-events: none; opacity: 0; transition: opacity .35s ease;
-  background: radial-gradient(340px circle at var(--mx, 50%) var(--my, 50%),
-              rgb(34 211 238 / 16%), rgb(168 85 247 / 10%) 42%, transparent 70%);
-}
-.glass:hover, .cap:hover, .stat:hover {
-  transform: translateY(-4px);
-  border-color: var(--line-hi);
-  background: rgb(255 255 255 / 6%);
-  box-shadow: 0 22px 60px -22px rgb(168 85 247 / 50%),
-              inset 0 0 0 1px rgb(34 211 238 / 12%);
-}
-.glass:hover::before, .cap:hover::before, .stat:hover::before { opacity: 1; }
 
-/* terminal window gets a gentler accent bloom */
-.window { transition: box-shadow .35s ease, transform .3s ease; }
-.window:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 30px 80px -24px rgb(34 211 238 / 40%), 0 24px 70px rgb(0 0 0 / 50%);
+/* Guarded on (hover: hover): on a touch screen :hover latches after a tap and
+   the card stays lifted until you touch something else. */
+@media (hover: hover) {
+  .glass:hover, .cap:hover, .stat:hover {
+    transform: translateY(-2px);
+    background: var(--surface-2);
+    border-color: var(--line-hi);
+    box-shadow: 0 1px 2px rgb(4 5 10 / 50%), 0 8px 24px -12px rgb(4 5 10 / 70%);
+  }
+  .window:hover { transform: translateY(-2px); }
 }
+
+.window { transition: transform .28s var(--ease), box-shadow .3s var(--ease); }
 
 /* ============================================================================
    Reveal on scroll — add class="reveal"; boost.js flips .in when it enters view
    ========================================================================== */
 .reveal { opacity: 1; }               /* visible by default (no-JS safe) */
-.js .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
+/* Short and small on purpose. A 600ms/16px reveal is long enough that a reader
+   who scrolls at speed outruns it and reads text mid-fade. */
+.js .reveal {
+  opacity: 0; transform: translateY(10px);
+  transition: opacity .38s var(--ease), transform .38s var(--ease);
+}
 .js .reveal.in { opacity: 1; transform: none; }
 
 /* ============================================================================
@@ -451,7 +552,6 @@ footer .foot-legal { margin-top: 13px; font-size: 12.5px; color: var(--text-3); 
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
   body::before { animation: none !important; }
-  .badge::before { animation: none !important; }
   .glass, .cap, .stat, .window {
     transition: border-color .3s ease, box-shadow .3s ease;
   }
@@ -462,10 +562,47 @@ footer .foot-legal { margin-top: 13px; font-size: 12.5px; color: var(--text-3); 
 }
 
 @media print {
-  body::before, body::after { display: none !important; }
-  .glass, .cap, .stat, .window {
-    box-shadow: none !important; backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-  }
+  body::before, body::after, .skip { display: none !important; }
+  .glass, .cap, .stat, .window { box-shadow: none !important; }
   .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+}
+
+/* ============================================================================
+   Cross-document view transitions
+
+   The docs are ten static pages sharing one header. Without this, following a
+   nav link white-flashes and rebuilds an identical bar. The header is held
+   still by name while the body cross-fades, so the frame reads as continuous
+   and only the content changes. Ignored by engines that do not support it.
+   ========================================================================== */
+@view-transition { navigation: auto; }
+header { view-transition-name: site-header; }
+::view-transition-old(site-header),
+::view-transition-new(site-header) { animation-duration: 0s; }
+
+@keyframes vt-out { to   { opacity: 0; transform: translateY(-6px); } }
+@keyframes vt-in  { from { opacity: 0; transform: translateY(8px);  } }
+::view-transition-old(root) { animation: vt-out .16s cubic-bezier(.4, 0, 1, 1) both; }
+::view-transition-new(root) { animation: vt-in  .24s cubic-bezier(0, 0, .2, 1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 1ms; }
+}
+
+/* ============================================================================
+   Forced colors (Windows high contrast)
+
+   The OS replaces the palette wholesale and drops box-shadow, so anything whose
+   shape came from a shadow or from background-clip:text disappears: gradient
+   headings render as invisible transparent text, and every card loses its edge.
+   ========================================================================== */
+@media (forced-colors: active) {
+  .grad-text, .eyebrow, .stat b, .logo b, footer .foot-brand b {
+    background: none !important;
+    -webkit-text-fill-color: currentColor !important;
+    color: CanvasText !important;
+    forced-color-adjust: none;
+  }
+  .glass, .cap, .stat, .window { border: 1px solid CanvasText; }
+  :focus-visible { outline: 3px solid Highlight; }
 }
