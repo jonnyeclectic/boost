@@ -10,7 +10,7 @@ wow: 4
 note: main passes this budget on run-to-run luck — its own three runs are 0.810, 0.840, 0.850
 order: 86
 owner: loop/page-growth-budget
-pr:
+pr: 435
 title: The Lighthouse budget passes on noise, not on margin
 ---
 <b>The roadmap page has not been under its performance budget. It has been winning a coin toss.</b>
