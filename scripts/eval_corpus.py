@@ -48,10 +48,27 @@ but the failure can at least say what it is. EX_TEMPFAIL separates "a third
 party took their repo down" from "your ranker regressed", which today arrive as
 the same red check.
 
+WHY THERE IS A --refresh. Pinning bought reproducibility with
+representativeness. The gate asks "does the right skill come back for a real
+question", and skills are written by other people continuously — this corpus
+grew by thousands of entries in the months before it was pinned — so a frozen
+corpus answers that question about a world that no longer exists, and answers it
+with total confidence because every number reproduces. Nothing was going to move
+the pins on its own. `--refresh` moves every row to current upstream HEAD and
+re-measures; .github/workflows/eval-corpus-refresh.yml runs it monthly and opens
+a PR, the same shape lock-refresh.yml uses for the toolchain.
+
+It deliberately does not run the eval. A refreshed corpus moves the gate's
+numbers and they move DOWN as it grows, so the refresh can propose a corpus that
+turns a required gate red through no fault of any change here. Deciding whether
+that is acceptable is a separate step from performing the move, and a step that
+did both would be deciding it silently.
+
 Usage:
   python3 scripts/eval_corpus.py --ensure    # tap, pin and verify every row
   python3 scripts/eval_corpus.py --audit     # static checks, no network
   python3 scripts/eval_corpus.py --relock    # re-measure the entry counts
+  python3 scripts/eval_corpus.py --refresh   # move the pins to upstream HEAD
   python3 scripts/eval_corpus.py --list      # print "repo sha count" rows
 """
 from __future__ import annotations
@@ -325,14 +342,21 @@ def _report_failures(failures: Sequence[CorpusError], total_rows: int) -> int:
     return EXIT_DRIFT if drift else EXIT_UNAVAILABLE
 
 
-def relock_text(text: str, counts: Dict[str, int]) -> str:
-    """Rewrite each pinned row's entry count, preserving everything else.
+def relock_text(text: str, counts: Dict[str, int],
+                shas: Optional[Dict[str, str]] = None) -> str:
+    """Rewrite each pinned row's entry count — and its SHA when ``shas`` says so.
 
     A whole-file rewrite would lose the header, which is where the reasoning
     lives; this touches only rows it has a new count for. A row with no SHA is
     left alone — a count beside an unpinned repo describes a tree free to change
     underneath it, so it must never be written.
+
+    ``shas`` is what makes ``--refresh`` a rewrite of the pins rather than of
+    the counts alone. It is optional because the two operations are genuinely
+    different: ``--relock`` re-measures the *same* trees (the scanner changed),
+    ``--refresh`` moves to *new* trees (the world changed).
     """
+    shas = shas or {}
     width = max([len(r) for r in counts] or [1])
     out = []
     for raw in text.splitlines():
@@ -342,8 +366,50 @@ def relock_text(text: str, counts: Dict[str, int]) -> str:
                 or parts[0] not in counts or not _SHA.fullmatch(parts[1]):
             out.append(raw)
             continue
-        out.append("%-*s %s %5d" % (width, parts[0], parts[1], counts[parts[0]]))
+        repo = parts[0]
+        sha = shas.get(repo, parts[1])
+        if not _SHA.fullmatch(sha):
+            raise SystemExit(
+                "refusing to write %s: %r is not a 40-character commit SHA"
+                % (repo, sha))
+        out.append("%-*s %s %5d" % (width, repo, sha, counts[repo]))
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def refresh_summary(rows: Sequence[Row], shas: Dict[str, str],
+                    counts: Dict[str, int]) -> str:
+    """A Markdown table of what a refresh moved, for the pull request body.
+
+    The point of the scheduled refresh is not the refresh — it is that the diff
+    is a direct measurement of how a changing catalogue moves retrieval, which
+    nothing else in this repository reports. A table of twenty SHAs is not that
+    measurement; the entry deltas beside them are the closest cheap proxy, so
+    they go in the body rather than being left for a reader to derive from
+    twenty `git log` lookups.
+    """
+    lines = ["| repo | pin | entries |", "| --- | --- | --- |"]
+    moved = 0
+    for repo, sha, count in rows:
+        new_sha = shas.get(repo, sha or "")
+        new_count = counts.get(repo, count)
+        if new_sha == sha and new_count == count:
+            lines.append("| `%s` | unchanged | %s |" % (repo, count))
+            continue
+        moved += 1
+        pin = ("`%s` → `%s`" % ((sha or "?")[:7], new_sha[:7])
+               if new_sha != sha else "unchanged")
+        if new_count == count:
+            entries = str(count)
+        else:
+            delta = (new_count or 0) - (count or 0)
+            entries = "%s → %s (%+d)" % (count, new_count, delta)
+        lines.append("| `%s` | %s | %s |" % (repo, pin, entries))
+    total_old = sum(n for _r, _s, n in rows if n is not None)
+    total_new = sum(counts.get(r, n or 0) for r, _s, n in rows)
+    lines.append("")
+    lines.append("**%d of %d repositories moved.** Corpus %d → %d entries (%+d)."
+                 % (moved, len(rows), total_old, total_new, total_new - total_old))
+    return "\n".join(lines)
 
 
 def _print_concentration(rows: Sequence[Row]) -> None:
@@ -377,6 +443,77 @@ def _ensure(relock: bool = False) -> int:
     return 0
 
 
+def _refresh(summary_path: Optional[str] = None) -> int:
+    """Move every row to current upstream HEAD, re-measure, rewrite taps.txt.
+
+    Pinning bought reproducibility with representativeness: the gate measures
+    one snapshot for as long as nobody moves it, while the catalogue it is
+    meant to represent is written by other people continuously. Reproducible
+    and representative are different properties, and nothing here was moving
+    the pins.
+
+    This deliberately does NOT run the eval. The refresh and the judgement
+    about what it did to the numbers are separate steps, because the numbers
+    can legitimately go down — a larger corpus scores lower, measured — and a
+    step that both moved the corpus and decided whether that was acceptable
+    would be deciding it silently.
+    """
+    sys.path.insert(0, str(ROOT))
+    from boost_cli.core import catalog, gitutil, registry  # deferred: path shim
+
+    rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+    shas: Dict[str, str] = {}
+    counts: Dict[str, int] = {}
+    failures: List[CorpusError] = []
+    for repo, old_sha, _n in rows:
+        try:
+            try:
+                tap = registry.get(repo)
+            except Exception:  # not yet tapped; add it below
+                tap = registry.add(repo)
+            else:
+                # An existing clone is pinned to a detached commit, so it has to
+                # be moved back onto the default branch before HEAD means
+                # "current upstream" again.
+                gitutil.pull(tap.path)
+            sha = gitutil.head_commit(tap.path)
+        except Exception as exc:  # any failure to reach the current tree
+            # This is where a deleted, renamed or privatised repository is
+            # discovered — the scheduled job is the only thing that asks.
+            failures.append(CorpusError(UNAVAILABLE, repo, str(exc)))
+            print("  %-44s could not be refreshed: %s" % (repo, exc))
+            continue
+        if not _SHA.fullmatch(sha):
+            failures.append(CorpusError(
+                UNAVAILABLE, repo,
+                "upstream HEAD did not resolve to a commit (got %r)" % sha))
+            continue
+        shas[repo] = sha
+        entries = catalog.rebuild_tap(tap)
+        counts[repo] = len(entries)
+        print("  %-44s %s -> %s  %5d entries%s"
+              % (repo, (old_sha or "?")[:7], sha[:7], len(entries),
+                 "" if sha == old_sha else "   MOVED"))
+    if failures:
+        return _report_failures(failures, len(rows))
+    TAPS.write_text(relock_text(TAPS.read_text(encoding="utf-8"), counts, shas),
+                    encoding="utf-8")
+    summary = refresh_summary(rows, shas, counts)
+    print("\n" + summary)
+    if summary_path:
+        Path(summary_path).write_text(summary + "\n", encoding="utf-8")
+    new_rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+    _print_concentration(new_rows)
+    problem = check_concentration(new_rows)
+    if problem:
+        # Upstream growth alone can push one publisher over the ceiling, and it
+        # is worth failing the refresh rather than opening a PR that quietly
+        # makes the corpus more lopsided than the ratchet allows.
+        print("\nCORPUS CONCENTRATION — %s" % problem)
+        return EXIT_DRIFT
+    return 0
+
+
 def _audit() -> int:
     """Static checks over the shipped list — no network, no clones."""
     rows = parse_taps(TAPS.read_text(encoding="utf-8"))
@@ -400,6 +537,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="tap, pin and verify every row, then rebuild its cache")
     p.add_argument("--relock", action="store_true",
                    help="re-measure entry counts and write them into taps.txt")
+    p.add_argument("--refresh", action="store_true",
+                   help="move every pin to current upstream HEAD, then re-measure")
+    p.add_argument("--summary-md", metavar="PATH",
+                   help="with --refresh, also write the Markdown summary here")
     p.add_argument("--audit", action="store_true",
                    help="static concentration/count checks, no network")
     p.add_argument("--list", action="store_true",
@@ -411,11 +552,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     if args.audit:
         return _audit()
+    if args.refresh:
+        return _refresh(args.summary_md)
     if args.relock:
         return _ensure(relock=True)
     if args.ensure:
         return _ensure()
-    p.error("provide --ensure, --relock, --audit or --list")
+    p.error("provide --ensure, --relock, --refresh, --audit or --list")
     return 2
 
 
