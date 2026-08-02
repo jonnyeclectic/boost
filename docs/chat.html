@@ -31,7 +31,20 @@
                 background: rgb(64 203 227 / 9%); padding: 1px 6px; border-radius: 6px; }
   .prose a { color: var(--sky); text-decoration: underline;
              text-underline-offset: 2px; text-decoration-thickness: 1px; }
-  .flow { display: grid; gap: 10px; margin: 28px 0; }
+  /* Measure. Both of these ran the full 1120px of .wrap: 104ch for the section
+     paragraphs and 118ch inside .step, against the 45-75ch a reader can track
+     without losing their place returning to the left edge. The hero lede above
+     already stops at 700px, so the page visibly widened its own column halfway
+     down. Capped in ch rather than px on purpose — the two blocks are 17px and
+     13.5px, so one pixel width would give them two different measures, and the
+     measure is the thing being fixed. */
+  main section .wrap > p { max-width: 70ch; }
+  /* The cap goes on .flow, not on .step p. Capping the paragraph left each card
+     stretched to the full 1120px with its text hugging the left 60% — the card
+     looked broken rather than deliberate. Capping the container sizes the cards
+     to their content and lands their right edge on the same column as the
+     paragraphs above. */
+  .flow { display: grid; gap: 10px; margin: 28px 0; max-width: 720px; }
   .step { display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
           padding: 14px 16px; background: var(--panel); border: 1px solid var(--line);
           border-radius: 10px; }

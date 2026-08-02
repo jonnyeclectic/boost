@@ -218,12 +218,57 @@ jobs:
       # metric and absent on the other three, the ones that exist to catch a
       # ranker that finds the answer every time and never ranks it first.
       # PYTHONPATH=. makes boost_cli importable without an editable install.
+      #
+      # THE CLONES ARE CACHED, and it is availability this buys, not speed.
+      # `ensure_eval_corpus.sh` runs under `set -euo pipefail` in this required
+      # job, so one of twenty personal repositories being deleted, renamed or
+      # made private reddens EVERY open pull request at once, on changes with
+      # nothing to do with retrieval. A cache hit is a corpus that no longer
+      # needs those repositories to still exist.
+      #
+      # Only `repos/` and `config.json` — third-party bytes fixed by the SHA in
+      # taps.txt, and the list of which repo is where. Everything this project
+      # derives (the per-tap catalog JSON, the BM25 index) is deliberately left
+      # out and rebuilt every run, so a cache can never answer for code that has
+      # since changed. FORCE=1 says the same thing about the sentinel: it is not
+      # cached, and even if a later edit to these paths let it in, the corpus
+      # would still be re-pinned and re-counted rather than trusted.
+      #
+      # Keyed on the tap list's content, with NO restore-keys on purpose. A
+      # near-miss restore would hand this job a corpus built for a different
+      # taps.txt, carrying taps this file no longer pins — and the index is
+      # built from every configured tap, so those extra entries would be scored
+      # as if they were the pinned corpus. An exact key or nothing.
+      - name: restore the pinned eval corpus
+        id: corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ github.workspace }}/.eval-home/repos
+            ${{ github.workspace }}/.eval-home/config.json
+          key: eval-corpus-${{ hashFiles('tests/eval/taps.txt') }}
       - name: retrieval quality gate (Tier 1 golden set)
+        env:
+          # The scratch home `make eval` uses, so the cached path and the
+          # documented one are one thing.
+          BOOST_HOME: ${{ github.workspace }}/.eval-home
         run: |
-          bash scripts/ensure_eval_corpus.sh
+          FORCE=1 bash scripts/ensure_eval_corpus.sh
           PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 \
             --fail-under 0.78 --floor hit@1=0.40 --floor MRR=0.52 --floor nDCG@k=0.58 \
             --regression-eps 1
+      # Save explicitly rather than with the combined action, so a corpus that
+      # failed to materialise or failed its counts is never the thing a later
+      # run restores. The key is content-addressed, so a bad entry under it
+      # would persist the failure instead of retrying it.
+      - name: cache the pinned eval corpus
+        if: success() && steps.corpus.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ github.workspace }}/.eval-home/repos
+            ${{ github.workspace }}/.eval-home/config.json
+          key: eval-corpus-${{ hashFiles('tests/eval/taps.txt') }}
 
   evals:
     # Evaluation-harness gate: recall@5/@10, MRR, nDCG@5/@10 with graded (3/2/1)

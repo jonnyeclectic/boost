@@ -18,9 +18,41 @@ it. `boost tap` still does the cloning (the corpus must be built the way a user
 builds one); pinning is a step applied after, because the alternative — teaching
 `boost tap` to pin — would add a CLI surface for a test-harness problem.
 
+WHY A ROW ALSO CARRIES AN ENTRY COUNT. A SHA fixes the *tree*; it does not fix
+what this project makes of that tree, and it does nothing at all when the tree
+cannot be fetched. Both gaps end in the same place — the gate scoring a corpus
+that is not the one its floors were set on — and the direction of the error is
+the surprise. Measured over the 91-query required set, one repo removed and
+everything else identical:
+
+    all 20 repos           10,152 entries   0.852 / 0.473 / 0.605 / 0.657
+    minus sickn33 (62%)     3,843 entries   0.885 / 0.593 / 0.711 / 0.746
+    minus that and ECC      2,227 entries   0.967 / 0.659 / 0.769 / 0.814
+    minus LessUp (targets)  9,682 entries   0.676 / 0.374 / 0.483 / 0.523
+    floors                                  0.780 / 0.400 / 0.520 / 0.580
+
+Losing a *scale* repo makes the gate EASIER — all four metrics rise and the
+check goes green having measured a third of the intended corpus. Losing a repo
+that holds golden targets fails all four floors in a way indistinguishable from
+"this pull request broke retrieval". So "skip whichever repos are missing today"
+is unsafe in both directions, and the count is what makes the first case
+detectable at all: a corpus that does not match its pins stops the run before
+anything is scored.
+
+WHY UNAVAILABILITY EXITS 75. `ensure_eval_corpus.sh` runs under `set -euo
+pipefail` inside CI's `lint` job, a required context, so one deleted, renamed or
+privatised repository reddens every open pull request at once. That is a real
+risk for twenty personal repositories, not a hypothetical. Nothing here can keep
+a vanished repository available — CI caches the materialised corpus for that —
+but the failure can at least say what it is. EX_TEMPFAIL separates "a third
+party took their repo down" from "your ranker regressed", which today arrive as
+the same red check.
+
 Usage:
-  python3 scripts/eval_corpus.py --ensure          # tap + pin every row
-  python3 scripts/eval_corpus.py --list            # print "repo sha" rows
+  python3 scripts/eval_corpus.py --ensure    # tap, pin and verify every row
+  python3 scripts/eval_corpus.py --audit     # static checks, no network
+  python3 scripts/eval_corpus.py --relock    # re-measure the entry counts
+  python3 scripts/eval_corpus.py --list      # print "repo sha count" rows
 """
 from __future__ import annotations
 
@@ -29,23 +61,65 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 TAPS = ROOT / "tests" / "eval" / "taps.txt"
 
 _SHA = re.compile(r"[0-9a-f]{40}")
 
+#: ``(owner/repo, pinned commit or None, pinned entry count or None)``.
+Row = Tuple[str, Optional[str], Optional[int]]
 
-def parse_taps(text: str) -> List[Tuple[str, Optional[str]]]:
-    """Rows of ``owner/repo [sha]``, comments and blank lines dropped.
+#: A repository, or the commit a row pins, could not be fetched.
+UNAVAILABLE = "unavailable"
+#: The repository materialised, but into a different number of entries.
+DRIFT = "drift"
+
+# 75 is EX_TEMPFAIL from sysexits.h, and the distinction is the point: an
+# unreachable third-party repository is not a defect in the change under test,
+# and it must not arrive looking like one.
+EXIT_DRIFT = 1
+EXIT_UNAVAILABLE = 75
+
+# No single repository may hold more than this share of the corpus. Measured,
+# not chosen: sickn33/antigravity-awesome-skills is 62.1% of the 10,152 entries
+# today. So this is a ratchet against making the concentration worse — not a
+# claim that 62% is a healthy number, which it is not. Diluting it means adding
+# breadth, never dropping the big repo: the table above shows that dropping it
+# raises every metric, so "rebalancing" by trimming would flatter the gate.
+MAX_SHARE = 0.65
+
+
+class CorpusError(RuntimeError):
+    """A corpus problem that carries which KIND of problem it is.
+
+    The kind is the whole reason this class exists. A corpus can fail to be the
+    one the floors were measured on in two unrelated ways — someone else's
+    repository went away, or the tree we did get scans into a different number
+    of entries — and only the second says anything about this project. Collapsed
+    into one exit status they are indistinguishable, which is how a third
+    party's force-push comes to look like a retrieval regression.
+    """
+
+    def __init__(self, kind: str, repo: str, detail: str) -> None:
+        super().__init__("%s: %s" % (repo, detail))
+        self.kind = kind
+        self.repo = repo
+        self.detail = detail
+
+
+def parse_taps(text: str) -> List[Row]:
+    """Rows of ``owner/repo [sha [count]]``, comments and blanks dropped.
 
     An absent SHA parses as ``None`` rather than an error so the format stays
     backward compatible, but a SHA that is *present and malformed* is fatal: a
     typo silently degrading to "unpinned" would reintroduce the exact drift this
-    file exists to stop, while still looking pinned to a reader.
+    file exists to stop, while still looking pinned to a reader. A count is
+    fatal on the same grounds, and requires a SHA — a count beside an unpinned
+    repo describes a tree that is free to change underneath it.
     """
-    rows: List[Tuple[str, Optional[str]]] = []
+    rows: List[Row] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -53,15 +127,78 @@ def parse_taps(text: str) -> List[Tuple[str, Optional[str]]]:
         parts = line.split()
         repo = parts[0]
         if len(parts) == 1:
-            rows.append((repo, None))
+            rows.append((repo, None, None))
             continue
         sha = parts[1]
         if not _SHA.fullmatch(sha):
             raise SystemExit(
                 "tests/eval/taps.txt: %s is pinned to %r, which is not a "
                 "40-character commit SHA" % (repo, sha))
-        rows.append((repo, sha))
+        if len(parts) == 2:
+            rows.append((repo, sha, None))
+            continue
+        if len(parts) > 3:
+            raise SystemExit(
+                "tests/eval/taps.txt: %s has %d fields, expected at most 3 "
+                "(repo, sha, entry count)" % (repo, len(parts)))
+        count = parts[2]
+        if not count.isdigit():
+            raise SystemExit(
+                "tests/eval/taps.txt: %s records %r entries, which is not a "
+                "non-negative integer" % (repo, count))
+        rows.append((repo, sha, int(count)))
     return rows
+
+
+def shares(rows: Sequence[Row]) -> List[Tuple[str, int, float]]:
+    """``(repo, count, share)`` for every counted row, largest first.
+
+    Rows with no recorded count are omitted rather than treated as zero: a
+    partially counted list should report the concentration of what it knows,
+    not a share diluted by rows it cannot see.
+    """
+    counted = [(repo, n) for repo, _sha, n in rows if n is not None]
+    total = sum(n for _repo, n in counted)
+    if not total:
+        return []
+    return sorted(((repo, n, n / total) for repo, n in counted),
+                  key=lambda row: (-row[1], row[0]))
+
+
+def check_concentration(rows: Sequence[Row]) -> Optional[str]:
+    """Return a message when one repository exceeds ``MAX_SHARE``, else ``None``.
+
+    Static — it reads the counts already in the file, so it costs no network and
+    runs anywhere. Concentration is a sampling bias in every recall figure this
+    project publishes, and the bias is invisible in a list of twenty names that
+    look equally weighted.
+    """
+    ranked = shares(rows)
+    if not ranked:
+        return None
+    repo, count, share = ranked[0]
+    if share <= MAX_SHARE:
+        return None
+    return ("%s is %d of %d entries (%.1f%%), over the %.0f%% ceiling. The "
+            "corpus would be mostly one publisher's house style, which biases "
+            "every recall figure this project reports. Add breadth rather than "
+            "dropping the big repo: a smaller corpus scores HIGHER, so trimming "
+            "to rebalance would flatter the gate."
+            % (repo, count, sum(n for _r, n, _s in ranked), share * 100,
+               MAX_SHARE * 100))
+
+
+def extra_taps(configured: Sequence[str], pinned: Sequence[str]) -> List[str]:
+    """Configured taps that this list does not pin, sorted.
+
+    The third way to score a corpus that is not the pinned one, and the easiest
+    to walk into: the index is built from ``catalog.all_entries()``, which is
+    every configured tap, not the twenty in this file. Point BOOST_HOME at a
+    real install — 445 taps and 71,655 entries on the machine this was written
+    on — and `make eval` reports numbers for that catalogue while every comment
+    in the tree says it measured twenty repos.
+    """
+    return sorted(set(configured) - set(pinned))
 
 
 def _run(path: Path, *args: str) -> subprocess.CompletedProcess:
@@ -84,57 +221,201 @@ def _fetch(path: Path, sha: str) -> subprocess.CompletedProcess:
 
 
 def pin_clone(path: Path, sha: str) -> None:
-    """Check ``path`` out at ``sha``, fetching the commit first if it is absent."""
+    """Check ``path`` out at ``sha``, fetching the commit first if it is absent.
+
+    Raises ``CorpusError(UNAVAILABLE, ...)``, which is the same class of event as
+    the whole repository being gone: the tree the floors were measured on is not
+    obtainable here and now, and that is not a statement about this project.
+    """
     if not has_commit(path, sha):
         _fetch(path, sha)
     if not has_commit(path, sha):
-        raise SystemExit(
-            "%s: commit %s is not reachable — the pin in tests/eval/taps.txt is "
-            "stale, or the repository rewrote history" % (path.name, sha))
+        raise CorpusError(
+            UNAVAILABLE, path.name,
+            "commit %s is not reachable — the pin in tests/eval/taps.txt is "
+            "stale, or the repository rewrote history" % sha)
     res = _run(path, "checkout", "--quiet", "--detach", sha)
     if res.returncode != 0:
-        raise SystemExit("%s: could not check out %s: %s"
-                         % (path.name, sha, res.stderr.strip()))
+        raise CorpusError(UNAVAILABLE, path.name,
+                          "could not check out %s: %s" % (sha, res.stderr.strip()))
 
 
-def _ensure() -> int:
-    """Tap every row, pin it, and rebuild its cache from the pinned tree."""
+def _materialise(rows: Sequence[Row], verify: bool = True
+                 ) -> Tuple[Dict[str, int], List[CorpusError]]:
+    """Tap, pin and rescan every row. Returns ``(counts, failures)``.
+
+    Every row is attempted even after one fails. Stopping at the first would
+    report "one repository is unreachable" when five are, and the difference
+    decides whether the answer is "re-run it" or "the list needs work".
+    """
     sys.path.insert(0, str(ROOT))
-    from boost_cli.core import catalog, registry  # noqa: PLC0415
+    from boost_cli.core import catalog, registry  # deferred: repo-root import shim
 
-    rows = parse_taps(TAPS.read_text(encoding="utf-8"))
-    total = 0
-    for repo, sha in rows:
+    counts: Dict[str, int] = {}
+    failures: List[CorpusError] = []
+    for repo, sha, want in rows:
         try:
-            tap = registry.get(repo)
-        except Exception:
-            tap = registry.add(repo)
-        if sha:
-            pin_clone(tap.path, sha)
+            try:
+                tap = registry.get(repo)
+            except Exception:  # not yet tapped; add it below
+                tap = registry.add(repo)
+            if sha:
+                pin_clone(tap.path, sha)
+        except CorpusError as exc:
+            # Re-name it: pin_clone only knows the clone directory, and the
+            # report has to say what taps.txt says so the reader can grep for it.
+            failures.append(CorpusError(exc.kind, repo, exc.detail))
+            print("  %-44s %s" % (repo, exc.detail))
+            continue
+        except Exception as exc:  # any failure to obtain the tree at all
+            failures.append(CorpusError(UNAVAILABLE, repo, str(exc)))
+            print("  %-44s could not be tapped: %s" % (repo, exc))
+            continue
         # Always after pinning: `boost tap` built the cache from the default
         # branch, so an unrebuilt cache would describe a tree we just replaced.
         entries = catalog.rebuild_tap(tap)
-        total += len(entries)
-        print("  %-44s %s  %5d entries"
-              % (repo, (sha or "unpinned")[:7], len(entries)))
-    print("corpus: %d entries across %d taps" % (total, len(rows)))
+        counts[repo] = len(entries)
+        note = ""
+        if verify and want is not None and len(entries) != want:
+            failures.append(CorpusError(
+                DRIFT, repo,
+                "taps.txt records %d entries, this tree scans into %d"
+                % (want, len(entries))))
+            note = "  != %d pinned" % want
+        print("  %-44s %s  %5d entries%s"
+              % (repo, (sha or "unpinned")[:7], len(entries), note))
+
+    extras = extra_taps([t.name for t in registry.list_taps()],
+                        [r for r, _s, _n in rows])
+    if verify and extras:
+        failures.append(CorpusError(
+            DRIFT, "BOOST_HOME",
+            "%d tap(s) are configured here but not pinned by taps.txt, and the "
+            "index is built from ALL configured taps: %s"
+            % (len(extras), ", ".join(extras[:5])
+               + (", ..." if len(extras) > 5 else ""))))
+    return counts, failures
+
+
+def _report_failures(failures: Sequence[CorpusError], total_rows: int) -> int:
+    """Print the failures grouped by kind and return the exit code to use."""
+    unavailable = [f for f in failures if f.kind == UNAVAILABLE]
+    drift = [f for f in failures if f.kind == DRIFT]
+    if unavailable:
+        print("\nCORPUS UNAVAILABLE — this is not a retrieval regression.")
+        print("%d of %d pinned repositories could not be materialised:"
+              % (len(unavailable), total_rows))
+        for f in unavailable:
+            print("  %s — %s" % (f.repo, f.detail))
+        print("The gate cannot run, and scoring the repos that ARE reachable is\n"
+              "not a fallback: measured, dropping the largest repo alone moves\n"
+              "BM25 recall@10 0.852 -> 0.885 and hit@1 0.473 -> 0.593, so a\n"
+              "partial corpus clears the floors MORE easily than the real one.")
+    if drift:
+        print("\nCORPUS DRIFT — what materialised is not what taps.txt pins.")
+        for f in drift:
+            print("  %s — %s" % (f.repo, f.detail))
+        print("A count mismatch means the scanner changed or a pin moved: "
+              "re-measure with\n`--relock`, then regenerate "
+              "tests/eval/baseline.json. An unpinned tap means\nBOOST_HOME is "
+              "not a corpus this file describes — point it at a scratch\n"
+              "directory (`make eval` uses ./.eval-home).")
+    # Drift wins when both happen: it is the one that says something about this
+    # repository, and it is not fixed by waiting or re-running.
+    return EXIT_DRIFT if drift else EXIT_UNAVAILABLE
+
+
+def relock_text(text: str, counts: Dict[str, int]) -> str:
+    """Rewrite each pinned row's entry count, preserving everything else.
+
+    A whole-file rewrite would lose the header, which is where the reasoning
+    lives; this touches only rows it has a new count for. A row with no SHA is
+    left alone — a count beside an unpinned repo describes a tree free to change
+    underneath it, so it must never be written.
+    """
+    width = max([len(r) for r in counts] or [1])
+    out = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        parts = line.split()
+        if not line or line.startswith("#") or len(parts) < 2 \
+                or parts[0] not in counts or not _SHA.fullmatch(parts[1]):
+            out.append(raw)
+            continue
+        out.append("%-*s %s %5d" % (width, parts[0], parts[1], counts[parts[0]]))
+    return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def _print_concentration(rows: Sequence[Row]) -> None:
+    ranked = shares(rows)
+    if not ranked:
+        return
+    total = sum(n for _r, n, _s in ranked)
+    top = ranked[0]
+    print("corpus: %d entries across %d taps" % (total, len(ranked)))
+    line = "concentration: %s is %.1f%%" % (top[0], top[2] * 100)
+    if len(ranked) > 1:
+        line += "; top two are %.1f%%" % ((top[2] + ranked[1][2]) * 100)
+    print(line)
+
+
+def _ensure(relock: bool = False) -> int:
+    rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+    counts, failures = _materialise(rows, verify=not relock)
+    if failures:
+        return _report_failures(failures, len(rows))
+    if relock:
+        TAPS.write_text(relock_text(TAPS.read_text(encoding="utf-8"), counts),
+                        encoding="utf-8")
+        print("relocked %d rows in tests/eval/taps.txt" % len(counts))
+        rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+    _print_concentration(rows)
+    problem = check_concentration(rows)
+    if problem:
+        print("\nCORPUS CONCENTRATION — %s" % problem)
+        return EXIT_DRIFT
+    return 0
+
+
+def _audit() -> int:
+    """Static checks over the shipped list — no network, no clones."""
+    rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+    for repo, count, share in shares(rows):
+        print("  %-44s %5d entries  %5.1f%%" % (repo, count, share * 100))
+    _print_concentration(rows)
+    uncounted = [r for r, _s, n in rows if n is None]
+    if uncounted:
+        print("\nuncounted rows (run --relock): %s" % ", ".join(uncounted))
+        return EXIT_DRIFT
+    problem = check_concentration(rows)
+    if problem:
+        print("\nCORPUS CONCENTRATION — %s" % problem)
+        return EXIT_DRIFT
     return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="eval_corpus.py", description=__doc__)
     p.add_argument("--ensure", action="store_true",
-                   help="tap and pin every row, then rebuild its cache")
+                   help="tap, pin and verify every row, then rebuild its cache")
+    p.add_argument("--relock", action="store_true",
+                   help="re-measure entry counts and write them into taps.txt")
+    p.add_argument("--audit", action="store_true",
+                   help="static concentration/count checks, no network")
     p.add_argument("--list", action="store_true",
                    help="print the parsed rows and exit")
     args = p.parse_args(argv)
     if args.list:
-        for repo, sha in parse_taps(TAPS.read_text(encoding="utf-8")):
-            print("%s %s" % (repo, sha or ""))
+        for repo, sha, count in parse_taps(TAPS.read_text(encoding="utf-8")):
+            print("%s %s %s" % (repo, sha or "", "" if count is None else count))
         return 0
+    if args.audit:
+        return _audit()
+    if args.relock:
+        return _ensure(relock=True)
     if args.ensure:
         return _ensure()
-    p.error("provide --ensure or --list")
+    p.error("provide --ensure, --relock, --audit or --list")
     return 2
 
 
