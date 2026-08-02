@@ -2,14 +2,14 @@
 id: eval-corpus-is-96x-smaller-than-a-real-install
 board: code
 section: internals
-status: planned
+status: shipped
 category: Eval · Correctness
 complexity: M
 impact: High
 wow: 4
 note: 7x not 96x — but all four floors FAIL on a real install, while the engine ranking holds
 order: 80
-owner:
+owner: loop/eval-scale-tier
 pr:
 title: The eval gate would not pass on the catalogue its own users have
 ---
@@ -100,3 +100,42 @@ on all four metrics at 10,152 <em>and</em> at 71,655. The margin collapses, the 
 it is a poor estimate of <em>absolute</em> quality and a serviceable one for <em>comparing</em>
 engines, which is the weaker and correct version of the claim. Limits: two engines only (dense needs
 a key), and an A-vs-B comparison does not test blend weights or pool depth.
+
+<b>The second tier ships, and it is described as <em>a</em> scale rather than <em>the</em> scale
+&mdash; this card's own correction, taken seriously.</b> Because hit@1 decays continuously with
+corpus size and never plateaus, no number here can be canonical, so the tier is not an attempt to
+pick the &ldquo;right&rdquo; size. It buys one more point on that curve, measured against real
+registries instead of random distractors, and watched on a schedule instead of assumed.
+
+<b>The corpus is the required one PLUS distractors, and that is the load-bearing decision.</b>
+<code>tests/eval/taps-scale.txt</code> copies every required row verbatim &mdash; pin and count
+&mdash; then adds curated registries. Every golden target lives in those required rows, and a scale
+list that dropped one would collapse recall for a reason that has nothing to do with scale: measured
+on the required corpus, removing a single target-bearing repo takes recall@10 from <b>0.852</b> to
+<b>0.676</b>, indistinguishable from a retrieval regression. Building it as a superset also makes
+the two tiers comparable, so a gap between them isolates the added candidates rather than
+confounding them with a different target set.
+
+<b>The distractors are drawn round-robin across item kinds, not largest-first.</b> The curated set
+is <b>341 skill / 76 workflow / 26 rule</b> registries, so straight largest-first buries the rules
+under the skill tail &mdash; and the required list's own header records what that costs:
+<code>boost tap --defaults</code> taps only skill repos and scores <b>0.000</b> on every rule and
+workflow query. The shipped list is <b>183 repositories</b>: the 20 required plus 163 distractors
+(23 rule / 70 workflow / 70 skill) carrying <b>20,034</b> est items.
+
+<b>The projected size is labelled a projection.</b> <code>est_items</code> under-reports &mdash; the
+curated set estimates 28,225 items across 443 scannable registries while a real 445-tap install
+scans to 71,655, about <b>2.5&times;</b> &mdash; so 20,034 est projects to roughly <b>50,000</b>
+actual entries. That is arithmetic, not a measurement. The real counts are written into the file by
+<code>eval_corpus.py --refresh</code> on the first scheduled run, which is also what pins it.
+
+<b>It ships with no floors, deliberately.</b> A floor has to come from a measurement and nothing has
+measured this corpus yet; inventing one here would be exactly the move this line of work keeps
+removing. The first run records a baseline and the job reports &mdash; the report is the product.
+Choosing what to floor it at is a later decision made from real numbers.
+
+<b>Scheduled and never required, for two reasons that are not timidity.</b> It taps 183
+repositories over the network, which does not belong in front of every pull request; and its numbers
+are <em>expected</em> to be worse than the required gate's &mdash; that is the finding &mdash; so
+wiring it into merge protection would block work on a fact about corpus size rather than about the
+change under review.
