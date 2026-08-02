@@ -58,11 +58,11 @@
   --yellow:      #facc15;
 
   /* --- signature gradient --- */
-  --grad: linear-gradient(96deg, var(--cyan) 0%, var(--violet) 52%, var(--pink) 100%);
   /* Interpolating in OKLCH holds lightness across the ramp; sRGB dips through a
-     desaturated grey between cyan and violet. The sRGB line above stays as the
-     fallback for engines without <color-interpolation-method>. */
-  --grad: linear-gradient(96deg in oklch, var(--cyan) 0%, var(--violet) 52%, var(--pink) 100%);
+     desaturated grey between cyan and violet. The sRGB value here is the
+     fallback for engines without <color-interpolation-method>; the @supports
+     block after this rule upgrades it where the syntax is understood. */
+  --grad: linear-gradient(96deg, var(--cyan) 0%, var(--violet) 52%, var(--pink) 100%);
 
   /* --- terminal surfaces --- */
   --term-bg:  #0d1024;
@@ -77,6 +77,25 @@
   --radius:    16px;
   --radius-lg: 18px;
   --maxw:      1120px;
+}
+
+/* Upgrade the signature gradient to OKLCH interpolation only where the engine
+   understands it. This has to be @supports rather than two --grad declarations
+   in :root, and the difference is not stylistic. A custom property accepts
+   almost any token sequence, so an engine WITHOUT <color-interpolation-method>
+   still stores `linear-gradient(96deg in oklch, ...)` happily; it only fails
+   later, when `background: var(--grad)` substitutes it and the result is
+   invalid at computed-value time. That does not fall back to the earlier
+   declaration — the background resolves to its initial value and the gradient
+   disappears entirely. So the redeclaration form silently removed the very
+   fallback its comment claimed to keep, on exactly the old engines it was for.
+   (It also tripped stylelint's declaration-block-no-duplicate-custom-properties,
+   which is what surfaced it; a stylelint-disable would have quieted the linter
+   and left the bug.) */
+@supports (background: linear-gradient(in oklch, red, blue)) {
+  :root {
+    --grad: linear-gradient(96deg in oklch, var(--cyan) 0%, var(--violet) 52%, var(--pink) 100%);
+  }
 }
 
 /* ---------- reset ---------- */
