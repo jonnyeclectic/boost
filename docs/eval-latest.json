@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "generated": "2026-08-02T06:00:00Z",
+  "commit": "",
+  "engine": "bm25",
+  "corpus": {
+    "entries": 57,
+    "queries": 36,
+    "judgments": 107
+  },
+  "metrics": [
+    {
+      "name": "recall@5",
+      "value": 0.5069,
+      "floor": 0.45,
+      "headroom": 0.0569
+    },
+    {
+      "name": "recall@10",
+      "value": 0.6019,
+      "floor": 0.55,
+      "headroom": 0.0519
+    },
+    {
+      "name": "MRR",
+      "value": 0.8384,
+      "floor": 0.78,
+      "headroom": 0.0584
+    },
+    {
+      "name": "nDCG@5",
+      "value": 0.692,
+      "floor": 0.64,
+      "headroom": 0.052
+    },
+    {
+      "name": "nDCG@10",
+      "value": 0.714,
+      "floor": 0.66,
+      "headroom": 0.054
+    }
+  ]
+}
