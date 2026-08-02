@@ -1047,15 +1047,32 @@ def _print_reply(reply: chat_engine.Reply, show_sources: bool) -> None:
     Citations are not decoration here. The next thing a user does with an answer
     is install code that runs inside their agent, so every recommendation has to
     be checkable against a real catalogue entry.
+
+    THE LIST IS NUMBERED, and the numbering is not cosmetic. The model is handed
+    ``chat.source_text`` — a list numbered from 1 — and told to answer from "the
+    numbered skills", so it writes prose like "use differential-review (#3)".
+    This block rendered the same list *unnumbered*, which made every one of
+    those citations unresolvable: the two halves disagreed about which contract
+    was in force, and the reader had to count rows to decode an answer written
+    to be scanned. ``reply.skills`` is the retrieved list in retrieval order —
+    the same object ``source_text`` numbered — so enumerating here reproduces
+    the model's indices exactly rather than inventing a parallel scheme.
+
+    The first column is the entry's ``ref``, which is always something that can
+    be pasted into ``boost info``. When the name is unambiguous that is the
+    name, and the tap follows in parentheses; when several taps carry it the ref
+    is the qualified ``owner/repo:name``, which already names the tap, so
+    repeating it would be noise.
     """
     for line in reply.text.splitlines():
         out.info(line)
     if show_sources and reply.skills:
         out.info("")
         out.info(out.role("sources · ranked by %s" % reply.engine, "muted"))
-        for cite in chat_engine.citations(reply.skills):
-            out.info(out.role("  %s  %s  (%s)"
-                              % (cite["name"], cite["kind"], cite["tap"]), "muted"))
+        for n, cite in enumerate(chat_engine.citations(reply.skills), 1):
+            tail = "" if cite["ref"] != cite["name"] else "  (%s)" % cite["tap"]
+            out.info(out.role("  %d. %s  %s%s"
+                              % (n, cite["ref"], cite["kind"], tail), "muted"))
     if reply.source == "extractive" and not reply.grounded:
         # The model answered and was rejected. Saying so beats silently showing
         # a downgraded answer that looks identical to a confident one.
