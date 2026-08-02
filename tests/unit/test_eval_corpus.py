@@ -12,21 +12,32 @@ That matters because the floor is not comfortable: BM25 scores recall@10
 that margin, and the first symptom would be a red required gate on an unrelated
 PR.
 
-These tests pin the two halves of the fix: the file format carries a SHA per
-repo, and every repo in the shipped list actually has one — so a future edit
-cannot quietly reintroduce an unpinned entry.
+These tests pin the halves of the fix. The file format carries a SHA per repo,
+and every repo in the shipped list has one — so a future edit cannot quietly
+reintroduce an unpinned entry. It carries an ENTRY COUNT per repo too, because a
+SHA fixes the tree and not what the scanner makes of it, and because the
+direction of that error is counter-intuitive: measured over the 91-query
+required set, dropping the repo that holds 62% of the corpus moves BM25 from
+0.852 / 0.473 to 0.885 / 0.593, so a partial corpus clears the floors MORE
+easily than the real one and "score whatever is reachable today" is not a safe
+fallback. And unreachability now exits 75 rather than 1, so a third party
+deleting their repository does not arrive looking like a retrieval regression on
+every open pull request at once.
 """
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "eval_corpus.py"
+_ENSURE = _ROOT / "scripts" / "ensure_eval_corpus.sh"
 _TAPS = _ROOT / "tests" / "eval" / "taps.txt"
 
 pytestmark = pytest.mark.skipif(
@@ -64,26 +75,32 @@ def _repo(tmp_path, name="origin"):
 
 
 class TestParsingTheTapList:
-    def test_a_pinned_line_yields_repo_and_sha(self):
+    def test_a_pinned_line_yields_repo_sha_and_count(self):
         m = _load()
         sha = "a" * 40
-        assert m.parse_taps("owner/repo %s\n" % sha) == [("owner/repo", sha)]
+        assert m.parse_taps("owner/repo %s 12\n" % sha) == [("owner/repo", sha, 12)]
 
     def test_comments_and_blank_lines_are_skipped(self):
         m = _load()
-        text = "# a comment\n\n   \nowner/repo %s\n" % ("b" * 40)
-        assert [r for r, _s in m.parse_taps(text)] == ["owner/repo"]
+        text = "# a comment\n\n   \nowner/repo %s 1\n" % ("b" * 40)
+        assert [r for r, _s, _n in m.parse_taps(text)] == ["owner/repo"]
 
     def test_extra_whitespace_is_tolerated(self):
         m = _load()
         sha = "c" * 40
-        assert m.parse_taps("  owner/repo \t %s  \n" % sha) == [("owner/repo", sha)]
+        assert m.parse_taps("  owner/repo \t %s  9 \n" % sha) == [
+            ("owner/repo", sha, 9)]
 
     def test_an_unpinned_line_still_parses(self):
         # Backward compatible on purpose: the format change must not be a flag
         # day for anyone carrying a local list.
         m = _load()
-        assert m.parse_taps("owner/repo\n") == [("owner/repo", None)]
+        assert m.parse_taps("owner/repo\n") == [("owner/repo", None, None)]
+
+    def test_a_pinned_line_without_a_count_still_parses(self):
+        m = _load()
+        sha = "d" * 40
+        assert m.parse_taps("owner/repo %s\n" % sha) == [("owner/repo", sha, None)]
 
     def test_a_malformed_sha_fails_loudly(self):
         # A typo must not fall through to "unpinned" — that is the silent
@@ -98,26 +115,208 @@ class TestParsingTheTapList:
         with pytest.raises(SystemExit):
             m.parse_taps("owner/repo %s\n" % ("d" * 7))
 
+    def test_a_malformed_count_fails_loudly(self):
+        # Same reasoning as the SHA: a count that quietly read as "uncounted"
+        # would leave the corpus unverified while looking verified.
+        m = _load()
+        with pytest.raises(SystemExit) as ei:
+            m.parse_taps("owner/repo %s twelve\n" % ("e" * 40))
+        assert "owner/repo" in str(ei.value)
+
+    def test_a_negative_count_is_rejected(self):
+        m = _load()
+        with pytest.raises(SystemExit):
+            m.parse_taps("owner/repo %s -3\n" % ("e" * 40))
+
+    def test_a_count_without_a_pin_is_rejected(self):
+        # `repo 123` puts the count where the SHA belongs, so it fails as a bad
+        # SHA. That is the right answer: a count beside an unpinned repo would
+        # describe a tree free to change underneath it.
+        m = _load()
+        with pytest.raises(SystemExit):
+            m.parse_taps("owner/repo 123\n")
+
+    def test_a_fourth_field_is_rejected(self):
+        m = _load()
+        with pytest.raises(SystemExit) as ei:
+            m.parse_taps("owner/repo %s 1 2\n" % ("f" * 40))
+        assert "at most 3" in str(ei.value)
+
 
 class TestTheShippedListIsFullyPinned:
     """The regression guard: this is what stops the drift coming back."""
 
     def test_every_repo_carries_a_sha(self):
         m = _load()
-        unpinned = [r for r, sha in m.parse_taps(_TAPS.read_text(encoding="utf-8"))
+        unpinned = [r for r, sha, _n in m.parse_taps(_TAPS.read_text(encoding="utf-8"))
                     if not sha]
         assert unpinned == [], "unpinned repos in taps.txt: %s" % unpinned
 
+    def test_every_repo_carries_an_entry_count(self):
+        m = _load()
+        uncounted = [r for r, _s, n in m.parse_taps(_TAPS.read_text(encoding="utf-8"))
+                     if n is None]
+        assert uncounted == [], (
+            "uncounted repos in taps.txt: %s — run "
+            "`python3 scripts/eval_corpus.py --relock`" % uncounted)
+
     def test_the_list_is_not_empty_and_has_no_duplicates(self):
         m = _load()
-        repos = [r for r, _s in m.parse_taps(_TAPS.read_text(encoding="utf-8"))]
+        repos = [r for r, _s, _n in m.parse_taps(_TAPS.read_text(encoding="utf-8"))]
         assert len(repos) >= 20
         assert len(repos) == len(set(repos))
 
     def test_every_sha_is_lowercase_hex(self):
         m = _load()
-        for repo, sha in m.parse_taps(_TAPS.read_text(encoding="utf-8")):
+        for repo, sha, _n in m.parse_taps(_TAPS.read_text(encoding="utf-8")):
             assert re.fullmatch(r"[0-9a-f]{40}", sha or ""), (repo, sha)
+
+
+class TestConcentration:
+    """One publisher owning most of the corpus biases every recall figure.
+
+    It cannot be fixed by trimming — measured, dropping the big repo raises all
+    four metrics — so what is enforceable is a ratchet: this may not get worse
+    without someone deciding it should.
+    """
+
+    def test_shares_are_ordered_largest_first_and_sum_to_one(self):
+        m = _load()
+        rows = [("a/a", "1" * 40, 60), ("b/b", "2" * 40, 30), ("c/c", "3" * 40, 10)]
+        ranked = m.shares(rows)
+        assert [r for r, _n, _s in ranked] == ["a/a", "b/b", "c/c"]
+        assert sum(s for _r, _n, s in ranked) == pytest.approx(1.0)
+
+    def test_uncounted_rows_are_omitted_rather_than_read_as_zero(self):
+        # Counting them as zero would dilute every share and report a
+        # concentration lower than the one that exists.
+        m = _load()
+        rows = [("a/a", "1" * 40, 90), ("b/b", "2" * 40, None)]
+        assert m.shares(rows) == [("a/a", 90, 1.0)]
+
+    def test_an_uncounted_list_has_no_shares(self):
+        m = _load()
+        assert m.shares([("a/a", "1" * 40, None)]) == []
+
+    def test_a_dominant_repo_is_reported(self):
+        m = _load()
+        rows = [("big/one", "1" * 40, 900), ("small/two", "2" * 40, 100)]
+        problem = m.check_concentration(rows)
+        assert problem and "big/one" in problem
+
+    def test_a_balanced_list_is_silent(self):
+        m = _load()
+        rows = [("a/a", "1" * 40, 50), ("b/b", "2" * 40, 50)]
+        assert m.check_concentration(rows) is None
+
+    def test_the_boundary_is_inclusive(self):
+        # Exactly at the ceiling passes; the ratchet is "no worse than", not
+        # "strictly better than", so re-locking identical counts cannot fail.
+        m = _load()
+        top = int(m.MAX_SHARE * 100)
+        rows = [("a/a", "1" * 40, top), ("b/b", "2" * 40, 100 - top)]
+        assert m.check_concentration(rows) is None
+
+    def test_the_shipped_list_is_under_the_ceiling(self):
+        m = _load()
+        rows = m.parse_taps(_TAPS.read_text(encoding="utf-8"))
+        assert m.check_concentration(rows) is None, m.check_concentration(rows)
+
+    def test_the_ceiling_is_a_ratchet_on_the_measured_value(self):
+        # If this ever passes trivially, the ratchet has stopped ratcheting.
+        m = _load()
+        top = m.shares(m.parse_taps(_TAPS.read_text(encoding="utf-8")))[0]
+        assert 0.5 < top[2] <= m.MAX_SHARE
+        assert m.MAX_SHARE - top[2] < 0.10, (
+            "MAX_SHARE has drifted far above the measured share — re-tighten it")
+
+
+class TestExtraTaps:
+    """The index is built from every CONFIGURED tap, not from this file."""
+
+    def test_a_tap_outside_the_list_is_reported(self):
+        m = _load()
+        assert m.extra_taps(["a/a", "b/b"], ["a/a"]) == ["b/b"]
+
+    def test_an_exact_match_reports_nothing(self):
+        m = _load()
+        assert m.extra_taps(["a/a"], ["a/a"]) == []
+
+    def test_a_pinned_repo_that_is_not_configured_is_not_an_extra(self):
+        # That case is a materialisation failure, reported by --ensure with the
+        # repo named; it must not also surface here as a spurious "extra".
+        m = _load()
+        assert m.extra_taps(["a/a"], ["a/a", "b/b"]) == []
+
+
+class TestRelock:
+    def test_counts_are_written_and_read_back(self):
+        m = _load()
+        sha = "a" * 40
+        text = "# header\nowner/repo %s\n" % sha
+        out = m.relock_text(text, {"owner/repo": 42})
+        assert m.parse_taps(out) == [("owner/repo", sha, 42)]
+
+    def test_comments_and_the_trailing_newline_are_preserved(self):
+        m = _load()
+        text = "# header\n#\nowner/repo %s 1\n" % ("a" * 40)
+        out = m.relock_text(text, {"owner/repo": 2})
+        assert out.startswith("# header\n#\n")
+        assert out.endswith("\n")
+
+    def test_an_unpinned_row_is_left_alone(self):
+        # Writing a count beside an unpinned repo would claim a fixed size for a
+        # tree that is free to change.
+        m = _load()
+        out = m.relock_text("owner/repo\n", {"owner/repo": 5})
+        assert out == "owner/repo\n"
+
+    def test_a_row_with_no_new_count_is_left_alone(self):
+        m = _load()
+        text = "kept/repo %s 7\n" % ("a" * 40)
+        assert m.relock_text(text, {"other/repo": 1}) == text
+
+    def test_relocking_the_shipped_list_with_its_own_counts_is_a_no_op(self):
+        # The file is the output of --relock, so re-running it must not churn.
+        m = _load()
+        text = _TAPS.read_text(encoding="utf-8")
+        counts = {r: n for r, _s, n in m.parse_taps(text) if n is not None}
+        assert m.relock_text(text, counts) == text
+
+
+class TestFailuresAreClassified:
+    """An unreachable third party and a broken ranker are not the same red."""
+
+    def test_unavailability_exits_tempfail(self, capsys):
+        m = _load()
+        code = m._report_failures(
+            [m.CorpusError(m.UNAVAILABLE, "a/a", "gone")], 20)
+        assert code == m.EXIT_UNAVAILABLE == 75
+        assert "not a retrieval regression" in capsys.readouterr().out
+
+    def test_drift_exits_one(self, capsys):
+        m = _load()
+        code = m._report_failures([m.CorpusError(m.DRIFT, "a/a", "12 vs 13")], 20)
+        assert code == m.EXIT_DRIFT == 1
+        assert "CORPUS DRIFT" in capsys.readouterr().out
+
+    def test_drift_wins_when_both_happen(self, capsys):
+        # Drift is the one that says something about this repository, and it is
+        # not fixed by waiting; reporting TEMPFAIL would invite a re-run.
+        m = _load()
+        code = m._report_failures([m.CorpusError(m.UNAVAILABLE, "a/a", "gone"),
+                                   m.CorpusError(m.DRIFT, "b/b", "12 vs 13")], 20)
+        assert code == m.EXIT_DRIFT
+        out = capsys.readouterr().out
+        assert "CORPUS UNAVAILABLE" in out and "CORPUS DRIFT" in out
+
+    def test_every_unavailable_repo_is_named_not_just_the_first(self, capsys):
+        m = _load()
+        m._report_failures([m.CorpusError(m.UNAVAILABLE, "a/a", "gone"),
+                            m.CorpusError(m.UNAVAILABLE, "b/b", "gone")], 20)
+        out = capsys.readouterr().out
+        assert "a/a" in out and "b/b" in out
+        assert "2 of 20" in out
 
 
 class TestTheGateIsDefinedOnce:
@@ -148,7 +347,9 @@ class TestTheGateIsDefinedOnce:
         makefile = (_ROOT / "Makefile").read_text(encoding="utf-8")
         recipe = makefile.split("\neval:", 1)[1].split("\n\n", 1)[0]
         ci = (_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        step = ci.split("retrieval quality gate", 1)[1].split("\n\n", 1)[0]
+        # Anchor on the step, not the prose: the comment block above it names
+        # the gate too, and now carries the caching rationale between them.
+        step = ci.split("- name: retrieval quality gate", 1)[1].split("\n\n", 1)[0]
         assert self._flags(step) == self._flags(recipe)
 
 
@@ -182,11 +383,15 @@ class TestPinningAClone:
         m.pin_clone(path, shas[0])
         assert _git(path, "rev-parse", "HEAD") == shas[0]
 
-    def test_an_unreachable_sha_names_the_clone_and_exits(self, tmp_path):
+    def test_an_unreachable_sha_is_unavailability_not_a_generic_failure(
+            self, tmp_path):
+        # The kind is what CI reads to decide whether the pull request is at
+        # fault, so it is the assertion that matters — not just "it raised".
         m = _load()
         path, _shas = _repo(tmp_path)
-        with pytest.raises(SystemExit) as ei:
+        with pytest.raises(m.CorpusError) as ei:
             m.pin_clone(path, "e" * 40)
+        assert ei.value.kind == m.UNAVAILABLE
         assert path.name in str(ei.value)
 
     def test_has_commit_is_false_for_a_tree_not_a_commit(self, tmp_path):
@@ -196,3 +401,61 @@ class TestPinningAClone:
         path, _shas = _repo(tmp_path)
         tree = _git(path, "rev-parse", "HEAD^{tree}")
         assert m.has_commit(path, tree) is False
+
+
+@pytest.mark.skipif(os.name == "nt" or not _ENSURE.exists(),
+                    reason="POSIX shell wrapper")
+class TestTheSentinelIsKeyedOnTheTapList:
+    """An empty sentinel let an edited taps.txt score the OLD corpus.
+
+    `make eval` skipped re-tapping whenever the sentinel existed at all, so
+    moving a pin or adding a repo left the previous corpus in place and scored
+    it against the new file's baseline — the same "measuring something other
+    than what the file says" bug as an unpinned list, one directory along.
+    """
+
+    def _wrapper_run(self, tmp_path, taps_text, calls):
+        """Run the wrapper against a stub interpreter, recording --ensure calls."""
+        root = tmp_path / "root"
+        (root / "scripts").mkdir(parents=True, exist_ok=True)
+        (root / "tests" / "eval").mkdir(parents=True, exist_ok=True)
+        (root / "tests" / "eval" / "taps.txt").write_text(taps_text,
+                                                          encoding="utf-8")
+        (root / "scripts" / "ensure_eval_corpus.sh").write_text(
+            _ENSURE.read_text(encoding="utf-8"), encoding="utf-8")
+        # The wrapper calls the interpreter twice — once with `-c` to digest the
+        # tap list, once to run --ensure. The stub delegates the first to real
+        # Python and records the second, so no corpus is materialised.
+        stub = tmp_path / "stub.py"
+        stub.write_text(
+            "#!%s\n"
+            "import subprocess, sys\n"
+            "a = sys.argv[1:]\n"
+            "if a and a[0] == '-c':\n"
+            "    sys.exit(subprocess.run([sys.executable] + a).returncode)\n"
+            "open(%r, 'a').write('ensure\\n')\n" % (sys.executable, str(calls)),
+            encoding="utf-8")
+        stub.chmod(0o755)
+        env = dict(os.environ, BOOST_HOME=str(tmp_path / "home"),
+                   PYTHON=str(stub))
+        env.pop("FORCE", None)
+        res = subprocess.run(
+            ["bash", str(root / "scripts" / "ensure_eval_corpus.sh")],
+            capture_output=True, text=True, env=env)
+        assert res.returncode == 0, res.stderr
+        return res.stdout
+
+    def test_a_second_run_over_the_same_list_is_skipped(self, tmp_path):
+        calls = tmp_path / "calls"
+        text = "owner/repo %s 1\n" % ("a" * 40)
+        self._wrapper_run(tmp_path, text, calls)
+        out = self._wrapper_run(tmp_path, text, calls)
+        assert "skipping" in out
+        assert calls.read_text(encoding="utf-8").count("ensure") == 1
+
+    def test_editing_the_list_re_taps(self, tmp_path):
+        calls = tmp_path / "calls"
+        self._wrapper_run(tmp_path, "owner/repo %s 1\n" % ("a" * 40), calls)
+        out = self._wrapper_run(tmp_path, "owner/repo %s 2\n" % ("a" * 40), calls)
+        assert "skipping" not in out
+        assert calls.read_text(encoding="utf-8").count("ensure") == 2
