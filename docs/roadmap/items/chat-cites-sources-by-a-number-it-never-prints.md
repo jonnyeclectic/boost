@@ -10,7 +10,7 @@ wow: 3
 note: observed in the field — the citations point at nothing
 order: 72
 owner: loop/chat-citations
-pr:
+pr: 430
 title: <code>boost chat</code> cites its sources by a number it never prints
 ---
 <code>boost chat</code> answers with numbered references to the sources beneath it, and the
