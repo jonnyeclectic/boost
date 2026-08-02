@@ -5726,8 +5726,9 @@ open: <code>zizmor</code> and <code>gitleaks</code> run only in CI and have no M
       </article>
 
       <article class="cap rcard" id="chat-cites-sources-by-a-number-it-never-prints">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3><code>boost chat</code> cites its sources by a number it never prints</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost chat</code> answers with numbered references to the sources beneath it, and the
 source list is rendered unnumbered — so every citation points at nothing:
 
@@ -5753,11 +5754,39 @@ the follow-up command will work first time. That form is only worth emitting now
 <a href="#info-rejects-the-qualified-name-it-recommends">info accepts it</a>; before that fix,
 qualifying the name would have traded one dead end for another.
 
-<b>Not yet located.</b> There is no <code>chat</code> row in <code>cli.py</code>'s
-<code>COMMANDS</code> table and no <code>commands/chat.py</code> in this repository — the
-observed behaviour comes from an installed <code>boost-skill-cli</code> build. Whoever picks
-this up should start from <code>pip show -f boost-skill-cli</code> to find the source, and
-should treat "is this command still shipping?" as the first question rather than an assumption.</p>
+<b>CORRECTION &mdash; "not yet located" was wrong.</b> This card said there is no <code>chat</code>
+row in <code>cli.py</code>'s <code>COMMANDS</code> table, and told the next reader to start from
+<code>pip show -f boost-skill-cli</code> because the behaviour must be coming from an installed
+build. The row is at <code>cli.py:93</code>, has been all along, and <code>./boost --help</code>
+lists the command. What misled the search was looking for <code>commands/chat.py</code>: the
+<code>COMMANDS</code> row names its module, and this one lives in
+<code>commands/intelligence.py</code> alongside the rest of the <code>ai</code> group. The
+engine is <code>core/chat.py</code>. Treating "is this command still shipping?" as the first
+question was right; the answer was simply yes.
+
+<b>What shipped.</b> Both halves now agree on one contract. <code>chat.source_text</code>
+numbers the candidates from 1 and the system prompt says to answer from "the numbered skills",
+so the rendered block enumerates <code>reply.skills</code> &mdash; the same list, in the same
+order, so the indices are the model's rather than a parallel scheme invented at render time.
+The extractive answer is numbered too, so the keyless path and the AI path refer to the same
+rows the same way.
+
+<b>The ambiguity half is fixed where it is decidable.</b> Every citation now carries a
+<code>ref</code>, and the invariant is that a <code>ref</code> can be pasted into
+<code>boost info</code> and will resolve. Usually that is just the name; when several taps
+carry it &mdash; the exact condition <code>catalog.resolve_one</code> refuses on &mdash; it is
+the qualified <code>owner/repo:name</code>. Verified end to end against the pinned 10,152-entry
+corpus: <code>boost info code-reviewer</code> errors with "exists in multiple taps", and the
+<code>ChrisWiles/claude-code-showcase:code-reviewer</code> the sources block now prints
+resolves. A name repeated <em>inside</em> one tap is deliberately left bare, because
+<code>resolve_one</code> already picks a canonical row for that case.
+
+<b>One thing deliberately not done.</b> The qualifier does not reach the prompt. The system
+prompt tells the model to name skills "exactly as given" and <code>ungrounded_names</code>
+grades the reply against the entries' <em>bare</em> names, so feeding it qualified names would
+make a correctly-quoted recommendation look invented and throw the whole answer away. So
+<code>_describe</code> takes the ref on the answer path only, and a test pins that the prompt
+still names skills bare.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
