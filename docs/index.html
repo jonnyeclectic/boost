@@ -10,6 +10,10 @@
      inline block below carries ONLY page-specific layout, and wins ties
      by coming later in the cascade. -->
 <link rel="stylesheet" href="../style/boost.css">
+<!-- Blocking and first, like the portfolio site: boost.js sets this flag too,
+     but it is deferred, so on a slow parse the reveal sections would paint
+     visible and then blink out as `.js .reveal` finally applied. -->
+<script>document.documentElement.classList.add("js")</script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   @media (prefers-reduced-motion: reduce) {
@@ -53,7 +57,10 @@
     50%     { transform: translate3d(2.5vmax,-2vmax,0) scale(1.08); }
   }
   .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
-  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 4px; }
+  /* No :focus-visible override here. The shared sheet paints a white 3px ring
+     precisely because a cyan one is invisible around the cyan .btn-grad and the
+     cyan pills this page is full of — a hue-independent ring is the only one
+     that works on every surface. */
 
   /* ---------- nav ---------- */
   header {
@@ -95,6 +102,13 @@
     header .nav ul li { scroll-snap-align: start; }
     header .nav ul a { display: flex; align-items: center; min-height: 40px; }
   }
+  /* The wordmark keeps its "Visual Guide" kicker; the nav row does not have
+     room for it once the links start scrolling. Same breakpoint the portfolio
+     site drops its own. */
+  @media (max-width: 860px) {
+    header .nav { gap: 12px; }
+    .logo span { display: none; }
+  }
 
   /* ---------- shared section chrome ---------- */
   section { padding: 110px 0 20px; }
@@ -102,22 +116,57 @@
     color: var(--cyan); background: rgba(64,203,227,.09);
     padding: 1px 7px; border-radius: 6px; font-size: .88em;
   }
-  .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
-  .reveal.in { opacity: 1; transform: none; }
+  /* Gradient eyebrow, wider tracking — the section marker the portfolio site
+     uses, matched here so the two properties read as one family. The shared
+     sheet keeps the flat --text-3 version for the deeper docs pages, where a
+     third gradient per screen would be noise rather than a signature.
+     background-clip:text zeroes the text fill, and with it the selection
+     highlight, so ::selection has to paint one back. */
+  .eyebrow {
+    letter-spacing: .24em;
+    background: var(--grad);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    /* fit-content, not the inherited `display: block; text-align: center`.
+       The gradient is painted across the ELEMENT box and only then clipped to
+       the glyphs, so a full-width block hands a 200px word the middle 200px of
+       a 1120px ramp — every eyebrow on the page comes out the same flat violet,
+       with the cyan and pink ends off in the margins. Shrinking the box to the
+       text puts the whole cyan→violet→pink ramp across the word. */
+    width: fit-content; margin-inline: auto;
+  }
+  .eyebrow::selection, .stat b::selection {
+    -webkit-text-fill-color: var(--text); color: var(--text);
+    background: rgba(64,203,227,.28);
+  }
+  /* Gradient-clipped text has a transparent fill, and printers do not paint the
+     background it was clipped from — so on paper every eyebrow, hero accent and
+     stat number comes out blank. Put a real ink colour back for print. */
+  @media print {
+    .eyebrow, .stat b, .hero h1 .grad {
+      background: none !important;
+      -webkit-text-fill-color: #111 !important;
+      color: #111 !important;
+    }
+  }
+  /* No .reveal rules here either. This page used to declare an unguarded
+     `.reveal { opacity: 0 }`, which beat the shared sheet's `.js .reveal` on
+     cascade order — so with JavaScript disabled every revealed section of the
+     front door rendered permanently invisible. boost.css starts .reveal at
+     opacity 1 and only hides it once boost.js has stamped `.js` on <html>. */
 
   /* ---------- hero ---------- */
-  .hero { padding: 96px 0 30px; }
-  .badge {
-    display: inline-flex; align-items: center; gap: 8px;
-    font-family: var(--mono); font-size: 12.5px; color: #d8c9f5;
-    border: 1px solid rgba(167,139,250,.45); border-radius: 999px;
-    padding: 7px 16px; margin-bottom: 30px;
-    background: rgba(167,139,250,.07);
-  }
-  .badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--grad); }
+  /* padding-block, not the four-value shorthand: `padding: 96px 0 30px` also
+     sets padding-inline to 0, and this block is linked AFTER boost.css, so it
+     silently strips .wrap's 24px gutter and runs the hero edge-to-edge on
+     anything narrower than the 1120px column. */
+  .hero { padding-block: 96px 30px; }
+  /* Only the spacing is page-local. The badge itself — cyan pill, lit dot — is
+     the shared one from boost.css; the violet override that used to sit here
+     was left over from the pre-Aurora palette and matched neither site. */
+  .badge { margin-bottom: 30px; }
   .hero h1 {
     font-size: clamp(44px, 7.2vw, 86px); font-weight: 800;
-    letter-spacing: -.035em; line-height: 1.02; max-width: 820px; text-wrap: balance;
+    letter-spacing: -.035em; line-height: 1.02; max-width: 900px; text-wrap: balance;
   }
   .hero h1 .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .hero p.lede { max-width: 660px; margin-top: 30px; font-size: 19px; color: var(--text-2); }
@@ -148,6 +197,28 @@
   @media (hover: hover) {
     .stat:hover { background: var(--surface-2); border-color: var(--line-hi); }
   }
+  /* Gradient hero numerals, as on the portfolio site. Kept to the hero row: it
+     is one band of four, read once, so the device still lands. slashed-zero and
+     tabular-nums come from boost.css and survive the repaint. */
+  .stat b {
+    background: var(--grad);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    width: fit-content; margin-inline: auto;   /* see .eyebrow — same clipping trap */
+  }
+
+  /* ---------- bullet lists ----------
+     The portfolio's card device: a gradient dot instead of a disc, so a card
+     scans as three claims rather than one paragraph. */
+  .bullets { list-style: none; display: grid; gap: 8px; margin-top: 12px; }
+  .bullets li { position: relative; padding-left: 19px; }
+  .bullets li::before {
+    content: ""; position: absolute; left: 2px; top: .62em;
+    width: 5px; height: 5px; border-radius: 50%; background: var(--grad);
+  }
+  .bullets li b { color: var(--text); font-weight: 650; }
+  .cap .bullets { font-size: 14.5px; color: var(--text-2); }
+  .concept-copy .bullets { font-size: 17px; color: var(--text-2); margin-bottom: 22px; }
+  .concept-copy .bullets li { padding-left: 21px; }
 
   /* ---------- concept ---------- */
   .concept-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 56px; align-items: center; margin-top: 64px; }
@@ -223,13 +294,19 @@
 
   /* ---------- commands ---------- */
   .filterbar { max-width: 720px; margin: 48px auto 0; }
+  /* On the surface ladder and the cyan accent, like every other input on the
+     site. The violet-on-#14142a treatment predates the palette and was the
+     only control still wearing it. */
   .filterbar input {
     width: 100%; padding: 15px 22px; border-radius: 14px;
-    background: #14142a; border: 1px solid rgba(167,139,250,.3);
+    background: var(--surface-1); border: 1px solid var(--line);
+    box-shadow: inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 -1px 0 0 rgba(0,0,0,.3);
     color: var(--text); font-size: 15.5px; font-family: var(--sans);
+    transition: border-color .2s var(--ease), background .2s var(--ease);
   }
   .filterbar input::placeholder { color: var(--text-3); }
-  .filterbar input:focus { outline: none; border-color: rgba(167,139,250,.7); box-shadow: 0 0 0 3px rgba(167,139,250,.15); }
+  .filterbar input:hover { border-color: var(--line-hi); }
+  .filterbar input:focus { outline: none; border-color: var(--cyan); background: var(--surface-2); }
   .pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 22px; }
   .pill {
     font-size: 13.5px; font-weight: 600; color: var(--text-2);
@@ -238,13 +315,13 @@
     transition: color .15s, background .15s, border-color .15s;
   }
   .pill:hover { color: var(--text); border-color: rgba(255,255,255,.2); }
-  .pill.on { background: var(--cyan); border-color: var(--cyan); color: #201705; }
+  .pill.on { background: var(--cyan); border-color: var(--cyan); color: var(--bg); }
   .cmd-count { text-align: center; margin: 30px 0 6px; font-size: 14.5px; color: var(--text-2); }
   .group { margin-top: 46px; }
   .group-head { display: flex; align-items: center; gap: 14px; }
   .group-icon {
     font-family: var(--mono); font-size: 12px; font-weight: 700;
-    padding: 8px 10px; border-radius: 10px; color: #16120a;
+    padding: 8px 10px; border-radius: 10px; color: var(--bg);
   }
   .group-head h3 { font-size: 21px; font-weight: 750; letter-spacing: -.01em; }
   .group-head p { font-size: 14px; color: var(--text-2); margin-top: 1px; }
@@ -343,7 +420,7 @@
   }
   .install-box .bar .label::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--grad); }
   .copy-btn {
-    font-family: var(--sans); font-size: 12.5px; font-weight: 700; color: #201705;
+    font-family: var(--sans); font-size: 12.5px; font-weight: 700; color: var(--bg);
     background: var(--cyan); border: none; border-radius: 8px; padding: 6px 14px; cursor: pointer;
   }
   .copy-btn:hover { filter: brightness(1.08); }
@@ -657,49 +734,71 @@ facilitate structured divergent thinking:
         <div class="cap reveal" style="--ic-bg: rgba(236,72,153,.12); --ic-fg: #f9a8d4;">
           <div class="ic">✦</div>
           <h3>AI-powered authoring</h3>
-          <p>Claude ranks your searches by relevance, summarizes skills, drafts new
-            ones from your codebase or chat history, and previews behavior before
-            you install.</p>
+          <p>Claude does the parts that need judgement, only when you ask for them.</p>
+          <ul class="bullets">
+            <li>Ranks your search results by relevance, and <b>summarizes</b> what a
+              skill actually does.</li>
+            <li>Drafts new skills from <b>your codebase or your chat history</b>.</li>
+            <li>Previews how one will behave <b>before</b> you install it.</li>
+          </ul>
           <div class="tags"><code>search --smart</code><code>distill</code><code>infer</code><code>absorb</code><code>evolve</code><code>simulate</code><code>explain</code></div>
         </div>
         <div class="cap reveal" style="--ic-bg: rgba(74,222,128,.1); --ic-fg: #86efac;">
           <div class="ic">⛨</div>
           <h3>Governance &amp; safety</h3>
-          <p>Enforce org policies, detect drift from source, block unsafe skills
-            against a safety list, and verify integrity with content fingerprints
-            and install attestation (TOFU).</p>
+          <p>A skill is instructions your agent will run, so it gets what code gets.</p>
+          <ul class="bullets">
+            <li>Enforce <b>org policy</b>, and detect drift from the source repo.</li>
+            <li>Block unsafe skills against a safety list, and quarantine the rest.</li>
+            <li>Verify integrity with <b>content fingerprints</b> and install
+              attestation (TOFU).</li>
+          </ul>
           <div class="tags"><code>policy</code><code>drift</code><code>audit</code><code>verify</code><code>quarantine</code><code>attest</code><code>fingerprint</code></div>
         </div>
-        <div class="cap reveal" style="--ic-bg: rgba(167,139,250,.12); --ic-fg: #c4b5fd;">
+        <div class="cap reveal" style="--ic-bg: rgba(204,158,255,.12); --ic-fg: #ddd0f7;">
           <div class="ic">◈</div>
           <h3>Team &amp; collaboration</h3>
-          <p>Roll skills out to cohorts with A/B testing, switch context with
-            profiles, see a team activity feed, and find who has expertise.
-            Share exact setups via Boostfile bundles.</p>
+          <p>One person's working setup, made into something a team can adopt.</p>
+          <ul class="bullets">
+            <li>Roll skills out to <b>cohorts</b>, with A/B testing.</li>
+            <li>Switch context with profiles, and follow a team activity feed.</li>
+            <li>Share an exact setup as a <b>Boostfile bundle</b> — or find who
+              already has the expertise.</li>
+          </ul>
           <div class="tags"><code>cohort</code><code>profile</code><code>pulse</code><code>who</code><code>bundle</code><code>snapshot</code></div>
         </div>
         <div class="cap reveal" style="--ic-bg: rgba(96,165,250,.12); --ic-fg: #93c5fd;">
           <div class="ic">⇄</div>
           <h3>Multi-agent &amp; integration</h3>
-          <p>Install once, land in Claude Code, Windsurf, and Cursor. Run as a
-            native MCP server, register a <code style="color:var(--cyan)">boost://</code> one-click
-            protocol, serve a catalog over HTTP, or auto-sync on a schedule.</p>
+          <p>Install once, land in <b>Claude Code, Windsurf and Cursor</b>.</p>
+          <ul class="bullets">
+            <li>Run as a native <b>MCP server</b>, so the agent can search for itself.</li>
+            <li>Register a <code style="color:var(--cyan)">boost://</code> handler for
+              one-click installs.</li>
+            <li>Serve a catalog over HTTP, or auto-sync on a schedule.</li>
+          </ul>
           <div class="tags"><code>migrate</code><code>mcp</code><code>protocol</code><code>serve</code><code>schedule</code></div>
         </div>
         <div class="cap reveal" style="--ic-bg: rgba(64,203,227,.12); --ic-fg: #7dd3fc;">
           <div class="ic">∿</div>
           <h3>Reproducible &amp; recoverable</h3>
-          <p>A v3 lock file pins exact state. Preview diffs before syncing,
-            snapshot and restore whole environments, replay history, and pin
-            versions so nothing changes underfoot.</p>
+          <p>A <b>v3 lock file</b> pins exact state, so a rebuild is a rebuild.</p>
+          <ul class="bullets">
+            <li>Preview the diff before you sync it.</li>
+            <li>Snapshot and restore a whole environment, or replay its history.</li>
+            <li><b>Pin versions</b> so nothing changes underfoot.</li>
+          </ul>
           <div class="tags"><code>sync --diff</code><code>snapshot</code><code>replay</code><code>pin</code><code>unpin</code><code>outdated</code></div>
         </div>
         <div class="cap reveal" style="--ic-bg: rgba(125,211,252,.12); --ic-fg: #bae6fd;">
           <div class="ic">❄</div>
           <h3>Self-healing &amp; secure</h3>
-          <p>Auto-repair broken symlinks and stale caches, detect unused or
-            conflicting skills, and stay hardened: sandbox-safe paths,
-            safety-pattern audits, and SHA-verified state.</p>
+          <p>The install that fixes itself, and tells you when it cannot.</p>
+          <ul class="bullets">
+            <li>Auto-repair <b>broken symlinks</b> and stale caches.</li>
+            <li>Detect skills that are unused, decayed, or in conflict.</li>
+            <li>Sandbox-safe paths, safety-pattern audits, <b>SHA-verified state</b>.</li>
+          </ul>
           <div class="tags"><code>doctor</code><code>heal</code><code>decay</code><code>conflict</code><code>clean</code><code>self-update</code></div>
         </div>
       </div>
@@ -806,32 +905,35 @@ pipx upgrade boost-skill-cli        <span class="cm"># or: pip install --upgrade
     </div>
   </section>
 
-  <footer>
-    <div class="wrap">
-      <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
-      <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
-      <nav class="foot-links" aria-label="Documentation">
-        <a aria-current="page" href="#top">Guide</a>
-        <a href="commands.html">Commands</a>
-        <a href="demo.html">Try the search</a>
-        <a href="chat.html">How chat works</a>
-        <a href="mcp-hub.html">MCP Hub</a>
-        <a href="eval.html">Evaluation</a>
-        <a href="adapters.html">Adapters</a>
-        <a href="roadmap.html">Roadmap</a>
-        <a href="design-roadmap.html">Design</a>
-        <a href="carousel.html">Carousel</a>
-      </nav>
-      <p class="foot-legal">
-        <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
-        <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
-        <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
-        Released under the GPL-3.0 license
-      </p>
-    </div>
-  </footer>
-
 </main>
+
+<!-- Outside <main>, like every other page. A contentinfo landmark nested inside
+     the main landmark is not a top-level landmark, so assistive tech does not
+     offer it as "footer" in the landmark list. -->
+<footer>
+  <div class="wrap">
+    <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
+    <nav class="foot-links" aria-label="Documentation">
+      <a aria-current="page" href="#top">Guide</a>
+      <a href="commands.html">Commands</a>
+      <a href="demo.html">Try the search</a>
+      <a href="chat.html">How chat works</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a href="eval.html">Evaluation</a>
+      <a href="adapters.html">Adapters</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="design-roadmap.html">Design</a>
+      <a href="carousel.html">Carousel</a>
+    </nav>
+    <p class="foot-legal">
+      <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+      <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+      <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+      Released under the GPL-3.0 license
+    </p>
+  </div>
+</footer>
 
 <script>
 // ---------- command data (mirrors boost_cli/cli.py exactly) ----------
@@ -1042,18 +1144,10 @@ document.getElementById("copy-install").addEventListener("click", async function
   setTimeout(() => { this.textContent = "Copy"; }, 1800);
 });
 
-// ---------- scroll reveal ----------
-const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-if (!reduce && "IntersectionObserver" in window) {
-  const io = new IntersectionObserver((entries) => {
-    entries.forEach((en) => {
-      if (en.isIntersecting) { en.target.classList.add("in"); io.unobserve(en.target); }
-    });
-  }, { rootMargin: "0px 0px -8% 0px", threshold: 0.05 });
-  document.querySelectorAll(".reveal").forEach((el) => io.observe(el));
-} else {
-  document.querySelectorAll(".reveal").forEach((el) => el.classList.add("in"));
-}
+// Scroll reveal lives in style/boost.js, loaded below — this page carried a
+// second copy that observed every .reveal unconditionally, so anything already
+// on screen at load arrived as a fade-in on a page nobody had scrolled yet.
 </script>
+<script src="../style/boost.js" defer></script>
 </body>
 </html>
