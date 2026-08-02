@@ -321,11 +321,13 @@ _PAGE = """<!DOCTYPE html>
   <nav class="foot-links" aria-label="Documentation">
     <a href="index.html">Guide</a>
     <a href="#top" aria-current="page">Commands</a>
-    <a href="roadmap.html">Roadmap</a>
-    <a href="design-roadmap.html">Design</a>
+    <a href="demo.html">Try the search</a>
+    <a href="chat.html">How chat works</a>
     <a href="mcp-hub.html">MCP Hub</a>
     <a href="eval.html">Evaluation</a>
     <a href="adapters.html">Adapters</a>
+    <a href="roadmap.html">Roadmap</a>
+    <a href="design-roadmap.html">Design</a>
     <a href="carousel.html">Carousel</a>
   </nav>
   <p class="foot-legal">

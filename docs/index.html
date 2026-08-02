@@ -372,6 +372,35 @@
     .stats { gap: 10px; }
     .stat { padding: 18px 10px; }
   }
+
+  /* ---------- in-page jump row ----------
+     These six were in the sticky bar alongside eleven destinations. They belong
+     to this page, not to the site, so they sit with the page — under the hero
+     rather than pinned above it. */
+  .jump {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    margin-top: 54px; padding-top: 26px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .jump .lab {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--text-3);
+    margin-right: 6px;
+  }
+  .jump a {
+    display: flex; align-items: center; min-height: 36px;
+    padding: 6px 13px; border-radius: 999px;
+    font-size: 13.5px; color: var(--text-2); text-decoration: none;
+    border: 1px solid var(--line); background: var(--surface-1);
+    transition: color .18s var(--ease), background .18s var(--ease),
+                border-color .18s var(--ease);
+  }
+  @media (hover: hover) {
+    .jump a:hover { color: var(--text); background: var(--surface-2); border-color: var(--line-hi); }
+  }
+  /* 40px targets on touch (WCAG 2.5.5) */
+  @media (max-width: 620px) { .jump a { min-height: 40px; } }
+
 </style>
 </head>
 <body>
@@ -381,22 +410,14 @@
   <div class="wrap nav">
     <a class="logo" href="#top"><b>boost</b><span>Visual Guide</span></a>
     <ul>
-      <li><a href="#what">What it is</a></li>
-      <li><a href="#how">How it works</a></li>
-      <li><a href="#workflow">Workflow</a></li>
-      <li><a href="#commands">Commands</a></li>
-      <li><a href="#capabilities">Capabilities</a></li>
-      <li><a href="#registries">Registries</a></li>
-      <li><a href="commands.html">Commands&nbsp;↗</a></li>
-      <li><a href="roadmap.html">Roadmap&nbsp;↗</a></li>
-      <li><a href="design-roadmap.html">Design&nbsp;↗</a></li>
-      <li><a href="mcp-hub.html">MCP&nbsp;Hub&nbsp;↗</a></li>
-      <li><a href="demo.html">Try the search&nbsp;↗</a></li>
-      <li><a href="chat.html">How chat works&nbsp;↗</a></li>
-      <li><a href="eval.html">Evaluation&nbsp;↗</a></li>
-      <li><a href="adapters.html">Adapters&nbsp;↗</a></li>
-      <li><a href="carousel.html">Carousel</a></li>
-      <li><a href="https://jonnyeclectic.github.io/portfolio/">Portfolio&nbsp;↗</a></li>
+      <li><a aria-current="page" href="#top">Guide</a></li>
+      <li><a href="commands.html">Commands</a></li>
+      <li><a href="demo.html">Try the search</a></li>
+      <li><a href="chat.html">How chat works</a></li>
+      <li><a href="eval.html">Evaluation</a></li>
+      <li><a href="adapters.html">Adapters</a></li>
+      <li><a href="mcp-hub.html">MCP&nbsp;Hub</a></li>
+      <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
       <li><a class="cta" href="#start">Get started</a></li>
     </ul>
   </div>
@@ -425,6 +446,15 @@
       <div class="stat reveal"><b>3</b><span>AI agents supported</span></div>
     </div>
   </div>
+    <nav class="jump" aria-label="Sections on this page">
+      <span class="lab" aria-hidden="true">Jump to</span>
+      <a href="#what">What it is</a>
+      <a href="#how">How it works</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#commands">Commands</a>
+      <a href="#capabilities">Capabilities</a>
+      <a href="#registries">Registries</a>
+    </nav>
 
   <!-- ================= CONCEPT ================= -->
   <section id="what">
@@ -780,13 +810,15 @@ pipx upgrade boost-skill-cli        <span class="cm"># or: pip install --upgrade
       <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
       <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
       <nav class="foot-links" aria-label="Documentation">
-        <a href="#top" aria-current="page">Guide</a>
+        <a aria-current="page" href="#top">Guide</a>
         <a href="commands.html">Commands</a>
-        <a href="roadmap.html">Roadmap</a>
-        <a href="design-roadmap.html">Design</a>
+        <a href="demo.html">Try the search</a>
+        <a href="chat.html">How chat works</a>
         <a href="mcp-hub.html">MCP Hub</a>
         <a href="eval.html">Evaluation</a>
         <a href="adapters.html">Adapters</a>
+        <a href="roadmap.html">Roadmap</a>
+        <a href="design-roadmap.html">Design</a>
         <a href="carousel.html">Carousel</a>
       </nav>
       <p class="foot-legal">
