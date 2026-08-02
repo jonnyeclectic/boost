@@ -6698,8 +6698,9 @@ the verdict.</p></details>
       </article>
 
       <article class="cap rcard" id="roadmap-perf-budget-has-no-local-guard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Performance</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Performance</span></div>
         <h3>The Lighthouse budget passes on noise, not on margin</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The roadmap page has not been under its performance budget. It has been winning a coin toss.</b>
 Pulled from <code>main</code>'s own Lighthouse artifact, <code>roadmap.html</code> scores
 <b>0.810, 0.840 and 0.850</b> across the three runs of a single job, against a
@@ -6739,7 +6740,38 @@ genuinely faster, not on resampling luck.
 <b>Still open.</b> No local check predicts this &mdash; neither laid-out text nor prose volume moved
 the score, so the cheap proxy is not obvious, and <code>lighthouse</code> remains non-required, which
 is why two of three failing runs on <code>main</code> went unnoticed. The page itself is unfixed:
-0.84 is a board of 200 cards and 500&nbsp;KB of markup, and it only grows.</p>
+0.84 is a board of 200 cards and 500&nbsp;KB of markup, and it only grows.
+
+<b>What shipped, and what it deliberately does not claim.</b>
+<code>scripts/page_budget.py</code> measures every <code>docs/*.html</code> page's markup bytes,
+element count and nesting depth, and fails a ceiling. It runs in <code>make lint</code> and in CI's
+<code>lint</code> job &mdash; a <em>required</em> context &mdash; so the signal is enforceable,
+which is the half of this card that was actionable. It is pure stdlib and deterministic, because the
+thing that made the Lighthouse signal useless was needing a browser to see it.
+
+<b>It is not a Lighthouse predictor, and saying so would be inventing a correlation this card
+already measured away.</b> Cutting laid-out body text 33% moved the score by <b>0.00</b>; trimming
+3,066 characters of prose moved it by <b>0.00</b>. What the budget bounds is the thing this card's
+own last sentence names: the board <em>only grows</em>, one card at a time, each increment too small
+to argue with. The size is now printed on every run and the ceiling has to be raised on purpose.
+
+<b>Why element count leads.</b> It is the one dimension where the page is off the scale by the
+tool's own published standard rather than by inference: Lighthouse warns above <b>800</b> elements
+and fails above <b>1,400</b>, and <code>roadmap.html</code> carries <b>7,484</b> &mdash; 5&times; the
+failing threshold, and an order of magnitude past every other page here
+(<code>commands.html</code>, the next largest, is 1,512). Measured across the site:
+<code>roadmap.html 525,472&nbsp;B / 7,484 / depth&nbsp;10</code><br>
+<code>commands.html 86,026 / 1,512 / 8 &nbsp;·&nbsp; index.html 58,352 / 488 / 12</code><br>
+<code>mcp-hub.html 51,162 / 607 / 10 &nbsp;·&nbsp; design-roadmap.html 45,931 / 727 / 10</code>
+
+<b>The ceilings are loose on purpose.</b> One set just above today's measurement would fire on the
+next shipped card and be raised reflexively, which is worse than no check &mdash; it teaches people
+the number is noise. They are sized to catch roughly a doubling. A test enforces that discipline
+from the other side: if the board ever creeps past 80% of its ceiling, it fails and asks for the
+raise to be a decision rather than an emergency.
+
+<b>Still genuinely open.</b> The page is not faster. 0.84 is still a board of 200 cards, and nothing
+here changes that &mdash; only the odds that the next step change is noticed the day it lands.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>

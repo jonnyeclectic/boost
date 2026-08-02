@@ -179,6 +179,15 @@ jobs:
         # runs here rather than needing Node/Chrome; the axe-core sweep in
         # tests/visual covers what needs a live DOM.
         run: python scripts/a11y_check.py -v
+      # Page-weight budget. `lighthouse` is NOT a required check, which is how
+      # roadmap.html shipped two of three runs under its own perf floor on main
+      # without anyone noticing. This cannot replace it — measured, a 33% cut in
+      # laid-out body text moved that score by 0.00, so markup size is not a
+      # predictor — but it is required, deterministic and pure stdlib, and it
+      # turns "the board only grows" into a number printed on every run and a
+      # ceiling that has to be raised on purpose.
+      - name: page-weight budget (markup, DOM size, nesting)
+        run: python scripts/page_budget.py -v
       - name: golden set is regenerated
         # evals/golden_set.json is generated from evals/make_golden.py's query
         # table and validated against the generated corpus, so a judgment can
