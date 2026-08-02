@@ -81,7 +81,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
-TAPS = ROOT / "tests" / "eval" / "taps.txt"
+DEFAULT_TAPS = ROOT / "tests" / "eval" / "taps.txt"
+#: The Tier 1b scale corpus — the required rows plus distractors. Scheduled,
+#: never required; see .github/workflows/eval-scale.yml.
+SCALE_TAPS = ROOT / "tests" / "eval" / "taps-scale.txt"
 
 _SHA = re.compile(r"[0-9a-f]{40}")
 
@@ -149,19 +152,19 @@ def parse_taps(text: str) -> List[Row]:
         sha = parts[1]
         if not _SHA.fullmatch(sha):
             raise SystemExit(
-                "tests/eval/taps.txt: %s is pinned to %r, which is not a "
+                "tap list: %s is pinned to %r, which is not a "
                 "40-character commit SHA" % (repo, sha))
         if len(parts) == 2:
             rows.append((repo, sha, None))
             continue
         if len(parts) > 3:
             raise SystemExit(
-                "tests/eval/taps.txt: %s has %d fields, expected at most 3 "
+                "tap list: %s has %d fields, expected at most 3 "
                 "(repo, sha, entry count)" % (repo, len(parts)))
         count = parts[2]
         if not count.isdigit():
             raise SystemExit(
-                "tests/eval/taps.txt: %s records %r entries, which is not a "
+                "tap list: %s records %r entries, which is not a "
                 "non-negative integer" % (repo, count))
         rows.append((repo, sha, int(count)))
     return rows
@@ -425,16 +428,16 @@ def _print_concentration(rows: Sequence[Row]) -> None:
     print(line)
 
 
-def _ensure(relock: bool = False) -> int:
-    rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+def _ensure(taps: Path, relock: bool = False) -> int:
+    rows = parse_taps(taps.read_text(encoding="utf-8"))
     counts, failures = _materialise(rows, verify=not relock)
     if failures:
         return _report_failures(failures, len(rows))
     if relock:
-        TAPS.write_text(relock_text(TAPS.read_text(encoding="utf-8"), counts),
+        taps.write_text(relock_text(taps.read_text(encoding="utf-8"), counts),
                         encoding="utf-8")
         print("relocked %d rows in tests/eval/taps.txt" % len(counts))
-        rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+        rows = parse_taps(taps.read_text(encoding="utf-8"))
     _print_concentration(rows)
     problem = check_concentration(rows)
     if problem:
@@ -443,7 +446,7 @@ def _ensure(relock: bool = False) -> int:
     return 0
 
 
-def _refresh(summary_path: Optional[str] = None) -> int:
+def _refresh(taps: Path, summary_path: Optional[str] = None) -> int:
     """Move every row to current upstream HEAD, re-measure, rewrite taps.txt.
 
     Pinning bought reproducibility with representativeness: the gate measures
@@ -461,7 +464,7 @@ def _refresh(summary_path: Optional[str] = None) -> int:
     sys.path.insert(0, str(ROOT))
     from boost_cli.core import catalog, gitutil, registry  # deferred: path shim
 
-    rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+    rows = parse_taps(taps.read_text(encoding="utf-8"))
     shas: Dict[str, str] = {}
     counts: Dict[str, int] = {}
     failures: List[CorpusError] = []
@@ -496,13 +499,13 @@ def _refresh(summary_path: Optional[str] = None) -> int:
                  "" if sha == old_sha else "   MOVED"))
     if failures:
         return _report_failures(failures, len(rows))
-    TAPS.write_text(relock_text(TAPS.read_text(encoding="utf-8"), counts, shas),
+    taps.write_text(relock_text(taps.read_text(encoding="utf-8"), counts, shas),
                     encoding="utf-8")
     summary = refresh_summary(rows, shas, counts)
     print("\n" + summary)
     if summary_path:
         Path(summary_path).write_text(summary + "\n", encoding="utf-8")
-    new_rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+    new_rows = parse_taps(taps.read_text(encoding="utf-8"))
     _print_concentration(new_rows)
     problem = check_concentration(new_rows)
     if problem:
@@ -514,9 +517,9 @@ def _refresh(summary_path: Optional[str] = None) -> int:
     return 0
 
 
-def _audit() -> int:
+def _audit(taps: Path) -> int:
     """Static checks over the shipped list — no network, no clones."""
-    rows = parse_taps(TAPS.read_text(encoding="utf-8"))
+    rows = parse_taps(taps.read_text(encoding="utf-8"))
     for repo, count, share in shares(rows):
         print("  %-44s %5d entries  %5.1f%%" % (repo, count, share * 100))
     _print_concentration(rows)
@@ -545,19 +548,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="static concentration/count checks, no network")
     p.add_argument("--list", action="store_true",
                    help="print the parsed rows and exit")
+    p.add_argument("--taps", metavar="PATH", default=str(DEFAULT_TAPS),
+                   help="corpus list to act on (default the required corpus; "
+                        "%s is the scale tier)" % SCALE_TAPS.name)
     args = p.parse_args(argv)
+    taps = Path(args.taps)
+    if not taps.is_file():
+        raise SystemExit("no such corpus list: %s" % taps)
     if args.list:
-        for repo, sha, count in parse_taps(TAPS.read_text(encoding="utf-8")):
+        for repo, sha, count in parse_taps(taps.read_text(encoding="utf-8")):
             print("%s %s %s" % (repo, sha or "", "" if count is None else count))
         return 0
     if args.audit:
-        return _audit()
+        return _audit(taps)
     if args.refresh:
-        return _refresh(args.summary_md)
+        return _refresh(taps, args.summary_md)
     if args.relock:
-        return _ensure(relock=True)
+        return _ensure(taps, relock=True)
     if args.ensure:
-        return _ensure()
+        return _ensure(taps)
     p.error("provide --ensure, --relock, --refresh, --audit or --list")
     return 2
 
