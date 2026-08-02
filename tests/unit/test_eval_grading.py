@@ -213,14 +213,16 @@ class TestTheWorksheetShowsWhatIsLeftToDecide:
                               HASHES)]
         assert m.exemplar_worksheet(rows, [A, B, C], HASHES) == []
 
-    def test_the_shipped_set_leaves_exactly_the_rows_it_documents(self):
-        # Guards the split: if a future edit pins one of the 22 or unpins one of
-        # the 28, this is the line that says so.
+    def test_the_shipped_set_has_nothing_left_to_decide(self):
+        # This used to guard a 28/22 split: 28 rows whose exemplar was a lookup
+        # were pinned, and 22 that needed a judgment were left open. The split
+        # is closed — the worksheet is what generated the candidates for those
+        # 22, and it should now come back empty for the shipped set.
         path = _ROOT / "tests" / "eval" / "golden-natural.jsonl"
         rows = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()
                 if ln.strip() and not ln.startswith("#")]
         assert len(rows) == 50
-        assert len([r for r in rows if r.get("exemplar")]) == 28
+        assert [r["query"] for r in rows if not r.get("exemplar")] == []
 
 
 class TestDedupeKeepsTheBestRank:
@@ -236,3 +238,98 @@ class TestDedupeKeepsTheBestRank:
              "exemplar": "owner/a::code-reviewer/SKILL.md"}, HASHES)
         keys = m.dedupe_keys([m.grade_key(row, e, HASHES) for e in (A, C, B)])
         assert len(keys) == 2
+
+
+class TestTheMigrationIsFinished:
+    """Every natural-language row now pins its exemplars, and must keep doing so.
+
+    The mechanism shipped in #412 with 28 of 50 rows migrated — the ones whose
+    exemplar was a lookup rather than a judgment. The remaining 22 were left
+    open deliberately, because choosing which of 13 `code-reviewer`s a question
+    refers to is a statement about intent. They are decided now, under a rule
+    stated in the file's own header, and this is the ratchet that stops a new
+    row arriving name-graded and quietly re-opening the hole.
+    """
+
+    _GOLDEN = _ROOT / "tests" / "eval" / "golden-natural.jsonl"
+
+    def _rows(self):
+        return [json.loads(ln) for ln in
+                self._GOLDEN.read_text(encoding="utf-8").splitlines()
+                if ln.strip() and not ln.lstrip().startswith("#")]
+
+    @pytest.mark.skipif(not _GOLDEN.exists(), reason="query set not reachable")
+    def test_every_row_pins_an_exemplar(self):
+        missing = [r["query"] for r in self._rows() if not r.get("exemplar")]
+        assert missing == [], (
+            "%d natural-language rows are still graded by name — run "
+            "`eval_retrieval.py --golden tests/eval/golden-natural.jsonl "
+            "--worksheet` for the candidates: %s" % (len(missing), missing[:3]))
+
+    @pytest.mark.skipif(not _GOLDEN.exists(), reason="query set not reachable")
+    def test_every_exemplar_is_well_formed(self):
+        # Resolvability needs a materialised corpus and is enforced at run time
+        # by prepare_row; the shape can be checked anywhere, so it is.
+        for row in self._rows():
+            spec = row["exemplar"]
+            specs = [spec] if isinstance(spec, str) else spec
+            assert specs, row["query"]
+            for one in specs:
+                assert "::" in one, (row["query"], one)
+                tap, path = one.split("::", 1)
+                assert "/" in tap and path, (row["query"], one)
+
+    @pytest.mark.skipif(not _GOLDEN.exists(), reason="query set not reachable")
+    def test_no_exemplar_is_a_localised_copy(self):
+        """The stated rule, enforced rather than trusted.
+
+        The queries are English. `affaan-m/ECC` ships `code-reviewer` and
+        `update-docs` in seven languages under `docs/<locale>/`, and a reader
+        who asked in English is not served by the Turkish one. Byte-identical
+        mirrors still count automatically — they are one content class — so
+        this excludes only genuine translations.
+        """
+        for row in self._rows():
+            spec = row["exemplar"]
+            for one in ([spec] if isinstance(spec, str) else spec):
+                assert "/docs/es/" not in one and "::docs/es/" not in one, one
+                assert "/docs/ja-JP/" not in one and "::docs/ja-JP/" not in one, one
+                assert "::docs/zh-CN/" not in one and "::docs/zh-TW/" not in one, one
+                assert "::docs/ko-KR/" not in one and "::docs/pt-BR/" not in one, one
+                assert "::docs/tr/" not in one, one
+
+
+class TestASupersededBaselineIsDropped:
+    """A baseline key is `name@digest`, so an edited query set orphans the old one.
+
+    The digest can only recur if someone reverts the file byte for byte, so a
+    superseded entry is never read again — it is dead weight that accumulates
+    one row per edit. Pinning the 22 rows produced the first one, so the save
+    path now prunes.
+    """
+
+    def test_an_older_digest_of_the_same_set_is_stale(self):
+        m = _load()
+        keys = ["golden.jsonl@aaa", "golden-natural.jsonl@old",
+                "golden-natural.jsonl@new"]
+        assert m.stale_keys(keys, "golden-natural.jsonl@new") == [
+            "golden-natural.jsonl@old"]
+
+    def test_other_query_sets_are_left_alone(self):
+        # The whole point of the keyed layout: one set's re-baseline must not
+        # touch another's history.
+        m = _load()
+        keys = ["golden.jsonl@aaa", "golden-natural.jsonl@old"]
+        assert "golden.jsonl@aaa" not in m.stale_keys(
+            keys, "golden-natural.jsonl@new")
+
+    def test_the_key_being_written_is_never_stale(self):
+        m = _load()
+        assert m.stale_keys(["a.jsonl@x"], "a.jsonl@x") == []
+
+    def test_a_name_containing_an_at_sign_is_split_on_the_last_one(self):
+        # Splitting on the first `@` would read "odd@name.jsonl@new" as the set
+        # "odd", quietly matching — and deleting — an unrelated baseline.
+        m = _load()
+        keys = ["odd@name.jsonl@old", "name.jsonl@old"]
+        assert m.stale_keys(keys, "odd@name.jsonl@new") == ["odd@name.jsonl@old"]
