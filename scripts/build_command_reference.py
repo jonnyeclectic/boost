@@ -282,14 +282,25 @@ _PAGE = """<!DOCTYPE html>
   .args-h { font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: .14em;
             text-transform: uppercase; color: var(--text-2); margin: 12px 0 6px; }
   .args { display: grid; gap: 6px; }
-  .arg { display: grid; grid-template-columns: minmax(120px, 34%%) 1fr; gap: 14px;
-         align-items: baseline; }
-  .arg code { color: var(--cyan); font-size: 12.5px; }
-  .arg span { color: var(--text); font-size: 13.5px; }
+  /* minmax(0, 1fr), not 1fr: a grid track defaults to min-width:auto, so it
+     refuses to shrink below its widest unbreakable word. argparse renders a
+     choice list as one comma-joined brace token with no spaces in it, and the
+     longest here is 68 characters —
+     {install,init,startup,orient,uninstall,disable,enable,doctor,status} —
+     which offers the line breaker nothing to break on. That one cell sized the
+     track and gave the whole page 241px of horizontal scroll at 320px wide,
+     171px at 390px and 61px at 768px. The pairing with overflow-wrap below is
+     deliberate: the track may now shrink, so the token has to be allowed to
+     break mid-word, or it simply overflows its own cell instead of the page.
+     pre.syn already carries the same pair; .arg was the one that missed it. */
+  .arg { display: grid; grid-template-columns: minmax(120px, 34%%) minmax(0, 1fr);
+         gap: 14px; align-items: baseline; }
+  .arg code { color: var(--cyan); font-size: 12.5px; overflow-wrap: anywhere; }
+  .arg span { color: var(--text); font-size: 13.5px; overflow-wrap: anywhere; }
   @media (max-width: 760px) {
     .wrap { flex-direction: column; } aside { width: auto; height: auto; position: static;
     border-right: none; border-bottom: 1px solid var(--line); }
-    .arg { grid-template-columns: 1fr; gap: 2px; }
+    .arg { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   }
 
   /* The footer used to be a second copy of style/boost.css's footer rules,
