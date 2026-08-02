@@ -33,7 +33,7 @@ it is never load-bearing for correctness.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, NamedTuple, Optional, Sequence, Tuple
+from typing import Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 
 from . import ai, catalog, faithfulness, rag
 
@@ -161,19 +161,28 @@ def _one_line(text: str) -> str:
     return " ".join(text.replace("\\n", " ").replace("\\t", " ").split())
 
 
-def _describe(entry: dict) -> str:
+def _describe(entry: dict, ref: Optional[str] = None) -> str:
     """One catalogue entry as a line of prompt/answer text.
 
     Truncation is marked with an ellipsis rather than silent: the reader needs
     to know there is more to the description before deciding, and `boost info
     <name>` is where the full text lives.
+
+    ``ref`` replaces the bare name with something that resolves — see
+    :func:`citations`. It is passed on the *answer* path and deliberately NOT
+    on the prompt path: the system prompt tells the model to name skills
+    "exactly as given", and :func:`ungrounded_names` grades its reply against
+    the entries' bare names, so handing it qualified names would make a
+    correctly-quoted recommendation look invented and throw the answer away.
     """
     desc = _one_line(entry.get("description") or "")
     if len(desc) > DESC_CHARS:
         # Cut on a word boundary so the tail is not a severed token.
         desc = desc[:DESC_CHARS].rsplit(" ", 1)[0] + " …"
-    return "%s (%s) — %s" % (entry.get("name", "?"), entry.get("tap", "?"),
-                             desc or "no description")
+    name = str(entry.get("name", "?"))
+    # A qualified ref already names the tap, so repeating it is noise.
+    head = ref if ref and ref != name else "%s (%s)" % (name, entry.get("tap", "?"))
+    return "%s — %s" % (head, desc or "no description")
 
 
 def source_text(entries: Sequence[dict]) -> str:
@@ -264,7 +273,13 @@ def _extractive(question: str, entries: Sequence[dict]) -> str:
                 "--defaults` for more registries, or rephrase with the concrete "
                 "terms you would expect in the skill's own description.")
     lines = ["Closest matches in your tapped catalogue:"]
-    lines.extend("  " + _describe(entry) for entry in entries)
+    # Numbered to match what the AI path is shown, so the two answer shapes
+    # refer to the same rows the same way; and named by `ref`, because this
+    # block's whole closing instruction is to go run a command with one of
+    # these names, and a name several taps carry is not one.
+    lines.extend("  %d. %s" % (n, _describe(entry, ref=cite["ref"]))
+                 for n, (entry, cite)
+                 in enumerate(zip(entries, citations(entries)), 1))
     lines.extend(("", "Run `boost info <name>` for the full skill, or "
                       "`boost install <name>` to add it."))
     return "\n".join(lines)
@@ -303,15 +318,60 @@ def answer(question: str, history: Sequence[Turn] = (),
     return Reply(reply, entries.copy(), engine, "ai", True)
 
 
+def multi_tap_names(names: Set[str]) -> Set[str]:
+    """Which of ``names`` more than one tap carries.
+
+    This is exactly the condition :func:`catalog.resolve_one` refuses on, so it
+    is the condition under which a bare name is not a usable argument. A name
+    repeated *inside* one tap is deliberately not included: resolve_one picks a
+    canonical row for that case, so qualifying it would add noise without
+    fixing anything.
+
+    One pass for the whole citation block rather than a :func:`catalog.find`
+    per name — k scans of a catalogue that runs to tens of thousands of rows on
+    a real install. Measured, that is a small win rather than a decisive one
+    (``load_tap`` is mtime-cached in-process, so a repeat ``all_entries`` is
+    0.3 ms over 10,152 entries and this whole function is ~1 ms); the reason to
+    prefer it is that "which names are ambiguous" is one question about the
+    catalogue, not k independent ones.
+    """
+    if not names:
+        return set()
+    seen: Dict[str, Set[str]] = {}
+    for e in catalog.all_entries():
+        name = str(e.get("name", ""))
+        if name in names:
+            seen.setdefault(name, set()).add(str(e.get("tap", "")))
+    return {name for name, taps in seen.items() if len(taps) > 1}
+
+
 def citations(entries: Sequence[dict]) -> List[Dict[str, str]]:
-    """Name/tap pairs for the entries an answer drew on.
+    """Name/tap pairs for the entries an answer drew on, each with a usable ref.
 
     Shown under every answer so a claim can be checked against the source, which
     matters more here than in an ordinary chatbot: the next step is installing
     code that will run inside the user's agent.
+
+    ``ref`` is the invariant worth keeping: **whatever is in it can be pasted
+    into `boost info` or `boost install` and will resolve.** For most skills
+    that is just the name. For a name several taps carry it cannot be — the
+    answer would be recommending something whose follow-up command errors with
+    an ambiguity — so ``ref`` carries the ``owner/repo:name`` form instead.
+    That form is only worth emitting because ``info`` now accepts it; before
+    that it would have traded one dead end for another.
     """
-    return [{"name": str(e.get("name", "")), "tap": str(e.get("tap", "")),
-             "kind": str(e.get("kind", "skill"))} for e in entries]
+    ambiguous = multi_tap_names({str(e.get("name", "")) for e in entries})
+    out = []
+    for e in entries:
+        name = str(e.get("name", ""))
+        tap = str(e.get("tap", ""))
+        out.append({
+            "name": name,
+            "tap": tap,
+            "kind": str(e.get("kind", "skill")),
+            "ref": "%s:%s" % (tap, name) if name in ambiguous and tap else name,
+        })
+    return out
 
 
 def suggest_followups(entries: Sequence[dict]) -> List[str]:

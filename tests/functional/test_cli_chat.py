@@ -31,6 +31,15 @@ class TestOneShot:
         r = boost("chat", "brainstorming ideas")
         assert "sources" in r.out
 
+    def test_the_source_list_is_numbered(self, boost, tapped):
+        # The model is handed a list numbered from 1 and told to answer from
+        # "the numbered skills", so it writes "(#3)". Rendering the same list
+        # unnumbered made every such citation point at nothing, and left the
+        # reader counting rows to decode an answer written to be scanned.
+        r = boost("chat", "brainstorming ideas")
+        body = r.out.split("sources ·", 1)[1]
+        assert "1. " in body, "source block is unnumbered — citations cannot resolve"
+
     def test_no_sources_suppresses_them(self, boost, tapped):
         r = boost("chat", "brainstorming ideas", "--no-sources")
         assert "sources ·" not in r.out
