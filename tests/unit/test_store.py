@@ -319,7 +319,7 @@ class TestInstallFromPath:
         return src
 
     # ── gates: install_from_path used to enforce NONE of these, so every local
-    # path in (import, create --install, migrate, distill/infer/absorb --install)
+    # path in (import, create --install, distill/infer/absorb --install)
     # was a way around the blocklist, pin_only, max_skills and denied_capabilities.
 
     def test_refuses_a_pinned_skill(self, sandbox, tmp_path):

@@ -56,7 +56,6 @@ COMMANDS = [
     ("reinstall",   "pkg", "pkg", "Reinstall a skill or all skills (force)"),
     ("bundle",      "pkg", "pkg", "Export/install skill sets via a Boostfile"),
     ("import",      "pkg", "pkg", "Import skills from a GitHub URL or local path"),
-    ("migrate",     "pkg", "pkg", "Migrate skills between agents or from Skills CLI"),
     ("pin",         "pkg", "pkg", "Pin a skill to its current version"),
     ("unpin",       "pkg", "pkg", "Allow a pinned skill to update again"),
     ("snapshot",    "pkg", "pkg", "Save & restore whole skill environments"),
