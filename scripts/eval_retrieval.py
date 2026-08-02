@@ -52,7 +52,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 # Run from a source checkout without an install.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -433,6 +433,23 @@ def baseline_for(golden: Path) -> Optional[dict]:
     return None
 
 
+def stale_keys(keys: Iterable[str], fresh: str) -> List[str]:
+    """Keys for the same query set at a *different* digest, sorted.
+
+    A key is ``name@digest``, and the digest only changes when the file does.
+    So an old key can never be read again unless someone reverts the query set
+    byte for byte — it is dead weight that accumulates one entry per edit. This
+    is what decides which entries a save drops.
+
+    Matching is on the name half only. Splitting on the last ``@`` rather than
+    the first keeps a filename containing ``@`` from being mistaken for another
+    set and silently surviving forever.
+    """
+    name = fresh.rsplit("@", 1)[0]
+    return sorted(k for k in keys
+                  if k != fresh and k.rsplit("@", 1)[0] == name)
+
+
 def save_baseline(k: int, results: List[dict], golden: Path) -> None:
     """Pin this run's scores under its query set, leaving other sets alone."""
     payload = load_baseline() or {}
@@ -443,6 +460,11 @@ def save_baseline(k: int, results: List[dict], golden: Path) -> None:
         if payload.get("engines"):
             migrated[golden_key(DEFAULT_GOLDEN)] = payload
         payload = {"sets": migrated}
+    # Drop this set's superseded entries. Other sets are untouched — that
+    # separation is the whole point of the keyed layout.
+    for dead in stale_keys(payload["sets"], golden_key(golden)):
+        del payload["sets"][dead]
+        print("dropped superseded baseline %s" % dead)
     payload["sets"][golden_key(golden)] = {
         "k": k,
         "golden": golden.name,

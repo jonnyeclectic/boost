@@ -18,7 +18,7 @@
         }
       }
     },
-    "golden-natural.jsonl@c9f5b0153592": {
+    "golden-natural.jsonl@0d91b0cd8e41": {
       "k": 10,
       "golden": "golden-natural.jsonl",
       "engines": {
@@ -29,10 +29,10 @@
           "nDCG@k": 0.04244796319302442
         },
         "BM25 full-content": {
-          "recall@k": 0.35,
+          "recall@k": 0.36,
           "hit@1": 0.16,
           "MRR": 0.2447192741990893,
-          "nDCG@k": 0.2591292012176286
+          "nDCG@k": 0.26401074014436693
         }
       }
     }
