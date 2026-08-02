@@ -12,7 +12,11 @@
   /* Page-specific layout — built only on boost.css :root tokens so it stays on-palette. */
   main { padding-bottom: 40px; }
   section { padding: 92px 0 8px; }
-  .hero { padding: 84px 0 8px; }
+  /* padding-block, not the four-value shorthand: `padding: 84px 0 8px`
+     also sets padding-inline to 0, and this block is linked AFTER
+     boost.css, so it silently stripped .wrap's 24px gutter and ran the
+     hero edge-to-edge on anything narrower than the 1120px column. */
+  .hero { padding-block: 84px 8px; }
   .hero h1 { font-size: clamp(38px, 6vw, 66px); font-weight: 800;
              letter-spacing: -.035em; line-height: 1.06; max-width: 900px;
              text-wrap: balance; margin-top: 24px; }

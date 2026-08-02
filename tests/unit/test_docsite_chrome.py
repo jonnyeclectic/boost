@@ -35,7 +35,7 @@ _INDEX = _DOCS / "index.html"
 # all the others — the standing "no new page ships unlinked" rule.
 _PAGES = (
     "index.html", "commands.html", "roadmap.html", "design-roadmap.html",
-    "mcp-hub.html", "eval.html", "adapters.html", "carousel.html",
+    "mcp-hub.html", "eval.html", "adapters.html", "carousel.html", "demo.html",
 )
 # commands.html is a sidebar reference, not a top-nav page; it links the rest
 # from its footer and its sidebar "back to overview".
