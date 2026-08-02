@@ -7,7 +7,7 @@ category: Eval · Correctness
 complexity: M
 impact: High
 wow: 4
-note: 28 of 50 rows pinned mechanically with zero change to any number; 22 are genuine judgment calls
+note: all 50 rows pinned; the 22 judgment calls were measured to move the published number by zero
 order: 81
 owner: loop/golden-exemplars-22
 pr: 434
