@@ -547,6 +547,60 @@ class TestCompletions:
         monkeypatch.setenv("SHELL", "/bin/weirdsh")
         assert "_boost_complete" in boost("completions").out
 
+    def test_eval_flag_prints_the_eval_safe_variant(self, boost, sandbox):
+        r = boost("completions", "zsh", "--eval")
+        assert r.out.rstrip().endswith("compdef _boost boost")
+        assert '_boost "$@"' not in r.out
+        assert "boost __complete" in r.out
+
+
+class TestCompletionsInstall:
+    """`boost completions --install` — the one-shot alternative to the
+    copy-paste-into-your-rc-file instructions `INSTALL_HINT` used to be.
+    """
+
+    def test_explicit_shell_wires_the_matching_rc_file(self, boost, sandbox):
+        r = boost("completions", "bash", "--install")
+        assert "wired boost completions into ~/.bashrc" in r.out
+        assert "restart your shell" in r.out
+        text = (sandbox / ".bashrc").read_text(encoding="utf-8")
+        assert 'eval "$(boost completions bash --eval)"' in text
+
+    def test_auto_detects_shell_from_env(self, boost, sandbox, monkeypatch):
+        monkeypatch.setenv("SHELL", "/usr/local/bin/zsh")
+        boost("completions", "--install")
+        assert (sandbox / ".zshrc").exists()
+        assert not (sandbox / ".bashrc").exists()
+
+    def test_running_install_twice_does_not_duplicate_the_block(self, boost,
+                                                                 sandbox):
+        boost("completions", "bash", "--install")
+        boost("completions", "bash", "--install")
+        text = (sandbox / ".bashrc").read_text(encoding="utf-8")
+        assert text.count("# >>> boost completions >>>") == 1
+
+    def test_preserves_the_users_existing_rc_content(self, boost, sandbox):
+        (sandbox / ".bashrc").write_text("export EDITOR=vim\n", encoding="utf-8")
+        boost("completions", "bash", "--install")
+        text = (sandbox / ".bashrc").read_text(encoding="utf-8")
+        assert text.startswith("export EDITOR=vim\n")
+
+    def test_uninstall_removes_exactly_what_install_added(self, boost, sandbox):
+        (sandbox / ".bashrc").write_text("export EDITOR=vim\n", encoding="utf-8")
+        boost("completions", "bash", "--install")
+        r = boost("completions", "bash", "--uninstall")
+        assert "removed boost completions from ~/.bashrc" in r.out
+        assert (sandbox / ".bashrc").read_text(encoding="utf-8") == "export EDITOR=vim\n"
+
+    def test_fish_has_no_one_shot_install_yet(self, boost, sandbox):
+        r = boost("completions", "fish", "--install", expect=1)
+        assert "no one-shot install for fish yet" in r.err
+        assert "boost completions fish" in r.err
+
+    def test_install_and_uninstall_are_mutually_exclusive(self, boost, sandbox):
+        r = boost("completions", "bash", "--install", "--uninstall", expect=2)
+        assert "not allowed with argument" in r.err
+
 
 class TestHiddenCompleter:
     def test_it_prints_one_candidate_per_line(self, boost, sandbox):
