@@ -78,6 +78,7 @@ lint:
 	$(PY) scripts/build_command_reference.py --check
 	$(PY) scripts/lock_toolchain.py --check
 	$(PY) scripts/a11y_check.py
+	$(PY) scripts/page_budget.py
 	$(PY) scripts/import_budget.py
 	$(PY) scripts/perf_gate.py
 	$(PY) scripts/check_anchors.py
