@@ -120,6 +120,37 @@ def test_every_design_item_has_required_fields():
             "%s: bad impact %r" % (item["_file"], item.get("impact")))
 
 
+@pytest.mark.skipif(not _SCRIPT.exists(), reason="repo-root files not reachable")
+def test_the_design_board_can_record_a_measured_no():
+    """A design idea that was investigated and rejected needs somewhere to land.
+
+    The code board grew a `declined` pill for exactly this: without one, a
+    refuted item sits as `proposed` forever, reads as backlog, and the next
+    loop scanning for work re-opens the same question. The design board had no
+    such status, so `render_design_card` rejected it outright.
+    """
+    builder = _load_builder()
+    assert builder.DESIGN_STATUS["declined"] == "Declined"
+    card = builder.render_design_card({
+        "_file": "x.md", "id": "BOOST-DX", "track": "motion", "status": "declined",
+        "impact": "med", "wow": 3, "title": "t", "body": "b"})
+    assert 'class="rstatus declined"' in card
+    assert ">Declined<" in card
+
+
+@pytest.mark.skipif(not _SCRIPT.exists(), reason="repo-root files not reachable")
+def test_the_declined_pill_is_not_struck_through():
+    """Strikethrough is this board's "shipped"; a decline is a different answer.
+
+    Styling it like `.done` would say the work happened. Both are muted, and
+    only one is crossed out.
+    """
+    css = (_ROOT / "docs" / "design-roadmap.html").read_text(encoding="utf-8")
+    rule = [ln for ln in css.splitlines() if ".rstatus.declined" in ln]
+    assert rule, "no .rstatus.declined rule — the pill would render unstyled"
+    assert "line-through" not in rule[0]
+
+
 # ── the diagnosis itself ─────────────────────────────────────────────────────
 #
 # The failure above lands on lint and on all nine test legs simultaneously, for

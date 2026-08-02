@@ -72,6 +72,13 @@ DESIGN_STATUS = {
     "done": "Shipped",
     "progress": "In progress",
     "proposed": "Proposed",
+    # The code board has had a measured "no" since the declined pill was added;
+    # the design board did not, so a design idea that was investigated and
+    # rejected had nowhere to land. It sat as `proposed` forever and read as
+    # backlog, which is how the same refuted question gets re-opened. Muted and
+    # NOT struck through: a strikethrough is this board's "shipped", and a
+    # decline is a different answer, not a finished one.
+    "declined": "Declined",
 }
 IMPACT_LABEL = {"high": "High", "med": "Med", "low": "Low"}
 DESIGN_TRACKS = ["color", "layout", "motion", "commands", "system"]
