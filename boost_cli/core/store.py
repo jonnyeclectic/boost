@@ -914,7 +914,7 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
 
     Enforces the same pin, policy and capability gates as ``install``. It used
     to enforce none of them, so every local path in — ``import``, ``create
-    --install``, ``migrate``, ``distill/infer/absorb --install`` — was a way
+    --install``, ``distill/infer/absorb --install`` — was a way
     around a blocklist, ``pin_only``, ``max_skills`` and ``denied_capabilities``.
 
     Deliberately *not* adopted from ``install``: its "already installed" refusal.

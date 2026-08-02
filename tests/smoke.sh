@@ -173,7 +173,6 @@ update
 reinstall
 bundle
 import
-migrate
 pin
 unpin
 snapshot
