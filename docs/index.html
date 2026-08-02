@@ -15,48 +15,28 @@
      visible and then blink out as `.js .reveal` finally applied. -->
 <script>document.documentElement.classList.add("js")</script>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  @media (prefers-reduced-motion: reduce) {
-    html { scroll-behavior: auto; }
-    .reveal { transition: none !important; transform: none !important; opacity: 1 !important; }
-    body::before { animation: none !important; }
-  }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--sans);
-    font-size: 17px;
-    line-height: 1.6;
-    -webkit-font-smoothing: antialiased;
-  }
-  /* ambient aurora drift — slow, low, "alive but not distracting" */
-  body::before {
-    content: "";
-    position: fixed; inset: -25vmax; z-index: 0; pointer-events: none;
-    background:
-      radial-gradient(38vmax 38vmax at 12% 6%,  rgba(64,203,227,.20), transparent 60%),
-      radial-gradient(34vmax 34vmax at 90% 16%, rgba(204,158,255,.18), transparent 60%),
-      radial-gradient(30vmax 30vmax at 62% 104%, rgba(245,143,215,.14), transparent 62%);
-    filter: blur(34px) saturate(135%);
-    animation: aurora-drift 42s ease-in-out infinite;
-    will-change: transform;
-  }
-  /* faint tech grid, layered over the aurora and masked to the top */
-  body::after {
-    content: "";
-    position: fixed; inset: 0; z-index: 0; pointer-events: none;
-    background-image:
-      linear-gradient(rgba(255,255,255,.028) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,.028) 1px, transparent 1px);
-    background-size: 46px 46px;
-    -webkit-mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.3) 60%, rgba(0,0,0,.1) 100%);
-            mask-image: radial-gradient(1200px 800px at 30% 0%, #000 0%, rgba(0,0,0,.3) 60%, rgba(0,0,0,.1) 100%);
-  }
-  @keyframes aurora-drift {
-    0%,100% { transform: translate3d(0,0,0) scale(1); }
-    50%     { transform: translate3d(2.5vmax,-2vmax,0) scale(1.08); }
-  }
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; position: relative; z-index: 1; }
+  /* ---------- atmosphere, reset and .wrap: NOT declared here ----------
+     This page used to repaint all of it inline, and because the block is
+     linked after boost.css it won every tie. What that actually shipped was
+     the PREVIOUS generation of the Aurora background on the one page most
+     people see first:
+
+       * three blurred blobs, anchored top-left, top-right and bottom-centre.
+         The shared sheet moved to five wider, fainter ones precisely because
+         three "left a visible dead band" down the long middle of a docs page —
+         and the guide is the longest page on the site, so the band was most of
+         it. That band is the "background is just black" report.
+       * a 46px tech grid, which the shared sheet replaced with film grain
+         because the lattice drew hard lines through card edges and headline
+         counters.
+       * `filter: blur(34px)` over a viewport-sized fixed layer, re-rastered on
+         every frame of a 42s animation for no visual gain — a radial gradient
+         has no edge to soften.
+
+     Every other page, commands.html included, simply inherits the shared
+     atmosphere and looks right. So does this one now. The reset, `body` and
+     `.wrap` rules that sat here were byte-equivalent duplicates of the sheet's
+     and went with them. */
   /* No :focus-visible override here. The shared sheet paints a white 3px ring
      precisely because a cyan one is invisible around the cyan .btn-grad and the
      cyan pills this page is full of — a hue-independent ring is the only one

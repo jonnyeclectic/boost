@@ -8,7 +8,29 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2340cbe3' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="../style/boost.css">
 <style>
+  /* Page-specific layout only — the atmosphere, chrome and surfaces all come
+     from style/boost.css, like every other page on the site. */
+  main { padding-bottom: 40px; }
+  section { padding: 92px 0 8px; }
+  /* padding-block, not the four-value shorthand: `padding: 84px 0 8px` also
+     zeroes padding-inline, and this block is linked AFTER boost.css, so it
+     would strip .wrap's 24px gutter and run the hero edge-to-edge. */
+  .hero { padding-block: 84px 8px; }
+  .hero h1 { font-size: clamp(38px, 6vw, 66px); font-weight: 800;
+             letter-spacing: -.035em; line-height: 1.06; max-width: 900px;
+             text-wrap: balance; margin-top: 24px; }
+  .hero p.lede { max-width: 700px; margin-top: 24px; font-size: 18.5px; color: var(--text-2); }
+  .hero p.lede b { color: var(--text); font-weight: 650; }
   .crumbs { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); margin-bottom: 4px; }
+  .crumbs a { color: var(--sky); text-decoration: underline;
+              text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  .prose { max-width: 720px; margin: 30px auto 0; color: var(--text-2); font-size: 15.5px; }
+  .prose p { margin-top: 16px; }
+  .prose b { color: var(--text); }
+  .prose code { font-family: var(--mono); font-size: .86em; color: var(--sky);
+                background: rgb(64 203 227 / 9%); padding: 1px 6px; border-radius: 6px; }
+  .prose a { color: var(--sky); text-decoration: underline;
+             text-underline-offset: 2px; text-decoration-thickness: 1px; }
   .flow { display: grid; gap: 10px; margin: 28px 0; }
   .step { display: grid; grid-template-columns: 30px 1fr; gap: 14px; align-items: start;
           padding: 14px 16px; background: var(--panel); border: 1px solid var(--line);
@@ -25,15 +47,36 @@
 </style>
 </head>
 <body>
-<a class="skip" href="#main">Skip to content</a>
-<main id="main">
-<section>
-  <div class="wrap">
-    <p class="crumbs"><a href="index.html">boost</a> / chat</p>
-    <h1>How <code>chat</code> works</h1>
+<a class="skip" href="#top">Skip to content</a>
+
+<header>
+  <div class="wrap site-nav">
+    <a class="logo" href="index.html"><b>boost</b><span>Chat</span></a>
+    <ul>
+      <li><a href="index.html">Guide</a></li>
+      <li><a href="commands.html">Commands</a></li>
+      <li><a href="demo.html">Try the search</a></li>
+      <li><a aria-current="page" href="#top">How chat works</a></li>
+      <li><a href="eval.html">Evaluation</a></li>
+      <li><a href="adapters.html">Adapters</a></li>
+      <li><a href="mcp-hub.html">MCP&nbsp;Hub</a></li>
+      <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap hero">
+    <p class="crumbs"><a href="index.html">boost</a> / docs / how chat works</p>
+    <span class="badge">Grounded answers · retrieval-first</span>
+    <h1>A retrieval system <span class="grad-text">that happens to speak</span>.</h1>
     <p class="lede">Ask about skills in plain language. Every answer is assembled from what
       retrieval actually returned — and an answer that names a skill the catalogue does not
-      contain is thrown away rather than shown.</p>
+      contain is <b>thrown away rather than shown</b>.</p>
+  </div>
+
+<section>
+  <div class="wrap">
 
     <pre class="sample"><b>$ boost chat "how do I review a diff for security problems?"</b>
 
@@ -138,6 +181,32 @@ boost chat -k 3 --no-sources "review my diff"</pre>
   </div>
 </section>
 </main>
+
+<footer>
+  <div class="wrap">
+    <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.9+ and <code>git</code></p>
+    <nav class="foot-links" aria-label="Documentation">
+      <a href="index.html">Guide</a>
+      <a href="commands.html">Commands</a>
+      <a href="demo.html">Try the search</a>
+      <a aria-current="page" href="#top">How chat works</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a href="eval.html">Evaluation</a>
+      <a href="adapters.html">Adapters</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="design-roadmap.html">Design</a>
+      <a href="carousel.html">Carousel</a>
+    </nav>
+    <p class="foot-legal">
+      <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+      <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+      <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+      Released under the GPL-3.0 license
+    </p>
+  </div>
+</footer>
+
 <script src="../style/boost.js" defer></script>
 </body>
 </html>
