@@ -10,7 +10,7 @@ wow: 4
 note: 7x not 96x — but all four floors FAIL on a real install, while the engine ranking holds
 order: 80
 owner: loop/eval-scale-tier
-pr:
+pr: 436
 title: The eval gate would not pass on the catalogue its own users have
 ---
 <b>The required <code>eval</code> gate measures a catalogue almost nobody has.</b>
