@@ -98,7 +98,7 @@
   <aside>
     <div class="brand"><b>✦ boost</b><span>commands</span></div>
     <a class="home" href="index.html">← back to overview</a>
-    <input id="q" type="search" placeholder="Filter 79 commands…" autocomplete="off" aria-label="Filter commands">
+    <input id="q" type="search" placeholder="Filter 78 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">install</a>
@@ -108,7 +108,6 @@
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill or all skills (force)  --all name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  {dump,install} file">bundle</a>
       <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">import</a>
-      <a class="cmd-link" href="#cmd-migrate" data-search="migrate migrate skills between agents or from skills cli  --from agent --to agent --from-skills-cli --path dir">migrate</a>
       <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill to its current version  --commit name">pin</a>
       <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill to update again  name">unpin</a>
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json {save,list,restore} label|id">snapshot</a>
@@ -206,7 +205,7 @@
   </aside>
   <main id="top">
     <h1>boost <b>command reference</b></h1>
-    <p class="lead">All <b>79</b> commands, generated from the CLI itself —
+    <p class="lead">All <b>78</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
       <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">
@@ -303,18 +302,6 @@
           <div class="arg"><code>--name N</code><span>skill to pick when several are found (or a rename)</span></div>
           <div class="arg"><code>--all</code><span>import every skill found</span></div>
           <div class="arg"><code>--agent A</code><span>link only into this agent (repeatable)</span></div>
-        </div>
-      </section>
-      <section class="cmd" id="cmd-migrate" data-search="migrate migrate skills between agents or from skills cli  --from agent --to agent --from-skills-cli --path dir">
-        <h3><span class="cname">migrate</span><span class="gtag">pkg</span></h3>
-        <p class="summary">Migrate skills between agents or from Skills CLI</p>
-        <pre class="syn">boost migrate [--from AGENT] [--to AGENT] [--from-skills-cli] [--path DIR]</pre>
-        <div class="args-h">Options</div>
-        <div class="args">
-          <div class="arg"><code>--from AGENT</code><span>agent migrating away from</span></div>
-          <div class="arg"><code>--to AGENT</code><span>agent to link every installed skill into</span></div>
-          <div class="arg"><code>--from-skills-cli</code><span>import skills installed by the Skills CLI</span></div>
-          <div class="arg"><code>--path DIR</code><span>Skills CLI directory (default ~/.skills)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-pin" data-search="pin pin a skill to its current version  --commit name">
