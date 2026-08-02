@@ -19,6 +19,7 @@ from ..core import (
     adapters,
     agents,
     catalog,
+    complete,
     config,
     frontmatter,
     gitutil,
@@ -698,6 +699,9 @@ def cmd_update(argv: List[str]) -> int:
     for tname, summary in results.items():
         catalog.rebuild_tap(registry.get(tname))
         out.ok("%s: %s" % (tname, summary))
+    # A pulled tap can add, drop, or rename catalogue entries, so the
+    # completion name cache must not survive an update unrefreshed.
+    complete.refresh_names()
     journal.log("update", args.tap or "all")
     if args.taps_only:
         return 0
@@ -919,6 +923,8 @@ def _bundle_install(file: Optional[str]) -> int:
         else:
             out.warn("line %d: unrecognised: %s" % (lineno, line))
             failed += 1
+    if taps_added:
+        complete.refresh_names()
     journal.log("bundle-install", label, taps=taps_added, skills=installed_n)
     summary = "Installed %s" % _plural(installed_n, "skill")
     if taps_added:

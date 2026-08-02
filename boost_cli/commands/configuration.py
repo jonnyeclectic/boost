@@ -531,20 +531,42 @@ def _sq(s: str) -> str:
 
 
 def cmd_completions(argv) -> int:
-    """boost completions [bash|zsh|fish]"""
+    """boost completions [bash|zsh|fish] [--install|--uninstall] [--eval]"""
     p = cliparse.parser(
         prog="boost completions",
         description="Generate shell tab-completion scripts")
     p.add_argument("shell", nargs="?", choices=("bash", "zsh", "fish"),
                    default=None, help="target shell (default: from $SHELL)")
+    p.add_argument("--eval", action="store_true",
+                   help="print the variant safe to `eval` directly "
+                        "(what --install wires up)")
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("--install", action="store_true",
+                       help="wire completions into the shell's rc file "
+                            "(bash/zsh — one-shot, no manual editing)")
+    group.add_argument("--uninstall", action="store_true",
+                       help="remove what --install wired up")
     args = p.parse_args(argv)
 
-    shell = args.shell or Path(os.environ.get("SHELL", "")).name
-    if shell not in ("bash", "zsh", "fish"):
-        shell = "bash"
+    detected = args.shell or Path(os.environ.get("SHELL", "")).name
+
+    if args.install or args.uninstall:
+        rc = (complete.install if args.install else complete.uninstall)(detected)
+        out.ok("%s boost completions %s %s"
+               % ("wired" if args.install else "removed",
+                  "into" if args.install else "from", _tilde(rc)))
+        if args.install:
+            out.dim("  restart your shell (or run `exec %s`) to pick it up"
+                    % detected)
+        return 0
+
+    shell = detected if detected in ("bash", "zsh", "fish") else "bash"
     # The script is a thin shim that calls `boost __complete`; the candidate
     # rules live in core/complete.py so all three shells share one tested
     # implementation instead of three hand-maintained static lists.
+    if args.eval:
+        print(complete.eval_script(shell).rstrip())
+        return 0
     print(complete.script(shell).rstrip())
     out.dim("# install: " + complete.INSTALL_HINT[shell])
     return 0

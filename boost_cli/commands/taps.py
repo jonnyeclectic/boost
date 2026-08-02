@@ -8,6 +8,7 @@ from contextlib import suppress
 from .. import cliparse, spin
 from ..core import (
     catalog,
+    complete,
     config,
     gitutil,
     journal,
@@ -125,6 +126,9 @@ def cmd_tap(argv) -> int:
             entries = catalog.rebuild_tap(tap)
         journal.log("tap", tap.name)
         out.ok("Tapped %s (%d skills)" % (tap.name, len(entries)))
+    # Refresh the TAB-completion name cache so `boost install <TAB>` sees
+    # whatever this call just tapped instead of the pre-tap snapshot.
+    complete.refresh_names()
     return rc
 
 
@@ -151,6 +155,7 @@ def cmd_untap(argv) -> int:
             out.info("cancelled")
             return 1
     registry.remove(tap.name)
+    complete.refresh_names()
     journal.log("untap", tap.name)
     out.ok("untapped %s" % tap.name)
     return 0

@@ -229,3 +229,114 @@ class TestScriptSelection:
     def test_refresh_reports_what_it_wrote(self, sandbox):
         _tap("t", ["one", "two"])
         assert complete.refresh_names() == 2
+
+    def test_zsh_manual_script_still_self_invokes(self):
+        # The fpath/autoload install path (`boost completions zsh > ~/.zfunc/_boost`)
+        # relies on this exact trailer: zsh's autoload machinery calls `_boost`
+        # for the very first real TAB press, and that call IS the one this line
+        # answers. Swapping it for `compdef` here (the eval-script's trailer)
+        # would silently break that first completion — see eval_script's tests.
+        assert complete.script("zsh").rstrip().endswith('_boost "$@"')
+
+
+class TestEvalScript:
+    """`boost completions --install` eval's this into a running shell rather
+    than dropping a static file, so it must be safe to run inline rather than
+    autoloaded — see eval_script's docstring for why zsh needs a different
+    trailer than the manually-installed script does.
+    """
+
+    def test_bash_eval_is_identical_to_the_plain_script(self):
+        # complete -F registration behaves the same sourced or eval'd, so
+        # bash needs no special variant.
+        assert complete.eval_script("bash") == complete.script("bash")
+
+    def test_fish_eval_falls_back_to_the_plain_script(self):
+        assert complete.eval_script("fish") == complete.script("fish")
+
+    def test_zsh_eval_registers_via_compdef_not_self_invocation(self):
+        got = complete.eval_script("zsh")
+        assert got.rstrip().endswith("compdef _boost boost")
+        assert '_boost "$@"' not in got
+
+    def test_zsh_eval_still_delegates_to_the_completer(self):
+        # Same candidate logic either way — only the trailer differs.
+        assert "boost __complete" in complete.eval_script("zsh")
+
+
+class TestInstallUninstall:
+    """`boost completions --install` — the one-shot path that replaces the
+    copy-paste-into-your-rc-file dance with an idempotent, reversible edit.
+    """
+
+    def test_unsupported_shell_raises_with_a_hint(self, sandbox):
+        from boost_cli.errors import BoostError
+        with pytest.raises(BoostError) as exc:
+            complete.install("fish")
+        assert "fish" in exc.value.message
+        assert "boost completions fish" in exc.value.hint
+
+    def test_install_creates_the_rc_file_when_absent(self, sandbox):
+        rc = complete.install("bash")
+        assert rc == sandbox / ".bashrc"
+        text = rc.read_text(encoding="utf-8")
+        assert "# >>> boost completions >>>" in text
+        assert 'eval "$(boost completions bash --eval)"' in text
+
+    def test_install_preserves_existing_content(self, sandbox):
+        rc = sandbox / ".zshrc"
+        rc.write_text("my existing config\n", encoding="utf-8")
+        complete.install("zsh")
+        text = rc.read_text(encoding="utf-8")
+        assert text.startswith("my existing config\n")
+        assert 'eval "$(boost completions zsh --eval)"' in text
+
+    def test_install_twice_is_idempotent(self, sandbox):
+        rc = sandbox / ".bashrc"
+        rc.write_text("pre-existing\n", encoding="utf-8")
+        complete.install("bash")
+        once = rc.read_text(encoding="utf-8")
+        complete.install("bash")
+        twice = rc.read_text(encoding="utf-8")
+        assert once == twice
+        assert once.count("# >>> boost completions >>>") == 1
+
+    def test_install_then_uninstall_restores_original_content(self, sandbox):
+        rc = sandbox / ".bashrc"
+        original = "line one\nline two\n"
+        rc.write_text(original, encoding="utf-8")
+        complete.install("bash")
+        assert original.strip() in rc.read_text(encoding="utf-8")
+        complete.uninstall("bash")
+        assert rc.read_text(encoding="utf-8") == original
+
+    def test_uninstall_without_a_prior_install_is_a_harmless_no_op(self, sandbox):
+        assert not (sandbox / ".bashrc").exists()
+        complete.uninstall("bash")
+        assert not (sandbox / ".bashrc").exists()
+
+    def test_uninstall_leaves_unrelated_rc_content_untouched(self, sandbox):
+        rc = sandbox / ".zshrc"
+        rc.write_text("unrelated line\n", encoding="utf-8")
+        complete.uninstall("zsh")           # never installed here
+        assert rc.read_text(encoding="utf-8") == "unrelated line\n"
+
+    def test_uninstall_leaves_a_malformed_block_untouched(self, sandbox):
+        # A start marker with no matching end marker means someone hand-edited
+        # the file after boost wrote it — guessing at intent here would risk
+        # eating content that was never boost's to remove.
+        rc = sandbox / ".bashrc"
+        broken = "before\n# >>> boost completions >>>\nno end marker here\n"
+        rc.write_text(broken, encoding="utf-8")
+        complete.uninstall("bash")
+        assert rc.read_text(encoding="utf-8") == broken
+
+
+class TestDetectShell:
+    def test_reads_the_basename_of_shell_env(self, monkeypatch):
+        monkeypatch.setenv("SHELL", "/usr/local/bin/zsh")
+        assert complete.detect_shell() == "zsh"
+
+    def test_empty_when_shell_env_is_unset(self, monkeypatch):
+        monkeypatch.delenv("SHELL", raising=False)
+        assert complete.detect_shell() == ""

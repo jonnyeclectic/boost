@@ -345,6 +345,19 @@ class TestUpdate:
         assert "upgraded" not in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
+    def test_refreshes_the_completion_cache(self, boost, fixture_tap_src,
+                                            tmp_path):
+        from boost_cli.core import complete
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "growing-tap")
+        boost("tap", tap_dir)
+        complete.refresh_names()
+        assert "brand-new-skill" not in complete._cached_names()
+        _add_and_commit(tap_dir, "skills/brand-new-skill/SKILL.md",
+                        "---\nname: brand-new-skill\ndescription: added upstream\n"
+                        "version: 1.0.0\n---\n\n# New\n", "add brand-new-skill")
+        boost("update")
+        assert "brand-new-skill" in complete._cached_names()
+
     def test_refreshes_rule_when_source_changes(self, boost, fixture_tap_src,
                                                 tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "rule-tap")
@@ -824,6 +837,18 @@ class TestBundleEdges:
         assert "tapped fixture-tap" in r.out
         assert "installed brainstorming v1.4.0 (fixture-tap)" in r.out
         assert "Installed 1 skill, added 1 tap" in r.out
+
+    def test_readding_a_tap_refreshes_the_completion_cache(self, boost, installed,
+                                                            tmp_path):
+        from boost_cli.core import complete
+        bf = tmp_path / "Boostfile"
+        boost("bundle", "dump", bf)
+        boost("uninstall", "brainstorming")
+        boost("untap", "fixture-tap", "--force")
+        complete.refresh_names()
+        assert "brainstorming" not in complete._cached_names()
+        boost("bundle", "install", bf)
+        assert "brainstorming" in complete._cached_names()
 
     def test_dump_local_comment_and_lost_tap_url(self, boost, installed,
                                                  tmp_path):

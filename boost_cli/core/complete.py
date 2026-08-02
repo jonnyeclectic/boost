@@ -26,10 +26,12 @@ nothing. Silence degrades; a stack trace corrupts the line the user is typing.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+from ..errors import BoostError
 from . import catalog, paths, registry, store
 
 # cli.COMMANDS rows: (name, group, module, summary). Typed here rather than
@@ -159,20 +161,29 @@ _boost_complete() {
 complete -F _boost_complete boost
 """
 
-_ZSH = """#compdef boost
-# Delegates to `boost __complete` rather than embedding a static list, so
-# arguments complete too — the previous version fell through to _files, which
-# offered local filenames where a skill name belongs.
-_boost() {
+# The function body is shared between two different trailers (see
+# `eval_script` for why): one that self-invokes for zsh's fpath/autoload
+# machinery, one that self-registers for a direct `eval` into a running shell.
+_ZSH_FUNC = """_boost() {
   local -a reply
   # "${(@)...}" preserves the EMPTY current word. Unquoted, zsh drops it,
   # so `boost install <TAB>` arrives as two words and completes command
   # names instead of skills — the exact bug this rewrite is fixing.
   reply=( ${(f)"$(boost __complete "${(@)words[1,$CURRENT]}" 2>/dev/null)"} )
   compadd -- $reply
-}
+}"""
+
+_ZSH = """#compdef boost
+# Delegates to `boost __complete` rather than embedding a static list, so
+# arguments complete too — the previous version fell through to _files, which
+# offered local filenames where a skill name belongs.
+%s
 _boost "$@"
-"""
+""" % _ZSH_FUNC
+
+_ZSH_EVAL = """%s
+compdef _boost boost
+""" % _ZSH_FUNC
 
 _FISH = """# boost fish completion — delegates to `boost __complete`.
 # `-f` disables fish's filename fallback, which is what it offered previously
@@ -191,9 +202,111 @@ def script(shell: str) -> str:
     return _SCRIPTS.get(shell, _BASH)
 
 
+def eval_script(shell: str) -> str:
+    """The variant safe to ``eval`` directly into a *running* shell, e.g. from
+    an rc file — what ``boost completions --install`` wires up.
+
+    Bash's script is unconditional registration (``complete -F ... boost``),
+    so it behaves identically whether sourced from a file or eval'd inline —
+    the same script serves both, so this just returns :func:`script`.
+
+    zsh's shipped script instead *self-invokes* (``_boost "$@"``), which is
+    correct only when zsh's own fpath/autoload machinery is what calls it:
+    the first real TAB press is what swaps the autoload stub for this body,
+    so that trailing call answers *that* press. Eval'd inline at shell
+    startup there is no press to answer yet — it would fire once, uselessly,
+    against the shell's own startup arguments, and register nothing for
+    later. ``compdef _boost boost`` instead registers the function for zsh's
+    completion system to call on every subsequent TAB press.
+    """
+    return _ZSH_EVAL if shell == "zsh" else script(shell)
+
+
 INSTALL_HINT = {
-    "bash": "boost completions bash >> ~/.bashrc",
-    "zsh": "boost completions zsh > ~/.zfunc/_boost   "
-           "(with fpath+=~/.zfunc before compinit)",
+    "bash": "boost completions --install   (or by hand: boost completions bash >> ~/.bashrc)",
+    "zsh": "boost completions --install   (or by hand: boost completions zsh > ~/.zfunc/_boost, "
+           "with fpath+=~/.zfunc before compinit)",
     "fish": "boost completions fish > ~/.config/fish/completions/boost.fish",
 }
+
+# Shells `--install`/`--uninstall` know how to wire up, and the rc file each
+# writes to. Fish needs neither: `~/.config/fish/completions/*.fish` is
+# auto-discovered, so `boost completions fish > that path` is already one
+# shell command with nothing left to automate.
+RC_FILE = {"bash": ".bashrc", "zsh": ".zshrc"}
+
+# Shell-comment markers, not core.rules's HTML-comment ones: an rc file
+# executes as shell code, so `<!-- ... -->` there is a syntax error, not a
+# comment.
+_RC_START = "# >>> boost completions >>>"
+_RC_END = "# <<< boost completions <<<"
+
+
+def _rc_block(shell: str) -> str:
+    # Calls back into `boost completions <shell> --eval` at every shell
+    # startup, rather than embedding a frozen copy of the script, so an
+    # installed hook never drifts from whatever boost version is on PATH.
+    return ("%s\ncommand -v boost >/dev/null 2>&1 && "
+            "eval \"$(boost completions %s --eval)\"\n%s"
+            % (_RC_START, shell, _RC_END))
+
+
+def _merge_rc(text: str, block: str) -> str:
+    """Idempotently set ``block`` in ``text``: replace a prior boost block in
+    place, or append one after a single blank line. Mirrors
+    :func:`core.rules.merge_block`'s shape with rc-file-safe markers."""
+    i = text.find(_RC_START)
+    if i != -1:
+        j = text.find(_RC_END, i)
+        if j != -1:
+            j += len(_RC_END)
+            return (text[:i] + block + text[j:]).rstrip("\n") + "\n"
+    base = text.rstrip("\n")
+    return (base + "\n\n" + block + "\n") if base else block + "\n"
+
+
+def _strip_rc(text: str) -> str:
+    """Inverse of :func:`_merge_rc`: remove the managed block, if present."""
+    i = text.find(_RC_START)
+    if i == -1:
+        return text
+    j = text.find(_RC_END, i)
+    if j == -1:
+        return text  # no end marker: malformed, leave the file untouched
+    j += len(_RC_END)
+    before, after = text[:i].rstrip("\n"), text[j:].strip("\n")
+    parts = [p for p in (before, after) if p]
+    return "\n\n".join(parts) + "\n" if parts else ""
+
+
+def _rc_path(shell: str) -> Path:
+    if shell not in RC_FILE:
+        raise BoostError(
+            "no one-shot install for %s yet" % shell,
+            hint="fish needs none: boost completions fish > "
+                 "~/.config/fish/completions/boost.fish"
+            if shell == "fish" else "supported: %s" % ", ".join(RC_FILE))
+    return paths.expand("~/" + RC_FILE[shell])
+
+
+def install(shell: str) -> Path:
+    """Idempotently wire ``shell``'s rc file to eval boost's completions on
+    every startup. Returns the rc file path. Raises :class:`BoostError` for
+    a shell with no rc-file install path (currently anything but bash/zsh)."""
+    rc = _rc_path(shell)
+    text = rc.read_text(encoding="utf-8") if rc.exists() else ""
+    rc.write_text(_merge_rc(text, _rc_block(shell)), encoding="utf-8")
+    return rc
+
+
+def uninstall(shell: str) -> Path:
+    """Remove what :func:`install` wired up. A no-op if never installed."""
+    rc = _rc_path(shell)
+    if rc.exists():
+        rc.write_text(_strip_rc(rc.read_text(encoding="utf-8")), encoding="utf-8")
+    return rc
+
+
+def detect_shell() -> str:
+    """The caller's shell from ``$SHELL``, basename only (e.g. "zsh")."""
+    return Path(os.environ.get("SHELL", "")).name
