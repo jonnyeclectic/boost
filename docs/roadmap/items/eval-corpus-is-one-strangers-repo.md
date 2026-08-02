@@ -10,7 +10,7 @@ wow: 3
 note: one third-party repo is 62% of the gate's corpus, and if it disappears every PR goes red
 order: 84
 owner: loop/eval-corpus-availability
-pr:
+pr: 428
 title: 62% of the required gate's corpus is a single third-party repository
 ---
 <b>Pinning the eval corpus to commit SHAs fixed drift. It did not fix concentration, and cannot fix
