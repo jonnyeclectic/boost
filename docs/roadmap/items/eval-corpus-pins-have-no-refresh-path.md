@@ -10,7 +10,7 @@ wow: 3
 note: the corpus is now frozen at one August 2026 snapshot, and nothing will ever move it
 order: 85
 owner: loop/eval-corpus-refresh
-pr:
+pr: 431
 title: Nothing refreshes the eval corpus pins, so the gate measures one frozen day
 ---
 <b>Pinning traded one problem for its opposite, and the trade should be recorded rather than
