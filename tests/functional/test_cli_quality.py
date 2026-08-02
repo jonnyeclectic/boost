@@ -534,6 +534,21 @@ class TestHeal:
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
+    def test_refreshes_the_completion_cache(self, boost, tapped):
+        from boost_cli.core import complete
+        complete.refresh_names()
+        complete.names_file().write_text("", encoding="utf-8")  # gone stale
+        assert "brainstorming" not in complete._cached_names()
+        boost("heal")
+        assert "brainstorming" in complete._cached_names()
+
+    def test_dry_run_does_not_touch_the_completion_cache(self, boost, tapped):
+        from boost_cli.core import complete
+        complete.refresh_names()
+        complete.names_file().write_text("", encoding="utf-8")
+        boost("heal", "--dry-run")
+        assert "brainstorming" not in complete._cached_names()
+
 
 # ── conflict ─────────────────────────────────────────────────────────────
 

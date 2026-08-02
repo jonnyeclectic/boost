@@ -9,7 +9,16 @@ import stat
 import urllib.parse
 
 from .. import cliparse
-from ..core import catalog, journal, lockfile, paths, registry, store, util
+from ..core import (
+    catalog,
+    complete,
+    journal,
+    lockfile,
+    paths,
+    registry,
+    store,
+    util,
+)
 from ..core import output as out
 from ..errors import BoostError
 
@@ -379,6 +388,7 @@ def cmd_protocol(argv) -> int:
             return 1
         tap = registry.add(arg)
         entries = catalog.rebuild_tap(tap)
+        complete.refresh_names()
         journal.log("tap", tap.name, via="protocol")
         out.ok("tapped %s (%d skills)" % (tap.name, len(entries)))
         return 0

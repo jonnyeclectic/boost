@@ -9,6 +9,7 @@ from __future__ import annotations
 import getpass
 import hashlib
 import json
+import shutil
 import stat
 import sys
 
@@ -251,6 +252,19 @@ class TestProtocol:
         assert not (paths.store_dir() / "brainstorming").exists()
         r = boost("protocol", "open", "boost://tap/owner/repo", expect=1)
         assert "cancelled" in r.out
+
+    def test_open_tap_refreshes_the_completion_cache(self, boost, sandbox,
+                                                      fixture_tap_src,
+                                                      monkeypatch):
+        from boost_cli.core import complete
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest: shutil.copytree(fixture_tap_src, dest))
+        complete.refresh_names()
+        assert "brainstorming" not in complete._cached_names()
+        r = boost("protocol", "open", "boost://tap/owner/repo")
+        assert "tapped owner/repo" in r.out
+        assert "brainstorming" in complete._cached_names()
 
     def test_register_unregister_darwin(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.team.platform.system",

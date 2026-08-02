@@ -22,6 +22,7 @@ from ..core import (
     agents,
     ai,
     catalog,
+    complete,
     frontmatter,
     gitutil,
     imperative,
@@ -716,6 +717,9 @@ def cmd_heal(argv):
             if not had_cache:
                 out.ok("rebuilt catalog cache for %s" % tap.name)
                 actions.append("cache %s" % tap.name)
+
+    if not dry:
+        complete.refresh_names()
 
     if not journal.rotation_healthy():
         if dry:

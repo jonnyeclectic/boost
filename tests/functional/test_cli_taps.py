@@ -286,3 +286,28 @@ class TestOutdated:
         r = boost("outdated")
         assert "source missing" in r.out
         assert "1 outdated" in r.out
+
+
+# ── completion cache invalidation ───────────────────────────────────────
+
+class TestCompletionCacheStaysFresh:
+    """core/complete.py's module docstring promises the TAB-completion name
+    cache is refreshed "after anything that changes the catalogue (tap,
+    untap, update)" — these pin that promise against the commands that make
+    it. Without the refresh call, `boost install <TAB>` silently drifts from
+    whatever `boost taps` actually reports.
+    """
+
+    def test_tap_refreshes_the_completion_cache(self, boost, fixture_tap_src):
+        from boost_cli.core import complete
+        complete.refresh_names()          # snapshot before any tap: empty
+        assert "brainstorming" not in complete._cached_names()
+        boost("tap", fixture_tap_src)
+        assert "brainstorming" in complete._cached_names()
+
+    def test_untap_refreshes_the_completion_cache(self, boost, tapped):
+        from boost_cli.core import complete
+        complete.refresh_names()
+        assert "brainstorming" in complete._cached_names()
+        boost("untap", "fixture-tap", "--force")
+        assert "brainstorming" not in complete._cached_names()
