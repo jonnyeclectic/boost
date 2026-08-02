@@ -15,7 +15,8 @@ from typing import List
 
 import pytest
 
-from boost_cli.core import ai, chat
+from boost_cli.core import ai, catalog, chat
+from boost_cli.errors import BoostError
 
 
 def _entry(name: str, desc: str = "", tap: str = "acme/skills",
@@ -169,6 +170,118 @@ class TestCitations:
 
     def test_citations_of_nothing_is_empty(self):
         assert chat.citations([]) == []
+
+
+class TestAmbiguousNamesAreQualified:
+    """A recommendation whose follow-up command errors is not a recommendation.
+
+    `boost info code-reviewer` raises when several taps carry the name — and
+    `code-reviewer` is 13 distinct skills in the pinned eval corpus alone — so
+    handing back the bare name sends the reader into an ambiguity error. The
+    qualified form is only worth emitting because `info` accepts it; before
+    that it would have traded one dead end for another.
+    """
+
+    def test_a_name_in_two_taps_is_reported_as_ambiguous(self, sandbox, monkeypatch):
+        monkeypatch.setattr(catalog, "all_entries", lambda: [
+            _entry("code-reviewer", tap="a/one"),
+            _entry("code-reviewer", tap="b/two"),
+            _entry("pdf", tap="a/one")])
+        assert chat.multi_tap_names({"code-reviewer", "pdf"}) == {"code-reviewer"}
+
+    def test_a_name_repeated_inside_one_tap_is_not_ambiguous(
+            self, sandbox, monkeypatch):
+        # catalog.resolve_one picks a canonical row for that case, so there is
+        # nothing for a qualifier to disambiguate — it would be pure noise.
+        monkeypatch.setattr(catalog, "all_entries", lambda: [
+            _entry("code-reviewer", tap="a/one"),
+            _entry("code-reviewer", tap="a/one")])
+        assert chat.multi_tap_names({"code-reviewer"}) == set()
+
+    def test_no_names_means_no_catalogue_scan(self, monkeypatch):
+        monkeypatch.setattr(catalog, "all_entries",
+                            lambda: pytest.fail("scanned for an empty set"))
+        assert chat.multi_tap_names(set()) == set()
+
+    def test_the_ref_is_qualified_only_where_it_has_to_be(
+            self, sandbox, monkeypatch):
+        monkeypatch.setattr(catalog, "all_entries", lambda: [
+            _entry("code-reviewer", tap="a/one"),
+            _entry("code-reviewer", tap="b/two"),
+            _entry("pdf", tap="a/one")])
+        cites = chat.citations([_entry("code-reviewer", tap="b/two"),
+                                _entry("pdf", tap="a/one")])
+        assert [c["ref"] for c in cites] == ["b/two:code-reviewer", "pdf"]
+
+    def test_every_ref_actually_resolves(self, sandbox, monkeypatch):
+        """The invariant, checked against the real resolver rather than restated.
+
+        This is the test that would have caught the bug: the bare name was
+        perfectly well-formed and simply did not resolve.
+        """
+        entries = [_entry("code-reviewer", tap="a/one"),
+                   _entry("code-reviewer", tap="b/two"),
+                   _entry("pdf", tap="a/one")]
+        monkeypatch.setattr(catalog, "all_entries", lambda: entries)
+        for cite in chat.citations(entries):
+            resolved = catalog.resolve_one(cite["ref"])   # raises if ambiguous
+            assert resolved["name"] == cite["name"]
+            assert resolved["tap"] == cite["tap"]
+
+    def test_the_bare_name_would_not_have_resolved(self, sandbox, monkeypatch):
+        # Guards the test above from passing vacuously on a corpus where every
+        # name happens to be unique.
+        entries = [_entry("code-reviewer", tap="a/one"),
+                   _entry("code-reviewer", tap="b/two")]
+        monkeypatch.setattr(catalog, "all_entries", lambda: entries)
+        with pytest.raises(BoostError):
+            catalog.resolve_one("code-reviewer")
+
+
+class TestTheAnswerAndItsSourcesAgree:
+    """The model is told to answer from a NUMBERED list. Both halves must number.
+
+    `source_text` hands the model `1. …`, and the system prompt says "answer
+    only from the numbered skills", so replies cite `#3`. The rendered source
+    block had no numbers at all, which made every such citation unresolvable —
+    the two halves disagreed about which contract was in force.
+    """
+
+    def test_the_prompt_list_is_numbered_from_one(self):
+        text = chat.source_text(CANDIDATES)
+        assert text.startswith("1. ")
+        assert "\n2. " in text and "\n3. " in text
+
+    def test_the_extractive_answer_uses_the_same_indices(
+            self, sandbox, retrieved, no_ai):
+        reply = chat.answer("review my diff")
+        for n, entry in enumerate(CANDIDATES, 1):
+            assert "%d. %s" % (n, entry["name"]) in reply.text
+
+    def test_the_prompt_still_names_skills_bare(self, sandbox, monkeypatch):
+        """The qualifier must NOT reach the prompt.
+
+        The system prompt tells the model to name skills "exactly as given" and
+        `ungrounded_names` grades the reply against the entries' bare names, so
+        a qualified name in the prompt would make a correctly-quoted
+        recommendation look invented and throw the answer away.
+        """
+        monkeypatch.setattr(catalog, "all_entries", lambda: [
+            _entry("code-reviewer", tap="a/one"),
+            _entry("code-reviewer", tap="b/two")])
+        text = chat.source_text([_entry("code-reviewer", tap="b/two")])
+        assert "b/two:code-reviewer" not in text
+        assert "code-reviewer (b/two)" in text
+
+    def test_a_qualified_ref_does_not_repeat_its_tap(self):
+        line = chat._describe(_entry("code-reviewer", "desc", tap="b/two"),
+                              ref="b/two:code-reviewer")
+        assert line.startswith("b/two:code-reviewer — ")
+        assert line.count("b/two") == 1
+
+    def test_an_unqualified_ref_keeps_the_tap_parenthetical(self):
+        line = chat._describe(_entry("pdf", "desc", tap="a/one"), ref="pdf")
+        assert line.startswith("pdf (a/one) — ")
 
     def test_followup_suggestions_name_a_real_skill(self, sandbox, retrieved):
         suggestions = chat.suggest_followups(CANDIDATES)
