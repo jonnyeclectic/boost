@@ -2431,8 +2431,9 @@ a key), and an A-vs-B comparison does not test blend weights or pool depth.</p>
       </article>
 
       <article class="cap rcard" id="golden-set-grades-by-name-not-by-skill">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Eval · Correctness</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Eval · Correctness</span></div>
         <h3>The golden set grades by name, and 35 of 53 names are ambiguous</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The eval scores a hit when the top result carries the right <em>name</em>. Most of those names do
 not identify a skill.</b> Measured over a real 71,655-entry catalogue against the 50
 natural-language golden queries: of the <b>53</b> distinct target names, <b>18</b> resolve to a
@@ -2524,12 +2525,49 @@ about the corpus that is tapped:
 <b>What unblocked this.</b> Not the judgment calls &mdash; [[eval-deduped-ranked-lists-by-name]].
 A half-migrated set was averaging two different rank conventions, because name-graded rows collapsed
 homonyms into one rank slot while exemplar-graded rows gave every distractor mirror its own. Until
-both used one convention, migrating rows one at a time produced a number that meant nothing.</p>
+both used one convention, migrating rows one at a time produced a number that meant nothing.
+
+<b>The remaining 22 are decided, and the rule is written down rather than inferable from the pins.</b>
+A class is pinned when a user who asked that question would be <em>helped</em> by receiving it. Two
+exclusions, and only two. <b>E1, different job</b>: the body shares the name and does something else
+&mdash; a <code>brand-guidelines</code> that governs written copy, asked about colours and typefaces;
+a <code>commit</code> whose entire description is &ldquo;Create a git commit&rdquo;, asked what
+message convention to follow; a <code>create-pr</code> that is an explicit alias stub redirecting
+elsewhere. <b>E2, localised copy</b>: an entry under <code>docs/&lt;locale&gt;/</code>, because the
+queries are English and a reader who asked in English is not served by the Turkish translation
+(byte-identical mirrors are unaffected &mdash; they are one class). The rule deliberately does not
+adjudicate which of several <em>helpful</em> answers is best; that is an opinion the metric cannot
+support, and <code>relevant</code> has always been a list precisely because more than one skill can
+be right.
+
+<b>The card's central worry was that guessing would &ldquo;bake one opinion into the number the
+project publishes, invisibly&rdquo;. It is now measured, and the answer is zero.</b> Over the pinned
+corpus, one index build, BM25 <code>recall@10 / hit@1 / MRR / nDCG</code>:
+<code>name-graded (before) &rarr; <b>0.350 / 0.160 / 0.245 / 0.259</b></code><br>
+<code>every class pinned, no exclusions &rarr; <b>0.360 / 0.160 / 0.245 / 0.264</b></code><br>
+<code>the rule above, E1 + E2 applied &rarr; <b>0.360 / 0.160 / 0.245 / 0.264</b></code>
+
+The last two are <em>identical</em>. So the opinion is not load-bearing: the entire
+<code>+0.010 / +0.005</code> shift is the denominator effect of a multi-name row collapsing to one
+relevance class, not the judgments. Nothing that got excluded was being credited, because BM25
+rarely ranked one of these targets first at all (<code>hit@1</code> 0.160).
+
+<b>That qualifies the card's own claim rather than confirming it.</b> The metric being an upper
+bound is true in principle; on this query set and this corpus the looseness was <em>latent</em>,
+so the numbers published so far were not being flattered by it. The guard earns its keep
+prospectively &mdash; at 71,655 entries there are far more same-named distractors competing, which
+is the regime [[eval-corpus-is-96x-smaller-than-a-real-install]] describes.
+
+<b>A smaller thing fixed on the way.</b> A baseline key is <code>name@digest</code>, so editing a
+query set orphans the old entry &mdash; and the digest can only recur if someone reverts the file
+byte for byte, meaning it is never read again. It was dead weight accumulating one row per edit.
+Pinning these rows produced the first one, so <code>--save-baseline</code> now drops a set's
+superseded entries and says which, leaving every other set untouched.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">28 of 50 rows pinned mechanically with zero change to any number; 22 are genuine judgment calls</span>
+          <span class="m">all 50 rows pinned; the 22 judgment calls were measured to move the published number by zero</span>
         </div>
       </article>
 
