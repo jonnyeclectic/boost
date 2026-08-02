@@ -209,7 +209,7 @@ boost doctor               # sanity check: broken links, lock drift, stale taps
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ```
 
-## 79 commands, organized into 8 groups
+## 78 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see
 [`docs/index.html`](docs/index.html), and for every flag of every command see
@@ -221,7 +221,7 @@ install path — see [`docs/architecture/`](docs/architecture/README.md).
 
 | Group | Commands |
 |---|---|
-| **Package Management** | install · uninstall · sync · update · reinstall · bundle · import · migrate · pin · unpin · snapshot · export · adapt · run |
+| **Package Management** | install · uninstall · sync · update · reinstall · bundle · import · pin · unpin · snapshot · export · adapt · run |
 | **Discovery & Search** | search · reindex · discover · recommend · browse · index · trending · stats · count |
 | **Skill Information** | list · info · cat · edit · preview · explain · log · home · deps · tag |
 | **Registry (Taps)** | tap · untap · taps · outdated |
@@ -364,7 +364,7 @@ Four layers, all enforced (`make check` runs the full set; CI runs the same thin
 
 | Layer | What it does | Gate |
 |---|---|---|
-| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 79 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
+| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 78 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
 | `make smoke` | `tests/smoke.sh` — 170 checks run through the actual `./boost` shim (`--online` also hits real registries) | all pass |
 | `make mutation` | [mutmut] mutates `boost_cli/core` (~9,900 mutants) and reruns the unit suite against each one | **≥80% killed** (`scripts/mutation_gate.py`) |
 | `make evals` | scores the search ranker on a graded golden set — recall@5/@10, MRR, nDCG@5/@10 | **metric floors + no statistically significant regression** (`scripts/eval_gate.py`) |
