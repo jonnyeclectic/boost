@@ -824,9 +824,13 @@ def _tool_search(args: dict):
     # smart=True is stated, not inherited. It is `rag.search`'s default, so this
     # path was spending an LLM call per search by accident of a signature —
     # while the CLI makes the user ask for it with `--smart`. Measured on the
-    # 91-query golden set, the rerank moves hit@1 from 0.791 to 0.945, and an
-    # agent acts on the top result rather than scanning ten, so it is the one
-    # caller for whom the seconds are clearly worth it. Written down here so
+    # 91-query golden set over the SIX-repo corpus, the rerank moved hit@1 from
+    # 0.791 to 0.945; name the corpus, because the twenty-repo corpus that
+    # replaced it baselines at 0.4725 (tests/eval/baseline.json) and the
+    # reranked figure has not been re-measured there. The direction is what
+    # justifies the default: an agent acts on the top result rather than
+    # scanning ten, so it is the one caller for whom the seconds are clearly
+    # worth it. Written down here so
     # the asymmetry with the CLI is a decision someone can revisit, not a
     # default nobody chose. It degrades on its own when no AI is configured.
     rag_result = rag.search(query, limit=10, smart=True)
