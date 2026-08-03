@@ -10,6 +10,7 @@ wow: 4
 note: a dangling link is not garbage — an unmounted volume comes back, and heal deleted it anyway
 order: 99
 owner: fix/heal-only-removes-links-it-owns
+pr: 459
 title: heal removed symlinks boost never created
 ---
 <b><code>boost heal</code> deleted a symlink boost did not make, does not track, and has no claim
