@@ -57,7 +57,7 @@ def _git_error(text: str) -> str:
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     for line in lines:
         low = line.lower()
-        if low.startswith("fatal:") or low.startswith("error:"):
+        if low.startswith(("fatal:", "error:")):
             return line
     return lines[-1] if lines else "unknown error"
 
