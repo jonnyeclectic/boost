@@ -30,9 +30,25 @@ name: lighthouse
 # 0.80 is below the worst run this page has actually produced, which is what the
 # "measure, then floor" approach above asks for. It is a real loosening, and the
 # honest one: the alternative was a floor that a green tick did not mean.
-# Raising it back is gated on making roadmap.html genuinely faster — see
-# docs/roadmap/items/roadmap-perf-budget-has-no-local-guard.md, which records
-# what was tried and what moved the number (only content-visibility did).
+#
+# AND THE PAGE WAS NEVER THE SLOW PART — THE HARNESS WAS. `python3 -m
+# http.server` does not send `Content-Encoding`, so every run above scored a
+# document 3.27x larger than the one GitHub Pages delivers. That is not
+# inference: the failing artifact records `uses-text-compression` at score 0
+# with `transferSize` 567,874 against `resourceSize` 567,685, and Pages answers
+# `content-encoding: gzip` for the same URL. Lighthouse throttles to 1,474.56
+# kbps, where 566 KB is 3.08 s of download — the whole of a 3.6 s FCP scoring
+# 0.31, which with LCP at 0.53 is the entire 21-point deficit. gzip takes the
+# page's payload 597,782 -> 184,126 B, or 3.24 s -> 1.00 s on that link.
+#
+# It also explains the two rounds of work that moved the score by 0.00: both
+# changed LAYOUT (a `<details>` collapse, 3,066 characters of prose) while the
+# score was being decided by TRANSFER. `content-visibility` bought 0.01 because
+# TBT already scored 0.98 — there was nothing left to win there.
+#
+# So the server is now scripts/serve_docs.py, which compresses what Pages
+# compresses. Nothing else about the harness changed — not even HTTP/1.1
+# keep-alive, deliberately, so the score move has one cause.
 #
 # The two hand-authored, highest-traffic pages are audited: the landing page and
 # the code roadmap. Served over a throwaway localhost static server (no network),
@@ -46,6 +62,7 @@ on:
       - "docs/roadmap.html"
       - "style/**"
       - ".lighthouserc.json"
+      - "scripts/serve_docs.py"
       - ".github/workflows/lighthouse.yml"
   pull_request:
     paths:
@@ -53,6 +70,7 @@ on:
       - "docs/roadmap.html"
       - "style/**"
       - ".lighthouserc.json"
+      - "scripts/serve_docs.py"
       - ".github/workflows/lighthouse.yml"
 
 permissions: {}
