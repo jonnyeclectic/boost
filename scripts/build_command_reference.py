@@ -328,7 +328,7 @@ _PAGE = """<!DOCTYPE html>
 
 <footer>
   <p class="foot-brand"><b>boost</b> &mdash; a package manager for AI coding skills</p>
-  <p class="foot-note">Install with <code>pip install boost-skill-cli</code> &middot; requires Python 3.9+ and <code>git</code></p>
+  <p class="foot-note">Install with <code>pip install boost-skill-cli</code> &middot; requires Python 3.12+ and <code>git</code></p>
   <nav class="foot-links" aria-label="Documentation">
     <a href="index.html">Guide</a>
     <a href="#top" aria-current="page">Commands</a>

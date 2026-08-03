@@ -7,7 +7,7 @@ import logging.handlers
 import pathlib
 import re
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -531,8 +531,8 @@ class TestJsonFileOutput:
         # Parsed as UTC it must be within a minute of now; a local-time stamp
         # wearing a Z would be off by the machine's offset.
         parsed = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
-            tzinfo=timezone.utc)
-        assert abs((datetime.now(timezone.utc) - parsed).total_seconds()) < 60
+            tzinfo=UTC)
+        assert abs((datetime.now(UTC) - parsed).total_seconds()) < 60
 
     def test_an_exception_is_carried_in_its_own_field(self, env, monkeypatch):
         monkeypatch.setenv("BOOST_LOG_FORMAT", "json")

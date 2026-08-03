@@ -8,10 +8,9 @@ import os
 import re
 import shutil
 import stat
-import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import List, Tuple
 
@@ -29,13 +28,10 @@ def rmtree(path) -> None:
     Git writes objects under ``.git/objects/`` read-only; POSIX still lets the
     owner unlink a read-only file (permission lives on the directory), but
     Windows refuses outright. Clear the read-only bit and retry once per
-    failure — ``onexc`` on 3.12+, ``onerror`` below that (both get the same
-    handler; it ignores the exception argument either way).
+    failure. ``onexc`` is the 3.12+ spelling; the ``onerror`` branch this used
+    to carry was dead the moment the floor moved to 3.12.
     """
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
-    else:
-        shutil.rmtree(str(path), onerror=_clear_readonly_and_retry)
+    shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
 
 
 def _lock_is_stale(path: Path, stale_after: float) -> bool:
@@ -143,7 +139,7 @@ def positive_int(s: str) -> int:
 
 def now_iso() -> str:
     """Return UTC now as ``'2026-07-16T01:00:00Z'`` (what ``rel_time`` parses)."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def user() -> str:
@@ -158,10 +154,10 @@ def user() -> str:
 def rel_time(iso: str) -> str:
     """'2026-07-16T01:00:00Z' -> '3h ago' (best effort)."""
     try:
-        then = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        then = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     except (ValueError, TypeError):
         return iso or "?"
-    secs = (datetime.now(timezone.utc) - then).total_seconds()
+    secs = (datetime.now(UTC) - then).total_seconds()
     for limit, size, unit in ((60, 1, "s"), (3600, 60, "m"),
                               (86400, 3600, "h"), (604800, 86400, "d")):
         if secs < limit:

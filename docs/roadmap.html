@@ -124,8 +124,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>5</b><span>Planned</span></div>
-      <div class="stat"><b>206</b><span>Loop finds</span></div>
+      <div class="stat"><b>7</b><span>Planned</span></div>
+      <div class="stat"><b>209</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -703,6 +703,78 @@ package does not accumulate a second, redundant install path.</p>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">a second consumer class for the catalogue — blocked on one dependency conflict boost already owns</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="pep585-604-modernization-sweep">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>the <code>typing.List</code> → <code>list</code> sweep the floor now allows</h3>
+        <p>Three ruff rules sit in <code>pyproject.toml</code>'s ignore list: <code>UP006</code>
+(<code>List[x]</code> → <code>list[x]</code>), <code>UP007</code>
+(<code>Union[x, y]</code> → <code>x | y</code>), <code>UP035</code> (deprecated
+<code>typing</code> imports) and <code>UP045</code> (<code>Optional[x]</code> → <code>x | None</code>).
+
+<b>The reason they were ignored is gone.</b> It used to be a correctness argument, not a taste one:
+60 of boost's 63 modules carry <code>from __future__ import annotations</code>, which <i>defers</i>
+annotation evaluation but does not make the syntax legal — the moment anything actually evaluates
+one (<code>typing.get_type_hints</code>, a dataclass, a plain <code>eval</code>), a PEP 604 union
+was a <code>TypeError</code> on 3.9. ruff agreed, classifying all the fixes as <b>unsafe</b> at
+<code>target-version = "py39"</code>. At <code>py312</code> it classifies them as <b>safe</b>.
+
+<b>Why it is still deferred.</b> Purely diff size. The sweep rewrites annotations across roughly 60
+modules, which obliterates <code>git blame</code> on almost every file and conflicts with every
+branch in flight — the identical objection <code>UP031</code> (printf formatting) carries a few
+lines below in the same ignore block, and the reason the original note said to do it "as one
+deliberate sweep". Riding it in on the floor bump would have made a mechanical config change
+unreviewable.
+
+<b>What doing it looks like.</b> <code>ruff check --select UP006,UP007,UP035,UP045 --fix</code>,
+then delete the four entries and their comment from the ignore list. It is one command and one
+review pass, and it should land when no long-running branch is mid-flight. Worth checking first
+whether any module still needs the <code>from __future__ import annotations</code> import
+afterwards — at a 3.12 floor most of them do not, but removing those is a second, separable step and
+should not be bundled in.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">unblocked by the 3.12 floor; deferred only because the diff touches ~60 modules</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="zip-strict-audit">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Correctness</span></div>
+        <h3>audit the 16 <code>zip()</code> calls the 3.12 floor made checkable</h3>
+        <p>The <code>&gt;=3.12</code> floor switched on ruff's <code>B905</code>
+(<code>zip-without-explicit-strict</code>), which found <b>16</b> call sites. It is in the ignore
+list with a rationale rather than fixed, and the rationale is the point: this is a real correctness
+signal and <i>not</i> a mechanical fix.
+
+<b>Why it matters.</b> <code>zip()</code> stops at the shortest input and says nothing. When two
+sequences are meant to be the same length — a row and its header, an id list and the embedding
+vectors it indexes — a mismatch silently drops the tail, and the result looks like a smaller answer
+rather than a bug.
+
+<b>Why it cannot be swept.</b> <code>strict=True</code> converts that silent truncation into a
+<code>ValueError</code> at runtime. That is the right answer where the lengths are an invariant and
+the wrong answer where the truncation is deliberate — so each site needs a decision, and picking
+wrong in either direction is a behaviour change rather than a lint fix. ruff itself only offers the
+rewrite under <code>--unsafe-fixes</code>.
+
+<b>Where they are.</b> Nine files: <code>core/adapters.py</code> (4),
+<code>commands/discovery.py</code> (2), <code>core/chat.py</code>, <code>core/dense.py</code>,
+<code>core/output.py</code>, plus <code>evals/</code> (2) and <code>tests/unit/</code> (5). The five
+in <code>core/</code> are the ones that matter — that is the mutation-gated engine, and
+<code>dense.py</code>'s in particular pairs ids with vectors, which is exactly the shape where a
+length mismatch would be silent and wrong.
+
+Do it as one pass with a one-line justification per site, and prefer <code>strict=True</code>
+wherever the lengths are an invariant: a raise that names the bug beats a short answer that hides it.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">16 call sites, each a judgement — a silent truncation or a new raise, never a mechanical fix</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -3019,6 +3091,66 @@ the same class of decision as deleting an orphaned store dir.</p></details>
           <span class="m">the lock claimed one agent while three symlinks sat on disk, and every surface said healthy</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="python-floor-moves-to-312">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compat · Python</span></div>
+        <h3>the Python floor moves from 3.9 to 3.12</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p><code>requires-python</code> moves from <code>&gt;=3.9</code> to <code>&gt;=3.12</code>. The floor had
+stopped being a free promise and started being a constraint that two unrelated pieces of work were
+queued behind.
+
+<b>What it was blocking.</b> A Dependabot alert that <b>no code change could close</b> —
+CVE-2025-71176 against pytest, where the lock carried two markered pins and only the
+<code>&gt;=3.10</code> one could move past the patch, because pytest 9.x declares
+<code>requires-python &ge;3.10</code> and the advisory marks every 8.x release vulnerable. And a
+dependency major: <code>langchain</code> 1.3.14 declares <code>&gt;=3.10.0,&lt;4.0.0</code>, so any
+first-class LangChain surface had to be designed around the floor rather than written normally.
+
+<b>What it cost, measured before deciding.</b> PyPI download stats for
+<code>boost-skill-cli</code> over the preceding month: 43,192 downloads total, of which 6,872
+reported a Python version. On 3.9: <b>132</b> — 1.9% of the identified share, 0.3% of the total. On
+3.10: <b>zero</b>. On 3.11: 1,964. The 3.12 floor therefore costs ~30% of the identified share
+rather than the ~2% a 3.11 floor would have, and that was the explicit trade accepted here. The
+honest caveat is that 84% of downloads report no version at all — mirrors and CI — so the 1.9% is a
+share of the 16% that is visible.
+
+<b>What it bought, all of it verified in this change rather than predicted:</b>
+<code>pytest</code> resolves to a single <code>9.1.1</code> pin, closing the CVE.
+<b>Eight</b> packages lose their dual markered pins entirely (<code>attrs</code>,
+<code>coverage</code>, <code>exceptiongroup</code>, <code>hypothesis</code>,
+<code>iniconfig</code>, <code>pytest</code>, <code>tomli</code>,
+<code>typing-extensions</code>), taking 255 lines out of the lock files.
+<code>scripts/lock_toolchain.py</code>'s <code>GROUPS</code> table collapses from three different
+interpreter versions to one, because refurb's <code>&gt;=3.10</code> and mutmut's
+<code>&gt;=3.11</code> are now below the floor rather than above it. <code>mypy</code> stops
+warning that its configured <code>python_version</code> is unsupported.
+<code>core/util.rmtree</code> loses its <code>onexc</code>/<code>onerror</code> branch — the one
+genuine version shim in <code>boost_cli</code>.
+
+<b>The trap this nearly walked into.</b> <code>.github/required-checks.txt</code> named
+<code>tests (ubuntu-latest, 3.9)</code> and its two siblings. Changing the matrix without changing
+that file would have left branch protection waiting forever for three checks that no longer exist —
+the exact deadlock the file's own header describes and that
+<code>scripts/check_required_checks.py</code> exists to catch. The matrix moves to
+3.12 / 3.13 / 3.14 and the required list moves with it, verified by that script.
+
+<b>What is deliberately NOT in this change.</b> Raising the floor makes ruff's PEP 585/604 rules
+legal for the first time, and they are still ignored — for a new reason, recorded in
+<code>pyproject.toml</code>: the sweep rewrites annotations across ~60 modules, which obliterates
+blame and conflicts with every branch in flight. The rule the old comment set ("revisit as one
+deliberate sweep") is honoured by giving it its own PR. Same for <code>B905</code>
+(<code>zip(strict=)</code>), which is a genuine correctness signal but needs a per-site judgement at
+16 call sites, not a bulk fix. Both have their own cards. What <i>did</i> land here is the part with
+no judgement in it: the 18 safe <code>UP017</code> fixes (<code>timezone.utc</code> →
+<code>datetime.UTC</code>) and the now-dead version block.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the floor was blocking a CVE fix and a dependency major at once</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -3713,8 +3845,9 @@ extra ships it.</p></details>
       </article>
 
       <article class="cap rcard" id="pytest-tmpdir-cve-blocked-by-py39-floor">
-        <div class="head"><span class="pill declined">Declined</span><span class="cat">Supply chain</span></div>
-        <h3>The <code>pytest</code> tmpdir CVE has no fix at our Python floor</h3>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Supply chain</span></div>
+        <h3>The <code>pytest</code> tmpdir CVE — unfixable, then closed by the floor move</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>CVE-2025-71176 — pytest through 9.0.2 relies on the predictable
 <code>/tmp/pytest-of-{user}</code> path, letting a <b>local</b> user cause a denial of
 service or possibly gain privileges. Dependabot alert #1 (medium), raised against
@@ -3750,12 +3883,25 @@ compatibility promise in <code>pyproject.toml</code>, not an oversight.
 
 Reopen this if either condition changes. The residual exposure is unchanged and remains
 contributor-facing only: <code>[project].dependencies</code> is empty, so nobody installing
-<code>boost-skill-cli</code> ever receives pytest.</p>
+<code>boost-skill-cli</code> ever receives pytest.
+
+<b>Closed 2026-08-03.</b> The revisit condition this card set — "when either the 3.9 floor is
+dropped or a patched 8.x lands" — was met by the first branch: <code>requires-python</code> moved to
+<code>&gt;=3.12</code> (see <b>the Python floor moves from 3.9 to 3.12</b>). Regenerating the
+toolchain lock at the new floor drops the <code>python_full_version &lt; '3.10'</code> half of the
+split entirely, so <code>requirements/test-tools.txt</code> now carries <b>one</b>
+<code>pytest==9.1.1</code> pin — past the 9.0.3 patch — instead of two, and the vulnerable
+<code>8.4.2</code> line is gone rather than merely unused.
+
+Worth keeping the shape of this on record: the fix was never in this card's own subject matter. No
+amount of work on the CVE could close it, because the blocker was a compatibility promise three
+levels away. What resolved it was noticing that the <i>same</i> floor was independently blocking a
+dependency major, at which point the cost of keeping 3.9 could be counted rather than assumed.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
-          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">dismissed as tolerable risk, 2026-07-25</span>
+          <span class="m">dismissed 2026-07-25 as unfixable; closed 2026-08-03 by the 3.12 floor</span>
         </div>
       </article>
 

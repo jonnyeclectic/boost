@@ -13,7 +13,7 @@ C4Container
   System_Ext(github, "GitHub", "Registry repos and skill sources")
 
   Container_Boundary(boost, "boost") {
-    Container(cli, "boost CLI", "Python 3.9+, stdlib only", "78 commands in 8 groups; lazy-imports one module per invocation")
+    Container(cli, "boost CLI", "Python 3.12+, stdlib only", "78 commands in 8 groups; lazy-imports one module per invocation")
     Container(mcp, "MCP server", "JSON-RPC over stdio", "Exposes search/install/doctor as agent tools")
     Container(web, "boost serve", "http.server", "Local read-only web UI")
     Container(engine, "core engine", "Python package", "Catalog, retrieval, store, trust — see the component diagram")

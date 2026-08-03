@@ -92,9 +92,11 @@ class TestMarkerPins:
         assert not any(n.startswith(("#", "-")) for n in names), names
 
     def test_two_pins_of_one_package_are_distinguished_by_marker(self):
-        # test-tools really does carry pytest twice — the 3.9 leg gets the last
-        # release that supported it while 3.12/3.14 get the current one. A guard
-        # keyed on name alone would treat losing one of them as no change.
+        # SAMPLE is a fixed literal, not the live lock: at the >=3.12 floor
+        # test-tools carries pytest ONCE. The parsing rule it pins is what
+        # still matters — a guard keyed on name alone would treat losing one
+        # of two marker-split pins as no change, and universal resolution can
+        # still emit those for platform (not version) markers.
         pytests = [m for n, m in MOD.marker_pins(SAMPLE) if n == "pytest"]
         assert sorted(pytests) == ["python_full_version < '3.10'",
                                    "python_full_version >= '3.10'"]

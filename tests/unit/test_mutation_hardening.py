@@ -7,7 +7,7 @@ output. See `make mutation`.
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -17,7 +17,7 @@ from boost_cli.errors import BoostError
 
 
 def _iso(seconds_ago: float) -> str:
-    then = datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)
+    then = datetime.now(UTC) - timedelta(seconds=seconds_ago)
     return then.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 

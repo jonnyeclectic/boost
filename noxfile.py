@@ -5,7 +5,7 @@ the multi-version `tests` session fans out across the supported interpreters:
 
     nox                     # lint + tests across every installed interpreter
     nox -s lint             # ruff / mypy / import-linter / codespell + drift checks
-    nox -s tests            # unit + functional on 3.9, 3.12, 3.14 (skips absent ones)
+    nox -s tests            # unit + functional on 3.12, 3.13, 3.14 (skips absent ones)
     nox -s "tests-3.12"     # just one interpreter
     nox -s smoke -s mutation
 
@@ -17,14 +17,14 @@ is the only thing to install first: `pipx install nox` (or `pip install nox`).
 
 import nox
 
-# Match the CI matrix and the >=3.9 floor in pyproject.toml.
-PYTHONS = ["3.9", "3.12", "3.14"]
+# Match the CI matrix and the >=3.12 floor in pyproject.toml.
+PYTHONS = ["3.12", "3.13", "3.14"]
 
 # `nox` with no -s runs these; the rest are opt-in.
 nox.options.sessions = ["lint", "tests"]
 # Reuse venvs between runs for speed; a contributor rarely wants a cold rebuild.
 nox.options.reuse_existing_virtualenvs = True
-# Local machines rarely have all of 3.9/3.12/3.14 — skip the missing ones
+# Local machines rarely have all of 3.12/3.13/3.14 — skip the missing ones
 # instead of erroring, so `nox` is useful with a single interpreter too.
 nox.options.error_on_missing_interpreters = False
 

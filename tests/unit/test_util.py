@@ -5,7 +5,7 @@ import argparse
 import hashlib
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -16,7 +16,7 @@ ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
 # An arbitrary but FIXED instant. `iso_ago` measures back from it and the
 # frozen_clock fixture makes rel_time read the same one, so the two reads
 # cannot drift apart. See the fixture for why that matters.
-FROZEN_NOW = datetime(2026, 3, 4, 5, 6, 7, tzinfo=timezone.utc)
+FROZEN_NOW = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
 
 
 class _FrozenDatetime(datetime):
@@ -60,8 +60,8 @@ class TestNowIso:
         s = util.now_iso()
         assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", s)
         # parses back and is (approximately) now, in UTC
-        parsed = datetime.strptime(s, ISO_FMT).replace(tzinfo=timezone.utc)
-        delta = abs((datetime.now(timezone.utc) - parsed).total_seconds())
+        parsed = datetime.strptime(s, ISO_FMT).replace(tzinfo=UTC)
+        delta = abs((datetime.now(UTC) - parsed).total_seconds())
         assert delta < 5
 
 

@@ -88,15 +88,18 @@ PLATFORM_PINS = REQS / "platform-pins.lock"
 # back STALE on CI). Universal emits environment markers instead, so one file is
 # correct everywhere and byte-identical no matter who regenerates it.
 #
-# `python_version` is the interpreter the group's CI job pins, and it matters:
-# refurb needs >=3.10 and mutmut >=3.11, so neither can resolve at the 3.9
-# floor. Only `test-tools` resolves from 3.9 — it is the one set that installs on
-# every leg of the 3 OS x 3 Python matrix, and the markers let one file give 3.9
-# the last release that supported it while 3.12/3.14 still get the current one.
+# `python_version` is the interpreter the group's CI job pins. Every group now
+# resolves from the same 3.12 floor: refurb (>=3.10) and mutmut (>=3.11) used to
+# be the reason this table held three different versions, and `test-tools`
+# resolved from 3.9 because it is the one set installed on every leg of the
+# matrix. With the project floor at >=3.12 all of those constraints are
+# satisfied by one number, and the dual markered pins that gave 3.9 an older
+# attrs/coverage/hypothesis/iniconfig/pytest/typing-extensions collapse to one
+# pin each. Universal resolution still emits markers for platform differences.
 GROUPS = (
     ("lint-tools", "3.12"),
-    ("test-tools", "3.9"),
-    ("mutation-tools", "3.11"),
+    ("test-tools", "3.12"),
+    ("mutation-tools", "3.12"),
     ("coverage-tools", "3.12"),
     ("release-tools", "3.12"),
 )

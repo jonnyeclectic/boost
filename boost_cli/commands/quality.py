@@ -12,7 +12,7 @@ import json
 import os
 import re
 from contextlib import suppress
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from itertools import starmap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -139,7 +139,7 @@ def _drift_hint(name: str, status: str) -> str:
 
 def _parse_ts(iso: str) -> Optional[datetime]:
     try:
-        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     except (ValueError, TypeError):
         return None
 
@@ -188,7 +188,7 @@ def _decay_rows(cwd: Path) -> List[dict]:
         subj, ts = e.get("subject"), _parse_ts(e.get("ts", ""))
         if subj and ts and (subj not in last_by or ts > last_by[subj]):
             last_by[subj] = ts
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+    cutoff = datetime.now(UTC) - timedelta(days=30)
     rows = []
     for name, _entry in _iter_installed():
         meta, _ = _read_skill(store.skill_store_dir(name))
@@ -932,12 +932,12 @@ def cmd_health(argv):
             if proc.returncode == 0 and proc.stdout.strip().isdigit():
                 stamps.append(int(proc.stdout.strip()))
         if stamps:
-            iso = datetime.fromtimestamp(max(stamps), tz=timezone.utc
+            iso = datetime.fromtimestamp(max(stamps), tz=UTC
                                          ).strftime("%Y-%m-%dT%H:%M:%SZ")
             last_sync = util.rel_time(iso)
     out.kv("last tap sync", last_sync)
 
-    week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    week_ago = datetime.now(UTC) - timedelta(days=7)
     recent = sum(1 for e in journal.events()
                  if (_parse_ts(e.get("ts", "")) or week_ago) > week_ago)
     out.kv("journal (7d)", "%d event%s" % (recent, _s(recent)))
