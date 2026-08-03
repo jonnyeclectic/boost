@@ -552,6 +552,41 @@ footer .foot-legal { margin-top: 13px; font-size: 12.5px; color: var(--text-3); 
 }
 
 /* ============================================================================
+   Sideways-scrolling tables must admit that they scroll
+   ========================================================================== */
+/* macOS and iOS draw overlay scrollbars: nothing is painted until a scroll is
+   already in progress. A comparison table that drops `display: block;
+   overflow-x: auto` at a narrow width therefore renders as a *complete* table
+   showing only its first column or two — there is no bar, no cut-off edge, and
+   no reason for the reader to swipe. Measured on the docs pages at 375px,
+   `table.contract` hid 258px of itself (29 cells off-screen) and `table.map`
+   51px (11 cells).
+
+   These stay scrollers rather than stacking, unlike the registries table: their
+   columns exist to be read against each other, and a card per row would break
+   the comparison that is the whole point. So the fix is the affordance, not the
+   layout — opt out of the overlay and keep a thin bar drawn at all times.
+
+   Deliberately not applied to the nav strip above, which hides its bar on
+   purpose: it fades its trailing edge instead, so it already reads as
+   scrollable rather than truncated. */
+.reg-scroll, table.contract, table.map {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-hi) transparent;
+}
+.reg-scroll::-webkit-scrollbar,
+table.contract::-webkit-scrollbar,
+table.map::-webkit-scrollbar { height: 9px; }
+.reg-scroll::-webkit-scrollbar-track,
+table.contract::-webkit-scrollbar-track,
+table.map::-webkit-scrollbar-track { background: transparent; }
+.reg-scroll::-webkit-scrollbar-thumb,
+table.contract::-webkit-scrollbar-thumb,
+table.map::-webkit-scrollbar-thumb {
+  background: var(--line-hi); border-radius: 999px;
+}
+
+/* ============================================================================
    Accessibility — honor reduced-motion, and print cleanly
    ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
