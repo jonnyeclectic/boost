@@ -188,7 +188,7 @@ def _hint_semantic_search(engine: str) -> None:
     # blows the terminal width. `break_long_words=False` keeps the shell command
     # runnable — a copy-pasteable `pip install ...` matters more than a hard
     # clamp, and _FIX is tested to hold no token long enough to overflow.
-    msg = "semantic search is off — %s" % dense.fix_hint(st.get("reason", ""))
+    msg = "semantic search is off — %s" % dense.fix_hint(st.get("reason", ""), st)
     for line in textwrap.wrap(msg, max(out.term_width(), 20),
                               break_long_words=False, break_on_hyphens=False):
         out.info(out.role(line, "muted"))

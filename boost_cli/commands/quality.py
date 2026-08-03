@@ -442,7 +442,7 @@ def _report_search_engine(bad) -> None:
                   st["chunks"], _s(st["chunks"]), st["taps"], _s(st["taps"])))
         return
 
-    fix = dense.fix_hint(st["reason"])
+    fix = dense.fix_hint(st["reason"], st)
     if st["degraded"]:
         # The store was built and is now dead weight: say what it holds, what
         # changed, and that search has silently been on BM25 the whole time.

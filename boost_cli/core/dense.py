@@ -160,8 +160,37 @@ _FIX = {
 }
 
 
-def fix_hint(reason: str) -> str:
-    """The single next action for a `status()` reason, or a safe default."""
+def fix_hint(reason: str, status: Optional[dict] = None) -> str:
+    """The single next action for a `status()` reason, or a safe default.
+
+    Pass the whole ``status()`` dict when you have one. The reason alone is
+    ambiguous for ``no-key``, and getting it wrong there is expensive rather
+    than merely unhelpful: the table's generic answer is "reinstall the extra",
+    which for a user whose store was built against an API provider installs the
+    *local* model, flips ``provider()`` to ``local``, and turns their next
+    status into ``provider-changed`` — a full re-embed of every vector they
+    already paid for. Seen in the wild at 750,416 chunks.
+
+    The reason ladder cannot distinguish these two states on its own, because
+    ``no-key`` is checked before the store is even looked at: an unfinished
+    install with no store and a complete install whose key merely went missing
+    both land here. ``built_provider`` is what separates them, and it lives in
+    the status dict.
+
+    Backwards compatible on purpose — every existing single-argument call keeps
+    the table's answer, so a caller with no status in hand is never worse off.
+    """
+    if reason == "no-key" and status:
+        env = embed.KEY_ENV.get(status.get("built_provider") or "")
+        # `chunks` guards the unfinished-install case: without vectors on disk
+        # there is nothing a key would revive, and "build it" is the real next
+        # step. A store built by the local model has no env var and correctly
+        # falls through — that user does need the package back.
+        if env and status.get("chunks"):
+            return ("set the key it was built with: `export %s=...` — "
+                    "reinstalling the extra swaps in the local model and "
+                    "forces all %s vectors to be re-embedded"
+                    % (env, "{:,}".format(int(status["chunks"]))))
     return _FIX.get(reason, "see `boost reindex --dense`")
 
 

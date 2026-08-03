@@ -84,6 +84,99 @@ class TestWording:
         assert "--force" in dense.fix_hint(reason)
 
 
+class TestNoKeyReadsTheStore:
+    """"no-key" has two states behind it, and the generic answer ruins one.
+
+    The reason ladder checks `no-key` *before* it looks at the store, so an
+    unfinished install (no vectors yet) and a working install whose key went
+    missing are indistinguishable by reason alone. The table's answer —
+    reinstall the extra — is right for the first and actively destructive for
+    the second: it installs the local model, which flips `provider()` to
+    `local`, which makes the next status `provider-changed`, whose remedy is
+    `reindex --dense --force`. That re-embeds every vector the user already
+    paid for.
+
+    Found on a real machine: sqlite-vec installed, a 750,416-chunk store built
+    with voyage-4, and no key exported into the MCP server's environment. Both
+    `boost doctor` and the MCP `SEARCH ENGINE` line told it to reinstall.
+    """
+
+    def _status(self, **over):
+        st = {"reason": "no-key", "built_provider": "voyage",
+              "built_model": "voyage-4", "built_dim": 1024,
+              "chunks": 750416, "store_exists": True}
+        st.update(over)
+        return st
+
+    def test_a_voyage_built_store_is_told_to_set_the_key(self):
+        hint = dense.fix_hint("no-key", self._status())
+        assert "VOYAGE_API_KEY" in hint
+
+    def test_a_voyage_built_store_is_not_told_to_reinstall(self):
+        # The whole point: this is the advice that costs the re-embed.
+        hint = dense.fix_hint("no-key", self._status())
+        assert "pip install" not in hint
+
+    def test_it_names_the_provider_that_built_the_store_not_the_first_one(self):
+        # An openai-built store must not be handed voyage's variable — the key
+        # would be accepted, the provider would differ, and the user would land
+        # on `provider-changed` anyway, one wasted step later.
+        hint = dense.fix_hint("no-key", self._status(built_provider="openai",
+                                                     built_model="text-embedding-3-small"))
+        assert "OPENAI_API_KEY" in hint and "VOYAGE_API_KEY" not in hint
+
+    def test_it_says_what_reinstalling_would_cost(self):
+        # A hint that only names the action leaves the user free to do the
+        # expensive thing anyway; the number is why they won't.
+        assert "750,416" in dense.fix_hint("no-key", self._status())
+
+    def test_an_unfinished_install_still_gets_the_table_answer(self):
+        # No vectors on disk means no key can revive anything: reinstalling the
+        # extra really is the next step, exactly as before.
+        hint = dense.fix_hint("no-key", self._status(built_provider=None,
+                                                     chunks=0, store_exists=False))
+        assert hint == dense._FIX["no-key"]
+
+    def test_a_locally_built_store_still_gets_the_table_answer(self):
+        # `local` has no API key to set — this user genuinely dropped the
+        # package and needs it back.
+        hint = dense.fix_hint("no-key", self._status(built_provider="local",
+                                                     built_model="BAAI/bge-small-en-v1.5"))
+        assert hint == dense._FIX["no-key"]
+
+    def test_no_status_argument_keeps_the_old_answer(self):
+        # Every pre-existing caller passes one argument; none may regress.
+        assert dense.fix_hint("no-key") == dense._FIX["no-key"]
+
+    @pytest.mark.parametrize("reason", [r for r in ALL_REASONS if r != "no-key"])
+    def test_other_reasons_ignore_the_status_dict(self, reason):
+        # Only "no-key" is ambiguous. If a status dict started steering the
+        # rest, the "these never chain" property would be back in play.
+        assert dense.fix_hint(reason, self._status(reason=reason)) == dense._FIX[reason]
+
+    def test_the_env_var_names_come_from_embed_not_a_local_copy(self):
+        # A second copy of these strings is how the hint would keep naming
+        # VOYAGE_API_KEY after embed.py renamed it.
+        from boost_cli.core import embed
+        assert embed.KEY_ENV["voyage"] == "VOYAGE_API_KEY"
+        assert set(embed.KEY_ENV) == {"voyage", "openai"}
+        for provider, env in embed.KEY_ENV.items():
+            hint = dense.fix_hint("no-key", self._status(built_provider=provider))
+            assert env in hint
+
+    def test_the_state_aware_hint_also_wraps_into_a_narrow_pane(self):
+        # Same invariant TestFitsANarrowTerminal holds for the table; this
+        # string bypasses the table, so it needs its own guard.
+        import textwrap
+        msg = "semantic search is off — %s" % dense.fix_hint("no-key", self._status())
+        for line in textwrap.wrap(msg, 60, break_long_words=False,
+                                  break_on_hyphens=False):
+            assert len(line) <= 60, "overflowing line: %r" % line
+
+    def test_the_state_aware_hint_still_names_a_command(self):
+        assert "`" in dense.fix_hint("no-key", self._status())
+
+
 class TestFallback:
     """An unknown reason must degrade to advice, not a KeyError in front of a user."""
 
