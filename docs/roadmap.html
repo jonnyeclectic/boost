@@ -654,13 +654,32 @@ a SaaS account is a required check that fails when someone else's billing lapses
 
 <b>What "production ready" forces, specifically.</b>
 
-<b>It cannot be an extra — the Python floor decides it.</b> boost is
-<code>requires-python = "&gt;=3.9"</code> and CI tests 3.9 / 3.12 / 3.14 across Linux, macOS and
-Windows. Measured 2026-08-02: <code>langchain</code> 1.3.14 declares
-<code>&gt;=3.10.0,&lt;4.0.0</code> and <code>langsmith</code> 0.10.15 declares <code>&gt;=3.10</code>. So
-an extra would either fail to resolve on the 3.9 leg or force boost to drop 3.9 for every user,
-including those who never touch LangChain. A separately versioned distribution that depends on
-<code>boost-skill-cli</code> keeps the floor a property of the integration.
+<b>Packaging is an open decision — the Python floor does not settle it.</b> This card first argued
+the opposite ("it cannot be an extra — the Python floor decides it"), and since that reasoning is
+in the repo's history and someone could act on it, it is corrected here rather than quietly
+rewritten.
+
+<i>What was right.</i> <code>langchain</code> 1.3.14 does declare
+<code>&gt;=3.10.0,&lt;4.0.0</code>, and <code>langgraph</code> 1.2.10 and <code>langsmith</code>
+0.10.15 both declare <code>&gt;=3.10</code> — re-measured 2026-08-03, unchanged. Installing a
+<code>[langchain]</code> extra on the old 3.9 CI leg really would have failed.
+
+<i>What did not follow from it.</i> That failure is confined to whoever asks for the extra, and it
+is loud rather than silent: pip answers <i>"Ignored the following versions that require a different
+python version"</i> and names the constraint it could not satisfy. A dependency's floor does not
+propagate to its host, so an extra could not have forced <code>boost-skill-cli</code> to drop 3.9
+for users who never installed it — and which extras a CI leg installs is that leg's choice. "It
+cannot be an extra" was a conclusion the evidence did not reach.
+
+<i>What is now moot.</i> <code>requires-python</code> is <code>&gt;=3.12</code> and CI tests
+3.12 / 3.13 / 3.14, so every interpreter boost supports clears all three packages with room to
+spare.
+
+So the decision rests on grounds the original argument never got to. A separately versioned
+<code>boost-langchain</code> distribution still looks right, for a reason that has nothing to do
+with Python versions: langchain majors move faster than boost does, and an extra drags that cadence
+into boost's own lock files, <code>licenses</code> job and <code>pip-audit</code> job — a real cost
+for a package whose value is being boring to install.
 
 <b>There is a dependency conflict boost already owns, and it blocks this.</b> The
 <code>[eval]</code> extra pins <code>langchain-core&lt;0.4</code>,
@@ -668,7 +687,7 @@ including those who never touch LangChain. A separately versioned distribution t
 hard-imports a <code>ChatVertexAI</code> path that langchain ≥1.0 removed. One environment cannot
 hold both that pin and langchain 1.x. The good news is measured: <b>ragas 0.4.3 declares
 <code>langchain</code>, <code>langchain-core</code>, <code>langchain-community</code> and
-<code>langchain_openai</code> with no upper bound at all</b>, and still supports Python ≥3.9. So the
+<code>langchain_openai</code> with no upper bound at all</b> (re-measured 2026-08-03). So the
 first step is small, independently valuable, and testable on its own — move <code>[eval]</code>
 from <code>ragas&gt;=0.2,&lt;0.3</code> to 0.4 and delete the three pins. Nothing else should be built
 until that lands, or the project holds two incompatible langchain majors.
@@ -5535,13 +5554,16 @@ what retrieval returned, which is the same failure the grounding checks exist to
         <details class="cardbody"><summary>Write-up</summary>
         <p><code>refurb</code>'s unique <code>FURB</code> checks flag dated idioms
            the ruff families miss, and <code>pyupgrade</code> rewrites to the
-           cleanest form the <code>&gt;=3.9</code> floor allows. Keeps the codebase
-           reading like modern Python instead of accreting legacy patterns.</p></details>
+           cleanest form the floor allows. Keeps the codebase
+           reading like modern Python instead of accreting legacy patterns.
+           Shipped against <code>&gt;=3.9</code>; the floor later moved to
+           <code>&gt;=3.12</code>, which widens what "cleanest form" means — the
+           PEP 585/604 sweep that unlocks is its own item.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">respects 3.9 floor</span>
+          <span class="m">shipped under the 3.9 floor; the floor is now 3.12</span>
         </div>
       </article>
 
