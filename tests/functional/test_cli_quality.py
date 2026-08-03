@@ -87,6 +87,24 @@ class TestDoctor:
         assert "3 broken symlinks in agent dirs" in r.out
         assert "1 skill installed · 1 tap synced · 3 broken links" in r.out
 
+    def test_links_outside_the_declared_scope_rc1(self, boost, installed):
+        # doctor must agree with `boost sync`, which reports this. A "healthy"
+        # that contradicts the command it tells you to run is worse than no
+        # check — and before the lock recorded what is really linked, every
+        # surface here said healthy while two stray symlinks sat on disk.
+        boost("install", "brainstorming", "--force", "--agent", "cursor")
+        r = boost("doctor", expect=1)
+        assert ("skill brainstorming is linked for claude-code, windsurf, "
+                "outside its declared scope (cursor) — run `boost sync --prune`"
+                in r.out)
+        assert "need attention" in r.out
+
+    def test_a_narrowed_skill_with_no_stray_links_is_healthy(self, boost, tapped):
+        # A first narrow install declares AND links the same set, so the check
+        # must stay quiet — it fires on divergence, not on narrowing.
+        boost("install", "brainstorming", "--agent", "cursor")
+        assert "● healthy" in boost("doctor").out
+
     def test_empty_env_rc0(self, boost, sandbox):
         r = boost("doctor")
         assert "no taps configured — add one with `boost tap owner/repo`" in r.out

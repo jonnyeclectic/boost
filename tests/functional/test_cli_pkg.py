@@ -723,10 +723,45 @@ class TestSyncJson:
         plan = json.loads(boost("sync", "--diff", "--json").out)
         assert plan == {"missing_store": [], "missing_links": [],
                         "stale_links": [], "orphaned_store": [],
-                        "missing_materializations": [],
+                        "missing_materializations": [], "out_of_scope_links": [],
                         "project": {"missing": [], "orphaned": []}}
         data = json.loads(boost("sync", "--json").out)
-        assert data == {"actions": [], "pruned": [], "orphaned_store": []}
+        assert data == {"actions": [], "pruned": [], "orphaned_store": [],
+                        "out_of_scope_links": []}
+
+    def test_a_narrowing_reinstall_is_reported_and_pruned_only_on_request(
+            self, boost, installed):
+        """The CLI end of the divergence: `boost sync` used to say nothing.
+
+        JSON round-trips the (skill, agent) tuples as lists.
+        """
+        boost("install", "brainstorming", "--force", "--agent", "cursor")
+        stray = [["brainstorming", "claude-code"], ["brainstorming", "windsurf"]]
+
+        plan = json.loads(boost("sync", "--diff", "--json").out)
+        assert sorted(plan["out_of_scope_links"]) == stray
+
+        # A plain sync reports them and changes nothing.
+        data = json.loads(boost("sync", "--json").out)
+        assert sorted(data["out_of_scope_links"]) == stray
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+
+        # --prune is the opt-in that acts.
+        data = json.loads(boost("sync", "--json", "--prune").out)
+        assert data["out_of_scope_links"] == []
+        assert not (paths.home() / ".claude" / "skills" / "brainstorming").exists()
+        assert (paths.home() / ".cursor" / "skills" / "brainstorming").is_symlink()
+        assert json.loads(boost("sync", "--diff", "--json").out)[
+            "out_of_scope_links"] == []
+
+    def test_the_plain_text_sync_names_the_way_out(self, boost, installed):
+        # A warning the user cannot act on is only marginally better than
+        # silence, so it carries both directions of the fix.
+        boost("install", "brainstorming", "--force", "--agent", "cursor")
+        r = boost("sync")
+        assert "outside the declared scope" in r.out
+        assert "boost sync --prune" in r.out
+        assert "everything in sync" not in r.out
 
     def test_json_prune_orphan(self, boost, installed):
         orphan = paths.store_dir() / "orphan-y"

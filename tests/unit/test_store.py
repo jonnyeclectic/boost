@@ -492,7 +492,7 @@ class TestUninstall:
 class TestSyncPlan:
     EMPTY: ClassVar[dict] = {"missing_store": [], "missing_links": [],
              "stale_links": [], "orphaned_store": [],
-             "missing_materializations": []}
+             "missing_materializations": [], "out_of_scope_links": []}
 
     def test_clean_state_empty_plan(self, brainstorming):
         assert store.sync_plan() == self.EMPTY
@@ -1674,6 +1674,20 @@ class TestPreservedAgentScope:
         assert store.preserved_agent_scope(
             None, {"materializations": [{"path": "/y"}]}) is None
 
+    def test_a_declaration_outranks_the_link_list(self):
+        # `agents` describes disk and may name agents outside a narrowing, so
+        # replaying it would relink what the declaration excludes.
+        assert store.preserved_agent_scope(
+            None, {"agents": ["claude-code", "cursor"],
+                   "only_agents": ["cursor"]}) == ["cursor"]
+
+    def test_no_declaration_still_falls_back_to_the_link_list(self):
+        # Entries written before `only_agents` existed, and skills never
+        # narrowed, must keep replaying what is linked.
+        assert store.preserved_agent_scope(
+            None, {"agents": ["claude-code"], "only_agents": None}) == \
+            ["claude-code"]
+
     def test_agents_is_preferred_over_materializations(self):
         # A project skill records both; `agents` is the complete list (it
         # carries forward agents an earlier filtered install left untouched).
@@ -1888,3 +1902,272 @@ class TestSyncRespectsDeclaredScope:
         store.install_from_path(src, only_agents=["claude-code"])
         assert lockfile.get_skill("mine")["only_agents"] == ["claude-code"]
         assert store.sync_plan()["missing_links"] == []
+
+
+class TestLinkedAgents:
+    """`store.linked_agents` — the agent set read off disk, not off the lock."""
+
+    def test_it_reports_the_agents_holding_a_link(self, brainstorming):
+        assert store.linked_agents("brainstorming") == LINKED_AGENTS
+
+    def test_a_name_that_was_never_installed_has_no_links(self, sandbox):
+        assert store.linked_agents("never-installed") == []
+
+    def test_gemini_is_never_counted(self, brainstorming):
+        # It reads the canonical store natively (links_skills: False), so it has
+        # no link by design and reporting one would invent a file.
+        assert "gemini" not in store.linked_agents("brainstorming")
+
+    def test_a_regular_file_squatting_the_path_is_not_a_link(self, tap, entry):
+        # link_agents calls this a conflict and skips it; unlink_agents leaves
+        # it alone. Counting it would make install record an agent that
+        # uninstall then refuses to clean up — the divergence, mirrored.
+        store.install(entry, only_agents=["cursor"])
+        squatter = paths.home() / ".claude" / "skills" / "brainstorming"
+        squatter.parent.mkdir(parents=True, exist_ok=True)
+        squatter.write_text("not ours", encoding="utf-8")
+        assert store.linked_agents("brainstorming") == ["cursor"]
+
+
+class TestAgentsRecordsWhatIsLinked:
+    """`agents` describes disk; `only_agents` describes the request.
+
+    PR #311 split the two fields and stated the contract in as many words —
+    "`agents` keeps meaning what is actually linked". install broke it by
+    writing back only the links THIS run created. A narrowing re-install
+    (`--agent cursor --force`) links cursor, *skips* the other two without
+    unlinking them, and recorded a set of one: three symlinks on disk, a lock
+    claiming one, and sync/doctor/verify/list/health all reporting healthy.
+    """
+
+    def test_a_narrowing_reinstall_records_every_link_that_survives(self, tap,
+                                                                    entry):
+        store.install(entry)
+        store.install(entry, force=True, only_agents=["cursor"])
+        assert lockfile.get_skill("brainstorming")["agents"] == LINKED_AGENTS
+
+    def test_and_still_records_the_request_separately(self, tap, entry):
+        # The narrowing is not being undone — only_agents keeps recording it.
+        store.install(entry)
+        store.install(entry, force=True, only_agents=["cursor"])
+        assert lockfile.get_skill("brainstorming")["only_agents"] == ["cursor"]
+
+    def test_the_surviving_links_really_are_on_disk(self, tap, entry):
+        # Assert the premise too: without this the test above would also pass
+        # for a lock that lies in the opposite direction.
+        store.install(entry)
+        store.install(entry, force=True, only_agents=["cursor"])
+        for agent in LINKED_AGENTS:
+            assert _link(agent).is_symlink(), agent
+
+    def test_a_first_narrow_install_records_only_that_agent(self, tap, entry):
+        # Nothing to carry forward: the request and reality agree.
+        store.install(entry, only_agents=["claude-code"])
+        assert lockfile.get_skill("brainstorming")["agents"] == ["claude-code"]
+
+    def test_a_link_deleted_behind_boosts_back_is_not_recorded(self, tap, entry):
+        # Reading disk means the record self-corrects rather than inheriting a
+        # stale list — the reason this is not implemented as a union.
+        store.install(entry)
+        _link("windsurf").unlink()
+        store.install(entry, force=True, only_agents=["cursor"])
+        assert lockfile.get_skill("brainstorming")["agents"] == [
+            "claude-code", "cursor"]
+
+    def test_import_from_path_records_disk_too(self, sandbox, tmp_path):
+        # The second entry point to the same lock entry, with the same bug.
+        src = tmp_path / "mine"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: mine\ndescription: d\nversion: 1.0.0\n---\nbody\n",
+            encoding="utf-8")
+        store.install_from_path(src)
+        store.install_from_path(src, force=True, only_agents=["cursor"])
+        assert lockfile.get_skill("mine")["agents"] == LINKED_AGENTS
+
+
+class TestUntouchedMaterializations:
+    def test_it_drops_rows_for_agents_this_run_wrote(self):
+        assert store._untouched_materializations(
+            {"materializations": [{"agent": "cursor"}, {"agent": "windsurf"}]},
+            ["cursor"]) == [{"agent": "windsurf"}]
+
+    def test_no_existing_entry_carries_nothing(self):
+        assert store._untouched_materializations(None, ["cursor"]) == []
+
+    def test_a_missing_key_carries_nothing(self):
+        assert store._untouched_materializations({}, []) == []
+
+    def test_a_null_materializations_value_carries_nothing(self):
+        assert store._untouched_materializations({"materializations": None},
+                                                 []) == []
+
+
+class TestNarrowedRuleAndWorkflowKeepTheirRecords:
+    """The severe half — an unrecorded materialization is *unremovable*.
+
+    `_uninstall_rule` and `_uninstall_workflow` walk `materializations`; they
+    never sweep the agent dirs the way `unlink_agents` does for skills. So a
+    narrowing re-install that dropped a row left a managed block inside the
+    user's own CLAUDE.md, or a live slash command, that no boost command could
+    reverse — not a recoverable symlink, a permanent edit to a file the user
+    reads every session.
+    """
+
+    def test_a_narrowed_rule_still_records_the_untouched_agents(self, tap):
+        store.install(_rule_entry(tap))
+        store.install(_rule_entry(tap), force=True, only_agents=["cursor"])
+        rec = lockfile.get_rule("team-conventions")
+        assert {m["agent"] for m in rec["materializations"]} == {
+            "claude-code", "windsurf", "cursor", "gemini"}
+
+    def test_an_agent_rewritten_in_place_is_not_recorded_twice(self, tap):
+        # The carry-forward has to exclude what this run wrote, or uninstall
+        # walks the same path twice and the row count drifts on every install.
+        store.install(_rule_entry(tap))
+        store.install(_rule_entry(tap), force=True, only_agents=["cursor"])
+        rows = lockfile.get_rule("team-conventions")["materializations"]
+        assert len(rows) == len({m["agent"] for m in rows}) == 4
+
+    def test_uninstall_then_removes_the_orphaned_claude_md_block(self, tap):
+        store.install(_rule_entry(tap))
+        claude_md = paths.home() / ".claude" / "CLAUDE.md"
+        # A hand-authored note, so the file survives the strip and the
+        # assertion is about the block rather than about the file existing —
+        # an emptied CLAUDE.md is deleted outright, which would pass for free.
+        claude_md.write_text("# My own standing notes\n\n"
+                             + claude_md.read_text(encoding="utf-8"),
+                             encoding="utf-8")
+
+        store.install(_rule_entry(tap), force=True, only_agents=["cursor"])
+        store.uninstall("team-conventions")
+
+        text = claude_md.read_text(encoding="utf-8")
+        assert "boost:rule:team-conventions" not in text
+        assert "# My own standing notes" in text
+
+    def test_uninstall_then_removes_the_orphaned_rule_file(self, tap):
+        store.install(_rule_entry(tap))
+        store.install(_rule_entry(tap), force=True, only_agents=["cursor"])
+        store.uninstall("team-conventions")
+        assert not (paths.home() / ".windsurf" / "rules"
+                    / "team-conventions.md").exists()
+
+    def test_a_narrowed_workflow_still_records_the_untouched_agents(self, tap):
+        store.install(_workflow_entry(tap))
+        store.install(_workflow_entry(tap), force=True, only_agents=["cursor"])
+        rec = lockfile.get_workflow("ship-it")
+        assert {m["agent"] for m in rec["materializations"]} == {
+            "claude-code", "windsurf", "cursor", "gemini"}
+
+    def test_uninstall_then_removes_the_orphaned_slash_command(self, tap):
+        store.install(_workflow_entry(tap))
+        store.install(_workflow_entry(tap), force=True, only_agents=["cursor"])
+        store.uninstall("ship-it")
+        assert not (paths.home() / ".claude" / "commands" / "ship-it.md").exists()
+        assert not (paths.home() / ".gemini" / "commands" / "ship-it.toml").exists()
+
+
+class TestSyncSeesLinksOutsideTheDeclaredScope:
+    """The blind spot between sync's two sweeps.
+
+    The missing-link sweep is narrowed to `only_agents`, so it never visits an
+    excluded agent; the stale-link sweep visits every agent dir but keys on the
+    skill *name* being absent from the lock. A live, boost-owned link outside a
+    narrowing satisfies neither, so `boost sync` printed "everything in sync".
+    """
+
+    def _narrowed(self, entry):
+        store.install(entry)
+        store.install(entry, force=True, only_agents=["cursor"])
+
+    def test_a_narrowing_reinstall_is_reported(self, tap, entry):
+        self._narrowed(entry)
+        assert sorted(store.sync_plan()["out_of_scope_links"]) == [
+            ("brainstorming", "claude-code"), ("brainstorming", "windsurf")]
+
+    def test_an_unnarrowed_skill_reports_nothing(self, brainstorming):
+        # scoped_agents fails open, so every agent is in scope by definition.
+        assert store.sync_plan()["out_of_scope_links"] == []
+
+    def test_a_first_narrow_install_reports_nothing(self, tap, entry):
+        store.install(entry, only_agents=["claude-code"])
+        assert store.sync_plan()["out_of_scope_links"] == []
+
+    def test_a_narrowed_skill_with_no_stray_link_reports_nothing(self, tap,
+                                                                 entry):
+        self._narrowed(entry)
+        _link("claude-code").unlink()
+        _link("windsurf").unlink()
+        assert store.sync_plan()["out_of_scope_links"] == []
+
+    def test_sync_apply_leaves_them_alone(self, tap, entry):
+        # They resolve, and an agent is using them. Removing one changes which
+        # agents can run a skill, so it stays behind an explicit opt-in.
+        self._narrowed(entry)
+        store.sync_apply(store.sync_plan())
+        for agent in LINKED_AGENTS:
+            assert _link(agent).is_symlink(), agent
+
+    def test_they_are_not_reported_as_stale_or_missing(self, tap, entry):
+        # The two categories that already existed must not start claiming them,
+        # or sync_apply would delete or re-link them without the opt-in.
+        self._narrowed(entry)
+        plan = store.sync_plan()
+        assert plan["stale_links"] == []
+        assert plan["missing_links"] == []
+
+    def test_prune_removes_them(self, tap, entry):
+        self._narrowed(entry)
+        assert len(store.prune_out_of_scope_links(store.sync_plan())) == 2
+        assert _link("cursor").is_symlink()
+        assert not _link("claude-code").exists()
+        assert not _link("windsurf").exists()
+
+    def test_prune_corrects_the_lock_as_well_as_the_disk(self, tap, entry):
+        # Leaving `agents` naming a link it just deleted would recreate the
+        # divergence in the opposite direction.
+        self._narrowed(entry)
+        store.prune_out_of_scope_links(store.sync_plan())
+        assert lockfile.get_skill("brainstorming")["agents"] == ["cursor"]
+
+    def test_pruning_twice_is_a_no_op(self, tap, entry):
+        self._narrowed(entry)
+        store.prune_out_of_scope_links(store.sync_plan())
+        assert store.sync_plan()["out_of_scope_links"] == []
+        assert store.prune_out_of_scope_links(store.sync_plan()) == []
+
+    def test_an_agent_disabled_between_plan_and_prune_is_skipped(self,
+                                                                 brainstorming):
+        # The plan is a snapshot; config can change under it. Skipping beats
+        # raising, since the rest of the plan is still actionable.
+        assert store.prune_out_of_scope_links(
+            {"out_of_scope_links": [("brainstorming", "no-such-agent")]}) == []
+
+    def test_a_plan_without_the_key_is_tolerated(self, sandbox):
+        # sync_apply/prune are called with hand-built plans in places.
+        assert store.prune_out_of_scope_links({}) == []
+
+    def test_reinstall_does_not_recreate_a_link_the_scope_excludes(self, tap,
+                                                                   entry):
+        """`reinstall` and `sync` have to agree about the declared scope.
+
+        Once `agents` records disk it can name agents outside a narrowing, and
+        replaying it would relink one the user had just removed by hand —
+        while `boost sync`, which reads `only_agents`, correctly leaves it
+        alone. Which command you happened to run would decide your agent set.
+        """
+        self._narrowed(entry)
+        _link("claude-code").unlink()
+        store.install(entry, force=True)               # what `update` does
+        assert not _link("claude-code").exists()
+        assert _link("cursor").is_symlink()
+
+    def test_a_prune_is_journalled_and_a_no_op_is_not(self, tap, entry):
+        # Deleting a working link is the one destructive thing here, so it has
+        # to leave a trace — and a run that deleted nothing must not.
+        self._narrowed(entry)
+        store.prune_out_of_scope_links(store.sync_plan())
+        assert len(journal.events(action="sync-prune")) == 1
+        store.prune_out_of_scope_links(store.sync_plan())
+        assert len(journal.events(action="sync-prune")) == 1
