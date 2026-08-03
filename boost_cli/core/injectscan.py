@@ -103,6 +103,47 @@ RULES: tuple = (
          _rx(r"\brm\s+-[a-z]*r[a-z]*f[a-z]*\s+(?:--no-preserve-root\s+)?"
              r"(?:/|~|\$HOME)\S*"),
          "destructive recursive delete of a broad path"),
+    # ── concealment ──────────────────────────────────────────────────────
+    # The rules above catch content that tells the agent to do something. These
+    # catch content that tells it not to SAY so — which is what turns a visible
+    # misbehaviour into a silent one, and is present in every worked example of
+    # this attack.
+    Rule("hide-from-user", "high",
+         # The verbs take a `\w*` tail, not a `\b`: "avoid informING the user"
+         # is the same instruction as "do not inform the user", and requiring
+         # the bare stem let the gerund through.
+         _rx(r"\b(?:do\s*n[o']?t|never|avoid|refrain\s+from)\b[^.\n]{0,30}?\b"
+             r"(?:mention|tell|reveal|disclos|inform|report|notify|notif)\w*"
+             r"[^.\n]{0,30}?\b(?:user|human|operator|owner)\b"),
+         "asks the agent to hide this from the user"),
+    Rule("act-silently", "high",
+         _rx(r"\b(?:without\s+(?:telling|informing|notifying|alerting)|"
+             r"silently|secretly|covertly)\b[^.\n]{0,30}?\b"
+             r"(?:the\s+)?(?:user|human|operator|send|run|execute|perform)\b"),
+         "asks the agent to act without telling the user"),
+    # ── hidden from the human reviewer, not from the model ───────────────
+    # Both of these are about the *render*: the model reads the file, a person
+    # reads a preview of it, and these are the two ways those disagree.
+    Rule("invisible-characters", "high",
+         # Written as escapes on purpose — a literal zero-width character here
+         # would be invisible in the editor of whoever next reviews this rule,
+         # which is the exact property being detected. A test asserts this file
+         # contains none, so it cannot rot back.
+         re.compile(
+             "["
+             "\u200b-\u200f"          # zero-width space/joiners, LRM, RLM
+             "\u202a-\u202e"          # bidi embedding/override (Trojan Source)
+             "\u2060-\u2064"          # word joiner, invisible operators
+             "\u2066-\u2069"          # bidi isolates
+             "\ufeff"                  # BOM appearing mid-file
+             "\U000e0000-\U000e007f"  # Unicode tag block: renders as nothing
+             "]"),
+         "contains invisible or bidirectional characters"),
+    Rule("html-comment-directive", "medium",
+         _rx(r"<!--(?=[^>]*?\b(?:you\s+must|always|never|ignore|instead|"
+             r"important|system|instruction|do\s+not|priority|override)\b)"
+             r".*?-->"),
+         "hides a directive in an HTML comment"),
 )
 
 

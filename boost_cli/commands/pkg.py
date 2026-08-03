@@ -637,12 +637,19 @@ def cmd_sync(argv: List[str]) -> int:
 
 # ── update ───────────────────────────────────────────────────────────────
 
+def _show_and_confirm(label: str, diff, name: str) -> bool:
+    """Print why an update is risky, show it, and ask. Shared by all kinds."""
+    out.warn("%s: upstream update %s" % (label, "; ".join(diff.reasons)))
+    print(diff.text)
+    return out.confirm("Apply this update to %s?" % name)
+
+
 def _confirm_risky_update(name: str, entry: dict) -> bool:
     """Gate an in-place update behind a visible diff when it is risky.
 
     Diffs the installed skill against the incoming source. If the change adds
-    executable-looking instructions (shell commands, pipe-to-shell, shebangs),
-    the unified diff is printed and the update must be confirmed — so a poisoned
+    executable-looking instructions or prose aimed at redirecting the agent, the
+    unified diff is printed and the update must be confirmed — so a poisoned
     update is *seen* before it lands. Routine edits apply silently. If the
     source can't be read we fail open and let ``store.install`` surface the real
     error rather than blocking on a phantom diff.
@@ -655,9 +662,61 @@ def _confirm_risky_update(name: str, entry: dict) -> bool:
                                 new_tree)
     if not diff.risky:
         return True
-    out.warn("%s: upstream update changes executable-looking instructions" % name)
-    print(diff.text)
-    return out.confirm("Apply this update to %s?" % name)
+    return _show_and_confirm(name, diff, name)
+
+
+def _materialized_sides(kind: str, name: str, lk: dict, new_raw: str):
+    """``(installed_text, incoming_text)`` for a rule/workflow, same shape both.
+
+    Rules and workflows keep no copy of the source they were installed from —
+    only the artifact they were materialized into. That artifact is the honest
+    left-hand side anyway: it is the text the agent is loading *right now*, and
+    a diff against it is the diff the user actually cares about.
+
+    Each recorded materialization says how it was written, so the incoming half
+    is reconstructed the same way: a verbatim rule drop compares raw to raw, a
+    CLAUDE.md rule compares managed block to newly rendered block, and a
+    workflow compares the rendered file to the same render of the new source —
+    which keeps Gemini's TOML comparable with Gemini's TOML.
+
+    Falls back to ``("", new_raw)`` when nothing can be read back, so an
+    unreadable artifact scans the whole incoming file rather than nothing.
+    """
+    from ..core import rules, workflows
+    for m in lk.get("materializations") or []:
+        try:
+            current = Path(m.get("path", "")).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if kind == "rule":
+            if m.get("mode") != rules.MODE_CLAUDE:
+                return current, new_raw
+            old = rules.read_block(current, name)
+            if old is None:
+                continue
+            meta, body = frontmatter.parse(new_raw)
+            return old, rules.render_claude_body(
+                str(meta.get("name") or name), body)
+        return current, workflows.render(
+            m.get("agent"), m.get("slot", ""), name, new_raw)
+    return "", new_raw
+
+
+def _confirm_risky_materialized(kind: str, name: str, lk: dict,
+                                new_raw: str) -> bool:
+    """The same gate as `_confirm_risky_update`, for rules and workflows.
+
+    This used to be absent, and the asymmetry ran the wrong way: a skill that
+    grew a shell command was gated, while a rule — which is merged into the
+    standing instructions the agent reads every session, and which this repo's
+    own notes call "more invasive than a skill, not less" — was refreshed in
+    place with one line of output and no diff.
+    """
+    old, new = _materialized_sides(kind, name, lk, new_raw)
+    diff = updatediff.diff_tree({name: old}, {name: new})
+    if not diff.risky:
+        return True
+    return _show_and_confirm("%s %s" % (kind, name), diff, name)
 
 
 def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
@@ -665,9 +724,13 @@ def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
     tap, reinstall (force) when the source version bumped or its content sha
-    changed. Rules/workflows carry no pin/quarantine flags and their source is a
-    single file, so there is no risky-diff gate — re-applying a file drop or a
-    CLAUDE.md managed block is cheap. Returns how many were refreshed.
+    changed — behind the same risky-diff gate the skill loop uses. Returns how
+    many were refreshed.
+
+    Rules and workflows still carry no pin/quarantine flags, which is a separate
+    gap. What they no longer lack is the *diff*: re-applying a CLAUDE.md managed
+    block is cheap to do and expensive to get wrong, because that block is the
+    standing instruction the agent reads every session.
     """
     import hashlib
     n = 0
@@ -696,6 +759,16 @@ def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
                 cur = None
             changed = bool(cur and cur != lk.get("sha256"))
         if not changed:
+            continue
+        try:
+            new_raw = (registry.get(tapname).path
+                       / entry.get("skill_md", "")).read_text(
+                           encoding="utf-8", errors="replace")
+        except (OSError, BoostError):
+            new_raw = ""        # unreadable: store.install reports the real error
+        if new_raw and not _confirm_risky_materialized(kind, name, lk, new_raw):
+            out.warn("%s %s: update skipped — review the diff, then `boost "
+                     "update --yes` to apply" % (kind, name))
             continue
         try:
             # keep the item where it was installed (user vs a specific repo).
