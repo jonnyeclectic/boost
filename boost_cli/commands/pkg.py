@@ -725,19 +725,32 @@ def cmd_update(argv: List[str]) -> int:
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
     args = ap.parse_args(argv)
-    results = registry.update(args.tap or None)
-    if not results:
+    results, failures = registry.update(args.tap or None)
+    if not results and not failures:
         out.info("no taps configured — start with `boost tap --defaults`")
         return 0
     for tname, summary in results.items():
         catalog.rebuild_tap(registry.get(tname))
         out.ok("%s: %s" % (tname, summary))
+    # Report the dead ones by name, after the successes, so a broken upstream
+    # reads as one line of bad news rather than as the whole command failing.
+    for tname, err in failures.items():
+        out.warn("%s: %s" % (tname, err))
+    if failures:
+        out.info(out.role(
+            "%d of %d taps could not be refreshed — the rest are up to date. "
+            "Drop a dead one with `boost untap <name>`."
+            % (len(failures), len(results) + len(failures)), "muted"))
     # A pulled tap can add, drop, or rename catalogue entries, so the
     # completion name cache must not survive an update unrefreshed.
     complete.refresh_names()
     journal.log("update", args.tap or "all")
     if args.taps_only:
-        return 0
+        # Same exit-code rule as the end of the full path: non-zero only when
+        # nothing was refreshed at all. This early return predates that rule
+        # and kept answering 0 with every tap dead — and a cron'd
+        # `boost update --taps-only` exists precisely to notice that morning.
+        return 1 if failures and not results else 0
 
     upgraded = 0
     for name, lk in sorted(lockfile.installed().items()):
@@ -782,8 +795,14 @@ def cmd_update(argv: List[str]) -> int:
     upgraded += _update_materialized("rule", lockfile.installed_rules(), results)
     upgraded += _update_materialized("workflow", lockfile.installed_workflows(), results)
     if not upgraded:
-        out.ok("everything up to date")
-    return 0
+        # Don't claim "everything up to date" when some taps were never
+        # reached — that is exactly the false all-clear this fix exists to stop.
+        out.ok("everything up to date" if not failures
+               else "everything up to date, except the taps above")
+    # Non-zero only when nothing was refreshed at all. A partial run did the job
+    # it could do, and failing it would put us back to one dead upstream
+    # breaking `boost update` for the other 79.
+    return 1 if failures and not results else 0
 
 
 # ── reinstall ────────────────────────────────────────────────────────────
