@@ -105,8 +105,24 @@ PROTOCOL_VERSION = "2024-11-05"
 # look at all: one that expects a hit to seize the work is safer not looking.
 # The closing bound names concrete shapes instead of the word "trivial", which
 # an unbounded "always check first" needs or the guidance gets ignored wholesale.
+# Two claims were removed from this text rather than restated, and the reason
+# is the same for both: they were the only numbers here an agent could not
+# check, in the one block of boost prose it reads before deciding anything.
+#
+#   "95% of the time against 79% without it" — real, but measured over the
+#   SIX-repo corpus. tests/eval/baseline.json records BM25 hit@1 at 0.4725 for
+#   the twenty-repo corpus that replaced it precisely because six was
+#   unrealistically small (CLAUDE.md), and docs/eval.html publishes both side by
+#   side. Quoting 79% as today's baseline overstated it by 31 points, and the
+#   reranked figure has never been re-measured at twenty. The mechanism is the
+#   part that changes an agent's decision; the arithmetic belongs to the eval
+#   gate, which floors it against a corpus it names.
+#
+#   "vetted" — the catalog is indexed, not reviewed. #442 struck the word from
+#   every tool description for that reason and left it here, where it did the
+#   same work of implying a guarantee nobody performs.
 INSTRUCTIONS = (
-    "boost is a shared shelf of vetted, version-tracked skills for AI coding "
+    "boost is a shared shelf of version-tracked skills for AI coding "
     "agents — procedures someone already worked out, ready to follow.\n"
     "\n"
     "THE CHECK: if the task in front of you has a name — \"set up code "
@@ -114,10 +130,9 @@ INSTRUCTIONS = (
     "flaky tests\" — someone has probably already written it down. Call "
     "boost_list for what is installed on this machine and boost_search for "
     "what exists. Both are read-only and install nothing. boost_list is "
-    "instant. boost_search takes a few seconds: it retrieves, then ranks them "
-    "with an LLM, which is worth it because you act on the top result — "
-    "measured, that ranking puts the right skill first 95% of the time "
-    "against 79% without it.\n"
+    "instant. boost_search costs 10-15 seconds: it retrieves, then an LLM "
+    "reranks every match, which is what makes the top result worth acting on "
+    "rather than skimming ten.\n"
     "\n"
     "Finding nothing is a good outcome, not a wasted call: it tells you to "
     "build it yourself, now knowing that nothing already covers it. Finding "
