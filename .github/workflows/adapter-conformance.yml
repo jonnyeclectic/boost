@@ -3,7 +3,7 @@ name: adapter-conformance
 # Opt-in: does `boost adapt`'s output actually load in the real frameworks?
 #
 # This is deliberately OUT of the release gate (ci.yml). boost stays
-# zero-dependency and its own suite runs on Python 3.9-3.14; CrewAI and the
+# zero-dependency and its own suite runs on Python 3.12-3.14; CrewAI and the
 # OpenAI Agents SDK are third-party trees we don't control, so coupling the
 # PyPI release to their install/import would let upstream drift redden a
 # release. Instead, the release gate proves the emitted source is deterministic
@@ -68,7 +68,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           # 3.13, NOT 3.14: CrewAI pulls tiktoken, which has no cp314 wheel yet
-          # and fails to build from source. boost itself supports 3.9-3.14; this
+          # and fails to build from source. boost itself supports 3.12-3.14; this
           # job is pinned to what the frameworks can actually install on.
           python-version: "3.13"
       - name: git identity (fixture repos)

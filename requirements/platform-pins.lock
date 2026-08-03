@@ -20,25 +20,12 @@
 librt ; platform_python_implementation != 'PyPy'
 
 [test-tools]
-attrs ; python_full_version < '3.10'
 colorama ; sys_platform == 'win32'
-coverage ; python_full_version < '3.10'
-coverage ; python_full_version >= '3.10'
-exceptiongroup ; python_full_version < '3.11'
-hypothesis ; python_full_version < '3.10'
-hypothesis ; python_full_version >= '3.10'
-iniconfig ; python_full_version < '3.10'
-iniconfig ; python_full_version >= '3.10'
-pytest ; python_full_version < '3.10'
-pytest ; python_full_version >= '3.10'
-tomli ; python_full_version <= '3.11'
-typing-extensions ; python_full_version < '3.11'
 
 [mutation-tools]
 colorama ; sys_platform == 'win32'
 pyyaml ; python_full_version != '3.13.*'
 pyyaml-ft ; python_full_version == '3.13.*'
-tomli ; python_full_version <= '3.11'
 
 [coverage-tools]
 colorama ; sys_platform == 'win32'

@@ -5,7 +5,7 @@ name: floors
 # actually exercised — "works here, breaks on the floor we advertise" ships
 # silently. This job resolves the extras with uv's lowest-direct strategy,
 # installs exactly the declared floors (sqlite-vec==0.1.6, behave==1.2.6,
-# pytest-benchmark==4.0) on the oldest supported Python (3.9), and runs the
+# pytest-benchmark==4.0) on the oldest supported Python (3.12), and runs the
 # unit + functional suites against that combination. If it goes red, the fix
 # is raising the floor in pyproject.toml — in the very PR that broke it.
 #
@@ -26,7 +26,7 @@ permissions: {}
 
 jobs:
   lowest:
-    name: suite on declared floors (py3.9)
+    name: suite on declared floors (py3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -42,7 +42,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.9"
+          python-version: "3.12"
       - name: git identity (fixture repos)
         run: |
           git config --global user.email ci@boost.test

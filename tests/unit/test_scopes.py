@@ -272,7 +272,7 @@ def test_contains_fails_closed_when_resolution_errors(tmp_path, monkeypatch):
     itself: a global patch also breaks mutmut's instrumentation, which resolves
     its own source paths on every trampoline hit. The stand-in is a plain stub
     rather than a ``Path`` subclass — subclassing ``pathlib.Path`` before 3.12
-    needs a ``_flavour`` attribute, and this repo supports 3.9.
+    needs a ``_flavour`` attribute.
     """
     class ExplodingPath:
         def __init__(self, *a, **kw):

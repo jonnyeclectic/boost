@@ -17,9 +17,9 @@ from boost_cli.errors import BoostError
 
 
 def _toml_loads(text: str) -> dict:
-    """Parse ``text`` as TOML. Skips on Python < 3.11 — boost targets >= 3.9
-    and tomllib is stdlib only from 3.11, so the parser is not always there."""
-    tomllib = pytest.importorskip("tomllib")
+    """Parse ``text`` as TOML. tomllib is stdlib from 3.11 and the floor is
+    3.12, so it is always importable — no skip guard needed any more."""
+    import tomllib
     return tomllib.loads(text)
 
 

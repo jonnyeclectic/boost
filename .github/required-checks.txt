@@ -40,13 +40,13 @@ evals
 
 # Every matrix leg of ci.yml's `tests` job. They are listed individually
 # because GitHub requires the expanded matrix name, not the job id.
-tests (ubuntu-latest, 3.9)
+tests (ubuntu-latest, 3.13)
 tests (ubuntu-latest, 3.12)
 tests (ubuntu-latest, 3.14)
-tests (macos-latest, 3.9)
+tests (macos-latest, 3.13)
 tests (macos-latest, 3.12)
 tests (macos-latest, 3.14)
-tests (windows-latest, 3.9)
+tests (windows-latest, 3.13)
 tests (windows-latest, 3.12)
 tests (windows-latest, 3.14)
 

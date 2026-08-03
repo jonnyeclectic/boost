@@ -10,7 +10,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -1118,7 +1118,7 @@ def cmd_snapshot(argv: List[str]) -> int:
 
 def _snapshot_save(label: Optional[str]) -> int:
     paths.ensure_dirs()
-    base = "snap-" + datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    base = "snap-" + datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     snap_id, serial = base, 1
     while (paths.snapshots_dir() / (snap_id + ".tar.gz")).exists():
         serial += 1
@@ -1245,7 +1245,7 @@ def cmd_export(argv: List[str]) -> int:
             raise BoostError("store dir for %s is missing" % name,
                             hint="repair with `boost sync`")
         chosen[name] = installed[name]
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    stamp = datetime.now(UTC).strftime("%Y%m%d")
     ext = ".zip" if args.zip else ".tar.gz"
     dest = paths.expand(args.out) if args.out else Path(
         "boost-skills-%s%s" % (stamp, ext))
@@ -1263,7 +1263,7 @@ def cmd_export(argv: List[str]) -> int:
                 data = manifest.encode()
                 ti = tarfile.TarInfo("Boostfile")
                 ti.size = len(data)
-                ti.mtime = int(datetime.now(timezone.utc).timestamp())
+                ti.mtime = int(datetime.now(UTC).timestamp())
                 ti.mode = 0o644
                 tf.addfile(ti, io.BytesIO(data))
                 for name in chosen:

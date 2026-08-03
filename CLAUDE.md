@@ -132,8 +132,12 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   or assert exact versions; version tests are shape-only (`^boost \S+$`). The
   publish workflow filename must stay `publish.yml` (PyPI Trusted Publisher
   matches on it).
-- **Target Python ≥ 3.9** (`requires-python = ">=3.9"`). Avoid 3.10+-only syntax
-  (structural pattern matching, `X | Y` runtime unions in non-annotation context).
+- **Target Python ≥ 3.12** (`requires-python = ">=3.12"`). Structural pattern
+  matching and runtime `X | Y` unions are now legal. The `typing.List` →
+  `list` sweep is deliberately *not* done yet: ruff's UP006/UP035/UP045 stay in
+  the ignore list until their own PR, because rewriting annotations across ~60
+  modules obliterates blame and conflicts with every branch in flight. Write new
+  code in the modern style; don't bulk-rewrite old code in an unrelated PR.
 - **Three item kinds, one scanner.** `core/catalog.scan_dir` indexes `skill`
   (SKILL.md), `rule` (.mdc/.cursorrules/.windsurfrules/.clinerules), and
   `workflow` (commands/agents/workflows Markdown). **All three install**, and
