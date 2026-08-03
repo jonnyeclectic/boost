@@ -383,6 +383,48 @@ class TestUpdate:
         assert "upgraded" not in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
+    def test_taps_only_with_every_tap_dead_is_a_failure(
+            self, boost, fixture_tap_src, tmp_path):
+        """`--taps-only` must obey the same exit-code rule as the full path.
+
+        It didn't: `if args.taps_only: return 0` sat above the
+        `1 if failures and not results else 0` rule, so with every upstream
+        dead the taps-only path answered 0 while the full path answered 1.
+        A cron'd `boost update --taps-only` is exactly the caller that reads
+        nothing but the exit code — it would have slept through every tap
+        being gone.
+        """
+        dead = _copy_tap(fixture_tap_src, tmp_path / "only-dead-tap")
+        boost("tap", dead)
+        shutil.rmtree(dead)               # upstream deleted out from under us
+        r = boost("update", "--taps-only", expect=None)
+        assert "only-dead-tap" in r.out   # still named, same as the full path
+        assert r.rc == 1, "every tap failed and --taps-only said success"
+
+    def test_taps_only_partial_failure_is_still_success(
+            self, boost, fixture_tap_src, tmp_path):
+        # The other half of the rule: a partial run did the job it could do,
+        # and failing it would put us back to one dead upstream breaking
+        # `boost update` for the other 79.
+        dead = _copy_tap(fixture_tap_src, tmp_path / "half-dead-tap")
+        live = _copy_tap(fixture_tap_src, tmp_path / "half-live-tap")
+        boost("tap", dead)
+        boost("tap", live)
+        shutil.rmtree(dead)
+        r = boost("update", "--taps-only", expect=None)
+        assert "half-live-tap" in r.out
+        assert r.rc == 0
+
+    def test_every_tap_dead_is_a_failure_on_the_full_path_too(
+            self, boost, fixture_tap_src, tmp_path):
+        # Pins the rule itself, not just the taps-only copy of it — this is
+        # the assertion that keeps the two paths from drifting apart again.
+        dead = _copy_tap(fixture_tap_src, tmp_path / "all-dead-tap")
+        boost("tap", dead)
+        shutil.rmtree(dead)
+        r = boost("update", expect=None)
+        assert r.rc == 1
+
     def test_refreshes_the_completion_cache(self, boost, fixture_tap_src,
                                             tmp_path):
         from boost_cli.core import complete

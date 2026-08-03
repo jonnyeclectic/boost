@@ -746,7 +746,11 @@ def cmd_update(argv: List[str]) -> int:
     complete.refresh_names()
     journal.log("update", args.tap or "all")
     if args.taps_only:
-        return 0
+        # Same exit-code rule as the end of the full path: non-zero only when
+        # nothing was refreshed at all. This early return predates that rule
+        # and kept answering 0 with every tap dead — and a cron'd
+        # `boost update --taps-only` exists precisely to notice that morning.
+        return 1 if failures and not results else 0
 
     upgraded = 0
     for name, lk in sorted(lockfile.installed().items()):
