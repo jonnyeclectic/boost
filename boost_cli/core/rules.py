@@ -131,6 +131,27 @@ def merge_block(text: str, name: str, body: str) -> str:
     return block + "\n"
 
 
+def read_block(text: str, name: str) -> Optional[str]:
+    """Rule ``name``'s managed block body from ``text``, or None if absent.
+
+    The inverse of `merge_block`, and the reason it exists is that an update
+    needs something to diff *against*: the body sitting in the user's CLAUDE.md
+    is the standing instruction about to be replaced. Without a way to read it
+    back, a refresh could only be gated on the incoming half.
+
+    Returns None for both "no block" and a start marker with no end — the second
+    is malformed, and `strip_block` already declines to guess there.
+    """
+    start, end = markers(name)
+    i = text.find(start)
+    if i == -1:
+        return None
+    j = text.find(end, i)
+    if j == -1:
+        return None
+    return text[i + len(start):j].strip("\n")
+
+
 def strip_block(text: str, name: str) -> str:
     """Return ``text`` with rule ``name``'s managed block removed.
 
