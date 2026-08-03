@@ -10,6 +10,7 @@ wow: 5
 note: install scanned rule content; update did not — and the scanner could not see concealment anyway
 order: 98
 owner: fix/gate-injection-in-rule-updates
+pr: 456
 title: The update path skipped the scan the install path runs
 ---
 <b>boost has scanned installed content for prompt injection since it shipped. The update path never
