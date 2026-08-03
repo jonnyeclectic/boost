@@ -41,6 +41,13 @@ from typing import Any, List, Optional
 
 from . import nethttp
 
+# The environment variable that selects each API provider. A mapping rather
+# than literals inlined at each use, because `dense.fix_hint` has to name the
+# exact variable that would revive a store built with a given provider — and a
+# second copy of that string is precisely how a surface ends up naming the
+# wrong one at the only moment the name matters.
+KEY_ENV = {"voyage": "VOYAGE_API_KEY", "openai": "OPENAI_API_KEY"}
+
 VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
 OPENAI_URL = "https://api.openai.com/v1/embeddings"
 
@@ -122,9 +129,9 @@ def provider() -> Optional[str]:
     """
     if not enabled():
         return None
-    if os.environ.get("VOYAGE_API_KEY"):
+    if os.environ.get(KEY_ENV["voyage"]):
         return "voyage"
-    if os.environ.get("OPENAI_API_KEY"):
+    if os.environ.get(KEY_ENV["openai"]):
         return "openai"
     if local_available():
         return "local"
