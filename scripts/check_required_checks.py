@@ -50,6 +50,30 @@ ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
 CONFIG = ROOT / ".github" / "required-checks.txt"
 
+# `main` is protected TWICE: by a classic branch protection and by a repository
+# ruleset. They are independent objects with independent lists, and applying the
+# file to one leaves the other untouched — which is how the ruleset came to be
+# missing `bdd`, `evals` and `onnx-inference` while this script reported the
+# config clean. It was checking the file against the *workflows*, and emitting a
+# payload for the classic endpoint only; nothing here had ever heard of a
+# ruleset.
+#
+# Which mechanism actually binds is the part that made the gap expensive rather
+# than untidy. The classic protection sets `enforce_admins: false`, so it does
+# not apply to the identity that merges here; the ruleset carries
+# `bypass_actors: []`, so it applies to everyone. The three checks missing from
+# the ruleset were therefore the three that nothing enforced — among them
+# `evals`, the retrieval-quality floor, and `onnx-inference`, whose entry in
+# required-checks.txt says in as many words that the failure it catches is
+# silent.
+GITHUB_API = "https://api.github.com"
+REPO = "jonnyeclectic/boost"
+BRANCH = "main"
+# GitHub Actions' app id. A ruleset records which app must produce each context;
+# leaving it out lets any app satisfy a check by name, which is a weaker gate
+# than the one the file describes.
+ACTIONS_APP_ID = 15368
+
 # A job id line: exactly two spaces of indent, directly under `jobs:`.
 _JOB = re.compile(r"^  ([A-Za-z0-9][\w-]*):\s*$")
 # `    name: something` within a job block overrides the displayed check name.
@@ -238,29 +262,178 @@ def workflows_for(required: str, by_name: Dict[str, List[str]]) -> List[str]:
     return ["an unknown workflow"]
 
 
+def classic_payload(required: List[str]) -> dict:
+    """The `PUT /branches/{branch}/protection` body for this required list."""
+    return {
+        "required_status_checks": {"strict": True, "contexts": list(required)},
+        # Deliberately null: the repo's working model is parallel loop/*
+        # branches self-merging, so requiring reviews would deadlock it.
+        "required_pull_request_reviews": None,
+        "enforce_admins": False,
+        "restrictions": None,
+    }
+
+
+def ruleset_rule(required: List[str]) -> dict:
+    """The `required_status_checks` RULE for a repository ruleset.
+
+    Shaped differently from the classic payload on purpose — this is not a
+    stylistic variant of the same thing. A ruleset names each context as an
+    object carrying the app that must produce it, and spells `strict` as
+    `strict_required_status_checks_policy`. Hand-translating between the two
+    forms is exactly the step that got skipped.
+    """
+    return {
+        "type": "required_status_checks",
+        "parameters": {
+            "strict_required_status_checks_policy": True,
+            "required_status_checks": [
+                {"context": c, "integration_id": ACTIONS_APP_ID} for c in required
+            ],
+        },
+    }
+
+
+def drift(required: List[str], remote: List[str]) -> Tuple[List[str], List[str]]:
+    """``(missing, extra)`` — how a live mechanism disagrees with the file.
+
+    Order-insensitive and duplicate-tolerant: GitHub returns contexts in its own
+    order, and a list that merely sorts differently is not drift.
+    """
+    want, have = set(required), set(remote)
+    return sorted(want - have), sorted(have - want)
+
+
+def _api(path: str, token: str) -> object:
+    import urllib.request
+    req = urllib.request.Request(  # noqa: S310  GITHUB_API is a hardcoded https constant
+        GITHUB_API + path,
+        headers={"Authorization": "Bearer " + token,
+                 "Accept": "application/vnd.github+json",
+                 "User-Agent": "boost-check-required-checks"})
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310  same
+        return json.load(resp)
+
+
+def ruleset_contexts(detail: dict) -> Tuple[bool, List[str]]:
+    """``(has_rule, contexts)`` for one ruleset's required-status-checks rule.
+
+    ``has_rule`` is returned separately from an empty list because the two mean
+    opposite things: a ruleset with no such rule requires nothing at all, which
+    is a much louder problem than one whose list has drifted.
+    """
+    for rule in detail.get("rules", []):
+        if rule.get("type") == "required_status_checks":
+            params = rule.get("parameters") or {}
+            return True, [c.get("context") for c in params.get("required_status_checks", [])]
+    return False, []
+
+
+def verify_remote(required: List[str], token: str) -> List[str]:
+    """Compare BOTH live mechanisms against the file. Returns problems."""
+    problems: List[str] = []
+
+    prot = _api("/repos/%s/branches/%s/protection" % (REPO, BRANCH), token)
+    contexts = ((prot or {}).get("required_status_checks") or {}).get("contexts", [])
+    missing, extra = drift(required, contexts)
+    if missing or extra:
+        problems.append(
+            "classic branch protection on %r disagrees with %s — missing %s, extra %s "
+            "(apply with `--print-api`)"
+            % (BRANCH, CONFIG.name, missing or "nothing", extra or "nothing"))
+
+    rulesets = _api("/repos/%s/rulesets" % REPO, token) or []
+    checked = 0
+    for summary in rulesets:
+        detail = _api("/repos/%s/rulesets/%s" % (REPO, summary["id"]), token)
+        includes = ((detail.get("conditions") or {}).get("ref_name") or {}).get("include", [])
+        # `~DEFAULT_BRANCH` is GitHub's alias for whatever the default branch is.
+        if not ({"refs/heads/" + BRANCH, "~DEFAULT_BRANCH"} & set(includes)):
+            continue
+        if detail.get("enforcement") != "active":
+            continue
+        checked += 1
+        has_rule, contexts = ruleset_contexts(detail)
+        if not has_rule:
+            problems.append(
+                "active ruleset %r targets %r but has no required_status_checks "
+                "rule at all — it gates nothing" % (detail.get("name"), BRANCH))
+            continue
+        missing, extra = drift(required, contexts)
+        if missing or extra:
+            problems.append(
+                "ruleset %r (id %s) disagrees with %s — missing %s, extra %s "
+                "(apply with `--print-ruleset`; send the WHOLE body, a partial "
+                "PUT drops the other rules)"
+                % (detail.get("name"), detail.get("id"), CONFIG.name,
+                   missing or "nothing", extra or "nothing"))
+
+    if not checked:
+        # Silence here would read as "the rulesets agree", which is the failure
+        # this whole function exists to stop being invisible.
+        problems.append(
+            "no active ruleset targets %r — if protection moved to rulesets, "
+            "this check is now blind; if it did not, one was deleted" % BRANCH)
+    return problems
+
+
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--print-api", action="store_true",
-                    help="print the branch-protection API payload and exit")
+                    help="print the CLASSIC branch-protection payload and exit")
+    ap.add_argument("--print-ruleset", action="store_true",
+                    help="print the ruleset required_status_checks rule and exit")
+    ap.add_argument("--verify-remote", action="store_true",
+                    help="compare BOTH live mechanisms against the file "
+                         "(needs GITHUB_TOKEN; network — not part of `make lint`)")
     args = ap.parse_args(argv)
 
     by_name, on_pr, filtered, on_mg = collect()
     required = read_config()
 
     if args.print_api:
-        payload = {
-            "required_status_checks": {"strict": True, "contexts": required},
-            # Deliberately null: the repo's working model is parallel loop/*
-            # branches self-merging, so requiring reviews would deadlock it.
-            "required_pull_request_reviews": None,
-            "enforce_admins": False,
-            "restrictions": None,
-        }
         print("# apply with:")
         print("#   curl -X PUT -H \"Authorization: Bearer $GITHUB_TOKEN\" \\")
-        print("#     https://api.github.com/repos/jonnyeclectic/boost/branches/main/protection \\")
+        print("#     %s/repos/%s/branches/%s/protection \\" % (GITHUB_API, REPO, BRANCH))
         print("#     -d @payload.json")
-        print(json.dumps(payload, indent=2))
+        print("# NOTE: this is only HALF of `main`'s protection — see --print-ruleset.")
+        print(json.dumps(classic_payload(required), indent=2))
+        return 0
+
+    if args.print_ruleset:
+        print("# One rule out of a ruleset body. The ruleset PUT replaces the whole")
+        print("# object, so fetch it, swap ONLY this rule, and send it back — a")
+        print("# partial body silently drops deletion/non_fast_forward/code_scanning.")
+        print("#   curl %s/repos/%s/rulesets" % (GITHUB_API, REPO))
+        print(json.dumps(ruleset_rule(required), indent=2))
+        return 0
+
+    if args.verify_remote:
+        import os
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if not token:
+            # A skip, not a pass: `make lint` never passes this flag, so the
+            # offline gate is unaffected, and a caller who asked for the remote
+            # check deserves to know it did not happen.
+            print("required-checks: --verify-remote skipped (no GITHUB_TOKEN)")
+            return 0
+        try:
+            remote_problems = verify_remote(required, token)
+        # A network fault is not drift: exit 2 (could not check) rather than 1
+        # (found a problem), so a caller can tell "GitHub was down" from "your
+        # protection is wrong" without reading the message.
+        except Exception as exc:
+            print("required-checks: --verify-remote could not reach GitHub (%s: %s)"
+                  % (type(exc).__name__, exc), file=sys.stderr)
+            return 2
+        if remote_problems:
+            print("required-checks: %d live-protection problem(s)"
+                  % len(remote_problems), file=sys.stderr)
+            for p in remote_problems:
+                print("  - %s" % p, file=sys.stderr)
+            return 1
+        print("required-checks: live protection matches %s on both mechanisms "
+              "(%d checks)." % (CONFIG.name, len(required)))
         return 0
 
     problems: List[str] = []
