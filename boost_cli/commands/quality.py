@@ -97,6 +97,49 @@ def _resolve_as_far_as_it_exists(path: Path) -> Path:
     return cur.joinpath(*reversed(tail))
 
 
+def _norm(path: Path) -> str:
+    """``path`` as a comparable string, without resolving anything.
+
+    Strips Windows' extended-length prefix — ``os.readlink`` returns
+    ``\\\\?\\C:\\...`` for a link the store created while ``store_dir()`` is
+    spelled the ordinary way, so the two name one location with two strings —
+    and applies `os.path.normcase`, which folds case on Windows (where the
+    filesystem is case-insensitive) and is a no-op on POSIX.
+    """
+    # Strip BEFORE abspath: on a POSIX host a backslash path is not absolute,
+    # so abspath would prepend the cwd and move the prefix out of position —
+    # which matters because this must be testable off Windows.
+    text = str(path)
+    for prefix in ("\\\\?\\UNC\\", "\\\\?\\"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    return os.path.normcase(os.path.abspath(text))
+
+
+def _within(target: str, parent: str) -> bool:
+    """True if normalised ``target`` is ``parent`` or sits under it."""
+    return target == parent or target.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def _link_key(path: Path) -> str:
+    """``path`` resolved, then normalised into a comparable string.
+
+    Comparing `Path` objects directly is wrong on Windows, in two ways that
+    both read as "boost does not own its own link" and left `heal` refusing to
+    repair anything at all there:
+
+    * ``os.readlink`` returns the extended-length form (``\\\\?\\C:\\...``) for
+      a link the store created, while ``store_dir()`` is spelled the ordinary
+      way — same location, different string.
+    * The filesystem is case-insensitive, so ``C:\\Users`` and ``c:\\users``
+      are one directory and two unequal `Path`s.
+
+    `os.path.normcase` is a no-op on POSIX, so this stays exact where case is.
+    """
+    return _norm(_resolve_as_far_as_it_exists(path))
+
+
 def _owned_link(link: Path) -> bool:
     """True if ``link`` points into boost's canonical store.
 
@@ -108,10 +151,18 @@ def _owned_link(link: Path) -> bool:
         raw = Path(os.readlink(str(link)))
     except OSError:
         return False
-    target = _resolve_as_far_as_it_exists(
-        raw if raw.is_absolute() else link.parent / raw)
-    store_dir = _resolve_as_far_as_it_exists(paths.store_dir())
-    return target == store_dir or store_dir in target.parents
+    target = raw if raw.is_absolute() else link.parent / raw
+    store = paths.store_dir()
+    # Spelled form first. A link boost made carries the store's own path, so
+    # this settles the ordinary case without resolving anything — and every
+    # platform quirk lives in resolution. Windows alone supplies three: the
+    # extended-length prefix, 8.3 short names, and case-insensitivity.
+    if _within(_norm(target), _norm(store)):
+        return True
+    # Resolved form second, for a store genuinely reached through a symlinked
+    # parent — macOS `/tmp` -> `/private/tmp` is the case that made this
+    # necessary rather than theoretical.
+    return _within(_link_key(target), _link_key(store))
 
 
 def _broken_links() -> Tuple[List[Path], List[Path]]:
