@@ -271,13 +271,13 @@ class TestUpdate:
         origin = _make_repo(tmp_path / "pullme")
         tap = registry.add(str(origin))
         util.rmtree(tap.path)
-        assert registry.update("pullme") == {"pullme": "cloned"}
+        assert registry.update("pullme") == ({"pullme": "cloned"}, {})
         assert tap.is_cloned
 
     def test_update_already_up_to_date(self, sandbox, tmp_path):
         origin = _make_repo(tmp_path / "pullme")
         registry.add(str(origin))
-        assert registry.update() == {"pullme": "already up to date"}
+        assert registry.update() == ({"pullme": "already up to date"}, {})
 
     def test_update_pulls_new_commit(self, sandbox, tmp_path):
         origin = _make_repo(tmp_path / "pullme")
@@ -286,7 +286,7 @@ class TestUpdate:
         (origin / "b.txt").write_text("two\n", encoding="utf-8")
         _git("add", "-A", cwd=origin)
         _git("commit", "-qm", "add b", cwd=origin)
-        summary = registry.update("pullme")["pullme"]
+        summary = registry.update("pullme")[0]["pullme"]
         after = gitutil.head_commit(tap.path)
         assert re.fullmatch(r"[0-9a-f]{7} → [0-9a-f]{7}", summary)
         assert summary == "%s → %s" % (before[:7], after[:7])
@@ -295,3 +295,56 @@ class TestUpdate:
     def test_update_unknown_tap_raises(self, sandbox):
         with pytest.raises(BoostError):
             registry.update("nope")
+
+    def test_one_dead_upstream_does_not_stop_the_others(self, sandbox, tmp_path):
+        """The regression: `update()` had no error handling, so the first tap
+        with a deleted upstream aborted the loop and every later tap went
+        unrefreshed — with the successful pulls thrown away unreported.
+        """
+        dead_origin = _make_repo(tmp_path / "deadtap")
+        registry.add(str(dead_origin))
+        live_origin = _make_repo(tmp_path / "livetap")
+        registry.add(str(live_origin))
+        util.rmtree(dead_origin)             # upstream deleted out from under us
+
+        results, failures = registry.update()
+        assert "livetap" in results          # the healthy tap still refreshed
+        assert "deadtap" not in results      # and is not reported as a success
+        assert "deadtap" in failures
+        assert failures["deadtap"]           # carries a reason, not an empty string
+
+    def test_a_named_dead_tap_still_raises(self, sandbox, tmp_path):
+        """Asking about one tap makes its failure the answer, not a warning."""
+        origin = _make_repo(tmp_path / "solo")
+        registry.add(str(origin))
+        util.rmtree(origin)
+        with pytest.raises(BoostError):
+            registry.update("solo")
+
+
+class TestGitErrorLine:
+    """gitutil._git_error — git states the cause first, then advises."""
+
+    def test_prefers_the_first_fatal_line_over_the_hint_tail(self):
+        # Real `git fetch` output for a missing remote. The last line is the
+        # tail of a prose hint; the first names the bad path.
+        text = ("fatal: '/nope' does not appear to be a git repository\n"
+                "fatal: Could not read from remote repository.\n"
+                "\n"
+                "Please make sure you have the correct access rights\n"
+                "and the repository exists.\n")
+        assert gitutil._git_error(text) == (
+            "fatal: '/nope' does not appear to be a git repository")
+
+    def test_error_prefix_counts_too(self):
+        assert gitutil._git_error("error: pathspec 'x' did not match\ntrailing\n") == (
+            "error: pathspec 'x' did not match")
+
+    def test_falls_back_to_last_line_without_a_marker(self):
+        assert gitutil._git_error("something odd\nlast word\n") == "last word"
+
+    def test_blank_output_is_named_rather_than_empty(self):
+        assert gitutil._git_error("   \n\n") == "unknown error"
+
+    def test_skips_blank_lines_when_falling_back(self):
+        assert gitutil._git_error("only line\n\n\n") == "only line"

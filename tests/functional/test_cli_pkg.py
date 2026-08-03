@@ -317,6 +317,44 @@ class TestUpdate:
         assert "fixture-tap: already up to date" in r.out
         assert "everything up to date" in r.out
 
+    def test_a_dead_upstream_does_not_take_the_other_taps_down(
+            self, boost, fixture_tap_src, tmp_path):
+        """One deleted upstream must cost you that tap, not the whole command.
+
+        It used to cost the whole command: `registry.update()` had no error
+        handling, so the loop aborted on the dead tap and every later tap went
+        unrefreshed — while the user got a bare git error naming neither the tap
+        nor the URL. With 80+ taps a dead upstream is routine, not an edge case.
+        """
+        dead = _copy_tap(fixture_tap_src, tmp_path / "dead-tap")
+        live = _copy_tap(fixture_tap_src, tmp_path / "live-tap")
+        boost("tap", dead)
+        boost("tap", live)
+        shutil.rmtree(dead)               # upstream deleted out from under us
+
+        r = boost("update", expect=None)
+        assert "live-tap: already up to date" in r.out    # the healthy tap ran
+        assert "dead-tap" in r.out                        # named, not anonymous
+        assert "1 of 2 taps could not be refreshed" in r.out
+        # and it must not claim a clean bill of health
+        assert "everything up to date, except the taps above" in r.out
+        assert r.rc == 0                  # partial success is still success
+
+    def test_the_git_error_names_the_cause_not_the_hint_tail(
+            self, boost, fixture_tap_src, tmp_path):
+        """git states the cause first and advises after.
+
+        Reporting the LAST line of git's output surfaced "and the repository
+        exists." — the tail of a prose hint — and discarded the line naming the
+        missing path.
+        """
+        dead = _copy_tap(fixture_tap_src, tmp_path / "gone-tap")
+        boost("tap", dead)
+        shutil.rmtree(dead)
+        r = boost("update", expect=None)
+        assert "and the repository exists" not in r.out
+        assert "does not appear to be a git repository" in r.out
+
     def test_upgrades_unpinned_skips_pinned(self, boost, fixture_tap_src,
                                             tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "up-tap")
