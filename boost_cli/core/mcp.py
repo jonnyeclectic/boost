@@ -157,7 +157,7 @@ def engine_note() -> str:
     return ("\n\nSEARCH ENGINE: BM25 keyword matching only — dense vectors are "
             "not configured, so queries are matched on shared words rather than "
             "meaning. Prefer concrete terms over paraphrase. To enable semantic "
-            "search, %s." % dense.fix_hint(st.get("reason", "")))
+            "search, %s." % dense.fix_hint(st.get("reason", ""), st))
 
 
 def handle_request(req: dict, *, version: str,
