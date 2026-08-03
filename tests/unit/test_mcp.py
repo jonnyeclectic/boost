@@ -163,6 +163,41 @@ class TestHandleRequest:
         assert "ranks them with an llm" in low or "reranks" in low
         assert "read-only" in low          # the part that WAS true stays
 
+    def test_instructions_quote_no_retrieval_percentage(self):
+        # "95% of the time against 79% without it" was real and measured — over
+        # the SIX-repo corpus. tests/eval/baseline.json records BM25 hit@1 at
+        # 0.4725 for the twenty-repo corpus that replaced it because six was
+        # unrealistically small, so 79% overstated today's baseline by 31
+        # points at the one moment an agent cannot check it. #442 kept these
+        # figures out of every tool description for exactly this reason and
+        # left them here; this closes the gap rather than re-deriving it.
+        low = mcp.INSTRUCTIONS.lower()
+        for stale in ("95%", "79%", "0.945", "0.791"):
+            assert stale not in low, (
+                "INSTRUCTIONS quotes %r, a six-repo-corpus figure the eval "
+                "gate no longer measures" % stale)
+        # The claim that survives is the mechanism, which is what an agent
+        # actually acts on and what the eval gate does floor.
+        assert "reranks" in low
+
+    def test_instructions_do_not_call_the_catalog_vetted(self):
+        # The catalog is indexed, not reviewed. #442 struck "vetted" from every
+        # tool description and missed this copy, which implies the same
+        # guarantee nobody performs.
+        assert "vetted" not in mcp.INSTRUCTIONS.lower()
+
+    def test_instructions_and_tool_descriptions_agree_on_the_cost(self):
+        # Two surfaces, one connect: an agent sees INSTRUCTIONS and the
+        # boost_search description in the same context window, so a disagreement
+        # about what a search costs is visible in a way a single wrong number
+        # is not. #442 set the descriptions to "10-15 seconds" while this text
+        # still said "a few seconds".
+        from boost_cli.commands import configuration
+        desc = {s["name"]: s["description"] for s in configuration.REGISTRY.specs()}
+        assert "10-15 seconds" in mcp.INSTRUCTIONS
+        assert "10-15 seconds" in desc["boost_search"]
+        assert "a few seconds" not in mcp.INSTRUCTIONS.lower()
+
     def test_instructions_still_separate_the_free_tool_from_the_slow_one(self):
         # boost_list really is instant, and collapsing the two costs into one
         # number is what produced the wrong claim. Naming them separately is
