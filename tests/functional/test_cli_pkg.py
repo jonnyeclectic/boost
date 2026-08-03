@@ -123,13 +123,46 @@ class TestInstall:
         r = boost("install", "--dry-run", "brainstorming")
         assert "would install brainstorming v1.4.0 from fixture-tap" in r.out
         assert "~/.boost/repos/fixture-tap/skills/brainstorming" in r.out
-        # NOTE: the preview lists every *enabled* agent, so it still promises a
-        # gemini link the real install does not make (gemini reads the store
-        # directly — see test_exact_report_lines). Pinned as it behaves today.
-        assert "link  → claude-code · windsurf · cursor · gemini" in r.out
+        # The preview names the agents that actually take a link. Gemini reads
+        # the canonical store directly and is never symlinked, so promising one
+        # here made the dry run wrong about the one thing it exists to predict.
+        assert "link  → claude-code · windsurf · cursor" in r.out
+        assert "· gemini" not in r.out
+        assert "available to Gemini CLI (reads the store directly)" in r.out
         assert "dry run — nothing was changed" in r.out
         assert not (paths.store_dir() / "brainstorming").exists()
         assert not paths.lockfile_path().exists()
+
+    def test_dry_run_predicts_the_real_install(self, boost, tapped):
+        """The whole job of a preview: say what the real run will do.
+
+        These two disagreed by one agent and one verb — `--dry-run` promised a
+        `~/.gemini/skills` symlink that no install has ever created.
+        """
+        def agents_on(text, marker):
+            line = next(x for x in text.splitlines() if marker in x)
+            return line.split("→", 1)[1].strip()
+
+        preview = boost("install", "--dry-run", "brainstorming").out
+        real = boost("install", "brainstorming").out
+        # Compared as whole fields, not substrings: "a · b · c" contains
+        # "a · b", so a substring check would have passed on the bug.
+        assert agents_on(preview, "link  →") == agents_on(real, "linked →")
+        for text in (preview, real):
+            assert "available to Gemini CLI (reads the store directly)" in text
+        assert not (paths.home() / ".gemini" / "skills").exists()
+
+    def test_dry_run_still_names_gemini_for_a_rule(self, boost, fixture_tap_src,
+                                                   tmp_path):
+        # The distinction is the point, not a blanket removal: a RULE really is
+        # materialized into ~/.gemini/, so the preview must keep saying so.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "rule-dry-tap")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\nUse tabs.\n",
+                        "add rule")
+        boost("tap", tap_dir)
+        r = boost("install", "house-style", "--dry-run")
+        assert "materialize → claude-code · windsurf · cursor · gemini" in r.out
 
     def test_installs_declared_requires_closure(self, boost, tapped):
         # jira-integration declares `requires: [commit-messages]` in the fixture;
