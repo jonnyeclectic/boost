@@ -1,0 +1,158 @@
+name: eval-corpus-refresh
+
+# Move the Tier 1 eval corpus onto current upstream, and open a PR with what
+# that did to the numbers.
+#
+# WHY THIS EXISTS. #410 pinned every row of tests/eval/taps.txt to a commit,
+# which fixed a real problem: the corpus a required check measured was whatever
+# twenty third parties happened to be serving that morning. It bought
+# reproducibility with representativeness. The gate asks "does the right skill
+# come back for a real question", and skills are written by other people
+# continuously — the corpus grew by thousands of entries in the months before it
+# was pinned — so a frozen corpus answers that question about a world that no
+# longer exists, and answers it with total confidence because every number
+# reproduces. Nothing was ever going to move the pins: no job, no reminder, no
+# check that notices them ageing.
+#
+# lock-refresh.yml solves the same shape for the hash-pinned toolchain, and this
+# is deliberately its twin — monthly, one PR, a human decides.
+#
+# WHAT THE PR IS ACTUALLY FOR, and why it is not routine. A refreshed corpus
+# moves the gate's numbers, and they move DOWN as it grows: measured at 7x the
+# size, all four floors fail (0.709 / 0.341 / 0.451 / 0.504 against 0.78 / 0.40
+# / 0.52 / 0.58). So this job can propose a corpus that turns a required gate
+# red through no fault of any change in the pull request. That is information,
+# not a defect — it is the only thing in this repository that reports how
+# retrieval quality tracks a changing catalogue, and it is arguably worth more
+# than the refresh. The body therefore leads with the before/after metrics and
+# says plainly what a red gate here means, rather than looking like a version
+# bump.
+#
+# The eval is run as its OWN step, after the move, because performing the move
+# and judging it are different decisions and a single step that did both would
+# be making the second one silently. `continue-on-error` on that step is the
+# point: a corpus that fails the floors must still reach a human as a PR that
+# says so, not vanish as a failed job.
+#
+# A refresh is also when a deleted, renamed or privatised repository is
+# discovered — nothing else asks. `--refresh` exits 75 (EX_TEMPFAIL) for that
+# case with the repo named, and this job failing monthly with "X is gone" is the
+# intended signal. It blocks no pull request.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Monthly, matching lock-refresh.yml. The corpus is a sample of a slowly
+    # changing world; a cadence that outruns review just teaches people to
+    # rubber-stamp a diff of twenty SHAs.
+    - cron: "0 6 1 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-corpus-refresh
+  cancel-in-progress: false      # never kill a half-written taps.txt
+
+jobs:
+  # NOT `refresh`: lock-refresh.yml already has a job by that name, GitHub keys
+  # required checks on the name alone, and scripts/check_required_checks.py
+  # fails the build on the ambiguity.
+  corpus:
+    runs-on: ubuntu-latest
+    # The corpus is ~640 MB of shallow clones over 20 repos and materialises in
+    # ~30 s locally; 30 minutes is slack for a cold, rate-limited runner.
+    timeout-minutes: 30
+    permissions:
+      contents: write            # push the branch carrying the moved pins
+      pull-requests: write       # open the PR that carries it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: move every pin to current upstream HEAD
+        env:
+          BOOST_HOME: ${{ github.workspace }}/.eval-home
+        run: |
+          PYTHONPATH=. python scripts/eval_corpus.py --refresh \
+            --summary-md "$RUNNER_TEMP/corpus-summary.md"
+      - name: score the refreshed corpus
+        id: gate
+        # Deliberately non-blocking. A corpus that no longer clears the floors
+        # is exactly the finding this job exists to surface, and a failed job
+        # surfaces it to nobody.
+        continue-on-error: true
+        env:
+          BOOST_HOME: ${{ github.workspace }}/.eval-home
+        run: |
+          set -o pipefail
+          PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 \
+            --fail-under 0.78 --floor hit@1=0.40 --floor MRR=0.52 \
+            --floor nDCG@k=0.58 --regression-eps 1 \
+            2>&1 | tee "$RUNNER_TEMP/gate.txt"
+      - name: re-baseline against the refreshed corpus
+        # The baseline is a statement about a specific corpus, so it has to move
+        # with it or every later run reports a regression that is only the gap
+        # between two different corpora.
+        env:
+          BOOST_HOME: ${{ github.workspace }}/.eval-home
+        run: |
+          PYTHONPATH=. python scripts/eval_retrieval.py --save-baseline -k 10
+      - name: assemble the pull request body
+        id: body
+        env:
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+        run: |
+          {
+            echo "text<<PRBODY"
+            if [ "$GATE_OUTCOME" = "success" ]; then
+              echo "The refreshed corpus **clears all four floors.**"
+            else
+              echo "> [!WARNING]"
+              echo "> **The refreshed corpus does NOT clear the floors.**"
+              echo "> Nothing in this pull request caused that — the corpus moved,"
+              echo "> and the floors were set on the old one. This is the"
+              echo "> measurement, not a defect to fix by editing the diff."
+              echo "> Decide between re-flooring against the new corpus and"
+              echo "> declining the refresh; do not merge on the assumption that"
+              echo "> a later change will fix it."
+            fi
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/gate.txt" || true
+            echo '```'
+            echo
+            echo "### What moved"
+            echo
+            cat "$RUNNER_TEMP/corpus-summary.md" || true
+            echo
+            echo "\`tests/eval/baseline.json\` is regenerated against the new"
+            echo "corpus in the same commit, because a baseline is a statement"
+            echo "about a specific corpus."
+            echo
+            echo "**This PR arrives with no check runs.** \`create-pull-request\`"
+            echo "pushes with \`GITHUB_TOKEN\`, and a \`GITHUB_TOKEN\` push never"
+            echo "triggers workflows, so required contexts will not report until"
+            echo "someone presses **Update branch**. An empty check list looks"
+            echo "identical to \"CI has not started yet\" — make CI actually run"
+            echo "before merging."
+            echo
+            echo "Close it if the refresh is not wanted; the next scheduled run"
+            echo "re-opens from current upstream."
+            echo "PRBODY"
+          } >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/corpus-summary.md" >> "$GITHUB_STEP_SUMMARY" || true
+      - name: open a PR if the corpus moved
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: |
+            tests/eval/taps.txt
+            tests/eval/baseline.json
+          branch: bot/eval-corpus-refresh
+          delete-branch: true
+          commit-message: "test(eval): refresh the pinned retrieval corpus"
+          title: "test(eval): refresh the pinned retrieval corpus"
+          body: ${{ steps.body.outputs.text }}

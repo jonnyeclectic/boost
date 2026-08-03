@@ -1,0 +1,126 @@
+name: eval-scale
+
+# Tier 1b: run the retrieval eval over a corpus the size of a real install.
+#
+# WHY. The required `eval` gate measures 10,152 entries. A real install carries
+# far more — 71,655 across 445 taps on the machine this was measured on — and
+# the metrics do not survive the difference: at that size all four floors fail
+# (0.709 / 0.341 / 0.451 / 0.504 against 0.780 / 0.400 / 0.520 / 0.580). So the
+# bar every merge is gated on is one the project's own users' catalogues would
+# not clear, and every retrieval decision validated against the small corpus is
+# validated at a scale users leave behind after their third tap.
+#
+# WHY IT IS SCHEDULED AND NEVER REQUIRED. Two reasons, and neither is timidity.
+# It taps 183 repositories over the network, which is not something to put in
+# front of every pull request. And its numbers are expected to be worse than the
+# required gate's — that IS the finding — so wiring it into merge protection
+# would block work on a fact about corpus size rather than about the change.
+#
+# WHAT IT IS NOT. It is not "the" scale. Holding the golden queries fixed and
+# growing the corpus, hit@1 decays continuously — roughly halving per 4x — and
+# never plateaus, so no corpus size here can be canonical. What this buys is a
+# second point on that curve, measured against real registries rather than
+# random distractors, watched on a schedule instead of assumed.
+#
+# NO FLOORS YET, deliberately. A floor has to be set from a measurement, and
+# nothing has measured this corpus. The first run records a baseline; deciding
+# what to floor it at is a separate decision made from real numbers, not one
+# invented here. Until then the job reports, and the report is the product.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Monthly, two weeks off eval-corpus-refresh.yml so the two network-heavy
+    # corpus jobs never contend for runners or for the same review attention.
+    - cron: "0 7 15 * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eval-scale
+  cancel-in-progress: false      # never kill a half-written corpus list
+
+jobs:
+  # NOT `refresh` or `corpus`: GitHub keys required checks on the job name
+  # alone, and scripts/check_required_checks.py fails the build on a collision.
+  scale:
+    runs-on: ubuntu-latest
+    # 183 shallow clones, a full scan and a BM25 build. The 20-repo required
+    # corpus materialises in ~30 s locally, so this is minutes, not tens of
+    # minutes; 60 is slack for a cold, rate-limited runner.
+    timeout-minutes: 60
+    permissions:
+      contents: write            # push the branch carrying the pinned list
+      pull-requests: write       # open the PR that carries it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: the scale list is regenerated
+        # It is derived from registries.json and taps.txt, so a hand-edit or a
+        # stale checkout would silently measure a corpus nobody chose.
+        run: python scripts/build_scale_corpus.py --check
+      - name: materialise and pin the scale corpus
+        env:
+          BOOST_HOME: ${{ github.workspace }}/.scale-home
+        run: |
+          PYTHONPATH=. python scripts/eval_corpus.py --refresh \
+            --taps tests/eval/taps-scale.txt \
+            --summary-md "$RUNNER_TEMP/scale-summary.md"
+      - name: score it
+        id: gate
+        # Non-blocking on purpose: worse numbers here are the finding, and a
+        # failed job reports them to nobody.
+        continue-on-error: true
+        env:
+          BOOST_HOME: ${{ github.workspace }}/.scale-home
+        run: |
+          set -o pipefail
+          PYTHONPATH=. python scripts/eval_retrieval.py --build -k 10 \
+            --regression-eps 1 2>&1 | tee "$RUNNER_TEMP/scale-gate.txt"
+      - name: publish the measurement
+        run: |
+          {
+            echo "## Tier 1b — retrieval at install scale"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/scale-gate.txt" || true
+            echo '```'
+            echo
+            echo "### The corpus"
+            echo
+            cat "$RUNNER_TEMP/scale-summary.md" || true
+            echo
+            echo "Compare against the required gate, which scores the same"
+            echo "queries over 10,152 entries. A gap between them is the scale"
+            echo "effect — it is not a regression in this repository."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: open a PR if the pins moved
+        # create-pull-request opens nothing when the tree is unchanged, so this
+        # is quiet on a month where no upstream repository moved.
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: tests/eval/taps-scale.txt
+          branch: bot/eval-scale-pins
+          delete-branch: true
+          commit-message: "test(eval): re-pin the Tier 1b scale corpus"
+          title: "test(eval): re-pin the Tier 1b scale corpus"
+          body: |
+            Scheduled re-pin of the Tier 1b scale corpus
+            (`tests/eval/taps-scale.txt`) by
+            `scripts/eval_corpus.py --refresh`, which moves every row to current
+            upstream HEAD and writes back the entry count it actually scans to.
+
+            **This is not a required gate and nothing here blocks a merge.** The
+            measurement it produced is in the run's job summary; the diff is
+            just the pins that moved.
+
+            **This PR arrives with no check runs.** `create-pull-request` pushes
+            with `GITHUB_TOKEN`, and a `GITHUB_TOKEN` push never triggers
+            workflows, so required contexts will not report until someone
+            presses **Update branch**. An empty check list looks identical to
+            "CI has not started yet".

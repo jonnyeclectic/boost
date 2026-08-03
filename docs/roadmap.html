@@ -2333,8 +2333,9 @@ killed by measurement rather than argument, and the one that cracked it was noti
       </article>
 
       <article class="cap rcard" id="eval-corpus-is-96x-smaller-than-a-real-install">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Eval · Correctness</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Eval · Correctness</span></div>
         <h3>The eval gate would not pass on the catalogue its own users have</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The required <code>eval</code> gate measures a catalogue almost nobody has.</b>
 <code>tests/eval/taps.txt</code>'s twenty registries resolve to <b>10,152</b> entries. A real install
 that has run <code>boost tap</code> a few times is bigger &mdash; the machine this was measured on
@@ -2421,7 +2422,46 @@ scales, the small corpus picks the <em>same winner</em> &mdash; BM25 beats <code
 on all four metrics at 10,152 <em>and</em> at 71,655. The margin collapses, the ordering does not. So
 it is a poor estimate of <em>absolute</em> quality and a serviceable one for <em>comparing</em>
 engines, which is the weaker and correct version of the claim. Limits: two engines only (dense needs
-a key), and an A-vs-B comparison does not test blend weights or pool depth.</p>
+a key), and an A-vs-B comparison does not test blend weights or pool depth.
+
+<b>The second tier ships, and it is described as <em>a</em> scale rather than <em>the</em> scale
+&mdash; this card's own correction, taken seriously.</b> Because hit@1 decays continuously with
+corpus size and never plateaus, no number here can be canonical, so the tier is not an attempt to
+pick the &ldquo;right&rdquo; size. It buys one more point on that curve, measured against real
+registries instead of random distractors, and watched on a schedule instead of assumed.
+
+<b>The corpus is the required one PLUS distractors, and that is the load-bearing decision.</b>
+<code>tests/eval/taps-scale.txt</code> copies every required row verbatim &mdash; pin and count
+&mdash; then adds curated registries. Every golden target lives in those required rows, and a scale
+list that dropped one would collapse recall for a reason that has nothing to do with scale: measured
+on the required corpus, removing a single target-bearing repo takes recall@10 from <b>0.852</b> to
+<b>0.676</b>, indistinguishable from a retrieval regression. Building it as a superset also makes
+the two tiers comparable, so a gap between them isolates the added candidates rather than
+confounding them with a different target set.
+
+<b>The distractors are drawn round-robin across item kinds, not largest-first.</b> The curated set
+is <b>341 skill / 76 workflow / 26 rule</b> registries, so straight largest-first buries the rules
+under the skill tail &mdash; and the required list's own header records what that costs:
+<code>boost tap --defaults</code> taps only skill repos and scores <b>0.000</b> on every rule and
+workflow query. The shipped list is <b>183 repositories</b>: the 20 required plus 163 distractors
+(23 rule / 70 workflow / 70 skill) carrying <b>20,034</b> est items.
+
+<b>The projected size is labelled a projection.</b> <code>est_items</code> under-reports &mdash; the
+curated set estimates 28,225 items across 443 scannable registries while a real 445-tap install
+scans to 71,655, about <b>2.5&times;</b> &mdash; so 20,034 est projects to roughly <b>50,000</b>
+actual entries. That is arithmetic, not a measurement. The real counts are written into the file by
+<code>eval_corpus.py --refresh</code> on the first scheduled run, which is also what pins it.
+
+<b>It ships with no floors, deliberately.</b> A floor has to come from a measurement and nothing has
+measured this corpus yet; inventing one here would be exactly the move this line of work keeps
+removing. The first run records a baseline and the job reports &mdash; the report is the product.
+Choosing what to floor it at is a later decision made from real numbers.
+
+<b>Scheduled and never required, for two reasons that are not timidity.</b> It taps 183
+repositories over the network, which does not belong in front of every pull request; and its numbers
+are <em>expected</em> to be worse than the required gate's &mdash; that is the finding &mdash; so
+wiring it into merge protection would block work on a fact about corpus size rather than about the
+change under review.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -2431,8 +2471,9 @@ a key), and an A-vs-B comparison does not test blend weights or pool depth.</p>
       </article>
 
       <article class="cap rcard" id="golden-set-grades-by-name-not-by-skill">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Eval · Correctness</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Eval · Correctness</span></div>
         <h3>The golden set grades by name, and 35 of 53 names are ambiguous</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The eval scores a hit when the top result carries the right <em>name</em>. Most of those names do
 not identify a skill.</b> Measured over a real 71,655-entry catalogue against the 50
 natural-language golden queries: of the <b>53</b> distinct target names, <b>18</b> resolve to a
@@ -2524,12 +2565,49 @@ about the corpus that is tapped:
 <b>What unblocked this.</b> Not the judgment calls &mdash; [[eval-deduped-ranked-lists-by-name]].
 A half-migrated set was averaging two different rank conventions, because name-graded rows collapsed
 homonyms into one rank slot while exemplar-graded rows gave every distractor mirror its own. Until
-both used one convention, migrating rows one at a time produced a number that meant nothing.</p>
+both used one convention, migrating rows one at a time produced a number that meant nothing.
+
+<b>The remaining 22 are decided, and the rule is written down rather than inferable from the pins.</b>
+A class is pinned when a user who asked that question would be <em>helped</em> by receiving it. Two
+exclusions, and only two. <b>E1, different job</b>: the body shares the name and does something else
+&mdash; a <code>brand-guidelines</code> that governs written copy, asked about colours and typefaces;
+a <code>commit</code> whose entire description is &ldquo;Create a git commit&rdquo;, asked what
+message convention to follow; a <code>create-pr</code> that is an explicit alias stub redirecting
+elsewhere. <b>E2, localised copy</b>: an entry under <code>docs/&lt;locale&gt;/</code>, because the
+queries are English and a reader who asked in English is not served by the Turkish translation
+(byte-identical mirrors are unaffected &mdash; they are one class). The rule deliberately does not
+adjudicate which of several <em>helpful</em> answers is best; that is an opinion the metric cannot
+support, and <code>relevant</code> has always been a list precisely because more than one skill can
+be right.
+
+<b>The card's central worry was that guessing would &ldquo;bake one opinion into the number the
+project publishes, invisibly&rdquo;. It is now measured, and the answer is zero.</b> Over the pinned
+corpus, one index build, BM25 <code>recall@10 / hit@1 / MRR / nDCG</code>:
+<code>name-graded (before) &rarr; <b>0.350 / 0.160 / 0.245 / 0.259</b></code><br>
+<code>every class pinned, no exclusions &rarr; <b>0.360 / 0.160 / 0.245 / 0.264</b></code><br>
+<code>the rule above, E1 + E2 applied &rarr; <b>0.360 / 0.160 / 0.245 / 0.264</b></code>
+
+The last two are <em>identical</em>. So the opinion is not load-bearing: the entire
+<code>+0.010 / +0.005</code> shift is the denominator effect of a multi-name row collapsing to one
+relevance class, not the judgments. Nothing that got excluded was being credited, because BM25
+rarely ranked one of these targets first at all (<code>hit@1</code> 0.160).
+
+<b>That qualifies the card's own claim rather than confirming it.</b> The metric being an upper
+bound is true in principle; on this query set and this corpus the looseness was <em>latent</em>,
+so the numbers published so far were not being flattered by it. The guard earns its keep
+prospectively &mdash; at 71,655 entries there are far more same-named distractors competing, which
+is the regime [[eval-corpus-is-96x-smaller-than-a-real-install]] describes.
+
+<b>A smaller thing fixed on the way.</b> A baseline key is <code>name@digest</code>, so editing a
+query set orphans the old entry &mdash; and the digest can only recur if someone reverts the file
+byte for byte, meaning it is never read again. It was dead weight accumulating one row per edit.
+Pinning these rows produced the first one, so <code>--save-baseline</code> now drops a set's
+superseded entries and says which, leaving every other set untouched.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">28 of 50 rows pinned mechanically with zero change to any number; 22 are genuine judgment calls</span>
+          <span class="m">all 50 rows pinned; the 22 judgment calls were measured to move the published number by zero</span>
         </div>
       </article>
 
@@ -2726,8 +2804,9 @@ is fixed.</p></details>
       </article>
 
       <article class="cap rcard" id="eval-corpus-pins-have-no-refresh-path">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Eval · Correctness</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Eval · Correctness</span></div>
         <h3>Nothing refreshes the eval corpus pins, so the gate measures one frozen day</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Pinning traded one problem for its opposite, and the trade should be recorded rather than
 discovered.</b> Before, <code>taps.txt</code> named twenty repositories and the gate measured
 whatever they held that morning &mdash; reproducible only by luck. Now every row carries a SHA, so
@@ -2755,7 +2834,43 @@ also compounds with [[eval-corpus-is-one-strangers-repo]]: re-resolving is exact
 repository gets discovered, which is the feature or the outage depending on how it reports.
 
 <b>Provenance.</b> The direct consequence of [[eval-corpus-was-not-actually-pinned]], whose stated
-limits call this cost intended. It is intended, and it is also unassigned.</p>
+limits call this cost intended. It is intended, and it is also unassigned.
+
+<b>What shipped.</b> <code>scripts/eval_corpus.py --refresh</code> moves every row to current
+upstream HEAD, re-measures its entry count, and rewrites <code>taps.txt</code>;
+<code>.github/workflows/eval-corpus-refresh.yml</code> runs it monthly and opens a PR, the same
+shape <code>lock-refresh.yml</code> uses for the toolchain. The refresh deliberately does
+<em>not</em> run the eval: moving the corpus and judging what the move did are different
+decisions, and one step that did both would be making the second one silently.
+
+<b>The PR body is the deliverable, not the SHA diff.</b> The job scores the refreshed corpus in
+its own <code>continue-on-error</code> step and leads the body with the verdict, because the
+numbers can legitimately go down &mdash; [[eval-corpus-is-96x-smaller-than-a-real-install]]
+measures all four floors failing at 7&times; the size &mdash; so a refresh can turn a required
+gate red through no fault of any change in the diff. A failing job would surface that to nobody,
+so the failure has to arrive as a PR that says, in a warning block, that this is the measurement
+rather than a defect to fix by editing the diff. A test pins the refresh job to the <em>same
+four floors</em> the required gate uses, since a drifted floor would make that banner
+confidently wrong in either direction.
+
+<b>First run, measured rather than predicted.</b> Against the corpus pinned one day earlier:
+<b>4 of 20</b> repositories had moved, the corpus went <b>10,152 &rarr; 10,162</b> entries
+(<code>+10</code>, all in the repo that is already 62% of it), and the gate scored
+<code>0.852 / 0.473 / 0.605 / 0.657</code> &mdash; <b>identical to three decimals</b>, all four
+floors PASS. That is one day of drift, so it is a demonstration that the path works rather than
+evidence about how fast the corpus ages; the point of the monthly cadence is that nothing else
+in this repository reports that number at all.
+
+<b>The vanished-repo case is handled by the same run.</b> A refresh is the only thing that ever
+asks whether those twenty repositories still exist. <code>--refresh</code> exits <b>75</b>
+(EX_TEMPFAIL) naming the repo, so the scheduled job failing with &ldquo;X is gone&rdquo; is the
+intended discovery signal &mdash; and, unlike the old failure mode described in
+[[eval-corpus-is-one-strangers-repo]], it blocks no pull request.
+
+<b>One thing found while building it.</b> The job was called <code>refresh</code>, which collides
+with <code>lock-refresh.yml</code>'s job of the same name. GitHub keys required checks on the
+name alone, so that is an ambiguity a check can never be required through &mdash;
+<code>scripts/check_required_checks.py</code> caught it locally.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
@@ -5689,8 +5804,9 @@ open: <code>zizmor</code> and <code>gitleaks</code> run only in CI and have no M
       </article>
 
       <article class="cap rcard" id="chat-cites-sources-by-a-number-it-never-prints">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3><code>boost chat</code> cites its sources by a number it never prints</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost chat</code> answers with numbered references to the sources beneath it, and the
 source list is rendered unnumbered — so every citation points at nothing:
 
@@ -5716,11 +5832,39 @@ the follow-up command will work first time. That form is only worth emitting now
 <a href="#info-rejects-the-qualified-name-it-recommends">info accepts it</a>; before that fix,
 qualifying the name would have traded one dead end for another.
 
-<b>Not yet located.</b> There is no <code>chat</code> row in <code>cli.py</code>'s
-<code>COMMANDS</code> table and no <code>commands/chat.py</code> in this repository — the
-observed behaviour comes from an installed <code>boost-skill-cli</code> build. Whoever picks
-this up should start from <code>pip show -f boost-skill-cli</code> to find the source, and
-should treat "is this command still shipping?" as the first question rather than an assumption.</p>
+<b>CORRECTION &mdash; "not yet located" was wrong.</b> This card said there is no <code>chat</code>
+row in <code>cli.py</code>'s <code>COMMANDS</code> table, and told the next reader to start from
+<code>pip show -f boost-skill-cli</code> because the behaviour must be coming from an installed
+build. The row is at <code>cli.py:93</code>, has been all along, and <code>./boost --help</code>
+lists the command. What misled the search was looking for <code>commands/chat.py</code>: the
+<code>COMMANDS</code> row names its module, and this one lives in
+<code>commands/intelligence.py</code> alongside the rest of the <code>ai</code> group. The
+engine is <code>core/chat.py</code>. Treating "is this command still shipping?" as the first
+question was right; the answer was simply yes.
+
+<b>What shipped.</b> Both halves now agree on one contract. <code>chat.source_text</code>
+numbers the candidates from 1 and the system prompt says to answer from "the numbered skills",
+so the rendered block enumerates <code>reply.skills</code> &mdash; the same list, in the same
+order, so the indices are the model's rather than a parallel scheme invented at render time.
+The extractive answer is numbered too, so the keyless path and the AI path refer to the same
+rows the same way.
+
+<b>The ambiguity half is fixed where it is decidable.</b> Every citation now carries a
+<code>ref</code>, and the invariant is that a <code>ref</code> can be pasted into
+<code>boost info</code> and will resolve. Usually that is just the name; when several taps
+carry it &mdash; the exact condition <code>catalog.resolve_one</code> refuses on &mdash; it is
+the qualified <code>owner/repo:name</code>. Verified end to end against the pinned 10,152-entry
+corpus: <code>boost info code-reviewer</code> errors with "exists in multiple taps", and the
+<code>ChrisWiles/claude-code-showcase:code-reviewer</code> the sources block now prints
+resolves. A name repeated <em>inside</em> one tap is deliberately left bare, because
+<code>resolve_one</code> already picks a canonical row for that case.
+
+<b>One thing deliberately not done.</b> The qualifier does not reach the prompt. The system
+prompt tells the model to name skills "exactly as given" and <code>ungrounded_names</code>
+grades the reply against the entries' <em>bare</em> names, so feeding it qualified names would
+make a correctly-quoted recommendation look invented and throw the whole answer away. So
+<code>_describe</code> takes the ref on the answer path only, and a test pins that the prompt
+still names skills bare.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6554,8 +6698,9 @@ the verdict.</p></details>
       </article>
 
       <article class="cap rcard" id="roadmap-perf-budget-has-no-local-guard">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Performance</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Performance</span></div>
         <h3>The Lighthouse budget passes on noise, not on margin</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The roadmap page has not been under its performance budget. It has been winning a coin toss.</b>
 Pulled from <code>main</code>'s own Lighthouse artifact, <code>roadmap.html</code> scores
 <b>0.810, 0.840 and 0.850</b> across the three runs of a single job, against a
@@ -6595,7 +6740,38 @@ genuinely faster, not on resampling luck.
 <b>Still open.</b> No local check predicts this &mdash; neither laid-out text nor prose volume moved
 the score, so the cheap proxy is not obvious, and <code>lighthouse</code> remains non-required, which
 is why two of three failing runs on <code>main</code> went unnoticed. The page itself is unfixed:
-0.84 is a board of 200 cards and 500&nbsp;KB of markup, and it only grows.</p>
+0.84 is a board of 200 cards and 500&nbsp;KB of markup, and it only grows.
+
+<b>What shipped, and what it deliberately does not claim.</b>
+<code>scripts/page_budget.py</code> measures every <code>docs/*.html</code> page's markup bytes,
+element count and nesting depth, and fails a ceiling. It runs in <code>make lint</code> and in CI's
+<code>lint</code> job &mdash; a <em>required</em> context &mdash; so the signal is enforceable,
+which is the half of this card that was actionable. It is pure stdlib and deterministic, because the
+thing that made the Lighthouse signal useless was needing a browser to see it.
+
+<b>It is not a Lighthouse predictor, and saying so would be inventing a correlation this card
+already measured away.</b> Cutting laid-out body text 33% moved the score by <b>0.00</b>; trimming
+3,066 characters of prose moved it by <b>0.00</b>. What the budget bounds is the thing this card's
+own last sentence names: the board <em>only grows</em>, one card at a time, each increment too small
+to argue with. The size is now printed on every run and the ceiling has to be raised on purpose.
+
+<b>Why element count leads.</b> It is the one dimension where the page is off the scale by the
+tool's own published standard rather than by inference: Lighthouse warns above <b>800</b> elements
+and fails above <b>1,400</b>, and <code>roadmap.html</code> carries <b>7,484</b> &mdash; 5&times; the
+failing threshold, and an order of magnitude past every other page here
+(<code>commands.html</code>, the next largest, is 1,512). Measured across the site:
+<code>roadmap.html 525,472&nbsp;B / 7,484 / depth&nbsp;10</code><br>
+<code>commands.html 86,026 / 1,512 / 8 &nbsp;·&nbsp; index.html 58,352 / 488 / 12</code><br>
+<code>mcp-hub.html 51,162 / 607 / 10 &nbsp;·&nbsp; design-roadmap.html 45,931 / 727 / 10</code>
+
+<b>The ceilings are loose on purpose.</b> One set just above today's measurement would fire on the
+next shipped card and be raised reflexively, which is worse than no check &mdash; it teaches people
+the number is noise. They are sized to catch roughly a doubling. A test enforces that discipline
+from the other side: if the board ever creeps past 80% of its ceiling, it fails and asks for the
+raise to be a decision rather than an emergency.
+
+<b>Still genuinely open.</b> The page is not faster. 0.84 is still a board of 200 cards, and nothing
+here changes that &mdash; only the odds that the next step change is noticed the day it lands.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
