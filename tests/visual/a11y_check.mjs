@@ -3,6 +3,11 @@
 //   node tests/visual/a11y_check.mjs                # system Chrome
 //   BOOST_CHROME_BIN=/path/to/chrome node ...       # explicit binary
 //
+// On macOS, point BOOST_CHROME_BIN at a `chrome-headless-shell` rather than at
+// Google Chrome: Chrome's ProcessSingleton bind()s a unix socket and aborts "to
+// avoid profile corruption" wherever that syscall is denied, and no flag turns
+// it off. The shell binary has no ProcessSingleton.
+//
 // scripts/a11y_check.py is the always-on gate: it covers everything decidable
 // from the markup (lang, alt, accessible names, duplicate ids, heading order)
 // plus the 1.4.3 contrast ratios computed from the Aurora tokens, with no
@@ -55,13 +60,29 @@ if (!bin) {
   process.exit(2);
 }
 
+// chrome-headless-shell is the only binary that starts under a macOS sandbox
+// that denies Mach port rendezvous — and it needs --single-process to do it, or
+// it dies in bootstrap_check_in before the CDP pipe is ever ready and puppeteer
+// reports a bare ProtocolError from launch(). visual_check.mjs already passes
+// the flag, which is why that half of this directory ran locally and this half
+// did not. Scoped to the shell binary on purpose rather than passed
+// unconditionally: CI drives /usr/bin/google-chrome in NEW headless (this
+// script takes puppeteer's default; visual_check.mjs asks for "shell"), and
+// --single-process is a debug-only flag there whose interaction with new
+// headless nothing in this repo exercises. Conditioning on the binary keeps
+// the CI invocation byte-identical while making the local run work.
+const needsSingleProcess = /chrome[-_]headless[-_]shell/.test(bin);
+
 const browser = await launch({
   executablePath: bin,
   pipe: true,                       // no listening socket (sandbox-safe)
   // file:// pages load ../style/boost.css as a subresource; without this Chrome
   // treats each file as its own opaque origin and the stylesheet never applies,
   // which would make every contrast result meaningless.
-  args: ["--allow-file-access-from-files", "--no-sandbox"],
+  args: [
+    "--allow-file-access-from-files", "--no-sandbox",
+    ...(needsSingleProcess ? ["--single-process"] : []),
+  ],
 });
 
 let violatingNodes = 0;
