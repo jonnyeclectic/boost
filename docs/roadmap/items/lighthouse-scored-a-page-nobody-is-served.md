@@ -10,6 +10,7 @@ wow: 5
 note: the page was never the slow part — the harness sent 3.27x the bytes Pages sends
 order: 97
 owner: fix/lighthouse-serves-uncompressed
+pr: 455
 title: The performance gate was measuring a page nobody is served
 ---
 <b>The board's Lighthouse score was decided by a missing HTTP header.</b> The gate serves the docs
