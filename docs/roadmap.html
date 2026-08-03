@@ -124,8 +124,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>204</b><span>Loop finds</span></div>
+      <div class="stat"><b>5</b><span>Planned</span></div>
+      <div class="stat"><b>206</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -616,6 +616,93 @@ message, so routing it through the helper would change user-facing errors.</p></
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="langchain-langgraph-langsmith-integration">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Feature</span></div>
+        <h3>production-ready LangChain / LangGraph / LangSmith integration</h3>
+        <p>Every agent boost supports today is a <b>coding</b> agent that reads files off disk — Claude Code,
+Cursor, Windsurf, Gemini CLI. The catalogue itself is not coding-specific: it is 10,000+ retrievable
+procedures with frontmatter, provenance and a lock file. A LangChain application cannot reach any of
+it, so the same procedure has to be re-written as a prompt string by hand. This item is about making
+the catalogue addressable from a Python agent runtime as well as from a dotfile.
+
+<b>Three surfaces, and they are not equally justified.</b>
+
+<code>langchain</code> — a <code>BoostRetriever</code> implementing <code>BaseRetriever</code> over
+the engine <code>boost search</code> already uses: BM25 (<code>core/rag.py</code>) fused with
+optional dense retrieval (<code>core/dense.py</code>) through <code>rag.rrf_fuse</code>. The
+retrieval quality is already measured — the required gate floors recall@k, hit@1, MRR and nDCG@k
+against <code>tests/eval/golden.jsonl</code> — so this surface ships with numbers rather than
+claims. Plus a document loader that turns a <code>SKILL.md</code> into prompt content with its
+frontmatter preserved as metadata.
+
+<code>langgraph</code> — skills as procedures a graph pulls <i>mid-run</i>: a node that retrieves
+the right skill for the current state and injects it, rather than stuffing every procedure into the
+system prompt. boost's <code>workflow</code> item kind is already the closest thing it has to a
+graph node, and <code>core/workflows.py</code> already renders per-runtime formats
+(<code>TOML_COMMAND_AGENTS</code> for Gemini), so a LangGraph renderer is a new target for existing
+machinery, not a new concept.
+
+<code>langsmith</code> — hosted tracing plus datasets/evaluators. boost already has a four-tier
+eval story (Tier 1 BM25 floors, 1b <code>ranx</code> significance, 2a/2b LLM rerank and recommend,
+2c <code>ragas</code> faithfulness) and a baseline keyed by query-set digest. LangSmith would host
+the golden set and run online evals against real traffic. It must <b>not</b> replace the required
+gate, which is deliberately pure-stdlib BM25 needing no API key — a required check that depends on
+a SaaS account is a required check that fails when someone else's billing lapses.
+
+<b>What "production ready" forces, specifically.</b>
+
+<b>It cannot be an extra — the Python floor decides it.</b> boost is
+<code>requires-python = "&gt;=3.9"</code> and CI tests 3.9 / 3.12 / 3.14 across Linux, macOS and
+Windows. Measured 2026-08-02: <code>langchain</code> 1.3.14 declares
+<code>&gt;=3.10.0,&lt;4.0.0</code> and <code>langsmith</code> 0.10.15 declares <code>&gt;=3.10</code>. So
+an extra would either fail to resolve on the 3.9 leg or force boost to drop 3.9 for every user,
+including those who never touch LangChain. A separately versioned distribution that depends on
+<code>boost-skill-cli</code> keeps the floor a property of the integration.
+
+<b>There is a dependency conflict boost already owns, and it blocks this.</b> The
+<code>[eval]</code> extra pins <code>langchain-core&lt;0.4</code>,
+<code>langchain-community&lt;0.4</code> and <code>langchain-openai&lt;1</code>, because ragas 0.2.x
+hard-imports a <code>ChatVertexAI</code> path that langchain ≥1.0 removed. One environment cannot
+hold both that pin and langchain 1.x. The good news is measured: <b>ragas 0.4.3 declares
+<code>langchain</code>, <code>langchain-core</code>, <code>langchain-community</code> and
+<code>langchain_openai</code> with no upper bound at all</b>, and still supports Python ≥3.9. So the
+first step is small, independently valuable, and testable on its own — move <code>[eval]</code>
+from <code>ragas&gt;=0.2,&lt;0.3</code> to 0.4 and delete the three pins. Nothing else should be built
+until that lands, or the project holds two incompatible langchain majors.
+
+<b>The existing rules still apply.</b> Nothing in the integration may be imported by the CLI or by
+the required gate — the discipline <code>[eval]</code> already follows. It must degrade cleanly
+without an API key, the way <code>embed.py</code> falls back Voyage → OpenAI → local
+<code>bge-small-en-v1.5</code>; a key is a quality upgrade, never the entry fee. And it carries its
+own tests without lowering the 80% coverage or 80% mutation floors.
+
+<b>Delivery order.</b> Each phase is independently shippable, and phase 0 is worth doing on its own
+merits whatever happens to the rest.
+
+<b>0 &middot; unpin.</b> Move <code>[eval]</code> to <code>ragas&gt;=0.4</code> and delete the three
+langchain pins, freeing the langchain major. Contained, testable, no new surface.
+<b>1 &middot; retrieve.</b> A <code>boost-langchain</code> distribution carrying
+<code>BoostRetriever</code> and the <code>SKILL.md</code> loader — the smallest thing that makes the
+catalogue reachable from a LangChain app, and the one with measured retrieval quality behind it.
+<b>2 &middot; orchestrate.</b> The LangGraph node, plus a graph-shaped render target in
+<code>core/workflows.py</code> beside the existing per-agent formats.
+<b>3 &middot; observe.</b> LangSmith tracing, and the golden set published as a LangSmith dataset so
+online evals run against the same queries the offline gate uses.
+
+<b>One scoping decision shapes phase 1's API</b> and should be settled before it starts: a LangChain
+<i>application</i> pulling skills at runtime is the consumer all three phases serve, whereas a
+LangChain <i>developer</i> who just wants these procedures in their editor is already served by
+<code>boost install</code> with no langchain dependency at all. Phase 1 should be designed for the
+former — a retriever, not an installer — and the docs should point the latter at the CLI so the new
+package does not accumulate a second, redundant install path.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">a second consumer class for the catalogue — blocked on one dependency conflict boost already owns</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -6831,6 +6918,70 @@ here changes that &mdash; only the odds that the next step change is noticed the
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">main passes this budget on run-to-run luck — its own three runs are 0.810, 0.840, 0.850</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="langchain-integration-explainer-page">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Interop</span></div>
+        <h3>an explainer page for the LangChain / LangGraph / LangSmith integration</h3>
+        <p>A companion to <b>production-ready LangChain / LangGraph / LangSmith integration</b>: one
+<code>docs/langchain.html</code> that shows what the integration <i>is</i> — architecture and
+sequence diagrams, annotated code you can paste, and the reasoning behind each seam — rather than
+an API list. The audience is a Python engineer deciding whether boost's catalogue is worth wiring
+into their agent, and that decision is made from a diagram and a twenty-line snippet, not from
+a reference table.
+
+<b>The genre already exists here.</b> <code>docs/eval.html</code> does exactly this job for the
+evaluation system — architecture plus sequence diagrams plus a simple-vs-technical cheat sheet — and
+it is the template to follow rather than reinvent. So are its mechanics: a page-specific
+<code>&lt;style&gt;</code> block built <i>only</i> on <code>style/boost.css</code>
+<code>:root</code> tokens, so the Aurora palette stays recolourable from one file, and diagrams as
+<b>inline SVG on those same tokens</b> rather than a diagram library. A hardcoded hex in a diagram
+silently opts that diagram out of every future theme change, and an external script opts the page
+out of loading at all on a strict CSP.
+
+<b>What the page has to cover</b>, one section per seam, each with a diagram and a runnable snippet:
+retrieval (<code>BoostRetriever</code> over the BM25 + dense fusion, with the measured recall@k /
+hit@1 / MRR / nDCG@k shown as numbers because they exist); a <code>SKILL.md</code> loaded as prompt
+content with its frontmatter surviving as metadata; a LangGraph graph that pulls a procedure
+<i>mid-run</i> instead of pre-loading every one into the system prompt; and a LangSmith trace of
+that graph, next to a plain statement that the required gate stays offline, deterministic and
+key-free.
+
+<b>Three constraints that are specific to this repo</b>, all of them cheap to satisfy if known up
+front and expensive to retrofit:
+
+<b>No page ships unlinked.</b> <code>tests/unit/test_docsite_chrome.py</code> holds a
+<code>_PAGES</code> tuple and asserts every page carries the footer and is reachable from all the
+others. Adding the tenth page therefore means touching the nav and footer of the nine that exist —
+it is a small edit, but it is not optional and it is not automatic.
+
+<b>The budget already fits — measured, so nobody has to guess.</b>
+<code>scripts/page_budget.py</code> allows a hand-written page 150 kB / 2,000 elements / depth 20.
+Today <code>eval.html</code> is 35.5 kB / 528 elements / depth 10 and <code>mcp-hub.html</code>, the
+largest hand-written page, is 50.0 kB / 607. A diagram-and-snippet page of this shape lands in the
+same range, so it needs <b>no</b> new <code>BUDGETS</code> entry — and if it ever does, the entry
+carries a <code>why</code> string rather than raising the default for every page.
+
+<b>Accessibility is enforced with numbers, not vibes.</b> The axe-core sweep and
+<code>scripts/a11y_check.py</code> gate WCAG 2.1 AA, and this genre trips it in a predictable place:
+a diagram that encodes meaning in colour alone, or a link distinguished only by hue. The precedent
+is already commented in <code>eval.html</code> — <code>--sky</code> on <code>--text-3</code> is
+2.47:1 against the 3:1 that WCAG 1.4.1 requires, so its links carry an underline as the non-colour
+cue. Diagram legends need the same treatment: shape or label, never colour by itself.
+
+<b>Sequencing, and the one rule that keeps it honest.</b> The page cannot precede the code — a
+demonstration of an unbuilt integration is fiction, and a snippet nobody ran is a bug with syntax
+highlighting. So each section ships with the phase it documents (retrieval with phase 1, the graph
+with phase 2, the trace with phase 3), and every snippet on the page should be extracted and
+executed by a test rather than pasted in and trusted. That last part is a new discipline for this
+docsite, not an existing one; it is worth adopting here first precisely because this page's whole
+value is that its code runs.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">the eval.html genre, pointed at the LangChain stack — and it can only document what has shipped</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
