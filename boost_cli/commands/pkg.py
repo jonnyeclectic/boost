@@ -434,10 +434,8 @@ def cmd_install(argv: List[str]) -> int:
                                                   e["version"], e["tap"]))
             out.info("  copy  %s → %s" % (_tilde(store.source_dir_for(e)),
                                           _tilde(store.skill_store_dir(e["name"]))))
-            if link_targets:
-                out.info("  link  → %s" % " · ".join(link_targets))
-            elif not native_targets:
-                out.info("  link  → (no enabled agents)")
+            out.info("  link  → %s" % (" · ".join(link_targets)
+                                        or "(no linking agents)"))
             # Mirrors what the real install reports, so a Gemini-only install
             # does not read as reaching no agent at all.
             if native_targets:
