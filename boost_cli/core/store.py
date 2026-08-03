@@ -137,6 +137,15 @@ def preserved_agent_scope(only_agents: Optional[List[str]],
         return only_agents
     if not existing:
         return None
+    # A recorded declaration outranks the link list. Now that ``agents``
+    # describes disk, it can legitimately name agents *outside* a narrowing —
+    # and replaying it would make `update`/`reinstall` recreate a link the
+    # declaration excludes, including one the user had just deleted by hand.
+    # `sync` already refuses to do that (``scoped_agents``); these have to
+    # agree, or which command you run decides what your agent set is.
+    declared = existing.get("only_agents")
+    if declared:
+        return list(declared)
     recorded = existing.get("agents")
     if recorded is None:
         recorded = [m.get("agent")

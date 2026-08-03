@@ -1674,6 +1674,20 @@ class TestPreservedAgentScope:
         assert store.preserved_agent_scope(
             None, {"materializations": [{"path": "/y"}]}) is None
 
+    def test_a_declaration_outranks_the_link_list(self):
+        # `agents` describes disk and may name agents outside a narrowing, so
+        # replaying it would relink what the declaration excludes.
+        assert store.preserved_agent_scope(
+            None, {"agents": ["claude-code", "cursor"],
+                   "only_agents": ["cursor"]}) == ["cursor"]
+
+    def test_no_declaration_still_falls_back_to_the_link_list(self):
+        # Entries written before `only_agents` existed, and skills never
+        # narrowed, must keep replaying what is linked.
+        assert store.preserved_agent_scope(
+            None, {"agents": ["claude-code"], "only_agents": None}) == \
+            ["claude-code"]
+
     def test_agents_is_preferred_over_materializations(self):
         # A project skill records both; `agents` is the complete list (it
         # carries forward agents an earlier filtered install left untouched).
@@ -2133,6 +2147,21 @@ class TestSyncSeesLinksOutsideTheDeclaredScope:
     def test_a_plan_without_the_key_is_tolerated(self, sandbox):
         # sync_apply/prune are called with hand-built plans in places.
         assert store.prune_out_of_scope_links({}) == []
+
+    def test_reinstall_does_not_recreate_a_link_the_scope_excludes(self, tap,
+                                                                   entry):
+        """`reinstall` and `sync` have to agree about the declared scope.
+
+        Once `agents` records disk it can name agents outside a narrowing, and
+        replaying it would relink one the user had just removed by hand —
+        while `boost sync`, which reads `only_agents`, correctly leaves it
+        alone. Which command you happened to run would decide your agent set.
+        """
+        self._narrowed(entry)
+        _link("claude-code").unlink()
+        store.install(entry, force=True)               # what `update` does
+        assert not _link("claude-code").exists()
+        assert _link("cursor").is_symlink()
 
     def test_a_prune_is_journalled_and_a_no_op_is_not(self, tap, entry):
         # Deleting a working link is the one destructive thing here, so it has
