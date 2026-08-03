@@ -54,6 +54,34 @@ const browser = await launch({
          "--disable-dev-shm-usage", "--hide-scrollbars"],
 });
 
+// Containers allowed to hide content behind their own horizontal scroll.
+//
+// The document-level assertion below is blind to these by construction: an
+// element with `overflow-x: auto` ABSORBS its overflow, so
+// `documentElement.scrollWidth` stays equal to the viewport no matter how much
+// is hidden inside. That is how the registries table shipped 812px of content
+// into a 340px scroller — 21 of its 24 cells off-screen — past a gate that
+// reported "9 pages × 5 widths clean". macOS and iOS overlay scrollbars paint
+// nothing until a scroll is already under way, so it did not look truncated
+// either.
+//
+// An allowlist rather than a threshold, because "how much may be hidden" is not
+// the question — whether the reader can tell is. Each entry needs a reason, and
+// anything new fails until someone writes one. That is the ratchet: the cost of
+// adding a scroller is one sentence, and the cost of adding one by accident is
+// a red build.
+const SCROLL_OK = [
+  { sel: "header .nav ul, .site-nav ul",
+    why: "mobile nav strip — snap points and a faded trailing edge already read as scrollable" },
+  { sel: "pre",
+    why: "code must not wrap; a broken command line is worse than a hidden one" },
+  { sel: ".diagram",
+    why: "fixed-geometry diagram — reflowing it would move the arrows off their boxes" },
+  { sel: "table.contract, table.map",
+    why: "columns exist to be compared, so stacking would destroy the point; boost.css keeps a visible scrollbar on them" },
+];
+const SCROLL_OK_SEL = SCROLL_OK.map((s) => s.sel).join(", ");
+
 let failures = 0;
 const page = await browser.newPage();
 await page.emulateMediaFeatures([{ name: "prefers-reduced-motion", value: "reduce" }]);
@@ -67,12 +95,39 @@ for (const rel of PAGES) {
     // everything visible so the screenshot shows the real layout.
     await page.addStyleTag({ content: ".reveal{opacity:1!important;transform:none!important}" });
 
-    const r = await page.evaluate(() => {
+    const r = await page.evaluate((okSel) => {
       const doc = document.documentElement;
       const overflowPx = Math.max(0, doc.scrollWidth - doc.clientWidth);
       const css = getComputedStyle(document.body);
+
+      // Per-container overflow: what the document-level number cannot see.
+      const vw = window.innerWidth;
+      const clipped = [];
+      document.querySelectorAll("*").forEach((el) => {
+        const hidden = el.scrollWidth - el.clientWidth;
+        if (hidden <= 1 || el.clientWidth === 0) return;   // 1px = subpixel noise
+        const cs = getComputedStyle(el);
+        if (cs.overflowX !== "auto" && cs.overflowX !== "scroll") return;
+        if (okSel && el.matches(okSel)) return;
+        // Count what a reader actually cannot see right now. `hidden` alone
+        // overstates a container scrolled to the middle and understates one
+        // whose overflow is a single very wide child.
+        let off = 0;
+        el.querySelectorAll("*").forEach((c) => {
+          const b = c.getBoundingClientRect();
+          if (b.width > 0 && (b.right > vw + 0.5 || b.left < -0.5)) off++;
+        });
+        clipped.push({
+          sel: el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") +
+            (typeof el.className === "string" && el.className.trim()
+              ? "." + el.className.trim().split(/\s+/).join(".") : ""),
+          hidden, off,
+        });
+      });
+
       return {
         overflowPx,
+        clipped,
         bg: css.backgroundColor,
         fontOk: css.fontFamily.length > 0,
         // index has a <header> nav; adapters/eval/mcp-hub use breadcrumb
@@ -80,11 +135,15 @@ for (const rel of PAGES) {
         hasWrap: !!document.querySelector(".wrap"),
         headings: document.querySelectorAll("h1,h2").length,
       };
-    });
+    }, SCROLL_OK_SEL);
 
     const name = rel.replace(/[\/.]/g, "_") + "-" + width;
     const problems = [];
     if (r.overflowPx > 0) problems.push(`horizontal overflow ${r.overflowPx}px`);
+    for (const c of r.clipped) {
+      problems.push(`${c.sel} hides ${c.hidden}px behind its own scroll `
+        + `(${c.off} element(s) off-screen) — fix it, or add it to SCROLL_OK with a reason`);
+    }
     // boost.css paints the near-black ground; white/transparent means the
     // stylesheet did not load or a cascade break unstyled the page.
     if (!/rgb\(7, 8, 15\)/.test(r.bg)) problems.push(`body background ${r.bg} (stylesheet not applied?)`);
