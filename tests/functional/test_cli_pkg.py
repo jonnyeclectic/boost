@@ -429,6 +429,41 @@ class TestUpdateDiffGate:
         assert "upgraded" not in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 
+    def test_the_yes_flag_the_skip_message_advertises_is_accepted(
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        """Declining prints "then `boost update --yes` to apply" — so that has
+        to parse.
+
+        It did not: `boost update` never declared -y/--yes, so following its own
+        instruction died on `unrecognized arguments: --yes`, and the only escape
+        from the gate was a flag the parser rejected.
+        """
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "risk-tap3")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        _poison(tap_dir, "brainstorming", "1.4.0", "1.5.0")
+
+        # Drive the real out.confirm() rather than patching it: drop conftest's
+        # BOOST_ASSUME_YES (it would auto-approve and hide whether --yes did
+        # anything) and set sys.argv explicitly, which is where confirm() looks
+        # for the flag. With neither set and stdin not a tty, confirm returns
+        # its default — False — so the gate declines on its own.
+        # NB: never monkeypatch.undo() here; the sandbox fixture's HOME is on
+        # the same monkeypatch, so undoing drops the test out of its sandbox and
+        # onto the developer's real ~/.boost.
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        monkeypatch.setattr("sys.argv", ["boost", "update"])
+        r = boost("update")
+        assert "`boost update --yes` to apply" in r.out   # the advice is given
+        assert _lock()["brainstorming"]["version"] == "1.4.0"
+
+        # Now take that advice verbatim.
+        monkeypatch.setattr("sys.argv", ["boost", "update", "--yes"])
+        r2 = boost("update", "--yes")
+        assert "unrecognized arguments" not in r2.err
+        assert "upgraded brainstorming v1.4.0 → v1.5.0" in r2.out
+        assert _lock()["brainstorming"]["version"] == "1.5.0"
+
     def test_routine_bump_applies_without_gate(
             self, boost, fixture_tap_src, tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "clean-tap")
