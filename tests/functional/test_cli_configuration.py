@@ -990,6 +990,92 @@ class TestMcp:
         assert "by name" in specs["boost_info"]
         assert "do not need this between a search and an install" in specs["boost_info"]
 
+    def test_tool_descriptions_earn_the_call_without_overselling_it(self, sandbox):
+        # The descriptions were rewritten to pull harder, because on Gemini CLI
+        # they are the only boost text at the decision point. Pulling harder is
+        # allowed to cost accuracy in exactly zero places, so this pins the
+        # parts that make the pull legitimate rather than merely loud.
+        from boost_cli.commands import configuration
+        specs = {s["name"]: s["description"].lower()
+                 for s in configuration.REGISTRY.specs()}
+
+        # The rerank figures stay OUT of the tool description, deliberately.
+        # They are real -- _tool_search's own comment records "the rerank moves
+        # hit@1 from 0.791 to 0.945" on the 91-query golden set, which is where
+        # mcp.INSTRUCTIONS' "95% against 79%" comes from -- but 0.791 is the
+        # BM25 baseline over the SIX-repo corpus, and tests/eval/baseline.json
+        # records 0.4725 for the twenty-repo corpus that replaced it precisely
+        # because six was unrealistically small (see CLAUDE.md). Quoting 79%
+        # as today's baseline overstates it by 31 points. A number that precise
+        # at the decision point, drifted from the corpus it was measured on, is
+        # the flattering-but-stale claim the cost test below exists to prevent.
+        # State the mechanism; leave the arithmetic to the eval gate.
+        assert "95%" not in specs["boost_search"]
+        # Stating the benefit must never quietly drop the cost with it.
+        # A description whose job is to make a tool worth reaching for is the
+        # one place a flattering lie discredits everything around it.
+        assert "seconds" in specs["boost_search"]
+        assert "instant" not in specs["boost_search"]
+        for bad in ("always call", "you must", "never skip"):
+            assert bad not in specs["boost_search"], (
+                "coercive framing: an agent that is ordered rather than "
+                "persuaded routes around the tool the first time it misses")
+
+        # Non-capture moved onto the tool itself for the same Gemini reason: an
+        # agent that expects a hit to seize the task is safer not looking.
+        assert "the task stays yours" in specs["boost_search"]
+
+        # No claimed corpus size. "thousands of vetted skills" shipped for a
+        # long time and is false exactly when it matters most — at a new user's
+        # first search. config.DEFAULT_TAPS is five repos totalling 76
+        # est_items; the tens of thousands only exist once someone has tapped
+        # hundreds of registries. Describe the scope ("every registry you have
+        # tapped"), never a number the install cannot back.
+        assert "thousands" not in specs["boost_search"]
+
+        # install wires ENABLED agents, not all known ones (agents.py:28) --
+        # promising "every agent" writes a cheque the enabled-flag can bounce.
+        assert "enabled" in specs["boost_install"]
+
+        # doctor used to describe only its inputs. What makes it worth a call
+        # is that it ends at an action, not a symptom -- but `boost sync` is
+        # not that action for every class it counts: out_of_scope_links is
+        # "reported, never auto-removed" (store.sync_plan) and needs --prune,
+        # so the description has to carry the exception or an agent runs the
+        # named fix and watches the issue survive it.
+        assert "next action" in specs["boost_doctor"]
+        assert "--prune" in specs["boost_doctor"]
+
+        # Ship the real cost. docs/roadmap/items/mcp-search-cost-was-
+        # understated.md measured this path at 11.7-17.0s (median ~12) and
+        # exists because "about a second" shipped once already; "a few seconds"
+        # is the same understatement wearing a vaguer hat.
+        assert "10-15 seconds" in specs["boost_search"]
+        assert "a few seconds" not in specs["boost_search"]
+
+        # "vetted" claims item-level curation boost does not do: registries
+        # carry curated/confidence, individual skills do not, any repo can be
+        # tapped, and _tool_install scans every install for prompt injection
+        # and tells the caller to read it before acting on it. A description
+        # cannot promise vetting the install path explicitly distrusts.
+        assert "vetted" not in specs["boost_search"]
+
+        # _tool_search passes no kind filter, so a match can be a RULE, and
+        # _install_rule merges into ~/.claude/CLAUDE.md instead of copying into
+        # the store. CLAUDE.md calls that more invasive than a skill; the
+        # description must not imply every install is a benign file copy.
+        assert "rule" in specs["boost_install"]
+
+        # discover exists to stop an empty search reading as "nobody solved
+        # this" -- the reading that makes an agent give up rather than widen.
+        assert "empty" in specs["boost_discover_github"]
+
+        # install is the one place an agent gets the mechanism wrong: Gemini is
+        # NOT symlinked, it reads the canonical store directly, and a
+        # description that implies four symlinks teaches a wrong mental model.
+        assert "gemini" in specs["boost_install"]
+        assert "directly" in specs["boost_install"]
+
     def test_discover_github_missing_gh_degrades(self, sandbox, monkeypatch):
         from boost_cli.commands import configuration
         monkeypatch.setattr("boost_cli.commands.configuration.shutil.which",

@@ -960,16 +960,22 @@ def _tool_discover_github(args: dict):
 # miss protocol rather than deferring to the server instructions.
 REGISTRY.register(
     "boost_search",
-    "Check whether someone already wrote down how to do this. Searches "
-    "thousands of vetted, installable AI-agent skills across the configured "
-    "registries and returns ranked matches. Worth one call whenever the task "
-    "in front of you has a name you could say out loud — \"set up code "
-    "review\", \"add commit conventions\", \"debug flaky tests\" — and before "
-    "writing a skill, subagent, slash-command or rule from scratch. Read-only, "
-    "no side effects, installs nothing. Takes a few seconds because it ranks "
-    "the matches with an LLM, which is what makes the top result worth acting "
-    "on. Returning nothing relevant is a fine answer: it means build it "
-    "yourself.",
+    "Someone has probably solved this already — one call tells you. Searches "
+    "every installable AI-agent skill in every registry you have "
+    "tapped and returns ranked matches: each one a procedure a "
+    "practitioner already worked out, debugged and wrote down, edge cases "
+    "included. Reach for it the moment the task in front of you has a name you "
+    "could say out loud — \"set up code review\", \"add commit conventions\", "
+    "\"debug flaky tests\" — and before writing a skill, subagent, "
+    "slash-command or rule from scratch. Read-only where it counts: it "
+    "installs nothing and touches nothing you are working on, though the first "
+    "search builds a local index under ~/.boost. A hit commits you to nothing "
+    "either: take what fits, discard the rest, the task stays yours. It costs "
+    "10-15 seconds — an LLM reranks every match, which is what makes the top "
+    "result worth acting on rather than skimming. Worth budgeting for, not a "
+    "surprise. Coming back empty is a real answer too, not a "
+    "wasted turn: it means build it yourself, now knowing nothing already "
+    "covers it.",
     {"type": "object",
      "properties": {"query": {"type": "string",
                               "description": "what the skill should do (a task, "
@@ -978,43 +984,60 @@ REGISTRY.register(
     _tool_search)
 REGISTRY.register(
     "boost_list",
-    "The skills already installed on this machine and usable right now — "
-    "capability you have but may not know about. Read-only, instant, installs "
-    "nothing. Worth a call at the start of any task that will take more than a "
-    "few steps, before planning it from memory.",
+    "The skills already installed on this machine and usable this second — "
+    "capability you own and may not know you own. Read-only, instant, installs "
+    "nothing. Worth a call at the start of "
+    "anything that will take more than a few steps: planning from memory while "
+    "the answer already sits on disk is the one avoidable mistake here.",
     {"type": "object", "properties": {}},
     _tool_list)
 REGISTRY.register(
     "boost_info",
-    "Look up one skill by name: description, source tap, version, and whether "
-    "it is already installed. Use it when you have a name from somewhere else "
-    "and want the details. You do not need this between a search and an "
-    "install — boost_search already returns each match's description.",
+    "The whole picture of one skill by name — what it does, the tap it came "
+    "from, its version, and whether it is already installed — so you can "
+    "commit or move on without guessing. Reach for it when a name arrives from "
+    "somewhere else: a teammate, a README, a repo you are reading. You do not "
+    "need this between a search and an install — boost_search already returns "
+    "each match's description.",
     {"type": "object",
      "properties": {"name": {"type": "string", "description": "skill name"}},
      "required": ["name"]},
     _tool_info)
 REGISTRY.register(
     "boost_install",
-    "Install a skill found via boost_search — copies it into the canonical store "
-    "and wires it into every agent (Claude Code, Cursor, Windsurf) automatically. "
-    "Prefer this over pasting instructions by hand: it is version-tracked, "
-    "reusable, and shareable with your team.",
+    "Turn a skill you found with boost_search into permanent capability: copied "
+    "into the canonical store and wired into every agent you have enabled, in "
+    "one step — Claude Code, Cursor and Windsurf by symlink, Gemini CLI by "
+    "reading that same store directly. Prefer it to pasting instructions into "
+    "a prompt, which lasts one "
+    "session and helps nobody else: an installed skill is version-tracked, "
+    "survives restarts, updates cleanly, and your team can install the "
+    "identical thing by name. Worth knowing before you call it: boost_search "
+    "also returns rules, and installing a rule copies nothing into the store — "
+    "it merges into the context file your agent loads every session, which is "
+    "the more invasive change. Check what kind of thing you are installing.",
     {"type": "object",
      "properties": {"name": {"type": "string", "description": "skill name"}},
      "required": ["name"]},
     _tool_install)
 REGISTRY.register(
     "boost_doctor",
-    "Health-check the boost skill environment (installed skills, symlinks, taps) "
-    "— run when installed skills seem missing or misbehaving.",
+    "Prove the skills you think are installed are actually usable. Reports how "
+    "many skills are installed, how many taps and skills are reachable, and "
+    "anything the store and the lock file disagree about — and when they do "
+    "disagree it points at the next action, `boost sync` — though some classes "
+    "need `boost sync --prune` — rather than leaving you a "
+    "symptom. Worth a call when a skill does not seem to be loading, or before "
+    "you rely on one for something that matters.",
     {"type": "object", "properties": {}},
     _tool_doctor)
 REGISTRY.register(
     "boost_discover_github",
-    "Reach beyond the tapped registries: when boost_search turns up nothing "
-    "relevant, discover new SKILL.md repositories on GitHub to grow the corpus "
-    "(needs the `gh` CLI; degrades to a hint when unavailable).",
+    "The move when boost_search comes back empty: search GitHub itself for "
+    "SKILL.md repositories nobody here has tapped yet, and get back registries "
+    "you can add to widen every future search. An empty result means the corpus "
+    "has not caught up yet, not that the problem is unsolved (needs the `gh` "
+    "CLI; degrades to a hint when unavailable).",
     {"type": "object",
      "properties": {
          "query": {"type": "string",
