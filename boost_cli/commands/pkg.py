@@ -716,6 +716,14 @@ def cmd_update(argv: List[str]) -> int:
     ap.add_argument("tap", nargs="?", metavar="TAP", help="refresh only this tap")
     ap.add_argument("--taps-only", action="store_true",
                     help="refresh tap clones & catalogs without touching skills")
+    # Declared because this command *advertises* it: a skipped risky update
+    # prints "review the diff, then `boost update --yes` to apply", and without
+    # this line that instruction died on `unrecognized arguments: --yes` — the
+    # only escape from the confirmation was a flag the parser rejected. The
+    # behaviour needs nothing else: out.confirm() already honours --yes/-y off
+    # sys.argv, so this makes the printed advice true rather than adding a path.
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the confirmation prompt")
     args = ap.parse_args(argv)
     results = registry.update(args.tap or None)
     if not results:
