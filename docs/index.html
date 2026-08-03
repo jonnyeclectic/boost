@@ -64,17 +64,25 @@
     font-size: 14px; color: var(--text-2); text-decoration: none; white-space: nowrap;
   }
   header .nav ul a:hover { color: var(--text); background: var(--panel); }
-  header .nav ul a.cta { color: var(--text); font-weight: 600; }
+  /* var(--bg), not var(--text): this pill's background is the light Aurora
+     gradient, so near-white text measures 1.38:1 against its cyan stop — a
+     3x WCAG AA failure. No gate caught it: axe cannot evaluate contrast over
+     a gradient and files it as "incomplete" rather than a violation, and
+     scripts/a11y_check.py only grades solid token pairs. style/boost.css:479
+     already had this right; this inline rule was overriding it on cascade
+     order. Matches .btn-grad in the hero, which measures ~8:1. */
+  header .nav ul a.cta { color: var(--bg); font-weight: 600; }
 
   /* Small screens: the fourteen links get their own full-width row and scroll,
      with 40px tap targets — mirrors the .site-nav rules in style/boost.css.
      Stated here because this page's inline nav styling would otherwise win
      against the shared sheet on cascade order. */
   @media (max-width: 720px) {
-    header .nav { flex-wrap: wrap; gap: 6px 18px; padding: 8px 0 6px; }
+    header .nav { flex-wrap: wrap; gap: 6px 18px; padding: 8px 24px 6px; }
     header .nav ul {
       width: 100%; margin-left: 0; flex-wrap: nowrap; gap: 6px;
       -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity;
+      scroll-padding-inline-start: 24px;
       margin-inline: -24px; padding-inline: 24px; padding-bottom: 4px;
       -webkit-mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
               mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
@@ -243,6 +251,16 @@
   .flow-row.one { grid-template-columns: minmax(0, 460px); justify-content: center; }
   .flow-row.two { grid-template-columns: 1fr 1fr; }
   .flow-row.three { grid-template-columns: 1fr 1fr 1fr; }
+  /* Four agents, four columns. The ladder only ever uses counts that divide
+     4 — any other number strands the last card alone on its own row with the
+     rest of that row empty, which is what `.three` did to Gemini CLI at every
+     width above the 620px collapse. */
+  .flow-row.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  /* Below ~900px four tracks squeeze each card to 165px and the Gemini
+     caption to three lines (128px / four lines by 621px), so step to 2x2 —
+     still a divisor of 4, so still no orphan. The max-width:620px rule
+     further down takes it to a single column and wins there on source order. */
+  @media (max-width: 900px) { .flow-row.four { grid-template-columns: 1fr 1fr; } }
   .node {
     background: var(--surface-1);
     box-shadow: inset 0 1px 0 0 rgba(255,255,255,.06), inset 0 -1px 0 0 rgba(0,0,0,.3);
@@ -425,7 +443,7 @@
   @media (max-width: 620px) {
     section { padding: 84px 0 10px; }
     .cards, .caps, .mini { grid-template-columns: 1fr; }
-    .flow-row.two, .flow-row.three { grid-template-columns: 1fr; }
+    .flow-row.two, .flow-row.three, .flow-row.four { grid-template-columns: 1fr; }
     .stats { gap: 10px; }
     .stat { padding: 18px 10px; }
   }
@@ -616,7 +634,7 @@ facilitate structured divergent thinking:
           <svg width="14" height="26" viewBox="0 0 14 26" fill="none" aria-hidden="true"><path d="M7 0v22m0 0l-5.5-6M7 22l5.5-6" stroke="currentColor" stroke-width="2"/></svg>
           <span>symlinks</span>
         </div>
-        <div class="flow-row three reveal">
+        <div class="flow-row four reveal">
           <div class="node agent">
             <span class="tag">Agent</span>
             <h3>Claude Code</h3>
