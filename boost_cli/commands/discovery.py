@@ -104,9 +104,20 @@ def cmd_search(argv):
     # every user gets BM25 ranking without having to know about `boost reindex`.
     # rag.ensure() is incremental, offline, and degrades to frontmatter search
     # if the build fails — so a search never hard-fails on an indexing problem.
-    use_rag = rag.ready()
-    if not use_rag:
-        with spin.Spinner("building the search index (first run)"):
+    #
+    # `and not rag.stale()`, not a bare `rag.ready()`: ready() only asks whether
+    # an index exists, so once one did, `boost tap X` followed by a search
+    # answered "no matches" for a skill `boost info X` could describe from the
+    # same machine — and pointed the user at `boost discover` to go searching
+    # GitHub for something already on disk.
+    fresh = rag.ready() and not rag.stale()
+    use_rag = fresh
+    if not fresh:
+        # Name which one it is: a first build and a refresh cost the user the
+        # same pause, and only one of them is explained by "first run".
+        with spin.Spinner("refreshing the search index (taps changed)"
+                          if rag.ready() else
+                          "building the search index (first run)"):
             use_rag = rag.ensure()
     engine = ""
     if use_rag:
