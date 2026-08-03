@@ -1084,6 +1084,59 @@ class TestReindex:
         r = boost("search", "brainstorming")
         assert "ranked by full-content BM25" in r.out
 
+    def test_search_sees_a_tap_added_after_the_index_was_built(
+            self, boost, tapped, tmp_path):
+        """`boost tap X` then `boost search` must find X, with no reindex.
+
+        The regression this pins: `cmd_search` gated on `rag.ready()`, which
+        only asks whether an index *exists*. Once one did, a newly tapped repo
+        stayed invisible to search forever — while `boost info` described it
+        happily from the same machine, and search told the user to go looking
+        on GitHub for something already on their disk.
+        """
+        boost("search", "brainstorming")          # builds the index over `tapped`
+
+        root = tmp_path / "second-tap"
+        second = root / "skills" / "zeppelin-telemetry"
+        second.mkdir(parents=True)
+        (second / "SKILL.md").write_text(
+            "---\nname: zeppelin-telemetry\n"
+            "description: Stream airship gondola telemetry to a ground station.\n"
+            "---\n\n# Zeppelin telemetry\n\n"
+            "Mount the gondola sensor array and stream zeppelin telemetry "
+            "frames to the ground station dashboard.\n",
+            encoding="utf-8")
+        # `boost tap` clones its source, so the source has to be a real repo.
+        for cmd in (("init", "-q"),
+                    ("config", "user.email", "fixture@boost.test"),
+                    ("config", "user.name", "fixture"),
+                    ("add", "-A"),
+                    ("commit", "-qm", "second tap")):
+            subprocess.run(("git", *cmd), cwd=str(root),
+                           check=True, capture_output=True)
+        boost("tap", str(root))
+
+        # Deliberately no `boost reindex` — that is the whole point.
+        r = boost("search", "zeppelin telemetry gondola")
+        assert "zeppelin-telemetry" in r.out
+        assert "no matches" not in r.out
+
+    def test_search_stops_offering_an_untapped_repo(self, boost, tapped):
+        """After `boost untap`, its skills must stop ranking.
+
+        Note what actually carries this: `rag.retrieve` filters every hit
+        against the live catalog, so a removed tap's documents are dropped even
+        from a stale index. It therefore passes with or without the staleness
+        check, and is a guard on that filter rather than on `rag.stale`; the
+        removal branch of `stale()` is pinned by its own unit test. Worth
+        keeping as the end-to-end statement of the promise, not as evidence for
+        the fix beside it.
+        """
+        assert "brainstorming" in boost("search", "brainstorming").out
+        boost("untap", tapped.name)          # untap takes the tap's name
+        r = boost("search", "brainstorming", expect=None)
+        assert "brainstorming" not in r.out
+
     def test_dense_skipped_when_no_backend_at_all(self, boost, tapped, monkeypatch):
         """No key and no local model: BM25 still builds, dense says why it didn't.
 
