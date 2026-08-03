@@ -409,6 +409,58 @@
   .reg-note { text-align: center; font-size: 13.5px; color: var(--text-3); margin-top: 18px; }
   .reg-note code { color: var(--cyan); font-size: .92em; }
 
+  /* On a phone this table was 812px of content inside a 340px scroller: 21 of
+     its 24 cells sat off-screen, and because macOS/iOS draw overlay scrollbars
+     that stay invisible until a scroll is already under way, it looked like a
+     complete table of one column. Nothing in the visual gate caught it — a
+     container with overflow-x:auto absorbs its own overflow, so the page's
+     scrollWidth never exceeds the viewport.
+
+     Stacking rather than scrolling, because Focus is prose: the column that
+     makes this table worth reading is the one that pushes it past 720px, and a
+     card per registry shows all four fields at once. The other tables on the
+     site compare values across columns, where stacking would destroy the
+     comparison — those keep a scroller, and boost.css gives it a visible bar. */
+  @media (max-width: 860px) {
+    .reg-scroll { overflow-x: visible; }
+    table.reg { min-width: 0; display: block; }
+    /* The labels move into the cells, so the header row has nothing to say. */
+    table.reg thead { display: none; }
+    table.reg tbody, table.reg tr, table.reg td { display: block; width: 100%; }
+    table.reg tr { padding: 6px 0 8px; border-bottom: 1px solid var(--line); }
+    table.reg tbody tr:last-child { border-bottom: none; }
+    .reg tbody td {
+      /* Label above value, not beside it. A two-column grid here reads better
+         in a mockup and is wrong in the markup: `display: grid` promotes every
+         child of the cell to a grid item, so the one Focus cell that mixes
+         prose with an inline <code> splits across two tracks and the command
+         lands under the label. Block flow keeps each cell one run of text, and
+         gives the longest label ("REPOSITORY", which wraps mid-word in any
+         column narrow enough to be worth having) the full width. */
+      display: block; padding: 6px 18px; border-bottom: none; font-size: 14px;
+      /* The longest repo cell is a 45-character path with no spaces; without
+         this it reintroduces the overflow the stacking just removed. */
+      overflow-wrap: anywhere;
+    }
+    /* .tapname is a nowrap pill so it never breaks inside a table column. The
+       longest tap here is 34 characters, which overhangs a 375px card by 47px
+       — and .reg-wrap's overflow:hidden clips it, so the name silently loses
+       its last word. Stacked there is no column edge left to protect. */
+    .reg tbody td .tapname {
+      white-space: normal; overflow-wrap: anywhere;
+      /* Once it wraps, the pill is two boxes; without this the border and the
+         11px side padding are drawn only at the very start and very end, so
+         the second line loses its left edge and sits flush against the text. */
+      -webkit-box-decoration-break: clone;
+              box-decoration-break: clone;
+    }
+    .reg tbody td::before {
+      content: attr(data-label); display: block; margin-bottom: 4px;
+      font-family: var(--mono); font-size: 10px; font-weight: 700;
+      letter-spacing: .12em; text-transform: uppercase; color: var(--text-3);
+    }
+  }
+
   /* ---------- get started ---------- */
   .install-box { max-width: 760px; margin: 56px auto 0; }
   .install-box .bar { justify-content: space-between; }
@@ -820,40 +872,40 @@ facilitate structured divergent thinking:
             </thead>
             <tbody>
               <tr>
-                <td><span class="tapname">anthropics/skills</span></td>
-                <td class="repo">github.com/anthropics/skills</td>
-                <td><span class="cnt" data-count="anthropic">—</span></td>
-                <td class="focus">Official Anthropic skills — documents, artifacts, MCP builders, agent workflows</td>
+                <td data-label="Tap"><span class="tapname">anthropics/skills</span></td>
+                <td class="repo" data-label="Repository">github.com/anthropics/skills</td>
+                <td data-label="Skills"><span class="cnt" data-count="anthropic">—</span></td>
+                <td class="focus" data-label="Focus">Official Anthropic skills — documents, artifacts, MCP builders, agent workflows</td>
               </tr>
               <tr>
-                <td><span class="tapname">obra/superpowers</span></td>
-                <td class="repo">github.com/obra/superpowers</td>
-                <td><span class="cnt" data-count="superpowers">—</span></td>
-                <td class="focus">Community powerhouse — TDD, debugging, planning, subagent workflows</td>
+                <td data-label="Tap"><span class="tapname">obra/superpowers</span></td>
+                <td class="repo" data-label="Repository">github.com/obra/superpowers</td>
+                <td data-label="Skills"><span class="cnt" data-count="superpowers">—</span></td>
+                <td class="focus" data-label="Focus">Community powerhouse — TDD, debugging, planning, subagent workflows</td>
               </tr>
               <tr>
-                <td><span class="tapname">trailofbits/skills</span></td>
-                <td class="repo">github.com/trailofbits/skills</td>
-                <td><span class="cnt" data-count="trailofbits">—</span></td>
-                <td class="focus">Security auditing from Trail of Bits — CodeQL, Semgrep, vulnerability hunting</td>
+                <td data-label="Tap"><span class="tapname">trailofbits/skills</span></td>
+                <td class="repo" data-label="Repository">github.com/trailofbits/skills</td>
+                <td data-label="Skills"><span class="cnt" data-count="trailofbits">—</span></td>
+                <td class="focus" data-label="Focus">Security auditing from Trail of Bits — CodeQL, Semgrep, vulnerability hunting</td>
               </tr>
               <tr>
-                <td><span class="tapname">expo/skills</span></td>
-                <td class="repo">github.com/expo/skills</td>
-                <td><span class="cnt" data-count="expo">—</span></td>
-                <td class="focus">Official Expo team skills — EAS builds, app-store submission, deployments</td>
+                <td data-label="Tap"><span class="tapname">expo/skills</span></td>
+                <td class="repo" data-label="Repository">github.com/expo/skills</td>
+                <td data-label="Skills"><span class="cnt" data-count="expo">—</span></td>
+                <td class="focus" data-label="Focus">Official Expo team skills — EAS builds, app-store submission, deployments</td>
               </tr>
               <tr>
-                <td><span class="tapname">K-Dense-AI/scientific-agent-skills</span></td>
-                <td class="repo">github.com/K-Dense-AI/scientific-agent-skills</td>
-                <td><span class="cnt" data-count="scientific">—</span></td>
-                <td class="focus">Scientific computing — research libraries, databases, data analysis</td>
+                <td data-label="Tap"><span class="tapname">K-Dense-AI/scientific-agent-skills</span></td>
+                <td class="repo" data-label="Repository">github.com/K-Dense-AI/scientific-agent-skills</td>
+                <td data-label="Skills"><span class="cnt" data-count="scientific">—</span></td>
+                <td class="focus" data-label="Focus">Scientific computing — research libraries, databases, data analysis</td>
               </tr>
               <tr class="dim">
-                <td><span class="tapname">your-org/skills</span></td>
-                <td class="repo">any repo with SKILL.md files</td>
-                <td><span class="cnt">∞</span></td>
-                <td class="focus">Your team’s registry — <code style="color:var(--cyan);font-size:.92em">boost tap your-org/skills</code> (private repos work over ssh)</td>
+                <td data-label="Tap"><span class="tapname">your-org/skills</span></td>
+                <td class="repo" data-label="Repository">any repo with SKILL.md files</td>
+                <td data-label="Skills"><span class="cnt">∞</span></td>
+                <td class="focus" data-label="Focus">Your team’s registry — <code style="color:var(--cyan);font-size:.92em">boost tap your-org/skills</code> (private repos work over ssh)</td>
               </tr>
             </tbody>
           </table>
