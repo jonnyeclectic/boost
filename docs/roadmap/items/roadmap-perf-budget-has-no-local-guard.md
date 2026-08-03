@@ -84,3 +84,14 @@ raise to be a decision rather than an emergency.
 
 <b>Still genuinely open.</b> The page is not faster. 0.84 is still a board of 200 cards, and nothing
 here changes that &mdash; only the odds that the next step change is noticed the day it lands.
+
+<b>Corrected 2026-08-03: the page was never the slow part.</b> The <code>lighthouse</code> job served
+the docs with <code>python3 -m http.server</code>, which sends no <code>Content-Encoding</code>
+header at all, so every score above was measured on a document <b>3.27&times;</b> larger
+than the one GitHub Pages delivers. That is why both experiments here moved the number by
+<b>0.00</b>: each changed <i>layout</i> work while the score was being decided by <i>transfer</i>
+bytes. Compressing the harness the way Pages does took roadmap.html from
+<b>0.79&nbsp;&rarr;&nbsp;0.98</b> and FCP from <b>3,638&nbsp;&rarr;&nbsp;1,719&nbsp;ms</b>, and the
+floor went back to 0.90. The cheap local proxy this card called not obvious was markup bytes &mdash;
+the dimension <code>page_budget.py</code>, shipped by this very PR, already measures. See
+[[lighthouse-scored-a-page-nobody-is-served]].
