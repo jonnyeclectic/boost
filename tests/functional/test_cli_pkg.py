@@ -317,6 +317,44 @@ class TestUpdate:
         assert "fixture-tap: already up to date" in r.out
         assert "everything up to date" in r.out
 
+    def test_a_dead_upstream_does_not_take_the_other_taps_down(
+            self, boost, fixture_tap_src, tmp_path):
+        """One deleted upstream must cost you that tap, not the whole command.
+
+        It used to cost the whole command: `registry.update()` had no error
+        handling, so the loop aborted on the dead tap and every later tap went
+        unrefreshed — while the user got a bare git error naming neither the tap
+        nor the URL. With 80+ taps a dead upstream is routine, not an edge case.
+        """
+        dead = _copy_tap(fixture_tap_src, tmp_path / "dead-tap")
+        live = _copy_tap(fixture_tap_src, tmp_path / "live-tap")
+        boost("tap", dead)
+        boost("tap", live)
+        shutil.rmtree(dead)               # upstream deleted out from under us
+
+        r = boost("update", expect=None)
+        assert "live-tap: already up to date" in r.out    # the healthy tap ran
+        assert "dead-tap" in r.out                        # named, not anonymous
+        assert "1 of 2 taps could not be refreshed" in r.out
+        # and it must not claim a clean bill of health
+        assert "everything up to date, except the taps above" in r.out
+        assert r.rc == 0                  # partial success is still success
+
+    def test_the_git_error_names_the_cause_not_the_hint_tail(
+            self, boost, fixture_tap_src, tmp_path):
+        """git states the cause first and advises after.
+
+        Reporting the LAST line of git's output surfaced "and the repository
+        exists." — the tail of a prose hint — and discarded the line naming the
+        missing path.
+        """
+        dead = _copy_tap(fixture_tap_src, tmp_path / "gone-tap")
+        boost("tap", dead)
+        shutil.rmtree(dead)
+        r = boost("update", expect=None)
+        assert "and the repository exists" not in r.out
+        assert "does not appear to be a git repository" in r.out
+
     def test_upgrades_unpinned_skips_pinned(self, boost, fixture_tap_src,
                                             tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "up-tap")
@@ -344,6 +382,48 @@ class TestUpdate:
         assert "to-tap:" in r.out
         assert "upgraded" not in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
+
+    def test_taps_only_with_every_tap_dead_is_a_failure(
+            self, boost, fixture_tap_src, tmp_path):
+        """`--taps-only` must obey the same exit-code rule as the full path.
+
+        It didn't: `if args.taps_only: return 0` sat above the
+        `1 if failures and not results else 0` rule, so with every upstream
+        dead the taps-only path answered 0 while the full path answered 1.
+        A cron'd `boost update --taps-only` is exactly the caller that reads
+        nothing but the exit code — it would have slept through every tap
+        being gone.
+        """
+        dead = _copy_tap(fixture_tap_src, tmp_path / "only-dead-tap")
+        boost("tap", dead)
+        shutil.rmtree(dead)               # upstream deleted out from under us
+        r = boost("update", "--taps-only", expect=None)
+        assert "only-dead-tap" in r.out   # still named, same as the full path
+        assert r.rc == 1, "every tap failed and --taps-only said success"
+
+    def test_taps_only_partial_failure_is_still_success(
+            self, boost, fixture_tap_src, tmp_path):
+        # The other half of the rule: a partial run did the job it could do,
+        # and failing it would put us back to one dead upstream breaking
+        # `boost update` for the other 79.
+        dead = _copy_tap(fixture_tap_src, tmp_path / "half-dead-tap")
+        live = _copy_tap(fixture_tap_src, tmp_path / "half-live-tap")
+        boost("tap", dead)
+        boost("tap", live)
+        shutil.rmtree(dead)
+        r = boost("update", "--taps-only", expect=None)
+        assert "half-live-tap" in r.out
+        assert r.rc == 0
+
+    def test_every_tap_dead_is_a_failure_on_the_full_path_too(
+            self, boost, fixture_tap_src, tmp_path):
+        # Pins the rule itself, not just the taps-only copy of it — this is
+        # the assertion that keeps the two paths from drifting apart again.
+        dead = _copy_tap(fixture_tap_src, tmp_path / "all-dead-tap")
+        boost("tap", dead)
+        shutil.rmtree(dead)
+        r = boost("update", expect=None)
+        assert r.rc == 1
 
     def test_refreshes_the_completion_cache(self, boost, fixture_tap_src,
                                             tmp_path):
@@ -428,6 +508,41 @@ class TestUpdateDiffGate:
         assert "update skipped" in r.out
         assert "upgraded" not in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
+
+    def test_the_yes_flag_the_skip_message_advertises_is_accepted(
+            self, boost, fixture_tap_src, tmp_path, monkeypatch):
+        """Declining prints "then `boost update --yes` to apply" — so that has
+        to parse.
+
+        It did not: `boost update` never declared -y/--yes, so following its own
+        instruction died on `unrecognized arguments: --yes`, and the only escape
+        from the gate was a flag the parser rejected.
+        """
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "risk-tap3")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        _poison(tap_dir, "brainstorming", "1.4.0", "1.5.0")
+
+        # Drive the real out.confirm() rather than patching it: drop conftest's
+        # BOOST_ASSUME_YES (it would auto-approve and hide whether --yes did
+        # anything) and set sys.argv explicitly, which is where confirm() looks
+        # for the flag. With neither set and stdin not a tty, confirm returns
+        # its default — False — so the gate declines on its own.
+        # NB: never monkeypatch.undo() here; the sandbox fixture's HOME is on
+        # the same monkeypatch, so undoing drops the test out of its sandbox and
+        # onto the developer's real ~/.boost.
+        monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)
+        monkeypatch.setattr("sys.argv", ["boost", "update"])
+        r = boost("update")
+        assert "`boost update --yes` to apply" in r.out   # the advice is given
+        assert _lock()["brainstorming"]["version"] == "1.4.0"
+
+        # Now take that advice verbatim.
+        monkeypatch.setattr("sys.argv", ["boost", "update", "--yes"])
+        r2 = boost("update", "--yes")
+        assert "unrecognized arguments" not in r2.err
+        assert "upgraded brainstorming v1.4.0 → v1.5.0" in r2.out
+        assert _lock()["brainstorming"]["version"] == "1.5.0"
 
     def test_routine_bump_applies_without_gate(
             self, boost, fixture_tap_src, tmp_path):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 
 import pytest
@@ -125,9 +126,26 @@ class TestEnsure:
 
     def test_returns_true_without_building_when_ready(self, monkeypatch):
         monkeypatch.setattr(rag, "ready", lambda: True)
+        monkeypatch.setattr(rag, "stale", lambda: False)
         monkeypatch.setattr(rag, "build", lambda *a, **k:
                             pytest.fail("must not build when already ready"))
         assert rag.ensure() is True
+
+    def test_rebuilds_a_ready_but_stale_index(self, monkeypatch):
+        """An index that exists but predates a tap change must be rebuilt.
+
+        The regression: ensure() short-circuited on ready() alone, so after
+        `boost tap X` search kept answering from the pre-X index forever.
+        """
+        state = {"built": 0}
+        monkeypatch.setattr(rag, "ready", lambda: True)
+        monkeypatch.setattr(rag, "stale", lambda: True)
+        monkeypatch.setattr(registry, "list_taps", lambda: ["a-tap"])
+        monkeypatch.setattr(rag, "build",
+                            lambda *a, **k: state.__setitem__("built",
+                                                              state["built"] + 1))
+        assert rag.ensure() is True
+        assert state["built"] == 1
 
     def test_returns_false_without_taps(self, monkeypatch):
         monkeypatch.setattr(rag, "ready", lambda: False)
@@ -156,6 +174,123 @@ class TestEnsure:
             raise RuntimeError("disk full")
         monkeypatch.setattr(rag, "build", _boom)
         assert rag.ensure() is False
+
+
+class _StatTap:
+    """A tap whose cache_file reports a mtime we control."""
+
+    def __init__(self, name, mtime=None):
+        self.name = name
+        self.safe_name = name.replace("/", "__")
+        self._mtime = mtime
+
+    @property
+    def cache_file(self):
+        mtime = self._mtime
+
+        class _F:
+            @staticmethod
+            def stat():
+                if mtime is None:
+                    raise OSError("no cache file")
+                return os.stat_result(
+                    (0, 0, 0, 0, 0, 0, 0, 0, int(mtime), 0))
+        return _F
+
+
+class TestStale:
+    """rag.stale() — the index must notice the taps moving under it.
+
+    ready() answers "does an index exist", which is a different question, and
+    conflating them meant `boost tap X` then `boost search` reported no matches
+    for a skill `boost info X` described from the same machine.
+    """
+
+    def _fix(self, monkeypatch, *, stored, taps, built_at=100.0):
+        monkeypatch.setattr(rag, "_load_raw", lambda: {"commits": stored})
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: list(taps))
+
+        class _P:
+            @staticmethod
+            def stat():
+                return os.stat_result((0, 0, 0, 0, 0, 0, 0, 0,
+                                       int(built_at), 0))
+        monkeypatch.setattr(rag, "index_path", lambda: _P)
+
+    def test_missing_index_is_stale(self, monkeypatch):
+        monkeypatch.setattr(rag, "_load_raw", lambda: None)
+        assert rag.stale() is True
+
+    def test_unchanged_taps_are_not_stale(self, monkeypatch):
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=50)])
+        assert rag.stale() is False
+
+    def test_added_tap_is_stale(self, monkeypatch):
+        # The reported bug: a brand-new tap need not touch any existing cache,
+        # so only the tap *set* betrays it.
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=50), _StatTap("x/y", mtime=50)])
+        assert rag.stale() is True
+
+    def test_removed_tap_is_stale(self, monkeypatch):
+        # An untap deletes a cache rather than touching one, so mtimes alone
+        # would never see it — the set comparison is what catches this.
+        self._fix(monkeypatch, stored={"a__b": "c1", "x__y": "c2"},
+                  taps=[_StatTap("a/b", mtime=50)])
+        assert rag.stale() is True
+
+    def test_cache_newer_than_index_is_stale(self, monkeypatch):
+        # Same tap set, but that tap's contents moved and were re-cached.
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=101)], built_at=100.0)
+        assert rag.stale() is True
+
+    def test_cache_exactly_as_old_as_index_is_fresh(self, monkeypatch):
+        # Strictly-newer, not >=: build() writes the index after the caches it
+        # consumed, so equal mtimes are the normal post-build state. Treating
+        # them as stale would rebuild the index on every single search.
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=100)], built_at=100.0)
+        assert rag.stale() is False
+
+    def test_unreadable_index_mtime_is_stale(self, monkeypatch):
+        monkeypatch.setattr(rag, "_load_raw", lambda: {"commits": {}})
+        monkeypatch.setattr(rag.registry, "list_taps", lambda: [])
+
+        class _P:
+            @staticmethod
+            def stat():
+                raise OSError("gone")
+        monkeypatch.setattr(rag, "index_path", lambda: _P)
+        assert rag.stale() is True
+
+    def test_tap_without_a_cache_file_is_not_stale(self, monkeypatch):
+        # A tap that has never been cached cannot be *newer* than the index;
+        # build() picks it up regardless, so this must not force a rebuild on
+        # every search.
+        self._fix(monkeypatch, stored={"a__b": "c1"},
+                  taps=[_StatTap("a/b", mtime=None)])
+        assert rag.stale() is False
+
+    def test_null_commits_key_is_stale_only_via_tap_set(self, monkeypatch):
+        # An index written without commits reads as "no taps recorded".
+        monkeypatch.setattr(rag, "_load_raw", lambda: {"commits": None})
+        monkeypatch.setattr(rag.registry, "list_taps",
+                            lambda: [_StatTap("a/b", mtime=1)])
+        assert rag.stale() is True
+
+    def test_fresh_after_a_real_build(self, corpus, monkeypatch):
+        # The end-to-end shape: a real build writing a real index and its real
+        # postings must leave something that reports itself current, or every
+        # search pays for a rebuild. `corpus` fakes _tap_commits but not
+        # list_taps, so the tap set has to be made to agree with it here.
+        _root, entries = corpus
+        monkeypatch.setattr(rag.registry, "list_taps",
+                            lambda: [_StatTap("acme/skills", mtime=None)])
+        rag.build(entries=entries, force=True)
+        assert rag.ready() is True
+        assert rag.stale() is False
 
 
 class TestBuildAndRetrieve:
