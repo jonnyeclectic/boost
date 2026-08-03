@@ -1,7 +1,7 @@
 {
   "ci": {
     "collect": {
-      "startServerCommand": "python3 -m http.server 8099 --bind 127.0.0.1",
+      "startServerCommand": "python3 scripts/serve_docs.py --port 8099 --bind 127.0.0.1",
       "startServerReadyPattern": "Serving HTTP",
       "url": [
         "http://127.0.0.1:8099/docs/index.html",
