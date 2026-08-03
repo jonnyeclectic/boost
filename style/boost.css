@@ -526,12 +526,17 @@ footer .foot-legal { margin-top: 13px; font-size: 12.5px; color: var(--text-3); 
    scrollable rather than truncated. */
 @media (max-width: 720px) {
   .site-nav, header .nav {
-    flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 8px 0 6px;
+    flex-wrap: wrap; align-items: center; gap: 6px 18px; padding: 8px 24px 6px;
   }
   .site-nav ul, header .nav ul {
     width: 100%; flex-wrap: nowrap; gap: 6px;
     overflow-x: auto; -webkit-overflow-scrolling: touch;
     scrollbar-width: none; scroll-snap-type: x proximity;
+    /* Without this the snapport starts at the scrollport's content edge, so
+       the browser scrolls straight past the padding-inline below to satisfy
+       scroll-snap-align:start — the strip loads at scrollLeft 24 and clips the
+       first link mid-word. Inset the snapport by the same 24px instead. */
+    scroll-padding-inline-start: 24px;
     /* bleed past .wrap's 24px gutter, then pad it back so nothing is clipped */
     margin-inline: -24px; padding-inline: 24px; padding-bottom: 4px;
     -webkit-mask-image: linear-gradient(90deg, #000 0 calc(100% - 26px), transparent);
