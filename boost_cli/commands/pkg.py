@@ -533,7 +533,11 @@ _PLAN_LABELS = [
     ("stale_links", "stale links"),
     ("orphaned_store", "orphaned store dirs"),
     ("missing_materializations", "missing rule/workflow files"),
+    ("out_of_scope_links", "linked outside declared scope"),
 ]
+
+#: Plan keys whose items are ``(skill, agent)`` pairs rather than paths.
+_PAIR_KEYS = ("missing_links", "out_of_scope_links")
 
 
 def cmd_sync(argv: List[str]) -> int:
@@ -543,7 +547,8 @@ def cmd_sync(argv: List[str]) -> int:
     ap.add_argument("--diff", action="store_true",
                     help="show the plan without applying it")
     ap.add_argument("--prune", action="store_true",
-                    help="also delete orphaned store dirs")
+                    help="also delete orphaned store dirs and links outside "
+                         "a declared --agent scope")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
     plan = store.sync_plan()
@@ -571,7 +576,7 @@ def cmd_sync(argv: List[str]) -> int:
                 continue
             out.heading("%s (%d)" % (label, len(plan[key])))
             for item in plan[key]:
-                if key == "missing_links":
+                if key in _PAIR_KEYS:
                     out.info("%s → %s" % (item[0], item[1]))
                 elif key == "missing_materializations":
                     out.info("%s %s" % (item[0], item[1]))  # (kind, name)
@@ -580,6 +585,20 @@ def cmd_sync(argv: List[str]) -> int:
         return 0
 
     actions = store.sync_apply(plan) + store.project_sync_apply(pplan)
+    # Links outside a declared `--agent` scope work and are in use, so sync
+    # reports them and stops. Removing one changes which agents can run a
+    # skill, which is the same class of decision as deleting an orphaned store
+    # dir — hence the same explicit `--prune`, and its own confirm so the two
+    # are never approved as one.
+    oos = plan["out_of_scope_links"]
+    if args.prune and oos:
+        go = (bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
+              out.confirm("Remove %s outside their declared scope: %s?"
+                          % (_plural(len(oos), "link"),
+                             ", ".join("%s → %s" % (n, a) for n, a in oos))))
+        if go:
+            actions += store.prune_out_of_scope_links(plan)
+            oos = []
     orphans = plan["orphaned_store"]
     pruned = []
     if args.prune and orphans:
@@ -596,7 +615,7 @@ def cmd_sync(argv: List[str]) -> int:
     left = [n for n in orphans if n not in pruned]
     if args.json:
         print(json.dumps({"actions": actions, "pruned": pruned,
-                          "orphaned_store": left}))
+                          "orphaned_store": left, "out_of_scope_links": oos}))
         return 0
     for a in actions:
         out.ok(a)
@@ -605,7 +624,13 @@ def cmd_sync(argv: List[str]) -> int:
     if left:
         out.warn("%s left in place: %s — remove with `boost sync --prune`"
                  % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
-    if not actions and not pruned and not left:
+    if oos:
+        out.warn("%s outside the declared scope: %s — remove with "
+                 "`boost sync --prune`, or widen the scope with "
+                 "`boost install <skill> --force` naming every `--agent`"
+                 % (_plural(len(oos), "link"),
+                    ", ".join("%s → %s" % (n, a) for n, a in oos)))
+    if not actions and not pruned and not left and not oos:
         out.ok("everything in sync")
     return 0
 

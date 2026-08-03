@@ -196,6 +196,41 @@ def unlink_agents(name: str) -> List[str]:
     return removed
 
 
+def linked_agents(name: str) -> List[str]:
+    """The linking agents that currently hold a symlink for ``name``.
+
+    Measured from disk, not inherited from the lock, because this is what the
+    lock's ``agents`` field is *defined* to mean. Writing back only the links a
+    given run created made ``agents`` record the request instead of the result:
+    ``install X --agent cursor --force`` on a skill linked into three agents
+    left three symlinks and a lock claiming one, and every reporting surface
+    believed the lock.
+
+    Deliberately the same ``is_symlink()`` test :func:`unlink_agents` uses, so
+    what an install records is exactly what an uninstall will remove. A regular
+    file sitting where a link should be is a conflict, not a link, and is
+    excluded by both.
+    """
+    return [agent for agent, adir in agents.linking_agents().items()
+            if (adir / name).is_symlink()]
+
+
+def _untouched_materializations(existing: Optional[dict],
+                                linked: List[str]) -> List[dict]:
+    """Recorded materializations for agents a run did not write to.
+
+    Rules and workflows rebuild ``materializations`` from scratch on every
+    install, so a narrowed re-install used to drop the rows for the agents it
+    skipped — while leaving their files exactly where they were. Since
+    ``_uninstall_rule`` and ``_uninstall_workflow`` are driven by this list and
+    never sweep the agent dirs, those files became unremovable: a managed block
+    in ``CLAUDE.md`` or a live slash command that no record claimed and no
+    command could reverse.
+    """
+    return [m for m in (existing or {}).get("materializations") or []
+            if m.get("agent") not in linked]
+
+
 def _copy_skill(src: Path, dest: Path) -> None:
     """Copy a skill tree into ``dest`` atomically.
 
@@ -464,11 +499,17 @@ def install(entry: dict, force: bool = False,
         "updated_at": now,
         "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
-        "agents": res.linked,
         # `agents` is what IS linked; `only_agents` is what the user ASKED for.
         # sync needs the second: it links a skill into every enabled agent, and
         # without a record of the request it cannot tell a deliberate `--agent`
         # narrowing from a skill that simply predates a newly enabled agent.
+        #
+        # Read back off disk rather than taken from `res.linked`, which is only
+        # what THIS run linked. A narrowing re-install (`--agent cursor
+        # --force`) links cursor and *skips* the others without unlinking them,
+        # so recording res.linked made `agents` describe the request while the
+        # other symlinks lived on — a divergence no boost command could see.
+        "agents": linked_agents(name),
         "only_agents": declared_agent_scope(only_agents, existing),
         "tags": (existing or {}).get("tags", []),
     })
@@ -560,8 +601,7 @@ def _install_project_skill(entry: dict, force: bool = False,
     # everything that is actually on disk — dropping them would leave real
     # directories in the repo that no record claims, so uninstall would skip
     # them and sync would call them orphans.
-    kept = [m for m in (existing or {}).get("materializations") or []
-            if m.get("agent") not in linked]
+    kept = _untouched_materializations(existing, linked)
     materializations.extend(kept)
     all_agents = linked + [m["agent"] for m in kept if m.get("agent")]
 
@@ -763,6 +803,14 @@ def _install_rule(entry: dict, force: bool = False,
         materializations.append({"agent": agent, "mode": mode, "path": str(path)})
         linked.append(agent)
 
+    # Carry forward the agents this run did not touch — the same reason the
+    # project-scope skill path does it, but the stakes are higher here. A
+    # rule's materialization is a managed block inside a file the user reads
+    # every session (~/.claude/CLAUDE.md); dropping the record does not drop
+    # the block, and `_uninstall_rule` is record-driven, so an unrecorded block
+    # could never be removed by any boost command again.
+    materializations.extend(_untouched_materializations(existing, linked))
+
     now = util.now_iso()
     lockfile.set_rule(name, {
         "kind": "rule",
@@ -865,6 +913,10 @@ def _install_workflow(entry: dict, force: bool = False,
         materializations.append({"agent": agent, "slot": slot, "path": str(path)})
         linked.append(agent)
 
+    # As for rules: an unrecorded materialization is a live slash command that
+    # `_uninstall_workflow` — driven by this list — can never remove.
+    materializations.extend(_untouched_materializations(existing, linked))
+
     now = util.now_iso()
     lockfile.set_workflow(name, {
         "kind": "workflow",
@@ -962,7 +1014,8 @@ def install_from_path(src_dir: Path, name: Optional[str] = None,
         # re-import silently CLEARED an existing pin. install() preserves it.
         "pinned": bool((existing or {}).get("pinned")),
         "quarantined": False,
-        "agents": res.linked,
+        # What is on disk, not what this run linked — see install().
+        "agents": linked_agents(name),
         # `boost import --agent ...` narrows the same way `install` does, so it
         # has to record the same declaration — otherwise the links are narrow
         # but sync sees no scope and widens them right back.
@@ -1071,11 +1124,13 @@ def sync_plan() -> Dict[str, list]:
       missing_links:  (skill, agent) pairs that should be linked but aren't
       stale_links:    paths in agent dirs that are broken/unmanaged symlinks
       orphaned_store: store dirs not present in the lock file
+      out_of_scope_links: (skill, agent) pairs linked outside a declared
+                      ``--agent`` narrowing — reported, never auto-removed
     """
     lock = lockfile.installed()
     plan: dict[str, list] = {"missing_store": [], "missing_links": [],
             "stale_links": [], "orphaned_store": [],
-            "missing_materializations": []}
+            "missing_materializations": [], "out_of_scope_links": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
         if not sdir.is_dir():
@@ -1091,10 +1146,23 @@ def sync_plan() -> Dict[str, list]:
         # linking_agents, not enabled_agents: an agent that reads the canonical
         # store has no link to be missing, and reporting one would make `boost
         # sync` create the very duplicate `links_skills: false` exists to avoid.
-        for agent, adir in scoped_agents(entry, agents.linking_agents()).items():
+        linking = agents.linking_agents()
+        in_scope = scoped_agents(entry, linking)
+        for agent, adir in in_scope.items():
             link = adir / name
             if not link.is_symlink() or not link.exists():
                 plan["missing_links"].append((name, agent))
+        # The other direction, which nothing checked: a link that exists in an
+        # agent the declaration excludes. The loop above is narrowed to the
+        # declared set, and the stale-link sweep below keys on the skill *name*
+        # being absent from the lock — so a live, boost-owned link outside a
+        # narrowing fell between the two and no command could see it. Only
+        # meaningful when a narrowing was declared; without one `scoped_agents`
+        # fails open and every agent is in scope by definition.
+        if entry.get("only_agents"):
+            for agent, adir in linking.items():
+                if agent not in in_scope and (adir / name).is_symlink():
+                    plan["out_of_scope_links"].append((name, agent))
     store_root = paths.store_dir()
     if store_root.is_dir():
         for child in store_root.iterdir():
@@ -1136,6 +1204,37 @@ def _rule_materialization_ok(name: str, m: dict) -> bool:
         except OSError:
             return False
     return p.is_file()
+
+
+def prune_out_of_scope_links(plan: Dict[str, list]) -> List[str]:
+    """Remove the links :func:`sync_plan` found outside a declared scope.
+
+    Kept out of :func:`sync_apply` on purpose. Everything sync_apply does is
+    either additive or removes something already broken, so `boost sync` and
+    `boost heal` are safe to run blind. These links are neither broken nor
+    unowned — they work, and an agent is using them — so deleting one changes
+    which agents can run a skill. That is a decision, and it belongs behind the
+    same explicit opt-in as deleting an orphaned store dir (`--prune`).
+    """
+    removed = []
+    linking = agents.linking_agents()
+    for name, agent in plan.get("out_of_scope_links", []):
+        adir = linking.get(agent)
+        if adir is None:      # disabled between plan and prune
+            continue
+        link = adir / name
+        if link.is_symlink():
+            link.unlink()
+            entry = lockfile.get_skill(name)
+            if entry:
+                entry["agents"] = [a for a in entry.get("agents") or []
+                                   if a != agent]
+                lockfile.set_skill(name, entry)
+            removed.append("unlinked %s → %s (outside declared scope)"
+                           % (name, agent))
+    if removed:
+        journal.log("sync-prune", "%d links" % len(removed))
+    return removed
 
 
 def sync_apply(plan: Dict[str, list]) -> List[str]:

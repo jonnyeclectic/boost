@@ -290,6 +290,18 @@ def cmd_doctor(argv):
             if not link.is_symlink() or not link.exists():
                 bad("skill %s not linked for %s — run `boost sync`" % (name, agent))
                 skill_issues += 1
+        # The other direction. `agents` records what is linked and `only_agents`
+        # what was asked for, so a link the declaration excludes is pure lock
+        # arithmetic here — no second walk of the agent dirs. Doctor has to say
+        # it because `boost sync` does: a "healthy" that contradicts the
+        # command it tells you to run is worse than no check at all.
+        scope = entry.get("only_agents")
+        stray = [a for a in entry.get("agents", []) if scope and a not in scope]
+        if stray:
+            bad("skill %s is linked for %s, outside its declared scope (%s) — "
+                "run `boost sync --prune`"
+                % (name, ", ".join(stray), ", ".join(scope)))
+            skill_issues += 1
     if skills and not skill_issues:
         out.ok("%d skill%s present in store with agent links"
                % (len(skills), _s(len(skills))))
