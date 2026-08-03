@@ -149,3 +149,23 @@ class TestTheShippedPages:
         assert elements < ceiling * 0.8, (
             "roadmap.html is at %d of %d elements — raise the ceiling in "
             "BUDGETS deliberately" % (elements, ceiling))
+
+    @pytest.mark.skipif(not (_ROOT / "docs" / "roadmap.html").exists(),
+                        reason="board absent")
+    def test_the_board_has_byte_headroom_too(self):
+        """Bytes had the ceiling but not the warning — the same hole, one over.
+
+        The element ceiling gets an early warning at 80% so the raise is a
+        decision; `kbytes` had none, so it would have gone from green straight
+        to a red required job with no step in between. When this was written the
+        board sat at 565,883 B — 78.6% of the then-720 kB ceiling, 10,117 B
+        short of it, which is two to six more cards at the 1.8-5.5 kB the four
+        then queued each added.
+        """
+        m = _load()
+        nbytes, _e, _d = m.measure(
+            (_ROOT / "docs" / "roadmap.html").read_text(encoding="utf-8"))
+        ceiling = m.BUDGETS["roadmap.html"].kbytes * 1000
+        assert nbytes < ceiling * 0.8, (
+            "roadmap.html is at %d kB of %d kB — raise the ceiling in BUDGETS "
+            "deliberately" % (nbytes // 1000, ceiling // 1000))

@@ -35,6 +35,15 @@ fire on the next shipped card and be raised reflexively, which is worse than no
 check: it teaches people that the number is noise. These are set to catch a step
 change — roughly a doubling — not ordinary growth.
 
+TWO NUMBERS GATE, NOT ONE. `test_the_board_still_has_headroom_to_grow` fails the
+board at 80% of its ceiling, so the number that actually stops a build is
+`elements * 0.8`, not `elements`. Choosing the ceiling without that factor is
+how the first pair of numbers here missed its own stated intent: 10,000 was set
+against a measured 7,484, which reads as 1.34x but gated at 8,000 — 516 elements
+of usable room, about ten cards, for a budget whose docstring said it bounded a
+doubling. It was reached in a day. Pick the ceiling so that FOUR FIFTHS of it is
+the step change worth waking up for.
+
 Run:  python3 scripts/page_budget.py [-v]
 """
 from __future__ import annotations
@@ -64,11 +73,18 @@ class Budget(NamedTuple):
 
 
 #: Per-page ceilings; ``*`` is the default for any page without its own row.
-#: Measured 2026-08-02 (bytes / elements / depth):
-#:   roadmap.html 525,472 / 7,484 / 10   ·   commands.html 86,026 / 1,512 /  8
-#:   index.html    58,352 /   488 / 12   ·   mcp-hub.html  51,162 /   607 / 10
-#:   design-roadmap 45,931 /  727 / 10   ·   eval.html     36,320 /   528 / 10
-#:   carousel.html 27,829 /   328 / 14   ·   adapters.html 23,559 /   306 / 11
+#: Measured 2026-08-03 (bytes / elements / depth):
+#:   roadmap.html 565,883 / 7,951 / 10   ·   commands.html 86,070 / 1,512 /  8
+#:   index.html    63,239 /   488 / 12   ·   mcp-hub.html  51,163 /   607 / 10
+#:   design-roadmap 48,187 /  746 / 10   ·   eval.html     36,321 /   528 / 10
+#:   carousel.html 27,830 /   328 / 14   ·   adapters.html 23,560 /   306 / 11
+#:   demo.html     21,348 /   119 /  9   ·   chat.html     11,681 /   126 / 10
+#:
+#: The board moved 7,484 -> 7,951 elements in the 24 hours after these ceilings
+#: shipped, which is the growth rate they were written to tolerate rather than a
+#: step change — and it was enough to reach the 8,000 gate. Regenerate this block
+#: with `python3 scripts/page_budget.py -v` when you raise a ceiling; a stale
+#: measurement is what makes the next raise a guess.
 #:
 #: Depth is uniform and tight on purpose. Every page here nests 8-14 deep and
 #: none has any reason to go deeper, so unlike bytes and elements it is not a
@@ -76,9 +92,11 @@ class Budget(NamedTuple):
 #: and the roadmap board is no more nested than the smallest page on the site.
 BUDGETS: Dict[str, Budget] = {
     "roadmap.html": Budget(
-        kbytes=720, elements=10_000, depth=20,
+        kbytes=1_200, elements=16_000, depth=20,
         why="the code board — already 5x Lighthouse's DOM-size failure "
-            "threshold, so this bounds a step change, not ordinary growth"),
+            "threshold, so this bounds a step change, not ordinary growth; "
+            "raised deliberately 2026-08-03 from 720/10,000, which gated at "
+            "8,000 and was reached by ordinary card growth in a day"),
     "commands.html": Budget(
         kbytes=180, elements=3_000, depth=20,
         why="generated from COMMANDS, so it grows a block per new command"),
