@@ -128,7 +128,6 @@ def cmd_cohort(argv) -> int:
         if not targets:
             out.info("no cohorts defined")
             return 0
-        installed = lockfile.installed()
         applied = skipped = 0
         for cname in targets:
             spec = cohorts[cname]
@@ -138,8 +137,13 @@ def cmd_cohort(argv) -> int:
                 continue
             out.heading("cohort %s" % cname)
             for skill in spec["skills"]:
-                if skill in installed:
-                    out.info(out.role("%s already installed" % skill, "muted"))
+                # find_any, not installed(): a cohort item installed as a rule
+                # or workflow would otherwise be re-installed on every apply.
+                found = lockfile.find_any(skill)
+                if found is not None:
+                    label = (skill if found[0] == "skill"
+                             else "%s (%s)" % (skill, found[0]))
+                    out.info(out.role("%s already installed" % label, "muted"))
                     skipped += 1
                     continue
                 entry = _resolve_entry(skill)
@@ -195,14 +199,27 @@ def _load_profile(name: str) -> dict:
 
 
 def _profile_diff(profile: dict):
-    """-> (missing, extras, changed): profile vs currently installed."""
+    """-> (missing, extras, changed, other_kind): profile vs installed.
+
+    ``other_kind`` maps a profile name to the kind it is installed as when
+    that kind is not "skill" — reporting those as missing would tell the user
+    to install something `boost list` already shows.
+    """
     current = lockfile.installed()
     want = profile.get("skills", {})
-    missing = sorted(n for n in want if n not in current)
+    missing, other_kind = [], {}
+    for n in sorted(want):
+        if n in current:
+            continue
+        found = lockfile.find_any(n)
+        if found is not None:
+            other_kind[n] = found[0]
+        else:
+            missing.append(n)
     extras = sorted(n for n in current if n not in want)
     changed = sorted(n for n in want if n in current and
                      str(want[n].get("version")) != str(current[n].get("version")))
-    return missing, extras, changed
+    return missing, extras, changed, other_kind
 
 
 def cmd_profile(argv) -> int:
@@ -253,6 +270,11 @@ def cmd_profile(argv) -> int:
         _profile_path(args.name).write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         journal.log("profile", args.name, op="save", skills=len(installed))
         out.ok("saved profile %s (%d skills)" % (args.name, len(installed)))
+        n_rules = len(lockfile.installed_rules())
+        n_workflows = len(lockfile.installed_workflows())
+        if n_rules or n_workflows:
+            out.warn("%d rule(s) and %d workflow(s) not captured — profiles "
+                     "carry skills only" % (n_rules, n_workflows))
         return 0
 
     if args.action == "show":
@@ -272,12 +294,13 @@ def cmd_profile(argv) -> int:
 
     if args.action == "diff":
         profile = _load_profile(args.name)
-        missing, extras, changed = _profile_diff(profile)
+        missing, extras, changed, other_kind = _profile_diff(profile)
         if args.json:
             print(json.dumps({"missing": missing, "extras": extras,
-                              "changed": changed}, indent=2))
+                              "changed": changed, "other_kind": other_kind},
+                             indent=2))
             return 0
-        if not (missing or extras or changed):
+        if not (missing or extras or changed or other_kind):
             out.ok("current setup matches profile %s" % args.name)
             return 0
         for n in missing:
@@ -286,6 +309,10 @@ def cmd_profile(argv) -> int:
             out.info(out.role("- %s" % n, "danger") + out.role("  (installed, not in profile)", "muted"))
         for n in changed:
             out.info(out.role("~ %s" % n, "warn") + out.role("  (version differs)", "muted"))
+        for n, kind in sorted(other_kind.items()):
+            out.info(out.role("~ %s" % n, "warn")
+                     + out.role("  (in profile, installed as a %s — profiles "
+                                "carry skills only)" % kind, "muted"))
         return 0
 
     if args.action == "delete":
@@ -300,8 +327,13 @@ def cmd_profile(argv) -> int:
 
     # use
     profile = _load_profile(args.name)
-    missing, extras, _changed = _profile_diff(profile)
+    missing, extras, _changed, other_kind = _profile_diff(profile)
     want = profile.get("skills", {})
+    for n, kind in sorted(other_kind.items()):
+        # Installing it as a skill would shadow the rule/workflow of the same
+        # name; say why it is skipped rather than skipping silently.
+        out.info("%s is installed as a %s — profiles carry skills only, "
+                 "leaving it as-is" % (n, kind))
     for n in missing:
         entry = _resolve_entry(n, prefer_tap=want[n].get("tap"))
         if entry is None:
@@ -520,27 +552,31 @@ def cmd_replay(argv) -> int:
             out.info("no lock history yet — every install/uninstall snapshots the lock file")
             return 0
         rows = []
-        prev_skills = None
+        prev_items = None
         annotated = []
         for h in history:  # oldest -> newest
             try:
-                skills = set(lockfile.history_read(h["id"]).get("skills", {}))
+                snap = lockfile.history_read(h["id"])
             except BoostError:
-                skills = set()
-            if prev_skills is None:
+                snap = {}
+            # All three sections, keyed by (kind, name): a snapshot that
+            # gained a rule is a +1, not a no-op.
+            items = {(kind, n) for kind, section in lockfile.SECTIONS
+                     for n in snap.get(section, {})}
+            if prev_items is None:
                 delta = ""
             else:
-                n_added, n_removed = (len(skills - prev_skills),
-                                      len(prev_skills - skills))
+                n_added, n_removed = (len(items - prev_items),
+                                      len(prev_items - items))
                 parts = ([("+%d" % n_added)] if n_added else []) + \
                         ([("-%d" % n_removed)] if n_removed else [])
                 delta = " ".join(parts)
             annotated.append((h, delta))
-            prev_skills = skills
+            prev_items = items
         for h, delta in reversed(annotated):  # newest first
             rows.append((h["id"], util.rel_time(h["updated"]),
                          str(h["count"]), delta))
-        out.table(rows, headers=("ID", "WHEN", "SKILLS", "Δ"))
+        out.table(rows, headers=("ID", "WHEN", "ITEMS", "Δ"))
         print()
         out.dim("inspect with `boost replay show <id>` · restore with `boost replay rollback <id>`")
         return 0
@@ -548,35 +584,64 @@ def cmd_replay(argv) -> int:
     if not args.id:
         p.error("%s needs a history ID" % args.action)
     snapshot = lockfile.history_read(args.id)
+    now_all = lockfile.all_installed()
+    # Per-kind diff: snapshots carry all three sections, so a rule that
+    # appeared since the snapshot is a real difference, labeled as one.
+    diffs = {}
+    for kind, section in lockfile.SECTIONS:
+        snap = snapshot.get(section, {})
+        cur = now_all[kind]
+        diffs[kind] = (
+            sorted(n for n in cur if n not in snap),
+            sorted(n for n in snap if n not in cur),
+            sorted(n for n in cur if n in snap and
+                   str(cur[n].get("version")) != str(snap[n].get("version"))))
     snap_skills = snapshot.get("skills", {})
-    current = lockfile.installed()
-    added = sorted(n for n in current if n not in snap_skills)
-    removed = sorted(n for n in snap_skills if n not in current)
-    changed = sorted(n for n in current if n in snap_skills and
-                     str(current[n].get("version")) != str(snap_skills[n].get("version")))
+    current = now_all["skill"]
+    added, removed, changed = diffs["skill"]
+    any_diff = any(a or r or c for a, r, c in diffs.values())
 
     if args.action == "show":
         if args.json:
-            print(json.dumps({"id": args.id, "since_snapshot": {
-                "added": added, "removed": removed, "changed": changed}}, indent=2))
+            payload: dict = {"added": added, "removed": removed,
+                             "changed": changed}
+            for kind in ("rule", "workflow"):
+                a, r, c = diffs[kind]
+                payload[kind + "s"] = {"added": a, "removed": r, "changed": c}
+            print(json.dumps({"id": args.id, "since_snapshot": payload},
+                             indent=2))
             return 0
         out.heading("since %s (%s)" % (args.id,
                                        util.rel_time(snapshot.get("updated", ""))))
-        if not (added or removed or changed):
+        if not any_diff:
             out.ok("current state matches this snapshot")
             return 0
-        for n in added:
-            out.info(out.role("+ %s" % n, "success") + out.role("  added since", "muted"))
-        for n in removed:
-            out.info(out.role("- %s" % n, "danger") + out.role("  removed since", "muted"))
-        for n in changed:
-            out.info(out.role("~ %s  %s → %s" % (n, snap_skills[n].get("version"),
-                                              current[n].get("version")), "warn"))
+        for kind, _section in lockfile.SECTIONS:
+            a, r, c = diffs[kind]
+            label = "" if kind == "skill" else " (%s)" % kind
+            for n in a:
+                out.info(out.role("+ %s%s" % (n, label), "success")
+                         + out.role("  added since", "muted"))
+            for n in r:
+                out.info(out.role("- %s%s" % (n, label), "danger")
+                         + out.role("  removed since", "muted"))
+            snap = snapshot.get(_section, {})
+            for n in c:
+                out.info(out.role("~ %s%s  %s → %s"
+                                  % (n, label, snap[n].get("version"),
+                                     now_all[kind][n].get("version")), "warn"))
         return 0
 
-    # rollback
+    # rollback — skills only; rule/workflow differences are named, never
+    # silently absorbed into an "already at this snapshot" all-clear.
+    mat_diff = ["%s %s" % (kind, n) for kind in ("rule", "workflow")
+                for group in diffs[kind] for n in group]
+    if mat_diff:
+        out.warn("not rolled back (rollback restores skills only): %s — "
+                 "reinstall or uninstall these by hand" % ", ".join(mat_diff))
     if not (added or removed or changed):
-        out.ok("already at this snapshot — nothing to do")
+        out.ok("skills already match this snapshot — nothing to do"
+               if mat_diff else "already at this snapshot — nothing to do")
         return 0
     out.info("rollback to %s will: uninstall %d, install %d, revisit %d version change(s)"
              % (args.id, len(added), len(removed), len(changed)))
@@ -625,7 +690,10 @@ def cmd_who(argv) -> int:
         return 0
 
     if args.skill:
-        lk = lockfile.get_skill(args.skill)
+        # find_any: "installed: false" for a rule the journal clearly shows
+        # being installed would contradict `boost list`.
+        found = lockfile.find_any(args.skill)
+        kind, lk = found if found is not None else (None, None)
         expertise = ("install", "edit", "evolve", "distill", "tag")
         rows = [(util.rel_time(e.get("ts", "")), e.get("user", "?"),
                  e.get("action", "?"))
@@ -633,12 +701,15 @@ def cmd_who(argv) -> int:
                [(util.rel_time(e.get("ts", "")), e.get("user", "?"),
                  e.get("action", "?")) for e in events]
         if args.json:
-            print(json.dumps({"skill": args.skill, "installed": bool(lk),
-                              "events": events}, indent=2))
+            print(json.dumps({"skill": args.skill, "installed": lk is not None,
+                              "kind": kind, "events": events}, indent=2))
             return 0
         out.heading(args.skill)
         if lk:
-            out.kv("installed", "v%s from %s" % (lk.get("version"), lk.get("tap")))
+            installed_s = "v%s from %s" % (lk.get("version"), lk.get("tap"))
+            if kind != "skill":
+                installed_s += " (%s)" % kind
+            out.kv("installed", installed_s)
         out.table(rows[:20], headers=("WHEN", "USER", "ACTION"))
         print()
         out.dim("based on the local journal — in a team setup, pulse feeds "

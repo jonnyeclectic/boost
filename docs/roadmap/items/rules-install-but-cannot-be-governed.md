@@ -1,8 +1,10 @@
 ---
 id: rules-install-but-cannot-be-governed
 board: code
-section: planned
-status: planned
+section: trust
+status: shipped
+owner: loop/rule-governance
+pr: 464
 category: Security · Correctness
 complexity: L
 impact: High

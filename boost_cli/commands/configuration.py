@@ -22,6 +22,7 @@ from ..core import (
     frontmatter,
     gitutil,
     installscan,
+    integrity,
     journal,
     lockfile,
     mcp,
@@ -331,27 +332,47 @@ def cmd_policy(argv) -> int:
 
     # check
     pol = policy.load()
-    installed = lockfile.installed()
+    everything = lockfile.all_installed()
     min_score = int(pol.get("min_quality_score") or 0)
-    violations = []  # (skill, problem)
-    for name, entry in sorted(installed.items()):
-        tap = entry.get("tap", "local")
-        if name in pol["blocked_skills"]:
-            violations.append((name, "on the blocklist"))
-        if tap in pol["blocked_taps"]:
-            violations.append((name, "tap %s is blocked" % tap))
-        if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
-            violations.append((name, "tap %s is not on the allowlist" % tap))
-        if min_score:
-            score, _notes = util.score_skill(store.skill_store_dir(name))
-            if score < min_score:
-                violations.append(
-                    (name, "quality score %d < required %d" % (score, min_score)))
-    unpinned = sorted(n for n, e in installed.items() if not e.get("pinned"))
+    violations = []  # (name, problem)
+    total = 0
+    for kind, section in everything.items():
+        for name, entry in sorted(section.items()):
+            total += 1
+            label = name if kind == "skill" else "%s (%s)" % (name, kind)
+            tap = entry.get("tap", "local")
+            if name in pol["blocked_skills"]:
+                violations.append((label, "on the blocklist"))
+            if tap in pol["blocked_taps"]:
+                violations.append((label, "tap %s is blocked" % tap))
+            if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
+                violations.append((label, "tap %s is not on the allowlist" % tap))
+            # Quality scoring reads a store directory, which only skills have.
+            if min_score and kind == "skill":
+                score, _notes = util.score_skill(store.skill_store_dir(name))
+                if score < min_score:
+                    violations.append(
+                        (label, "quality score %d < required %d" % (score, min_score)))
+    unpinned = sorted(
+        n if k == "skill" else "%s (%s)" % (n, k)
+        for k, section in everything.items()
+        for n, e in section.items() if not e.get("pinned"))
+    counts = {kind: len(section) for kind, section in everything.items()}
+    # The breakdown appears exactly when it carries information (same
+    # convention as `boost count`): a skills-only environment keeps the exact
+    # summary line it always had.
+    summary = ("%d skills" % counts["skill"]
+               if not counts["rule"] and not counts["workflow"]
+               else ", ".join("%d %s%s" % (n, kind, "s" if n != 1 else "")
+                              for kind, n in counts.items()))
 
     if args.json:
         print(json.dumps({
-            "skills": len(installed),
+            # "skills" keeps its original meaning — the skill count — with the
+            # other kinds beside it rather than silently folded in.
+            "skills": counts["skill"],
+            "counts": counts,
+            "total": total,
             "violations": [{"skill": s, "violation": v} for s, v in violations],
             "pin_only": bool(pol["pin_only"]),
             "unpinned": unpinned if pol["pin_only"] else [],
@@ -360,16 +381,16 @@ def cmd_policy(argv) -> int:
 
     if pol["pin_only"]:
         out.info("pin-only mode is on — installs/updates are frozen"
-                 + (" (%d unpinned skill(s): %s)"
+                 + (" (%d unpinned item(s): %s)"
                     % (len(unpinned), ", ".join(unpinned)) if unpinned else ""))
     if violations:
-        out.table(violations, headers=("SKILL", "VIOLATION"))
+        out.table(violations, headers=("ITEM", "VIOLATION"))
         print()
-        out.err("%d policy violation(s) across %d installed skill(s)"
-                % (len(violations), len(installed)),
+        out.err("%d policy violation(s) across %d installed item(s)"
+                % (len(violations), total),
                 hint="adjust with `boost policy set` or remove the offenders")
         return 1
-    out.ok("policy check passed (%d skills)" % len(installed))
+    out.ok("policy check passed (%s)" % summary)
     return 0
 
 
@@ -876,32 +897,51 @@ def _tool_search(args: dict):
 
 
 def _tool_list(args: dict):
-    skills = lockfile.installed()
-    if not skills:
-        return "no skills installed", False
-    return "\n".join("%s v%s (%s)%s"
-                     % (n, e.get("version", "?"), e.get("tap", "?"),
-                        " [pinned]" if e.get("pinned") else "")
-                     for n, e in sorted(skills.items())), False
+    # All three lock sections: "no skills installed" while `boost list` shows
+    # a rule is the exact disagreement this surface must not have.
+    everything = lockfile.all_installed()
+    if not any(everything.values()):
+        return "nothing installed", False
+    lines = []
+    for kind, section in everything.items():
+        for n, e in sorted(section.items()):
+            lines.append("%s v%s (%s)%s%s"
+                         % (n, e.get("version", "?"), e.get("tap", "?"),
+                            "" if kind == "skill" else " [%s]" % kind,
+                            " [pinned]" if e.get("pinned") else ""))
+    return "\n".join(lines), False
 
 
 def _tool_info(args: dict):
     name = str(args.get("name", ""))
-    entry = lockfile.get_skill(name)
+    found = lockfile.find_any(name)
+    kind, entry = found if found is not None else ("skill", None)
     matches = catalog.find(name)
     if not entry and not matches:
         return "no skill named %r (installed or in any tap)" % name, True
     src = matches[0] if matches else {}
-    lines = ["name: " + name,
-             "version: %s" % (entry or src).get("version", "?"),
-             "tap: %s" % (entry or src).get("tap", "?")]
+    kind_label = kind if entry else src.get("kind", "skill")
+    lines = ["name: " + name]
+    if kind_label != "skill":
+        lines.append("kind: %s" % kind_label)
+    lines.extend(("version: %s" % (entry or src).get("version", "?"),
+                  "tap: %s" % (entry or src).get("tap", "?")))
     if src.get("description"):
         lines.append("description: %s" % src["description"])
     if entry:
+        if kind == "skill":
+            agents_s = ", ".join(entry.get("agents") or []) or "none"
+        else:
+            # Materialized kinds record their reach per materialization.
+            agents_s = ", ".join(sorted(
+                {m.get("agent", "?")
+                 for m in entry.get("materializations") or []})) or "none"
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
-                      "agents: %s" % (", ".join(entry.get("agents") or []) or "none")))
+                      "agents: %s" % agents_s))
         if entry.get("pinned"):
             lines.append("pinned: yes")
+        if entry.get("quarantined"):
+            lines.append("quarantined: yes")
     else:
         lines.append("installed: no")
     return "\n".join(lines), False
@@ -943,14 +983,30 @@ def _tool_doctor(args: dict):
     plan = store.sync_plan()
     issues = sum(len(v) for v in plan.values())
     taps = registry.list_taps()
-    lines = ["installed skills: %d" % len(lockfile.installed()),
+    everything = lockfile.all_installed()
+    lines = ["installed skills: %d" % len(everything["skill"]),
+             "installed rules: %d · workflows: %d"
+             % (len(everything["rule"]), len(everything["workflow"])),
              "taps: %d (%d skills available)" % (len(taps), len(catalog.all_entries()))]
     for key, vals in plan.items():
         if vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
-    lines.append("healthy — no issues found" if issues == 0
-                 else "%d issue(s) — run `boost sync` to fix" % issues)
-    return "\n".join(lines), issues > 0
+    # sync_plan already reports MISSING rule/workflow materializations; the
+    # digest check adds the drift sync cannot see — content edited in place.
+    mat_issues = ["%s %s: modified since install" % (kind, n)
+                  for kind in ("rule", "workflow")
+                  for n, e in sorted(everything[kind].items())
+                  if (integrity.materialized_status(n, e)
+                      == integrity.STATUS_MODIFIED)]
+    lines.extend(mat_issues)
+    total = issues + len(mat_issues)
+    if total == 0:
+        lines.append("healthy — no issues found")
+    elif mat_issues:
+        lines.append("%d issue(s) — run `boost doctor` for details" % total)
+    else:
+        lines.append("%d issue(s) — run `boost sync` to fix" % issues)
+    return "\n".join(lines), total > 0
 
 
 def _tool_discover_github(args: dict):

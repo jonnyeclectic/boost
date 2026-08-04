@@ -39,7 +39,7 @@ from ..core import (
 )
 from ..core import output as out
 from ..errors import BoostError
-from ._common import _iter_installed, _s
+from ._common import _iter_installed, _iter_installed_all, _s
 
 # --- conflict: normative-rule extraction -----------------------------------
 
@@ -223,12 +223,43 @@ def _drift_status(name: str, entry: dict) -> str:
     return staleness.drift_state(store_sha, lock_sha, is_local, source_sha)
 
 
+def _drift_status_materialized(kind: str, name: str, entry: dict) -> str:
+    """The rule/workflow analogue of `_drift_status`, over the same vocabulary.
+
+    "Local edits" means the materialized artifact — the CLAUDE.md block or
+    rendered command file — no longer hashes to what install wrote; "upstream
+    moved" means the tap's source text no longer hashes to the lock's sha256.
+    Quarantine removes the artifacts on purpose, which would otherwise read as
+    the most alarming status on the board.
+    """
+    if entry.get("quarantined"):
+        return "quarantined"
+    st = integrity.materialized_status(name, entry)
+    if st == integrity.STATUS_MISSING:
+        return "store-missing"
+    if st == integrity.STATUS_MODIFIED:
+        return "local-edits"
+    if entry.get("tap") == "local":
+        return "n/a"
+    try:
+        raw = (registry.get(entry["tap"]).path / entry.get("source_file", "")
+               ).read_text(encoding="utf-8", errors="replace")
+    except (OSError, BoostError):
+        return "source-missing"
+    if hashlib.sha256(raw.encode("utf-8")).hexdigest() != entry.get("sha256"):
+        return "upstream-moved"
+    return "in-sync"
+
+
 _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "upstream-moved": "accent", "source-missing": "danger",
-               "store-missing": "danger", "n/a": "muted"}
+               "store-missing": "danger", "n/a": "muted",
+               "quarantined": "muted"}
 
 
 def _drift_hint(name: str, status: str) -> str:
+    if status == "quarantined":
+        return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
         return "boost update"
     if status == "local-edits":
@@ -252,6 +283,12 @@ def _fingerprint() -> Tuple[str, List[str]]:
     and tap commits always produce the same hash."""
     comps = sorted("%s:%s" % (n, e.get("sha256", ""))
                    for n, e in lockfile.installed().items())
+    # Rules and workflows are part of the environment the agent runs on —
+    # a poisoned CLAUDE.md rule must change the fingerprint. Kind-prefixed so
+    # a skill-only environment's fingerprint is unchanged by this addition.
+    comps += sorted("%s/%s:%s" % (kind, n, e.get("sha256", ""))
+                    for kind, section in lockfile.all_installed().items()
+                    if kind != "skill" for n, e in section.items())
     comps += sorted("%s:%s" % (t.name,
                                gitutil.head_commit(t.path)
                                if t.is_cloned and gitutil.has_git() else "")
@@ -432,8 +469,13 @@ def cmd_doctor(argv):
     # Rules and workflows don't live in the store — they materialize into agent
     # dirs (a file drop, or a CLAUDE.md managed block). Health = every recorded
     # materialization is still on disk; a deleted file means the install rotted.
-    rules = lockfile.installed_rules()
-    workflows = lockfile.installed_workflows()
+    # Quarantined = materializations removed on purpose; reporting them as rot
+    # would send the user to `boost reinstall`, which re-arms the rule — and
+    # counting them "fully materialized" would be the opposite lie.
+    rules = {n: e for n, e in lockfile.installed_rules().items()
+             if not e.get("quarantined")}
+    workflows = {n: e for n, e in lockfile.installed_workflows().items()
+                 if not e.get("quarantined")}
     mat_issues = 0
     for name, entry in sorted(rules.items()):
         for m in entry.get("materializations") or []:
@@ -666,9 +708,10 @@ def cmd_drift(argv):
     args = ap.parse_args(argv)
 
     rows = []
-    for name, entry in _iter_installed(args.names or None):
-        status = _drift_status(name, entry)
-        rows.append({"name": name, "status": status,
+    for kind, name, entry in _iter_installed_all(args.names or None):
+        status = (_drift_status(name, entry) if kind == "skill"
+                  else _drift_status_materialized(kind, name, entry))
+        rows.append({"name": name, "kind": kind, "status": status,
                      "hint": _drift_hint(name, status)})
     if args.json:
         print(json.dumps({"skills": rows}))
@@ -676,9 +719,11 @@ def cmd_drift(argv):
     if not rows:
         out.info("no skills installed")
         return 0
-    out.table([(r["name"], out.role(r["status"], _DRIFT_ROLE[r["status"]]),
+    out.table([(r["name"] if r["kind"] == "skill"
+                else "%s (%s)" % (r["name"], r["kind"]),
+                out.role(r["status"], _DRIFT_ROLE[r["status"]]),
                 out.role(r["hint"], "muted")) for r in rows],
-              headers=("SKILL", "STATUS", "HINT"))
+              headers=("NAME", "STATUS", "HINT"))
     counts: dict = {}
     for r in rows:
         counts[r["status"]] = counts.get(r["status"], 0) + 1

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from contextlib import suppress
 
@@ -144,12 +145,18 @@ def cmd_untap(argv) -> int:
     args = p.parse_args(argv)
 
     tap = registry.get(args.name)
-    dependent = sorted(n for n, e in lockfile.installed().items()
-                       if e.get("tap") == tap.name)
+    # All three lock sections: untapping the source of a live CLAUDE.md rule
+    # deserves the same warning as untapping the source of a skill.
+    dependent = [(kind, n)
+                 for kind, section in lockfile.all_installed().items()
+                 for n, e in sorted(section.items())
+                 if e.get("tap") == tap.name]
     if dependent:
-        out.warn("%d skill(s) installed from %s: %s"
-                 % (len(dependent), tap.name, ", ".join(dependent)))
-        out.warn("installed skills keep working but lose their update source")
+        labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
+                  for kind, n in dependent]
+        out.warn("%d installed item(s) from %s: %s"
+                 % (len(dependent), tap.name, ", ".join(labels)))
+        out.warn("installed items keep working but lose their update source")
         if not (args.force or args.yes) and not out.confirm(
                 "untap %s anyway?" % tap.name):
             out.info("cancelled")
@@ -257,9 +264,41 @@ def cmd_outdated(argv) -> int:
             elif reason == staleness.CONTENT:
                 stale, latest_disp = True, "%s (%s)" % (latest, head[:7])
         if stale:
-            results.append({"name": name, "installed": installed_v,
+            results.append({"name": name, "kind": "skill",
+                            "installed": installed_v,
                             "latest": latest_disp, "tap": tap_name,
                             "pinned": bool(lk.get("pinned"))})
+
+    # Rules/workflows have no store dir — their staleness signal is the lock's
+    # source sha256 against the tap's current source file (the comparison
+    # `boost update` itself uses before re-materializing).
+    for kind, section in (("rule", lockfile.installed_rules()),
+                          ("workflow", lockfile.installed_workflows())):
+        for name, lk in sorted(section.items()):
+            tap_name = lk.get("tap", "local")
+            if tap_name == "local":
+                continue
+            installed_v = str(lk.get("version") or "0.0.0")
+            try:
+                raw = (registry.get(tap_name).path / lk.get("source_file", "")
+                       ).read_text(encoding="utf-8", errors="replace")
+            except (OSError, BoostError):
+                results.append({"name": name, "kind": kind,
+                                "installed": installed_v,
+                                "latest": "source missing", "tap": tap_name,
+                                "pinned": bool(lk.get("pinned"))})
+                continue
+            if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
+                continue
+            matches = [e for e in catalog.find(name)
+                       if e["tap"] == tap_name
+                       and e.get("kind", "skill") == kind]
+            latest = str(matches[0].get("version") or "?") if matches else "?"
+            if not util.semver_gt(latest, installed_v):
+                latest = "%s (content changed)" % latest
+            results.append({"name": name, "kind": kind,
+                            "installed": installed_v, "latest": latest,
+                            "tap": tap_name, "pinned": bool(lk.get("pinned"))})
 
     if args.json:
         print(json.dumps(results, indent=2))
@@ -267,11 +306,11 @@ def cmd_outdated(argv) -> int:
     if not results:
         out.ok("everything up to date")
         return 0
-    rows = [(r["name"],
+    rows = [(r["name"] + ("" if r["kind"] == "skill" else " (%s)" % r["kind"]),
              r["installed"] + (" (pinned)" if r["pinned"] else ""),
              r["latest"], r["tap"]) for r in results]
     out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"))
     print()
-    out.dim("%d outdated · `boost update` upgrades (pinned skills stay put)"
+    out.dim("%d outdated · `boost update` upgrades (pinned items stay put)"
             % len(results))
     return 0

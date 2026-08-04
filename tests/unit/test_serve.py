@@ -24,11 +24,13 @@ class _Tap:
         self.path = path
 
 
-def _patch_catalog(monkeypatch, *, installed=None, entries=None, find=None,
-                   taps=None):
+def _patch_catalog(monkeypatch, *, installed=None, rules=None, workflows=None,
+                   entries=None, find=None, taps=None):
     monkeypatch.setattr(serve.lockfile, "installed", lambda: installed or {})
     monkeypatch.setattr(serve.lockfile, "read",
-                        lambda: {"version": 3, "skills": installed or {}})
+                        lambda: {"version": 3, "skills": installed or {},
+                                 "rules": rules or {},
+                                 "workflows": workflows or {}})
     monkeypatch.setattr(serve.catalog, "all_entries", lambda: entries or [])
     monkeypatch.setattr(serve.catalog, "find", lambda n: (find or {}).get(n, []))
     monkeypatch.setattr(serve.registry, "list_taps", lambda: taps or [])
@@ -141,6 +143,23 @@ class TestServePage:
         assert "1 installed · 2 available across 1 taps" in page
         assert 'href="/skill/brainstorming"' in page
         assert "1.4.0" in page
+
+    def test_rules_and_workflows_rows_carry_kind_and_no_link(self, monkeypatch):
+        # The page is a view of the whole lock file: a rule shows up, labeled,
+        # and does NOT get a /skill/ link (there is no raw endpoint for it).
+        _patch_catalog(
+            monkeypatch,
+            installed={"brainstorming": {"version": "1.4.0", "tap": "core"}},
+            rules={"house-style": {"version": "1.0.0", "tap": "t2"}},
+            workflows={"ship-it": {"version": "2.0.0", "tap": "t2"}},
+            taps=[_Tap("a")])
+        page = serve.serve_page()
+        assert "3 installed" in page
+        assert "<td>house-style</td><td>rule</td>" in page
+        assert "<td>ship-it</td><td>workflow</td>" in page
+        assert 'href="/skill/brainstorming"' in page
+        assert 'href="/skill/house-style"' not in page
+        assert 'href="/skill/ship-it"' not in page
 
 
 class TestServeHttp:

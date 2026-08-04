@@ -184,7 +184,7 @@ ignore = [
 # cut word ("existin", "architec") reads as a typo. It is data, not prose.
 skip = "docs/roadmap.html,docs/design-roadmap.html,docs/commands.html,docs/demo-index.json,boost_cli/_version.py,*.tar.gz"
 # Valid English that codespell's dictionary flags as misspellings.
-ignore-words-list = "unparseable,accreting"
+ignore-words-list = "unparseable,accreting,covert"
 
 [tool.mypy]
 python_version = "3.12"

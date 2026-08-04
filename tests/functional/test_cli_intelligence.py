@@ -536,3 +536,70 @@ class TestImpact:
         r = boost("impact", "brainstorming")
         assert "This data is correlational only." in r.out
         assert FALLBACK not in r.out
+
+
+# ---------------------------------------------------------------- kind declines
+
+class TestKindDeclines:
+    """Skill-content commands name the kind instead of denying existence,
+    and context switching stops calling installed rules missing."""
+
+    def _seed_claude_rule(self, name="house", body="Do the thing."):
+        from boost_cli.core import lockfile, rules
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.parent.mkdir(parents=True, exist_ok=True)
+        cm.write_text(rules.merge_block("# notes\n", name, body),
+                      encoding="utf-8")
+        lockfile.set_rule(name, {
+            "kind": "rule", "version": "1.0.0", "tap": "some-tap",
+            "materializations": [
+                {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
+
+    def test_evolve_declines_a_rule_by_kind(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("evolve", "house", "--feedback", "be stricter", expect=1)
+        assert "house is a rule — boost evolve applies to skills" in r.err
+        assert "not installed" not in r.err
+
+    def test_focus_declines_a_rule_by_kind(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("focus", "house", expect=1)
+        assert "house is a rule — boost focus applies to skills" in r.err
+        assert "not installed" not in r.err
+
+    def test_impact_declines_a_rule_by_kind(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("impact", "house", expect=1)
+        assert "house is a rule — boost impact applies to skills" in r.err
+        assert "not installed" not in r.err
+
+    def test_simulate_declines_a_rule_by_kind(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("simulate", "house", expect=1)
+        assert "house is a rule — this command applies to skills" in r.err
+        assert "not installed" not in r.err
+
+    def test_distill_declines_a_rule_by_kind(self, boost, tapped):
+        self._seed_claude_rule()
+        r = boost("distill", "brainstorming", "house", expect=1)
+        assert "house is a rule — this command applies to skills" in r.err
+
+    def test_context_map_does_not_call_an_installed_rule_missing(
+            self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("context", "map", "feature/*", "house")
+        assert "mapped feature/* → house" in r.out
+        assert "not installed" not in r.out
+        assert "house is a rule" in r.out
+
+    def test_context_apply_reports_a_mapped_rule_truthfully(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        self._seed_claude_rule()
+        repo = _git_repo(tmp_path / "repo")
+        _git(repo, "checkout", "-q", "-b", "feature/x")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "house")
+        boost("context", "enable")
+        r = boost("context", "apply")
+        assert "mapped but not installed" not in r.out
+        assert "house (rule)" in r.out
