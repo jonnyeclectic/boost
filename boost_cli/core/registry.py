@@ -4,7 +4,7 @@ from __future__ import annotations
 import difflib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from ..errors import BoostError
 from . import config, gitutil, paths, policy, util
@@ -151,14 +151,38 @@ def remove(name: str) -> Tap:
     return tap
 
 
-def update(name: Optional[str] = None) -> dict:
-    """git-pull one tap (or all). Returns {tap_name: summary}."""
+def update(name: Optional[str] = None) -> Tuple[dict, dict]:
+    """git-pull one tap (or all). Returns ``({name: summary}, {name: error})``.
+
+    **A named tap still raises.** ``boost update sometap`` is a request about
+    that one tap, so its failure is the answer to the question asked.
+
+    **Across all taps it does not.** Upstream repos get deleted, renamed and
+    made private by people who have never heard of this machine, and one of them
+    used to abort the whole loop: every tap after the dead one went unrefreshed,
+    the ones already pulled never had their catalogs rebuilt, and the user saw a
+    bare git error naming neither the tap nor the URL. With 80+ taps that is a
+    near-certainty rather than an edge case. Collecting failures instead lets the
+    other 79 refresh, and lets the caller name the broken one.
+
+    This mirrors what the skill-update loop in ``cmd_update`` already does — warn
+    per item and carry on. The tap loop was the one place that did not.
+    """
     targets = [get(name)] if name else list_taps()
-    results = {}
+    results: dict = {}
+    failures: dict = {}
     for tap in targets:
-        if not tap.is_cloned:
-            gitutil.clone_shallow(tap.url, tap.path)
-            results[tap.name] = "cloned"
-        else:
-            results[tap.name] = gitutil.pull(tap.path)
-    return results
+        try:
+            if not tap.is_cloned:
+                gitutil.clone_shallow(tap.url, tap.path)
+                results[tap.name] = "cloned"
+            else:
+                results[tap.name] = gitutil.pull(tap.path)
+        except BoostError as err:
+            if name:
+                raise
+            # The caller prefixes the tap name, which is the part git never
+            # says; git's own first line already carries the URL or path. See
+            # gitutil._git_error for why that line is now the one we show.
+            failures[tap.name] = err.message
+    return results, failures

@@ -447,15 +447,62 @@ def ready() -> bool:
     return bool(raw and raw.get("docs") and postings_path().exists())
 
 
+def stale() -> bool:
+    """True when the index no longer reflects the taps on disk.
+
+    ``ready()`` only asks whether an index *exists*, which is why ``ensure()``
+    would serve a first build forever: ``boost tap X`` rebuilds X's catalog
+    cache but nothing rebuilt the BM25 index, so ``boost search`` answered "no
+    matches" — and suggested searching GitHub — for a skill ``boost info`` could
+    already describe from the same machine.
+
+    Deliberately **stat-only**. The obvious test, comparing ``_tap_commits()``
+    against the stored commits, means parsing every tap's catalog JSON on every
+    search — reintroducing exactly the cold-start cost that moving postings into
+    SQLite existed to remove. Two cheap signals cover it instead:
+
+    * the tap set must still match the set the index recorded (catches a tap
+      added or removed, neither of which need touch an existing cache file);
+    * no tap's catalog cache may be newer than the index (catches a tap whose
+      contents moved, since ``build()`` writes the index only after every
+      catalog cache it consumed).
+
+    The residual gap is a cache rewritten inside the same filesystem mtime tick
+    as the index; the next tap operation catches it, and paying a full parse on
+    every search to close it is the worse trade.
+    """
+    raw = _load_raw()
+    if raw is None:
+        return True
+    taps = registry.list_taps()
+    if {t.safe_name for t in taps} != set(raw.get("commits") or {}):
+        return True
+    try:
+        built_at = index_path().stat().st_mtime
+    except OSError:
+        return True
+    for t in taps:
+        try:
+            if t.cache_file.stat().st_mtime > built_at:
+                return True
+        except OSError:
+            continue        # no cache yet — build() will pick it up regardless
+    return False
+
+
 def ensure() -> bool:
-    """Ensure a usable full-content index exists, building it on first use.
+    """Ensure a *current* full-content index exists, building it on first use.
 
     This makes BM25 search the default for every surface (CLI + MCP) without the
     user having to run ``boost reindex`` first. Returns True when RAG is usable.
     Never raises: with no taps, or if the build fails, it returns False so the
     caller degrades to frontmatter search instead of erroring.
+
+    A stale index rebuilds rather than being served: ``build()`` reuses every
+    tap whose commit is unchanged, so noticing one new tap costs one tap's
+    indexing, not the whole corpus.
     """
-    if ready():
+    if ready() and not stale():
         return True
     if not registry.list_taps():
         return False
@@ -674,6 +721,13 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     return dedupe_by_content(hits, k)
 
 
+#: The label `rerank` returns when the LLM pass actually ran. Every other value
+#: is a retrieval engine's own name, i.e. "the rerank did not happen". Callers
+#: that quote what the rerank buys have to be able to tell those apart without
+#: string-matching a literal that could drift.
+LLM_RANKER = "Claude relevance"
+
+
 def rerank(query: str, hits: List[Hit], limit: int = 10,
            engine: str = "BM25 full-content") -> Tuple[List[Hit], str]:
     """Reorder the shortlist with the LLM bridge; degrade to ``engine`` order.
@@ -709,7 +763,7 @@ def rerank(query: str, hits: List[Hit], limit: int = 10,
     picked = [by_name[str(n)] for n in order if str(n) in by_name]
     rest = [h for h in hits if h["entry"]["name"]
             not in {str(n) for n in order}]
-    return (picked + rest)[:limit], "Claude relevance"
+    return (picked + rest)[:limit], LLM_RANKER
 
 
 # The damping constant from the original reciprocal-rank-fusion paper. It is

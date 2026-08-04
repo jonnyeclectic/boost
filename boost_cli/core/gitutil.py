@@ -32,9 +32,34 @@ def run(args: List[str], cwd: Optional[Path] = None, check: bool = True,
     except subprocess.TimeoutExpired:
         raise BoostError("git %s timed out after %ds" % (args[0], timeout)) from None
     if check and proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-        raise BoostError("git %s failed: %s" % (args[0], detail[-1] if detail else "unknown error"))
+        raise BoostError("git %s failed: %s"
+                         % (args[0], _git_error(proc.stderr or proc.stdout or "")))
     return proc
+
+
+def _git_error(text: str) -> str:
+    """Pull the one useful line out of git's multi-line failure output.
+
+    git states the cause first and then advises, so the LAST line is usually the
+    tail of a prose hint. A missing remote prints::
+
+        fatal: '/nope' does not appear to be a git repository
+        fatal: Could not read from remote repository.
+        <blank>
+        Please make sure you have the correct access rights
+        and the repository exists.
+
+    Taking the last line surfaced "and the repository exists." — a sentence
+    fragment, with the one line that names the bad path thrown away. Prefer the
+    first ``fatal:``/``error:`` line, which is git's own convention for the
+    cause, and fall back to the last non-empty line for output that has neither.
+    """
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    for line in lines:
+        low = line.lower()
+        if low.startswith(("fatal:", "error:")):
+            return line
+    return lines[-1] if lines else "unknown error"
 
 
 # git's remote-helper transports run arbitrary commands straight from the URL

@@ -352,6 +352,173 @@ class TestPrintApi:
         assert payload["required_pull_request_reviews"] is None
 
 
+class TestRulesetIsTheOtherHalf:
+    """`main` is protected twice, and this gate only ever saw one of them.
+
+    The classic branch protection and the repository ruleset are independent
+    objects with independent lists. Applying `--print-api` updates the classic
+    one and leaves the ruleset exactly as it was, which is how the ruleset came
+    to be missing `bdd`, `evals` and `onnx-inference` while this script reported
+    the config clean — it was comparing the file against the *workflows*, and
+    the workflows were fine.
+
+    The asymmetry is what made that expensive. Classic protection sets
+    `enforce_admins: false`, so it does not bind the identity that merges here;
+    the ruleset carries `bypass_actors: []`, so it binds everyone. The three
+    checks absent from the ruleset were therefore the three nothing enforced.
+    """
+
+    def _mod(self, tmp_path, monkeypatch):
+        workflow(tmp_path, "ci.yml", "  lint:\n    runs-on: ubuntu-latest\n")
+        config(tmp_path, "lint\n")
+        return load(monkeypatch, tmp_path)
+
+    def test_drift_reports_missing_and_extra(self, tmp_path, monkeypatch):
+        m = self._mod(tmp_path, monkeypatch)
+        missing, extra = m.drift(["a", "b", "c"], ["b", "z"])
+        assert missing == ["a", "c"] and extra == ["z"]
+
+    def test_drift_ignores_order(self, tmp_path, monkeypatch):
+        # GitHub returns contexts in its own order; a different sort is not drift.
+        m = self._mod(tmp_path, monkeypatch)
+        assert m.drift(["a", "b"], ["b", "a"]) == ([], [])
+
+    def test_the_ruleset_rule_is_not_the_classic_payload(self, tmp_path, monkeypatch):
+        # The two API shapes differ in ways a human retyping them gets wrong:
+        # a ruleset names each context as an object carrying the producing app,
+        # and spells `strict` differently. Pinning it here is what stops the
+        # translation step being done from memory.
+        m = self._mod(tmp_path, monkeypatch)
+        rule = m.ruleset_rule(["lint", "bdd"])
+        assert rule["type"] == "required_status_checks"
+        p = rule["parameters"]
+        assert p["strict_required_status_checks_policy"] is True
+        assert p["required_status_checks"] == [
+            {"context": "lint", "integration_id": m.ACTIONS_APP_ID},
+            {"context": "bdd", "integration_id": m.ACTIONS_APP_ID},
+        ]
+
+    def test_ruleset_rule_names_github_actions_as_the_producer(self, tmp_path, monkeypatch):
+        # Without integration_id any app could satisfy a check by name, which is
+        # a weaker gate than the one required-checks.txt describes.
+        m = self._mod(tmp_path, monkeypatch)
+        assert m.ACTIONS_APP_ID == 15368
+
+    def test_a_ruleset_with_no_status_check_rule_is_distinguishable(self, tmp_path, monkeypatch):
+        # "requires nothing" and "requires a drifted list" are different faults
+        # and get different messages; collapsing them to an empty list hides the
+        # louder one.
+        m = self._mod(tmp_path, monkeypatch)
+        assert m.ruleset_contexts({"rules": [{"type": "deletion"}]}) == (False, [])
+        has, ctx = m.ruleset_contexts({"rules": [
+            {"type": "required_status_checks",
+             "parameters": {"required_status_checks": [{"context": "lint"}]}}]})
+        assert has is True and ctx == ["lint"]
+
+    # ---- verify_remote, driven against a stubbed API ------------------------
+
+    def _stub(self, m, monkeypatch, *, classic, ruleset_ctx, has_rule=True,
+              enforcement="active", includes=("refs/heads/main",)):
+        rules = [{"type": "deletion"}]
+        if has_rule:
+            rules.append({"type": "required_status_checks", "parameters": {
+                "required_status_checks": [{"context": c} for c in ruleset_ctx]}})
+        detail = {"id": 1, "name": "main", "enforcement": enforcement,
+                  "conditions": {"ref_name": {"include": list(includes)}},
+                  "rules": rules}
+
+        def fake(path, token):
+            if path.endswith("/protection"):
+                return {"required_status_checks": {"contexts": list(classic)}}
+            if path.endswith("/rulesets"):
+                return [{"id": 1}]
+            return detail
+        monkeypatch.setattr(m, "_api", fake)
+
+    def test_it_catches_the_real_regression(self, tmp_path, monkeypatch):
+        # The exact production state: classic correct, ruleset short by three.
+        m = self._mod(tmp_path, monkeypatch)
+        want = ["lint", "bdd", "evals", "onnx-inference"]
+        self._stub(m, monkeypatch, classic=want, ruleset_ctx=["lint"])
+        problems = m.verify_remote(want, "t")
+        assert len(problems) == 1
+        assert "ruleset" in problems[0]
+        for name in ("bdd", "evals", "onnx-inference"):
+            assert name in problems[0]
+
+    def test_it_stays_quiet_when_both_agree(self, tmp_path, monkeypatch):
+        m = self._mod(tmp_path, monkeypatch)
+        want = ["lint", "bdd"]
+        self._stub(m, monkeypatch, classic=want, ruleset_ctx=list(reversed(want)))
+        assert m.verify_remote(want, "t") == []
+
+    def test_it_catches_classic_drift_too(self, tmp_path, monkeypatch):
+        m = self._mod(tmp_path, monkeypatch)
+        want = ["lint", "bdd"]
+        self._stub(m, monkeypatch, classic=["lint"], ruleset_ctx=want)
+        problems = m.verify_remote(want, "t")
+        assert len(problems) == 1 and "classic" in problems[0]
+
+    def test_a_ruleset_that_gates_nothing_is_loud(self, tmp_path, monkeypatch):
+        m = self._mod(tmp_path, monkeypatch)
+        want = ["lint"]
+        self._stub(m, monkeypatch, classic=want, ruleset_ctx=[], has_rule=False)
+        problems = m.verify_remote(want, "t")
+        assert any("gates nothing" in p for p in problems)
+
+    def test_no_active_ruleset_is_reported_rather_than_passing(self, tmp_path, monkeypatch):
+        # Silence here would read as "the rulesets agree" — the exact shape of
+        # invisibility this whole check exists to remove.
+        m = self._mod(tmp_path, monkeypatch)
+        want = ["lint"]
+        self._stub(m, monkeypatch, classic=want, ruleset_ctx=want,
+                   enforcement="disabled")
+        assert any("no active ruleset" in p for p in m.verify_remote(want, "t"))
+
+    def test_a_ruleset_for_another_branch_is_not_mistaken_for_main(self, tmp_path, monkeypatch):
+        m = self._mod(tmp_path, monkeypatch)
+        want = ["lint"]
+        self._stub(m, monkeypatch, classic=want, ruleset_ctx=["something-else"],
+                   includes=("refs/heads/release",))
+        problems = m.verify_remote(want, "t")
+        # It must not grade main against a release ruleset...
+        assert not any("disagrees" in p and "ruleset" in p for p in problems)
+        # ...but must still say main has no ruleset covering it.
+        assert any("no active ruleset" in p for p in problems)
+
+    def test_the_default_branch_alias_counts_as_main(self, tmp_path, monkeypatch):
+        # GitHub writes `~DEFAULT_BRANCH` rather than a literal ref when the
+        # ruleset was created through the UI's default-branch option.
+        m = self._mod(tmp_path, monkeypatch)
+        want = ["lint"]
+        self._stub(m, monkeypatch, classic=want, ruleset_ctx=want,
+                   includes=("~DEFAULT_BRANCH",))
+        assert m.verify_remote(want, "t") == []
+
+    def test_verify_remote_without_a_token_skips_rather_than_passes(
+            self, tmp_path, monkeypatch, capsys):
+        m = self._mod(tmp_path, monkeypatch)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        assert m.main(["--verify-remote"]) == 0
+        assert "skipped" in capsys.readouterr().out
+
+    def test_print_ruleset_emits_the_rule(self, tmp_path, monkeypatch, capsys):
+        import json
+        m = self._mod(tmp_path, monkeypatch)
+        assert m.main(["--print-ruleset"]) == 0
+        out = capsys.readouterr().out
+        rule = json.loads(out[out.index("{"):])
+        assert rule["parameters"]["required_status_checks"][0]["context"] == "lint"
+
+    def test_print_api_now_says_it_is_only_half(self, tmp_path, monkeypatch, capsys):
+        # The old output invited exactly the mistake that caused this: it read
+        # as though applying it made protection correct.
+        m = self._mod(tmp_path, monkeypatch)
+        assert m.main(["--print-api"]) == 0
+        assert "--print-ruleset" in capsys.readouterr().out
+
+
 class TestRealRepo:
     def test_the_committed_config_matches_the_real_workflows(self):
         import subprocess
