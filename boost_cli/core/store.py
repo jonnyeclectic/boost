@@ -893,6 +893,11 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> List[str]:
     agents whose artifacts were removed.
     """
     from . import rules
+    # Prior stash contents win over a fresh None: re-running after an
+    # interrupted quarantine must never overwrite a saved copy with "the
+    # artifact was already gone".
+    prior = {m.get("path"): m.get("content")
+             for m in entry.get("quarantine_stash") or []}
     stash: List[dict] = []
     affected: List[str] = []
     for m in entry.get("materializations") or []:
@@ -900,25 +905,59 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> List[str]:
         content: Optional[str] = None
         if m.get("mode") == rules.MODE_CLAUDE:
             if path.exists():
+                content = rules.read_block(
+                    path.read_text(encoding="utf-8"), name)
+        elif path.is_file():
+            content = path.read_text(encoding="utf-8")
+        if content is None:
+            content = prior.get(m.get("path"))
+        stash.append({**m, "content": content})
+        if m.get("agent"):
+            affected.append(m["agent"])
+    # Persist the stash BEFORE removing anything. A crash mid-removal then
+    # leaves a lock that already says quarantined-with-stash — release still
+    # restores, and re-running quarantine finishes the removal. The reverse
+    # order could remove an artifact whose only copy died with the crash.
+    entry["quarantined"] = True
+    entry["quarantine_stash"] = stash
+    lockfile.set_entry(kind, name, entry)
+    for m in entry.get("materializations") or []:
+        path = Path(m.get("path", ""))
+        if m.get("mode") == rules.MODE_CLAUDE:
+            if path.exists():
                 text = path.read_text(encoding="utf-8")
-                content = rules.read_block(text, name)
-                if content is not None:
+                if rules.read_block(text, name) is not None:
                     stripped = rules.strip_block(text, name)
                     if stripped:
                         util.atomic_write_text(path, stripped)
                     else:
                         path.unlink()  # file held only our block
         elif path.is_file():
-            content = path.read_text(encoding="utf-8")
             path.unlink()
-        stash.append({**m, "content": content})
-        if m.get("agent"):
-            affected.append(m["agent"])
-    entry["quarantined"] = True
-    entry["quarantine_stash"] = stash
-    lockfile.set_entry(kind, name, entry)
     journal.log("quarantine", name)
     return affected
+
+
+def stale_quarantine_artifacts(name: str, entry: dict) -> bool:
+    """True when a quarantined rule/workflow still has artifacts on disk.
+
+    That is the signature of an interrupted quarantine (the stash persisted,
+    the removal pass did not finish) — re-running
+    :func:`quarantine_materialized` completes it without touching the stash.
+    """
+    from . import rules
+    for m in entry.get("materializations") or []:
+        p = Path(m.get("path", ""))
+        if m.get("mode") == rules.MODE_CLAUDE:
+            try:
+                if p.exists() and rules.read_block(
+                        p.read_text(encoding="utf-8"), name) is not None:
+                    return True
+            except OSError:
+                continue
+        elif p.is_file():
+            return True
+    return False
 
 
 def release_materialized(kind: str, name: str, entry: dict) -> List[str]:
@@ -1342,6 +1381,40 @@ def prune_out_of_scope_links(plan: Dict[str, list]) -> List[str]:
     return removed
 
 
+def _skill_source_sha(cat_entry: dict) -> Optional[str]:
+    """sha256 of a catalog entry's tap source directory, or None if unreadable."""
+    try:
+        return util.sha256_dir(source_dir_for(cat_entry))
+    except BoostError:
+        return None
+
+
+def _source_text_sha(tap_name: str, cat_entry: dict) -> Optional[str]:
+    """sha256 of a rule/workflow's tap source text, or None if unreadable."""
+    import hashlib
+    try:
+        src = registry.get(tap_name).path / cat_entry.get("skill_md", "")
+        return hashlib.sha256(src.read_text(
+            encoding="utf-8", errors="replace").encode("utf-8")).hexdigest()
+    except (OSError, BoostError):
+        return None
+
+
+def _pinned_repair_blocked(entry: dict, source_sha: Optional[str]) -> bool:
+    """True when repairing ``entry`` from its tap would bypass a pin.
+
+    sync repairs by re-installing from the tap's CURRENT content. For an
+    unpinned entry that is the point of `boost sync`; for a pinned one whose
+    source has moved it would be the covert update the pin exists to prevent —
+    the same guard the update loops apply, on the repair path. An unreadable
+    source fails closed: better to leave a pinned item broken and say so than
+    to guess.
+    """
+    if not entry.get("pinned"):
+        return False
+    return source_sha is None or source_sha != entry.get("sha256")
+
+
 def sync_apply(plan: Dict[str, list]) -> List[str]:
     """Fix what sync_plan found. Returns human-readable actions taken."""
     actions = []
@@ -1363,6 +1436,12 @@ def sync_apply(plan: Dict[str, list]) -> List[str]:
                 from . import catalog
                 matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
                 if matches:
+                    if _pinned_repair_blocked(entry, _skill_source_sha(matches[0])):
+                        actions.append(
+                            "%s is pinned and its tap source has moved — repair "
+                            "declined (unpin, or `boost reinstall %s` to accept "
+                            "the new content)" % (name, name))
+                        continue
                     install(matches[0], force=True)
                     actions.append("reinstalled missing %s from %s" % (name, tap_name))
                     restored = True
@@ -1381,6 +1460,13 @@ def sync_apply(plan: Dict[str, list]) -> List[str]:
                 matches = [e for e in catalog.find(name)
                            if e["tap"] == tap_name and e.get("kind", "skill") == kind]
                 if matches:
+                    if _pinned_repair_blocked(
+                            entry, _source_text_sha(tap_name, matches[0])):
+                        actions.append(
+                            "%s %s is pinned and its tap source has moved — "
+                            "repair declined (unpin, or `boost reinstall %s` to "
+                            "accept the new content)" % (kind, name, name))
+                        continue
                     # preserve the original scope/base so a project rule repairs
                     # into its repo, not wherever sync happens to run.
                     install(matches[0], force=True,

@@ -479,6 +479,14 @@ def cmd_quarantine(argv):
                         hint="see what is with `boost list`")
     kind, entry = found
     if entry.get("quarantined"):
+        # A quarantined entry whose artifacts are still on disk is an
+        # interrupted quarantine (stash persisted, removal did not finish) —
+        # finish it rather than reporting the half-armed state as done.
+        if kind != "skill" and store.stale_quarantine_artifacts(name, entry):
+            store.quarantine_materialized(kind, name, entry)
+            out.ok("finished an interrupted quarantine of %s %s"
+                   % (kind, name))
+            return 0
         out.warn("%s is already quarantined" % name)
         return 0
     if kind == "skill":
