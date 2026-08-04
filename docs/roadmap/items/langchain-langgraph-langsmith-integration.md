@@ -1,9 +1,10 @@
 ---
 id: langchain-langgraph-langsmith-integration
 board: code
-section: planned
-status: inflight
+section: compat
+status: shipped
 owner: loop/langchain-integration
+pr: 466
 category: Feature
 complexity: L
 impact: High

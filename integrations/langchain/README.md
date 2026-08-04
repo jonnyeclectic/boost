@@ -112,3 +112,29 @@ doc = SkillMarkdownLoader.from_installed("brainstorming").load()[0]
 doc.page_content        # the markdown body, frontmatter stripped
 doc.metadata            # frontmatter keys (name, version, tags, ...) + source
 ```
+
+## Observe: LangSmith tracing and the golden set
+
+`BoostRetriever` is a `langchain-core` `BaseRetriever`, so LangSmith
+instrumentation traces its calls automatically — enable tracing the standard
+way and every retrieval shows up with its query, documents, and the `engine`
+metadata that names which of boost's engines answered:
+
+```bash
+export LANGSMITH_TRACING=true
+export LANGSMITH_API_KEY=...
+```
+
+boost's offline retrieval gate floors recall@k / hit@1 / MRR / nDCG@k over a
+golden set on every merge. To run *online* evals against the same ground
+truth, publish that set as a LangSmith dataset (from a boost checkout —
+key-gated, opt-in, and re-running mirrors the file rather than accreting):
+
+```bash
+pip install 'boost-langchain[langsmith]'
+python integrations/langchain/scripts/publish_golden_dataset.py
+```
+
+None of this touches boost's required gate: a required check that depends on
+a SaaS account is a required check that fails when someone else's billing
+lapses.
