@@ -2,7 +2,8 @@
 id: langchain-langgraph-langsmith-integration
 board: code
 section: planned
-status: planned
+status: inflight
+owner: loop/langchain-integration
 category: Feature
 complexity: L
 impact: High
@@ -70,16 +71,25 @@ with Python versions: langchain majors move faster than boost does, and an extra
 into boost's own lock files, <code>licenses</code> job and <code>pip-audit</code> job — a real cost
 for a package whose value is being boring to install.
 
-<b>There is a dependency conflict boost already owns, and it blocks this.</b> The
-<code>[eval]</code> extra pins <code>langchain-core&lt;0.4</code>,
+<b>There is a dependency conflict boost already owns — and the unpin this card prescribed does
+not work yet.</b> The <code>[eval]</code> extra pins <code>langchain-core&lt;0.4</code>,
 <code>langchain-community&lt;0.4</code> and <code>langchain-openai&lt;1</code>, because ragas 0.2.x
-hard-imports a <code>ChatVertexAI</code> path that langchain ≥1.0 removed. One environment cannot
-hold both that pin and langchain 1.x. The good news is measured: <b>ragas 0.4.3 declares
-<code>langchain</code>, <code>langchain-core</code>, <code>langchain-community</code> and
-<code>langchain_openai</code> with no upper bound at all</b> (re-measured 2026-08-03). So the
-first step is small, independently valuable, and testable on its own — move <code>[eval]</code>
-from <code>ragas&gt;=0.2,&lt;0.3</code> to 0.4 and delete the three pins. Nothing else should be built
-until that lands, or the project holds two incompatible langchain majors.
+hard-imports a <code>ChatVertexAI</code> path that langchain ≥1.0 removed. This card originally
+made the unpin phase 0 and blocked everything on it, on the measurement that <b>ragas 0.4.3
+declares its langchain dependencies with no upper bound at all</b> (re-measured 2026-08-03,
+still true). That measured the <i>declared</i> bounds and not the imports: installed beside
+langchain 1.x (measured 2026-08-04), ragas 0.4.3's <code>llms/base.py</code> still does
+<code>from langchain_community.chat_models.vertexai import ChatVertexAI</code> — the path
+langchain-community 0.4.x deleted — so <code>import ragas</code> crashes. Upstream main already
+carries the removal (zero <code>ChatVertexAI</code> hits in the repo), so the unpin becomes a
+small follow-up the day ragas ships a release after 0.4.3.
+
+What actually dissolves the conflict is the packaging decision made above for other reasons:
+<code>boost-langchain</code> is a separately versioned distribution, so the langchain 1.x stack
+lives in its own environment and its own CI leg while <code>[eval]</code> keeps its 0.3-stack
+pins in its own. The two majors never co-install — pip refuses the combination loudly — and each
+surface tests against the stack it really runs on. "Nothing else should be built until the unpin
+lands" was wrong twice over: the unpin cannot land yet, and it was never the real gate.
 
 <b>The existing rules still apply.</b> Nothing in the integration may be imported by the CLI or by
 the required gate — the discipline <code>[eval]</code> already follows. It must degrade cleanly
@@ -87,11 +97,10 @@ without an API key, the way <code>embed.py</code> falls back Voyage → OpenAI �
 <code>bge-small-en-v1.5</code>; a key is a quality upgrade, never the entry fee. And it carries its
 own tests without lowering the 80% coverage or 80% mutation floors.
 
-<b>Delivery order.</b> Each phase is independently shippable, and phase 0 is worth doing on its own
-merits whatever happens to the rest.
+<b>Delivery order.</b> Each phase is independently shippable.
 
-<b>0 &middot; unpin.</b> Move <code>[eval]</code> to <code>ragas&gt;=0.4</code> and delete the three
-langchain pins, freeing the langchain major. Contained, testable, no new surface.
+<b>0 &middot; unpin.</b> Blocked upstream (see above): lands as its own small PR when ragas ships
+a release after 0.4.3. The distribution isolation makes it a cleanup, not a prerequisite.
 <b>1 &middot; retrieve.</b> A <code>boost-langchain</code> distribution carrying
 <code>BoostRetriever</code> and the <code>SKILL.md</code> loader — the smallest thing that makes the
 catalogue reachable from a LangChain app, and the one with measured retrieval quality behind it.
