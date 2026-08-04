@@ -12,6 +12,7 @@ import json
 import re
 import time
 from contextlib import suppress
+from pathlib import Path
 from typing import Any, Dict, List
 
 from .. import cliparse
@@ -31,8 +32,9 @@ from ..core import (
     util,
 )
 from ..core import output as out
+from ..core import rules as rules_mod
 from ..errors import BoostError
-from ._common import _iter_installed, _s
+from ._common import _iter_installed, _iter_installed_all, _s
 
 # --- audit: dangerous-content patterns ------------------------------------
 
@@ -106,19 +108,56 @@ def cmd_audit(argv):
                     add(name, "MED", "credential-exfil",
                         "%s:%d" % (rel, i), line.strip()[:90])
 
+    # Rules and workflows get the same content scan, over what is actually
+    # materialized — the CLAUDE.md block or rendered command file is the text
+    # the agent loads. One materialization per item suffices (every agent gets
+    # the same content, rendered); quarantined items have no active artifacts.
+    mat_scanned = 0
+    for kind, section in (("rule", lockfile.installed_rules()),
+                          ("workflow", lockfile.installed_workflows())):
+        for name, entry in sorted(section.items()):
+            if entry.get("quarantined"):
+                continue
+            mat_scanned += 1
+            if name in pol.get("blocked_skills", []):
+                add(name, "HIGH", "policy-blocked", "policy.json",
+                    "%s is on the policy blocklist" % kind)
+            for m in entry.get("materializations") or []:
+                path = Path(m.get("path", ""))
+                try:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                if m.get("mode") == rules_mod.MODE_CLAUDE:
+                    text = rules_mod.read_block(text, name) or ""
+                where = "%s %s" % (kind, path.name)
+                for pat, severity, label in _AUDIT_PATTERNS:
+                    for hit in pat.finditer(text):
+                        line_no = text.count("\n", 0, hit.start()) + 1
+                        line = text.splitlines()[line_no - 1].strip()
+                        add(name, severity, label,
+                            "%s:%d" % (where, line_no), line[:90])
+                for i, line in enumerate(text.splitlines(), 1):
+                    if _CRED_POST.search(line) and _CRED_HINT.search(line):
+                        add(name, "MED", "credential-exfil",
+                            "%s:%d" % (where, i), line.strip()[:90])
+                break  # identical content per agent — one scan is the signal
+
     counts = {"HIGH": 0, "MED": 0, "LOW": 0}
     for fs in findings.values():
         for f in fs:
             counts[f["severity"]] += 1
 
+    scanned = len(installed) + mat_scanned
     if args.json:
         print(json.dumps({"skills_scanned": len(installed),
+                          "materialized_scanned": mat_scanned,
                           "findings": findings, "counts": counts}))
         return 1 if counts["HIGH"] or counts["MED"] else 0
 
-    out.heading("safety audit — %d skill%s" % (len(installed), _s(len(installed))))
+    out.heading("safety audit — %d item%s" % (scanned, _s(scanned)))
     if not findings:
-        out.ok("no safety findings across %d skills" % len(installed))
+        out.ok("no safety findings across %d item%s" % (scanned, _s(scanned)))
         return 0
     for name in sorted(findings):
         print("  " + out.c(name, out.BOLD))
@@ -126,9 +165,9 @@ def cmd_audit(argv):
             print("    %s %s  %s  %s"
                   % (out.role(f["severity"].ljust(4), _SEV_ROLE[f["severity"]]),
                      f["label"], out.role(f["file"], "muted"), f["snippet"]))
-    out.info("%d high · %d medium · %d low across %d skill%s"
+    out.info("%d high · %d medium · %d low across %d item%s"
              % (counts["HIGH"], counts["MED"], counts["LOW"],
-                len(installed), _s(len(installed))))
+                scanned, _s(scanned)))
     return 1 if counts["HIGH"] or counts["MED"] else 0
 
 
@@ -288,32 +327,42 @@ def cmd_verify(argv):
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
-    # A named skill may be installed at user OR project scope. Validate against
+    # A named item may be installed at user OR project scope. Validate against
     # both up front so `boost verify <vendored-skill>` doesn't wrongly error
-    # "not installed", and only hand user-scope names to _iter_installed.
+    # "not installed", and only hand user-scope names to the iterator. User
+    # scope resolves through find_any: an installed rule or workflow is
+    # exactly as verifiable as a skill, and "not installed" for one was the
+    # roadmap card's headline lie.
     pbase, pskills = integrity.project_skills()
     if args.names:
         unknown = [n for n in args.names
-                   if n not in lockfile.installed() and n not in pskills]
+                   if lockfile.find_any(n) is None and n not in pskills]
         if unknown:
             raise BoostError("not installed: %s" % ", ".join(unknown),
                             hint="see what is with `boost list`")
-    user_names = [n for n in (args.names or []) if n in lockfile.installed()]
+    user_names = [n for n in (args.names or [])
+                  if lockfile.find_any(n) is not None]
 
     results: List[Dict[str, Any]] = []
-    for name, entry in _iter_installed(user_names or (None if not args.names else [])):
+    for kind, name, entry in _iter_installed_all(
+            user_names or (None if not args.names else [])):
         missing_fields = [f for f in ("version", "tap", "sha256", "installed_at")
                           if not entry.get(f)]
         # Digest check lives in core.integrity now (the same call the read
         # commands enforce with), so verify reports exactly what enforcement
         # acts on. An UNLOCKED entry has no digest to compare — surface it as a
         # missing field rather than a false "ok".
-        status = integrity.status(name, entry)
-        if status == integrity.STATUS_UNLOCKED and "sha256" not in missing_fields:
-            missing_fields.append("sha256")
+        if kind == "skill":
+            status = integrity.status(name, entry)
+            if status == integrity.STATUS_UNLOCKED and "sha256" not in missing_fields:
+                missing_fields.append("sha256")
+        else:
+            status = integrity.materialized_status(name, entry)
+            if status == integrity.STATUS_UNLOCKED:
+                missing_fields.append("materialization sha256")
         commit_pin = integrity.commit_status(name, entry)
-        results.append({"name": name, "status": status, "scope": "user",
-                        "missing_fields": missing_fields,
+        results.append({"name": name, "kind": kind, "status": status,
+                        "scope": "user", "missing_fields": missing_fields,
                         "commit_pin": commit_pin})
 
     # Vendored, project-scoped skills live in the repo's own lock, not the user's
@@ -330,20 +379,23 @@ def cmd_verify(argv):
         results.append({"name": name, "status": status, "scope": "project",
                         "missing_fields": missing_fields, "commit_pin": None})
 
-    bad = [r for r in results if r["status"] != "ok" or r["missing_fields"]
+    bad = [r for r in results
+           if r["status"] not in ("ok", "quarantined") or r["missing_fields"]
            or r["commit_pin"] == integrity.STATUS_MODIFIED]
     if args.json:
         print(json.dumps({"skills": results, "failed": len(bad)}))
         return 1 if bad else 0
 
     if not results:
-        out.info("no skills installed")
+        out.info("nothing installed")
         return 0
     width = max(len(r["name"]) for r in results)
     status_role = {"ok": "success", "modified": "warn", "missing": "danger",
-                   "unlocked": "warn"}
+                   "unlocked": "warn", "quarantined": "muted"}
     for r in results:
         bits = []
+        if r.get("kind") not in (None, "skill"):
+            bits.append(r["kind"])
         if r.get("scope") == "project":
             bits.append("project")
         if r["missing_fields"]:
@@ -357,7 +409,7 @@ def cmd_verify(argv):
                               out.role(r["status"], status_role.get(r["status"], "warn")),
                               out.role(note, "muted")))
     if bad:
-        out.warn("%d of %d skill%s failed verification"
+        out.warn("%d of %d item%s failed verification"
                  % (len(bad), len(results), _s(len(results))))
         return 1
     out.ok("lock file integrity OK")
@@ -454,25 +506,31 @@ def cmd_attest(argv):
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
-    targets = _iter_installed([args.name] if args.name else None)
+    targets = _iter_installed_all([args.name] if args.name else None)
     first_install: dict = {}
     for e in journal.events():  # most-recent-first; oldest wins by overwrite
         if e.get("action") in ("install", "import") and e.get("subject"):
             first_install[e["subject"]] = e
 
     records, failures = [], 0
-    for name, entry in targets:
+    for kind, name, entry in targets:
         ev = first_install.get(name)
-        rec = {"name": name,
+        rec = {"name": name, "kind": kind,
                "who": (ev or {}).get("user", "?"),
                "when": entry.get("installed_at", "?"),
                "tap": entry.get("tap", "?"),
                "commit": (entry.get("commit") or "")[:9],
                "sha256": (entry.get("sha256") or "")[:12]}
         if args.verify:
-            sdir = store.skill_store_dir(name)
-            rec["sha_ok"] = (sdir.is_dir()
-                             and util.sha256_dir(sdir) == entry.get("sha256"))
+            if kind == "skill":
+                sdir = store.skill_store_dir(name)
+                rec["sha_ok"] = (sdir.is_dir()
+                                 and util.sha256_dir(sdir) == entry.get("sha256"))
+            else:
+                # The artifact the agent loads, against the hash recorded when
+                # it was written. UNLOCKED (a pre-hash entry) never fails.
+                rec["sha_ok"] = integrity.materialized_status(name, entry) not in (
+                    integrity.STATUS_MODIFIED, integrity.STATUS_MISSING)
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
                 failures += 1
@@ -484,13 +542,19 @@ def cmd_attest(argv):
     if not records:
         out.info("no skills installed")
         return 0
-    out.table([(r["name"], r["who"], util.rel_time(r["when"]), r["tap"],
-                r["commit"] or "-", r["sha256"]) for r in records],
-              headers=("SKILL", "WHO", "WHEN", "TAP", "COMMIT", "SHA"))
+    # Kind folds into the name cell only when it is not a skill, so the
+    # everyday all-skills table keeps its width and nothing truncates.
+    out.table([(r["name"] if r["kind"] == "skill"
+                else "%s (%s)" % (r["name"], r["kind"]),
+                r["who"], util.rel_time(r["when"]),
+                r["tap"], r["commit"] or "-", r["sha256"]) for r in records],
+              headers=("NAME", "WHO", "WHEN", "TAP", "COMMIT", "SHA"))
     if args.verify:
         for r in records:
             if not r["sha_ok"]:
-                out.warn("%s: store content no longer matches the lock sha" % r["name"])
+                out.warn("%s: %s content no longer matches the lock sha"
+                         % (r["name"], "store" if r["kind"] == "skill"
+                            else "materialized"))
             elif not r["journal"]:
                 out.warn("%s: no journal record (installed before journaling?)" % r["name"])
             else:

@@ -31,6 +31,7 @@ STATUS_OK = "ok"
 STATUS_MODIFIED = "modified"     # on-disk content no longer matches the lock
 STATUS_MISSING = "missing"       # lock says installed, but the store dir is gone
 STATUS_UNLOCKED = "unlocked"     # present on disk but no lock digest to check
+STATUS_QUARANTINED = "quarantined"  # artifacts removed on purpose; stash holds them
 
 ENFORCE_KEY = "security.enforce_digest"
 COMMIT_KEY = "security.enforce_commit"
@@ -60,6 +61,45 @@ def status(name: str, entry: Optional[dict] = None) -> str:
     if not recorded:
         return STATUS_UNLOCKED
     return STATUS_OK if util.sha256_dir(sdir) == recorded else STATUS_MODIFIED
+
+
+def materialized_status(name: str, entry: dict) -> str:
+    """Classify a rule/workflow's integrity against its lock entry.
+
+    A materialized kind has no store dir — the artifacts it wrote (a CLAUDE.md
+    managed block, a rendered command file) are the content the agent actually
+    loads, so that is what gets checked: every recorded materialization must
+    still be present and hash to the ``sha256`` recorded when it was written.
+    An entry from before per-materialization hashes existed has nothing to
+    compare — ``UNLOCKED``, not a failure. Quarantine removes the artifacts on
+    purpose, so it short-circuits before "missing" can lie about it.
+    """
+    import hashlib
+
+    from . import rules
+    if entry.get("quarantined"):
+        return STATUS_QUARANTINED
+    unlocked = False
+    for m in entry.get("materializations") or []:
+        p = Path(m.get("path", ""))
+        if m.get("mode") == rules.MODE_CLAUDE:
+            try:
+                content = rules.read_block(p.read_text(encoding="utf-8"), name)
+            except OSError:
+                content = None
+        else:
+            try:
+                content = p.read_text(encoding="utf-8")
+            except OSError:
+                content = None
+        if content is None:
+            return STATUS_MISSING
+        recorded = m.get("sha256")
+        if not recorded:
+            unlocked = True
+        elif hashlib.sha256(content.encode("utf-8")).hexdigest() != recorded:
+            return STATUS_MODIFIED
+    return STATUS_UNLOCKED if unlocked else STATUS_OK
 
 
 def project_status(entry: dict, base) -> str:

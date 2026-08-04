@@ -807,9 +807,15 @@ def _install_rule(entry: dict, force: bool = False,
         if mode == rules.MODE_CLAUDE:
             current = path.read_text(encoding="utf-8") if path.exists() else ""
             util.atomic_write_text(path, rules.merge_block(current, name, claude_body))
+            # Hash what `rules.read_block` will read back (the stripped body),
+            # so `boost verify` can tell an edited managed block from ours.
+            written = claude_body.strip("\n")
         else:
             util.atomic_write_text(path, raw)
-        materializations.append({"agent": agent, "mode": mode, "path": str(path)})
+            written = raw
+        materializations.append({
+            "agent": agent, "mode": mode, "path": str(path),
+            "sha256": hashlib.sha256(written.encode("utf-8")).hexdigest()})
         linked.append(agent)
 
     # Carry forward the agents this run did not touch — the same reason the
@@ -994,8 +1000,11 @@ def _install_workflow(entry: dict, force: bool = False,
         if resolved_base is not None:
             scopes.ensure_in_base(resolved_base, path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        util.atomic_write_text(path, workflows.render(agent, slot, name, raw))
-        materializations.append({"agent": agent, "slot": slot, "path": str(path)})
+        rendered = workflows.render(agent, slot, name, raw)
+        util.atomic_write_text(path, rendered)
+        materializations.append({
+            "agent": agent, "slot": slot, "path": str(path),
+            "sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest()})
         linked.append(agent)
 
     # As for rules: an unrecorded materialization is a live slash command that

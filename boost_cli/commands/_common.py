@@ -18,12 +18,52 @@ def _s(n: int) -> str:
 
 
 def _iter_installed(names: Optional[List[str]] = None) -> List[Tuple[str, dict]]:
-    """[(name, lock_entry)] — all installed, or the given names (validated)."""
+    """[(name, lock_entry)] — all installed skills, or the given names.
+
+    A named item that exists in another lock section is declined with the
+    truth ("X is a rule — this command applies to skills") instead of the
+    "not installed" every skill-only accessor used to answer — the user can
+    see it in `boost list`, so denying it exists reads as data loss.
+    """
     skills = lockfile.installed()
     if names:
-        missing = [n for n in names if n not in skills]
+        missing, other_kind = [], []
+        for n in names:
+            if n in skills:
+                continue
+            found = lockfile.find_any(n)
+            if found is not None:
+                other_kind.append((n, found[0]))
+            else:
+                missing.append(n)
+        if other_kind:
+            raise BoostError(
+                "; ".join("%s is a %s — this command applies to skills"
+                          % (n, kind) for n, kind in other_kind),
+                hint="rules and workflows are governed by pin / quarantine / "
+                     "verify / update")
         if missing:
             raise BoostError("not installed: %s" % ", ".join(missing),
                             hint="see what is with `boost list`")
         return [(n, skills[n]) for n in names]
     return sorted(skills.items())
+
+
+def _iter_installed_all(
+        names: Optional[List[str]] = None) -> List[Tuple[str, str, dict]]:
+    """[(kind, name, lock_entry)] across every section, or the given names."""
+    if names:
+        out, missing = [], []
+        for n in names:
+            found = lockfile.find_any(n)
+            if found is None:
+                missing.append(n)
+            else:
+                out.append((found[0], n, found[1]))
+        if missing:
+            raise BoostError("not installed: %s" % ", ".join(missing),
+                            hint="see what is with `boost list`")
+        return out
+    return [(kind, n, e)
+            for kind, section in lockfile.all_installed().items()
+            for n, e in sorted(section.items())]
