@@ -12,7 +12,6 @@ import shutil
 import subprocess
 import urllib.error
 import urllib.request
-from typing import Optional
 
 from . import config, logs, nethttp
 
@@ -47,8 +46,8 @@ def fallback_note() -> str:
             "— using the heuristic fallback")
 
 
-def ask(prompt: str, system: Optional[str] = None, model: Optional[str] = None,
-        max_tokens: int = 1500, timeout: int = 120) -> Optional[str]:
+def ask(prompt: str, system: str | None = None, model: str | None = None,
+        max_tokens: int = 1500, timeout: int = 120) -> str | None:
     """Ask Claude. Returns the text reply, or None if AI is unavailable/fails."""
     if not enabled():
         return None
@@ -62,8 +61,8 @@ def ask(prompt: str, system: Optional[str] = None, model: Optional[str] = None,
     return None
 
 
-def ask_author(prompt: str, system: Optional[str] = None,
-               max_tokens: int = 4000) -> Optional[str]:
+def ask_author(prompt: str, system: str | None = None,
+               max_tokens: int = 4000) -> str | None:
     """Authoring-grade call (infer/distill/evolve) using the bigger model."""
     return ask(prompt, system=system, model=str(config.get("ai.author_model")),
                max_tokens=max_tokens, timeout=240)
@@ -81,14 +80,14 @@ def _log_failure(route: str, reason: str) -> None:
     logs.get_logger().debug("ai: %s call failed: %s", route, reason)
 
 
-def _stderr_excerpt(text: Optional[str]) -> str:
+def _stderr_excerpt(text: str | None) -> str:
     """Collapse a subprocess' stderr to one bounded line fit for the log."""
     s = " ".join((text or "").split())
     return (s[:STDERR_LOG_CHARS] + "...") if len(s) > STDERR_LOG_CHARS else s
 
 
-def _ask_cli(prompt: str, system: Optional[str], model: str,
-             timeout: int) -> Optional[str]:
+def _ask_cli(prompt: str, system: str | None, model: str,
+             timeout: int) -> str | None:
     cmd = ["claude", "-p", "--model", model, "--output-format", "text"]
     if system:
         cmd += ["--append-system-prompt", system]
@@ -111,8 +110,8 @@ def _ask_cli(prompt: str, system: Optional[str], model: str,
     return out
 
 
-def _ask_api(prompt: str, system: Optional[str], model: str,
-             max_tokens: int, timeout: int) -> Optional[str]:
+def _ask_api(prompt: str, system: str | None, model: str,
+             max_tokens: int, timeout: int) -> str | None:
     body = {
         "model": model,
         "max_tokens": max_tokens,

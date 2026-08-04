@@ -29,7 +29,6 @@ explanation looks fabricated.
 from __future__ import annotations
 
 import re
-from typing import List, Set
 
 # Terms a faithful summary can only have gotten from the source. Ordered as they
 # are searched; each capture group is the term itself.
@@ -46,13 +45,13 @@ _STOP_ACRONYMS = {"A", "I", "AN", "THE", "AND", "OR", "IF", "IT", "IS", "TO",
                   "OK", "NO", "YES", "ON", "OFF", "AI"}
 
 
-def salient_terms(s: str) -> Set[str]:
+def salient_terms(s: str) -> set[str]:
     """The set of checkable, source-derived terms in ``s`` (lower-cased).
 
     Backtick spans are split on whitespace so `boost install x` contributes
     three terms, not one — each is grounded independently.
     """
-    out: Set[str] = set()
+    out: set[str] = set()
     for m in _BACKTICK.findall(s):
         for tok in m.split():
             tok = tok.strip("`.,:;()[]{}\"'")
@@ -66,7 +65,7 @@ def salient_terms(s: str) -> Set[str]:
     return out
 
 
-def _source_vocab(source: str) -> Set[str]:
+def _source_vocab(source: str) -> set[str]:
     """Every salient term the source contains, plus its plain word vocabulary.
 
     A summary term counts as grounded if it appears anywhere in the source —
@@ -96,7 +95,7 @@ def score(summary: str, source: str) -> float:
     return grounded / len(terms)
 
 
-def _is_grounded(term: str, vocab: Set[str]) -> bool:
+def _is_grounded(term: str, vocab: set[str]) -> bool:
     """A term is grounded if the source vocab contains it, or a token of it.
 
     Handles ``boost-install`` vs a source that writes ``boost install``: the
@@ -109,7 +108,7 @@ def _is_grounded(term: str, vocab: Set[str]) -> bool:
     return bool(parts) and all(p in vocab for p in parts)
 
 
-def ungrounded_terms(summary: str, source: str) -> List[str]:
+def ungrounded_terms(summary: str, source: str) -> list[str]:
     """The salient terms in ``summary`` absent from ``source`` — for the caveat."""
     vocab = _source_vocab(source)
     return sorted(t for t in salient_terms(summary) if not _is_grounded(t, vocab))

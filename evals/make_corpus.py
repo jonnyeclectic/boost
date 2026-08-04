@@ -27,7 +27,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 # The corpus directory name becomes the tap name, and boost names a root-level
@@ -47,9 +46,9 @@ GIT_EPOCH = "2024-01-01T00:00:00+00:00"
 # (name, description, tags, body). The body is the searchable text: BM25 indexes
 # the whole thing, so the vocabulary here is what the golden queries have to hit.
 
-Item = Tuple[str, str, List[str], str]
+Item = tuple[str, str, list[str], str]
 
-SKILLS: Tuple[Item, ...] = (
+SKILLS: tuple[Item, ...] = (
     # ---- testing ----------------------------------------------------------
     ("unit-test-authoring",
      "Write focused unit tests with arrange-act-assert structure",
@@ -577,7 +576,7 @@ Measure onboarding by time to first merged change, not by documents read.
 # Rules (.mdc / .cursorrules) and workflows (commands/, agents/) — boost indexes
 # all three kinds out of one tap, so the corpus carries the other two as ranking
 # pressure. The golden set grades skills only.
-RULES: Tuple[Tuple[str, str], ...] = (
+RULES: tuple[tuple[str, str], ...] = (
     ("rules/python-style.mdc", """---
 description: Python formatting and idiom rules
 globs: ["**/*.py"]
@@ -610,7 +609,7 @@ globs: ["**/*.tsx"]
 """),
 )
 
-WORKFLOWS: Tuple[Tuple[str, str], ...] = (
+WORKFLOWS: tuple[tuple[str, str], ...] = (
     ("commands/ship-it.md", """---
 description: Run the full gate and open a pull request
 ---
@@ -641,7 +640,7 @@ Produce a short orientation note a new engineer can follow to a first change.
 
 # --------------------------------------------------------------- generation
 
-def _fixture_skills() -> Dict[str, str]:
+def _fixture_skills() -> dict[str, str]:
     """The five skills from tests/make_fixture.py, as full SKILL.md text.
 
     Imported rather than retyped so the fixture tap remains the single source of
@@ -657,13 +656,13 @@ def _fixture_skills() -> Dict[str, str]:
             for name, spec_d in mod.SKILLS.items()}
 
 
-def skill_md(name: str, description: str, tags: List[str], body: str) -> str:
+def skill_md(name: str, description: str, tags: list[str], body: str) -> str:
     return ("---\nname: %s\ndescription: %s\nversion: 1.0.0\ntags: [%s]\n---\n\n"
             "# %s\n%s" % (name, description, ", ".join(tags),
                           name.replace("-", " ").title(), body))
 
 
-def skill_names() -> List[str]:
+def skill_names() -> list[str]:
     """Every skill id in the corpus — what the golden set is allowed to cite."""
     return sorted(list(_fixture_skills()) + [s[0] for s in SKILLS])
 

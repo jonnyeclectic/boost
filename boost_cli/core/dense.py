@@ -16,7 +16,6 @@ import base64
 import json
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 from . import catalog, embed, paths
 from .rag import Hit, chunk, entry_key, read_body
@@ -45,7 +44,7 @@ def db_path() -> Path:
     return paths.cache_dir() / "rag_vectors.sqlite"
 
 
-def _connect() -> Optional[sqlite3.Connection]:
+def _connect() -> sqlite3.Connection | None:
     """Open the vector DB with the sqlite-vec extension loaded, or None."""
     mod = _load()
     if mod is None:
@@ -73,12 +72,12 @@ def _ensure_schema(con: sqlite3.Connection, dim: int) -> None:
         "vec0(embedding float[%d] distance_metric=cosine)" % dim)
 
 
-def _read_meta(con: sqlite3.Connection) -> Dict[str, object]:
+def _read_meta(con: sqlite3.Connection) -> dict[str, object]:
     try:
         rows = con.execute("SELECT k, v FROM meta").fetchall()
     except sqlite3.OperationalError:
         return {}
-    out: Dict[str, object] = {}
+    out: dict[str, object] = {}
     for k, v in rows:
         try:
             out[k] = json.loads(v)
@@ -87,7 +86,7 @@ def _read_meta(con: sqlite3.Connection) -> Dict[str, object]:
     return out
 
 
-def _write_meta(con: sqlite3.Connection, meta: Dict[str, object]) -> None:
+def _write_meta(con: sqlite3.Connection, meta: dict[str, object]) -> None:
     con.executemany("INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)",
                     [(k, json.dumps(v)) for k, v in meta.items()])
 
@@ -97,8 +96,8 @@ def _wipe(con: sqlite3.Connection) -> None:
     con.execute("DROP TABLE IF EXISTS vec_chunks")
 
 
-def _chunk_texts(entry: dict, tap_paths: Optional[Dict[str, Path]]
-                 ) -> List[str]:
+def _chunk_texts(entry: dict, tap_paths: dict[str, Path] | None
+                 ) -> list[str]:
     body = read_body(entry, tap_paths)
     return chunk(body) or [body]
 
@@ -160,7 +159,7 @@ _FIX = {
 }
 
 
-def fix_hint(reason: str, status: Optional[dict] = None) -> str:
+def fix_hint(reason: str, status: dict | None = None) -> str:
     """The single next action for a `status()` reason, or a safe default.
 
     Pass the whole ``status()`` dict when you have one. The reason alone is
@@ -222,7 +221,7 @@ def status() -> dict:
     # Order matters: report the *first* missing link, so the message names the
     # next action rather than a downstream symptom of the same gap.
     if not have_be:
-        reason: Optional[str] = "no-backend"
+        reason: str | None = "no-backend"
     elif prov is None:
         reason = "no-key"
     elif not store_exists:
@@ -292,8 +291,8 @@ def ready() -> bool:
         con.close()
 
 
-def build(entries: Optional[List[dict]] = None,
-          force: bool = False) -> Optional[dict]:
+def build(entries: list[dict] | None = None,
+          force: bool = False) -> dict | None:
     """(Re)embed and store chunk vectors, reusing unchanged taps.
 
     Returns stats, or ``None`` if the backend or an embeddings provider is
@@ -427,7 +426,7 @@ def export_shard(tap: str) -> dict:
         con.close()
 
 
-def import_shard(shard: dict, commit: str) -> Tuple[bool, str]:
+def import_shard(shard: dict, commit: str) -> tuple[bool, str]:
     """Merge a prebuilt shard into this machine's store. ``(ok, reason)``.
 
     Refuses rather than degrades. A vector is only meaningful against others
@@ -493,7 +492,7 @@ def _indexed_taps(con: sqlite3.Connection) -> set:
         return set()          # no chunks table yet — nothing indexed, nothing stale
 
 
-def _delete_taps(con: sqlite3.Connection, taps: List[str]) -> None:
+def _delete_taps(con: sqlite3.Connection, taps: list[str]) -> None:
     for tap in taps:
         ids = [r[0] for r in
                con.execute("SELECT id FROM chunks WHERE tap = ?", (tap,))]
@@ -502,9 +501,9 @@ def _delete_taps(con: sqlite3.Connection, taps: List[str]) -> None:
         con.execute("DELETE FROM chunks WHERE tap = ?", (tap,))
 
 
-def _embed_and_store(con: sqlite3.Connection, entries: List[dict],
-                     tap_paths: Optional[Dict[str, Path]]
-                     ) -> Tuple[int, set]:
+def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
+                     tap_paths: dict[str, Path] | None
+                     ) -> tuple[int, set]:
     """Embed every chunk of ``entries``; returns ``(added, failed_taps)``.
 
     A batch the provider rejects (rate limit, quota, oversized input) yields no
@@ -517,7 +516,7 @@ def _embed_and_store(con: sqlite3.Connection, entries: List[dict],
         # them built with zero vectors stored is what leaves the store
         # permanently empty. (callers fall back to BM25; see module docstring)
         return 0, {e["tap"] for e in entries}
-    rows: List[Tuple[dict, int, str]] = []   # (entry, chunk_ix, text)
+    rows: list[tuple[dict, int, str]] = []   # (entry, chunk_ix, text)
     for e in entries:
         for ci, text in enumerate(_chunk_texts(e, tap_paths)):
             rows.append((e, ci, text))
@@ -541,8 +540,8 @@ def _embed_and_store(con: sqlite3.Connection, entries: List[dict],
     return added, failed_taps
 
 
-def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
-             entries: Optional[List[dict]] = None) -> Optional[List[Hit]]:
+def retrieve(query: str, k: int = 60, kind: str | None = None,
+             entries: list[dict] | None = None) -> list[Hit] | None:
     """Top-k dense hits for ``query``, or None to signal 'fall back to BM25'."""
     if not ready():
         return None
@@ -577,7 +576,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
 
     entries = catalog.all_entries() if entries is None else entries
     live = {entry_key(e): e for e in entries}
-    best: Dict[Tuple[str, str], Tuple[float, str]] = {}
+    best: dict[tuple[str, str], tuple[float, str]] = {}
     for rid, dist in knn:
         meta = by_id.get(rid)
         if meta is None:
@@ -595,7 +594,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     # Tie-break on the displayed name (see rag.retrieve for why).
     ranked = sorted(best.items(),
                     key=lambda kv: (-kv[1][0], live[kv[0]]["name"], kv[0]))
-    hits: List[Hit] = [
+    hits: list[Hit] = [
         {"entry": live[key], "score": score,
          "snippet": snip}  # type: ignore[typeddict-item]
         for key, (score, snip) in ranked[:k]]

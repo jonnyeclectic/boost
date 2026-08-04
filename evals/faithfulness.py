@@ -40,7 +40,6 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -77,7 +76,7 @@ VERIFY_SYSTEM = (
 
 # ------------------------------------------------------------ ragas steps
 
-def extract_statements(answer: str) -> Optional[List[str]]:
+def extract_statements(answer: str) -> list[str] | None:
     """Ragas step 1: break the generated answer into atomic claims."""
     from boost_cli.core import ai
     reply = ai.ask(
@@ -91,7 +90,7 @@ def extract_statements(answer: str) -> Optional[List[str]]:
     return [str(s).strip() for s in data if str(s).strip()]
 
 
-def verify_statements(statements: List[str], context: str) -> Optional[List[dict]]:
+def verify_statements(statements: list[str], context: str) -> list[dict] | None:
     """Ragas step 2: judge each claim as supported or not by the context."""
     from boost_cli.core import ai
     numbered = "\n".join("%d. %s" % (i + 1, s) for i, s in enumerate(statements))
@@ -104,14 +103,14 @@ def verify_statements(statements: List[str], context: str) -> Optional[List[dict
     data = _json_value(reply)
     if not isinstance(data, list):
         return None
-    out: List[dict] = [{"statement": str(item.get("statement", "")),
+    out: list[dict] = [{"statement": str(item.get("statement", "")),
                         "supported": bool(item.get("supported")),
                         "reason": str(item.get("reason", ""))}
                        for item in data if isinstance(item, dict)]
     return out or None
 
 
-def score_sample(answer: str, context: str) -> Optional[dict]:
+def score_sample(answer: str, context: str) -> dict | None:
     """Faithfulness for one (answer, context) pair: supported / extracted statements.
 
     The denominator is the number of statements *extracted*, never the number of
@@ -139,7 +138,7 @@ def score_sample(answer: str, context: str) -> Optional[dict]:
                             if not v["supported"]]}
 
 
-def _json_value(text: Optional[str]):
+def _json_value(text: str | None):
     """Parse the first JSON array in a reply, tolerating prose or a code fence."""
     if not text:
         return None
@@ -154,7 +153,7 @@ def _json_value(text: Optional[str]):
 
 # ------------------------------------------------------------- generation
 
-def _skill_md(name: str) -> Optional[str]:
+def _skill_md(name: str) -> str | None:
     """The SKILL.md text for a corpus skill, read through the live catalog."""
     from boost_cli.core import catalog, registry
     entry = next((e for e in catalog.all_entries() if e["name"] == name), None)
@@ -167,7 +166,7 @@ def _skill_md(name: str) -> Optional[str]:
     return p.read_text(encoding="utf-8") if p.exists() else None
 
 
-def generate_explain(name: str) -> Optional[Tuple[str, str]]:
+def generate_explain(name: str) -> tuple[str, str] | None:
     """(answer, context) for `boost explain <name>` — the raw model reply.
 
     This is the *pre-guardrail* generation. `cmd_explain` only prints it when it
@@ -206,7 +205,7 @@ def guardrail_verdict(answer: str, context: str) -> dict:
             "would_be_shown": score >= threshold}
 
 
-def generate_distill(names: Tuple[str, ...]) -> Optional[Tuple[str, str]]:
+def generate_distill(names: tuple[str, ...]) -> tuple[str, str] | None:
     """(answer, context) for `boost distill <a> <b>` — context is both sources."""
     from boost_cli.core import ai
     texts = [(n, _skill_md(n)) for n in names]
@@ -250,8 +249,8 @@ def run(scorer: str = "builtin") -> dict:
     if scorer == "ragas":
         return _run_ragas()
 
-    samples: List[dict] = []
-    skipped: List[str] = []
+    samples: list[dict] = []
+    skipped: list[str] = []
     for name in EXPLAIN_TARGETS:
         gen = generate_explain(name)
         if gen is None:
@@ -351,7 +350,7 @@ def _run_ragas() -> dict:
             "skipped": skipped}
 
 
-def report(data: Dict[str, object]) -> None:
+def report(data: dict[str, object]) -> None:
     """Print the faithfulness block of the run report."""
     print("\n=== Tier 2: faithfulness (Ragas methodology, scorer=%s) ==="
           % data.get("scorer", "?"))

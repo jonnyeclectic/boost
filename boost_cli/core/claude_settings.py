@@ -23,7 +23,6 @@ from __future__ import annotations
 import contextlib
 import json
 from pathlib import Path
-from typing import List, Optional
 
 from ..errors import BoostError
 from . import paths, util
@@ -39,7 +38,7 @@ KNOWN_EVENTS = (
 )
 
 
-def settings_path(scope: str, project_dir: Optional[Path] = None) -> Path:
+def settings_path(scope: str, project_dir: Path | None = None) -> Path:
     """Absolute path to the settings.json for a scope."""
     if scope == "global":
         return paths.home() / ".claude" / "settings.json"
@@ -54,7 +53,7 @@ def _history_dir() -> Path:
     return paths.state_dir() / "claude-settings-history"
 
 
-def load(scope: str, project_dir: Optional[Path] = None) -> dict:
+def load(scope: str, project_dir: Path | None = None) -> dict:
     """Parse a scope's settings.json ({} if missing or corrupt)."""
     p = settings_path(scope, project_dir)
     if not p.exists():
@@ -66,7 +65,7 @@ def load(scope: str, project_dir: Optional[Path] = None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def save(scope: str, data: dict, project_dir: Optional[Path] = None) -> None:
+def save(scope: str, data: dict, project_dir: Path | None = None) -> None:
     """Write a scope's settings.json, snapshotting the prior version first."""
     p = settings_path(scope, project_dir)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -98,7 +97,7 @@ def _tag(command: str, name: str) -> str:
     return "%s %s%s" % (command, MARKER, name)
 
 
-def _hook_name(command: str) -> Optional[str]:
+def _hook_name(command: str) -> str | None:
     """The boost name embedded in a command string, or None if unmanaged."""
     if MARKER not in command:
         return None
@@ -108,8 +107,8 @@ def _hook_name(command: str) -> Optional[str]:
 # ------------------------------------------------------------------ hook CRUD
 
 def add_hook(scope: str, event: str, name: str, command: str,
-             matcher: Optional[str] = None, timeout: int = 10,
-             project_dir: Optional[Path] = None) -> None:
+             matcher: str | None = None, timeout: int = 10,
+             project_dir: Path | None = None) -> None:
     """Idempotently install a boost-managed hook (replaces same-named entry)."""
     data = load(scope, project_dir)
     event_list = data.setdefault("hooks", {}).setdefault(event, [])
@@ -128,7 +127,7 @@ def add_hook(scope: str, event: str, name: str, command: str,
 
 
 def remove_hook(scope: str, event: str, name: str,
-                project_dir: Optional[Path] = None) -> int:
+                project_dir: Path | None = None) -> int:
     """Remove boost-managed hooks matching name; return how many were removed."""
     data = load(scope, project_dir)
     hooks = data.get("hooks")
@@ -166,7 +165,7 @@ def _strip(event_list: list, name: str) -> int:
 
 
 def has_hook(scope: str, event: str, name: str,
-             project_dir: Optional[Path] = None) -> bool:
+             project_dir: Path | None = None) -> bool:
     data = load(scope, project_dir)
     for block in data.get("hooks", {}).get(event, []) or []:
         for h in (block.get("hooks") or []) if isinstance(block, dict) else []:
@@ -175,11 +174,11 @@ def has_hook(scope: str, event: str, name: str,
     return False
 
 
-def list_hooks(scope: Optional[str] = None,
-               project_dir: Optional[Path] = None) -> List[dict]:
+def list_hooks(scope: str | None = None,
+               project_dir: Path | None = None) -> list[dict]:
     """All boost-managed hooks: [{scope, event, name, command, matcher}]."""
     scopes = (scope,) if scope else SCOPES
-    rows: List[dict] = []
+    rows: list[dict] = []
     for sc in scopes:
         data = load(sc, project_dir)
         for event, blocks in (data.get("hooks") or {}).items():

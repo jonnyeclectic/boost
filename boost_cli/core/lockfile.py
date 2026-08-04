@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import shutil
 from contextlib import suppress
-from typing import Dict, List, Optional, Tuple
 
 from . import paths, util
 
@@ -22,7 +21,7 @@ HISTORY_KEEP = 50
 # One section per installable kind, in lookup-precedence order. `find_any`
 # resolves a bare name through these left to right, so a skill shadows a rule
 # of the same name — matching the order `store.uninstall` already established.
-SECTIONS: Tuple[Tuple[str, str], ...] = (
+SECTIONS: tuple[tuple[str, str], ...] = (
     ("skill", "skills"), ("rule", "rules"), ("workflow", "workflows"))
 
 
@@ -98,7 +97,7 @@ def write(lock: dict) -> None:
     util.atomic_write_text(p, json.dumps(lock, indent=2, sort_keys=True) + "\n")
 
 
-def _history_files() -> List:
+def _history_files() -> list:
     """History snapshots oldest→newest (mtime, then name — '-2' suffixed
     same-second snapshots would sort before their base name otherwise)."""
     return sorted(paths.lock_history_dir().glob("lock-*.json"),
@@ -110,7 +109,7 @@ def _prune_history() -> None:
         old.unlink()
 
 
-def get_skill(name: str) -> Optional[dict]:
+def get_skill(name: str) -> dict | None:
     """Return the lock entry for skill ``name``, or None if not installed."""
     return read()["skills"].get(name)
 
@@ -137,7 +136,7 @@ def installed() -> dict:
     return read()["skills"]
 
 
-def get_rule(name: str) -> Optional[dict]:
+def get_rule(name: str) -> dict | None:
     """Return the lock entry for rule ``name``, or None if not installed."""
     return read()["rules"].get(name)
 
@@ -164,7 +163,7 @@ def installed_rules() -> dict:
     return read()["rules"]
 
 
-def get_workflow(name: str) -> Optional[dict]:
+def get_workflow(name: str) -> dict | None:
     """Return the lock entry for workflow ``name``, or None if not installed."""
     return read()["workflows"].get(name)
 
@@ -191,7 +190,7 @@ def installed_workflows() -> dict:
     return read()["workflows"]
 
 
-def find_any(name: str) -> Optional[Tuple[str, dict]]:
+def find_any(name: str) -> tuple[str, dict] | None:
     """Resolve ``name`` across all three sections: ``(kind, entry)`` or None.
 
     This is the accessor every command that takes an installed name should
@@ -216,13 +215,13 @@ def set_entry(kind: str, name: str, entry: dict) -> None:
     write(lock)
 
 
-def all_installed() -> Dict[str, dict]:
+def all_installed() -> dict[str, dict]:
     """Every installed item as ``{kind: {name: entry}}``, one read."""
     lock = read()
     return {kind: lock[section] for kind, section in SECTIONS}
 
 
-def history_list() -> List[dict]:
+def history_list() -> list[dict]:
     """[{id, path, updated, count}] oldest→newest."""
     out = []
     for p in _history_files():

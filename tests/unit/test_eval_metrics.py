@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import ClassVar, Dict, List
+from typing import ClassVar
 
 import pytest
 
@@ -43,7 +43,7 @@ class TestGain:
 
 
 class TestRecall:
-    labels: ClassVar[Dict[str, int]] = {"a": 3, "b": 2, "c": 1}
+    labels: ClassVar[dict[str, int]] = {"a": 3, "b": 2, "c": 1}
 
     def test_partial_recall_at_5(self):
         # top-5 of this ranking holds a and b, but c sits at rank 6.
@@ -101,8 +101,8 @@ class TestNDCG:
     IDCG@3 = 7/log2(2) + 3/log2(3) + 1/log2(4) = 7 + 1.89279 + 0.5 = 9.39279
     nDCG@3 = 6.5 / 9.39279                                         = 0.692020
     """
-    labels: ClassVar[Dict[str, int]] = {"a": 3, "b": 2, "c": 1}
-    ranked: ClassVar[List[str]] = ["b", "x", "a", "c"]
+    labels: ClassVar[dict[str, int]] = {"a": 3, "b": 2, "c": 1}
+    ranked: ClassVar[list[str]] = ["b", "x", "a", "c"]
 
     def test_exponential_gain_worked_example(self):
         expected = (3.0 + 0.0 + 3.5) / (7.0 + 3.0 / LOG2_3 + 0.5)

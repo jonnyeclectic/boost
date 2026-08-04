@@ -6,8 +6,6 @@ place lets the modules split without either importing back into the other.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 from ..core import lockfile
 from ..errors import BoostError
 
@@ -17,7 +15,7 @@ def _s(n: int) -> str:
     return "" if n == 1 else "s"
 
 
-def _iter_installed(names: Optional[List[str]] = None) -> List[Tuple[str, dict]]:
+def _iter_installed(names: list[str] | None = None) -> list[tuple[str, dict]]:
     """[(name, lock_entry)] — all installed skills, or the given names.
 
     A named item that exists in another lock section is declined with the
@@ -49,7 +47,7 @@ def _iter_installed(names: Optional[List[str]] = None) -> List[Tuple[str, dict]]
     return sorted(skills.items())
 
 
-def _shadowed_kinds(name: str, acted_kind: str) -> List[str]:
+def _shadowed_kinds(name: str, acted_kind: str) -> list[str]:
     """Other lock sections also holding ``name``.
 
     `find_any` resolves a bare name skill-first, which is right for reads but
@@ -61,7 +59,7 @@ def _shadowed_kinds(name: str, acted_kind: str) -> List[str]:
 
 
 def _iter_installed_all(
-        names: Optional[List[str]] = None) -> List[Tuple[str, str, dict]]:
+        names: list[str] | None = None) -> list[tuple[str, str, dict]]:
     """[(kind, name, lock_entry)] across every section, or the given names."""
     if names:
         out, missing = [], []

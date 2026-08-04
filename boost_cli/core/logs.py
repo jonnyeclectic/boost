@@ -52,7 +52,6 @@ import time
 import traceback
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Optional
 
 from . import paths
 
@@ -90,7 +89,7 @@ def is_debug() -> bool:
     return _debug_console
 
 
-def _console_level(verbose: bool, debug: bool, quiet: bool) -> Optional[int]:
+def _console_level(verbose: bool, debug: bool, quiet: bool) -> int | None:
     """Resolve the stderr diagnostic-handler level, or None to suppress it.
 
     The console diagnostic channel is *off by default* — user-facing messages
@@ -231,7 +230,7 @@ def configure(verbose: bool = False, debug: bool = False,
     return logger
 
 
-def log_invocation(argv: List[str]) -> None:
+def log_invocation(argv: list[str]) -> None:
     """Record a command invocation at the head of the trail.
 
     Includes ``pid``/``ppid`` and the interpreter path so a *native* crash —
@@ -244,7 +243,7 @@ def log_invocation(argv: List[str]) -> None:
         " ".join(argv), os.getpid(), os.getppid(), sys.executable)
 
 
-def log_completion(argv: List[str], rc: int, elapsed_ms: float) -> None:
+def log_completion(argv: list[str], rc: int, elapsed_ms: float) -> None:
     """Close out an invocation with its exit code and wall-clock duration.
 
     A clean exit logs at INFO; any non-zero code logs at WARNING so a failing
@@ -263,13 +262,13 @@ def _boost_version() -> str:
         return "unknown"
 
 
-def _env_snapshot() -> List[str]:
+def _env_snapshot() -> list[str]:
     keys = sorted(k for k in os.environ
                   if k.startswith("BOOST_") or k in ("NO_COLOR", "CLICOLOR_FORCE"))
     return ["%s=%s" % (k, os.environ[k]) for k in keys]
 
 
-def write_crash_report(exc: BaseException, argv: List[str]) -> Optional[Path]:
+def write_crash_report(exc: BaseException, argv: list[str]) -> Path | None:
     """Dump a full crash report and return its path (or None if it can't).
 
     Captures the traceback, invocation, versions and boost-relevant env so a

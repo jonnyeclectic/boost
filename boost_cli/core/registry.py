@@ -4,7 +4,6 @@ from __future__ import annotations
 import difflib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from ..errors import BoostError
 from . import config, gitutil, paths, policy, util
@@ -60,7 +59,7 @@ def parse_spec(spec: str):
                     hint="use owner/repo, a git URL, or a local directory")
 
 
-def list_taps() -> List[Tap]:
+def list_taps() -> list[Tap]:
     """Configured taps from config.json.
 
     Malformed config or entries read as no taps, never raise.
@@ -151,7 +150,7 @@ def remove(name: str) -> Tap:
     return tap
 
 
-def update(name: Optional[str] = None) -> Tuple[dict, dict]:
+def update(name: str | None = None) -> tuple[dict, dict]:
     """git-pull one tap (or all). Returns ``({name: summary}, {name: error})``.
 
     **A named tap still raises.** ``boost update sometap`` is a request about

@@ -28,7 +28,7 @@ import difflib
 import re
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Tuple
+from typing import NamedTuple
 
 from . import injectscan
 from .util import IGNORED
@@ -55,7 +55,7 @@ class TreeDiff(NamedTuple):
     text: str        # concatenated unified diffs across changed files
     risky: bool      # an added line is worth a human look before it lands
     changed: bool    # any file added, removed, or modified
-    reasons: Tuple[str, ...] = ()   # why `risky` is set, worst-first, deduped
+    reasons: tuple[str, ...] = ()   # why `risky` is set, worst-first, deduped
 
 
 def line_is_executable(line: str) -> bool:
@@ -75,13 +75,13 @@ def touches_executable(lines: Iterable[str]) -> bool:
     return any(line_is_executable(ln) for ln in lines)
 
 
-def _added_lines(old: str, new: str) -> List[str]:
+def _added_lines(old: str, new: str) -> list[str]:
     """The right-hand (``+``) lines a unified diff would introduce."""
     added = [ln[2:] for ln in difflib.ndiff(old.splitlines(), new.splitlines()) if ln.startswith("+ ")]
     return added
 
 
-def diff_tree(old: Dict[str, str], new: Dict[str, str]) -> TreeDiff:
+def diff_tree(old: dict[str, str], new: dict[str, str]) -> TreeDiff:
     """Diff two ``{relpath: text}`` maps.
 
     Returns the unified-diff text over every changed file, whether anything
@@ -93,8 +93,8 @@ def diff_tree(old: Dict[str, str], new: Dict[str, str]) -> TreeDiff:
     Only the ``+`` side is scanned. *Removing* a poisoned line must not be the
     thing that stops to ask.
     """
-    chunks: List[str] = []
-    added_all: List[str] = []
+    chunks: list[str] = []
+    added_all: list[str] = []
     changed = False
     for rel in sorted(set(old) | set(new)):
         before = old.get(rel, "")
@@ -106,7 +106,7 @@ def diff_tree(old: Dict[str, str], new: Dict[str, str]) -> TreeDiff:
         chunks.append("\n".join(difflib.unified_diff(
             before.splitlines(), after.splitlines(),
             fromfile="a/" + rel, tofile="b/" + rel, lineterm="")))
-    reasons: List[str] = []
+    reasons: list[str] = []
     if touches_executable(added_all):
         reasons.append("changes executable-looking instructions")
     # `injectscan` orders worst-first and may report the same rule on several
@@ -120,7 +120,7 @@ def diff_tree(old: Dict[str, str], new: Dict[str, str]) -> TreeDiff:
                     reasons=tuple(reasons))
 
 
-def read_tree(path: Path) -> Dict[str, str]:
+def read_tree(path: Path) -> dict[str, str]:
     """Map every readable text file under ``path`` to its content.
 
     Binary files (and anything under an ignored dir) are skipped — the gate is
@@ -128,7 +128,7 @@ def read_tree(path: Path) -> Dict[str, str]:
     A missing directory yields an empty map, so a first install diffs cleanly.
     """
     root = Path(path)
-    tree: Dict[str, str] = {}
+    tree: dict[str, str] = {}
     if not root.is_dir():
         return tree
     for p in root.rglob("*"):

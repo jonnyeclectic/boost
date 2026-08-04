@@ -25,7 +25,6 @@ beat a sprawling taxonomy nobody configures.
 from __future__ import annotations
 
 import re
-from typing import List, Set
 
 NETWORK = "network"
 SHELL = "shell"
@@ -64,7 +63,7 @@ _COMPILED = {cap: [re.compile(p, re.IGNORECASE) for p in pats]
              for cap, pats in _TELLS.items()}
 
 
-def declared(meta: dict) -> Set[str]:
+def declared(meta: dict) -> set[str]:
     """Canonical capabilities a skill's frontmatter declares.
 
     Accepts a list or a comma-separated string; folds known aliases; drops
@@ -74,7 +73,7 @@ def declared(meta: dict) -> Set[str]:
     return {c for c in _normalize(_raw(meta)) if c in KNOWN}
 
 
-def unknown(meta: dict) -> Set[str]:
+def unknown(meta: dict) -> set[str]:
     """Declared capability names that are not in the known vocabulary."""
     return {c for c in _normalize(_raw(meta)) if c not in KNOWN}
 
@@ -88,8 +87,8 @@ def _raw(meta: dict):
     return str(val).split(",")
 
 
-def _normalize(items) -> Set[str]:
-    out: Set[str] = set()
+def _normalize(items) -> set[str]:
+    out: set[str] = set()
     for it in items:
         s = str(it).strip().lower()
         if s:
@@ -97,26 +96,26 @@ def _normalize(items) -> Set[str]:
     return out
 
 
-def detect(text: str) -> Set[str]:
+def detect(text: str) -> set[str]:
     """Capabilities a heuristic scan finds evidence of in ``text``.
 
     Advisory: a match means "this looks like it uses X", not "it is allowed to".
     Used for audit/info and, only under the opt-in strict flag, for enforcement.
     """
-    found: Set[str] = set()
+    found: set[str] = set()
     for cap, patterns in _COMPILED.items():
         if any(p.search(text) for p in patterns):
             found.add(cap)
     return found
 
 
-def effective(meta: dict, text: str) -> Set[str]:
+def effective(meta: dict, text: str) -> set[str]:
     """Everything a skill declares *or* shows evidence of — the audit view."""
     return declared(meta) | detect(text)
 
 
-def violations(declared_caps: Set[str], detected_caps: Set[str],
-               denied: Set[str], enforce_detected: bool) -> List[str]:
+def violations(declared_caps: set[str], detected_caps: set[str],
+               denied: set[str], enforce_detected: bool) -> list[str]:
     """Policy violations for a skill's capabilities against a deny list.
 
     A declared capability on the deny list always violates. A merely *detected*

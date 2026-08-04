@@ -15,7 +15,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from itertools import starmap
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from .. import cliparse
 from ..core import (
@@ -87,7 +87,7 @@ def _resolve_as_far_as_it_exists(path: Path) -> Path:
     foreign and `heal` declined to repair anything.
     """
     path = Path(os.path.abspath(str(path)))
-    tail: List[str] = []
+    tail: list[str] = []
     cur = path
     while cur != cur.parent and not cur.exists():
         tail.append(cur.name)
@@ -165,7 +165,7 @@ def _owned_link(link: Path) -> bool:
     return _within(_link_key(target), _link_key(store))
 
 
-def _broken_links() -> Tuple[List[Path], List[Path]]:
+def _broken_links() -> tuple[list[Path], list[Path]]:
     """``(ours, theirs)`` — dangling symlinks in the dirs boost links into.
 
     Two things this deliberately does NOT do.
@@ -181,8 +181,8 @@ def _broken_links() -> Tuple[List[Path], List[Path]]:
     a link the user made themselves is not a repair, it is data loss with a
     reassuring name, so those are reported and left alone.
     """
-    ours: List[Path] = []
-    theirs: List[Path] = []
+    ours: list[Path] = []
+    theirs: list[Path] = []
     for adir in agents.linking_agents().values():
         if not adir.is_dir():
             continue
@@ -192,7 +192,7 @@ def _broken_links() -> Tuple[List[Path], List[Path]]:
     return ours, theirs
 
 
-def _read_skill(skill_dir: Path) -> Tuple[dict, str]:
+def _read_skill(skill_dir: Path) -> tuple[dict, str]:
     """(frontmatter, body) for a skill dir's SKILL.md; ({}, "") if unreadable."""
     md = Path(skill_dir) / "SKILL.md"
     if not md.exists():
@@ -271,14 +271,14 @@ def _drift_hint(name: str, status: str) -> str:
     return ""
 
 
-def _parse_ts(iso: str) -> Optional[datetime]:
+def _parse_ts(iso: str) -> datetime | None:
     try:
         return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     except (ValueError, TypeError):
         return None
 
 
-def _fingerprint() -> Tuple[str, List[str]]:
+def _fingerprint() -> tuple[str, list[str]]:
     """(sha256 hexdigest, component lines). Deterministic: the same lock file
     and tap commits always produce the same hash."""
     comps = sorted("%s:%s" % (n, e.get("sha256", ""))
@@ -308,7 +308,7 @@ def _stack_keywords(cwd: Path) -> set:
     """Tech-stack keywords for the working directory: the discovery module's
     detect_stack keywords, enriched with coarse filesystem markers (so tags
     like `testing` or `git` can match even when detect_stack is language-only)."""
-    kws: List[str] = []
+    kws: list[str] = []
     with suppress(Exception):
         from ..core.stackprobe import detect_stack
         stack = detect_stack(cwd)
@@ -320,7 +320,7 @@ def _stack_keywords(cwd: Path) -> set:
     return {_norm_token(k) for k in kws if _norm_token(k)}
 
 
-def _decay_rows(cwd: Path) -> List[dict]:
+def _decay_rows(cwd: Path) -> list[dict]:
     """Relevance/recency verdict per installed skill (shared by decay/health)."""
     kws = _stack_keywords(cwd)
     last_by: dict = {}
@@ -615,7 +615,7 @@ def _report_search_engine(bad) -> None:
              "engine (%s)" % fix)
 
 
-def _print_skipped(skipped: List[dict]) -> None:
+def _print_skipped(skipped: list[dict]) -> None:
     """Note the rule/workflow entries `lint` passed over (they have no SKILL.md)."""
     if not skipped:
         return
@@ -634,8 +634,8 @@ def cmd_lint(argv):
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
-    targets: List[Tuple[str, Path]] = []
-    skipped: List[dict] = []
+    targets: list[tuple[str, Path]] = []
+    skipped: list[dict] = []
     if args.tap:
         tap = registry.get(args.tap)
         if not tap.is_cloned:
@@ -655,7 +655,7 @@ def cmd_lint(argv):
             out.info("nothing to lint")
         return 0
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for name, sdir in targets:
         score, notes = util.score_skill(sdir)
         meta, _ = _read_skill(sdir)
@@ -830,7 +830,7 @@ def cmd_heal(argv):
                     help="show repairs without applying them")
     args = ap.parse_args(argv)
     dry = args.dry_run
-    actions: List[str] = []
+    actions: list[str] = []
 
     # linking_agents, matching agents.ensure_agent_dirs below: a native-store
     # agent's skills dir is never written to, so it is not a missing directory.
@@ -917,8 +917,8 @@ def cmd_conflict(argv):
     args = ap.parse_args(argv)
 
     installed = _iter_installed()
-    rules: List[Tuple[str, str, str, set]] = []   # skill, line, polarity, stems
-    declared: List[Tuple[str, str]] = []           # skill, conflicting skill
+    rules: list[tuple[str, str, str, set]] = []   # skill, line, polarity, stems
+    declared: list[tuple[str, str]] = []           # skill, conflicting skill
     installed_names = {n for n, _e in installed}
     for name, _entry in installed:
         meta, body = _read_skill(store.skill_store_dir(name))
@@ -943,7 +943,7 @@ def cmd_conflict(argv):
             if stem:
                 rules.append((name, raw.strip(), polarity, stem))
 
-    pairs: List[Dict[str, str]] = []
+    pairs: list[dict[str, str]] = []
     seen: set = set()   # holds both key shapes below, declared and heuristic
     for da, db in declared:
         # Two different key SHAPES share `seen` — a flat triple here, a pair of

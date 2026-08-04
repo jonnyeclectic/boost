@@ -18,7 +18,7 @@ folds them into its reply text.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List, NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
 
 from . import injectscan, secretscan
 
@@ -54,7 +54,7 @@ class Report(NamedTuple):
     # `tuple.count` and change the type of an inherited method.
     total: int          # all findings, not just the ones quoted in `details`
     headline: str
-    details: List[str]  # up to MAX_DETAIL "L12 [high] description" lines
+    details: list[str]  # up to MAX_DETAIL "L12 [high] description" lines
 
 
 def content_label(res: InstallResult) -> str:
@@ -75,7 +75,7 @@ def findings_for(res: InstallResult, scanner) -> list:
     return scanner.scan_file(res.dest / "SKILL.md")
 
 
-def scan(res: InstallResult, *only: str) -> List[Report]:
+def scan(res: InstallResult, *only: str) -> list[Report]:
     """Reports for `res`, worst-first within each scanner, empty when clean.
 
     `only` restricts to named scanners (``INJECTION`` / ``SECRET``); with no
@@ -103,10 +103,10 @@ def scan(res: InstallResult, *only: str) -> List[Report]:
     return reports
 
 
-def as_lines(reports: List[Report]) -> List[str]:
+def as_lines(reports: list[Report]) -> list[str]:
     """Flatten reports into plain indented text, for a surface with no colour
     and no terminal — the MCP reply, a log line, a file."""
-    lines: List[str] = []
+    lines: list[str] = []
     for rep in reports:
         lines.append(rep.headline)
         lines.extend("  " + d for d in rep.details)

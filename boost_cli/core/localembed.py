@@ -36,7 +36,6 @@ from __future__ import annotations
 import hashlib
 import shutil
 from pathlib import Path
-from typing import List, Optional
 
 from . import paths
 
@@ -137,7 +136,7 @@ def _fetch(rel: str, dest: Path, size: int, digest: str) -> bool:
     return True
 
 
-def ensure_model() -> Optional[Path]:
+def ensure_model() -> Path | None:
     """The verified model directory, downloading it once if needed, or None."""
     root = model_dir()
     for rel, (size, digest) in FILES.items():
@@ -189,7 +188,7 @@ def reset() -> None:
     _tokenizer = None
 
 
-def encode(texts: List[str]) -> Optional[List[List[float]]]:
+def encode(texts: list[str]) -> list[list[float]] | None:
     """Embed `texts`, or None on any failure.
 
     CLS pooling plus L2 normalisation, which is what BGE was trained for.
@@ -218,7 +217,7 @@ def encode(texts: List[str]) -> Optional[List[List[float]]]:
         return None
 
 
-def cls_pool(out) -> List[List[float]]:
+def cls_pool(out) -> list[list[float]]:
     """Last hidden state -> one L2-normalised CLS vector per row.
 
     Kept pure and separate from :func:`encode` so the part that decides *what a
@@ -237,7 +236,7 @@ def _as_i64(rows):
     return numpy.array(rows, dtype=numpy.int64)
 
 
-def _normalise(vec: List[float]) -> List[float]:
+def _normalise(vec: list[float]) -> list[float]:
     """L2-normalise, leaving an all-zero vector alone rather than dividing by 0."""
     norm = sum(x * x for x in vec) ** 0.5
     if not norm:

@@ -32,7 +32,6 @@ gate.
 from __future__ import annotations
 
 import json
-from typing import Dict, List, Optional, Tuple
 
 from . import mcphost
 
@@ -54,7 +53,7 @@ SERVERS_KEY = "mcpServers"
 MARKER_KEY = "x-boost-skill"
 
 
-def declared_names(meta: Optional[dict]) -> List[str]:
+def declared_names(meta: dict | None) -> list[str]:
     """Server names a skill's frontmatter declares, de-duped, order preserved.
 
     Accepts a YAML list or a comma-separated string and drops blanks — the same
@@ -66,7 +65,7 @@ def declared_names(meta: Optional[dict]) -> List[str]:
         return []
     raw = ([str(x) for x in val] if isinstance(val, list)
            else str(val).split(","))
-    out: List[str] = []
+    out: list[str] = []
     for item in raw:
         name = item.strip()
         if name and name not in out:
@@ -74,7 +73,7 @@ def declared_names(meta: Optional[dict]) -> List[str]:
     return out
 
 
-def parse_sidecar(text: Optional[str]) -> Dict[str, dict]:
+def parse_sidecar(text: str | None) -> dict[str, dict]:
     """``{name: spec}`` from a bundled ``.mcp.json``'s text.
 
     Tolerant by design: unreadable JSON, a non-object document, a missing or
@@ -97,8 +96,8 @@ def parse_sidecar(text: Optional[str]) -> Dict[str, dict]:
             if k and isinstance(v, dict)}
 
 
-def servers_for(meta: Optional[dict], sidecar_text: Optional[str] = None,
-                ) -> List[dict]:
+def servers_for(meta: dict | None, sidecar_text: str | None = None,
+                ) -> list[dict]:
     """Every MCP server a skill needs, as ``{"name", "spec", "source"}`` rows.
 
     Merges the two declaration forms. A name in *both* uses the sidecar's spec —
@@ -112,7 +111,7 @@ def servers_for(meta: Optional[dict], sidecar_text: Optional[str] = None,
     for deterministic output.
     """
     specs = parse_sidecar(sidecar_text)
-    rows: Dict[str, dict] = {
+    rows: dict[str, dict] = {
         name: {"name": name, "spec": spec, "source": "sidecar"}
         for name, spec in specs.items()}
     for name in declared_names(meta):
@@ -121,7 +120,7 @@ def servers_for(meta: Optional[dict], sidecar_text: Optional[str] = None,
     return [rows[k] for k in sorted(rows)]
 
 
-def registrable(rows) -> List[dict]:
+def registrable(rows) -> list[dict]:
     """The rows boost can actually wire up — those carrying a runnable spec.
 
     A spec is runnable when it names a ``command``. Anything else (a name-only
@@ -135,7 +134,7 @@ def registrable(rows) -> List[dict]:
 
 
 def register_argv(name: str, spec: dict, *, scope: str = "user",
-                  host: str = mcphost.CLAUDE) -> List[str]:
+                  host: str = mcphost.CLAUDE) -> list[str]:
     """The ``<host> mcp add`` argv that registers one declared server.
 
     Mirrors :mod:`boost_cli.core.mcphost`'s per-host grammar exactly, because
@@ -150,7 +149,7 @@ def register_argv(name: str, spec: dict, *, scope: str = "user",
     """
     exe = mcphost.cli(host)
     env = spec.get("env")
-    flags: List[str] = []
+    flags: list[str] = []
     if isinstance(env, dict):
         for key in sorted(env):
             flags += ["-e", "%s=%s" % (key, env[key])]
@@ -164,7 +163,7 @@ def register_argv(name: str, spec: dict, *, scope: str = "user",
             "--", command, *tail]
 
 
-def merge_into(existing: Optional[dict], rows, skill: str) -> Tuple[dict, List[str]]:
+def merge_into(existing: dict | None, rows, skill: str) -> tuple[dict, list[str]]:
     """Add ``rows``' specs to an ``.mcp.json`` document -> ``(doc, added)``.
 
     Returns a **new** document rather than mutating the caller's, and never
@@ -175,7 +174,7 @@ def merge_into(existing: Optional[dict], rows, skill: str) -> Tuple[dict, List[s
     """
     doc = dict(existing) if isinstance(existing, dict) else {}
     servers = dict(doc.get(SERVERS_KEY) or {})
-    added: List[str] = []
+    added: list[str] = []
     for row in registrable(rows):
         name = row["name"]
         if name in servers:
@@ -188,7 +187,7 @@ def merge_into(existing: Optional[dict], rows, skill: str) -> Tuple[dict, List[s
     return doc, added
 
 
-def strip_owned(existing: Optional[dict], skill: str) -> Tuple[dict, List[str]]:
+def strip_owned(existing: dict | None, skill: str) -> tuple[dict, list[str]]:
     """Remove the servers boost registered for ``skill`` -> ``(doc, removed)``.
 
     Only entries whose :data:`MARKER_KEY` names this skill are removed, so a

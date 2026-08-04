@@ -12,7 +12,6 @@ from __future__ import annotations
 import itertools
 import sys
 import threading
-from typing import Optional
 
 from .core import output as out
 
@@ -25,7 +24,7 @@ class Spinner:
         self.label = label
         self.stream = stream if stream is not None else sys.stderr
         self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
 
     def active(self) -> bool:
         """Animate only on an interactive, color-capable TTY."""

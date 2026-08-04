@@ -19,7 +19,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import List
 
 from .. import cliparse
 from ..core import adapters, config, journal, paths, util
@@ -28,7 +27,7 @@ from ..errors import BoostError
 from .pkg import _resolve_skill_source, _tilde
 
 
-def cmd_run(argv: List[str]) -> int:
+def cmd_run(argv: list[str]) -> int:
     """boost run NAME [TARGET] [--model M] [--print] [-o FILE]"""
     ap = cliparse.parser(
         prog="boost run",

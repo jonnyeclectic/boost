@@ -5,7 +5,6 @@ Powers `boost pulse`, `boost trending`, `boost stats`, and `boost who`.
 from __future__ import annotations
 
 import json
-from typing import List, Optional
 
 from . import paths, util
 
@@ -28,8 +27,8 @@ def log(action: str, subject: str = "", **fields) -> None:
     _maybe_rotate()
 
 
-def events(n: Optional[int] = None, action: Optional[str] = None,
-           subject: Optional[str] = None) -> List[dict]:
+def events(n: int | None = None, action: str | None = None,
+           subject: str | None = None) -> list[dict]:
     """Most-recent-first list of journal events; ``n=None`` means all of them.
 
     ``n`` must be >= 0: a negative would become a negative slice and silently

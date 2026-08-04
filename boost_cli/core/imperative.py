@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 from re import Match
-from typing import List, Optional
 
 # An "always / never / must (not) / do not / don't" line, optionally preceded by
 # a list marker. Group 1 = the modal, group 2 = everything after it.
@@ -31,7 +30,7 @@ LIST_RE = re.compile(r"^([-*+]|\d+[.)])\s+")
 _NUMBERED_RE = re.compile(r"^\d+[.)]\s+")
 
 
-def match(line: str) -> Optional[Match]:
+def match(line: str) -> Match | None:
     """Return the ``RULE_RE`` match for ``line`` (modal + rest), or ``None``."""
     return RULE_RE.match(line)
 
@@ -46,14 +45,14 @@ def norm_rule(text: str) -> str:
     return (t[:1].lower() + t[1:]) if t else t
 
 
-def imperative_rules(body: str) -> List[str]:
+def imperative_rules(body: str) -> list[str]:
     """Cleaned, de-duplicated imperative rules from a skill ``body``.
 
     A line that reads as a rule is normalized; a numbered step (``1. …``) with
     at least two words becomes ``follow: …``. Order is preserved and exact
     duplicates are dropped.
     """
-    rules: List[str] = []
+    rules: list[str] = []
     for raw in body.splitlines():
         line = raw.strip()
         stripped = LIST_RE.sub("", line)

@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Dict
 
 # Directories that never describe the project's own stack — skip them so a
 # vendored dependency can't masquerade as a first-party language.
@@ -33,7 +32,7 @@ def _read_text(p: Path) -> str:
         return ""
 
 
-def detect_stack(path) -> Dict[str, list]:
+def detect_stack(path) -> dict[str, list]:
     """Detect a project's tech stack from files on disk.
 
     Walks at most two directory levels (skipping .git/node_modules etc.) and

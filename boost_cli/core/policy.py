@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-from typing import List
 
 from . import config, paths
 
@@ -54,12 +53,12 @@ def save(pol: dict) -> None:
     paths.policy_path().write_text(json.dumps(known, indent=2) + "\n", encoding="utf-8")
 
 
-def check_install(entry: dict, installed_count: int) -> List[str]:
+def check_install(entry: dict, installed_count: int) -> list[str]:
     """Return a list of violation strings (empty = allowed)."""
     if not config.get("policy_enforce", True):
         return []
     pol = load()
-    v: List[str] = []
+    v: list[str] = []
     name, tap = entry.get("name", ""), entry.get("tap", "")
     if pol["pin_only"]:
         v.append("environment is pin-only (frozen)")
@@ -78,7 +77,7 @@ def check_install(entry: dict, installed_count: int) -> List[str]:
     return v
 
 
-def check_capabilities(meta: dict, text: str) -> List[str]:
+def check_capabilities(meta: dict, text: str) -> list[str]:
     """Return capability-policy violations for a skill (empty = allowed).
 
     Separate from :func:`check_install` because it needs the skill's CONTENT,
@@ -97,7 +96,7 @@ def check_capabilities(meta: dict, text: str) -> List[str]:
         denied, bool(pol["enforce_detected_capabilities"]))
 
 
-def check_tap_signing(clone_dir) -> List[str]:
+def check_tap_signing(clone_dir) -> list[str]:
     """Return provenance violations for a tap clone (empty = allowed).
 
     No-op unless ``require_signed_taps`` is on. When on, anything short of a

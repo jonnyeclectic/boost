@@ -14,7 +14,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
 
 from ..errors import BoostError
 from . import gitutil, paths
@@ -32,7 +31,7 @@ UNKNOWN = "unknown"
 _VERSION_LINE = re.compile(r"^boost\s+(\S+)$", re.MULTILINE)
 
 
-def installed_version() -> Optional[str]:
+def installed_version() -> str | None:
     """Version recorded in installed package metadata, or None.
 
     None is the useful answer, not a failure: it means no Python package
@@ -45,7 +44,7 @@ def installed_version() -> Optional[str]:
         return None
 
 
-def detect(root: Optional[Path] = None, prefix: Optional[Path] = None,
+def detect(root: Path | None = None, prefix: Path | None = None,
            metadata_version=None) -> str:
     """Resolve how this boost was installed.
 
@@ -87,7 +86,7 @@ def _require(tool: str) -> str:
     return found
 
 
-def upgrade_command(method: str) -> List[str]:
+def upgrade_command(method: str) -> list[str]:
     """The argv that upgrades boost for `method`."""
     if method == PIPX:
         return [_require("pipx"), "upgrade", DIST]
@@ -104,7 +103,7 @@ def upgrade_command(method: str) -> List[str]:
         hint="upgrade with your package manager, e.g. `pipx upgrade %s`" % DIST)
 
 
-def run_upgrade(cmd: List[str], timeout: float = 300.0):
+def run_upgrade(cmd: list[str], timeout: float = 300.0):
     """Run the upgrade, raising BoostError with the manager's own last words."""
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True,
@@ -120,7 +119,7 @@ def run_upgrade(cmd: List[str], timeout: float = 300.0):
     return proc
 
 
-def observed_version(timeout: float = 30.0) -> Optional[str]:
+def observed_version(timeout: float = 30.0) -> str | None:
     """Ask a freshly-spawned boost what version it is now, or None.
 
     This process imported its own version before the upgrade ran, so it cannot

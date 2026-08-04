@@ -28,15 +28,15 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..errors import BoostError
 from . import catalog, lockfile, paths, registry, store
 
 # cli.COMMANDS rows: (name, group, module, summary). Typed here rather than
 # imported so `core` stays the bottom layer.
-Registry = Sequence[Tuple[str, str, str, str]]
+Registry = Sequence[tuple[str, str, str, str]]
 
 # Commands whose first argument is a catalogue item, an installed item, or a tap.
 # Anything absent completes nothing rather than guessing: a wrong candidate list
@@ -51,7 +51,7 @@ def names_file() -> Path:
     return paths.cache_dir() / "_names.txt"
 
 
-def _command_names(commands: Registry) -> List[str]:
+def _command_names(commands: Registry) -> list[str]:
     # No hidden-name filter here: `__complete` is dispatched in cli.main()
     # without a COMMANDS row precisely so it stays out of --help, the generated
     # docs, the counts *and* this list. One mechanism, not two.
@@ -72,7 +72,7 @@ def refresh_names() -> int:
     return len(names)
 
 
-def _cached_names() -> List[str]:
+def _cached_names() -> list[str]:
     path = names_file()
     if not path.exists():
         refresh_names()
@@ -82,7 +82,7 @@ def _cached_names() -> List[str]:
     return [line for line in text.split("\n") if line]
 
 
-def _installed_names() -> List[str]:
+def _installed_names() -> list[str]:
     # store.installed() is the skills lock section only; the commands this
     # feeds (uninstall, pin, verify, ...) govern rules and workflows too, so
     # TAB must offer those names as well.
@@ -92,13 +92,13 @@ def _installed_names() -> List[str]:
     return sorted(names)
 
 
-def _tap_names() -> List[str]:
+def _tap_names() -> list[str]:
     return sorted(t.name for t in registry.list_taps())
 
 
 # Long flags a command documents, read from its own parser rather than a shared
 # list — a global flag list would offer flags the command rejects.
-def _flags_for(command: str, commands: Registry) -> List[str]:
+def _flags_for(command: str, commands: Registry) -> list[str]:
     row = next((r for r in commands if r[0] == command), None)
     if row is None:
         return []
@@ -117,8 +117,8 @@ def _flags_for(command: str, commands: Registry) -> List[str]:
     return sorted(set(re.findall(r'"(--[a-z][a-z0-9-]*)"', src)))
 
 
-def _source_for(command: str) -> Optional[Callable[[], List[str]]]:
-    table: Dict[str, Callable[[], List[str]]] = {}
+def _source_for(command: str) -> Callable[[], list[str]] | None:
+    table: dict[str, Callable[[], list[str]]] = {}
     for name in _CATALOG_ARG:
         table[name] = _cached_names
     for name in _INSTALLED_ARG:
@@ -128,7 +128,7 @@ def _source_for(command: str) -> Optional[Callable[[], List[str]]]:
     return table.get(command)
 
 
-def candidates(words: List[str], commands: Registry) -> List[str]:
+def candidates(words: list[str], commands: Registry) -> list[str]:
     """Completions for ``words``, where the last element is the partial word.
 
     ``words`` is the command line as the shell split it, including ``boost``

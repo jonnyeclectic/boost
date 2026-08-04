@@ -22,7 +22,6 @@ to trust it.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 from ..errors import BoostError
 from . import config, lockfile, paths, projectlock, scopes, util
@@ -42,7 +41,7 @@ def _store_dir(name: str) -> Path:
     return paths.store_dir() / name
 
 
-def status(name: str, entry: Optional[dict] = None) -> str:
+def status(name: str, entry: dict | None = None) -> str:
     """Classify an installed skill's integrity against its lock entry.
 
     ``entry`` may be supplied to avoid a re-read when the caller already has it.
@@ -141,7 +140,7 @@ def project_skills():
     return base, projectlock.installed(base)
 
 
-def commit_status(name: str, entry: Optional[dict] = None) -> Optional[str]:
+def commit_status(name: str, entry: dict | None = None) -> str | None:
     """Compare the installed commit against a commit pin, if one is set.
 
     Returns ``None`` when the skill is not commit-pinned (the common case),
@@ -169,7 +168,7 @@ def commit_enforcement_enabled() -> bool:
     return bool(config.get(COMMIT_KEY, False))
 
 
-def enforce(name: str, entry: Optional[dict] = None) -> None:
+def enforce(name: str, entry: dict | None = None) -> None:
     """Raise BoostError if ``name`` fails an *enabled* integrity check.
 
     A no-op when enforcement is off, when the skill is not installed, or when the

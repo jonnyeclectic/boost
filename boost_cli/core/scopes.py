@@ -21,7 +21,6 @@ import os
 import re
 from contextlib import suppress
 from pathlib import Path
-from typing import Optional
 
 from ..errors import BoostError
 from . import paths
@@ -48,7 +47,7 @@ PROJECT_MARKERS = (".git", ".hg", ".svn")
 _SAFE_NAME = re.compile(r"[A-Za-z0-9._-]+")
 
 
-def project_root(start=None) -> Optional[Path]:
+def project_root(start=None) -> Path | None:
     """Nearest enclosing project root at or above ``start`` (default: cwd).
 
     Walks up until a :data:`PROJECT_MARKERS` entry is found, returning ``None``
@@ -79,7 +78,7 @@ def project_root(start=None) -> Optional[Path]:
     return None
 
 
-def resolve_base(scope: str, base=None, start=None) -> Optional[Path]:
+def resolve_base(scope: str, base=None, start=None) -> Path | None:
     """Directory a scope materializes under — ``None`` for user scope.
 
     An explicit ``base`` always wins, so a re-materialization driven by a lock
@@ -167,7 +166,7 @@ def relative_to_base(base, path) -> str:
     return str(rel).replace(os.sep, "/")
 
 
-def resolve_in_base(base, rel: str) -> Optional[Path]:
+def resolve_in_base(base, rel: str) -> Path | None:
     """A lock-recorded relative path, re-anchored under ``base``.
 
     Returns ``None`` for anything that does not land inside ``base`` — an empty

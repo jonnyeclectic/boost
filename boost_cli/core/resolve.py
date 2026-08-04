@@ -20,9 +20,8 @@ plain graph work.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Callable, FrozenSet, List, Optional, Tuple
 
 __all__ = ["Resolution", "resolve"]
 
@@ -46,15 +45,15 @@ class Resolution:
       ``requires:``); surfaced so the caller can warn rather than crash.
     """
 
-    order: List[str] = field(default_factory=list)
-    added: List[str] = field(default_factory=list)
-    conflicts: List[Tuple[str, str]] = field(default_factory=list)
-    unresolved: List[str] = field(default_factory=list)
+    order: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)
+    conflicts: list[tuple[str, str]] = field(default_factory=list)
+    unresolved: list[str] = field(default_factory=list)
 
 
-def _norm(names: Sequence[str]) -> List[str]:
+def _norm(names: Sequence[str]) -> list[str]:
     """De-dupe a name sequence preserving first-seen order."""
-    seen: List[str] = []  # noqa: FURB138  the guard below reads `seen` itself — not expressible as a comprehension
+    seen: list[str] = []  # noqa: FURB138  the guard below reads `seen` itself — not expressible as a comprehension
     for n in names:
         if n and n not in seen:
             seen.append(n)
@@ -64,10 +63,10 @@ def _norm(names: Sequence[str]) -> List[str]:
 def resolve(
     roots: Sequence[str],
     requires_of: Callable[[str], Sequence[str]],
-    conflicts_of: Optional[Callable[[str], Sequence[str]]] = None,
+    conflicts_of: Callable[[str], Sequence[str]] | None = None,
     *,
-    installed: FrozenSet[str] = frozenset(),
-    known: Optional[Callable[[str], bool]] = None,
+    installed: frozenset[str] = frozenset(),
+    known: Callable[[str], bool] | None = None,
 ) -> Resolution:
     """Resolve ``roots`` plus their ``requires:`` closure into an install plan.
 
@@ -83,10 +82,10 @@ def resolve(
     roots = _norm(roots)
     root_set = set(roots)
 
-    order: List[str] = []
+    order: list[str] = []
     done: set = set()      # fully-processed (post-order emitted)
     on_stack: set = set()  # currently being visited — cycle guard
-    unresolved: List[str] = []
+    unresolved: list[str] = []
 
     def visit(name: str, is_root: bool) -> None:
         if name in done or name in on_stack:
@@ -122,7 +121,7 @@ def resolve(
     # Conflict scan: anything in the plan (being installed) OR already installed
     # is a live presence; flag a declared conflict against any live presence.
     live = set(order) | set(installed)
-    conflicts: List[Tuple[str, str]] = []
+    conflicts: list[tuple[str, str]] = []
     seen_pairs: set = set()
     for skill in order:
         for clash in _norm(list(conflicts_of(skill) or [])):

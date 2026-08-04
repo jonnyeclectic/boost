@@ -33,7 +33,8 @@ it is never load-bearing for correctness.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
+from collections.abc import Sequence
+from typing import NamedTuple
 
 from . import ai, catalog, faithfulness, rag
 
@@ -88,7 +89,7 @@ class Reply(NamedTuple):
     """
 
     text: str
-    skills: List[dict]      # the catalogue entries the answer draws on
+    skills: list[dict]      # the catalogue entries the answer draws on
     engine: str             # which retrieval engine ran, for attribution
     source: str             # "ai" | "extractive"
     grounded: bool
@@ -126,7 +127,7 @@ def expand_query(question: str, history: Sequence[Turn]) -> str:
 
 
 def retrieve(question: str, history: Sequence[Turn] = (),
-             k: int = TOP_K) -> Tuple[List[dict], str]:
+             k: int = TOP_K) -> tuple[list[dict], str]:
     """Candidate catalogue entries for ``question``, best first.
 
     Returns ``(entries, engine_label)``. Uses :func:`rag.retrieve_any` so chat
@@ -161,7 +162,7 @@ def _one_line(text: str) -> str:
     return " ".join(text.replace("\\n", " ").replace("\\t", " ").split())
 
 
-def _describe(entry: dict, ref: Optional[str] = None) -> str:
+def _describe(entry: dict, ref: str | None = None) -> str:
     """One catalogue entry as a line of prompt/answer text.
 
     Truncation is marked with an ellipsis rather than silent: the reader needs
@@ -231,7 +232,7 @@ def claimed_names(reply: str) -> set:
     return out
 
 
-def ungrounded_names(reply: str, entries: Sequence[dict]) -> List[str]:
+def ungrounded_names(reply: str, entries: Sequence[dict]) -> list[str]:
     """Skill-shaped tokens in ``reply`` that appear nowhere in ``entries``.
 
     Catalogue names are lowercase hyphenated words (``code-reviewer``), which is
@@ -318,7 +319,7 @@ def answer(question: str, history: Sequence[Turn] = (),
     return Reply(reply, entries.copy(), engine, "ai", True)
 
 
-def multi_tap_names(names: Set[str]) -> Set[str]:
+def multi_tap_names(names: set[str]) -> set[str]:
     """Which of ``names`` more than one tap carries.
 
     This is exactly the condition :func:`catalog.resolve_one` refuses on, so it
@@ -337,7 +338,7 @@ def multi_tap_names(names: Set[str]) -> Set[str]:
     """
     if not names:
         return set()
-    seen: Dict[str, Set[str]] = {}
+    seen: dict[str, set[str]] = {}
     for e in catalog.all_entries():
         name = str(e.get("name", ""))
         if name in names:
@@ -345,7 +346,7 @@ def multi_tap_names(names: Set[str]) -> Set[str]:
     return {name for name, taps in seen.items() if len(taps) > 1}
 
 
-def citations(entries: Sequence[dict]) -> List[Dict[str, str]]:
+def citations(entries: Sequence[dict]) -> list[dict[str, str]]:
     """Name/tap pairs for the entries an answer drew on, each with a usable ref.
 
     Shown under every answer so a claim can be checked against the source, which
@@ -374,7 +375,7 @@ def citations(entries: Sequence[dict]) -> List[Dict[str, str]]:
     return out
 
 
-def suggest_followups(entries: Sequence[dict]) -> List[str]:
+def suggest_followups(entries: Sequence[dict]) -> list[str]:
     """Concrete next questions, drawn from what was actually retrieved.
 
     Generic prompts ("ask me anything!") teach nothing; naming a real retrieved
@@ -382,9 +383,9 @@ def suggest_followups(entries: Sequence[dict]) -> List[str]:
     """
     if not entries:
         return ["what skills do I have installed?"]
-    top: Optional[dict] = entries[0]
+    top: dict | None = entries[0]
     name = str(top.get("name", "")) if top else ""
-    out: List[str] = []
+    out: list[str] = []
     if name:
         out.extend(("what does %s actually do?" % name,
                     "how is %s different from the others?" % name))

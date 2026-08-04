@@ -37,7 +37,7 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Any, List, Optional
+from typing import Any
 
 from . import nethttp
 
@@ -120,7 +120,7 @@ def local_available() -> bool:
     return _backend() is not None
 
 
-def provider() -> Optional[str]:
+def provider() -> str | None:
     """The active provider, preferring a configured key, or None when nothing works.
 
     Order matters: local comes **last** so configuring Voyage keeps voyage-4.
@@ -143,7 +143,7 @@ def available() -> bool:
     return provider() is not None
 
 
-def model() -> Optional[str]:
+def model() -> str | None:
     """The active provider's model name, or None when unconfigured."""
     p = provider()
     if p == "voyage":
@@ -155,7 +155,7 @@ def model() -> Optional[str]:
     return None
 
 
-def dimension() -> Optional[int]:
+def dimension() -> int | None:
     """Output vector dimension of the active model, or None when
 
     unconfigured. Stored in the index so a model switch forces a rebuild.
@@ -177,8 +177,8 @@ def fallback_note() -> str:
             "boost-skill-cli[rag]`; using the BM25 full-content engine")
 
 
-def embed(texts: List[str], input_type: Optional[str] = None,
-          timeout: int = 60) -> Optional[List[List[float]]]:
+def embed(texts: list[str], input_type: str | None = None,
+          timeout: int = 60) -> list[list[float]] | None:
     """Embed a batch of texts.
 
     Returns one vector per input, ``[]`` for an empty batch, or ``None`` when no
@@ -215,7 +215,7 @@ def _local_model():
     return _backend()
 
 
-def _embed_local(texts: List[str]) -> Optional[List[List[float]]]:
+def _embed_local(texts: list[str]) -> list[list[float]] | None:
     """Embed locally. None on any failure, so the caller degrades to BM25.
 
     Validated as strictly as the API path: a short batch would misalign vectors
@@ -232,7 +232,7 @@ def _embed_local(texts: List[str]) -> Optional[List[List[float]]]:
         return None
     if rows is None or len(rows) != len(texts):
         return None
-    out: List[List[float]] = []
+    out: list[list[float]] = []
     for row in rows:
         try:
             vec = [float(x) for x in row]
@@ -244,7 +244,7 @@ def _embed_local(texts: List[str]) -> Optional[List[List[float]]]:
     return out
 
 
-def _post(url: str, key: str, payload: dict, timeout: int) -> Optional[dict]:
+def _post(url: str, key: str, payload: dict, timeout: int) -> dict | None:
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers={  # noqa: S310  url is a hardcoded VOYAGE_URL/OPENAI_URL constant
         "Authorization": "Bearer %s" % key,
@@ -257,7 +257,7 @@ def _post(url: str, key: str, payload: dict, timeout: int) -> Optional[dict]:
         return None
 
 
-def _vectors(obj: Optional[dict], n: int) -> Optional[List[List[float]]]:
+def _vectors(obj: dict | None, n: int) -> list[list[float]] | None:
     """Pull ``data[].embedding`` out of an OpenAI-shaped response.
 
     Both Voyage and OpenAI return ``{"data": [{"embedding": [...]}, ...]}``.
@@ -268,7 +268,7 @@ def _vectors(obj: Optional[dict], n: int) -> Optional[List[List[float]]]:
     data = obj.get("data")
     if not isinstance(data, list) or len(data) != n:
         return None
-    out: List[List[float]] = []
+    out: list[list[float]] = []
     for item in data:
         vec = item.get("embedding") if isinstance(item, dict) else None
         if not isinstance(vec, list) or not vec:

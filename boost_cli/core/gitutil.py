@@ -4,7 +4,6 @@ from __future__ import annotations
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional
 
 from ..errors import BoostError
 
@@ -14,7 +13,7 @@ def has_git() -> bool:
     return shutil.which("git") is not None
 
 
-def run(args: List[str], cwd: Optional[Path] = None, check: bool = True,
+def run(args: list[str], cwd: Path | None = None, check: bool = True,
         timeout: int = 300) -> subprocess.CompletedProcess:
     """Run `git *args` with captured text output; return the CompletedProcess.
 
@@ -113,7 +112,7 @@ def remote_url(repo: Path) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def log_for_path(repo: Path, rel_path: str = ".", n: int = 20) -> List[str]:
+def log_for_path(repo: Path, rel_path: str = ".", n: int = 20) -> list[str]:
     """Formatted one-line log entries for a path inside a repo."""
     proc = run(["-C", str(repo), "log", "--date=short", "-n", str(n),
                 "--pretty=format:%h  %ad  %an  %s", "--", rel_path], check=False)

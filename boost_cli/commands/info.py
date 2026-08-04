@@ -15,7 +15,6 @@ import textwrap
 import webbrowser
 from itertools import chain
 from pathlib import Path
-from typing import Dict, List
 
 from .. import cliparse
 from ..core import (
@@ -218,7 +217,7 @@ def _kind_table(heading, items, extra=None):
     count line reuses the heading's trailing noun (`installed rules` -> `rule`)."""
     out.heading(heading)
     headers: tuple = ("NAME", "VERSION", "TAP", "AGENTS")  # `extra` adds a 5th
-    rows: List[tuple] = []   # 4 columns, or 5 when `extra` adds one
+    rows: list[tuple] = []   # 4 columns, or 5 when `extra` adds one
     for name in sorted(items):
         e = items[name]
         row = [name, e.get("version", "?"), e.get("tap", "?"),
@@ -270,7 +269,7 @@ def cmd_list(argv):
         return 0
     if skills:
         out.heading("installed skills")
-        rows: List[tuple] = []   # 5 columns here, 4 for project skills below
+        rows: list[tuple] = []   # 5 columns here, 4 for project skills below
         for name in sorted(skills):
             e = skills[name]
             # Aurora-tinted flags — now that table() aligns by visible width,
@@ -887,8 +886,8 @@ def cmd_deps(argv):
             out.info("  conflicts: %s %s" % (c_name, state))
         return 1 if problems else 0
 
-    unmet: List[dict] = []
-    pairs: List[list] = []   # JSON-dumped, so lists rather than tuples
+    unmet: list[dict] = []
+    pairs: list[list] = []   # JSON-dumped, so lists rather than tuples
     seen: set = set()
     for name in sorted(inst):
         meta = _skill_meta(name) or {}
@@ -943,7 +942,7 @@ def cmd_tag(argv):
     mods = operands[1:]
 
     if args.list_all:
-        mapping: Dict[str, List[str]] = {}
+        mapping: dict[str, list[str]] = {}
         for name, e in sorted(lockfile.installed().items()):
             for t in e.get("tags") or []:
                 mapping.setdefault(t, []).append(name)
