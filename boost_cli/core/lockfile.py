@@ -12,12 +12,18 @@ from __future__ import annotations
 import json
 import shutil
 from contextlib import suppress
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import paths, util
 
 SCHEMA_VERSION = 3
 HISTORY_KEEP = 50
+
+# One section per installable kind, in lookup-precedence order. `find_any`
+# resolves a bare name through these left to right, so a skill shadows a rule
+# of the same name — matching the order `store.uninstall` already established.
+SECTIONS: Tuple[Tuple[str, str], ...] = (
+    ("skill", "skills"), ("rule", "rules"), ("workflow", "workflows"))
 
 
 def _skeleton() -> dict:
@@ -185,6 +191,37 @@ def installed_workflows() -> dict:
     return read()["workflows"]
 
 
+def find_any(name: str) -> Optional[Tuple[str, dict]]:
+    """Resolve ``name`` across all three sections: ``(kind, entry)`` or None.
+
+    This is the accessor every command that takes an installed name should
+    reach for. `get_skill`/`installed()` read the ``skills`` section only,
+    which is how twenty commands came to deny that an installed rule or
+    workflow exists — see docs/roadmap/items/rules-install-but-cannot-be-governed.md.
+    """
+    lock = read()
+    for kind, section in SECTIONS:
+        if name in lock[section]:
+            return kind, lock[section][name]
+    return None
+
+
+def set_entry(kind: str, name: str, entry: dict) -> None:
+    """Insert or replace the lock entry for ``name`` of ``kind`` and persist."""
+    section = dict(SECTIONS).get(kind)
+    if section is None:
+        raise ValueError("unknown lock kind %r" % kind)
+    lock = read()
+    lock[section][name] = entry
+    write(lock)
+
+
+def all_installed() -> Dict[str, dict]:
+    """Every installed item as ``{kind: {name: entry}}``, one read."""
+    lock = read()
+    return {kind: lock[section] for kind, section in SECTIONS}
+
+
 def history_list() -> List[dict]:
     """[{id, path, updated, count}] oldest→newest."""
     out = []
@@ -197,7 +234,8 @@ def history_list() -> List[dict]:
             "id": p.stem.replace("lock-", ""),
             "path": str(p),
             "updated": data.get("updated", "?"),
-            "count": len(data.get("skills", {})),
+            # All three sections: a snapshot holding one rule is not empty.
+            "count": sum(len(data.get(s, {})) for _k, s in SECTIONS),
         })
     return out
 

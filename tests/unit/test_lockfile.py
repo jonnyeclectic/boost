@@ -212,3 +212,63 @@ class TestRulesAndWorkflows:
         assert lockfile.remove_workflow("w") is True    # present -> True
         assert lockfile.get_workflow("w") is None
         assert lockfile.remove_workflow("w") is False    # absent -> False
+
+
+class TestKindAgnosticAccessors:
+    """find_any / set_entry / all_installed — the accessors the command sweep
+    migrates to, so a name resolves no matter which section it lives in."""
+
+    def _seed(self):
+        lockfile.set_skill("alpha", {"version": "1.0.0"})
+        lockfile.set_rule("bravo", {"kind": "rule", "version": "2.0.0"})
+        lockfile.set_workflow("charlie", {"kind": "workflow", "version": "3.0.0"})
+
+    def test_find_any_resolves_each_kind(self, sandbox):
+        self._seed()
+        assert lockfile.find_any("alpha") == ("skill", {"version": "1.0.0"})
+        kind, entry = lockfile.find_any("bravo")
+        assert kind == "rule" and entry["version"] == "2.0.0"
+        kind, entry = lockfile.find_any("charlie")
+        assert kind == "workflow" and entry["version"] == "3.0.0"
+
+    def test_find_any_misses_with_none(self, sandbox):
+        self._seed()
+        assert lockfile.find_any("delta") is None
+
+    def test_find_any_prefers_a_skill_over_a_homonymous_rule(self, sandbox):
+        # Same precedence store.uninstall established: skills shadow rules,
+        # rules shadow workflows, so behavior cannot depend on dict order.
+        lockfile.set_rule("twin", {"kind": "rule"})
+        lockfile.set_skill("twin", {"version": "9"})
+        kind, entry = lockfile.find_any("twin")
+        assert kind == "skill" and entry == {"version": "9"}
+
+    def test_set_entry_dispatches_by_kind(self, sandbox):
+        lockfile.set_entry("rule", "echo", {"kind": "rule", "pinned": True})
+        assert lockfile.get_rule("echo")["pinned"] is True
+        lockfile.set_entry("workflow", "foxtrot", {"kind": "workflow"})
+        assert lockfile.get_workflow("foxtrot") is not None
+        lockfile.set_entry("skill", "golf", {"version": "1"})
+        assert lockfile.get_skill("golf") == {"version": "1"}
+
+    def test_set_entry_rejects_an_unknown_kind(self, sandbox):
+        with pytest.raises(ValueError, match="unknown lock kind"):
+            lockfile.set_entry("plugin", "hotel", {})
+
+    def test_all_installed_returns_every_section(self, sandbox):
+        self._seed()
+        allofit = lockfile.all_installed()
+        assert set(allofit) == {"skill", "rule", "workflow"}
+        assert list(allofit["skill"]) == ["alpha"]
+        assert list(allofit["rule"]) == ["bravo"]
+        assert list(allofit["workflow"]) == ["charlie"]
+
+    def test_history_count_includes_rules_and_workflows(self, sandbox):
+        # One skill, one rule, one workflow, then one more write to snapshot
+        # that state: the snapshot's count must say 3, not 1 — `boost replay`
+        # reads it, and under-reporting made rule history invisible.
+        self._seed()
+        lockfile.set_skill("delta", {"version": "1"})
+        hist = lockfile.history_list()
+        assert hist, "the fourth write must have snapshotted the third state"
+        assert hist[-1]["count"] == 3

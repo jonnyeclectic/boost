@@ -331,27 +331,41 @@ def cmd_policy(argv) -> int:
 
     # check
     pol = policy.load()
-    installed = lockfile.installed()
+    everything = lockfile.all_installed()
     min_score = int(pol.get("min_quality_score") or 0)
-    violations = []  # (skill, problem)
-    for name, entry in sorted(installed.items()):
-        tap = entry.get("tap", "local")
-        if name in pol["blocked_skills"]:
-            violations.append((name, "on the blocklist"))
-        if tap in pol["blocked_taps"]:
-            violations.append((name, "tap %s is blocked" % tap))
-        if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
-            violations.append((name, "tap %s is not on the allowlist" % tap))
-        if min_score:
-            score, _notes = util.score_skill(store.skill_store_dir(name))
-            if score < min_score:
-                violations.append(
-                    (name, "quality score %d < required %d" % (score, min_score)))
-    unpinned = sorted(n for n, e in installed.items() if not e.get("pinned"))
+    violations = []  # (name, problem)
+    total = 0
+    for kind, section in everything.items():
+        for name, entry in sorted(section.items()):
+            total += 1
+            label = name if kind == "skill" else "%s (%s)" % (name, kind)
+            tap = entry.get("tap", "local")
+            if name in pol["blocked_skills"]:
+                violations.append((label, "on the blocklist"))
+            if tap in pol["blocked_taps"]:
+                violations.append((label, "tap %s is blocked" % tap))
+            if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
+                violations.append((label, "tap %s is not on the allowlist" % tap))
+            # Quality scoring reads a store directory, which only skills have.
+            if min_score and kind == "skill":
+                score, _notes = util.score_skill(store.skill_store_dir(name))
+                if score < min_score:
+                    violations.append(
+                        (label, "quality score %d < required %d" % (score, min_score)))
+    unpinned = sorted(
+        n if k == "skill" else "%s (%s)" % (n, k)
+        for k, section in everything.items()
+        for n, e in section.items() if not e.get("pinned"))
+    counts = {kind: len(section) for kind, section in everything.items()}
+    summary = ", ".join("%d %s%s" % (n, kind, "s" if n != 1 else "")
+                        for kind, n in counts.items())
 
     if args.json:
         print(json.dumps({
-            "skills": len(installed),
+            # "skills" stays the total for backward compatibility; the
+            # per-kind counts say what it is made of.
+            "skills": total,
+            "counts": counts,
             "violations": [{"skill": s, "violation": v} for s, v in violations],
             "pin_only": bool(pol["pin_only"]),
             "unpinned": unpinned if pol["pin_only"] else [],
@@ -360,16 +374,16 @@ def cmd_policy(argv) -> int:
 
     if pol["pin_only"]:
         out.info("pin-only mode is on — installs/updates are frozen"
-                 + (" (%d unpinned skill(s): %s)"
+                 + (" (%d unpinned item(s): %s)"
                     % (len(unpinned), ", ".join(unpinned)) if unpinned else ""))
     if violations:
-        out.table(violations, headers=("SKILL", "VIOLATION"))
+        out.table(violations, headers=("ITEM", "VIOLATION"))
         print()
-        out.err("%d policy violation(s) across %d installed skill(s)"
-                % (len(violations), len(installed)),
+        out.err("%d policy violation(s) across %d installed item(s)"
+                % (len(violations), total),
                 hint="adjust with `boost policy set` or remove the offenders")
         return 1
-    out.ok("policy check passed (%d skills)" % len(installed))
+    out.ok("policy check passed (%s)" % summary)
     return 0
 
 

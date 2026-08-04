@@ -229,14 +229,15 @@ class TestPolicy:
 
     def test_check_clean_vs_violations(self, boost, installed):
         r = boost("policy", "check")
-        assert "policy check passed (1 skills)" in r.out
+        assert "policy check passed (1 skill, 0 rules, 0 workflows)" in r.out
         r = boost("policy", "check", "--json")
-        assert json.loads(r.out) == {"skills": 1, "violations": [],
-                                     "pin_only": False, "unpinned": []}
+        assert json.loads(r.out) == {
+            "skills": 1, "counts": {"skill": 1, "rule": 0, "workflow": 0},
+            "violations": [], "pin_only": False, "unpinned": []}
         boost("policy", "set", "blocked_skills", "brainstorming")
         r = boost("policy", "check", expect=1)
         assert "on the blocklist" in r.out
-        assert "1 policy violation(s) across 1 installed skill(s)" in r.err
+        assert "1 policy violation(s) across 1 installed item(s)" in r.err
         r = boost("policy", "check", "--json", expect=1)
         assert json.loads(r.out)["violations"] == [
             {"skill": "brainstorming", "violation": "on the blocklist"}]
@@ -248,7 +249,7 @@ class TestPolicy:
         boost("policy", "set", "pin_only", "true")
         r = boost("policy", "check", expect=1)
         assert "pin-only mode is on — installs/updates are frozen" in r.out
-        assert "1 unpinned skill(s): brainstorming" in r.out
+        assert "1 unpinned item(s): brainstorming" in r.out
         assert "quality score %d < required 101" % score in r.out
 
 

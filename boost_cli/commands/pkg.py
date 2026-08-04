@@ -742,18 +742,17 @@ def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
     tap, reinstall (force) when the source version bumped or its content sha
-    changed — behind the same risky-diff gate the skill loop uses. Returns how
-    many were refreshed.
-
-    Rules and workflows still carry no pin/quarantine flags, which is a separate
-    gap. What they no longer lack is the *diff*: re-applying a CLAUDE.md managed
-    block is cheap to do and expensive to get wrong, because that block is the
-    standing instruction the agent reads every session.
+    changed — behind the same risky-diff gate the skill loop uses, and behind
+    the same pin/quarantine skips: a pinned rule stays put, and refreshing a
+    quarantined one would re-materialize the very content quarantine removed.
+    Returns how many were refreshed.
     """
     import hashlib
     n = 0
     for name, lk in sorted(installed.items()):
         tapname = lk.get("tap")
+        if lk.get("pinned") or lk.get("quarantined"):
+            continue
         if tapname in (None, "local") or tapname not in results:
             continue
         matches = [e for e in catalog.find(name)
@@ -1171,9 +1170,10 @@ def cmd_pin(argv: List[str]) -> int:
                     help="also freeze the exact source commit (integrity pin)")
     args = ap.parse_args(argv)
     rc = _set_pin(args.name, True)
-    entry = lockfile.get_skill(args.name)
-    if rc == 0 and args.commit and entry is not None:
-        commit = integrity.set_commit_pin(args.name, entry)
+    found = lockfile.find_any(args.name)
+    if rc == 0 and args.commit and found is not None:
+        kind, entry = found
+        commit = integrity.set_commit_pin(args.name, entry, kind=kind)
         journal.log("pin-commit", args.name, commit=commit)
         out.ok("commit-pinned %s at %s" % (args.name, commit[:12]))
         out.dim("  `boost verify` fails if the recorded commit ever moves off it")
@@ -1187,29 +1187,34 @@ def cmd_unpin(argv: List[str]) -> int:
     args = ap.parse_args(argv)
     # Releasing the version pin releases the commit pin with it — a commit pin
     # only makes sense while the skill is otherwise frozen.
-    entry = lockfile.get_skill(args.name)
-    if entry and integrity.clear_commit_pin(args.name, entry):
+    found = lockfile.find_any(args.name)
+    if found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]):
         out.dim("  released the commit pin too")
     return _set_pin(args.name, False)
 
 
 def _set_pin(name: str, pinned: bool) -> int:
-    entry = lockfile.get_skill(name)
-    if not entry:
+    # All three kinds pin: the flag is persisted on any lock entry and the
+    # update loops (skills at cmd_update, rules/workflows at
+    # _update_materialized) each honour it.
+    found = lockfile.find_any(name)
+    if not found:
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
+    kind, entry = found
+    label = name if kind == "skill" else "%s %s" % (kind, name)
     version = entry.get("version", "0.0.0")
     if bool(entry.get("pinned")) == pinned:
-        out.info("%s is already %s" % (name, "pinned at v%s" % version
+        out.info("%s is already %s" % (label, "pinned at v%s" % version
                                        if pinned else "unpinned"))
         return 0
     entry["pinned"] = pinned
-    lockfile.set_skill(name, entry)
+    lockfile.set_entry(kind, name, entry)
     journal.log("pin" if pinned else "unpin", name)
     if pinned:
-        out.ok("pinned %s at v%s — `boost update` will skip it" % (name, version))
+        out.ok("pinned %s at v%s — `boost update` will skip it" % (label, version))
     else:
-        out.ok("unpinned %s (v%s) — updates apply again" % (name, version))
+        out.ok("unpinned %s (v%s) — updates apply again" % (label, version))
     return 0
 
 

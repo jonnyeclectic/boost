@@ -2171,3 +2171,120 @@ class TestSyncSeesLinksOutsideTheDeclaredScope:
         assert len(journal.events(action="sync-prune")) == 1
         store.prune_out_of_scope_links(store.sync_plan())
         assert len(journal.events(action="sync-prune")) == 1
+
+
+class TestMaterializedGovernance:
+    """pin/quarantine for rules and workflows — the brakes on an active rule.
+
+    A rule materializes into the standing instructions the agent reads every
+    session, so these tests hold the two flags to the same contract skills
+    already have: a pin survives a forced reinstall, quarantine does not, and
+    quarantine physically removes the artifact while a release restores the
+    exact bytes it removed — never whatever the tap has moved to since.
+    """
+
+    def _claude_md(self):
+        return paths.home() / ".claude" / "CLAUDE.md"
+
+    def test_rule_and_workflow_entries_carry_governance_flags(self, tap):
+        store.install(_rule_entry(tap))
+        store.install(_workflow_entry(tap))
+        rule = lockfile.get_rule("team-conventions")
+        wf = lockfile.get_workflow("ship-it")
+        assert rule["pinned"] is False and rule["quarantined"] is False
+        assert wf["pinned"] is False and wf["quarantined"] is False
+
+    def test_pin_survives_forced_reinstall_quarantine_does_not(self, tap):
+        entry = _rule_entry(tap)
+        store.install(entry)
+        lk = lockfile.get_rule("team-conventions")
+        lk["pinned"] = True
+        lk["quarantined"] = True
+        lockfile.set_rule("team-conventions", lk)
+        store.install(entry, force=True)
+        lk = lockfile.get_rule("team-conventions")
+        assert lk["pinned"] is True, "a forced reinstall must not drop a pin"
+        assert lk["quarantined"] is False, \
+            "reinstall re-materialized the content; a surviving flag would lie"
+
+    def test_quarantine_strips_the_claude_block_and_stashes_it(self, tap):
+        store.install(_rule_entry(tap))
+        assert "Always write tests first." in self._claude_md().read_text(
+            encoding="utf-8")
+        lk = lockfile.get_rule("team-conventions")
+        affected = store.quarantine_materialized(
+            "rule", "team-conventions", lk)
+        assert "claude-code" in affected
+        p = self._claude_md()
+        after = p.read_text(encoding="utf-8") if p.exists() else ""
+        assert "Always write tests first." not in after
+        lk = lockfile.get_rule("team-conventions")
+        assert lk["quarantined"] is True
+        assert any("Always write tests first." in (m.get("content") or "")
+                   for m in lk["quarantine_stash"])
+
+    def test_release_restores_the_exact_bytes(self, tap):
+        store.install(_rule_entry(tap))
+        before = self._claude_md().read_text(encoding="utf-8")
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        restored = store.release_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        assert "claude-code" in restored
+        assert self._claude_md().read_text(encoding="utf-8") == before
+        lk = lockfile.get_rule("team-conventions")
+        assert lk["quarantined"] is False
+        assert "quarantine_stash" not in lk
+
+    def test_release_merges_into_a_user_edited_claude_md(self, tap):
+        # The user's own additions between quarantine and release must survive:
+        # release merges the block back, it does not overwrite the file.
+        store.install(_rule_entry(tap))
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        p = self._claude_md()
+        base = p.read_text(encoding="utf-8") if p.exists() else ""
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(base + "\n# my own notes\n", encoding="utf-8")
+        store.release_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        text = p.read_text(encoding="utf-8")
+        assert "# my own notes" in text
+        assert "Always write tests first." in text
+
+    def test_workflow_quarantine_removes_files_and_release_restores(self, tap):
+        store.install(_workflow_entry(tap))
+        lk = lockfile.get_workflow("ship-it")
+        mats = [Path(m["path"]) for m in lk["materializations"]]
+        assert mats and all(p.is_file() for p in mats)
+        originals = {p: p.read_text(encoding="utf-8") for p in mats}
+        store.quarantine_materialized("workflow", "ship-it", lk)
+        assert all(not p.exists() for p in mats)
+        store.release_materialized(
+            "workflow", "ship-it", lockfile.get_workflow("ship-it"))
+        for p, text in originals.items():
+            assert p.read_text(encoding="utf-8") == text
+
+    def test_sync_plan_does_not_heal_a_quarantined_item(self, tap):
+        # `boost sync` repairing the "missing" materializations would make it
+        # an accidental release — the exact re-arming quarantine must prevent.
+        store.install(_rule_entry(tap))
+        store.install(_workflow_entry(tap))
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        store.quarantine_materialized(
+            "workflow", "ship-it", lockfile.get_workflow("ship-it"))
+        plan = store.sync_plan()
+        assert plan["missing_materializations"] == []
+
+    def test_a_stash_entry_with_no_content_is_skipped_on_release(self, tap):
+        # The artifact was already gone at quarantine time: there is nothing
+        # truthful to restore, and inventing an empty file would be worse.
+        store.install(_workflow_entry(tap))
+        lk = lockfile.get_workflow("ship-it")
+        gone = Path(lk["materializations"][0]["path"])
+        gone.unlink()
+        store.quarantine_materialized("workflow", "ship-it", lk)
+        store.release_materialized(
+            "workflow", "ship-it", lockfile.get_workflow("ship-it"))
+        assert not gone.exists()

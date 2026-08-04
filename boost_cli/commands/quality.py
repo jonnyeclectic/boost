@@ -432,8 +432,13 @@ def cmd_doctor(argv):
     # Rules and workflows don't live in the store — they materialize into agent
     # dirs (a file drop, or a CLAUDE.md managed block). Health = every recorded
     # materialization is still on disk; a deleted file means the install rotted.
-    rules = lockfile.installed_rules()
-    workflows = lockfile.installed_workflows()
+    # Quarantined = materializations removed on purpose; reporting them as rot
+    # would send the user to `boost reinstall`, which re-arms the rule — and
+    # counting them "fully materialized" would be the opposite lie.
+    rules = {n: e for n, e in lockfile.installed_rules().items()
+             if not e.get("quarantined")}
+    workflows = {n: e for n, e in lockfile.installed_workflows().items()
+                 if not e.get("quarantined")}
     mat_issues = 0
     for name, entry in sorted(rules.items()):
         for m in entry.get("materializations") or []:

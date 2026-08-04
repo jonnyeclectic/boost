@@ -382,49 +382,65 @@ def cmd_quarantine(argv):
 
     if args.list_mode:
         rows = []
-        for name, rec in _iter_installed():
-            if not rec.get("quarantined"):
-                continue
-            evs = journal.events(action="quarantine", subject=name)
-            since = util.rel_time(evs[0].get("ts", "")) if evs else "?"
-            rows.append((name, rec.get("version", "?"),
-                         rec.get("tap", "?"), since))
+        for kind, section in lockfile.all_installed().items():
+            for name, rec in sorted(section.items()):
+                if not rec.get("quarantined"):
+                    continue
+                evs = journal.events(action="quarantine", subject=name)
+                since = util.rel_time(evs[0].get("ts", "")) if evs else "?"
+                rows.append((name, kind, rec.get("version", "?"),
+                             rec.get("tap", "?"), since))
         if not rows:
-            out.info("no skills in quarantine")
+            out.info("nothing in quarantine")
             return 0
-        out.table(rows, headers=("SKILL", "VERSION", "TAP", "SINCE"))
+        out.table(rows, headers=("NAME", "KIND", "VERSION", "TAP", "SINCE"))
         return 0
 
     if args.release:
         name = args.release
-        entry = lockfile.get_skill(name)
-        if not entry:
+        found = lockfile.find_any(name)
+        if not found:
             raise BoostError("%s is not installed" % name,
                             hint="see what is with `boost list`")
+        kind, entry = found
         if not entry.get("quarantined"):
             out.warn("%s is not quarantined" % name)
             return 0
-        res = store.link_agents(name)
-        entry["quarantined"] = False
-        entry["agents"] = res.linked
-        lockfile.set_skill(name, entry)
-        journal.log("release", name)
-        out.ok("released %s (linked: %s)" % (name, ", ".join(res.linked) or "none"))
+        if kind == "skill":
+            res = store.link_agents(name)
+            entry["quarantined"] = False
+            entry["agents"] = res.linked
+            lockfile.set_skill(name, entry)
+            journal.log("release", name)
+            out.ok("released %s (linked: %s)"
+                   % (name, ", ".join(res.linked) or "none"))
+        else:
+            restored = store.release_materialized(kind, name, entry)
+            out.ok("released %s %s (restored: %s)"
+                   % (kind, name, ", ".join(restored) or "none"))
         return 0
 
     name = args.name
-    entry = lockfile.get_skill(name)
-    if not entry:
+    found = lockfile.find_any(name)
+    if not found:
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
+    kind, entry = found
     if entry.get("quarantined"):
         out.warn("%s is already quarantined" % name)
         return 0
-    store.unlink_agents(name)
-    entry["quarantined"] = True
-    lockfile.set_skill(name, entry)
-    journal.log("quarantine", name)
-    out.ok("quarantined %s (store intact, links removed)" % name)
+    if kind == "skill":
+        store.unlink_agents(name)
+        entry["quarantined"] = True
+        lockfile.set_skill(name, entry)
+        journal.log("quarantine", name)
+        out.ok("quarantined %s (store intact, links removed)" % name)
+    else:
+        # A rule/workflow has no store copy to keep — the artifact is stashed
+        # on the lock entry and `--release` restores it byte-for-byte.
+        store.quarantine_materialized(kind, name, entry)
+        out.ok("quarantined %s %s (content stashed, materializations removed)"
+               % (kind, name))
     return 0
 
 

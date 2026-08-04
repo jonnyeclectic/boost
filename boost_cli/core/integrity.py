@@ -162,26 +162,28 @@ def enforce(name: str, entry: Optional[dict] = None) -> None:
                  "the pinned commit" % name)
 
 
-def set_commit_pin(name: str, entry: dict) -> str:
+def set_commit_pin(name: str, entry: dict, kind: str = "skill") -> str:
     """Freeze ``name`` to its currently-installed commit and persist.
 
     Returns the commit that was pinned. Raises BoostError if the entry has no
     recorded commit to pin (a local ``import`` with no source commit).
+    ``kind`` routes persistence: rules and workflows record a source commit
+    too, so they commit-pin the same way.
     """
     commit = entry.get("commit")
     if not commit:
         raise BoostError(
             "%s has no recorded source commit to pin" % name,
-            hint="commit pinning needs a skill installed from a tapped repo")
+            hint="commit pinning needs an item installed from a tapped repo")
     entry["commit_pin"] = commit
-    lockfile.set_skill(name, entry)
+    lockfile.set_entry(kind, name, entry)
     return commit
 
 
-def clear_commit_pin(name: str, entry: dict) -> bool:
+def clear_commit_pin(name: str, entry: dict, kind: str = "skill") -> bool:
     """Drop a commit pin from ``name``; True if one was present."""
     if not entry.get("commit_pin"):
         return False
     del entry["commit_pin"]
-    lockfile.set_skill(name, entry)
+    lockfile.set_entry(kind, name, entry)
     return True

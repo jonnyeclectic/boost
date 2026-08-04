@@ -514,7 +514,51 @@ class TestQuarantine:
 
     def test_list_empty(self, boost, sandbox):
         r = boost("quarantine", "--list")
-        assert "no skills in quarantine" in r.out
+        assert "nothing in quarantine" in r.out
+
+
+class TestQuarantineMaterialized:
+    """The CLI round trip for the kinds quarantine used to deny existed."""
+
+    def _seed_claude_rule(self, name="house", body="Do the thing."):
+        from boost_cli.core import lockfile, rules
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.parent.mkdir(parents=True, exist_ok=True)
+        cm.write_text(rules.merge_block("# my own notes\n", name, body),
+                      encoding="utf-8")
+        lockfile.set_rule(name, {
+            "kind": "rule", "version": "1.0.0", "tap": "some-tap",
+            "materializations": [
+                {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
+        return cm
+
+    def test_rule_quarantine_release_round_trip(self, boost, sandbox):
+        cm = self._seed_claude_rule()
+        before = cm.read_text(encoding="utf-8")
+
+        r = boost("quarantine", "house")
+        assert "quarantined rule house" in r.out
+        after = cm.read_text(encoding="utf-8")
+        assert "Do the thing." not in after
+        assert "# my own notes" in after, "only the managed block goes"
+
+        r = boost("quarantine", "--list")
+        assert "house" in r.out and "rule" in r.out
+
+        # Neither of the repair paths may re-arm it.
+        r = boost("doctor")
+        assert "missing its claude-code materialization" not in r.out
+        r = boost("sync")
+        assert "Do the thing." not in cm.read_text(encoding="utf-8")
+
+        r = boost("quarantine", "--release", "house")
+        assert "released rule house" in r.out
+        assert cm.read_text(encoding="utf-8") == before
+
+    def test_release_of_an_unquarantined_rule_says_so(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("quarantine", "--release", "house")
+        assert "house is not quarantined" in r.out
 
 
 # ── decay ────────────────────────────────────────────────────────────────

@@ -832,6 +832,11 @@ def _install_rule(entry: dict, force: bool = False,
         "base": str(resolved_base) if resolved_base is not None else None,
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
+        # Same governance contract as a skill entry: a pin survives a forced
+        # reinstall, quarantine does not — the reinstall just re-materialized
+        # the content, so a surviving flag would be a lie.
+        "pinned": bool((existing or {}).get("pinned")),
+        "quarantined": False,
         "materializations": materializations,
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
@@ -866,6 +871,77 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
     lockfile.remove_rule(name)
     journal.log("uninstall", name)
     return {"name": name, "unlinked": removed, "entry": rule}
+
+
+def quarantine_materialized(kind: str, name: str, entry: dict) -> List[str]:
+    """Remove every recorded materialization of a rule/workflow, stashing it.
+
+    The counterpart of skill quarantine's "store intact, links removed". These
+    kinds have no store copy — the materialization IS the only artifact — so
+    what gets removed is stashed on the lock entry and
+    :func:`release_materialized` restores it byte-for-byte. Restoring from the
+    stash rather than the tap matters: the tap may have moved (or vanished)
+    since, and a release must never be a covert update.
+
+    Persists the entry (``quarantined`` + ``quarantine_stash``) and returns the
+    agents whose artifacts were removed.
+    """
+    from . import rules
+    stash: List[dict] = []
+    affected: List[str] = []
+    for m in entry.get("materializations") or []:
+        path = Path(m.get("path", ""))
+        content: Optional[str] = None
+        if m.get("mode") == rules.MODE_CLAUDE:
+            if path.exists():
+                text = path.read_text(encoding="utf-8")
+                content = rules.read_block(text, name)
+                if content is not None:
+                    stripped = rules.strip_block(text, name)
+                    if stripped:
+                        util.atomic_write_text(path, stripped)
+                    else:
+                        path.unlink()  # file held only our block
+        elif path.is_file():
+            content = path.read_text(encoding="utf-8")
+            path.unlink()
+        stash.append({**m, "content": content})
+        if m.get("agent"):
+            affected.append(m["agent"])
+    entry["quarantined"] = True
+    entry["quarantine_stash"] = stash
+    lockfile.set_entry(kind, name, entry)
+    journal.log("quarantine", name)
+    return affected
+
+
+def release_materialized(kind: str, name: str, entry: dict) -> List[str]:
+    """Restore what :func:`quarantine_materialized` removed, byte-for-byte.
+
+    A stash record whose ``content`` is None (the artifact was already gone at
+    quarantine time) is skipped — there is nothing truthful to restore.
+    Persists the entry and returns the agents restored.
+    """
+    from . import rules
+    restored: List[str] = []
+    for m in entry.get("quarantine_stash") or []:
+        content = m.get("content")
+        if content is None:
+            continue
+        path = Path(m.get("path", ""))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if m.get("mode") == rules.MODE_CLAUDE:
+            current = path.read_text(encoding="utf-8") if path.exists() else ""
+            util.atomic_write_text(path, rules.merge_block(current, name, content))
+        else:
+            util.atomic_write_text(path, content)
+        if m.get("agent"):
+            restored.append(m["agent"])
+    entry["quarantined"] = False
+    entry.pop("quarantine_stash", None)
+    lockfile.set_entry(kind, name, entry)
+    journal.log("release", name)
+    return restored
 
 
 def _install_workflow(entry: dict, force: bool = False,
@@ -939,6 +1015,10 @@ def _install_workflow(entry: dict, force: bool = False,
         "base": str(resolved_base) if resolved_base is not None else None,
         "installed_at": (existing or {}).get("installed_at", now),
         "updated_at": now,
+        # Same governance contract as a skill entry: a pin survives a forced
+        # reinstall, quarantine does not.
+        "pinned": bool((existing or {}).get("pinned")),
+        "quarantined": False,
         "materializations": materializations,
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
@@ -1191,10 +1271,17 @@ def sync_plan() -> Dict[str, list]:
     # A materialization whose file (or CLAUDE.md block) is gone can be repaired
     # by re-materializing from the tap, same as a missing skill store dir.
     for name, entry in lockfile.installed_rules().items():
+        # A quarantined rule's materializations are ABSENT BY DESIGN — the
+        # stash holds them. Repairing here would re-arm what quarantine
+        # disarmed, making `boost sync` an accidental release.
+        if entry.get("quarantined"):
+            continue
         if any(not _rule_materialization_ok(name, m)
                for m in entry.get("materializations") or []):
             plan["missing_materializations"].append(("rule", name))
     for name, entry in lockfile.installed_workflows().items():
+        if entry.get("quarantined"):
+            continue
         if any(not Path(m.get("path", "")).is_file()
                for m in entry.get("materializations") or []):
             plan["missing_materializations"].append(("workflow", name))
