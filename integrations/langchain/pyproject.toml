@@ -24,13 +24,17 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
 ]
-# boost-skill-cli's floor is >=0.1 rather than a tight pin: this package only
-# touches boost_cli.core seams that predate 0.1 (rag, catalog, store,
-# frontmatter), and pinning tighter would force a lockstep release for every
-# CLI patch. langchain-core is capped at <2 because BaseRetriever's contract
-# is what this package implements against, and that contract moves on majors.
+# boost-skill-cli's floor is measured, not guessed: rag.retrieve_any first
+# shipped in 1.0.291 and rag.surface (the full_content=False fallback) in
+# 1.0.320, so every seam this package calls exists from 1.0.320 on. A looser
+# floor resolved cleanly and then crashed the flagship class on first call —
+# an adversarial install proved it. No upper bound: the seams are the same
+# ones `boost search` itself runs on, so removing one would fail boost's own
+# gate before it could break this package. langchain-core is capped at <2
+# because BaseRetriever's contract is what this package implements against,
+# and that contract moves on majors.
 dependencies = [
-    "boost-skill-cli>=0.1",
+    "boost-skill-cli>=1.0.320",
     "langchain-core>=1,<2",
 ]
 

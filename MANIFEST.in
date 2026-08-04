@@ -13,3 +13,6 @@ exclude .coverage
 # only; nothing in the shipped runtime touches node.
 exclude package.json package-lock.json
 global-exclude __pycache__ *.pyc *.pyo .DS_Store
+# integrations/ hosts separately-versioned distributions (boost-langchain);
+# boost-skill-cli's own sdist must not ship a nested pyproject.
+prune integrations

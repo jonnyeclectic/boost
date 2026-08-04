@@ -1,9 +1,12 @@
 """A LangChain retriever over boost's tapped skill/rule/workflow catalog."""
 from __future__ import annotations
 
+from typing import Literal
+
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
+from pydantic import Field
 
 from boost_cli.core import rag
 
@@ -27,8 +30,11 @@ class BoostRetriever(BaseRetriever):
     choosing among items wants).
     """
 
-    k: int = 8
-    kind: str | None = None
+    # Validated at construction: a typo'd kind would otherwise return [] for
+    # every query, indistinguishable from an empty catalog; a negative k
+    # would silently drop the last hit via slice semantics.
+    k: int = Field(default=8, ge=0)
+    kind: Literal["skill", "rule", "workflow"] | None = None
     full_content: bool = True
 
     def _get_relevant_documents(

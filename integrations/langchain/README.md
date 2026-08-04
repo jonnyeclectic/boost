@@ -42,9 +42,11 @@ chain = (
 chain.invoke("how should this repo handle commit messages?")
 ```
 
-Each `Document` carries the item's full body as `page_content` (pass
-`full_content=False` for just the one-line description) and
-`name` / `kind` / `tap` / `version` / `source` / `engine` in `metadata`.
+Each `Document`'s `page_content` is the item's *indexed text* — its name and
+one-line description followed by the full body, i.e. exactly the surface BM25
+scored, so what you retrieve is what matched (pass `full_content=False` for
+just the description). `metadata` carries
+`name` / `kind` / `tap` / `version` / `source` / `engine`.
 
 ## Filtering by kind
 
@@ -66,6 +68,8 @@ ladder:
 
 - **No API key needed, ever.** The always-on engine is a pure-stdlib BM25
   full-content index that builds itself on first use.
+- **The BM25 tier tokenizes `[a-z0-9]`.** Non-Latin queries (CJK, emoji)
+  retrieve nothing from it; the dense tier below is what serves them.
 - **Dense retrieval is an upgrade, not an entry fee.** With boost's `[rag]`
   extra installed the two engines are fused by reciprocal rank fusion; a
   Voyage or OpenAI key improves embedding quality but a local model ships

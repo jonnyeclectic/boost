@@ -54,3 +54,16 @@ def test_missing_skill_raises_a_clear_error(sandbox):
     loader = SkillMarkdownLoader.from_installed("never-installed")
     with pytest.raises(FileNotFoundError):
         loader.load()
+
+
+def test_from_installed_declines_a_rule_by_kind(sandbox):
+    # A rule has no store copy; a bare FileNotFoundError would deny that the
+    # name is installed at all — the decline must name the kind instead.
+    import pytest
+
+    from boost_cli.core import lockfile
+    from boost_langchain import SkillMarkdownLoader
+    lockfile.set_rule("house-style", {"kind": "rule", "version": "1.0.0",
+                                      "tap": "t", "materializations": []})
+    with pytest.raises(ValueError, match="house-style is a rule"):
+        SkillMarkdownLoader.from_installed("house-style")

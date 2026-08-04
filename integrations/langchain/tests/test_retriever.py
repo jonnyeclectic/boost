@@ -75,3 +75,23 @@ def test_full_content_false_uses_the_description(indexed):
     assert top.metadata["name"] == "brainstorming"
     assert "Structured ideation" in top.page_content
     assert "diverge phase" not in top.page_content.lower()
+
+
+def test_an_unknown_kind_is_rejected_at_construction(sandbox):
+    # A typo'd kind would otherwise return [] for every query —
+    # indistinguishable from an empty catalog, and silent.
+    import pytest
+    from pydantic import ValidationError
+
+    from boost_langchain import BoostRetriever
+    with pytest.raises(ValidationError):
+        BoostRetriever(kind="plugin")
+
+
+def test_a_negative_k_is_rejected_at_construction(sandbox):
+    import pytest
+    from pydantic import ValidationError
+
+    from boost_langchain import BoostRetriever
+    with pytest.raises(ValidationError):
+        BoostRetriever(k=-1)
