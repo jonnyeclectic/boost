@@ -13,6 +13,7 @@ import subprocess
 import sys
 import textwrap
 import webbrowser
+from itertools import chain
 from pathlib import Path
 from typing import Dict, List
 
@@ -853,7 +854,7 @@ def cmd_deps(argv):
     # `requires:`/`conflicts:` name an installed item, not a kind — a
     # requirement met by an installed rule or workflow is met, and denying it
     # ("✗ not installed" while `boost list` shows it) was the section-blind lie.
-    have = {n for section in lockfile.all_installed().values() for n in section}
+    have = set(chain.from_iterable(lockfile.all_installed().values()))
 
     if args.name:
         text, _kind, _lock, _cat = _resolve_text(args.name)

@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 import zipfile
 from datetime import UTC, datetime
+from itertools import chain
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -314,8 +315,7 @@ def _expand_dependencies(entries: List[dict]) -> tuple[List[dict], resolve.Resol
     """
     # All three lock sections, not just skills: a rule or workflow already
     # installed under a required name must not be re-added to the plan.
-    installed = frozenset(n for section in lockfile.all_installed().values()
-                          for n in section)
+    installed = frozenset(chain.from_iterable(lockfile.all_installed().values()))
     res = resolve.resolve(
         [e["name"] for e in entries],
         lambda n: _skill_relations(n, "requires"),
