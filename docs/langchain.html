@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boost — the LangChain / LangGraph / LangSmith integration</title>
+<meta name="description" content="boost's skill catalog behind LangChain's retriever contract: BoostRetriever over the measured BM25 + dense engine, a SKILL.md document loader, a LangGraph node that injects procedures mid-run, and LangSmith tracing. Architecture, sequence diagram, and paste-ready code.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%2307080f'/%3E%3Ctext x='50' y='70' font-size='58' font-family='monospace' font-weight='bold' fill='%2340cbe3' text-anchor='middle'%3E%E2%9C%A6%3C/text%3E%3C/svg%3E">
+<!-- Shared Aurora design system. Recolour everything by editing style/boost.css. -->
+<link rel="stylesheet" href="../style/boost.css">
+<style>
+  /* Page-specific layout — built only on boost.css :root tokens so it stays on-palette. */
+  main { padding-bottom: 40px; }
+  section { padding: 92px 0 8px; }
+  /* padding-block, not the four-value shorthand: `padding: 84px 0 8px`
+     also sets padding-inline to 0, and this block is linked AFTER
+     boost.css, so it silently stripped .wrap's 24px gutter and ran the
+     hero edge-to-edge on anything narrower than the 1120px column. */
+  .hero { padding-block: 84px 8px; }
+  .hero h1 { font-size: clamp(38px, 6vw, 66px); font-weight: 800;
+             letter-spacing: -.035em; line-height: 1.06; max-width: 900px;
+             text-wrap: balance; margin-top: 24px; }
+  .hero p.lede { max-width: 700px; margin-top: 24px; font-size: 18.5px; color: var(--text-2); }
+  .crumbs { font-family: var(--mono); font-size: 12.5px; color: var(--text-3); margin-bottom: 4px; }
+  /* Underlined, not colour-only: --sky on --text-3 is 2.47:1, under the 3:1
+     WCAG 1.4.1 needs to distinguish a link from its surrounding text by
+     colour alone. The underline is the non-colour cue (same pattern as
+     `footer a` in boost.css). Caught by the axe-core sweep. */
+  .crumbs a { color: var(--sky); text-decoration: underline;
+              text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  .stats { margin-top: 58px; }
+
+  .lead { max-width: 760px; margin: 0 auto; text-align: center; color: var(--text-2);
+          font-size: 16.5px; }
+  .prose { max-width: 720px; margin: 28px auto 0; color: var(--text-2); font-size: 15.5px; }
+  .prose p { margin-top: 14px; }
+  .prose b { color: var(--text); }
+  .prose code, .lead code { font-family: var(--mono); font-size: .86em; color: var(--sky);
+          background: rgba(64,203,227,.09); padding: 1px 6px; border-radius: 6px; }
+  .prose a, .snip a { color: var(--sky); text-decoration: underline;
+          text-underline-offset: 2px; text-decoration-thickness: 1px; }
+
+  /* Diagram frame: a glass surface that scrolls its own wide SVG (body never scrolls X). */
+  .diagram { margin: 40px auto 0; padding: 24px; border: 1px solid var(--line);
+             border-radius: var(--radius-lg); background: var(--panel); overflow-x: auto; }
+  .diagram svg { display: block; min-width: 700px; width: 100%; height: auto; }
+  .caption { margin: 14px auto 0; max-width: 720px; text-align: center; font-size: 13px;
+             color: var(--text-3); font-family: var(--mono); }
+
+  /* SVG shared type + shapes via CSS classes (keeps the markup lean, on-palette). */
+  svg .box   { fill: rgba(255,255,255,.03); stroke: var(--line); }
+  svg .box-hi { fill: rgba(64,203,227,.07); stroke: rgba(64,203,227,.38); }
+  svg .box-gate { fill: rgba(74,222,128,.06); stroke: rgba(74,222,128,.42); }
+  svg .head  { font-family: var(--sans); font-size: 13.5px; font-weight: 700; fill: var(--text); }
+  svg .lbl   { font-family: var(--mono); font-size: 12px; fill: var(--text); }
+  svg .lbl-s { font-family: var(--mono); font-size: 11px; fill: var(--text-2); }
+  svg .lbl-t { font-family: var(--mono); font-size: 10.5px; fill: var(--text-3); }
+  svg .flow  { stroke: var(--line-hi); stroke-width: 1.5; fill: none; }
+  svg .flow-c { stroke: var(--cyan); stroke-width: 1.5; fill: none; }
+  svg .life  { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+  svg .msg   { stroke: var(--cyan); stroke-width: 1.4; fill: none; }
+  svg .ret   { stroke: var(--green); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+  svg .ok    { font-family: var(--mono); font-size: 11px; fill: var(--green); font-weight: 700; }
+
+  /* Annotated Python (same token classes adapters.html uses). */
+  .snip { max-width: 820px; margin: 0 auto; }
+  pre.code { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: var(--text);
+             background: var(--panel-solid); border: 1px solid var(--line); border-radius: 12px;
+             padding: 16px 18px; overflow-x: auto; margin-top: 24px; }
+  pre.code .c { color: var(--text-3); }
+  pre.code .k { color: var(--violet); }
+  pre.code .s { color: var(--green); }
+  pre.code .fn { color: var(--cyan); }
+
+  ul.ticks { list-style: none; padding: 0; max-width: 760px; margin: 26px auto 0; }
+  ul.ticks li { position: relative; padding-left: 26px; margin: 12px 0; color: var(--text-2);
+                font-size: 14.5px; line-height: 1.6; }
+  ul.ticks li::before { content: "✦"; position: absolute; left: 0; color: var(--cyan); }
+  ul.ticks li b { color: var(--text); }
+  ul.ticks li code { font-family: var(--mono); font-size: .86em; color: var(--sky);
+                background: rgba(64,203,227,.09); padding: 1px 6px; border-radius: 6px; }
+
+  .callout { max-width: 760px; margin: 26px auto 0; border-left: 3px solid var(--yellow);
+             background: rgba(250,204,21,.06); padding: 14px 18px;
+             border-radius: 0 10px 10px 0; color: var(--text-2); font-size: 14px; }
+  .callout b { color: var(--yellow); }
+  .callout code { font-family: var(--mono); font-size: .86em; color: var(--sky); }
+
+  /* metadata contract table */
+  table.contract { width: 100%; border-collapse: collapse; margin-top: 30px; font-size: 14px; }
+  table.contract th, table.contract td { text-align: left; padding: 13px 14px;
+             border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  table.contract th { font-family: var(--mono); font-size: 11.5px; color: var(--text-2);
+             text-transform: uppercase; letter-spacing: .05em; }
+  table.contract td code { font-family: var(--mono); font-size: 12.5px; color: var(--sky); }
+  table.contract tr:last-child td { border-bottom: none; }
+
+  .term-wrap { max-width: 820px; margin: 40px auto 0; }
+
+  /* narrow screens: tables scroll inside themselves instead of widening the
+     document (caught by tests/visual/visual_check.mjs) */
+  @media (max-width: 760px) { table.contract { display: block; overflow-x: auto; } }
+</style>
+</head>
+<body>
+<a class="skip" href="#top">Skip to content</a>
+
+<header>
+  <div class="wrap site-nav">
+    <a class="logo" href="index.html"><b>boost</b><span>LangChain</span></a>
+    <ul>
+      <li><a href="index.html">Guide</a></li>
+      <li><a href="commands.html">Commands</a></li>
+      <li><a href="demo.html">Try the search</a></li>
+      <li><a href="chat.html">How chat works</a></li>
+      <li><a href="eval.html">Evaluation</a></li>
+      <li><a href="adapters.html">Adapters</a></li>
+      <li><a aria-current="page" href="#top">LangChain</a></li>
+      <li><a href="mcp-hub.html">MCP&nbsp;Hub</a></li>
+      <li><a href="https://github.com/jonnyeclectic/boost">GitHub</a></li>
+    </ul>
+  </div>
+</header>
+
+<main id="top">
+  <!-- ===== hero ===== -->
+  <div class="wrap hero">
+    <p class="crumbs"><a href="index.html">boost</a> / docs / langchain integration</p>
+    <span class="badge">Interop · shipped in PR #466</span>
+    <h1>The skill catalog, <span class="grad-text">behind LangChain's</span> retriever contract.</h1>
+    <p class="lede">boost's tapped catalog is 10,000+ retrievable procedures with frontmatter,
+      provenance and a lock file. <code>boost-langchain</code> makes it addressable from a Python
+      agent runtime: a <b>retriever</b> over the same measured engine <code>boost search</code>
+      runs on, a <b>document loader</b> for one SKILL.md, and a <b>LangGraph node</b> that pulls
+      the right procedure into a run mid-flight. No API key, ever — and nothing tapped means
+      <code>[]</code>, not an exception.</p>
+
+    <div class="stats">
+      <div class="stat reveal"><b>3</b><span>Seams, all thin on purpose</span></div>
+      <div class="stat reveal"><b>10k+</b><span>Catalog items retrievable</span></div>
+      <div class="stat reveal"><b>4</b><span>Metrics floored behind the engine</span></div>
+      <div class="stat reveal"><b>0</b><span>API keys required</span></div>
+    </div>
+  </div>
+
+  <!-- ===== the fit ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">The fit</span>
+      <h2 class="sec-title">Two audiences — <span class="grad-text">one of them should leave now</span></h2>
+      <p class="lead" style="margin-top:20px">If you are a LangChain developer who just wants
+        skills in your <em>editor</em> — Claude Code, Cursor, Windsurf, Gemini CLI — you do not
+        need this package. Install the <a href="https://pypi.org/project/boost-skill-cli/"
+        style="color:var(--sky);text-decoration:underline;text-underline-offset:2px">boost CLI</a>
+        and run <code>boost install &lt;skill&gt;</code>: no langchain dependency at all.</p>
+      <div class="prose">
+        <p>This package exists for the other direction: putting the catalog <b>inside a LangChain
+          application</b>, so a chain can search it, stuff it into context, or route on it at
+          runtime. That scoping decision shaped the whole API — it is <b>a retriever, not an
+          installer</b>. Installing is the CLI's job, with its lock file and agent symlinks;
+          duplicating that path here would have created a second, redundant way to install and
+          nothing else. What a Python agent runtime actually lacks is <em>reach</em>: the same
+          procedure otherwise gets re-written as a prompt string by hand.</p>
+        <p>Everything that decides <b>what comes back</b> — ranking, fusion, dedupe, the degrade
+          ladder — stays in <code>boost_cli.core</code>, where the repo's
+          <a href="eval.html">eval gate</a> measures it. This package only translates the result
+          into LangChain's types.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== architecture ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Architecture</span>
+      <h2 class="sec-title">Three thin seams over one measured engine</h2>
+      <p class="lead" style="margin-top:20px">Queries flow left to right; Documents flow back.
+        The seams own <em>translation</em>; the engine owns <em>retrieval</em>; the gate below
+        the engine is why wrapping it beats re-embedding the catalog.</p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 900 400" role="img" aria-label="boost-langchain architecture: a LangChain app calls the boost_langchain seams, which call boost's retrieval engine over the tapped catalog; the Tier-1 eval gate floors the engine's quality">
+          <defs>
+            <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#7dd3fc"></path>
+            </marker>
+            <marker id="ahc" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#40cbe3"></path>
+            </marker>
+            <marker id="ahg" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#4ade80"></path>
+            </marker>
+          </defs>
+
+          <!-- your app -->
+          <rect class="box" x="20" y="40" width="188" height="120" rx="12"></rect>
+          <text class="head" x="114" y="68" text-anchor="middle">Your LangChain app</text>
+          <text class="lbl-s" x="114" y="92" text-anchor="middle">chain · | · Runnable</text>
+          <text class="lbl-s" x="114" y="110" text-anchor="middle">LangGraph StateGraph</text>
+          <text class="lbl-s" x="114" y="128" text-anchor="middle">prompt assembly</text>
+
+          <!-- boost_langchain -->
+          <rect class="box-hi" x="248" y="40" width="188" height="120" rx="12"></rect>
+          <text class="head" x="342" y="64" text-anchor="middle">boost_langchain</text>
+          <text class="lbl-s" x="342" y="86" text-anchor="middle">BoostRetriever</text>
+          <text class="lbl-s" x="342" y="104" text-anchor="middle">skill_context_node</text>
+          <text class="lbl-s" x="342" y="122" text-anchor="middle">SkillMarkdownLoader</text>
+          <text class="lbl-t" x="342" y="146" text-anchor="middle">translation only — no ranking</text>
+
+          <!-- engine -->
+          <rect class="box" x="476" y="40" width="188" height="120" rx="12"></rect>
+          <text class="head" x="570" y="64" text-anchor="middle">boost engine</text>
+          <text class="lbl-s" x="570" y="86" text-anchor="middle">BM25 full-content</text>
+          <text class="lbl-s" x="570" y="104" text-anchor="middle">⊕ dense (optional)</text>
+          <text class="lbl-s" x="570" y="122" text-anchor="middle">rag.rrf_fuse · RRF_K=60</text>
+          <text class="lbl-t" x="570" y="146" text-anchor="middle">boost_cli.core — same as `boost search`</text>
+
+          <!-- catalog -->
+          <rect class="box" x="704" y="40" width="176" height="120" rx="12"></rect>
+          <text class="head" x="792" y="68" text-anchor="middle">Tapped catalog</text>
+          <text class="lbl-s" x="792" y="92" text-anchor="middle">~/.boost/repos</text>
+          <text class="lbl-s" x="792" y="110" text-anchor="middle">skills · rules</text>
+          <text class="lbl-s" x="792" y="128" text-anchor="middle">workflows</text>
+
+          <!-- forward flow -->
+          <path class="flow" marker-end="url(#ah)" d="M208 84 L246 84"></path>
+          <path class="flow" marker-end="url(#ah)" d="M436 84 L474 84"></path>
+          <path class="flow" marker-end="url(#ah)" d="M664 84 L702 84"></path>
+          <text class="lbl-t" x="227" y="74" text-anchor="middle">query</text>
+          <text class="lbl-t" x="455" y="74" text-anchor="middle">k · kind</text>
+          <text class="lbl-t" x="683" y="74" text-anchor="middle">index</text>
+
+          <!-- return flow -->
+          <path class="ret" marker-end="url(#ahg)" d="M474 132 L436 132"></path>
+          <path class="ret" marker-end="url(#ahg)" d="M246 132 L208 132"></path>
+          <text class="lbl-t" x="455" y="124" text-anchor="middle">hits</text>
+          <text class="lbl-t" x="227" y="124" text-anchor="middle">Documents</text>
+
+          <!-- the gate feeds the engine's credibility from below -->
+          <rect class="box-gate" x="440" y="222" width="260" height="72" rx="12"></rect>
+          <text class="head" x="570" y="248" text-anchor="middle">Tier-1 eval gate · required</text>
+          <text class="lbl-s" x="570" y="268" text-anchor="middle">floors recall@k · hit@1 · MRR · nDCG@k</text>
+          <text class="lbl-t" x="570" y="284" text-anchor="middle">golden set, every merge — see the Evaluation page</text>
+          <path class="flow-c" marker-end="url(#ahc)" d="M570 222 L570 162"></path>
+          <text class="lbl-t" x="582" y="196">measures this engine</text>
+
+          <!-- degrade ladder footer band -->
+          <text class="lbl" x="20" y="336">Degrades →</text>
+          <text class="lbl-s" x="112" y="336"><tspan fill="#4ade80">hybrid RRF (BM25 + dense)</tspan>  →  dense vectors  →  BM25 full-content  →  <tspan fill="#facc15">[]</tspan> when nothing is tapped</text>
+          <text class="lbl-t" x="112" y="358">metadata["engine"] names which rung answered — the first thing to check when quality surprises</text>
+          <text class="lbl-t" x="112" y="378">an empty shelf is an answer, not an error: the chain keeps running without boost context</text>
+        </svg>
+      </div>
+      <p class="caption">The seams never rank. Everything that decides what comes back lives in
+        boost_cli.core, under the gate.</p>
+
+      <ul class="ticks">
+        <li><b>Reuse, don't re-embed.</b> The retriever wraps <code>rag.retrieve_any</code> — the
+          engine <code>boost search</code> runs on — rather than re-embedding the catalog into a
+          vector store. Retrieval quality is the reason: boost's Tier-1 gate floors
+          <b>recall@k, hit@1, MRR and nDCG@k</b> over a golden query set on every merge, so this
+          retriever ships with numbers rather than claims. A fresh embedding pipeline here would
+          start from zero evidence.</li>
+        <li><b>Degrade to <code>[]</code>, never raise.</b> The always-on engine is a pure-stdlib
+          BM25 full-content index that builds itself on first use (<code>rag.ensure()</code> makes
+          a fresh tap behave like <code>boost search</code> does). With boost's <code>[rag]</code>
+          extra the dense engine joins by reciprocal rank fusion; a Voyage or OpenAI key upgrades
+          embedding quality but a local model ships with the extra. Nothing tapped returns
+          <code>[]</code> — a chain keeps running without boost context rather than crashing on it.
+          One honest caveat: the BM25 tier tokenizes <code>[a-z0-9]</code>, so non-Latin queries
+          (CJK, emoji) retrieve nothing from it — the dense tier is what serves them.</li>
+        <li><b>One catalog, three kinds, one filter.</b> boost indexes <code>skill</code>
+          (SKILL.md), <code>rule</code> (.mdc, .cursorrules, …) and <code>workflow</code> (slash
+          commands / subagents). <code>kind</code> narrows retrieval to one of them — a router
+          choosing among rules should not wade through skills — and <code>None</code> searches
+          all three.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ===== the snippet ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Paste this</span>
+      <h2 class="sec-title">Twenty lines, <span class="grad-text">standard chain shape</span></h2>
+      <p class="lead" style="margin-top:20px"><code>BoostRetriever</code> is a
+        <code>langchain-core</code> <code>BaseRetriever</code>, so it is a Runnable and drops into
+        the usual retrieval-chain shape unchanged.</p>
+
+      <div class="snip">
+        <pre class="code"><span class="k">from</span> boost_langchain <span class="k">import</span> <span class="fn">BoostRetriever</span>
+
+retriever = <span class="fn">BoostRetriever</span>(k=<span class="s">4</span>)
+docs = retriever.<span class="fn">invoke</span>(<span class="s">"set up code review for a python repo"</span>)
+<span class="k">for</span> d <span class="k">in</span> docs:
+    <span class="fn">print</span>(d.metadata[<span class="s">"name"</span>], d.metadata[<span class="s">"kind"</span>], d.metadata[<span class="s">"tap"</span>])
+
+<span class="c"># It is a standard Runnable retriever, so the usual chain shape works:</span>
+<span class="k">from</span> langchain_core.output_parsers <span class="k">import</span> <span class="fn">StrOutputParser</span>
+<span class="k">from</span> langchain_core.runnables <span class="k">import</span> <span class="fn">RunnablePassthrough</span>
+
+chain = (
+    {<span class="s">"context"</span>: retriever, <span class="s">"question"</span>: <span class="fn">RunnablePassthrough</span>()}
+    | prompt          <span class="c"># your ChatPromptTemplate</span>
+    | model           <span class="c"># your chat model</span>
+    | <span class="fn">StrOutputParser</span>()
+)
+chain.<span class="fn">invoke</span>(<span class="s">"how should this repo handle commit messages?"</span>)
+
+<span class="c"># kind narrows retrieval to one of boost's three item kinds:</span>
+<span class="fn">BoostRetriever</span>(kind=<span class="s">"rule"</span>)       <span class="c"># only rules (.mdc, .cursorrules, ...)</span>
+<span class="fn">BoostRetriever</span>(kind=<span class="s">"workflow"</span>)   <span class="c"># only slash commands / subagents</span></pre>
+
+        <div class="callout"><b>Validated at construction, not at query time.</b> <code>k</code>
+          and <code>kind</code> are pydantic-checked fields: a typo'd kind would otherwise return
+          <code>[]</code> for every query — indistinguishable from an empty catalog — and a
+          negative <code>k</code> would silently drop the last hit via slice semantics. Both fail
+          loudly the moment you build the retriever instead.</div>
+
+        <p class="prose" style="margin-top:26px">Each Document's <code>page_content</code> is the
+          item's <b>indexed text</b> — its name and one-line description followed by the full
+          body, i.e. exactly the surface BM25 scored, so what you retrieve is what matched. Pass
+          <code>full_content=False</code> for just the description (what a router choosing among
+          items wants, rather than a chain stuffing context). Metadata carries:</p>
+
+        <table class="contract">
+          <thead><tr><th>key</th><th>what it holds</th></tr></thead>
+          <tbody>
+            <tr><td><code>name</code> / <code>kind</code></td><td>the item's name and which of the three kinds it is</td></tr>
+            <tr><td><code>tap</code> / <code>source</code> / <code>version</code></td><td>provenance: registry, in-repo path, frontmatter version</td></tr>
+            <tr><td><code>engine</code></td><td>which engine actually answered — <code>"BM25 full-content"</code>, <code>"dense vectors"</code>, or <code>"hybrid RRF (BM25 + dense)"</code></td></tr>
+          </tbody>
+        </table>
+
+        <p class="prose" style="margin-top:26px">For one specific skill — no retrieval, just
+          loading — <code>SkillMarkdownLoader</code> yields a SKILL.md as a single Document: body
+          as content, frontmatter as metadata. One Document per skill, not one per chunk: a skill
+          file is already the author's chosen unit of instruction (run any LangChain splitter over
+          it if you want chunks). Parsing reuses boost's own frontmatter parser, so the file reads
+          <em>exactly</em> the way boost's catalog reads it.</p>
+
+        <pre class="code"><span class="k">from</span> boost_langchain <span class="k">import</span> <span class="fn">SkillMarkdownLoader</span>
+
+<span class="c"># From a path (a SKILL.md, or a directory containing one):</span>
+doc = <span class="fn">SkillMarkdownLoader</span>(<span class="s">"path/to/skill"</span>).<span class="fn">load</span>()[<span class="s">0</span>]
+
+<span class="c"># From boost's canonical store, for a skill you already installed:</span>
+doc = <span class="fn">SkillMarkdownLoader</span>.<span class="fn">from_installed</span>(<span class="s">"brainstorming"</span>).<span class="fn">load</span>()[<span class="s">0</span>]
+
+doc.page_content   <span class="c"># the markdown body, frontmatter stripped</span>
+doc.metadata       <span class="c"># frontmatter keys (name, version, tags, ...) + source</span></pre>
+
+        <p class="prose">Two details that earn their keep: the real file path always wins over any
+          frontmatter key that happens to be named <code>source</code> — provenance must state
+          where the bytes came from, and a self-reported value is the one thing that cannot. And
+          <code>from_installed</code> declines a name installed as a rule or workflow <em>by
+          kind</em> rather than with a bare missing-file error: those kinds materialize into agent
+          context files and keep no store copy to load — retrieve them with
+          <code>BoostRetriever(kind="rule")</code> instead.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== sequence: a LangGraph run ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Sequence · a LangGraph run</span>
+      <h2 class="sec-title">Pull the procedure <span class="grad-text">mid-run</span>, not up front</h2>
+      <p class="lead" style="margin-top:20px">The alternative this exists to avoid is stuffing
+        every procedure into the system prompt: that spends context on procedures the run never
+        needs and stops scaling the moment the catalog does. <code>skill_context_node</code>
+        retrieves against the current state instead, so each turn carries only the procedures that
+        turn asked for.</p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 840 400" role="img" aria-label="Sequence diagram of one LangGraph turn: the skills node retrieves boost procedures for the last human message and injects them as a SystemMessage before the model node runs; when nothing matches it is a no-op">
+          <defs>
+            <marker id="sm" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#40cbe3"></path>
+            </marker>
+            <marker id="sr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+              <path d="M0,0 L7,3 L0,6 Z" fill="#4ade80"></path>
+            </marker>
+          </defs>
+
+          <!-- lifelines -->
+          <g>
+            <rect class="box" x="20" y="16" width="150" height="46" rx="10"></rect>
+            <text class="head" x="95" y="38" text-anchor="middle">user turn</text>
+            <text class="lbl-t" x="95" y="53" text-anchor="middle">HumanMessage</text>
+            <line class="life" x1="95" y1="62" x2="95" y2="376"></line>
+
+            <rect class="box-hi" x="230" y="16" width="170" height="46" rx="10"></rect>
+            <text class="head" x="315" y="38" text-anchor="middle">skills node</text>
+            <text class="lbl-t" x="315" y="53" text-anchor="middle">skill_context_node(k=3)</text>
+            <line class="life" x1="315" y1="62" x2="315" y2="376"></line>
+
+            <rect class="box" x="460" y="16" width="160" height="46" rx="10"></rect>
+            <text class="head" x="540" y="38" text-anchor="middle">BoostRetriever</text>
+            <text class="lbl-t" x="540" y="53" text-anchor="middle">→ boost engine</text>
+            <line class="life" x1="540" y1="62" x2="540" y2="376"></line>
+
+            <rect class="box" x="680" y="16" width="140" height="46" rx="10"></rect>
+            <text class="head" x="750" y="38" text-anchor="middle">agent node</text>
+            <text class="lbl-t" x="750" y="53" text-anchor="middle">your model</text>
+            <line class="life" x1="750" y1="62" x2="750" y2="376"></line>
+          </g>
+
+          <!-- messages -->
+          <path class="msg" marker-end="url(#sm)" d="M95 100 L313 100"></path>
+          <text class="lbl-s" x="100" y="92">START → state["messages"] — node reads the last human turn</text>
+
+          <path class="msg" marker-end="url(#sm)" d="M315 148 L538 148"></path>
+          <text class="lbl-s" x="320" y="140">retriever.invoke(query) · k=3, full bodies</text>
+
+          <path class="ret" marker-end="url(#sr)" d="M538 196 L317 196"></path>
+          <text class="lbl-s" x="330" y="188">Documents + name · tap · path · version · engine</text>
+
+          <path class="msg" marker-end="url(#sm)" d="M315 252 L748 252"></path>
+          <text class="lbl-s" x="320" y="230">{"messages": [SystemMessage]} — each procedure prefixed</text>
+          <text class="lbl-s" x="320" y="244">### name (kind — tap:path @ version)</text>
+
+          <path class="ret" marker-end="url(#sr)" d="M748 312 L97 312"></path>
+          <text class="ok" x="420" y="304" text-anchor="middle">model answers with the procedure in context ✓</text>
+
+          <text class="lbl-t" x="315" y="348" text-anchor="middle">no human turn · nothing tapped · no match → {}</text>
+          <text class="lbl-t" x="315" y="364" text-anchor="middle">no state update — the graph runs on without boost</text>
+          <text class="lbl-t" x="750" y="356" text-anchor="middle">never blocked on retrieval</text>
+        </svg>
+      </div>
+      <p class="caption">The no-op path is a contract, not an accident: a graph wired through this
+        node must keep working on a machine with an empty catalog.</p>
+
+      <div class="snip">
+        <pre class="code"><span class="k">from</span> boost_langchain <span class="k">import</span> <span class="fn">skill_context_node</span>
+<span class="k">from</span> langgraph.graph <span class="k">import</span> <span class="fn">StateGraph</span>, <span class="fn">MessagesState</span>, <span class="fn">START</span>
+
+builder = <span class="fn">StateGraph</span>(<span class="fn">MessagesState</span>)
+builder.<span class="fn">add_node</span>(<span class="s">"skills"</span>, <span class="fn">skill_context_node</span>(k=<span class="s">3</span>))   <span class="c"># or kind="workflow", or a configured BoostRetriever</span>
+builder.<span class="fn">add_node</span>(<span class="s">"agent"</span>, call_model)                 <span class="c"># your model node</span>
+builder.<span class="fn">add_edge</span>(<span class="fn">START</span>, <span class="s">"skills"</span>)
+builder.<span class="fn">add_edge</span>(<span class="s">"skills"</span>, <span class="s">"agent"</span>)</pre>
+      </div>
+
+      <ul class="ticks">
+        <li><b>It retrieves on the last human message.</b> Earlier human turns are already
+          answered context; retrieving on them would re-inject procedures for questions the graph
+          has moved past.</li>
+        <li><b>Provenance rides along.</b> Injected text steers the model, so when a run goes
+          wrong the first question is <em>which</em> skill said that and <em>where it came
+          from</em>. Every injected procedure is prefixed with its name, tap, in-repo path and
+          version — a poisoned or stale skill is traceable from the transcript alone, without
+          re-running retrieval.</li>
+        <li><b><code>k</code> defaults to 3 here, not the retriever's 8.</b> These are full
+          procedure bodies landing in a live conversation: three is a context budget, eight is a
+          search page. Pass a configured <code>BoostRetriever</code> to control retrieval
+          wholesale.</li>
+        <li><b>The node imports only <code>langchain_core</code>.</b> A graph node is just a
+          callable from state to a partial state update, so langgraph itself stays where the
+          pyproject puts it — an optional extra.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ===== observe ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Observe</span>
+      <h2 class="sec-title">Tracing you don't write, <span class="grad-text">ground truth you already have</span></h2>
+      <p class="lead" style="margin-top:20px">Because <code>BoostRetriever</code> is a
+        <code>langchain-core</code> <code>BaseRetriever</code>, LangSmith instrumentation traces
+        its calls automatically — enable tracing the standard way
+        (<code>LANGSMITH_TRACING=true</code> + a key) and every retrieval shows up with its query,
+        its documents, and the <code>engine</code> metadata naming which of boost's engines
+        answered.</p>
+      <div class="prose">
+        <p>Offline, boost's required gate already floors recall@k / hit@1 / MRR / nDCG@k over a
+          golden query set on every merge (the <a href="eval.html">Evaluation page</a> is that
+          story). To run <b>online</b> evals against the <em>same</em> ground truth, publish the
+          golden set as a LangSmith dataset with
+          <code>integrations/langchain/scripts/publish_golden_dataset.py</code> — key-gated,
+          opt-in, run from a boost checkout. Re-running replaces examples wholesale, so the
+          dataset always mirrors <code>tests/eval/golden.jsonl</code> rather than accreting. The
+          point is one set of judgments in both places: an online regression and an offline
+          regression mean the same thing.</p>
+        <p>None of this touches the required gate, which stays offline, deterministic and
+          key-free — a required check that depends on a SaaS account is a required check that
+          fails when someone else's billing lapses.</p>
+        <p><b>The honest dependency paragraph.</b> boost's own <code>[eval]</code> extra pins the
+          langchain 0.3 stack, because ragas — through 0.4.3 — still imports a
+          <code>ChatVertexAI</code> path that langchain-community 0.4 removed, so
+          <code>import ragas</code> crashes beside langchain 1.x. What dissolves the conflict is
+          distribution isolation, not an unpin: <code>boost-langchain</code> is a separately
+          versioned package, so the langchain 1.x stack lives in its own environment and its own
+          CI leg while <code>[eval]</code> keeps its 0.3-stack pins in its own. The two majors
+          never co-install — pip refuses the combination loudly — and each surface tests against
+          the stack it really runs on. The unpin becomes a small follow-up the day ragas ships a
+          release after 0.4.3, which already carries the fix on its main branch.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== install ===== -->
+  <section>
+    <div class="wrap">
+      <span class="eyebrow">Install</span>
+      <h2 class="sec-title">One pip install, two optional extras</h2>
+      <div class="term-wrap">
+        <div class="window">
+          <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
+            <div class="bar-title">pip · boost-langchain</div></div>
+          <pre><span class="cm"># the package — pulls in boost-skill-cli + langchain-core</span>
+<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> boost-langchain
+
+<span class="cm"># give boost something to search (once)</span>
+<span class="tp">$</span> <span class="tv">boost</span> <span class="tc">tap</span> anthropics/skills
+
+<span class="cm"># optional: the LangGraph runtime for skill_context_node graphs</span>
+<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> 'boost-langchain[langgraph]'
+
+<span class="cm"># optional: publish the golden set as a LangSmith dataset</span>
+<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> 'boost-langchain[langsmith]'
+<span class="tp">$</span> <span class="tv">python</span> integrations/langchain/scripts/publish_golden_dataset.py
+  <span class="tdim">published 91 examples to LangSmith dataset 'boost-golden-retrieval'</span></pre>
+        </div>
+      </div>
+      <p class="caption">The dataset publish is illustrative output; it exits with a one-line hint
+        rather than a traceback when the key or package is missing.</p>
+      <div class="prose">
+        <p>More depth: the
+          <a href="https://github.com/jonnyeclectic/boost/tree/main/integrations/langchain">package
+          README</a> covers the same ground as a reference, and the
+          <a href="roadmap.html#langchain-langgraph-langsmith-integration">roadmap card</a> holds
+          the full reasoning — including the packaging decision and the corrected ragas story.</p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="foot-brand"><b>boost</b> — a package manager for AI coding skills</p>
+    <p class="foot-note">Install with <code>pip install boost-skill-cli</code> · requires Python 3.12+ and <code>git</code></p>
+    <nav class="foot-links" aria-label="Documentation">
+      <a href="index.html">Guide</a>
+      <a href="commands.html">Commands</a>
+      <a href="demo.html">Try the search</a>
+      <a href="chat.html">How chat works</a>
+      <a href="mcp-hub.html">MCP Hub</a>
+      <a href="eval.html">Evaluation</a>
+      <a href="adapters.html">Adapters</a>
+      <a aria-current="page" href="#top">LangChain</a>
+      <a href="roadmap.html">Roadmap</a>
+      <a href="design-roadmap.html">Design</a>
+      <a href="carousel.html">Carousel</a>
+    </nav>
+    <p class="foot-legal">
+      <a href="https://github.com/jonnyeclectic/boost">GitHub</a> ·
+      <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> ·
+      <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> ·
+      Released under the GPL-3.0 license
+    </p>
+  </div>
+</footer>
+
+
+<script src="../style/boost.js" defer></script>
+</body>
+</html>

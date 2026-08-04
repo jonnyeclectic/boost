@@ -48,6 +48,7 @@ PAGES = (
     "docs/commands.html",
     "docs/adapters.html",
     "docs/eval.html",
+    "docs/langchain.html",
     "docs/mcp-hub.html",
 )
 

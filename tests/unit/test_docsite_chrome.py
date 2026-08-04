@@ -36,7 +36,7 @@ _INDEX = _DOCS / "index.html"
 _PAGES = (
     "index.html", "commands.html", "roadmap.html", "design-roadmap.html",
     "mcp-hub.html", "eval.html", "adapters.html", "carousel.html", "demo.html",
-    "chat.html",
+    "chat.html", "langchain.html",
 )
 # commands.html is a sidebar reference, not a top-nav page; it links the rest
 # from its footer and its sidebar "back to overview".

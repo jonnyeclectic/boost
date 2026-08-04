@@ -34,7 +34,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const PAGES = [
   "docs/index.html", "docs/adapters.html", "docs/eval.html", "docs/mcp-hub.html",
   "docs/roadmap.html", "docs/design-roadmap.html", "docs/commands.html",
-  "docs/demo.html", "docs/chat.html",
+  "docs/demo.html", "docs/chat.html", "docs/langchain.html",
 ];
 
 // WCAG 2.1 A + AA. Deliberately not "best-practice": those are opinions, and a
