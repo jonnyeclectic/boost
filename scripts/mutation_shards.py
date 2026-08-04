@@ -510,7 +510,7 @@ def cmd_plan(args: argparse.Namespace) -> int:
         heaviest = max(unit_weight(root, u) for b in bins for u in b)
         print("largest unit: %d  (floor on the slowest shard)" % heaviest)
         print("speedup cap : %.2fx" % (total / max(loads)))
-        for i, (b, ld) in enumerate(zip(bins, loads)):
+        for i, (b, ld) in enumerate(zip(bins, loads, strict=True)):
             print("  shard %d: weight %5d, %2d units" % (i, ld, len(b)))
         return 0
 

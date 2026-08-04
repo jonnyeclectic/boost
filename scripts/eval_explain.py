@@ -189,7 +189,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     scores = score_faithfulness(samples, judge)
-    graded = [(s["name"], sc) for s, sc in zip(samples, scores) if sc is not None]
+    graded = [(s["name"], sc)
+              for s, sc in zip(samples, scores, strict=True) if sc is not None]
     mean = sum(sc for _, sc in graded) / len(graded) if graded else 0.0
 
     if args.json:
