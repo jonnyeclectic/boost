@@ -358,15 +358,21 @@ def cmd_policy(argv) -> int:
         for k, section in everything.items()
         for n, e in section.items() if not e.get("pinned"))
     counts = {kind: len(section) for kind, section in everything.items()}
-    summary = ", ".join("%d %s%s" % (n, kind, "s" if n != 1 else "")
-                        for kind, n in counts.items())
+    # The breakdown appears exactly when it carries information (same
+    # convention as `boost count`): a skills-only environment keeps the exact
+    # summary line it always had.
+    summary = ("%d skills" % counts["skill"]
+               if not counts["rule"] and not counts["workflow"]
+               else ", ".join("%d %s%s" % (n, kind, "s" if n != 1 else "")
+                              for kind, n in counts.items()))
 
     if args.json:
         print(json.dumps({
-            # "skills" stays the total for backward compatibility; the
-            # per-kind counts say what it is made of.
-            "skills": total,
+            # "skills" keeps its original meaning — the skill count — with the
+            # other kinds beside it rather than silently folded in.
+            "skills": counts["skill"],
             "counts": counts,
+            "total": total,
             "violations": [{"skill": s, "violation": v} for s, v in violations],
             "pin_only": bool(pol["pin_only"]),
             "unpinned": unpinned if pol["pin_only"] else [],

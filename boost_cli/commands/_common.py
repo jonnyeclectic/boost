@@ -49,6 +49,17 @@ def _iter_installed(names: Optional[List[str]] = None) -> List[Tuple[str, dict]]
     return sorted(skills.items())
 
 
+def _shadowed_kinds(name: str, acted_kind: str) -> List[str]:
+    """Other lock sections also holding ``name``.
+
+    `find_any` resolves a bare name skill-first, which is right for reads but
+    silently wrong for governance: acting on the skill while a same-named rule
+    stays live in CLAUDE.md must at least be *said*. Callers warn with this.
+    """
+    return [k for k, section in lockfile.all_installed().items()
+            if k != acted_kind and name in section]
+
+
 def _iter_installed_all(
         names: Optional[List[str]] = None) -> List[Tuple[str, str, dict]]:
     """[(kind, name, lock_entry)] across every section, or the given names."""

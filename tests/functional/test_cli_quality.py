@@ -635,6 +635,57 @@ class TestGovernedIntegritySurface:
         assert "not installed" not in r.err
 
 
+class TestShadowedNames:
+    """A skill and a rule sharing one name: governance must not act blind.
+
+    find_any resolves skill-first, which made a quarantined rule unreleasable
+    (--release hit the skill, said "not quarantined", exited 0) and let
+    `boost quarantine` disarm the skill while the same-named rule stayed live
+    in CLAUDE.md with no mention. Reproduced by review; pinned here.
+    """
+
+    def _seed_rule_named(self, name):
+        from boost_cli.core import lockfile, rules
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.parent.mkdir(parents=True, exist_ok=True)
+        base = cm.read_text(encoding="utf-8") if cm.exists() else ""
+        cm.write_text(rules.merge_block(base, name, "Rule body."),
+                      encoding="utf-8")
+        lockfile.set_rule(name, {
+            "kind": "rule", "version": "1.0.0", "tap": "some-tap",
+            "materializations": [
+                {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
+        return cm
+
+    def test_release_reaches_the_quarantined_rule_behind_a_skill(
+            self, boost, installed):
+        from boost_cli.core import lockfile, store
+        cm = self._seed_rule_named("brainstorming")
+        before = cm.read_text(encoding="utf-8")
+        store.quarantine_materialized(
+            "rule", "brainstorming", lockfile.get_rule("brainstorming"))
+        gone = cm.read_text(encoding="utf-8") if cm.exists() else ""
+        assert "Rule body." not in gone
+        r = boost("quarantine", "--release", "brainstorming")
+        assert "released rule brainstorming" in r.out
+        assert cm.read_text(encoding="utf-8") == before
+        assert "not quarantined" not in r.out
+
+    def test_quarantining_a_shadowed_name_names_the_shadow(
+            self, boost, installed):
+        self._seed_rule_named("brainstorming")
+        r = boost("quarantine", "brainstorming")
+        assert "quarantined brainstorming (store intact, links removed)" in r.out
+        assert ("a rule named brainstorming is also installed — this "
+                "quarantines the skill only") in r.out
+
+    def test_pinning_a_shadowed_name_names_the_shadow(self, boost, installed):
+        self._seed_rule_named("brainstorming")
+        r = boost("pin", "brainstorming")
+        assert "pinned brainstorming" in r.out
+        assert "a rule named brainstorming is also installed" in r.out
+
+
 # ── decay ────────────────────────────────────────────────────────────────
 
 class TestDecay:

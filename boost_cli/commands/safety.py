@@ -34,7 +34,7 @@ from ..core import (
 from ..core import output as out
 from ..core import rules as rules_mod
 from ..errors import BoostError
-from ._common import _iter_installed, _iter_installed_all, _s
+from ._common import _iter_installed, _iter_installed_all, _s, _shadowed_kinds
 
 # --- audit: dangerous-content patterns ------------------------------------
 
@@ -376,8 +376,9 @@ def cmd_verify(argv):
                           if not entry.get(f)]
         if status == integrity.STATUS_UNLOCKED and "sha256" not in missing_fields:
             missing_fields.append("sha256")
-        results.append({"name": name, "status": status, "scope": "project",
-                        "missing_fields": missing_fields, "commit_pin": None})
+        results.append({"name": name, "kind": "skill", "status": status,
+                        "scope": "project", "missing_fields": missing_fields,
+                        "commit_pin": None})
 
     bad = [r for r in results
            if r["status"] not in ("ok", "quarantined") or r["missing_fields"]
@@ -456,6 +457,15 @@ def cmd_quarantine(argv):
                             hint="see what is with `boost list`")
         kind, entry = found
         if not entry.get("quarantined"):
+            # The bare name resolves skill-first, but --release means "the
+            # quarantined one": a rule shadowed by a same-named skill would
+            # otherwise be unreleasable by the exact command every hint names.
+            for okind, section in lockfile.all_installed().items():
+                other = section.get(name)
+                if okind != kind and other is not None and other.get("quarantined"):
+                    kind, entry = okind, other
+                    break
+        if not entry.get("quarantined"):
             out.warn("%s is not quarantined" % name)
             return 0
         if kind == "skill":
@@ -478,6 +488,9 @@ def cmd_quarantine(argv):
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     kind, entry = found
+    for other in _shadowed_kinds(name, kind):
+        out.warn("a %s named %s is also installed — this quarantines the %s "
+                 "only; the %s stays active" % (other, name, kind, other))
     if entry.get("quarantined"):
         # A quarantined entry whose artifacts are still on disk is an
         # interrupted quarantine (stash persisted, removal did not finish) —

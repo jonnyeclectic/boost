@@ -41,6 +41,7 @@ from ..core import (
 )
 from ..core import output as out
 from ..errors import BoostError
+from ._common import _shadowed_kinds
 
 _tilde = paths.tilde
 
@@ -1077,9 +1078,11 @@ def _bundle_install(file: Optional[str]) -> int:
     have_taps = {t.name for t in registry.list_taps()}
     # name -> kind across every lock section, so a `skill` line naming an
     # already-installed rule/workflow is counted present, not re-installed.
-    have_installed = {n: kind
-                      for kind, section in lockfile.all_installed().items()
-                      for n in section}
+    have_installed: Dict[str, str] = {}
+    for kind, section in lockfile.all_installed().items():
+        for n in section:              # first section wins: skill > rule >
+            have_installed.setdefault(n, kind)  # workflow, same as find_any
+
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -1277,6 +1280,9 @@ def _set_pin(name: str, pinned: bool) -> int:
         raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     kind, entry = found
+    for other in _shadowed_kinds(name, kind):
+        out.warn("a %s named %s is also installed — this pins the %s only"
+                 % (other, name, kind))
     label = name if kind == "skill" else "%s %s" % (kind, name)
     version = entry.get("version", "0.0.0")
     if bool(entry.get("pinned")) == pinned:
