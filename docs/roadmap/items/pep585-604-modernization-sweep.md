@@ -2,7 +2,8 @@
 id: pep585-604-modernization-sweep
 board: code
 section: planned
-status: planned
+status: inflight
+owner: loop/typing-sweep
 category: Tech-debt
 complexity: M
 impact: Low
