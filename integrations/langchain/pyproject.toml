@@ -1,0 +1,54 @@
+# boost-langchain — a separately-versioned distribution. It is NOT part of
+# boost_cli: the CLI and the required gate never import it, and unlike the CLI
+# it is allowed third-party dependencies (langchain-core). The version is
+# static rather than setuptools-scm on purpose: the repo's git tags drive
+# boost-skill-cli's release cadence, and this package releases on its own.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boost-langchain"
+version = "0.1.0"
+description = "LangChain retriever and document loader over boost's skill catalog"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-only"
+authors = [{name = "Jonathan Reyes"}]
+keywords = ["ai", "skills", "langchain", "rag", "retriever", "claude-code"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+# boost-skill-cli's floor is measured, not guessed: rag.retrieve_any first
+# shipped in 1.0.291 and rag.surface (the full_content=False fallback) in
+# 1.0.320, so every seam this package calls exists from 1.0.320 on. A looser
+# floor resolved cleanly and then crashed the flagship class on first call —
+# an adversarial install proved it. No upper bound: the seams are the same
+# ones `boost search` itself runs on, so removing one would fail boost's own
+# gate before it could break this package. langchain-core is capped at <2
+# because BaseRetriever's contract is what this package implements against,
+# and that contract moves on majors.
+dependencies = [
+    "boost-skill-cli>=1.0.320",
+    "langchain-core>=1,<2",
+]
+
+[project.urls]
+Homepage = "https://github.com/jonnyeclectic/boost"
+Repository = "https://github.com/jonnyeclectic/boost"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+langgraph = ["langgraph>=1,<2"]
+langsmith = ["langsmith>=0.10"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
