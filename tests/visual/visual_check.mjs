@@ -30,6 +30,7 @@ mkdirSync(OUT, { recursive: true });
 const PAGES = [
   "docs/index.html", "docs/adapters.html", "docs/eval.html", "docs/mcp-hub.html",
   "docs/commands.html", "docs/demo.html", "docs/chat.html",
+  "docs/langchain.html",
   "docs/roadmap.html", "docs/design-roadmap.html",
 ];
 const WIDTHS = [375, 768, 1024, 1280, 1680];
