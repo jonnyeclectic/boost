@@ -388,7 +388,18 @@ def cmd_install(argv: List[str]) -> int:
         multi = multi or len(entries) > 1
 
     if args.dry_run:
+        # TWO lists, because the three kinds do not reach the same agents.
+        # Rules and workflows materialize into every enabled agent's dotdir,
+        # Gemini included. A skill is symlinked only into the agents that take
+        # links — Gemini reads the canonical store directly and is deliberately
+        # never linked (see agents.linking_agents). One list for both is how
+        # `--dry-run` came to promise a `~/.gemini/skills` symlink that the real
+        # install has never created.
         targets = [a for a in agents.enabled_agents() if not only or a in only]
+        link_targets = [a for a in agents.linking_agents()
+                        if not only or a in only]
+        native_targets = [a for a in agents.native_store_agents()
+                          if not only or a in only]
         pbase = scopes.resolve_base(args.scope)
         if args.scope == scopes.SCOPE_PROJECT and pbase is None:
             raise BoostError(
@@ -423,7 +434,14 @@ def cmd_install(argv: List[str]) -> int:
                                                   e["version"], e["tap"]))
             out.info("  copy  %s → %s" % (_tilde(store.source_dir_for(e)),
                                           _tilde(store.skill_store_dir(e["name"]))))
-            out.info("  link  → %s" % (" · ".join(targets) or "(no enabled agents)"))
+            out.info("  link  → %s" % (" · ".join(link_targets)
+                                        or "(no linking agents)"))
+            # Mirrors what the real install reports, so a Gemini-only install
+            # does not read as reaching no agent at all.
+            if native_targets:
+                out.info("  available to %s (reads the store directly)"
+                         % " · ".join(agents.display_name(a)
+                                      for a in native_targets))
         out.info("dry run — nothing was changed")
         return 1 if failed else 0
 
