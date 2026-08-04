@@ -125,8 +125,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>4</b><span>Planned</span></div>
-      <div class="stat"><b>218</b><span>Loop finds</span></div>
+      <div class="stat"><b>7</b><span>Planned</span></div>
+      <div class="stat"><b>221</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -617,6 +617,97 @@ message, so routing it through the helper would change user-facing errors.</p></
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="ragas-unpin-when-upstream-ships">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>unpin the <code>[eval]</code> langchain stack when ragas ships its fix</h3>
+        <p>The <code>[eval]</code> extra pins <code>langchain-core&lt;0.4</code>,
+<code>langchain-community&lt;0.4</code> and <code>langchain-openai&lt;1</code> because ragas hard-imports
+<code>langchain_community.chat_models.vertexai.ChatVertexAI</code> — a path langchain-community
+0.4.x deleted. The LangChain integration card originally made this unpin its phase 0 and was
+corrected in place: <b>ragas 0.4.3 still carries the import</b> (measured 2026-08-04 — declared
+bounds are open, but <code>import ragas</code> crashes beside langchain 1.x), while upstream main
+already has the removal merged. So the unpin is one release of someone else's package away.
+
+<b>What to do when it lands.</b> Check <code>pip index versions ragas</code> (or the PyPI JSON) for
+a release after 0.4.3; verify in a throwaway venv that <code>import ragas</code> succeeds beside
+<code>langchain&gt;=1</code>; then move <code>[eval]</code> to that floor, delete the three langchain
+pins, and adapt <code>scripts/eval_explain.py</code> if the 0.4 scoring API moved (its
+<code>evaluate</code>/<code>to_pandas</code> surface is what
+<code>tests/unit/test_eval_faithfulness.py</code> stubs). The <code>eval-explain</code> workflow is
+the live proof — it must stay green with real keys.
+
+<b>Why it stays its own card.</b> The shipped integration card documents the block but will not be
+re-read; an unpin nobody remembers is how a workaround pin outlives its reason by years. This card
+is the reminder, and it is deliberately not claimable until the upstream release exists.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">blocked on ragas shipping a release after 0.4.3 — check before starting</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="boost-langchain-publishing">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Release</span></div>
+        <h3>give <code>boost-langchain</code> a release path to PyPI</h3>
+        <p>The <code>boost-langchain</code> distribution shipped under <code>integrations/langchain/</code>
+with its whole point being a <b>separate release cadence</b> from <code>boost-skill-cli</code> —
+langchain majors move faster than boost does, and the conformance workflow already builds the
+sdist/wheel and runs <code>twine check</code> on every touching PR. What does not exist is any way
+for those artifacts to reach PyPI: the name 404s there, and nothing publishes on any trigger.
+
+<b>Two pieces, one of which only the repo owner can do.</b> First, create the PyPI project and
+configure a <b>Trusted Publisher</b> for it — pending-publisher registration works before the first
+upload, and the filename-matching rule that pinned boost's own workflow name applies here too.
+Second, a publish workflow with a deliberate trigger: <b>not</b> boost's every-merge cadence
+(<code>publish.yml</code> releases <code>boost-skill-cli</code> on every push to main, which is
+exactly the coupling the separate distribution exists to avoid) — a tag like
+<code>boost-langchain-v0.1.0</code> or a manual dispatch that bumps the static version, builds from
+<code>integrations/langchain/</code>, and publishes with the OIDC token. Remember the repo's own
+lesson: a <code>release:</code>-triggered workflow can never fire here (GITHUB_TOKEN events do not
+chain), so trigger on the tag push or dispatch directly.
+
+<b>The floor is already honest.</b> The package requires <code>boost-skill-cli&gt;=1.0.320</code> —
+measured against the actual API it calls, verified by an adversarial install — so the first
+published version works against PyPI as it stands today.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">the artifacts already build and pass twine check in CI — what is missing is a cadence and a Trusted Publisher</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="scripts-under-the-lint-gate">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>bring <code>scripts/</code> under the ruff gate</h3>
+        <p><code>make lint</code> runs <code>ruff check boost_cli tests evals</code> — and <code>scripts/</code>,
+the 28 build-and-gate tools that decide whether every PR merges, is not in the list. Nothing that
+lints the product lints the gatekeepers.
+
+<b>Why it bit, twice in one day.</b> The <code>zip(strict=)</code> audit enforced B905 across the
+linted trees, and an adversarial review immediately found two more <code>zip()</code> sites in
+<code>scripts/</code> that the rule cannot guard — one of them (<code>eval_explain.py</code> pairing
+ragas scores with samples by position) exactly the silent-misattribution shape the audit existed to
+kill. They were fixed by hand, but the next <code>zip()</code> added to <code>scripts/</code> gets
+no intent check, and the same blindness applies to every rule the gate enforces.
+
+<b>Measured, not guessed:</b> running the current rule set over <code>scripts/</code> today finds
+<b>291</b> violations — ~277 are the mechanical UP typing sweep the rest of the repo just finished
+(<code>List</code> → <code>list</code> and friends), plus a handful of real ones (a
+<code>raise ... from</code> miss, collapsible ifs, stale <code>noqa</code>s). So the shape is: one
+mechanical pass like the pep585 sweep, a short judgement pass over the rest, then add
+<code>scripts</code> to the Makefile line and CI so it stays clean. Some rules may deserve
+per-directory ignores (scripts legitimately print, exit, and parse argv) — decide those in the PR
+rather than globally.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">291 findings across 28 files, measured — most are the same UP sweep the package just finished</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
