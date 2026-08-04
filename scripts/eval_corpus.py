@@ -77,8 +77,8 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_TAPS = ROOT / "tests" / "eval" / "taps.txt"
@@ -89,7 +89,7 @@ SCALE_TAPS = ROOT / "tests" / "eval" / "taps-scale.txt"
 _SHA = re.compile(r"[0-9a-f]{40}")
 
 #: ``(owner/repo, pinned commit or None, pinned entry count or None)``.
-Row = Tuple[str, Optional[str], Optional[int]]
+Row = tuple[str, str | None, int | None]
 
 #: A repository, or the commit a row pins, could not be fetched.
 UNAVAILABLE = "unavailable"
@@ -129,7 +129,7 @@ class CorpusError(RuntimeError):
         self.detail = detail
 
 
-def parse_taps(text: str) -> List[Row]:
+def parse_taps(text: str) -> list[Row]:
     """Rows of ``owner/repo [sha [count]]``, comments and blanks dropped.
 
     An absent SHA parses as ``None`` rather than an error so the format stays
@@ -139,7 +139,7 @@ def parse_taps(text: str) -> List[Row]:
     fatal on the same grounds, and requires a SHA — a count beside an unpinned
     repo describes a tree that is free to change underneath it.
     """
-    rows: List[Row] = []
+    rows: list[Row] = []
     for raw in text.splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -170,7 +170,7 @@ def parse_taps(text: str) -> List[Row]:
     return rows
 
 
-def shares(rows: Sequence[Row]) -> List[Tuple[str, int, float]]:
+def shares(rows: Sequence[Row]) -> list[tuple[str, int, float]]:
     """``(repo, count, share)`` for every counted row, largest first.
 
     Rows with no recorded count are omitted rather than treated as zero: a
@@ -185,7 +185,7 @@ def shares(rows: Sequence[Row]) -> List[Tuple[str, int, float]]:
                   key=lambda row: (-row[1], row[0]))
 
 
-def check_concentration(rows: Sequence[Row]) -> Optional[str]:
+def check_concentration(rows: Sequence[Row]) -> str | None:
     """Return a message when one repository exceeds ``MAX_SHARE``, else ``None``.
 
     Static — it reads the counts already in the file, so it costs no network and
@@ -208,7 +208,7 @@ def check_concentration(rows: Sequence[Row]) -> Optional[str]:
                MAX_SHARE * 100))
 
 
-def extra_taps(configured: Sequence[str], pinned: Sequence[str]) -> List[str]:
+def extra_taps(configured: Sequence[str], pinned: Sequence[str]) -> list[str]:
     """Configured taps that this list does not pin, sorted.
 
     The third way to score a corpus that is not the pinned one, and the easiest
@@ -261,7 +261,7 @@ def pin_clone(path: Path, sha: str) -> None:
 
 
 def _materialise(rows: Sequence[Row], verify: bool = True
-                 ) -> Tuple[Dict[str, int], List[CorpusError]]:
+                 ) -> tuple[dict[str, int], list[CorpusError]]:
     """Tap, pin and rescan every row. Returns ``(counts, failures)``.
 
     Every row is attempted even after one fails. Stopping at the first would
@@ -271,8 +271,8 @@ def _materialise(rows: Sequence[Row], verify: bool = True
     sys.path.insert(0, str(ROOT))
     from boost_cli.core import catalog, registry  # deferred: repo-root import shim
 
-    counts: Dict[str, int] = {}
-    failures: List[CorpusError] = []
+    counts: dict[str, int] = {}
+    failures: list[CorpusError] = []
     for repo, sha, want in rows:
         try:
             try:
@@ -345,8 +345,8 @@ def _report_failures(failures: Sequence[CorpusError], total_rows: int) -> int:
     return EXIT_DRIFT if drift else EXIT_UNAVAILABLE
 
 
-def relock_text(text: str, counts: Dict[str, int],
-                shas: Optional[Dict[str, str]] = None) -> str:
+def relock_text(text: str, counts: dict[str, int],
+                shas: dict[str, str] | None = None) -> str:
     """Rewrite each pinned row's entry count — and its SHA when ``shas`` says so.
 
     A whole-file rewrite would lose the header, which is where the reasoning
@@ -379,8 +379,8 @@ def relock_text(text: str, counts: Dict[str, int],
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
 
 
-def refresh_summary(rows: Sequence[Row], shas: Dict[str, str],
-                    counts: Dict[str, int]) -> str:
+def refresh_summary(rows: Sequence[Row], shas: dict[str, str],
+                    counts: dict[str, int]) -> str:
     """A Markdown table of what a refresh moved, for the pull request body.
 
     The point of the scheduled refresh is not the refresh — it is that the diff
@@ -446,7 +446,7 @@ def _ensure(taps: Path, relock: bool = False) -> int:
     return 0
 
 
-def _refresh(taps: Path, summary_path: Optional[str] = None) -> int:
+def _refresh(taps: Path, summary_path: str | None = None) -> int:
     """Move every row to current upstream HEAD, re-measure, rewrite taps.txt.
 
     Pinning bought reproducibility with representativeness: the gate measures
@@ -465,9 +465,9 @@ def _refresh(taps: Path, summary_path: Optional[str] = None) -> int:
     from boost_cli.core import catalog, gitutil, registry  # deferred: path shim
 
     rows = parse_taps(taps.read_text(encoding="utf-8"))
-    shas: Dict[str, str] = {}
-    counts: Dict[str, int] = {}
-    failures: List[CorpusError] = []
+    shas: dict[str, str] = {}
+    counts: dict[str, int] = {}
+    failures: list[CorpusError] = []
     for repo, old_sha, _n in rows:
         try:
             try:
@@ -534,7 +534,7 @@ def _audit(taps: Path) -> int:
     return 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="eval_corpus.py", description=__doc__)
     p.add_argument("--ensure", action="store_true",
                    help="tap, pin and verify every row, then rebuild its cache")

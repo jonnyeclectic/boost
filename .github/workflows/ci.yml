@@ -81,7 +81,11 @@ jobs:
         # install instead of silently changing what the gate checks.
         run: python -m pip -q install -r requirements/lint-tools.txt
       - name: ruff
-        run: ruff check boost_cli tests evals
+        # scripts/ is in scope on purpose: the 28 build-and-gate tools decide
+        # whether every PR merges, and leaving them unlinted is how two
+        # unguarded zip() sites survived the B905 audit (see the
+        # scripts-under-the-lint-gate roadmap card).
+        run: ruff check boost_cli tests evals scripts
       - name: mypy
         run: mypy
       - name: pyright (second type checker)
@@ -114,10 +118,9 @@ jobs:
         # subset misses — try/except/pass that wants contextlib.suppress,
         # redundant list()/dict()/str() casts, `x or ""` on an already
         # non-optional value. ruff carries the pyupgrade (UP) half of this gate;
-        # the three PEP 585/604 rules are still ignored, but no longer because
-        # the floor forbids them — >=3.12 allows them. They are deferred to
-        # their own sweep PR so a ~60-module annotation rewrite does not ride in
-        # on an unrelated change (rationale in pyproject.toml [tool.ruff.lint]).
+        # the PEP 585/604 rules are enforced since the pep585-604 sweep landed
+        # (typing.List and friends are gone). UP031 stays declined — printf
+        # formatting is house style (rationale in pyproject.toml [tool.ruff.lint]).
         run: refurb boost_cli
       - name: codespell (user-facing text)
         run: codespell boost_cli docs README.md

@@ -48,7 +48,6 @@ import gzip
 import io
 import os
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from typing import Optional
 
 #: Compressed by GitHub Pages, and worth compressing: markup, styles, scripts
 #: and data. `image/svg+xml` is in because SVG is text; every other image type
@@ -73,7 +72,7 @@ LEVEL = 6
 READY = "Serving HTTP"
 
 
-def compressible(ctype: Optional[str]) -> bool:
+def compressible(ctype: str | None) -> bool:
     """True if `ctype` is a type Pages would compress."""
     if not ctype:
         return False

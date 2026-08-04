@@ -52,7 +52,7 @@ mutation:
 	$(PY) scripts/mutation_gate.py --run --min 80
 
 lint:
-	$(VENV)/bin/ruff check boost_cli tests evals
+	$(VENV)/bin/ruff check boost_cli tests evals scripts
 	$(VENV)/bin/mypy
 	$(VENV)/bin/pyright
 	$(VENV)/bin/lint-imports

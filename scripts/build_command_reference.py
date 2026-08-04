@@ -71,9 +71,9 @@ def _capture_parser(name: str, module: str):
     cliparse.parser = spy
     try:
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            with contextlib.suppress(SystemExit):
-                getattr(mod, fn)(["--help"])
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf), \
+                contextlib.suppress(SystemExit):
+            getattr(mod, fn)(["--help"])
     finally:
         cliparse.parser = real
     return created[0] if created else None  # main parser is created first
@@ -121,8 +121,7 @@ def _extract(name: str, group: str, module: str, summary: str) -> dict:
     for act in opt:
         flag = act.option_strings[-1]
         syn.append("[%s]" % (flag if act.nargs == 0 else "%s %s" % (flag, _metavar(act))))
-    for act in pos:
-        syn.append(_positional_syn(act))
+    syn.extend(_positional_syn(act) for act in pos)
 
     def rows(actions, is_opt):
         out = []
@@ -178,7 +177,7 @@ def render() -> str:
         for c in items:
             search = html.escape(
                 (" ".join([c["name"], c["summary"], c["description"]]
-                          + [l for l, _h in c["options"] + c["positionals"]])).lower(),
+                          + [label for label, _h in c["options"] + c["positionals"]])).lower(),
                 quote=True)
             nav.append(
                 '      <a class="cmd-link" href="#cmd-%s" data-search="%s">%s</a>'

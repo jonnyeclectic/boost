@@ -1,8 +1,10 @@
 ---
 id: scripts-under-the-lint-gate
 board: code
-section: planned
-status: planned
+section: internals
+status: shipped
+owner: loop/scripts-lint
+pr: 471
 category: Tech-debt
 complexity: M
 impact: Med

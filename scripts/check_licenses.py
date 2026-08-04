@@ -29,13 +29,13 @@ from __future__ import annotations
 import json
 import re
 import sys
-from typing import List, Tuple
+from pathlib import Path
 
 # (pattern, why). Matched case-insensitively against the whole declared licence
 # string. Deliberately short: the aim is high-confidence incompatibility, not a
 # taxonomy. LGPL, MPL and EPL are all fine to *consume* from a GPL-3.0 project
 # and are not listed.
-DENIED: Tuple[Tuple[str, str], ...] = (
+DENIED: tuple[tuple[str, str], ...] = (
     (r"affero|\bagpl\b",
      "AGPL adds network-use copyleft that GPL-3.0 does not carry"),
     # GPLv2-*only* cannot be combined with GPL-3.0. "v2 or later" / "GPLv2+"
@@ -63,7 +63,7 @@ def is_undeclared(licence: str) -> bool:
     return bool(_UNDECLARED.match(licence or ""))
 
 
-def violations(rows: List[dict]) -> List[str]:
+def violations(rows: list[dict]) -> list[str]:
     """Human-readable problems in a ``pip-licenses --format=json`` payload."""
     problems = []
     for row in rows:
@@ -83,8 +83,8 @@ def violations(rows: List[dict]) -> List[str]:
     return problems
 
 
-def main(argv: List[str]) -> int:
-    raw = (open(argv[0], encoding="utf-8").read() if argv
+def main(argv: list[str]) -> int:
+    raw = (Path(argv[0]).read_text(encoding="utf-8") if argv
            else sys.stdin.read())
     try:
         rows = json.loads(raw)

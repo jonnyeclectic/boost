@@ -51,13 +51,13 @@ import hashlib
 import json
 import math
 import sys
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 # Run from a source checkout without an install.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from boost_cli.core import ai, catalog, dense, rag  # noqa: E402
+from boost_cli.core import ai, catalog, dense, rag
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_GOLDEN = ROOT / "tests" / "eval" / "golden.jsonl"
@@ -67,7 +67,7 @@ KINDS = ("skill", "rule", "workflow")
 # Rankers yield catalog ENTRIES, not names: the grading key depends on the
 # row being graded (a name, or a content class when it pins an exemplar),
 # so the ranker cannot decide it.
-Ranker = Callable[[str], List[dict]]
+Ranker = Callable[[str], list[dict]]
 
 
 # --------------------------------------------------------------- metrics
@@ -103,7 +103,7 @@ def ndcg_at_k(ranked: Sequence[str], relevant: set, k: int) -> float:
     return (dcg / idcg) if idcg else 0.0
 
 
-METRICS: Dict[str, Callable[[Sequence[str], set, int], float]] = {
+METRICS: dict[str, Callable[[Sequence[str], set, int], float]] = {
     "recall@k": lambda r, rel, k: recall_at_k(r, rel, k),
     "hit@1": lambda r, rel, k: hit_at_1(r, rel),
     "MRR": lambda r, rel, k: reciprocal_rank(r, rel),
@@ -213,8 +213,8 @@ def relevant_keys(row: dict) -> set:
     return {"cls:%s" % sorted(classes)[0]}
 
 
-def exemplar_worksheet(rows: List[dict], entries: List[dict],
-                       hashes: dict) -> List[dict]:
+def exemplar_worksheet(rows: list[dict], entries: list[dict],
+                       hashes: dict) -> list[dict]:
     """Rows still graded by name whose name resolves to several bodies.
 
     Pinning those is a judgment about what the question meant, not a lookup, so
@@ -225,14 +225,14 @@ def exemplar_worksheet(rows: List[dict], entries: List[dict],
     candidate list is a fact about the corpus that is currently tapped. Written
     down, it would be wrong the first time a pin moves.
     """
-    by_name: Dict[str, List[dict]] = {}
+    by_name: dict[str, list[dict]] = {}
     for entry in entries:
         by_name.setdefault(str(entry.get("name", "")), []).append(entry)
-    sheet: List[dict] = []
+    sheet: list[dict] = []
     for row in rows:
         if row.get("class_hashes"):
             continue                       # already decided
-        seen: Dict[str, dict] = {}
+        seen: dict[str, dict] = {}
         for name in row["relevant_set"]:
             for entry in by_name.get(name, []):
                 digest = hashes.get((entry.get("tap", ""), entry.get("skill_md", "")))
@@ -256,7 +256,7 @@ def exemplar_worksheet(rows: List[dict], entries: List[dict],
 def dedupe_keys(keys):
     """Collapse to the first (best-ranked) occurrence of each key."""
     seen: set = set()
-    out: List[str] = []
+    out: list[str] = []
     for key in keys:
         if key not in seen:
             seen.add(key)
@@ -264,10 +264,10 @@ def dedupe_keys(keys):
     return out
 
 
-def load_golden(path: Path, hashes: Optional[dict] = None) -> List[dict]:
+def load_golden(path: Path, hashes: dict | None = None) -> list[dict]:
     # One pass over the BM25 index, not one per row.
     hashes = rag.content_hashes() if hashes is None else hashes
-    rows: List[dict] = []
+    rows: list[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -297,7 +297,7 @@ def hybrid_ranker(k: int) -> Ranker:
     hybrid win must not be creditable to whichever component did not earn it,
     which is why each engine is also reported alone.
     """
-    def rank(q: str) -> List[str]:
+    def rank(q: str) -> list[str]:
         pool = max(k * 4, 60)
         b = rag.retrieve(q, k=pool)
         d = dense.retrieve(q, k=pool) or []
@@ -307,7 +307,7 @@ def hybrid_ranker(k: int) -> Ranker:
 
 def rerank_ranker(k: int) -> Ranker:
     """BM25 shortlist reordered by the LLM rerank stage (Tier 2a)."""
-    def rank(q: str) -> List[str]:
+    def rank(q: str) -> list[str]:
         hits = rag.retrieve(q, k=max(k * 4, 60))
         reranked, _label = rag.rerank(q, hits, limit=max(k, 15))
         return [h["entry"] for h in reranked]
@@ -316,9 +316,9 @@ def rerank_ranker(k: int) -> Ranker:
 
 # --------------------------------------------------------------- eval loop
 
-def evaluate(rows: List[dict], ranker: Ranker, k: int) -> Tuple[List[dict], dict]:
+def evaluate(rows: list[dict], ranker: Ranker, k: int) -> tuple[list[dict], dict]:
     """Run every golden query through `ranker`; return per-case + aggregates."""
-    per_case: List[dict] = []
+    per_case: list[dict] = []
     hashes = rag.content_hashes()
     for row in rows:
         entries = ranker(row["query"])
@@ -333,9 +333,9 @@ def evaluate(rows: List[dict], ranker: Ranker, k: int) -> Tuple[List[dict], dict
     return per_case, _aggregate(per_case)
 
 
-def _aggregate(per_case: List[dict]) -> dict:
+def _aggregate(per_case: list[dict]) -> dict:
     overall = {m: _mean(c["scores"][m] for c in per_case) for m in METRICS}
-    by_kind: Dict[str, dict] = {}
+    by_kind: dict[str, dict] = {}
     for kind in KINDS:
         cases = [c for c in per_case if c["kind"] == kind]
         if cases:
@@ -347,7 +347,7 @@ def _aggregate(per_case: List[dict]) -> dict:
     return {"overall": overall, "by_kind": by_kind}
 
 
-def _first_rank(ranked: Sequence[str], relevant: set) -> Optional[int]:
+def _first_rank(ranked: Sequence[str], relevant: set) -> int | None:
     for i, name in enumerate(ranked):
         if name in relevant:
             return i + 1
@@ -366,7 +366,7 @@ def _row(label: str, m: dict) -> str:
         label, m["recall@k"], m["hit@1"], m["MRR"], m["nDCG@k"])
 
 
-def print_compare(k: int, results: List[dict]) -> None:
+def print_compare(k: int, results: list[dict]) -> None:
     print("\n=== engine comparison (k=%d, %d queries) ===" % (k, results[0]["n"]))
     print("  %-22s %8s %8s %8s %8s" % ("engine", "recall", "hit@1", "MRR", "nDCG"))
     for r in results:
@@ -379,7 +379,7 @@ def print_compare(k: int, results: List[dict]) -> None:
               % (kind, m["n"], m["recall@k"], m["hit@1"]))
 
 
-def print_misses(engine: str, per_case: List[dict], k: int) -> None:
+def print_misses(engine: str, per_case: list[dict], k: int) -> None:
     misses = [c for c in per_case if c["rank"] != 1]
     if not misses:
         return
@@ -392,7 +392,7 @@ def print_misses(engine: str, per_case: List[dict], k: int) -> None:
 
 # --------------------------------------------------------------- baseline
 
-def load_baseline() -> Optional[dict]:
+def load_baseline() -> dict | None:
     try:
         return json.loads(BASELINE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -414,7 +414,7 @@ def golden_key(golden: Path) -> str:
     return "%s@%s" % (golden.name, digest)
 
 
-def baseline_for(golden: Path) -> Optional[dict]:
+def baseline_for(golden: Path) -> dict | None:
     """The recorded numbers for this query set, or None if there are none.
 
     Reads the current keyed layout and the original flat one. A flat baseline
@@ -433,7 +433,7 @@ def baseline_for(golden: Path) -> Optional[dict]:
     return None
 
 
-def stale_keys(keys: Iterable[str], fresh: str) -> List[str]:
+def stale_keys(keys: Iterable[str], fresh: str) -> list[str]:
     """Keys for the same query set at a *different* digest, sorted.
 
     A key is ``name@digest``, and the digest only changes when the file does.
@@ -450,7 +450,7 @@ def stale_keys(keys: Iterable[str], fresh: str) -> List[str]:
                   if k != fresh and k.rsplit("@", 1)[0] == name)
 
 
-def save_baseline(k: int, results: List[dict], golden: Path) -> None:
+def save_baseline(k: int, results: list[dict], golden: Path) -> None:
     """Pin this run's scores under its query set, leaving other sets alone."""
     payload = load_baseline() or {}
     if "sets" not in payload:
@@ -480,9 +480,9 @@ def save_baseline(k: int, results: List[dict], golden: Path) -> None:
     print("\nbaseline written -> %s (%s)" % (shown, golden.name))
 
 
-def parse_floors(pairs: Sequence[str]) -> Dict[str, float]:
+def parse_floors(pairs: Sequence[str]) -> dict[str, float]:
     """Turn `--floor name=value` arguments into a metric -> minimum mapping."""
-    floors: Dict[str, float] = {}
+    floors: dict[str, float] = {}
     for raw in pairs:
         name, sep, value = raw.partition("=")
         if not sep:
@@ -496,11 +496,13 @@ def parse_floors(pairs: Sequence[str]) -> Dict[str, float]:
         try:
             floors[metric] = float(value)
         except ValueError:
-            raise SystemExit("--floor %s: %r is not a number" % (name, value))
+            # A usage error: the ValueError context is noise, not evidence.
+            raise SystemExit(
+                "--floor %s: %r is not a number" % (name, value)) from None
     return floors
 
 
-def check_floors(result: dict, floors: Dict[str, float]) -> List[str]:
+def check_floors(result: dict, floors: dict[str, float]) -> list[str]:
     """Every metric below its floor, not just the first.
 
     `--fail-under` floored `recall@k` alone, so a ranker that found the right
@@ -509,7 +511,7 @@ def check_floors(result: dict, floors: Dict[str, float]) -> List[str]:
     thing missing was the ability to fail on them.
     """
     overall = result["agg"]["overall"]
-    breaches: List[str] = []
+    breaches: list[str] = []
     for metric, minimum in sorted(floors.items()):
         if metric not in METRICS:
             raise SystemExit("unknown metric %r in --floor (known: %s)"
@@ -520,12 +522,12 @@ def check_floors(result: dict, floors: Dict[str, float]) -> List[str]:
     return breaches
 
 
-def check_regressions(results: List[dict], eps: float,
-                      golden: Path) -> List[str]:
+def check_regressions(results: list[dict], eps: float,
+                      golden: Path) -> list[str]:
     base = baseline_for(golden)
     if not base:
         return []
-    problems: List[str] = []
+    problems: list[str] = []
     for r in results:
         prev = base.get("engines", {}).get(r["engine"])
         if not prev:
@@ -541,7 +543,7 @@ def check_regressions(results: List[dict], eps: float,
 
 # --------------------------------------------------------------- Tier 2a
 
-def run_rerank_lift(rows: List[dict], k: int, json_out: bool) -> int:
+def run_rerank_lift(rows: list[dict], k: int, json_out: bool) -> int:
     """Compare raw BM25 vs LLM-reranked BM25 on the same golden set."""
     if not ai.available():
         print("rerank lift needs the `claude` CLI on PATH or ANTHROPIC_API_KEY "
@@ -574,12 +576,12 @@ def run_rerank_lift(rows: List[dict], k: int, json_out: bool) -> int:
 
 # --------------------------------------------------------------- Tier 1b (stats)
 
-def _stats_metrics(k: int) -> List[str]:
+def _stats_metrics(k: int) -> list[str]:
     return ["recall@%d" % k, "hit_rate@1", "mrr", "ndcg@%d" % k]
 
 
-def build_stats_report(per_cases: Dict[str, List[dict]], rows: List[dict],
-                       k: int, order: List[str]):
+def build_stats_report(per_cases: dict[str, list[dict]], rows: list[dict],
+                       k: int, order: list[str]):
     """Compare the engines with `ranx` + a paired Student's t-test; return the
     ranx Report, or None if unavailable.
 
@@ -600,11 +602,11 @@ def build_stats_report(per_cases: Dict[str, List[dict]], rows: List[dict],
               file=sys.stderr)
         return None
 
-    qrels = Qrels({"q%d" % i: {n: 1 for n in row["relevant_set"]}
+    qrels = Qrels({"q%d" % i: dict.fromkeys(row["relevant_set"], 1)
                    for i, row in enumerate(rows)})
     runs = []
     for label in order:
-        run_d: Dict[str, Dict[str, float]] = {}
+        run_d: dict[str, dict[str, float]] = {}
         for i, pc in enumerate(per_cases[label]):
             top = pc["top"]
             # position-derived descending scores: ranx orders docs by score, so
@@ -619,7 +621,7 @@ def build_stats_report(per_cases: Dict[str, List[dict]], rows: List[dict],
                    stat_test="student", make_comparable=True)
 
 
-def print_stats_human(report, order: List[str], k: int) -> None:
+def print_stats_human(report, order: list[str], k: int) -> None:
     print("\n=== Tier 1b: statistical significance (ranx · paired t-test) ===")
     print(report)
     # Plain-language verdict for the best engine vs each other, at p<0.05.
@@ -640,7 +642,7 @@ def print_stats_human(report, order: List[str], k: int) -> None:
 
 # --------------------------------------------------------------- main
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)
@@ -703,19 +705,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ---- Tier 1: engine comparison ----
     wanted = ["catalog", "bm25"] if args.engines == "auto" \
         else [e.strip() for e in args.engines.split(",") if e.strip()]
-    if (args.engines == "auto" or "dense" in wanted) and dense.ready():
-        if "dense" not in wanted:
-            wanted.append("dense")
-    if (args.engines == "auto" or "hybrid" in wanted) and dense.ready():
-        if "hybrid" not in wanted:
-            wanted.append("hybrid")
+    if ((args.engines == "auto" or "dense" in wanted) and dense.ready()
+            and "dense" not in wanted):
+        wanted.append("dense")
+    if ((args.engines == "auto" or "hybrid" in wanted) and dense.ready()
+            and "hybrid" not in wanted):
+        wanted.append("hybrid")
     factory = {"catalog": catalog_ranker, "bm25": bm25_ranker,
                "dense": dense_ranker, "hybrid": hybrid_ranker}
     labels = {"catalog": "catalog.search", "bm25": "BM25 full-content",
               "dense": "dense vectors", "hybrid": "hybrid RRF"}
 
-    results: List[dict] = []
-    per_cases: Dict[str, List[dict]] = {}
+    results: list[dict] = []
+    per_cases: dict[str, list[dict]] = {}
     for name in wanted:
         if name == "dense" and not dense.ready():
             print("dense engine not ready (needs [rag] extra + embeddings) — "
