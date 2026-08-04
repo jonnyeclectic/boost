@@ -855,8 +855,11 @@ def _browse_tui(curses, entries):
                 title = " boost browse"
                 put(0, 6, title, th["title"])
                 rx = 6 + len(title) + 1
+                # strict=False: a terminal narrower than the 3-color palette
+                # yields fewer segments, and the extra attrs go unused.
                 for (start, length), attr in zip(
-                        _grad_segments(max(0, _w - 1 - rx)), th["rule"]):
+                        _grad_segments(max(0, _w - 1 - rx)), th["rule"],
+                        strict=False):
                     put(0, rx + start, "─" * length, attr)
                 # prompt line: cyan chevron, query, cursor, right-aligned count
                 put(1, 0, "❯", th["prompt"])
@@ -905,8 +908,11 @@ def _browse_tui(curses, entries):
                 if pane and matches:
                     e = matches[sel]
                     y0 = _h - pane
+                    # strict=False: same narrow-terminal truncation as the
+                    # titlebar rule above.
                     for (start, length), attr in zip(
-                            _grad_segments(_w - 1), th["rule"]):
+                            _grad_segments(_w - 1), th["rule"],
+                            strict=False):
                         put(y0, start, "─" * length, attr)
                     tags = "  ".join("#" + str(t) for t in
                                      (e.get("meta", {}).get("tags") or []))

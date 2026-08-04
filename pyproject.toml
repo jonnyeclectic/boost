@@ -163,14 +163,6 @@ ignore = [
     "UP007",  # non-pep604-annotation-union     (Union[x, y] -> x | y)
     "UP035",  # deprecated-import       (typing.List and friends)
     "UP045",  # non-pep604-annotation-optional  (Optional[x] -> x | None)
-    # zip(strict=) became expressible at the 3.12 floor, and this rule is a real
-    # correctness signal — a length mismatch silently truncates. It is NOT a
-    # mechanical fix though: `strict=True` turns that silent truncation into a
-    # raise, so each of the 16 call sites needs a judgement about whether the
-    # iterables are meant to be the same length. Wrong either way is a behaviour
-    # change, so it gets reviewed per-site rather than swept.
-    # See docs/roadmap/items/zip-strict-audit.md.
-    "B905",   # zip-without-explicit-strict
     # printf-formatting is this codebase's house style across ~860 call sites.
     # The rewrite is an unsafe fix (`%` and `format` differ on tuples and on
     # types with a custom `__format__`), it would rewrite nearly every file —

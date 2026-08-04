@@ -146,7 +146,7 @@ def paired_bootstrap(baseline: Sequence[float], candidate: Sequence[float],
     if n == 0:
         raise ValueError("paired bootstrap needs at least one paired score")
 
-    diffs = [c - b for b, c in zip(baseline, candidate)]
+    diffs = [c - b for b, c in zip(baseline, candidate, strict=True)]
     observed = sum(diffs) / n
 
     rng = random.Random(seed)  # noqa: S311 — resampling, not a security context

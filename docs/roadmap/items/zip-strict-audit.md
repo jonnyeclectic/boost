@@ -1,8 +1,10 @@
 ---
 id: zip-strict-audit
 board: code
-section: planned
-status: planned
+section: internals
+status: shipped
+owner: loop/zip-strict
+pr: 463
 category: Correctness
 complexity: S
 impact: Med
