@@ -64,8 +64,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRIES = ROOT / "boost_cli" / "data" / "registries.json"
@@ -86,7 +86,7 @@ DEFAULT_TARGET = 20_000
 TYPE_ORDER = ("rule", "workflow", "skill")
 
 
-def required_rows(text: str) -> List[str]:
+def required_rows(text: str) -> list[str]:
     """The required corpus's rows, verbatim, in file order."""
     return [ln.rstrip() for ln in text.splitlines()
             if ln.strip() and not ln.lstrip().startswith("#")]
@@ -97,14 +97,14 @@ def repo_of(row: str) -> str:
 
 
 def candidates(registries: Sequence[dict], exclude: Sequence[str]
-               ) -> Dict[str, List[Tuple[str, int]]]:
+               ) -> dict[str, list[tuple[str, int]]]:
     """``type -> [(repo, est_items)]``, largest first, excluding what we have.
 
     ``list_only`` rows are awesome-list indexes rather than skill trees, so they
     contribute nothing to scan and are dropped — the same distinction
     `registries.json` already draws for its own item-count math.
     """
-    out: Dict[str, List[Tuple[str, int]]] = {}
+    out: dict[str, list[tuple[str, int]]] = {}
     seen = set(exclude)
     for row in registries:
         name = str(row.get("name", ""))
@@ -117,8 +117,8 @@ def candidates(registries: Sequence[dict], exclude: Sequence[str]
     return out
 
 
-def select(pools: Dict[str, List[Tuple[str, int]]], target: int
-           ) -> List[Tuple[str, int]]:
+def select(pools: dict[str, list[tuple[str, int]]], target: int
+           ) -> list[tuple[str, int]]:
     """Round-robin across types, largest first within each, until ``target``.
 
     Deterministic: the pools are already sorted, and the cycle order is fixed.
@@ -126,7 +126,7 @@ def select(pools: Dict[str, List[Tuple[str, int]]], target: int
     ``--check`` gate is meaningless.
     """
     cursors = dict.fromkeys(pools, 0)
-    picked: List[Tuple[str, int]] = []
+    picked: list[tuple[str, int]] = []
     total = 0
     order = [k for k in TYPE_ORDER if k in pools] + \
             [k for k in sorted(pools) if k not in TYPE_ORDER]
@@ -149,7 +149,7 @@ def select(pools: Dict[str, List[Tuple[str, int]]], target: int
     return picked
 
 
-def existing_pins(text: str) -> Dict[str, str]:
+def existing_pins(text: str) -> dict[str, str]:
     """``repo -> its committed row``, so a regeneration keeps what was measured.
 
     Without this the generator and `eval_corpus.py --refresh` fight: the refresh
@@ -160,7 +160,7 @@ def existing_pins(text: str) -> Dict[str, str]:
     So `--check` verifies the *selection* — which registries are in and in what
     order — and leaves the pins to the job that actually measured them.
     """
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for line in text.splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
             continue
@@ -168,8 +168,8 @@ def existing_pins(text: str) -> Dict[str, str]:
     return out
 
 
-def render(required: Sequence[str], picked: Sequence[Tuple[str, int]],
-           target: int, pinned: Optional[Dict[str, str]] = None) -> str:
+def render(required: Sequence[str], picked: Sequence[tuple[str, int]],
+           target: int, pinned: dict[str, str] | None = None) -> str:
     """The taps-scale.txt text, header included."""
     pinned = pinned or {}
     est = sum(e for _n, e in picked)

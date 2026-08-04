@@ -52,7 +52,7 @@ import argparse
 import sys
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Tuple
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
@@ -90,7 +90,7 @@ class Budget(NamedTuple):
 #: none has any reason to go deeper, so unlike bytes and elements it is not a
 #: growth budget at all — it is a "the markup went structurally strange" alarm,
 #: and the roadmap board is no more nested than the smallest page on the site.
-BUDGETS: Dict[str, Budget] = {
+BUDGETS: dict[str, Budget] = {
     "roadmap.html": Budget(
         kbytes=1_200, elements=16_000, depth=20,
         why="the code board — already 5x Lighthouse's DOM-size failure "
@@ -137,7 +137,7 @@ class _Shape(HTMLParser):
             self._open = max(0, self._open - 1)
 
 
-def measure(text: str) -> Tuple[int, int, int]:
+def measure(text: str) -> tuple[int, int, int]:
     """``(bytes, elements, max_depth)`` for one page's markup."""
     shape = _Shape()
     shape.feed(text)
@@ -149,7 +149,7 @@ def budget_for(name: str) -> Budget:
     return BUDGETS.get(name, BUDGETS["*"])
 
 
-def check_page(name: str, text: str) -> List[str]:
+def check_page(name: str, text: str) -> list[str]:
     """Ceilings this page exceeds, as printable lines. Empty when it fits."""
     nbytes, elements, depth = measure(text)
     budget = budget_for(name)
@@ -176,7 +176,7 @@ def main(argv=None) -> int:
     if not pages:
         print("no pages under docs/ — nothing to budget", file=sys.stderr)
         return 1
-    problems: List[str] = []
+    problems: list[str] = []
     if args.verbose:
         print("%-24s %9s %9s %6s" % ("page", "bytes", "elements", "depth"))
     for path in pages:

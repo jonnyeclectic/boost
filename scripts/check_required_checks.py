@@ -44,7 +44,6 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -92,7 +91,7 @@ PR_ALWAYS = "always"      # fires on every PR — safe to require
 PR_FILTERED = "filtered"  # fires only on some PRs — NEVER safe to require
 
 
-def has_merge_group(header_lines: List[str]) -> bool:
+def has_merge_group(header_lines: list[str]) -> bool:
     """Does this workflow declare a ``merge_group:`` trigger?
 
     Same narrow, stdlib-only parsing as everything else here: a top-level
@@ -101,7 +100,7 @@ def has_merge_group(header_lines: List[str]) -> bool:
     return any(_MG_TRIGGER.match(line) for line in header_lines)
 
 
-def pull_request_state(header_lines: List[str]) -> str:
+def pull_request_state(header_lines: list[str]) -> str:
     """Classify the ``pull_request:`` trigger in a workflow header.
 
     Returns one of :data:`PR_NONE`, :data:`PR_ALWAYS`, :data:`PR_FILTERED`.
@@ -143,7 +142,7 @@ def _strip_quotes(s: str) -> str:
     return s
 
 
-def parse_workflow(path: Path) -> Tuple[str, bool, Dict[str, str]]:
+def parse_workflow(path: Path) -> tuple[str, bool, dict[str, str]]:
     """``(pull_request_state, has_merge_group, {job_id: display_name})``."""
     lines = path.read_text(encoding="utf-8").splitlines()
     try:
@@ -154,7 +153,7 @@ def parse_workflow(path: Path) -> Tuple[str, bool, Dict[str, str]]:
     on_pr = pull_request_state(lines[:jobs_at])
     on_mg = has_merge_group(lines[:jobs_at])
 
-    jobs: Dict[str, str] = {}
+    jobs: dict[str, str] = {}
     current = None
     for line in lines[jobs_at + 1:]:
         job = _JOB.match(line)
@@ -169,17 +168,17 @@ def parse_workflow(path: Path) -> Tuple[str, bool, Dict[str, str]]:
     return on_pr, on_mg, jobs
 
 
-def collect() -> Tuple[Dict[str, List[str]], Set[str], Dict[str, str], Set[str]]:
+def collect() -> tuple[dict[str, list[str]], set[str], dict[str, str], set[str]]:
     """``({check_name: [workflow, ...]}, {on every PR}, {name: workflow}, {on merge_group})``.
 
     The third value maps a *conditionally*-triggered check name to the workflow
     that narrows it, so the error message can name the culprit. The fourth is
     the set of names that would also report on a merge-queue ref.
     """
-    by_name: Dict[str, List[str]] = {}
-    on_pr: Set[str] = set()
-    filtered: Dict[str, str] = {}
-    on_mg: Set[str] = set()
+    by_name: dict[str, list[str]] = {}
+    on_pr: set[str] = set()
+    filtered: dict[str, str] = {}
+    on_mg: set[str] = set()
     files = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
     if not files:
         raise SystemExit("required-checks: no workflow files found under %s" % WORKFLOWS)
@@ -204,7 +203,7 @@ def collect() -> Tuple[Dict[str, List[str]], Set[str], Dict[str, str], Set[str]]
     return by_name, on_pr, filtered, on_mg
 
 
-def read_config() -> List[str]:
+def read_config() -> list[str]:
     if not CONFIG.exists():
         raise SystemExit("required-checks: missing %s" % CONFIG)
     out = []
@@ -217,7 +216,7 @@ def read_config() -> List[str]:
     return out
 
 
-def resolve(required: str, on_pr: Set[str]) -> Tuple[bool, str]:
+def resolve(required: str, on_pr: set[str]) -> tuple[bool, str]:
     """Is ``required`` satisfied by some job name in ``on_pr``?
 
     Called twice — once against the names that run on every PR, and once
@@ -242,7 +241,7 @@ def resolve(required: str, on_pr: Set[str]) -> Tuple[bool, str]:
     return False, ""
 
 
-def workflows_for(required: str, by_name: Dict[str, List[str]]) -> List[str]:
+def workflows_for(required: str, by_name: dict[str, list[str]]) -> list[str]:
     """Which workflow file(s) produce ``required``.
 
     Accepts the same three spellings :func:`resolve` does — an exact name, a
@@ -262,7 +261,7 @@ def workflows_for(required: str, by_name: Dict[str, List[str]]) -> List[str]:
     return ["an unknown workflow"]
 
 
-def classic_payload(required: List[str]) -> dict:
+def classic_payload(required: list[str]) -> dict:
     """The `PUT /branches/{branch}/protection` body for this required list."""
     return {
         "required_status_checks": {"strict": True, "contexts": list(required)},
@@ -274,7 +273,7 @@ def classic_payload(required: List[str]) -> dict:
     }
 
 
-def ruleset_rule(required: List[str]) -> dict:
+def ruleset_rule(required: list[str]) -> dict:
     """The `required_status_checks` RULE for a repository ruleset.
 
     Shaped differently from the classic payload on purpose — this is not a
@@ -294,7 +293,7 @@ def ruleset_rule(required: List[str]) -> dict:
     }
 
 
-def drift(required: List[str], remote: List[str]) -> Tuple[List[str], List[str]]:
+def drift(required: list[str], remote: list[str]) -> tuple[list[str], list[str]]:
     """``(missing, extra)`` — how a live mechanism disagrees with the file.
 
     Order-insensitive and duplicate-tolerant: GitHub returns contexts in its own
@@ -315,7 +314,7 @@ def _api(path: str, token: str) -> object:
         return json.load(resp)
 
 
-def ruleset_contexts(detail: dict) -> Tuple[bool, List[str]]:
+def ruleset_contexts(detail: dict) -> tuple[bool, list[str]]:
     """``(has_rule, contexts)`` for one ruleset's required-status-checks rule.
 
     ``has_rule`` is returned separately from an empty list because the two mean
@@ -329,9 +328,9 @@ def ruleset_contexts(detail: dict) -> Tuple[bool, List[str]]:
     return False, []
 
 
-def verify_remote(required: List[str], token: str) -> List[str]:
+def verify_remote(required: list[str], token: str) -> list[str]:
     """Compare BOTH live mechanisms against the file. Returns problems."""
-    problems: List[str] = []
+    problems: list[str] = []
 
     prot = _api("/repos/%s/branches/%s/protection" % (REPO, BRANCH), token)
     contexts = ((prot or {}).get("required_status_checks") or {}).get("contexts", [])
@@ -377,7 +376,7 @@ def verify_remote(required: List[str], token: str) -> List[str]:
     return problems
 
 
-def main(argv: List[str]) -> int:
+def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--print-api", action="store_true",
                     help="print the CLASSIC branch-protection payload and exit")
@@ -436,7 +435,7 @@ def main(argv: List[str]) -> int:
               "(%d checks)." % (CONFIG.name, len(required)))
         return 0
 
-    problems: List[str] = []
+    problems: list[str] = []
 
     ambiguous = {n: w for n, w in sorted(by_name.items()) if len(w) > 1}
     for name, where in ambiguous.items():

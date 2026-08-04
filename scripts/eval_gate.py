@@ -29,7 +29,6 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -58,7 +57,7 @@ BASELINE = ROOT / "evals" / "baseline.json"
 #
 # Raise a floor only after the higher score has held for a release; lowering one
 # is a decision to make explicitly in review, not a way to make CI green.
-FLOORS: Dict[str, float] = {
+FLOORS: dict[str, float] = {
     "recall@5": 0.45,
     "recall@10": 0.55,
     "MRR": 0.78,
@@ -74,7 +73,7 @@ REGRESSION_EPS = 0.02
 ALPHA = 0.05
 
 
-def load(path: Path, what: str) -> Optional[dict]:
+def load(path: Path, what: str) -> dict | None:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
@@ -82,7 +81,7 @@ def load(path: Path, what: str) -> Optional[dict]:
         return None
 
 
-def corpus_drift(current: dict, baseline: Optional[dict]) -> Optional[str]:
+def corpus_drift(current: dict, baseline: dict | None) -> str | None:
     """Refuse to compare scores measured over a different corpus.
 
     The per-query numbers only mean anything against the corpus they were pinned
@@ -106,7 +105,7 @@ def corpus_drift(current: dict, baseline: Optional[dict]) -> Optional[str]:
             "change was intended." % (want, got))
 
 
-def check_floors(mean: Dict[str, float]) -> List[str]:
+def check_floors(mean: dict[str, float]) -> list[str]:
     failures = []
     print("eval gate: absolute floors")
     for name in metrics.METRIC_NAMES:
@@ -120,7 +119,7 @@ def check_floors(mean: Dict[str, float]) -> List[str]:
 
 
 def check_regressions(current: dict, baseline: dict, eps: float,
-                      alpha: float) -> List[str]:
+                      alpha: float) -> list[str]:
     """Paired-bootstrap each metric against the baseline's per-query scores."""
     arm = current["primary"]
     cur_q = current["arms"][arm]["per_query"]
@@ -170,7 +169,7 @@ def check_regressions(current: dict, baseline: dict, eps: float,
     return failures
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", action="store_true",

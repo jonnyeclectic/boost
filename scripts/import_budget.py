@@ -30,19 +30,18 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Set
 
 ROOT = Path(__file__).resolve().parent.parent
 
 # Common commands that must stay lean. All are fully offline and touch the core
 # dispatch + store/catalog paths, so a leak anywhere in that surface is caught.
-COMMANDS: List[List[str]] = [["--help"], ["--version"], ["list"], ["count"]]
+COMMANDS: list[list[str]] = [["--help"], ["--version"], ["list"], ["count"]]
 
 # Modules that must NEVER load for the commands above. Heavy C extensions,
 # scientific-python, and the embedding/AI SDKs — plus boost's own optional-only
 # engines, which stay lazy behind `search --dense`. A leak means a hot path grew
 # a top-level import of an optional dependency.
-DENYLIST: Set[str] = {
+DENYLIST: set[str] = {
     # the [rag] extra's native dependency
     "sqlite_vec",
     # scientific-python / vector libs an embedding backend might drag in
@@ -62,7 +61,7 @@ DENYLIST: Set[str] = {
 SOFT_MODULE_CEILING = 260
 
 
-def parse_modules(importtime_stderr: str) -> Set[str]:
+def parse_modules(importtime_stderr: str) -> set[str]:
     """Module names from ``python -X importtime`` stderr.
 
     Each line is ``import time: <self> | <cumulative> | <indent><module>``; the
@@ -70,7 +69,7 @@ def parse_modules(importtime_stderr: str) -> Set[str]:
     stripped. The header line (``self [us] | cumulative | imported package``)
     has no numeric first field and is skipped.
     """
-    modules: Set[str] = set()
+    modules: set[str] = set()
     for line in importtime_stderr.splitlines():
         if "import time:" not in line:
             continue
@@ -86,7 +85,7 @@ def parse_modules(importtime_stderr: str) -> Set[str]:
     return modules
 
 
-def imported_modules(command: List[str]) -> Set[str]:
+def imported_modules(command: list[str]) -> set[str]:
     """The set of modules imported when running ``boost <command>``.
 
     Runs in a subprocess with a throwaway ``$HOME`` so a real ``~/.boost`` can
@@ -107,14 +106,14 @@ def imported_modules(command: List[str]) -> Set[str]:
     return parse_modules(proc.stderr)
 
 
-def leaks_for(modules: Set[str]) -> List[str]:
+def leaks_for(modules: set[str]) -> list[str]:
     """Sorted denylisted modules present in ``modules`` (empty = clean)."""
     return sorted(DENYLIST & modules)
 
 
-def check() -> Dict[str, dict]:
+def check() -> dict[str, dict]:
     """Run every command; return ``{label: {"leaks": [...], "count": int}}``."""
-    report: Dict[str, dict] = {}
+    report: dict[str, dict] = {}
     for command in COMMANDS:
         mods = imported_modules(command)
         report["boost " + " ".join(command)] = {
@@ -124,7 +123,7 @@ def check() -> Dict[str, dict]:
     return report
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     show_counts = "--list" in argv
     report = check()

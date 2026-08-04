@@ -14,13 +14,12 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Optional
 
 ALPHA = 0.05
 HEADER = "### Tier 1b — retrieval significance (ranx paired t-test)\n"
 
 
-def _load(path: str) -> Optional[dict]:
+def _load(path: str) -> dict | None:
     try:
         with open(path, encoding="utf-8") as fh:
             return json.load(fh)
@@ -28,7 +27,7 @@ def _load(path: str) -> Optional[dict]:
         return None
 
 
-def render(payload: Optional[dict]) -> str:
+def render(payload: dict | None) -> str:
     """Markdown for a `--stats --json` payload (or a graceful skip note)."""
     sig = (payload or {}).get("significance")
     if not sig:
@@ -72,7 +71,7 @@ def render(payload: Optional[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     path = args[0] if args else "stats.json"
     sys.stdout.write(render(_load(path)))

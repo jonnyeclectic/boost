@@ -35,14 +35,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
 
 # Run from a source checkout without an install.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from boost_cli.commands.discovery import _ai_picks  # noqa: E402
-from boost_cli.core import ai, catalog, rag  # noqa: E402
+from boost_cli.commands.discovery import _ai_picks
+from boost_cli.core import ai, catalog, rag
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_GOLDEN = ROOT / "tests" / "eval" / "recommend.jsonl"
@@ -51,8 +51,8 @@ SHORTLIST = 20          # cmd_recommend feeds _ai_picks the top-20 heuristic hit
 
 # --------------------------------------------------------------- data
 
-def load_golden(path: Path) -> List[dict]:
-    rows: List[dict] = []
+def load_golden(path: Path) -> list[dict]:
+    rows: list[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -65,13 +65,13 @@ def load_golden(path: Path) -> List[dict]:
     return rows
 
 
-def candidates(stack: dict, entries, n: int = SHORTLIST) -> List[dict]:
+def candidates(stack: dict, entries, n: int = SHORTLIST) -> list[dict]:
     """Rebuild cmd_recommend's heuristic shortlist for a stack (top-n entries).
 
     Mirrors boost_cli/commands/discovery.cmd_recommend: search the catalog for
     each stack keyword, sum scores per skill, +10 for curated, rank.
     """
-    agg: Dict[str, dict] = {}
+    agg: dict[str, dict] = {}
     for kw in stack["keywords"]:
         for e, s in catalog.search(kw, entries):
             rec = agg.setdefault(e["name"], {"entry": e, "score": 0})
@@ -104,11 +104,11 @@ def _mean(xs) -> float:
 
 # --------------------------------------------------------------- arms
 
-def heuristic_names(cands: List[dict], k: int) -> List[str]:
+def heuristic_names(cands: list[dict], k: int) -> list[str]:
     return [e["name"] for e in cands[:k]]
 
 
-def ai_names(stack: dict, cands: List[dict]) -> Optional[List[str]]:
+def ai_names(stack: dict, cands: list[dict]) -> list[str] | None:
     picks = _ai_picks(stack, cands)
     if picks is None:
         return None
@@ -117,9 +117,9 @@ def ai_names(stack: dict, cands: List[dict]) -> Optional[List[str]]:
 
 # --------------------------------------------------------------- eval
 
-def eval_stacks(rows: List[dict], k: int, use_ai: bool) -> dict:
-    per_case: List[dict] = []
-    hallucinated: List[Tuple[str, List[str]]] = []
+def eval_stacks(rows: list[dict], k: int, use_ai: bool) -> dict:
+    per_case: list[dict] = []
+    hallucinated: list[tuple[str, list[str]]] = []
     ai_ran = 0
     for row in rows:
         stack = row["stack"]
@@ -203,7 +203,7 @@ def print_report(res: dict, k: int, use_ai: bool) -> None:
               "(0 hallucinations).")
 
 
-def print_dump(rows: List[dict], k: int) -> None:
+def print_dump(rows: list[dict], k: int) -> None:
     """Print each stack's heuristic shortlist — an aid for authoring goldens."""
     for row in rows:
         stack = row["stack"]
@@ -218,7 +218,7 @@ def print_dump(rows: List[dict], k: int) -> None:
 
 # --------------------------------------------------------------- main
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)

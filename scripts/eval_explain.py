@@ -32,12 +32,11 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 # Run from a source checkout without an install.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from boost_cli.core import ai, catalog, registry  # noqa: E402
+from boost_cli.core import ai, catalog, registry
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_GOLDEN = ROOT / "tests" / "eval" / "explain.jsonl"
@@ -55,8 +54,8 @@ EXPLAIN_SYSTEM = "You summarize agent skills for developers. Be concrete and bri
 JUDGE_QUESTION = "What does this skill do, and when does it trigger?"
 
 
-def load_golden(path: Path) -> List[dict]:
-    rows: List[dict] = []
+def load_golden(path: Path) -> list[dict]:
+    rows: list[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
@@ -67,7 +66,7 @@ def load_golden(path: Path) -> List[dict]:
     return rows
 
 
-def resolve_skill_md(name: str) -> Optional[str]:
+def resolve_skill_md(name: str) -> str | None:
     """Return a skill's SKILL.md text, or None if it isn't tapped/installed.
 
     ``skill_md`` is stored relative to its tap's repo root, so join it onto the
@@ -84,12 +83,12 @@ def resolve_skill_md(name: str) -> Optional[str]:
     return p.read_text(encoding="utf-8") if p.exists() else None
 
 
-def generate_explanation(skill_md: str) -> Optional[str]:
+def generate_explanation(skill_md: str) -> str | None:
     """Generate the explanation exactly as `boost explain` does."""
     return ai.ask(EXPLAIN_PROMPT + skill_md, system=EXPLAIN_SYSTEM)
 
 
-def build_judge() -> Tuple[object, Optional[str]]:
+def build_judge() -> tuple[object, str | None]:
     """Configure the ragas judge LLM from the environment.
 
     Returns (judge, None) on success, or (None, reason) so the caller can print
@@ -121,7 +120,7 @@ def build_judge() -> Tuple[object, Optional[str]]:
                   "langchain-anthropic) so ragas can score faithfulness")
 
 
-def score_faithfulness(samples: List[dict], judge) -> List[Optional[float]]:
+def score_faithfulness(samples: list[dict], judge) -> list[float | None]:
     """Run ragas faithfulness over the samples; return one score per sample."""
     from ragas import EvaluationDataset, SingleTurnSample, evaluate
     from ragas.metrics import faithfulness
@@ -144,7 +143,7 @@ def score_faithfulness(samples: List[dict], judge) -> List[Optional[float]]:
             for v in df[col].tolist()]
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--golden", type=Path, default=DEFAULT_GOLDEN)
@@ -168,8 +167,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               "explanations).", file=sys.stderr)
         return 0
 
-    samples: List[dict] = []
-    skipped: List[str] = []
+    samples: list[dict] = []
+    skipped: list[str] = []
     for row in rows:
         name = row["name"]
         skill_md = resolve_skill_md(name)
@@ -198,7 +197,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "metric": "faithfulness",
             "mean": mean,
             "n": len(graded),
-            "per_skill": {n: sc for n, sc in graded},
+            "per_skill": dict(graded),
             "skipped": skipped,
         }, indent=2))
     else:

@@ -94,7 +94,7 @@ import ast
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Tuple
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = Path("boost_cli/core")
@@ -116,7 +116,7 @@ def line_weight(path: Path) -> int:
     return max(n, 1)
 
 
-def load_weights(root: Path) -> Dict[str, int]:
+def load_weights(root: Path) -> dict[str, int]:
     """Real mutant counts, if a previous run left any. Missing file is normal."""
     path = root / WEIGHTS
     if not path.exists():
@@ -129,7 +129,7 @@ def load_weights(root: Path) -> Dict[str, int]:
     return {k: int(v) for k, v in counts.items() if isinstance(v, int) and v > 0}
 
 
-def load_symbol_weights(root: Path) -> Dict[str, Dict[str, int]]:
+def load_symbol_weights(root: Path) -> dict[str, dict[str, int]]:
     """Recorded per-function mutant counts, if a previous run left any.
 
     Same contract as ``load_weights``: advisory, and a missing or corrupt file
@@ -142,7 +142,7 @@ def load_symbol_weights(root: Path) -> Dict[str, Dict[str, int]]:
         data = json.loads(path.read_text())
     except ValueError:
         return {}
-    out: Dict[str, Dict[str, int]] = {}
+    out: dict[str, dict[str, int]] = {}
     for name, syms in (data.get("mutants_by_symbol") or {}).items():
         if isinstance(syms, dict):
             out[name] = {s: int(v) for s, v in syms.items()
@@ -150,7 +150,7 @@ def load_symbol_weights(root: Path) -> Dict[str, Dict[str, int]]:
     return out
 
 
-def load_symbol_durations(root: Path) -> Dict[str, Dict[str, int]]:
+def load_symbol_durations(root: Path) -> dict[str, dict[str, int]]:
     """Recorded per-FUNCTION run time in milliseconds, if a previous run left any.
 
     The share basis that matters inside a split file. Mutant count is a poor
@@ -167,7 +167,7 @@ def load_symbol_durations(root: Path) -> Dict[str, Dict[str, int]]:
         data = json.loads(path.read_text())
     except ValueError:
         return {}
-    out: Dict[str, Dict[str, int]] = {}
+    out: dict[str, dict[str, int]] = {}
     for name, syms in (data.get("millis_by_symbol") or {}).items():
         if isinstance(syms, dict):
             out[name] = {s: int(v) for s, v in syms.items()
@@ -175,7 +175,7 @@ def load_symbol_durations(root: Path) -> Dict[str, Dict[str, int]]:
     return out
 
 
-def load_durations(root: Path) -> Dict[str, int]:
+def load_durations(root: Path) -> dict[str, int]:
     """Recorded per-file RUN TIME in milliseconds, if a previous run left any.
 
     Time is the quantity the critical path is actually made of, and it is not
@@ -225,7 +225,7 @@ def weight_fn(root: Path):
     # came back short, which under an all-or-nothing rule would have silently
     # dropped the planner back to counting mutants. Imputing keeps every weight
     # in the same unit, which is the property that actually matters.
-    imputed: Dict[str, int] = {}
+    imputed: dict[str, int] = {}
     if millis:
         measured_ms = sum(millis[n] for n in millis if n in recorded)
         measured_mutants = sum(recorded[n] for n in millis if n in recorded)
@@ -251,7 +251,7 @@ def weight_fn(root: Path):
     return weight
 
 
-def source_files(root: Path) -> List[Path]:
+def source_files(root: Path) -> list[Path]:
     """Every mutatable file, RECURSIVELY.
 
     mutmut walks ``source_paths`` with ``os.walk``, so a subpackage
@@ -287,7 +287,7 @@ class Unit(NamedTuple):
     """
 
     path: Path
-    symbol: Optional[str] = None
+    symbol: str | None = None
 
     @property
     def name(self) -> str:
@@ -305,7 +305,7 @@ def _as_path(path) -> Path:
     return path.path if isinstance(path, Unit) else path
 
 
-def top_level_symbols(path: Path) -> List[str]:
+def top_level_symbols(path: Path) -> list[str]:
     """The function names a file's mutants can be addressed by, or [].
 
     mutmut generates one ``x_<name>__mutmut_<n>`` per *function*, so the set of
@@ -339,7 +339,7 @@ def top_level_symbols(path: Path) -> List[str]:
     return names
 
 
-def symbol_weight(path: Path, symbols: List[str]) -> Dict[str, int]:
+def symbol_weight(path: Path, symbols: list[str]) -> dict[str, int]:
     """Per-function weight, by body size — the same stand-in ``line_weight`` uses.
 
     Recorded per-symbol mutant counts are preferred when a previous run left
@@ -358,7 +358,7 @@ def symbol_weight(path: Path, symbols: List[str]) -> Dict[str, int]:
     return out
 
 
-def units_for(root: Path, path: Path, ceiling: int) -> List[Unit]:
+def units_for(root: Path, path: Path, ceiling: int) -> list[Unit]:
     """Split `path` into per-function units when it alone exceeds `ceiling`.
 
     ``ceiling`` is the ideal per-shard load. A file lighter than that can never
@@ -409,7 +409,7 @@ def unit_weight(root: Path, unit: Unit) -> int:
     return max(file_weight * shares.get(unit.symbol, 1) // total, 1)
 
 
-def pack(root: Path, shards: int) -> List[List[Path]]:
+def pack(root: Path, shards: int) -> list[list[Path]]:
     """Longest-processing-time-first bin packing.
 
     Deterministic: every shard runs this and selects its own index, so they all
@@ -430,7 +430,7 @@ def pack(root: Path, shards: int) -> List[List[Path]]:
     total = sum(weight(root, f) for f in files)
     ceiling = max(total // max(shards, 1), 1)
 
-    work: List[Unit] = []
+    work: list[Unit] = []
     for f in files:
         work.extend(units_for(root, f, ceiling))
 
@@ -438,7 +438,7 @@ def pack(root: Path, shards: int) -> List[List[Path]]:
                         u.symbol or "", u) for u in work),
                       key=lambda t: (-t[0], t[1], t[2]))
 
-    bins: List[List[Unit]] = [[] for _ in range(shards)]
+    bins: list[list[Unit]] = [[] for _ in range(shards)]
     load = [0] * shards
     for w, _name, _sym, u in weighted:
         i = load.index(min(load))
@@ -554,7 +554,7 @@ def cmd_merge(args: argparse.Namespace) -> int:
     # A file may now be owned by SEVERAL shards, one per function, so the owner
     # map is file -> {shards}. For a whole-file unit that set has one member and
     # the logic below reduces to what it always did.
-    owner: Dict[str, set] = {}
+    owner: dict[str, set] = {}
     for i, b in enumerate(bins):
         for u in b:
             owner.setdefault(rel_name(root, u), set()).add(i)
@@ -563,8 +563,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
     dest_dir = into / SOURCE
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    problems: List[str] = []
-    merged: List[Tuple[str, int, int]] = []
+    problems: list[str] = []
+    merged: list[tuple[str, int, int]] = []
     for name, shards in sorted(owner.items()):
         # Union every owning shard's results for this file. Each shard writes a
         # .meta containing EVERY key in the file — with `None` against the
@@ -572,8 +572,8 @@ def cmd_merge(args: argparse.Namespace) -> int:
         # when it is None in all of them. That is what makes this fail closed:
         # a function that no shard was assigned stays None everywhere and is
         # reported below, exactly as a dropped whole file already was.
-        codes: Dict[str, object] = {}
-        extras: Dict[str, Dict[str, object]] = {}
+        codes: dict[str, object] = {}
+        extras: dict[str, dict[str, object]] = {}
         missing = []
         for shard in sorted(shards):
             src = shard_meta(Path(args.source), args.prefix, shard, name)
@@ -680,7 +680,7 @@ RELEVANT_PREFIXES = (
 RELEVANT_EXACT = ("setup.cfg", "pyproject.toml")
 
 
-def is_relevant(changed: List[str]) -> bool:
+def is_relevant(changed: list[str]) -> bool:
     """True when the mutation score could differ from the base commit's."""
     for name in changed:
         name = name.strip()
@@ -729,9 +729,9 @@ def cmd_weights(args: argparse.Namespace) -> int:
     root = Path(args.root)
     src = Path(args.source) / SOURCE
     counts = {}
-    millis: Dict[str, int] = {}
-    by_symbol: Dict[str, Dict[str, int]] = {}
-    millis_by_symbol: Dict[str, Dict[str, int]] = {}
+    millis: dict[str, int] = {}
+    by_symbol: dict[str, dict[str, int]] = {}
+    millis_by_symbol: dict[str, dict[str, int]] = {}
     for meta in sorted(src.rglob("*.py.meta")):
         data = json.loads(meta.read_text())
         codes = data.get("exit_code_by_key", {})
@@ -754,8 +754,8 @@ def cmd_weights(args: argparse.Namespace) -> int:
             # Attribute each mutant to the function it belongs to, so a split
             # file balances on measured counts rather than on body size. Keys
             # look like `boost_cli.core.store.x_install__mutmut_3`.
-            tally: Dict[str, int] = {}
-            times: Dict[str, float] = {}
+            tally: dict[str, int] = {}
+            times: dict[str, float] = {}
             for key in codes:
                 head, sep, _n = key.rpartition("__mutmut_")
                 if not sep:

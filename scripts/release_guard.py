@@ -44,7 +44,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import Callable, List, Optional, Sequence, Tuple
+from collections.abc import Callable, Sequence
 
 PYPI = "https://pypi.org/pypi"
 
@@ -54,13 +54,13 @@ PYPI = "https://pypi.org/pypi"
 TAG_RE = re.compile(r"^v?(\d+\.\d+(?:\.\d+)*(?:[.\-+][0-9A-Za-z.\-+]+)?)$")
 
 
-def version_of(tag: str) -> Optional[str]:
+def version_of(tag: str) -> str | None:
     """The PyPI version a release tag denotes, or None if it is not one."""
     m = TAG_RE.match(tag.strip())
     return m.group(1) if m else None
 
 
-def git_tags_at(ref: str = "HEAD") -> List[str]:
+def git_tags_at(ref: str = "HEAD") -> list[str]:
     """Tags pointing at `ref`. Empty on any git failure — an unreadable tag
     list must not be mistaken for "no tags, go ahead"; `decide` is told
     separately when the lookup itself failed."""
@@ -73,7 +73,7 @@ def git_tags_at(ref: str = "HEAD") -> List[str]:
     return [ln.strip() for ln in out.decode("utf-8").splitlines() if ln.strip()]
 
 
-def pypi_has(project: str, version: str, attempts: int = 3) -> Optional[bool]:
+def pypi_has(project: str, version: str, attempts: int = 3) -> bool | None:
     """True if `version` of `project` is on PyPI, False if not, None if unknown.
 
     None is the important third answer: it means PyPI did not tell us, and the
@@ -105,7 +105,7 @@ def pypi_has(project: str, version: str, attempts: int = 3) -> Optional[bool]:
 
 
 def decide(tags: Sequence[str], project: str,
-           probe: Callable[[str, str], Optional[bool]]) -> Tuple[bool, str]:
+           probe: Callable[[str, str], bool | None]) -> tuple[bool, str]:
     """(proceed, reason) for a commit carrying `tags`.
 
     Pure apart from `probe`, which is what makes the decision testable without
@@ -138,7 +138,7 @@ def decide(tags: Sequence[str], project: str,
                   "complete, releasing" % ", ".join(sorted(versions)))
 
 
-def emit(name: str, value: str, path: Optional[str] = None) -> None:
+def emit(name: str, value: str, path: str | None = None) -> None:
     """Append a step output for GitHub Actions. A no-op off-CI."""
     path = path if path is not None else os.environ.get("GITHUB_OUTPUT", "")
     if not path:
@@ -147,7 +147,7 @@ def emit(name: str, value: str, path: Optional[str] = None) -> None:
         fh.write("%s=%s\n" % (name, value))
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)

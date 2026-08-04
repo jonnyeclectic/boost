@@ -186,7 +186,7 @@ def marker_pins(text: str) -> tuple[tuple[str, str], ...]:
     return tuple(sorted(pins))
 
 
-def render_platform_pins(locks: "dict[str, str]") -> str:
+def render_platform_pins(locks: dict[str, str]) -> str:
     """The manifest text recording the marker-gated pins of `locks`.
 
     A group with no conditional pins still gets its section header, so the
@@ -202,9 +202,9 @@ def render_platform_pins(locks: "dict[str, str]") -> str:
     return "".join(out)
 
 
-def parse_platform_pins(text: str) -> "dict[str, tuple[tuple[str, str], ...]]":
+def parse_platform_pins(text: str) -> dict[str, tuple[tuple[str, str], ...]]:
     """`{group: ((name, marker), ...)}` as recorded by a manifest."""
-    out: "dict[str, list[tuple[str, str]]]" = {}
+    out: dict[str, list[tuple[str, str]]] = {}
     stem = None
     for raw in text.splitlines():
         line = raw.strip()
@@ -221,14 +221,14 @@ def parse_platform_pins(text: str) -> "dict[str, tuple[tuple[str, str], ...]]":
     return {k: tuple(v) for k, v in out.items()}
 
 
-def read_locks() -> "dict[str, str]":
+def read_locks() -> dict[str, str]:
     """The committed text of every group's generated lock."""
     return {stem: (REQS / ("%s.txt" % stem)).read_text(encoding="utf-8")
             for stem, _python_version in GROUPS}
 
 
-def audit_platform_pins(locks: "dict[str, str]",
-                        manifest_text: str) -> "list[str]":
+def audit_platform_pins(locks: dict[str, str],
+                        manifest_text: str) -> list[str]:
     """Problems found comparing `locks` against the recorded manifest.
 
     A LOST pin and a NEW pin are reported differently on purpose. They are the
