@@ -1,0 +1,90 @@
+name: boost-langchain
+
+# Opt-in: does the boost-langchain distribution still install, pass its tests,
+# and package cleanly against the live langchain stack?
+#
+# This is deliberately OUT of the release gate (ci.yml). boost stays
+# zero-dependency and its own suite proves that; integrations/langchain is a
+# SEPARATE distribution (`boost-langchain`) whose entire point is depending on
+# the third-party langchain-core tree we don't control. Coupling boost's PyPI
+# release to whether that stack installs and imports today would let upstream
+# drift redden a release of a package that doesn't even ship the integration —
+# the same reasoning adapter-conformance.yml documents for CrewAI and the
+# Agents SDK. Run this manually before shipping a change under
+# integrations/langchain, and weekly to catch upstream breakage early. It never
+# blocks a merge.
+on:
+  workflow_dispatch:
+  # Also on PRs that touch the thing under test — the adapter-conformance
+  # lesson: a leg nothing exercises on its own pull request merges broken and
+  # sits until the weekly cron is the first thing to run it. Deliberately
+  # narrow: this job installs the langchain/langgraph stack, far too slow to
+  # hang off every PR.
+  #
+  # This stays path-filtered, which means it MUST NOT be added to the required
+  # status checks (.github/required-checks.txt explains the rule): a required
+  # context that does not report on a given PR leaves that PR pending forever.
+  # It is early signal, never a gate.
+  pull_request:
+    paths:
+      - "integrations/langchain/**"
+      - ".github/workflows/boost-langchain.yml"
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC — early warning on upstream drift
+
+# Least-privilege default. `conformance` declares its own block, and a job-level
+# block replaces this rather than merging, so its effective token is unchanged.
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    name: boost-langchain conformance
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0    # tags for setuptools-scm version resolution
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # boost's floor. The main suite already proves 3.12-3.14; running the
+          # integration on the floor means a green run here can't be hiding a
+          # syntax or stdlib feature the oldest supported interpreter lacks.
+          python-version: "3.12"
+      - name: git identity (fixture repos)
+        # The integration tests build their corpus with tests/make_fixture.py +
+        # `boost tap`, which commit a fixture repo — commits need an identity.
+        run: |
+          git config --global user.email ci@boost.test
+          git config --global user.name "Boost CI"
+      - name: install boost + boost-langchain[test,langgraph]
+        run: |
+          python -m venv .venv
+          .venv/bin/pip -q install -e .
+          .venv/bin/pip -q install -e './integrations/langchain[test,langgraph]'
+      - name: run the integration test suite
+        # From inside the package, so ITS pytest configuration governs. The
+        # root pyproject pins testpaths/filterwarnings for the main suite, and
+        # a run that inherits the wrong rootdir config is how "green" stops
+        # meaning anything.
+        run: |
+          cd "$GITHUB_WORKSPACE/integrations/langchain"
+          "$GITHUB_WORKSPACE/.venv/bin/pytest" -q
+      - name: build sdist + wheel and check the metadata
+        # Tooling from the hash-pinned release-tools lock, same reasoning as
+        # package-metadata.yml: a twine verdict that changes on an upstream
+        # release of twine is a verdict about twine. Installed AFTER the test
+        # run so the lock's exact pins can never quietly repin something the
+        # langchain stack resolved for the tests.
+        run: |
+          .venv/bin/pip -q install -r requirements/release-tools.txt
+          .venv/bin/python -m build --sdist --wheel integrations/langchain
+          .venv/bin/twine check integrations/langchain/dist/*

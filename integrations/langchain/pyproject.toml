@@ -1,0 +1,49 @@
+# boost-langchain — a separately-versioned distribution. It is NOT part of
+# boost_cli: the CLI and the required gate never import it, and unlike the CLI
+# it is allowed third-party dependencies (langchain-core). The version is
+# static rather than setuptools-scm on purpose: the repo's git tags drive
+# boost-skill-cli's release cadence, and this package releases on its own.
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boost-langchain"
+version = "0.1.0"
+description = "LangChain retriever and document loader over boost's skill catalog"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-only"
+authors = [{name = "Jonathan Reyes"}]
+keywords = ["ai", "skills", "langchain", "rag", "retriever", "claude-code"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+# boost-skill-cli's floor is >=0.1 rather than a tight pin: this package only
+# touches boost_cli.core seams that predate 0.1 (rag, catalog, store,
+# frontmatter), and pinning tighter would force a lockstep release for every
+# CLI patch. langchain-core is capped at <2 because BaseRetriever's contract
+# is what this package implements against, and that contract moves on majors.
+dependencies = [
+    "boost-skill-cli>=0.1",
+    "langchain-core>=1,<2",
+]
+
+[project.urls]
+Homepage = "https://github.com/jonnyeclectic/boost"
+Repository = "https://github.com/jonnyeclectic/boost"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+langgraph = ["langgraph>=1,<2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
