@@ -76,17 +76,120 @@ _STACK_MARKERS = [
 _tilde = paths.tilde
 
 
-def _broken_links() -> List[Path]:
-    """Broken (dangling) symlinks across every enabled agent dir."""
-    broken: List[Path] = []
-    for adir in agents.enabled_agents().values():
+def _resolve_as_far_as_it_exists(path: Path) -> Path:
+    """Absolute ``path``, symlinks resolved down to its deepest real ancestor.
+
+    Plain ``resolve()`` is wrong on both sides of this comparison. The link's
+    target does not exist — that is what makes the link broken — and the store
+    dir does, so resolving only the one that can be resolved compares a real
+    path against a nominal one. On macOS that is not hypothetical: ``/tmp`` is
+    itself a symlink to ``/private/tmp``, so a genuine boost link read as
+    foreign and `heal` declined to repair anything.
+    """
+    path = Path(os.path.abspath(str(path)))
+    tail: List[str] = []
+    cur = path
+    while cur != cur.parent and not cur.exists():
+        tail.append(cur.name)
+        cur = cur.parent
+    with suppress(OSError):
+        cur = cur.resolve()
+    return cur.joinpath(*reversed(tail))
+
+
+def _norm(path: Path) -> str:
+    """``path`` as a comparable string, without resolving anything.
+
+    Strips Windows' extended-length prefix — ``os.readlink`` returns
+    ``\\\\?\\C:\\...`` for a link the store created while ``store_dir()`` is
+    spelled the ordinary way, so the two name one location with two strings —
+    and applies `os.path.normcase`, which folds case on Windows (where the
+    filesystem is case-insensitive) and is a no-op on POSIX.
+    """
+    # Strip BEFORE abspath: on a POSIX host a backslash path is not absolute,
+    # so abspath would prepend the cwd and move the prefix out of position —
+    # which matters because this must be testable off Windows.
+    text = str(path)
+    for prefix in ("\\\\?\\UNC\\", "\\\\?\\"):
+        if text.startswith(prefix):
+            text = text[len(prefix):]
+            break
+    return os.path.normcase(os.path.abspath(text))
+
+
+def _within(target: str, parent: str) -> bool:
+    """True if normalised ``target`` is ``parent`` or sits under it."""
+    return target == parent or target.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def _link_key(path: Path) -> str:
+    """``path`` resolved, then normalised into a comparable string.
+
+    Comparing `Path` objects directly is wrong on Windows, in two ways that
+    both read as "boost does not own its own link" and left `heal` refusing to
+    repair anything at all there:
+
+    * ``os.readlink`` returns the extended-length form (``\\\\?\\C:\\...``) for
+      a link the store created, while ``store_dir()`` is spelled the ordinary
+      way — same location, different string.
+    * The filesystem is case-insensitive, so ``C:\\Users`` and ``c:\\users``
+      are one directory and two unequal `Path`s.
+
+    `os.path.normcase` is a no-op on POSIX, so this stays exact where case is.
+    """
+    return _norm(_resolve_as_far_as_it_exists(path))
+
+
+def _owned_link(link: Path) -> bool:
+    """True if ``link`` points into boost's canonical store.
+
+    Ownership is read off the link itself rather than the lock, so it still
+    answers correctly for a skill uninstalled mid-sweep or a lock that has gone
+    missing — the two cases where a dangling link is most likely to exist.
+    """
+    try:
+        raw = Path(os.readlink(str(link)))
+    except OSError:
+        return False
+    target = raw if raw.is_absolute() else link.parent / raw
+    store = paths.store_dir()
+    # Spelled form first. A link boost made carries the store's own path, so
+    # this settles the ordinary case without resolving anything — and every
+    # platform quirk lives in resolution. Windows alone supplies three: the
+    # extended-length prefix, 8.3 short names, and case-insensitivity.
+    if _within(_norm(target), _norm(store)):
+        return True
+    # Resolved form second, for a store genuinely reached through a symlinked
+    # parent — macOS `/tmp` -> `/private/tmp` is the case that made this
+    # necessary rather than theoretical.
+    return _within(_link_key(target), _link_key(store))
+
+
+def _broken_links() -> Tuple[List[Path], List[Path]]:
+    """``(ours, theirs)`` — dangling symlinks in the dirs boost links into.
+
+    Two things this deliberately does NOT do.
+
+    **It does not look in a native-store agent's dir.** `linking_agents`, not
+    `enabled_agents`: boost never links into `~/.gemini/skills`, so anything
+    dangling there belongs to someone else and is none of this command's
+    business. The rest of `cmd_heal` already had this right.
+
+    **It does not report a link boost did not create as ours.** `heal` deletes
+    what this returns first, and a broken link is not necessarily garbage — a
+    skill on an unmounted volume dangles until the volume comes back. Removing
+    a link the user made themselves is not a repair, it is data loss with a
+    reassuring name, so those are reported and left alone.
+    """
+    ours: List[Path] = []
+    theirs: List[Path] = []
+    for adir in agents.linking_agents().values():
         if not adir.is_dir():
             continue
-        broken.extend(
-            link for link in sorted(adir.iterdir())
-            if link.is_symlink() and not link.exists()
-        )
-    return broken
+        for link in sorted(adir.iterdir()):
+            if link.is_symlink() and not link.exists():
+                (ours if _owned_link(link) else theirs).append(link)
+    return ours, theirs
 
 
 def _read_skill(skill_dir: Path) -> Tuple[dict, str]:
@@ -365,10 +468,18 @@ def cmd_doctor(argv):
         bad("%d orphaned store dir%s (%s) — run `boost sync`"
             % (len(orphans), _s(len(orphans)), ", ".join(orphans[:5])))
 
-    broken = _broken_links()
+    broken, foreign = _broken_links()
     if broken:
         bad("%d broken symlink%s in agent dirs — run `boost heal`"
             % (len(broken), _s(len(broken))))
+    if foreign:
+        # `out.info`, not `bad`: this does not raise the issue count, because
+        # boost will not fix it and `heal` deliberately leaves it — counting it
+        # would leave doctor permanently red on something no boost command can
+        # clear, which is how a health check stops being read.
+        out.info("%d broken symlink%s in agent dirs not created by boost — "
+                 "left alone; yours to remove or repair"
+                 % (len(foreign), _s(len(foreign))))
 
     for adir in enabled.values():
         if adir.is_dir() and not os.access(str(adir), os.W_OK):
@@ -691,13 +802,19 @@ def cmd_heal(argv):
                    % (len(missing), "y" if len(missing) == 1 else "ies"))
         actions.append("mkdir %d" % len(missing))
 
-    for link in _broken_links():
+    ours, theirs = _broken_links()
+    for link in ours:
         if dry:
             out.info("would remove broken link %s" % _tilde(link))
         else:
             link.unlink()
             out.ok("removed broken link %s" % _tilde(link))
         actions.append("unlink %s" % link.name)
+    for link in theirs:
+        # Named, never touched: it is in a directory boost writes to, so the
+        # user should know it is dangling — but boost did not put it there.
+        out.warn("broken link %s does not point into %s — left alone"
+                 % (_tilde(link), _tilde(paths.store_dir())))
 
     plan = store.sync_plan()
     if dry:
@@ -920,8 +1037,9 @@ def cmd_health(argv):
     decay_n = sum(1 for r in _decay_rows(Path.cwd()) if r["verdict"] == "decay")
     out.kv("decay", "%d candidate%s" % (decay_n, _s(decay_n)))
 
-    broken = _broken_links()
-    out.kv("broken links", str(len(broken)))
+    broken, foreign = _broken_links()
+    out.kv("broken links", "%d%s" % (
+        len(broken), " (+%d not ours)" % len(foreign) if foreign else ""))
 
     last_sync = "never"
     if cloned and gitutil.has_git():

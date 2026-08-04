@@ -264,3 +264,32 @@ class TestRuleNameTraversal:
         with pytest.raises(BoostError, match="invalid rule name"):
             rules.rule_target(agent, Path("/home/v/.x/skills"), self.EVIL,
                               base=Path("/home/v/myrepo"))
+
+
+class TestReadBlock:
+    """The inverse of `merge_block` — the left-hand side an update diffs against."""
+
+    def test_round_trips_what_merge_block_wrote(self):
+        body = "# House style\n\nUse tabs."
+        text = rules.merge_block("# notes\n", "house-style", body)
+        assert rules.read_block(text, "house-style") == body
+
+    def test_absent_block_is_none(self):
+        text = rules.merge_block("", "one", "body")
+        assert rules.read_block(text, "two") is None
+
+    def test_a_start_marker_with_no_end_is_none(self):
+        # Malformed, and `strip_block` already declines to guess here — reading
+        # to end-of-file would hand the diff the rest of the user's CLAUDE.md.
+        start, _end = rules.markers("x")
+        assert rules.read_block(start + "\nbody\n", "x") is None
+
+    def test_it_reads_only_its_own_block(self):
+        text = rules.merge_block(rules.merge_block("", "a", "AAA"), "b", "BBB")
+        assert rules.read_block(text, "a") == "AAA"
+        assert rules.read_block(text, "b") == "BBB"
+
+    def test_surrounding_user_content_is_not_returned(self):
+        text = rules.merge_block("my own notes\n", "r", "managed")
+        assert rules.read_block(text, "r") == "managed"
+        assert "my own notes" not in (rules.read_block(text, "r") or "")
