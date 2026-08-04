@@ -2,7 +2,8 @@
 id: rules-install-but-cannot-be-governed
 board: code
 section: planned
-status: planned
+status: inflight
+owner: loop/rule-governance
 category: Security · Correctness
 complexity: L
 impact: High
