@@ -374,7 +374,7 @@ def render_crew(workflow: str, description: str, specs: List[AgentSpec],
     llm_line = "    llm=LLM(model=%s),\n" % _py_str(_litellm_model(model)) if model else ""
 
     blocks: List[str] = []
-    for ident, spec in zip(idents, specs):
+    for ident, spec in zip(idents, specs, strict=True):
         tline = "    tools=[%s],\n" % ", ".join(spec.tools) if spec.tools else ""
         blocks.append(
             "%s = Agent(\n"
@@ -385,7 +385,7 @@ def render_crew(workflow: str, description: str, specs: List[AgentSpec],
             ")\n" % (ident, _py_str(_clean(spec.name)),
                      _py_str(_clean(spec.description)),
                      _py_str(_clean(spec.instructions)), tline, llm_line))
-    for ident, spec in zip(idents, specs):
+    for ident, spec in zip(idents, specs, strict=True):
         blocks.append(
             "%s_task = Task(\n"
             "    description=%s,\n"
@@ -428,13 +428,13 @@ def render_graph(workflow: str, description: str, specs: List[AgentSpec],
 
     prompts = "SYSTEM_PROMPTS = {\n%s}\n" % "".join(
         "    %s: %s,\n" % (_py_str(ident), _py_str(_clean(spec.instructions)))
-        for ident, spec in zip(idents, specs))
+        for ident, spec in zip(idents, specs, strict=True))
 
     lines: List[str] = ['    """Build and compile the %s crew as a graph."""' % workflow]
     lines.extend(
         "    %s = create_react_agent(model, tools=[%s], prompt=SYSTEM_PROMPTS[%s])"
         % (ident, ", ".join(spec.tools), _py_str(ident))
-        for ident, spec in zip(idents, specs))
+        for ident, spec in zip(idents, specs, strict=True))
     lines.append("")
     for ident in idents:
         lines.extend(("    def %s_node(state):" % ident,

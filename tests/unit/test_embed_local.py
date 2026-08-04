@@ -255,7 +255,7 @@ class TestAgainstTheRealModel:
         assert out is not None and len(out) == 3
 
         def dot(a, b):
-            return sum(x * y for x, y in zip(a, b))
+            return sum(x * y for x, y in zip(a, b, strict=True))
 
         near = dot(out[0], out[1])
         far = dot(out[0], out[2])

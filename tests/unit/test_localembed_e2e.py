@@ -61,7 +61,7 @@ NEAR_SIM, FAR_SIM, TOL = 0.7691, 0.5338, 0.03
 
 
 def _dot(a, b):
-    return sum(x * y for x, y in zip(a, b))
+    return sum(x * y for x, y in zip(a, b, strict=True))
 
 
 @pytest.fixture(scope="module")
@@ -80,7 +80,7 @@ def vectors():
         pytest.skip("pinned weights unavailable (download failed)")
     out = localembed.encode([Q_SLOW, NEAR, FAR])
     assert out is not None, "encode returned None with the backend present"
-    return dict(zip((Q_SLOW, NEAR, FAR), out))
+    return dict(zip((Q_SLOW, NEAR, FAR), out, strict=True))
 
 
 class TestModelContract:
@@ -155,7 +155,7 @@ class TestDeterminism:
         # would make every reindex produce a different index for the same input.
         again = localembed.encode([NEAR])
         assert again is not None
-        for a, b in zip(again[0], vectors[NEAR]):
+        for a, b in zip(again[0], vectors[NEAR], strict=True):
             assert math.isclose(a, b, abs_tol=1e-6)
 
     def test_batching_does_not_change_a_vector(self, vectors):
@@ -165,6 +165,6 @@ class TestDeterminism:
         alone = localembed.encode([NEAR])
         batched = localembed.encode([NEAR, FAR * 20])
         assert alone is not None and batched is not None
-        for a, b in zip(alone[0], batched[0]):
+        for a, b in zip(alone[0], batched[0], strict=True):
             assert math.isclose(a, b, abs_tol=1e-4), (
                 "padding changed the vector — suspect the attention mask")

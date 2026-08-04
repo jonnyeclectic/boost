@@ -529,7 +529,7 @@ def _embed_and_store(con: sqlite3.Connection, entries: List[dict],
         if not vecs or len(vecs) != len(batch):
             failed_taps.update(e["tap"] for e, _c, _t in batch)
             continue
-        for (e, ci, text), vec in zip(batch, vecs):
+        for (e, ci, text), vec in zip(batch, vecs, strict=True):
             cur = con.execute(
                 "INSERT INTO chunks (name, tap, path, kind, cix, snip) "
                 "VALUES (?, ?, ?, ?, ?, ?)",

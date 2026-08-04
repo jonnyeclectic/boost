@@ -279,7 +279,7 @@ def _extractive(question: str, entries: Sequence[dict]) -> str:
     # these names, and a name several taps carry is not one.
     lines.extend("  %d. %s" % (n, _describe(entry, ref=cite["ref"]))
                  for n, (entry, cite)
-                 in enumerate(zip(entries, citations(entries)), 1))
+                 in enumerate(zip(entries, citations(entries), strict=True), 1))
     lines.extend(("", "Run `boost info <name>` for the full skill, or "
                       "`boost install <name>` to add it."))
     return "\n".join(lines)

@@ -338,7 +338,8 @@ def _run_ragas() -> dict:
                           % "; ".join(skipped)}
 
     scores = mod.score_faithfulness(samples, judge)
-    graded = [(s["name"], sc) for s, sc in zip(samples, scores) if sc is not None]
+    graded = [(s["name"], sc)
+              for s, sc in zip(samples, scores, strict=True) if sc is not None]
     if not graded:
         return {"status": "skipped", "scorer": "ragas",
                 "reason": "ragas returned no usable scores"}

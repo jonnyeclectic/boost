@@ -297,7 +297,7 @@ def panel(lines, title: str | None = None, hue: str = "cyan") -> str:
         rows.append(b("╭─ ") + c(title, BOLD) + b(" " + "─" * (inner - tw - 1) + "╮"))
     else:
         rows.append(b("╭" + "─" * (inner + 2) + "╮"))
-    for x, xw in zip(lines, widths):
+    for x, xw in zip(lines, widths, strict=True):
         rows.append(b("│ ") + x + " " * (inner - xw) + b(" │"))
     rows.append(b("╰" + "─" * (inner + 2) + "╯"))
     return "\n".join(rows)
