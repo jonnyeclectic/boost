@@ -9,6 +9,15 @@ instructions** (shell commands, pipe-to-shell, shebangs). The command layer
 shows that diff and asks before applying a risky change; routine edits still
 apply quietly.
 
+IT ALSO ASKS `injectscan`. The shell heuristic below models a payload that is a
+*command*. The payload that matters for a file loaded into a model's context can
+be a *sentence* — "ignore all previous instructions", "do not mention this to
+the user" — and none of those match a command pattern, so this gate used to
+apply them silently. `boost install` has scanned for exactly that since it
+shipped; the update path simply never asked. It does now, over the added lines
+only, so the same taxonomy covers both ways content arrives on the machine
+rather than two half-detectors drifting apart.
+
 The decision logic here is deliberately pure — it works on ``{relpath: text}``
 maps, not the filesystem — so it stays trivially testable. ``read_tree`` is the
 only filesystem touch and is a thin adapter.
@@ -19,8 +28,9 @@ import difflib
 import re
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, List, NamedTuple
+from typing import Dict, List, NamedTuple, Tuple
 
+from . import injectscan
 from .util import IGNORED
 
 # Added lines that look like something a machine would *execute*, not prose.
@@ -43,8 +53,9 @@ class TreeDiff(NamedTuple):
     """Result of comparing two skill trees."""
 
     text: str        # concatenated unified diffs across changed files
-    risky: bool      # an added line looks like an executable instruction
+    risky: bool      # an added line is worth a human look before it lands
     changed: bool    # any file added, removed, or modified
+    reasons: Tuple[str, ...] = ()   # why `risky` is set, worst-first, deduped
 
 
 def line_is_executable(line: str) -> bool:
@@ -74,8 +85,13 @@ def diff_tree(old: Dict[str, str], new: Dict[str, str]) -> TreeDiff:
     """Diff two ``{relpath: text}`` maps.
 
     Returns the unified-diff text over every changed file, whether anything
-    changed at all, and whether any *added* line looks like an executable
-    instruction (the ``risky`` gate).
+    changed at all, whether any *added* line is worth a human look (the
+    ``risky`` gate), and the reasons why — worst-first and deduped, because the
+    caller has to print one. A confirmation prompt that cannot say what it
+    objected to is a prompt people learn to accept without reading.
+
+    Only the ``+`` side is scanned. *Removing* a poisoned line must not be the
+    thing that stops to ask.
     """
     chunks: List[str] = []
     added_all: List[str] = []
@@ -90,9 +106,18 @@ def diff_tree(old: Dict[str, str], new: Dict[str, str]) -> TreeDiff:
         chunks.append("\n".join(difflib.unified_diff(
             before.splitlines(), after.splitlines(),
             fromfile="a/" + rel, tofile="b/" + rel, lineterm="")))
+    reasons: List[str] = []
+    if touches_executable(added_all):
+        reasons.append("changes executable-looking instructions")
+    # `injectscan` orders worst-first and may report the same rule on several
+    # lines; the prompt wants each distinct reason once.
+    for f in injectscan.scan_text("\n".join(added_all)):
+        if f.description not in reasons:
+            reasons.append(f.description)
     return TreeDiff(text="\n".join(chunks),
-                    risky=touches_executable(added_all),
-                    changed=changed)
+                    risky=bool(reasons),
+                    changed=changed,
+                    reasons=tuple(reasons))
 
 
 def read_tree(path: Path) -> Dict[str, str]:

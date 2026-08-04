@@ -79,6 +79,17 @@ class TestDoctor:
         assert "1 skill installed · 1 tap synced · 1 broken link" in r.out
         assert "need attention" in r.out          # verdict flips on issues
 
+    def test_a_foreign_broken_link_is_reported_but_not_an_issue(
+            self, boost, installed):
+        # `heal` deliberately will not fix this, so counting it would leave
+        # doctor permanently red on something no boost command can clear.
+        mine = paths.home() / ".claude" / "skills" / "my-own-skill"
+        mine.symlink_to(paths.home() / "elsewhere" / "my-own-skill")
+        r = boost("doctor")                       # rc 0, not 1
+        assert "not created by boost" in r.out
+        assert "0 broken links" in r.out          # none of boost's are broken
+        assert "need attention" not in r.out
+
     def test_missing_store_rc1(self, boost, installed):
         shutil.rmtree(paths.store_dir() / "brainstorming")
         r = boost("doctor", expect=1)
@@ -544,6 +555,34 @@ class TestHeal:
 
         r = boost("heal")
         assert "nothing to heal" in r.out
+
+    def test_a_link_boost_did_not_create_is_left_alone(self, boost, installed):
+        """`heal` deleted these. A broken link is not necessarily garbage.
+
+        `~/.claude/skills/` is a directory the user owns and boost merely links
+        into, so a dangling entry there can be a skill on an unmounted volume or
+        a repo temporarily moved — both of which come back. Removing it is not a
+        repair, it is data loss with a reassuring name.
+        """
+        mine = paths.home() / ".claude" / "skills" / "my-own-skill"
+        mine.symlink_to(paths.home() / "elsewhere" / "my-own-skill")
+
+        r = boost("heal")
+        assert "does not point into" in r.out
+        assert "left alone" in r.out
+        assert mine.is_symlink()                 # still there, still dangling
+        assert "removed broken link ~/.claude/skills/my-own-skill" not in r.out
+
+    def test_a_relative_link_into_the_store_is_still_ours(self, boost, installed):
+        # Ownership is decided by where the link points, not by how it is
+        # spelled — a relative target resolves against the link's own dir.
+        rel = paths.home() / ".claude" / "skills" / "relghost"
+        import os as _os
+        rel.symlink_to(_os.path.relpath(str(paths.store_dir() / "nowhere"),
+                                        str(rel.parent)))
+        r = boost("heal")
+        assert "removed broken link ~/.claude/skills/relghost" in r.out
+        assert not rel.is_symlink()
 
     def test_restores_missing_store_from_tap(self, boost, installed):
         shutil.rmtree(paths.store_dir() / "brainstorming")

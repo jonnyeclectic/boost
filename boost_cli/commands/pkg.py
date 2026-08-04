@@ -655,12 +655,19 @@ def cmd_sync(argv: List[str]) -> int:
 
 # ── update ───────────────────────────────────────────────────────────────
 
+def _show_and_confirm(label: str, diff, name: str) -> bool:
+    """Print why an update is risky, show it, and ask. Shared by all kinds."""
+    out.warn("%s: upstream update %s" % (label, "; ".join(diff.reasons)))
+    print(diff.text)
+    return out.confirm("Apply this update to %s?" % name)
+
+
 def _confirm_risky_update(name: str, entry: dict) -> bool:
     """Gate an in-place update behind a visible diff when it is risky.
 
     Diffs the installed skill against the incoming source. If the change adds
-    executable-looking instructions (shell commands, pipe-to-shell, shebangs),
-    the unified diff is printed and the update must be confirmed — so a poisoned
+    executable-looking instructions or prose aimed at redirecting the agent, the
+    unified diff is printed and the update must be confirmed — so a poisoned
     update is *seen* before it lands. Routine edits apply silently. If the
     source can't be read we fail open and let ``store.install`` surface the real
     error rather than blocking on a phantom diff.
@@ -673,9 +680,61 @@ def _confirm_risky_update(name: str, entry: dict) -> bool:
                                 new_tree)
     if not diff.risky:
         return True
-    out.warn("%s: upstream update changes executable-looking instructions" % name)
-    print(diff.text)
-    return out.confirm("Apply this update to %s?" % name)
+    return _show_and_confirm(name, diff, name)
+
+
+def _materialized_sides(kind: str, name: str, lk: dict, new_raw: str):
+    """``(installed_text, incoming_text)`` for a rule/workflow, same shape both.
+
+    Rules and workflows keep no copy of the source they were installed from —
+    only the artifact they were materialized into. That artifact is the honest
+    left-hand side anyway: it is the text the agent is loading *right now*, and
+    a diff against it is the diff the user actually cares about.
+
+    Each recorded materialization says how it was written, so the incoming half
+    is reconstructed the same way: a verbatim rule drop compares raw to raw, a
+    CLAUDE.md rule compares managed block to newly rendered block, and a
+    workflow compares the rendered file to the same render of the new source —
+    which keeps Gemini's TOML comparable with Gemini's TOML.
+
+    Falls back to ``("", new_raw)`` when nothing can be read back, so an
+    unreadable artifact scans the whole incoming file rather than nothing.
+    """
+    from ..core import rules, workflows
+    for m in lk.get("materializations") or []:
+        try:
+            current = Path(m.get("path", "")).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if kind == "rule":
+            if m.get("mode") != rules.MODE_CLAUDE:
+                return current, new_raw
+            old = rules.read_block(current, name)
+            if old is None:
+                continue
+            meta, body = frontmatter.parse(new_raw)
+            return old, rules.render_claude_body(
+                str(meta.get("name") or name), body)
+        return current, workflows.render(
+            m.get("agent"), m.get("slot", ""), name, new_raw)
+    return "", new_raw
+
+
+def _confirm_risky_materialized(kind: str, name: str, lk: dict,
+                                new_raw: str) -> bool:
+    """The same gate as `_confirm_risky_update`, for rules and workflows.
+
+    This used to be absent, and the asymmetry ran the wrong way: a skill that
+    grew a shell command was gated, while a rule — which is merged into the
+    standing instructions the agent reads every session, and which this repo's
+    own notes call "more invasive than a skill, not less" — was refreshed in
+    place with one line of output and no diff.
+    """
+    old, new = _materialized_sides(kind, name, lk, new_raw)
+    diff = updatediff.diff_tree({name: old}, {name: new})
+    if not diff.risky:
+        return True
+    return _show_and_confirm("%s %s" % (kind, name), diff, name)
 
 
 def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
@@ -683,9 +742,13 @@ def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
 
     Mirrors the skill upgrade loop: for each installed item from a refreshed
     tap, reinstall (force) when the source version bumped or its content sha
-    changed. Rules/workflows carry no pin/quarantine flags and their source is a
-    single file, so there is no risky-diff gate — re-applying a file drop or a
-    CLAUDE.md managed block is cheap. Returns how many were refreshed.
+    changed — behind the same risky-diff gate the skill loop uses. Returns how
+    many were refreshed.
+
+    Rules and workflows still carry no pin/quarantine flags, which is a separate
+    gap. What they no longer lack is the *diff*: re-applying a CLAUDE.md managed
+    block is cheap to do and expensive to get wrong, because that block is the
+    standing instruction the agent reads every session.
     """
     import hashlib
     n = 0
@@ -716,6 +779,16 @@ def _update_materialized(kind: str, installed: Dict[str, dict], results) -> int:
         if not changed:
             continue
         try:
+            new_raw = (registry.get(tapname).path
+                       / entry.get("skill_md", "")).read_text(
+                           encoding="utf-8", errors="replace")
+        except (OSError, BoostError):
+            new_raw = ""        # unreadable: store.install reports the real error
+        if new_raw and not _confirm_risky_materialized(kind, name, lk, new_raw):
+            out.warn("%s %s: update skipped — review the diff, then `boost "
+                     "update --yes` to apply" % (kind, name))
+            continue
+        try:
             # keep the item where it was installed (user vs a specific repo).
             store.install(entry, force=True,
                           scope=lk.get("scope", "user"), base=lk.get("base"))
@@ -734,20 +807,41 @@ def cmd_update(argv: List[str]) -> int:
     ap.add_argument("tap", nargs="?", metavar="TAP", help="refresh only this tap")
     ap.add_argument("--taps-only", action="store_true",
                     help="refresh tap clones & catalogs without touching skills")
+    # Declared because this command *advertises* it: a skipped risky update
+    # prints "review the diff, then `boost update --yes` to apply", and without
+    # this line that instruction died on `unrecognized arguments: --yes` — the
+    # only escape from the confirmation was a flag the parser rejected. The
+    # behaviour needs nothing else: out.confirm() already honours --yes/-y off
+    # sys.argv, so this makes the printed advice true rather than adding a path.
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the confirmation prompt")
     args = ap.parse_args(argv)
-    results = registry.update(args.tap or None)
-    if not results:
+    results, failures = registry.update(args.tap or None)
+    if not results and not failures:
         out.info("no taps configured — start with `boost tap --defaults`")
         return 0
     for tname, summary in results.items():
         catalog.rebuild_tap(registry.get(tname))
         out.ok("%s: %s" % (tname, summary))
+    # Report the dead ones by name, after the successes, so a broken upstream
+    # reads as one line of bad news rather than as the whole command failing.
+    for tname, err in failures.items():
+        out.warn("%s: %s" % (tname, err))
+    if failures:
+        out.info(out.role(
+            "%d of %d taps could not be refreshed — the rest are up to date. "
+            "Drop a dead one with `boost untap <name>`."
+            % (len(failures), len(results) + len(failures)), "muted"))
     # A pulled tap can add, drop, or rename catalogue entries, so the
     # completion name cache must not survive an update unrefreshed.
     complete.refresh_names()
     journal.log("update", args.tap or "all")
     if args.taps_only:
-        return 0
+        # Same exit-code rule as the end of the full path: non-zero only when
+        # nothing was refreshed at all. This early return predates that rule
+        # and kept answering 0 with every tap dead — and a cron'd
+        # `boost update --taps-only` exists precisely to notice that morning.
+        return 1 if failures and not results else 0
 
     upgraded = 0
     for name, lk in sorted(lockfile.installed().items()):
@@ -792,8 +886,14 @@ def cmd_update(argv: List[str]) -> int:
     upgraded += _update_materialized("rule", lockfile.installed_rules(), results)
     upgraded += _update_materialized("workflow", lockfile.installed_workflows(), results)
     if not upgraded:
-        out.ok("everything up to date")
-    return 0
+        # Don't claim "everything up to date" when some taps were never
+        # reached — that is exactly the false all-clear this fix exists to stop.
+        out.ok("everything up to date" if not failures
+               else "everything up to date, except the taps above")
+    # Non-zero only when nothing was refreshed at all. A partial run did the job
+    # it could do, and failing it would put us back to one dead upstream
+    # breaking `boost update` for the other 79.
+    return 1 if failures and not results else 0
 
 
 # ── reinstall ────────────────────────────────────────────────────────────
