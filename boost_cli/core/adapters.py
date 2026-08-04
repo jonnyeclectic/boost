@@ -19,14 +19,14 @@ import collections
 import json
 import keyword
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
 
 from . import frontmatter
 
 # Public: the format id shown in `--to`/errors -> its renderer.
 # Populated at the bottom once the render_* functions are defined.
-FORMATS: Dict[str, Callable[..., str]] = {}
+FORMATS: dict[str, Callable[..., str]] = {}
 
 # Subagent (crew member) directories: a Markdown file under one of these, at any
 # depth beneath a skill, is one of the skill's subagents — so both a flat
@@ -43,13 +43,13 @@ AgentSpec = collections.namedtuple("AgentSpec",
                                    "name description instructions tools")
 
 
-def formats() -> List[str]:
+def formats() -> list[str]:
     """Sorted list of supported target framework ids (for help/errors)."""
     return sorted(FORMATS)
 
 
 def render(fmt: str, name: str, description: str, body: str,
-           model: Optional[str] = None) -> str:
+           model: str | None = None) -> str:
     """Dispatch to the renderer for `fmt`. Raises KeyError on unknown fmt.
 
     `model` (a boost/LiteLLM model id) wires the emitted agent to a specific
@@ -121,7 +121,7 @@ def _langchain_model(model: str) -> str:
 
 # --- multi-agent detection ------------------------------------------------
 
-def parse_tools(meta: dict) -> List[str]:
+def parse_tools(meta: dict) -> list[str]:
     """Tool identifiers a skill/subagent declares in its frontmatter.
 
     Reads the first present of the ``tools`` / ``allowed-tools`` keys — either a
@@ -137,7 +137,7 @@ def parse_tools(meta: dict) -> List[str]:
     if raw is None:
         return []
     parts = re.split(r"[,\s]+", raw.strip()) if isinstance(raw, str) else [str(x) for x in raw]
-    seen: List[str] = []
+    seen: list[str] = []
     for part in parts:
         part = part.strip()
         if not part:
@@ -152,7 +152,7 @@ def parse_tools(meta: dict) -> List[str]:
     return seen
 
 
-def discover_subagents(skill_dir: Path) -> List[AgentSpec]:
+def discover_subagents(skill_dir: Path) -> list[AgentSpec]:
     """Discover a skill's subagents for multi-agent adaptation.
 
     A subagent is a Markdown file (other than ``SKILL.md``) that lives under an
@@ -162,7 +162,7 @@ def discover_subagents(skill_dir: Path) -> List[AgentSpec]:
     subagents as :class:`AgentSpec`s — an empty list for a flat single-agent
     skill or a missing directory.
     """
-    specs: List[AgentSpec] = []
+    specs: list[AgentSpec] = []
     if not skill_dir or not skill_dir.is_dir():
         return specs
     for path in sorted(skill_dir.rglob("*.md")):
@@ -183,12 +183,12 @@ def discover_subagents(skill_dir: Path) -> List[AgentSpec]:
     return specs
 
 
-def _unique_idents(specs: List[AgentSpec]) -> List[str]:
+def _unique_idents(specs: list[AgentSpec]) -> list[str]:
     """A unique Python identifier per spec, in order — two agents whose names
     normalize to the same ident get numeric suffixes so emitted assignments and
     node names never collide."""
-    counts: Dict[str, int] = {}
-    idents: List[str] = []
+    counts: dict[str, int] = {}
+    idents: list[str] = []
     for spec in specs:
         base = _ident(spec.name)
         if base in counts:
@@ -200,9 +200,9 @@ def _unique_idents(specs: List[AgentSpec]) -> List[str]:
     return idents
 
 
-def _unique_tools(specs: List[AgentSpec]) -> List[str]:
+def _unique_tools(specs: list[AgentSpec]) -> list[str]:
     """Union of every spec's declared tools, first-seen order preserved."""
-    seen: List[str] = []
+    seen: list[str] = []
     for spec in specs:
         for tool in spec.tools:
             if tool not in seen:
@@ -213,7 +213,7 @@ def _unique_tools(specs: List[AgentSpec]) -> List[str]:
 # --- renderers ------------------------------------------------------------
 
 def render_crewai(name: str, description: str, body: str,
-                  model: Optional[str] = None) -> str:
+                  model: str | None = None) -> str:
     """A CrewAI Agent: role=name, goal=description, backstory=instructions.
 
     With `model`, pins the agent's LLM via `crewai.LLM` (LiteLLM under the
@@ -247,7 +247,7 @@ def render_crewai(name: str, description: str, body: str,
 
 
 def render_agents_sdk(name: str, description: str, body: str,
-                      model: Optional[str] = None) -> str:
+                      model: str | None = None) -> str:
     """An OpenAI Agents SDK Agent: instructions carry the skill body.
 
     With `model`, pins the agent's LLM via the SDK's LiteLLM extension
@@ -283,7 +283,7 @@ def render_agents_sdk(name: str, description: str, body: str,
 
 
 def render_langgraph(name: str, description: str, body: str,
-                     model: Optional[str] = None) -> str:
+                     model: str | None = None) -> str:
     """A LangGraph node factory: prebuilt ``create_react_agent`` bound to the
     skill body as its system prompt.
 
@@ -356,8 +356,8 @@ def _crew_header(kind: str, workflow: str, description: str) -> str:
             "# %s\n") % (workflow, kind, summary)
 
 
-def render_crew(workflow: str, description: str, specs: List[AgentSpec],
-                model: Optional[str] = None) -> str:
+def render_crew(workflow: str, description: str, specs: list[AgentSpec],
+                model: str | None = None) -> str:
     """Render a multi-agent skill as a CrewAI ``Crew``.
 
     Each :class:`AgentSpec` becomes an ``Agent`` (role / goal / backstory) paired
@@ -373,7 +373,7 @@ def render_crew(workflow: str, description: str, specs: List[AgentSpec],
         imports.append("from crewai.tools import tool")
     llm_line = "    llm=LLM(model=%s),\n" % _py_str(_litellm_model(model)) if model else ""
 
-    blocks: List[str] = []
+    blocks: list[str] = []
     for ident, spec in zip(idents, specs, strict=True):
         tline = "    tools=[%s],\n" % ", ".join(spec.tools) if spec.tools else ""
         blocks.append(
@@ -406,8 +406,8 @@ def render_crew(workflow: str, description: str, specs: List[AgentSpec],
     return "".join(parts)
 
 
-def render_graph(workflow: str, description: str, specs: List[AgentSpec],
-                 model: Optional[str] = None) -> str:
+def render_graph(workflow: str, description: str, specs: list[AgentSpec],
+                 model: str | None = None) -> str:
     """Render a multi-agent skill as a LangGraph ``StateGraph``.
 
     Emits a ``build_<workflow>(model)`` factory that constructs one
@@ -430,7 +430,7 @@ def render_graph(workflow: str, description: str, specs: List[AgentSpec],
         "    %s: %s,\n" % (_py_str(ident), _py_str(_clean(spec.instructions)))
         for ident, spec in zip(idents, specs, strict=True))
 
-    lines: List[str] = ['    """Build and compile the %s crew as a graph."""' % workflow]
+    lines: list[str] = ['    """Build and compile the %s crew as a graph."""' % workflow]
     lines.extend(
         "    %s = create_react_agent(model, tools=[%s], prompt=SYSTEM_PROMPTS[%s])"
         % (ident, ", ".join(spec.tools), _py_str(ident))
@@ -460,7 +460,7 @@ def render_graph(workflow: str, description: str, specs: List[AgentSpec],
 # Multi-agent (crew/graph) renderers, keyed by the same format id as FORMATS.
 # A format absent here has no multi-agent path; the command layer falls back to
 # the single-agent renderer (flattening the skill to its primary agent).
-MULTI_FORMATS: Dict[str, Callable[..., str]] = {
+MULTI_FORMATS: dict[str, Callable[..., str]] = {
     "crewai": render_crew,
     "langgraph": render_graph,
 }
@@ -472,7 +472,7 @@ def supports_multi(fmt: str) -> bool:
 
 
 def render_multi(fmt: str, workflow: str, description: str,
-                 specs: List[AgentSpec], model: Optional[str] = None) -> str:
+                 specs: list[AgentSpec], model: str | None = None) -> str:
     """Dispatch to the crew/graph renderer for `fmt`.
 
     Raises ``KeyError`` for a format with no multi-agent path — callers guard
@@ -535,7 +535,7 @@ print(_boost_Runner.run_sync(_boost_agent, %s).final_output)
 
 
 def render_runner(name: str, description: str, body: str,
-                  model: Optional[str] = None, target: Optional[str] = None) -> str:
+                  model: str | None = None, target: str | None = None) -> str:
     """A self-contained OpenAI Agents SDK *runner* for ``boost run``.
 
     The adapted agent (its brain — instructions + model, via

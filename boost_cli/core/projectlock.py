@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 from contextlib import suppress
 from pathlib import Path
-from typing import Optional
 
 from . import util
 
@@ -92,7 +91,7 @@ def installed(base) -> dict:
     return read(base)["skills"]
 
 
-def get_skill(base, name: str) -> Optional[dict]:
+def get_skill(base, name: str) -> dict | None:
     """Return the project lock entry for ``name``, or None."""
     return read(base)["skills"].get(name)
 

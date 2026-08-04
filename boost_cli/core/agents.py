@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
 
 from . import config, paths
 
@@ -10,7 +9,7 @@ DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
            "cursor": "Cursor", "gemini": "Gemini CLI"}
 
 
-def known_agents() -> Dict[str, dict]:
+def known_agents() -> dict[str, dict]:
     """{name: {"dir": Path, "enabled": bool, "links_skills": bool}} per agent."""
     out = {}
     for name, spec in (config.get("agents") or {}).items():
@@ -25,12 +24,12 @@ def known_agents() -> Dict[str, dict]:
     return out
 
 
-def enabled_agents() -> Dict[str, Path]:
+def enabled_agents() -> dict[str, Path]:
     """{name: dir Path} for just the agents whose "enabled" flag is true."""
     return {n: s["dir"] for n, s in known_agents().items() if s["enabled"]}
 
 
-def linking_agents() -> Dict[str, Path]:
+def linking_agents() -> dict[str, Path]:
     """The enabled agents that need a skill *symlinked* into their own dir.
 
     Most agents do: they only look inside their own config directory, so a
@@ -51,7 +50,7 @@ def linking_agents() -> Dict[str, Path]:
             if s["enabled"] and s["links_skills"]}
 
 
-def native_store_agents() -> Dict[str, Path]:
+def native_store_agents() -> dict[str, Path]:
     """Enabled agents that read the canonical store without a symlink.
 
     The complement of :func:`linking_agents` within :func:`enabled_agents` —

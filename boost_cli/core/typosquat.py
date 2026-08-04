@@ -9,7 +9,6 @@ a user asked for, so a command can warn before installing a look-alike.
 from __future__ import annotations
 
 import operator
-from typing import List
 
 
 def edit_distance(a: str, b: str, cap: int = 2) -> int:
@@ -43,7 +42,7 @@ def edit_distance(a: str, b: str, cap: int = 2) -> int:
     return prev[lb] if prev[lb] <= cap else cap + 1
 
 
-def confusable_names(name: str, candidates, max_distance: int = 1) -> List[str]:
+def confusable_names(name: str, candidates, max_distance: int = 1) -> list[str]:
     """Candidate names within ``1..max_distance`` edits of ``name``.
 
     Case-insensitive; exact matches (distance 0) and duplicates are dropped.
@@ -65,7 +64,7 @@ def confusable_names(name: str, candidates, max_distance: int = 1) -> List[str]:
     return [c for _d, c in hits]
 
 
-def find_confusions(target: dict, entries, max_distance: int = 1) -> List[dict]:
+def find_confusions(target: dict, entries, max_distance: int = 1) -> list[dict]:
     """Catalog entries that are confusable with ``target`` but from another tap.
 
     Flags both the owner-confusion case (same name, *different* tap → distance

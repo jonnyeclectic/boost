@@ -22,7 +22,6 @@ import operator
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 from ..errors import BoostError
 from . import frontmatter, gitutil, paths, registry, util
@@ -44,7 +43,7 @@ DOC_STEMS = {"readme", "contributing", "license", "changelog", "security",
              "code_of_conduct", "index", "_index", "authors", "notice"}
 
 
-def _read(path: Path) -> Optional[Tuple[dict, str]]:
+def _read(path: Path) -> tuple[dict, str] | None:
     try:
         return frontmatter.parse(path.read_text(encoding="utf-8", errors="replace"))
     except OSError:
@@ -105,15 +104,15 @@ def _classify_workflow(path: Path, meta: dict) -> bool:
                 and (WORKFLOW_META_KEYS & set(meta)))
 
 
-def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> List[dict]:
+def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list[dict]:
     """Walk `root` and index every skill/rule/workflow into entry dicts.
 
     Files inside a SKILL.md dir belong to that skill, never re-indexed;
     output is sorted by (skill_md, name) regardless of walk order.
     """
     root = Path(root)
-    entries: List[dict] = []
-    skill_dirs: Set[Path] = set()
+    entries: list[dict] = []
+    skill_dirs: set[Path] = set()
     # One top-down walk instead of two rglob passes: prune ignored dirs in place
     # so we never descend into .git/__pycache__, and test skill-dir membership
     # against a set via each dir's own ancestor chain rather than O(files × dirs).
@@ -163,7 +162,7 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> List
     return entries
 
 
-def rebuild_tap(tap: registry.Tap) -> List[dict]:
+def rebuild_tap(tap: registry.Tap) -> list[dict]:
     """Rescan a cloned tap and rewrite its JSON cache file -> entries.
 
     Raises BoostError when the tap is not cloned; also drops the
@@ -193,10 +192,10 @@ def rebuild_tap(tap: registry.Tap) -> List[dict]:
 # the cached list is shared by reference (matching the index cache). Keying on
 # nanosecond mtime + size catches rewrites a bare second-resolution mtime would
 # miss.
-_ENTRY_CACHE: Dict[str, Tuple[Tuple[int, int], List[dict]]] = {}
+_ENTRY_CACHE: dict[str, tuple[tuple[int, int], list[dict]]] = {}
 
 
-def _cached_tap(tap: registry.Tap) -> Optional[List[dict]]:
+def _cached_tap(tap: registry.Tap) -> list[dict] | None:
     """Memoized ``skills`` for a tap's cache file, or ``None`` to force a
     rebuild (file missing, unreadable, or corrupt JSON)."""
     p = tap.cache_file
@@ -219,7 +218,7 @@ def _cached_tap(tap: registry.Tap) -> Optional[List[dict]]:
     return skills
 
 
-def load_tap(tap: registry.Tap, rebuild: bool = False) -> List[dict]:
+def load_tap(tap: registry.Tap, rebuild: bool = False) -> list[dict]:
     """Return a tap's entries, from the mtime-keyed cache when fresh.
 
     `rebuild=True` or a missing/corrupt cache forces a rescan; an
@@ -234,9 +233,9 @@ def load_tap(tap: registry.Tap, rebuild: bool = False) -> List[dict]:
     return []
 
 
-def lint_targets(entries: List[dict], tap_root: Path,
-                 names: Optional[List[str]] = None,
-                 ) -> Tuple[List[Tuple[str, Path]], List[dict]]:
+def lint_targets(entries: list[dict], tap_root: Path,
+                 names: list[str] | None = None,
+                 ) -> tuple[list[tuple[str, Path]], list[dict]]:
     """Split tap entries into lintable skills and skipped rule/workflow items.
 
     `boost lint` scores a SKILL.md directory, so only `skill` entries are
@@ -249,8 +248,8 @@ def lint_targets(entries: List[dict], tap_root: Path,
     still reported as skipped rather than vanishing.
     """
     wanted = set(names or ())
-    targets: List[Tuple[str, Path]] = []
-    skipped: List[dict] = []
+    targets: list[tuple[str, Path]] = []
+    skipped: list[dict] = []
     for entry in entries:
         if wanted and entry["name"] not in wanted:
             continue
@@ -263,15 +262,15 @@ def lint_targets(entries: List[dict], tap_root: Path,
     return targets, skipped
 
 
-def all_entries() -> List[dict]:
+def all_entries() -> list[dict]:
     """Return the entries of every configured tap, concatenated."""
-    out: List[dict] = []
+    out: list[dict] = []
     for tap in registry.list_taps():
         out.extend(load_tap(tap))
     return out
 
 
-def split_name(name: str) -> Tuple[Optional[str], str]:
+def split_name(name: str) -> tuple[str | None, str]:
     """Split a possibly tap-qualified name into ``(tap, bare_name)``.
 
     ``'owner/repo:skill'`` -> ``('owner/repo', 'skill')``; an unqualified name
@@ -298,7 +297,7 @@ def tap_matches(tap_name: str, qualifier: str) -> bool:
     return bool(tap_name) and qualifier in (tap_name, tap_name.split("/")[-1])
 
 
-def find(name: str, tap: Optional[str] = None) -> List[dict]:
+def find(name: str, tap: str | None = None) -> list[dict]:
     """Exact-name lookup. Supports 'owner/repo:skill' qualified form."""
     qualifier, bare = split_name(name)
     if qualifier is not None:
@@ -331,7 +330,7 @@ def _identity(entry: dict) -> str:
                       sort_keys=True, default=str)
 
 
-def _canonical(matches: List[dict]) -> dict:
+def _canonical(matches: list[dict]) -> dict:
     """The shallowest copy, ties broken lexicographically.
 
     Registries vendor their own skills into plugin bundles, so the top-level
@@ -387,7 +386,7 @@ def _meta_text(meta) -> str:
     search. Cheaper than ``json.dumps(meta).lower()`` — which built and threw
     away a JSON string on every entry of every query just to substring-match —
     while matching the same words (tags, keys, scalar values)."""
-    parts: List[str] = []
+    parts: list[str] = []
 
     def walk(v) -> None:
         if isinstance(v, dict):
@@ -413,7 +412,7 @@ def _search_blob(name: str, description: str, meta) -> str:
     return " ".join([name.lower(), (description or "").lower(), _meta_text(meta)])  # noqa: FURB143
 
 
-def search(query: str, entries: Optional[List[dict]] = None):
+def search(query: str, entries: list[dict] | None = None):
     """Rank entries against a query -> [(entry, score)] best-first."""
     entries = all_entries() if entries is None else entries
     q = query.lower().strip()

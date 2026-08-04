@@ -11,8 +11,6 @@ these run identically with `BOOST_NO_AI=1`, on a machine with a key, and on CI.
 """
 from __future__ import annotations
 
-from typing import List
-
 import pytest
 
 from boost_cli.core import ai, catalog, chat
@@ -25,7 +23,7 @@ def _entry(name: str, desc: str = "", tap: str = "acme/skills",
             "skill_md": "%s/SKILL.md" % name}
 
 
-CANDIDATES: List[dict] = [
+CANDIDATES: list[dict] = [
     _entry("code-reviewer", "Reviews a diff for bugs and style"),
     _entry("security-auditor", "Finds injection flaws and leaked secrets"),
     _entry("pdf", "Extract text from a scanned document"),

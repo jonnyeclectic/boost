@@ -25,7 +25,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, cast
+from typing import cast
 
 try:  # TypedDict lives in typing on 3.9+, kept optional for safety
     from typing import TypedDict
@@ -77,14 +77,14 @@ class Hit(TypedDict, total=False):  # type: ignore[misc]
 
 # --------------------------------------------------------------- tokenizing
 
-def tokenize(text: str) -> List[str]:
+def tokenize(text: str) -> list[str]:
     """Lowercase, split on non-alphanumerics, drop stopwords and 1-char noise."""
     return [t for t in re.split(r"[^a-z0-9]+", text.lower())
             if len(t) >= 2 and t not in _STOPWORDS]
 
 
 def chunk(text: str, size: int = CHUNK_CHARS, overlap: int = OVERLAP,
-          cap: int = MAX_CHUNKS) -> List[str]:
+          cap: int = MAX_CHUNKS) -> list[str]:
     """Split a body into passage-sized chunks on paragraph boundaries.
 
     Paragraphs are packed up to ``size`` chars; an oversized paragraph is
@@ -95,7 +95,7 @@ def chunk(text: str, size: int = CHUNK_CHARS, overlap: int = OVERLAP,
     if not text:
         return []
     paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    chunks: List[str] = []
+    chunks: list[str] = []
     cur = ""
     for p in paras:
         while len(p) > size:
@@ -120,13 +120,13 @@ def chunk(text: str, size: int = CHUNK_CHARS, overlap: int = OVERLAP,
 
 # ------------------------------------------------------------ body reading
 
-def _tap_paths() -> Dict[str, Path]:
+def _tap_paths() -> dict[str, Path]:
     return {t.name: t.path for t in registry.list_taps()}
 
 
-def _tap_commits() -> Dict[str, str]:
+def _tap_commits() -> dict[str, str]:
     """Map safe tap name -> the commit its cache was built from."""
-    commits: Dict[str, str] = {}
+    commits: dict[str, str] = {}
     for t in registry.list_taps():
         commit = ""
         try:
@@ -140,7 +140,7 @@ def _tap_commits() -> Dict[str, str]:
     return commits
 
 
-def read_body(entry: dict, tap_paths: Optional[Dict[str, Path]] = None) -> str:
+def read_body(entry: dict, tap_paths: dict[str, Path] | None = None) -> str:
     """Return an item's searchable text: name + description + prose body.
 
     The frontmatter is stripped (reusing ``frontmatter.parse``); the name and
@@ -182,7 +182,7 @@ def surface(entry: dict) -> str:
                      entry.get("description") or ""])
 
 
-def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
+def _make_docs(entries: list[dict], tap_paths: dict[str, Path]) -> list[dict]:
     """Tokenize every entry into ONE scored document.
 
     Chunking cost far more than it bought. Each 1000-char window carried its own
@@ -197,13 +197,13 @@ def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
     collapsing chunks back to one hit per entry anyway (max score across
     chunks), so the extra documents were discarded at query time.
     """
-    docs: List[dict] = []
+    docs: list[dict] = []
     for e in entries:
         body = read_body(e, tap_paths)
         # Hashed here because the body is already in hand; doing it at query
         # time would mean re-reading ~30k files to answer one search.
         digest = hashlib.sha256(body.strip().encode("utf-8", "replace")).hexdigest()[:16]
-        tf: Dict[str, int] = defaultdict(int)
+        tf: dict[str, int] = defaultdict(int)
         for tok in tokenize(surface(e) + "\n" + body):
             tf[tok] += 1
         if not tf:
@@ -218,7 +218,7 @@ def _make_docs(entries: List[dict], tap_paths: Dict[str, Path]) -> List[dict]:
     return docs
 
 
-def _postings_to_doc_tf(raw: dict) -> Dict[int, Dict[str, int]]:
+def _postings_to_doc_tf(raw: dict) -> dict[int, dict[str, int]]:
     """Invert persisted postings back to per-doc term frequencies.
 
     Pure: it inverts whatever ``raw`` carries and reads nothing. An earlier
@@ -227,14 +227,14 @@ def _postings_to_doc_tf(raw: dict) -> Dict[int, Dict[str, int]]:
     index — invisible in CI, where no store exists, and wrong everywhere else.
     Callers that need the store now say so; see :func:`_kept_docs`.
     """
-    doc_tf: Dict[int, Dict[str, int]] = defaultdict(dict)
+    doc_tf: dict[int, dict[str, int]] = defaultdict(dict)
     for term, plist in (raw.get("postings") or {}).items():
         for doc_id, tf in plist:
             doc_tf[doc_id][term] = tf
     return doc_tf
 
 
-def _kept_docs(raw: dict, keep_safe: set) -> List[dict]:
+def _kept_docs(raw: dict, keep_safe: set) -> list[dict]:
     """Recover cached docs (with term freqs) for taps that did not change.
 
     Term frequencies live in the SQLite postings store since they left the JSON
@@ -251,7 +251,7 @@ def _kept_docs(raw: dict, keep_safe: set) -> List[dict]:
             if meta["t"].replace("/", "__") in keep_safe]
 
 
-def build(entries: Optional[List[dict]] = None, force: bool = False) -> dict:
+def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     """(Re)build the full-content index, reusing unchanged taps.
 
     Returns stats: ``{"entries", "docs", "taps", "reindexed", "reused"}``.
@@ -289,7 +289,7 @@ def postings_path() -> Path:
     return paths.cache_dir() / "rag_postings.sqlite"
 
 
-def _write_postings(postings: Dict[str, List[List[int]]]) -> None:
+def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     """Persist the term -> [(doc, tf)] map to SQLite, replacing any existing one.
 
     Postings were the largest part of the JSON index — measured 64% of it after
@@ -326,7 +326,7 @@ def _write_postings(postings: Dict[str, List[List[int]]]) -> None:
     tmp.replace(final)          # atomic swap, same as the JSON half
 
 
-def read_postings(terms: Sequence[str]) -> Dict[str, List[List[int]]]:
+def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
     """Postings for just these terms — the whole point of the SQLite store.
 
     A query touches a handful of terms out of tens of thousands, so this reads
@@ -339,7 +339,7 @@ def read_postings(terms: Sequence[str]) -> Dict[str, List[List[int]]]:
         con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
     except sqlite3.Error:
         return {}
-    out: Dict[str, List[List[int]]] = defaultdict(list)
+    out: dict[str, list[list[int]]] = defaultdict(list)
     try:
         # Chunked: SQLite caps host parameters (999 on older builds), and a
         # long query can exceed it.
@@ -356,13 +356,13 @@ def read_postings(terms: Sequence[str]) -> Dict[str, List[List[int]]]:
     return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
 
 
-def _all_postings() -> Dict[str, List[List[int]]]:
+def _all_postings() -> dict[str, list[list[int]]]:
     """Every posting — only the incremental rebuild path needs this."""
     try:
         con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
     except sqlite3.Error:
         return {}
-    out: Dict[str, List[List[int]]] = defaultdict(list)
+    out: dict[str, list[list[int]]] = defaultdict(list)
     try:
         for term, doc, tf in con.execute("SELECT term, doc, tf FROM postings"):
             out[term].append([doc, tf])
@@ -373,9 +373,9 @@ def _all_postings() -> Dict[str, List[List[int]]]:
     return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
 
 
-def _save(docs: List[dict], commits: Dict[str, str]) -> None:
-    postings: Dict[str, List[List[int]]] = defaultdict(list)
-    meta_docs: List[dict] = []
+def _save(docs: list[dict], commits: dict[str, str]) -> None:
+    postings: dict[str, list[list[int]]] = defaultdict(list)
+    meta_docs: list[dict] = []
     total_len = 0
     for doc_id, d in enumerate(docs):
         for term, tf in d["tf"].items():
@@ -412,10 +412,10 @@ def _now() -> str:
 
 # ----------------------------------------------------------------- query
 
-_CACHE: Dict[str, object] = {}
+_CACHE: dict[str, object] = {}
 
 
-def _load_raw() -> Optional[dict]:
+def _load_raw() -> dict | None:
     p = index_path()
     key = str(p)
     try:
@@ -513,8 +513,8 @@ def ensure() -> bool:
     return ready()
 
 
-def _bm25(query_terms: List[str], raw: dict,
-          postings: Dict[str, List[List[int]]]) -> Dict[int, float]:
+def _bm25(query_terms: list[str], raw: dict,
+          postings: dict[str, list[list[int]]]) -> dict[int, float]:
     """Score documents for ``query_terms``. Pure: postings are passed in.
 
     Reading them inside would hide I/O in the one function whose arithmetic is
@@ -524,7 +524,7 @@ def _bm25(query_terms: List[str], raw: dict,
     docs = raw["docs"]
     n = len(docs)
     avg = raw.get("stats", {}).get("avg_len") or 1.0
-    scores: Dict[int, float] = defaultdict(float)
+    scores: dict[int, float] = defaultdict(float)
     for term in set(query_terms):
         plist = postings.get(term)
         if not plist:
@@ -563,7 +563,7 @@ def _passage(text: str, terms: Sequence[str], width: int = SNIP_WIDTH) -> str:
     return lead + snip + tail
 
 
-def entry_key(entry: dict) -> Tuple[str, str]:
+def entry_key(entry: dict) -> tuple[str, str]:
     """Identity of a catalog entry: the tap it came from and its file.
 
     NOT ``(name, tap)``, which both engines used and which is not unique. On the
@@ -592,14 +592,14 @@ def entry_key(entry: dict) -> Tuple[str, str]:
 
 
 @lru_cache(maxsize=1)
-def _confidence_map() -> Dict[str, str]:
+def _confidence_map() -> dict[str, str]:
     """``tap name -> confidence`` from the shipped registry catalog.
 
     Cached because dedup asks per hit and the catalog is 466 rows; parsing it
     inside a search loop would be a real cost for a value that cannot change
     while the process runs.
     """
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     for row in config.load_registry_catalog():
         name = row.get("name")
         conf = row.get("confidence")
@@ -608,7 +608,7 @@ def _confidence_map() -> Dict[str, str]:
     return out
 
 
-def registry_confidence(tap: str) -> Optional[str]:
+def registry_confidence(tap: str) -> str | None:
     """The shipped confidence for a tap, or None if it is not catalogued."""
     return _confidence_map().get(tap)
 
@@ -618,7 +618,7 @@ def registry_confidence(tap: str) -> Optional[str]:
 _CONFIDENCE_ORDER = {"high": 0, "med": 1, "low": 2}
 
 
-def source_rank(entry: dict) -> Tuple[int, int]:
+def source_rank(entry: dict) -> tuple[int, int]:
     """How much this copy's *source* is worth, for choosing between identical bodies.
 
     Only ever used inside a content cluster, where every candidate has the same
@@ -635,7 +635,7 @@ def source_rank(entry: dict) -> Tuple[int, int]:
     return (curated, conf)
 
 
-def dedupe_by_content(hits: List[Hit], limit: int) -> List[Hit]:
+def dedupe_by_content(hits: list[Hit], limit: int) -> list[Hit]:
     """Collapse byte-identical copies, then take ``limit``.
 
     Measured over 77 tapped registries: 78.3% of 29,938 entries are
@@ -658,8 +658,8 @@ def dedupe_by_content(hits: List[Hit], limit: int) -> List[Hit]:
     A hit with no recorded content hash is always kept — two unknowns must not
     collapse into each other, which would hide real results.
     """
-    best: Dict[str, int] = {}          # content hash -> index into `out`
-    out: List[Hit] = []
+    best: dict[str, int] = {}          # content hash -> index into `out`
+    out: list[Hit] = []
     for hit in hits:
         digest = hit.get("content")
         if not digest:
@@ -683,8 +683,8 @@ def dedupe_by_content(hits: List[Hit], limit: int) -> List[Hit]:
     return out[:limit]
 
 
-def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
-             entries: Optional[List[dict]] = None) -> List[Hit]:
+def retrieve(query: str, k: int = 60, kind: str | None = None,
+             entries: list[dict] | None = None) -> list[Hit]:
     """Top-k full-content hits for ``query``. ``[]`` if the index is empty."""
     raw = _load_raw()
     if not raw or not raw.get("docs"):
@@ -695,7 +695,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     entries = catalog.all_entries() if entries is None else entries
     live = {entry_key(e): e for e in entries}
     docs = raw["docs"]
-    best: Dict[Tuple[str, str], Tuple[float, str, str]] = {}
+    best: dict[tuple[str, str], tuple[float, str, str]] = {}
     for doc_id, score in _bm25(terms, raw, read_postings(terms)).items():
         d = docs[doc_id]
         if kind is not None and d["k"] != kind:
@@ -714,7 +714,7 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     # Over-fetch, then collapse byte-identical copies before taking k — the
     # duplicates have to be removed from the pool, not from the visible page,
     # or they still consume the slots they were removed from.
-    hits: List[Hit] = [
+    hits: list[Hit] = [
         {"entry": live[key], "score": score, "content": digest,
          "snippet": _passage(snip, terms)}  # type: ignore[typeddict-item]
         for key, (score, snip, digest) in ranked]
@@ -728,8 +728,8 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
 LLM_RANKER = "Claude relevance"
 
 
-def rerank(query: str, hits: List[Hit], limit: int = 10,
-           engine: str = "BM25 full-content") -> Tuple[List[Hit], str]:
+def rerank(query: str, hits: list[Hit], limit: int = 10,
+           engine: str = "BM25 full-content") -> tuple[list[Hit], str]:
     """Reorder the shortlist with the LLM bridge; degrade to ``engine`` order.
 
     ``engine`` is the label from whichever retrieval actually produced ``hits``.
@@ -772,7 +772,7 @@ def rerank(query: str, hits: List[Hit], limit: int = 10,
 RRF_K = 60
 
 
-def rrf_fuse(rankings: List[List[Hit]], limit: int = 60) -> List[Hit]:
+def rrf_fuse(rankings: list[list[Hit]], limit: int = 60) -> list[Hit]:
     """Fuse ranked hit lists by reciprocal rank: ``sum 1/(RRF_K + rank)``.
 
     Fuses on **ranks, not scores**, which is the whole point. A BM25 score and
@@ -788,8 +788,8 @@ def rrf_fuse(rankings: List[List[Hit]], limit: int = 60) -> List[Hit]:
     to order these hits against each other, and comparing it to a raw BM25
     score from elsewhere would be meaningless.
     """
-    scores: Dict[Tuple[str, str], float] = {}
-    chosen: Dict[Tuple[str, str], Hit] = {}
+    scores: dict[tuple[str, str], float] = {}
+    chosen: dict[tuple[str, str], Hit] = {}
     for hits in rankings:
         for rank, hit in enumerate(hits, start=1):
             entry = hit["entry"]
@@ -797,14 +797,14 @@ def rrf_fuse(rankings: List[List[Hit]], limit: int = 60) -> List[Hit]:
             scores[key] = scores.get(key, 0.0) + 1.0 / (RRF_K + rank)
             chosen.setdefault(key, hit)
     ordered = sorted(scores, key=lambda key: (-scores[key], key[0], key[1]))
-    fused: List[Hit] = [
+    fused: list[Hit] = [
         {"entry": chosen[key]["entry"], "score": scores[key],
          "snippet": chosen[key]["snippet"]}  # type: ignore[typeddict-item]
         for key in ordered[:limit]]
     return fused
 
 
-def content_hashes() -> Dict[Tuple[str, str], str]:
+def content_hashes() -> dict[tuple[str, str], str]:
     """``entry_key`` -> content hash, read from the BM25 index.
 
     The dense store does not carry the hash and does not need to: BM25 indexes
@@ -819,14 +819,14 @@ def content_hashes() -> Dict[Tuple[str, str], str]:
             for d in raw.get("docs", []) if d.get("h")}
 
 
-def _with_content(hits: List[Hit]) -> List[Hit]:
+def _with_content(hits: list[Hit]) -> list[Hit]:
     """Attach content hashes to hits that lack them (dense, and fused output)."""
     if all(h.get("content") for h in hits):
         return hits
     hashes = content_hashes()
     if not hashes:
         return hits
-    filled: List[Hit] = []
+    filled: list[Hit] = []
     for h in hits:
         if h.get("content"):
             filled.append(h)
@@ -837,9 +837,9 @@ def _with_content(hits: List[Hit]) -> List[Hit]:
     return filled
 
 
-def retrieve_any(query: str, k: int = 60, kind: Optional[str] = None,
-                 entries: Optional[List[dict]] = None
-                 ) -> Tuple[Optional[List[Hit]], str]:
+def retrieve_any(query: str, k: int = 60, kind: str | None = None,
+                 entries: list[dict] | None = None
+                 ) -> tuple[list[Hit] | None, str]:
     """Fuse BM25 and dense when both are available; floor to whichever is.
 
     Returns ``(hits, engine_label)``; ``hits`` is ``None`` only when no index of
@@ -887,9 +887,9 @@ def retrieve_any(query: str, k: int = 60, kind: Optional[str] = None,
     return None, ""
 
 
-def search(query: str, limit: int = 10, kind: Optional[str] = None,
+def search(query: str, limit: int = 10, kind: str | None = None,
            smart: bool = True,
-           entries: Optional[List[dict]] = None) -> Optional[Tuple[List[Hit], str]]:
+           entries: list[dict] | None = None) -> tuple[list[Hit], str] | None:
     """Two-stage RAG search: dense-or-BM25 retrieve -> optional LLM rerank.
 
     Returns ``(hits, ranker_label)``, or ``None`` when no index exists yet so

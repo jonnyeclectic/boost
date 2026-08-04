@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import NamedTuple
 
 # Severity ordering — higher rank = more alarming, used to sort worst-first.
 _SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
@@ -185,7 +185,7 @@ def _html_comments(text: str):
         i = end + 3
 
 
-def scan_text(text: str) -> List[Finding]:
+def scan_text(text: str) -> list[Finding]:
     """Return findings for every rule that matches a line of ``text``.
 
     Scans line by line so each finding carries a 1-based line number and the
@@ -193,7 +193,7 @@ def scan_text(text: str) -> List[Finding]:
     is reported. Results are ordered worst-first: descending severity, then by
     line number, then rule id — a stable order tests can rely on.
     """
-    findings: List[Finding] = []
+    findings: list[Finding] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):
         findings.extend(
             Finding(rule.id, rule.severity, lineno,
@@ -216,7 +216,7 @@ def scan_text(text: str) -> List[Finding]:
     return findings
 
 
-def scan_file(path) -> List[Finding]:
+def scan_file(path) -> list[Finding]:
     """Scan the Markdown at ``path``; a missing/unreadable file yields ``[]``."""
     p = Path(path)
     try:

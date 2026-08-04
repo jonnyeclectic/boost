@@ -17,7 +17,7 @@ import threading
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from .. import cliparse, spin
 from ..core import (
@@ -333,7 +333,7 @@ def cmd_index(argv):
     if not shutil.which("gh"):
         raise BoostError("the GitHub CLI (gh) is required to build the index",
                         hint="brew install gh && gh auth login")
-    items: List[dict] = []
+    items: list[dict] = []
     total = 0
     pages = min((max(1, args.limit) + 99) // 100, 10)  # code search caps at 1000
     for page in range(1, pages + 1):
@@ -516,7 +516,7 @@ def cmd_recommend(argv):
         raise BoostError("no skills in any tap to recommend from",
                         hint="add registries with `boost tap --defaults`")
     stack = detect_stack(target)
-    agg: Dict[str, Dict[str, Any]] = {}
+    agg: dict[str, dict[str, Any]] = {}
     for kw in stack["keywords"]:
         for e, s in catalog.search(kw, entries):
             rec = agg.setdefault(e["name"], {"entry": e, "score": 0,
@@ -537,12 +537,12 @@ def cmd_recommend(argv):
     if stack["frameworks"]:
         line += " · frameworks: " + ", ".join(stack["frameworks"])
     out.info(out.role("%s  (%s)" % (line, _tilde(target)), "muted"))
-    shown: List[Dict[str, Any]] = ranked[:args.limit]
+    shown: list[dict[str, Any]] = ranked[:args.limit]
     if not shown:
         # Annotated rather than inlined: an unannotated literal of mixed value
         # types infers dict[str, object], which then makes every r["entry"][…]
         # read below an error about indexing `object`.
-        curated: List[Dict[str, Any]] = [
+        curated: list[dict[str, Any]] = [
             {"entry": e, "score": 0, "because": {"curated"}}
             for e in entries if e.get("curated")]
         shown = curated[:args.limit]
@@ -802,7 +802,7 @@ def _browse_tui(curses, entries):
     """Run the curses UI. Returns the list of entries picked for install
     (one or more, via multi-select), or None if the user quit without picking.
     """
-    state: Dict[str, Any] = {"picks": None}
+    state: dict[str, Any] = {"picks": None}
     categories = _tap_categories()
     desc_cache: dict = {}
     loading: set = set()
@@ -1017,7 +1017,7 @@ def cmd_trending(argv):
                     out.truncate(e["description"], descw))
                    for e in sorted(curated, key=operator.itemgetter("name"))[:args.limit]])
         return 0
-    agg: Dict[str, Any] = {}
+    agg: dict[str, Any] = {}
     for ev in evs:  # most-recent-first, so first ts per subject is the latest
         name = ev.get("subject") or "?"
         rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})

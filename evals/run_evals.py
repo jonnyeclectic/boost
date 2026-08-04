@@ -33,8 +33,8 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -57,7 +57,7 @@ PRIMARY = "bm25"
 ARM_LABELS = {"catalog": "catalog.search (frontmatter)",
               "bm25": "BM25 full-content (shipped)"}
 
-Ranker = Callable[[str], List[str]]
+Ranker = Callable[[str], list[str]]
 
 
 # ------------------------------------------------------------ sandbox setup
@@ -114,14 +114,14 @@ def prepare_online_home(home: Path) -> dict:
 
 # ----------------------------------------------------------------- rankers
 
-def build_rankers() -> Dict[str, Ranker]:
+def build_rankers() -> dict[str, Ranker]:
     """The engines under test, each mapping a query to a ranked list of names."""
     from boost_cli.core import catalog, rag
 
-    def catalog_rank(q: str) -> List[str]:
+    def catalog_rank(q: str) -> list[str]:
         return metrics.dedupe([e["name"] for e, _s in catalog.search(q)])
 
-    def bm25_rank(q: str) -> List[str]:
+    def bm25_rank(q: str) -> list[str]:
         return metrics.dedupe([h["entry"]["name"] for h in rag.retrieve(q, k=60)])
 
     return {"catalog": catalog_rank, "bm25": bm25_rank}
@@ -129,10 +129,10 @@ def build_rankers() -> Dict[str, Ranker]:
 
 # ------------------------------------------------------------------- data
 
-def load_golden(path: Path) -> List[dict]:
+def load_golden(path: Path) -> list[dict]:
     """Load the graded golden set (JSON) or a binary .jsonl set (--online)."""
     if path.suffix == ".jsonl":
-        rows: List[dict] = []
+        rows: list[dict] = []
         for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
             line = line.strip()
             if not line or line.startswith("#"):
@@ -147,10 +147,10 @@ def load_golden(path: Path) -> List[dict]:
     return list(data["queries"])
 
 
-def evaluate(rows: List[dict], ranker: Ranker) -> dict:
+def evaluate(rows: list[dict], ranker: Ranker) -> dict:
     """Score every golden query; return per-query scores, means, and the ranks."""
-    per_query: Dict[str, Dict[str, float]] = {}
-    ranks: Dict[str, dict] = {}
+    per_query: dict[str, dict[str, float]] = {}
+    ranks: dict[str, dict] = {}
     for row in rows:
         ranked = ranker(row["query"])
         labels = {k: int(v) for k, v in row["labels"].items()}
@@ -164,7 +164,7 @@ def evaluate(rows: List[dict], ranker: Ranker) -> dict:
     return {"mean": means, "per_query": per_query, "ranks": ranks}
 
 
-def run_suite(rows: List[dict], rankers: Dict[str, Ranker]) -> dict:
+def run_suite(rows: list[dict], rankers: dict[str, Ranker]) -> dict:
     return {arm: evaluate(rows, rank) for arm, rank in rankers.items()}
 
 
@@ -197,7 +197,7 @@ def print_misses(arm: str, res: dict) -> None:
               % (qid, where, r["query"][:46], ", ".join(r["top"][:3])))
 
 
-def print_significance(arms: dict, baseline: Optional[dict]) -> None:
+def print_significance(arms: dict, baseline: dict | None) -> None:
     """Paired bootstrap of the primary arm against the committed baseline."""
     if not baseline:
         print("\nno baseline yet — run `make evals-baseline` to pin one")
@@ -222,15 +222,15 @@ def print_significance(arms: dict, baseline: Optional[dict]) -> None:
 
 # ----------------------------------------------------------------- baseline
 
-def load_baseline() -> Optional[dict]:
+def load_baseline() -> dict | None:
     try:
         return json.loads(BASELINE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
 
 
-def payload(arms: dict, rows: List[dict], corpus: dict,
-            online: Optional[dict] = None) -> dict:
+def payload(arms: dict, rows: list[dict], corpus: dict,
+            online: dict | None = None) -> dict:
     return {
         "version": 1,
         "primary": PRIMARY,
@@ -258,7 +258,7 @@ def _rel(path: Path) -> str:
 
 # --------------------------------------------------------------------- main
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--golden", type=Path, default=GOLDEN)

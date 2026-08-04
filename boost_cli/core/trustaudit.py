@@ -15,7 +15,7 @@ by the mutation gate.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections.abc import Sequence
 
 from . import provenance
 
@@ -61,7 +61,7 @@ _PROVENANCE_LABEL = {
 }
 
 
-def signing_label(status: Optional[str], is_local: bool = False) -> Optional[str]:
+def signing_label(status: str | None, is_local: bool = False) -> str | None:
     """The trust finding for a tap's signing ``status``, or ``None`` if healthy.
 
     ``is_local`` marks a skill imported from a path rather than tapped: there is
@@ -79,8 +79,8 @@ def signing_label(status: Optional[str], is_local: bool = False) -> Optional[str
     return _PROVENANCE_LABEL.get(status, UNSIGNED_TAP)
 
 
-def stale_tap_label(age_days: Optional[int],
-                    limit: int = STALE_TAP_DAYS) -> Optional[str]:
+def stale_tap_label(age_days: int | None,
+                    limit: int = STALE_TAP_DAYS) -> str | None:
     """:data:`STALE_TAP` when a tap clone's last sync is older than ``limit``.
 
     ``age_days`` is ``None`` when the age could not be determined (no clone, no
@@ -93,11 +93,11 @@ def stale_tap_label(age_days: Optional[int],
     return STALE_TAP if age_days > limit else None
 
 
-def skill_findings(*, is_local: bool, provenance_status: Optional[str],
-                   tap_age_days: Optional[int],
-                   upstream_reason: Optional[str],
+def skill_findings(*, is_local: bool, provenance_status: str | None,
+                   tap_age_days: int | None,
+                   upstream_reason: str | None,
                    conflicts_with: Sequence[str] = (),
-                   stale_after: int = STALE_TAP_DAYS) -> List[dict]:
+                   stale_after: int = STALE_TAP_DAYS) -> list[dict]:
     """Every trust finding for one installed skill, worst severity first.
 
     Each finding is ``{"severity", "label", "detail"}``. The caller supplies
@@ -114,7 +114,7 @@ def skill_findings(*, is_local: bool, provenance_status: Optional[str],
     A locally-imported skill is deliberately not checked for tap staleness or
     upstream drift: it has no upstream, so those axes are not signals about it.
     """
-    found: List[dict] = []
+    found: list[dict] = []
     label = signing_label(provenance_status, is_local=is_local)
     if label:
         found.append({"severity": SEVERITY[label], "label": label,
@@ -134,7 +134,7 @@ def skill_findings(*, is_local: bool, provenance_status: Optional[str],
     return sort_findings(found)
 
 
-def _signing_detail(label: str, status: Optional[str]) -> str:
+def _signing_detail(label: str, status: str | None) -> str:
     """Human detail for a signing finding."""
     if label == LOCAL_SOURCE:
         return "imported from a path — no tap signature to check"
@@ -152,13 +152,13 @@ def _signing_detail(label: str, status: Optional[str]) -> str:
 _SEVERITY_RANK = {HIGH: 0, MED: 1, LOW: 2}
 
 
-def sort_findings(findings: Sequence[dict]) -> List[dict]:
+def sort_findings(findings: Sequence[dict]) -> list[dict]:
     """Findings ordered worst-first, then alphabetically for determinism."""
     return sorted(findings, key=lambda f: (_SEVERITY_RANK[f["severity"]],
                                            f["label"], f["detail"]))
 
 
-def count_severities(findings_by_skill: Dict[str, List[dict]]) -> Dict[str, int]:
+def count_severities(findings_by_skill: dict[str, list[dict]]) -> dict[str, int]:
     """Total findings per severity across every skill."""
     counts = {HIGH: 0, MED: 0, LOW: 0}
     for findings in findings_by_skill.values():
@@ -167,7 +167,7 @@ def count_severities(findings_by_skill: Dict[str, List[dict]]) -> Dict[str, int]
     return counts
 
 
-def is_healthy(counts: Dict[str, int]) -> bool:
+def is_healthy(counts: dict[str, int]) -> bool:
     """True when nothing needs a decision — no HIGH and no MED findings.
 
     LOW findings alone stay healthy: an unsigned tap is the norm for most of
@@ -177,7 +177,7 @@ def is_healthy(counts: Dict[str, int]) -> bool:
     return not counts[HIGH] and not counts[MED]
 
 
-def exit_code(counts: Dict[str, int]) -> int:
+def exit_code(counts: dict[str, int]) -> int:
     """``0`` when healthy, ``1`` when a HIGH or MED finding needs attention.
 
     Matches ``cmd_audit``'s content-scan contract, so ``--skills`` composes in
@@ -186,7 +186,7 @@ def exit_code(counts: Dict[str, int]) -> int:
     return 0 if is_healthy(counts) else 1
 
 
-def relation_list(meta: Optional[dict], key: str) -> List[str]:
+def relation_list(meta: dict | None, key: str) -> list[str]:
     """A skill's ``requires:``/``conflicts:`` frontmatter as a clean name list.
 
     Accepts a YAML list or a comma-separated string, drops blanks, and treats a
@@ -206,7 +206,7 @@ def relation_list(meta: Optional[dict], key: str) -> List[str]:
 
 
 def conflict_pairs(installed: Sequence[str],
-                   conflicts_of) -> List[Tuple[str, str]]:
+                   conflicts_of) -> list[tuple[str, str]]:
     """``(skill, peer)`` pairs where both sides are installed.
 
     Deliberately independent of :func:`resolve.resolve`: that answers "what
@@ -217,7 +217,7 @@ def conflict_pairs(installed: Sequence[str],
     from both sides, because both skills are equally implicated.
     """
     present = set(installed)
-    pairs: List[Tuple[str, str]] = []
+    pairs: list[tuple[str, str]] = []
     for name in sorted(present):
         pairs.extend((name, peer) for peer in conflicts_of(name)
                      if peer and peer != name and peer in present)

@@ -12,7 +12,6 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import List, Tuple
 
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
@@ -247,7 +246,7 @@ def semver_gt(a: str, b: str) -> bool:
     return semver_tuple(a) > semver_tuple(b)
 
 
-def score_skill(skill_dir: Path) -> Tuple[int, List[str]]:
+def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
     """Heuristic quality score 0-100 for a skill directory, with notes.
 
     Shared by `boost install` (display), `boost lint`, and `boost test`.
@@ -255,7 +254,7 @@ def score_skill(skill_dir: Path) -> Tuple[int, List[str]]:
     from . import frontmatter
 
     skill_md = Path(skill_dir) / "SKILL.md"
-    notes: List[str] = []
+    notes: list[str] = []
     if not skill_md.exists():
         return 0, ["missing SKILL.md"]
     try:

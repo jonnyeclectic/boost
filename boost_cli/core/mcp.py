@@ -18,22 +18,22 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
 
 from ..errors import BoostError
 
 # A handler maps parsed arguments to (text, is_error). ``text is None`` means the
 # handler produced no result (treated by the server as an unknown/aborted tool).
-Handler = Callable[[dict], Tuple[Optional[str], bool]]
+Handler = Callable[[dict], tuple[str | None, bool]]
 
 
 class Registry:
     """An ordered name -> (spec, handler) map for MCP tools."""
 
     def __init__(self) -> None:
-        self._order: List[str] = []
-        self._specs: Dict[str, dict] = {}
-        self._handlers: Dict[str, Handler] = {}
+        self._order: list[str] = []
+        self._specs: dict[str, dict] = {}
+        self._handlers: dict[str, Handler] = {}
 
     def register(self, name: str, description: str, input_schema: dict,
                  handler: Handler) -> None:
@@ -55,18 +55,18 @@ class Registry:
             return fn
         return deco
 
-    def specs(self) -> List[dict]:
+    def specs(self) -> list[dict]:
         """The ``tools/list`` payload — specs in registration order."""
         return [self._specs[name] for name in self._order]
 
-    def names(self) -> List[str]:
+    def names(self) -> list[str]:
         """Registered tool names, in registration order."""
         return self._order.copy()
 
     def has(self, name: str) -> bool:
         return name in self._handlers
 
-    def call(self, name: str, args: dict) -> Tuple[Optional[str], bool]:
+    def call(self, name: str, args: dict) -> tuple[str | None, bool]:
         """Dispatch to a handler. ``(None, False)`` for an unknown tool."""
         handler = self._handlers.get(name)
         if handler is None:
@@ -176,7 +176,7 @@ def engine_note() -> str:
 
 
 def handle_request(req: dict, *, version: str,
-                   registry: Registry) -> Optional[dict]:
+                   registry: Registry) -> dict | None:
     """Map one parsed JSON-RPC request to its response dict.
 
     Returns ``None`` for a notification (a request with no ``id``) — the caller

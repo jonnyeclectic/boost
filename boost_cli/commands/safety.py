@@ -13,7 +13,7 @@ import re
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from .. import cliparse
 from ..core import (
@@ -343,7 +343,7 @@ def cmd_verify(argv):
     user_names = [n for n in (args.names or [])
                   if lockfile.find_any(n) is not None]
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for kind, name, entry in _iter_installed_all(
             user_names or (None if not args.names else [])):
         missing_fields = [f for f in ("version", "tap", "sha256", "installed_at")

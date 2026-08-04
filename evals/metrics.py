@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import math
 import random
-from typing import Dict, List, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 # Bootstrap defaults. The seed makes the gate reproducible: the same scores must
 # always yield the same p-value, or a flaky CI run could block a clean merge.
@@ -28,10 +28,10 @@ RESAMPLES = 10000
 SEED = 20240517
 
 
-def dedupe(ids: Sequence[str]) -> List[str]:
+def dedupe(ids: Sequence[str]) -> list[str]:
     """Collapse a ranked list to the first (best) occurrence of each id."""
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for i in ids:
         if i not in seen:
             seen.add(i)
@@ -119,7 +119,7 @@ def _percentile(sorted_values: Sequence[float], q: float) -> float:
 
 
 def paired_bootstrap(baseline: Sequence[float], candidate: Sequence[float],
-                     resamples: int = RESAMPLES, seed: int = SEED) -> Dict[str, float]:
+                     resamples: int = RESAMPLES, seed: int = SEED) -> dict[str, float]:
     """Paired bootstrap over per-query deltas. Returns delta, p_value, 95% CI.
 
     Why paired and why bootstrap: the two arms answer the *same* queries, so the
@@ -150,7 +150,7 @@ def paired_bootstrap(baseline: Sequence[float], candidate: Sequence[float],
     observed = sum(diffs) / n
 
     rng = random.Random(seed)  # noqa: S311 — resampling, not a security context
-    means: List[float] = []
+    means: list[float] = []
     for _ in range(resamples):
         total = 0.0
         for _ in range(n):
@@ -178,7 +178,7 @@ def paired_bootstrap(baseline: Sequence[float], candidate: Sequence[float],
 
 # --------------------------------------------------------------- the suite
 
-def score_query(ranked: Sequence[str], labels: Mapping[str, int]) -> Dict[str, float]:
+def score_query(ranked: Sequence[str], labels: Mapping[str, int]) -> dict[str, float]:
     """The five headline metrics for one query, over one ranked list."""
     ranked = dedupe(ranked)
     return {

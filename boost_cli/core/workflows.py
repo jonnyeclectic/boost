@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 
 from ..errors import BoostError
 from . import frontmatter, util
@@ -59,7 +58,7 @@ def detect_slot(source_rel: str) -> str:
     return SLOT_AGENTS if parts & AGENT_DIRS else SLOT_COMMANDS
 
 
-def target_ext(agent: Optional[str], slot: str) -> str:
+def target_ext(agent: str | None, slot: str) -> str:
     """The file extension workflow files use for ``agent`` in ``slot``.
 
     ``.toml`` only for a :data:`TOML_COMMAND_AGENTS` agent's ``commands`` slot;
@@ -73,8 +72,8 @@ def target_ext(agent: Optional[str], slot: str) -> str:
 
 
 def workflow_target(skills_dir: Path, slot: str, name: str,
-                    base: Optional[Path] = None,
-                    agent: Optional[str] = None) -> Path:
+                    base: Path | None = None,
+                    agent: str | None = None) -> Path:
     """Where workflow ``name`` (in ``slot``) materializes for an agent.
 
     ``base`` selects the scope:
@@ -136,7 +135,7 @@ def render_gemini_command(name: str, raw: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render(agent: Optional[str], slot: str, name: str, raw: str) -> str:
+def render(agent: str | None, slot: str, name: str, raw: str) -> str:
     """The text to write for ``name`` in ``slot`` for ``agent``.
 
     Verbatim ``raw`` for every agent and slot except a TOML-command agent's

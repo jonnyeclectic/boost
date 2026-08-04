@@ -147,22 +147,6 @@ ignore = [
     # batch. Hoisting the handler out of the loop would trade that resilience
     # for a negligible per-iteration saving.
     "PERF203",  # try-except-in-loop
-    # pyupgrade (UP). These were ignored because the >=3.9 floor made
-    # PEP 585/604 annotations a runtime TypeError the moment anything evaluated
-    # one — `from __future__ import annotations` defers evaluation, it does not
-    # make the syntax legal. That reason is now GONE: the floor is >=3.12 and
-    # ruff classifies all three fixes as safe at `target-version = "py312"`.
-    #
-    # They stay ignored for one PR only, and for a different reason: the sweep
-    # rewrites annotations in ~60 modules, which obliterates blame and conflicts
-    # with every branch in flight — the same objection UP031 carries below. The
-    # note this replaces said to do it "as one deliberate sweep", so it gets its
-    # own PR rather than riding in on the floor bump.
-    # See docs/roadmap/items/pep585-604-modernization-sweep.md.
-    "UP006",  # non-pep585-annotation   (List[x]  -> list[x])
-    "UP007",  # non-pep604-annotation-union     (Union[x, y] -> x | y)
-    "UP035",  # deprecated-import       (typing.List and friends)
-    "UP045",  # non-pep604-annotation-optional  (Optional[x] -> x | None)
     # printf-formatting is this codebase's house style across ~860 call sites.
     # The rewrite is an unsafe fix (`%` and `format` differ on tuples and on
     # types with a custom `__format__`), it would rewrite nearly every file —

@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import os
 import urllib.request
-from typing import Union
 
-_Request = Union[str, urllib.request.Request]
+_Request = str | urllib.request.Request
 
 
 def harden_fork_safety() -> bool:

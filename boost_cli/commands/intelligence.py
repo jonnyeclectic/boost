@@ -16,7 +16,6 @@ import tempfile
 import textwrap
 from collections import Counter
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from .. import cliparse
 from ..core import (
@@ -54,7 +53,7 @@ def _note_fallback() -> None:
 _tilde = paths.tilde
 
 
-def _skill_text(name: str) -> Tuple[str, str]:
+def _skill_text(name: str) -> tuple[str, str]:
     """A skill's SKILL.md text -> (text, origin). Installed store preferred.
 
     A rule/workflow is declined by kind — the callers reason about skill
@@ -135,7 +134,7 @@ def _write_generated(dest: Path, text: str) -> bool:
     return True
 
 
-def _current_branch(cwd: Optional[Path] = None) -> Optional[str]:
+def _current_branch(cwd: Path | None = None) -> str | None:
     """Current git branch of cwd, or None when not in a repo / no git."""
     if not gitutil.has_git():
         return None
@@ -146,7 +145,7 @@ def _current_branch(cwd: Optional[Path] = None) -> Optional[str]:
 
 # ---------------------------------------------------------------- distill
 
-def cmd_distill(argv: List[str]) -> int:
+def cmd_distill(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost distill",
         description="Merge multiple skills into one deduplicated skill")
@@ -187,7 +186,7 @@ def cmd_distill(argv: List[str]) -> int:
     return 0
 
 
-def _distill_ai(new: str, sources: List[dict]) -> Optional[str]:
+def _distill_ai(new: str, sources: list[dict]) -> str | None:
     blocks = "\n\n".join("### SOURCE SKILL: %s\n\n%s" % (s["name"], s["text"])
                          for s in sources)
     reply = ai.ask_author(
@@ -207,9 +206,9 @@ def _distill_ai(new: str, sources: List[dict]) -> Optional[str]:
     return text if meta.get("name") else None
 
 
-def _distill_merge(new: str, sources: List[dict]) -> str:
+def _distill_merge(new: str, sources: list[dict]) -> str:
     """Mechanical merge: union tags, dedupe exact-duplicate body lines."""
-    tags: List[str] = []
+    tags: list[str] = []
     for s in sources:
         for t in s["meta"].get("tags") or []:
             if t not in tags:
@@ -241,7 +240,7 @@ def _distill_merge(new: str, sources: List[dict]) -> str:
 # ---------------------------------------------------------------- simulate
 
 
-def cmd_simulate(argv: List[str]) -> int:
+def cmd_simulate(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost simulate",
         description="Preview how a skill would change Claude's behavior")
@@ -292,7 +291,7 @@ _CONV_RE = re.compile(
     r"(\(.+?\))?!?:\s")
 
 
-def cmd_infer(argv: List[str]) -> int:
+def cmd_infer(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost infer",
         description="Generate a SKILL.md from your codebase patterns")
@@ -341,7 +340,7 @@ def _probe_repo(root: Path) -> dict:
     return facts
 
 
-def _stack_from_discovery(root: Path) -> Optional[Tuple[List[str], List[str]]]:
+def _stack_from_discovery(root: Path) -> tuple[list[str], list[str]] | None:
     """Use discovery's shared stack prober when present; normalize its shape."""
     try:
         from ..core.stackprobe import detect_stack
@@ -349,7 +348,7 @@ def _stack_from_discovery(root: Path) -> Optional[Tuple[List[str], List[str]]]:
     except Exception:
         return None
 
-    def _names(val) -> List[str]:
+    def _names(val) -> list[str]:
         items = []
         for x in (val or []):
             n = x.get("name") if isinstance(x, dict) else x
@@ -367,11 +366,11 @@ def _stack_from_discovery(root: Path) -> Optional[Tuple[List[str], List[str]]]:
     return (langs, fws) if (langs or fws) else None
 
 
-def _local_stack(root: Path) -> Tuple[List[str], List[str]]:
-    langs: List[str] = []
-    fws: List[str] = []
+def _local_stack(root: Path) -> tuple[list[str], list[str]]:
+    langs: list[str] = []
+    fws: list[str] = []
 
-    def add(lst: List[str], item: str) -> None:
+    def add(lst: list[str], item: str) -> None:
         if item not in lst:
             lst.append(item)
 
@@ -410,8 +409,8 @@ def _local_stack(root: Path) -> Tuple[List[str], List[str]]:
     return langs, fws
 
 
-def _formatter_configs(root: Path) -> List[str]:
-    found: List[str] = []
+def _formatter_configs(root: Path) -> list[str]:
+    found: list[str] = []
     if (root / ".editorconfig").exists():
         found.append(".editorconfig")
     try:
@@ -434,7 +433,7 @@ def _formatter_configs(root: Path) -> List[str]:
     return found
 
 
-def _commit_style(root: Path) -> Optional[Tuple[int, int]]:
+def _commit_style(root: Path) -> tuple[int, int] | None:
     """(conventional, total) over the last 20 commit subjects, or None."""
     if not gitutil.has_git():
         return None
@@ -447,7 +446,7 @@ def _commit_style(root: Path) -> Optional[Tuple[int, int]]:
     return sum(1 for s in subjects if _CONV_RE.match(s)), len(subjects)
 
 
-def _commit_rule(style: Tuple[int, int]) -> str:
+def _commit_rule(style: tuple[int, int]) -> str:
     conv, total = style
     if conv / total >= 0.5:
         return ("Write Conventional Commits (`type(scope): subject`) — "
@@ -456,7 +455,7 @@ def _commit_rule(style: Tuple[int, int]) -> str:
             "short and imperative." % (conv, total))
 
 
-def _infer_ai(name: str, root: Path, facts: dict) -> Optional[str]:
+def _infer_ai(name: str, root: Path, facts: dict) -> str | None:
     listing = ", ".join(sorted(p.name for p in root.iterdir()
                                if not p.name.startswith("."))[:30])
     detected = facts.copy()
@@ -520,7 +519,7 @@ _TRIVIAL = {"yes", "no", "ok", "okay", "continue", "go ahead", "sounds good",
             "please continue", "try again"}
 
 
-def cmd_absorb(argv: List[str]) -> int:
+def cmd_absorb(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost absorb",
         description="Turn recurring chat-history patterns into a skill")
@@ -573,7 +572,7 @@ def cmd_absorb(argv: List[str]) -> int:
     return 0
 
 
-def _recurring_patterns(files: List[Path], limit: int) -> List[Tuple[str, int]]:
+def _recurring_patterns(files: list[Path], limit: int) -> list[tuple[str, int]]:
     counts: Counter = Counter()
     for f in files:
         try:
@@ -595,7 +594,7 @@ def _recurring_patterns(files: List[Path], limit: int) -> List[Tuple[str, int]]:
     return hits[:limit]
 
 
-def _user_texts(obj) -> List[str]:
+def _user_texts(obj) -> list[str]:
     """Best-effort user-message text from one history event."""
     if not isinstance(obj, dict):
         return []
@@ -612,7 +611,7 @@ def _user_texts(obj) -> List[str]:
     return []
 
 
-def _norm_sentences(text: str) -> List[str]:
+def _norm_sentences(text: str) -> list[str]:
     sents = []
     for chunk in re.split(r"[.!?\n]+", text):
         s = re.sub(r"[^a-z0-9\s']", " ", chunk.lower())
@@ -622,7 +621,7 @@ def _norm_sentences(text: str) -> List[str]:
     return sents
 
 
-def _absorb_ai(name: str, patterns: List[Tuple[str, int]]) -> Optional[str]:
+def _absorb_ai(name: str, patterns: list[tuple[str, int]]) -> str | None:
     listing = "\n".join("- (seen %dx) %s" % (n, p) for p, n in patterns)
     reply = ai.ask_author(
         "These requests recur in a developer's AI chat history:\n%s\n\n"
@@ -639,7 +638,7 @@ def _absorb_ai(name: str, patterns: List[Tuple[str, int]]) -> Optional[str]:
     return text if meta.get("name") else None
 
 
-def _absorb_template(name: str, patterns: List[Tuple[str, int]]) -> str:
+def _absorb_template(name: str, patterns: list[tuple[str, int]]) -> str:
     meta = {"name": name,
             "description": "Recurring instructions from your chat history, "
                            "codified as standing rules",
@@ -655,7 +654,7 @@ def _absorb_template(name: str, patterns: List[Tuple[str, int]]) -> str:
 
 # ---------------------------------------------------------------- evolve
 
-def cmd_evolve(argv: List[str]) -> int:
+def cmd_evolve(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost evolve",
         description="Iteratively improve a skill from feedback")
@@ -708,7 +707,7 @@ def cmd_evolve(argv: List[str]) -> int:
     return 0
 
 
-def _evolve_ai(old: str, old_ver: str, feedback: str) -> Optional[str]:
+def _evolve_ai(old: str, old_ver: str, feedback: str) -> str | None:
     reply = ai.ask_author(
         "Revise this SKILL.md based on user feedback. Keep everything that "
         "still holds, integrate the feedback as concrete rules, and bump the "
@@ -764,7 +763,7 @@ _CONTEXT_STATE = "context.json"
 _CONTEXT_DEFAULT = {"enabled": False, "rules": []}
 
 
-def cmd_context(argv: List[str]) -> int:
+def cmd_context(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost context", description="Branch-aware skill activation")
     sub = ap.add_subparsers(dest="action",
@@ -930,7 +929,7 @@ def _context_apply(state: dict) -> int:
 _FOCUS_STATE = "focus.json"
 
 
-def cmd_focus(argv: List[str]) -> int:
+def cmd_focus(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost focus",
         description="Temporarily prioritize skills for a work session")
@@ -1008,7 +1007,7 @@ def cmd_focus(argv: List[str]) -> int:
 
 # ---------------------------------------------------------------- impact
 
-def cmd_impact(argv: List[str]) -> int:
+def cmd_impact(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost impact",
         description="Measure a skill's influence on code quality")
@@ -1083,7 +1082,7 @@ def cmd_impact(argv: List[str]) -> int:
 _IMPACT_NOTE = "correlation, not causation — commits since install in this repo"
 
 
-def _repo_activity(since: str) -> Tuple[Optional[int], Optional[int]]:
+def _repo_activity(since: str) -> tuple[int | None, int | None]:
     """(commit count, unique files touched) in cwd's repo since a date."""
     if not since:
         return None, None
@@ -1139,7 +1138,7 @@ def _print_reply(reply: chat_engine.Reply, show_sources: bool) -> None:
                  "showing the grounded matches instead")
 
 
-def cmd_chat(argv: List[str]) -> int:
+def cmd_chat(argv: list[str]) -> int:
     """Ask about skills in plain language; answers are grounded in retrieval."""
     ap = cliparse.parser(
         prog="boost chat",
@@ -1195,7 +1194,7 @@ def _chat_session(args) -> int:
         out.info(out.role("no AI configured — answers are the grounded matches "
                           "themselves (%s)" % ai.fallback_note(), "muted"))
     out.info(out.role("ask about skills; blank line or Ctrl-D to exit", "muted"))
-    history: List[chat_engine.Turn] = []
+    history: list[chat_engine.Turn] = []
     while True:
         try:
             question = input("\n> ").strip()

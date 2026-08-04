@@ -17,7 +17,6 @@ import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional, Tuple
 
 from .. import __version__
 from ..errors import BoostError
@@ -27,7 +26,7 @@ from . import output as out
 SKILL_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
-def _validated_skill_name(name: str) -> Optional[str]:
+def _validated_skill_name(name: str) -> str | None:
     """Return canonical trusted skill name, else None."""
     if not isinstance(name, str):
         return None
@@ -99,7 +98,7 @@ def _safe_join_within(base, rel):
     return candidate
 
 
-def skill_text(name: str) -> Optional[str]:
+def skill_text(name: str) -> str | None:
     """SKILL.md text for an installed skill, else from a tap. None if unknown."""
     trusted_name = _validated_skill_name(name)
     if trusted_name is None:
@@ -128,7 +127,7 @@ def _json_body(obj) -> bytes:
     return json.dumps(obj, indent=2).encode()
 
 
-def route(path: str) -> Tuple[int, str, bytes]:
+def route(path: str) -> tuple[int, str, bytes]:
     """Map a GET path to ``(status, content_type, body)``. Pure — no socket.
 
     Mirrors the historical dispatch exactly: ``/`` and ``/index.html`` serve the

@@ -12,8 +12,6 @@ commands gather the raw signals (``head_commit``, ``source_dir_for``,
 """
 from __future__ import annotations
 
-from typing import Optional
-
 from . import util
 
 # ── upstream_reason: why a tap's copy is newer than the installed one ──────
@@ -23,8 +21,8 @@ CONTENT = "content"  # the tap HEAD moved AND the source tree's bytes changed
 
 def upstream_reason(installed_version: str, latest_version: str,
                     installed_commit: str, tap_head: str,
-                    installed_sha: str, source_sha: Optional[str]
-                    ) -> Optional[str]:
+                    installed_sha: str, source_sha: str | None
+                    ) -> str | None:
     """Why the tap's copy is newer than the installed one, else ``None``.
 
     Mirrors the historical order exactly: a higher advertised semver wins
@@ -49,8 +47,8 @@ STORE_MISSING = "store-missing"
 NA = "n/a"
 
 
-def drift_state(store_sha: Optional[str], lock_sha: str,
-                is_local: bool, source_sha: Optional[str]) -> str:
+def drift_state(store_sha: str | None, lock_sha: str,
+                is_local: bool, source_sha: str | None) -> str:
     """Drift of an installed skill's store copy vs its lock entry and tap.
 
     Signals (all pre-computed by the caller):

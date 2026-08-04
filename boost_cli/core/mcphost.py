@@ -29,8 +29,6 @@ possible moment: silently, on someone else's machine.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 # The MCP server name boost registers itself under. Deliberately free of
 # underscores: Gemini CLI assigns every MCP tool the fully-qualified name
 # ``mcp_{server}_{tool}`` and its policy parser splits on the first underscore
@@ -53,13 +51,13 @@ GEMINI = "gemini"
 
 # name -> {"cli": executable, "label": display name}. Order is the order hosts
 # are tried and reported in.
-HOSTS: Dict[str, dict] = {
+HOSTS: dict[str, dict] = {
     CLAUDE: {"cli": "claude", "label": "Claude Code"},
     GEMINI: {"cli": "gemini", "label": "Gemini CLI"},
 }
 
 
-def hosts() -> List[str]:
+def hosts() -> list[str]:
     """Known host ids, in registration order."""
     return list(HOSTS)
 
@@ -74,11 +72,11 @@ def label(host: str) -> str:
     return str(HOSTS[host]["label"])
 
 
-def _env_flags(env: Optional[Dict[str, str]]) -> List[str]:
+def _env_flags(env: dict[str, str] | None) -> list[str]:
     """``-e KEY=VALUE`` pairs, sorted so the argv is deterministic."""
     if not env:
         return []
-    out: List[str] = []
+    out: list[str] = []
     for key in sorted(env):
         out += ["-e", "%s=%s" % (key, env[key])]
     return out
@@ -86,7 +84,7 @@ def _env_flags(env: Optional[Dict[str, str]]) -> List[str]:
 
 def register_argv(host: str, launcher: str, *, scope: str = "user",
                   name: str = SERVER_NAME,
-                  env: Optional[Dict[str, str]] = None) -> List[str]:
+                  env: dict[str, str] | None = None) -> list[str]:
     """The argv that registers boost as an MCP server with ``host``.
 
     ``launcher`` is the absolute path other processes should use to invoke
@@ -106,7 +104,7 @@ def register_argv(host: str, launcher: str, *, scope: str = "user",
 
 
 def unregister_argv(host: str, *, scope: str = "user",
-                    name: str = SERVER_NAME) -> List[str]:
+                    name: str = SERVER_NAME) -> list[str]:
     """The argv that removes boost's MCP registration from ``host``.
 
     Gemini gets an explicit ``--scope`` because its ``remove`` defaults to
@@ -120,7 +118,7 @@ def unregister_argv(host: str, *, scope: str = "user",
 
 
 def argv(host: str, action: str, launcher: str = "", *,
-         scope: str = "user", name: str = SERVER_NAME) -> List[str]:
+         scope: str = "user", name: str = SERVER_NAME) -> list[str]:
     """Dispatch to :func:`register_argv` / :func:`unregister_argv`.
 
     Raises ValueError for an action that is neither ``register`` nor
@@ -134,7 +132,7 @@ def argv(host: str, action: str, launcher: str = "", *,
     raise ValueError("unknown MCP host action %r" % action)
 
 
-def resolve(requested: Optional[str]) -> List[str]:
+def resolve(requested: str | None) -> list[str]:
     """Which hosts a ``--host`` value selects, validated.
 
     ``None`` or ``"auto"`` means "every known host" — the command layer then

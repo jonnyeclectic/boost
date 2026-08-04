@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import NamedTuple
 
 _SEVERITY_RANK = {"high": 3, "medium": 2, "low": 1}
 
@@ -96,14 +96,14 @@ def _redacted_line(line: str, rule: Rule, match) -> str:
     return masked.strip()[:200]
 
 
-def scan_text(text: str) -> List[Finding]:
+def scan_text(text: str) -> list[Finding]:
     """Findings for every secret-shape rule that matches a line of ``text``.
 
     One finding per (rule, line), using that line's first match. The raw secret
     is never included — the snippet carries a redacted line. Ordered worst-first
     (severity desc, then line, then rule id).
     """
-    findings: List[Finding] = []
+    findings: list[Finding] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):
         for rule in RULES:
             m = rule.pattern.search(raw)
@@ -116,7 +116,7 @@ def scan_text(text: str) -> List[Finding]:
     return findings
 
 
-def scan_file(path) -> List[Finding]:
+def scan_file(path) -> list[Finding]:
     """Scan the file at ``path``; a missing/unreadable file yields ``[]``."""
     p = Path(path)
     try:

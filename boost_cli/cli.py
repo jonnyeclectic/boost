@@ -11,7 +11,6 @@ import difflib
 import importlib
 import sys
 import time
-from typing import List
 
 from . import PRODUCT, TAGLINE, __version__
 from .core import logs, nethttp
@@ -197,7 +196,7 @@ def _unknown(name: str) -> int:
     return 2
 
 
-def _complete_candidates(argv: List[str]) -> int:
+def _complete_candidates(argv: list[str]) -> int:
     """`boost __complete <words…>` — one candidate per line, for a shell.
 
     Runs on every TAB, so it never fails loudly: core.complete swallows its own
@@ -212,7 +211,7 @@ def _complete_candidates(argv: List[str]) -> int:
 _PLUMBING = {"__complete": _complete_candidates}
 
 
-def _dispatch(name: str, argv: List[str], soft: bool = False) -> int:
+def _dispatch(name: str, argv: list[str], soft: bool = False) -> int:
     _group, module, _summary = _BY_NAME[name]
     mod = importlib.import_module("boost_cli.commands.%s" % module)
     func = getattr(mod, "cmd_%s" % name.replace("-", "_"), None)
@@ -225,7 +224,7 @@ def _dispatch(name: str, argv: List[str], soft: bool = False) -> int:
     return int(rc or 0)
 
 
-def _extract_globals(argv: List[str]) -> tuple[dict, List[str]]:
+def _extract_globals(argv: list[str]) -> tuple[dict, list[str]]:
     """Peel leading global flags (`boost --debug install …`) off argv.
 
     Only flags *before* the command name are treated as global, so a
@@ -239,7 +238,7 @@ def _extract_globals(argv: List[str]) -> tuple[dict, List[str]]:
     return opts, argv[i:]
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     out.harden_console_encoding()
     # Belt-and-suspenders fork safety: a host may fork() into `boost mcp

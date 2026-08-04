@@ -28,7 +28,6 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
@@ -40,9 +39,9 @@ GOLDEN = ROOT / "evals" / "golden_set.json"
 VERSION = 1
 
 # (id, query, {skill: grade}, note)
-Query = Tuple[str, str, Dict[str, int], str]
+Query = tuple[str, str, dict[str, int], str]
 
-QUERIES: Tuple[Query, ...] = (
+QUERIES: tuple[Query, ...] = (
     # ---- testing ----------------------------------------------------------
     ("q01", "my tests pass locally but fail randomly in CI",
      {"flaky-test-triage": 3, "integration-test-harness": 1,
@@ -184,12 +183,12 @@ QUERIES: Tuple[Query, ...] = (
 
 # --------------------------------------------------------------- validation
 
-def validate(queries: Tuple[Query, ...], corpus_ids: List[str]) -> List[str]:
+def validate(queries: tuple[Query, ...], corpus_ids: list[str]) -> list[str]:
     """Return a list of problems; empty means the set is well-formed."""
-    problems: List[str] = []
+    problems: list[str] = []
     known = set(corpus_ids)
-    seen_ids: Dict[str, str] = {}
-    seen_text: Dict[str, str] = {}
+    seen_ids: dict[str, str] = {}
+    seen_text: dict[str, str] = {}
     for qid, text, labels, note in queries:
         if qid in seen_ids:
             problems.append("%s: duplicate query id" % qid)
@@ -217,7 +216,7 @@ def validate(queries: Tuple[Query, ...], corpus_ids: List[str]) -> List[str]:
     return problems
 
 
-def build(queries: Tuple[Query, ...] = QUERIES) -> dict:
+def build(queries: tuple[Query, ...] = QUERIES) -> dict:
     corpus_ids = make_corpus.skill_names()
     problems = validate(queries, corpus_ids)
     if problems:
@@ -241,7 +240,7 @@ def render(payload: dict) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check", action="store_true",

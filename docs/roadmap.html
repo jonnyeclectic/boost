@@ -125,7 +125,7 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>5</b><span>Planned</span></div>
+      <div class="stat"><b>4</b><span>Planned</span></div>
       <div class="stat"><b>218</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
@@ -617,42 +617,6 @@ message, so routing it through the helper would change user-facing errors.</p></
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-        </div>
-      </article>
-
-      <article class="cap rcard" id="pep585-604-modernization-sweep">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
-        <h3>the <code>typing.List</code> → <code>list</code> sweep the floor now allows</h3>
-        <p>Three ruff rules sit in <code>pyproject.toml</code>'s ignore list: <code>UP006</code>
-(<code>List[x]</code> → <code>list[x]</code>), <code>UP007</code>
-(<code>Union[x, y]</code> → <code>x | y</code>), <code>UP035</code> (deprecated
-<code>typing</code> imports) and <code>UP045</code> (<code>Optional[x]</code> → <code>x | None</code>).
-
-<b>The reason they were ignored is gone.</b> It used to be a correctness argument, not a taste one:
-60 of boost's 63 modules carry <code>from __future__ import annotations</code>, which <i>defers</i>
-annotation evaluation but does not make the syntax legal — the moment anything actually evaluates
-one (<code>typing.get_type_hints</code>, a dataclass, a plain <code>eval</code>), a PEP 604 union
-was a <code>TypeError</code> on 3.9. ruff agreed, classifying all the fixes as <b>unsafe</b> at
-<code>target-version = "py39"</code>. At <code>py312</code> it classifies them as <b>safe</b>.
-
-<b>Why it is still deferred.</b> Purely diff size. The sweep rewrites annotations across roughly 60
-modules, which obliterates <code>git blame</code> on almost every file and conflicts with every
-branch in flight — the identical objection <code>UP031</code> (printf formatting) carries a few
-lines below in the same ignore block, and the reason the original note said to do it "as one
-deliberate sweep". Riding it in on the floor bump would have made a mechanical config change
-unreviewable.
-
-<b>What doing it looks like.</b> <code>ruff check --select UP006,UP007,UP035,UP045 --fix</code>,
-then delete the four entries and their comment from the ignore list. It is one command and one
-review pass, and it should land when no long-running branch is mid-flight. Worth checking first
-whether any module still needs the <code>from __future__ import annotations</code> import
-afterwards — at a 3.12 floor most of them do not, but removing those is a second, separable step and
-should not be bundled in.</p>
-        <div class="meta">
-          <span class="m">Complexity <b>M</b></span>
-          <span class="m">Impact <b>Low</b></span>
-          <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">unblocked by the 3.12 floor; deferred only because the diff touches ~60 modules</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -3027,6 +2991,43 @@ no judgement in it: the 18 safe <code>UP017</code> fixes (<code>timezone.utc</co
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">the floor was blocking a CVE fix and a dependency major at once</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="pep585-604-modernization-sweep">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Tech-debt</span></div>
+        <h3>the <code>typing.List</code> → <code>list</code> sweep the floor now allows</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p>Three ruff rules sit in <code>pyproject.toml</code>'s ignore list: <code>UP006</code>
+(<code>List[x]</code> → <code>list[x]</code>), <code>UP007</code>
+(<code>Union[x, y]</code> → <code>x | y</code>), <code>UP035</code> (deprecated
+<code>typing</code> imports) and <code>UP045</code> (<code>Optional[x]</code> → <code>x | None</code>).
+
+<b>The reason they were ignored is gone.</b> It used to be a correctness argument, not a taste one:
+60 of boost's 63 modules carry <code>from __future__ import annotations</code>, which <i>defers</i>
+annotation evaluation but does not make the syntax legal — the moment anything actually evaluates
+one (<code>typing.get_type_hints</code>, a dataclass, a plain <code>eval</code>), a PEP 604 union
+was a <code>TypeError</code> on 3.9. ruff agreed, classifying all the fixes as <b>unsafe</b> at
+<code>target-version = "py39"</code>. At <code>py312</code> it classifies them as <b>safe</b>.
+
+<b>Why it is still deferred.</b> Purely diff size. The sweep rewrites annotations across roughly 60
+modules, which obliterates <code>git blame</code> on almost every file and conflicts with every
+branch in flight — the identical objection <code>UP031</code> (printf formatting) carries a few
+lines below in the same ignore block, and the reason the original note said to do it "as one
+deliberate sweep". Riding it in on the floor bump would have made a mechanical config change
+unreviewable.
+
+<b>What doing it looks like.</b> <code>ruff check --select UP006,UP007,UP035,UP045 --fix</code>,
+then delete the four entries and their comment from the ignore list. It is one command and one
+review pass, and it should land when no long-running branch is mid-flight. Worth checking first
+whether any module still needs the <code>from __future__ import annotations</code> import
+afterwards — at a 3.12 floor most of them do not, but removing those is a second, separable step and
+should not be bundled in.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★</b></span>
+          <span class="m">unblocked by the 3.12 floor; deferred only because the diff touches ~60 modules</span>
         </div>
       </article>
 

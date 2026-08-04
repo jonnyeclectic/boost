@@ -14,10 +14,9 @@ Supports the subset actually used by skill files:
 from __future__ import annotations
 
 from contextlib import suppress
-from typing import Tuple
 
 
-def split(text: str) -> Tuple[str, str]:
+def split(text: str) -> tuple[str, str]:
     """Return (frontmatter_block, body). Frontmatter block may be ""."""
     if not text.startswith("---"):
         return "", text
@@ -151,7 +150,7 @@ def parse_block(block: str) -> dict:
     return meta
 
 
-def parse(text: str) -> Tuple[dict, str]:
+def parse(text: str) -> tuple[dict, str]:
     """Parse a SKILL.md's text -> (frontmatter dict, markdown body)."""
     block, body = split(text)
     return (parse_block(block) if block else {}), body

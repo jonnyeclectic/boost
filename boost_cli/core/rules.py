@@ -15,7 +15,6 @@ the filesystem writes and the lock record so uninstall can reverse them.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Tuple
 
 from ..errors import BoostError
 from . import util
@@ -54,13 +53,13 @@ MODE_CLAUDE = "claude"
 MODE_FILE = "file"
 
 
-def markers(name: str) -> Tuple[str, str]:
+def markers(name: str) -> tuple[str, str]:
     """The (start, end) CLAUDE.md marker comments for rule ``name``."""
     return BLOCK_START % name, BLOCK_END % name
 
 
 def rule_target(agent: str, skills_dir: Path, name: str,
-                base: Optional[Path] = None) -> Tuple[str, Path]:
+                base: Path | None = None) -> tuple[str, Path]:
     """Where rule ``name`` materializes for ``agent``.
 
     Returns ``(mode, path)``: ``MODE_CLAUDE`` writes/merges the agent's context
@@ -131,7 +130,7 @@ def merge_block(text: str, name: str, body: str) -> str:
     return block + "\n"
 
 
-def read_block(text: str, name: str) -> Optional[str]:
+def read_block(text: str, name: str) -> str | None:
     """Rule ``name``'s managed block body from ``text``, or None if absent.
 
     The inverse of `merge_block`, and the reason it exists is that an update

@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
 
 from ..errors import BoostError
 from . import minisign, paths
@@ -44,9 +43,9 @@ UNSIGNED = "unsigned"        # no signature file at all
 class Result:
     """Outcome of verifying one tap clone."""
     status: str
-    key_name: Optional[str] = None
-    fingerprint: Optional[str] = None   # public 8-byte key id, hex — not secret
-    trusted_comment: Optional[str] = None
+    key_name: str | None = None
+    fingerprint: str | None = None   # public 8-byte key id, hex — not secret
+    trusted_comment: str | None = None
     detail: str = ""
 
     @property
@@ -57,7 +56,7 @@ class Result:
 
 # ── trusted-key store ────────────────────────────────────────────────────
 
-def trusted_keys() -> List[dict]:
+def trusted_keys() -> list[dict]:
     """Trusted keys from the store: ``[{name, key_id, key}]``.
 
     A missing or unparseable store, or a non-list payload, reads as empty.
@@ -74,7 +73,7 @@ def trusted_keys() -> List[dict]:
     return [k for k in data if isinstance(k, dict) and k.get("name") and k.get("key")]
 
 
-def _save(keys: List[dict]) -> None:
+def _save(keys: list[dict]) -> None:
     paths.ensure_dirs()
     paths.trusted_keys_path().write_text(
         json.dumps(keys, indent=2) + "\n", encoding="utf-8")
@@ -116,7 +115,7 @@ def remove_trusted_key(name: str) -> bool:
     return True
 
 
-def _public_keys() -> List[tuple]:
+def _public_keys() -> list[tuple]:
     """Trusted keys as ``(name, minisign.PublicKey)`` pairs, skipping any junk."""
     import base64
     out = []
