@@ -2,7 +2,8 @@
 id: scripts-under-the-lint-gate
 board: code
 section: planned
-status: planned
+status: inflight
+owner: loop/scripts-lint
 category: Tech-debt
 complexity: M
 impact: Med
