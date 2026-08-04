@@ -33,6 +33,9 @@
   .lead { max-width: 760px; margin: 0 auto; text-align: center; color: var(--text-2);
           font-size: 16.5px; }
   .prose { max-width: 720px; margin: 28px auto 0; color: var(--text-2); font-size: 15.5px; }
+  /* A long unbreakable <code> token (a path, a dotted name) must wrap rather
+     than push the body past the viewport — the sweep measures at 375px. */
+  .prose code, .snip p code, ul.ticks code, .callout code { overflow-wrap: anywhere; }
   .prose p { margin-top: 14px; }
   .prose b { color: var(--text); }
   .prose code, .lead code { font-family: var(--mono); font-size: .86em; color: var(--sky);
@@ -477,8 +480,9 @@ builder.<span class="fn">add_edge</span>(<span class="s">"skills"</span>, <span 
         <p>Offline, boost's required gate already floors recall@k / hit@1 / MRR / nDCG@k over a
           golden query set on every merge (the <a href="eval.html">Evaluation page</a> is that
           story). To run <b>online</b> evals against the <em>same</em> ground truth, publish the
-          golden set as a LangSmith dataset with
-          <code>integrations/langchain/scripts/publish_golden_dataset.py</code> — key-gated,
+          golden set as a LangSmith dataset with the
+          <code>publish_golden_dataset.py</code> script (under
+          <code>integrations/langchain/scripts/</code>) — key-gated,
           opt-in, run from a boost checkout. Re-running replaces examples wholesale, so the
           dataset always mirrors <code>tests/eval/golden.jsonl</code> rather than accreting. The
           point is one set of judgments in both places: an online regression and an offline
