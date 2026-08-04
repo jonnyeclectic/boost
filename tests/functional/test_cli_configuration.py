@@ -1011,6 +1011,12 @@ class TestMcp:
         # the flattering-but-stale claim the cost test below exists to prevent.
         # State the mechanism; leave the arithmetic to the eval gate.
         assert "95%" not in specs["boost_search"]
+
+        # The description still says the rerank happens ("ranks the matches
+        # with an LLM"), so the REPLY has to say when it did not — otherwise
+        # the degraded order is indistinguishable from the promised one. See
+        # TestSearchNamesItsRanker below.
+        assert "llm" in specs["boost_search"]
         # Stating the benefit must never quietly drop the cost with it.
         # A description whose job is to make a tool worth reaching for is the
         # one place a flattering lie discredits everything around it.
@@ -1469,3 +1475,69 @@ class TestSelfUpdate:
         ev = journal.events(action="self-update")[0]
         assert ev["subject"] == "9.9.9"          # git-derived, not the stale const
         assert ev["previous"] == __version__
+
+
+class TestSearchNamesItsRanker:
+    """The reply has to say which ranking produced it.
+
+    `boost_search`'s description tells the calling agent an LLM reranks every
+    match, "which is what makes the top result worth acting on rather than
+    skimming ten". With no AI configured that rerank silently degrades to the
+    retrieval order and the reply was byte-for-byte the shape of a reranked
+    one — same ten lines, same confidence. `rag.rerank` already computes the
+    only signal that distinguishes them; the handler discarded it.
+    """
+
+    def test_a_degraded_search_says_the_rerank_did_not_run(self, monkeypatch):
+        from boost_cli.commands import configuration
+        from boost_cli.core import rag
+        monkeypatch.setattr(
+            rag, "ensure", lambda *a, **k: True)
+        monkeypatch.setattr(rag, "search", lambda *a, **k: (
+            [{"entry": {"name": "x", "description": "d", "tap": "t"}}],
+            "BM25 full-content"))
+        text, _ = configuration._tool_search({"query": "anything"})
+        assert "did NOT run" in text
+        assert "BM25 full-content" in text
+        assert "ANTHROPIC_API_KEY" in text
+
+    def test_a_reranked_search_says_so_without_the_warning(self, monkeypatch):
+        from boost_cli.commands import configuration
+        from boost_cli.core import rag
+        monkeypatch.setattr(rag, "ensure", lambda *a, **k: True)
+        monkeypatch.setattr(rag, "search", lambda *a, **k: (
+            [{"entry": {"name": "x", "description": "d", "tap": "t"}}],
+            rag.LLM_RANKER))
+        text, _ = configuration._tool_search({"query": "anything"})
+        assert "(ranked by %s)" % rag.LLM_RANKER in text
+        assert "did NOT run" not in text
+
+    def test_rerank_returns_that_label_only_when_the_llm_answered(
+            self, monkeypatch):
+        """The producer and the consumer of the label must agree.
+
+        `rag.LLM_RANKER` exists so this is impossible to drift rather than
+        merely unlikely — the note in the MCP handler keys on it, and every
+        other value means "the rerank did not happen".
+        """
+        from boost_cli.core import ai, rag
+        hits = [{"entry": {"name": "b", "kind": "skill", "description": "d"},
+                 "snippet": ""},
+                {"entry": {"name": "a", "kind": "skill", "description": "d"},
+                 "snippet": ""}]
+
+        monkeypatch.setattr(ai, "available", lambda: False)
+        assert rag.rerank("q", hits, engine="BM25 full-content")[1] == \
+            "BM25 full-content"
+
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **k: '["a", "b"]')
+        order, label = rag.rerank("q", hits, engine="BM25 full-content")
+        assert label == rag.LLM_RANKER
+        assert [h["entry"]["name"] for h in order] == ["a", "b"]
+
+        # The model replied, but not with an order — the label must fall back
+        # with the ordering, or it claims a rerank that did not take effect.
+        monkeypatch.setattr(ai, "ask", lambda *a, **k: "sorry, I cannot")
+        assert rag.rerank("q", hits, engine="BM25 full-content")[1] == \
+            "BM25 full-content"

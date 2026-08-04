@@ -50,6 +50,22 @@ name: lighthouse
 # compresses. Nothing else about the harness changed — not even HTTP/1.1
 # keep-alive, deliberately, so the score move has one cause.
 #
+# MEASURED, AND THE FLOOR IS 0.90 AGAIN. main's first artifact under the fixed
+# harness scores roadmap.html 0.98 / 0.97 / 0.99, against 0.79 three times
+# before it. FCP went 3,638 -> 1,719 ms and LCP 3,858 -> 1,867; the compression
+# audit went 0 -> 1, and transferSize is now 174,808 against a resourceSize of
+# 570,292. The 1.9 s FCP gain is the 1,950 ms Lighthouse itself had estimated.
+#
+# 0.90 follows the same "measure, then floor" rule as everything above: it sits
+# below every median run observed, with ~0.08 of margin on the audited board,
+# while being a real gate again rather than the 0.80 that a broken harness had
+# forced. It is deliberately NOT 0.95 — index.html still produces the occasional
+# 0.86 single sample under runner load, which `median-run` absorbs but which a
+# tight floor would eventually catch on a bad day.
+#
+# The page was never the slow part, so "raising it back is gated on making
+# roadmap.html genuinely faster" was gated on the wrong thing.
+#
 # The two hand-authored, highest-traffic pages are audited: the landing page and
 # the code roadmap. Served over a throwaway localhost static server (no network),
 # three runs each so a noisy single sample can't redden a PR.
