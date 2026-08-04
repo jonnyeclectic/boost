@@ -2,7 +2,8 @@
 id: langchain-integration-explainer-page
 board: code
 section: docsite
-status: planned
+status: inflight
+owner: loop/langchain-docs
 category: Docs · Interop
 complexity: M
 impact: Med
