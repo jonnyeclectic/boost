@@ -721,6 +721,13 @@ def retrieve(query: str, k: int = 60, kind: Optional[str] = None,
     return dedupe_by_content(hits, k)
 
 
+#: The label `rerank` returns when the LLM pass actually ran. Every other value
+#: is a retrieval engine's own name, i.e. "the rerank did not happen". Callers
+#: that quote what the rerank buys have to be able to tell those apart without
+#: string-matching a literal that could drift.
+LLM_RANKER = "Claude relevance"
+
+
 def rerank(query: str, hits: List[Hit], limit: int = 10,
            engine: str = "BM25 full-content") -> Tuple[List[Hit], str]:
     """Reorder the shortlist with the LLM bridge; degrade to ``engine`` order.
@@ -756,7 +763,7 @@ def rerank(query: str, hits: List[Hit], limit: int = 10,
     picked = [by_name[str(n)] for n in order if str(n) in by_name]
     rest = [h for h in hits if h["entry"]["name"]
             not in {str(n) for n in order}]
-    return (picked + rest)[:limit], "Claude relevance"
+    return (picked + rest)[:limit], LLM_RANKER
 
 
 # The damping constant from the original reciprocal-rank-fusion paper. It is
