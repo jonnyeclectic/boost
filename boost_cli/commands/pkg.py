@@ -275,6 +275,17 @@ def _boostfile_text(skills: Dict[str, dict], via: str = "boost bundle dump") -> 
     return "\n".join(lines) + "\n"
 
 
+def _others_installed() -> str:
+    """"N rule(s) and N workflow(s)" across the non-skill lock sections — what
+    a skills-only artifact (Boostfile, export archive, snapshot) leaves out —
+    or "" when there is nothing to leave out."""
+    parts = [_plural(len(section), kind)
+             for kind, section in (("rule", lockfile.installed_rules()),
+                                   ("workflow", lockfile.installed_workflows()))
+             if section]
+    return " and ".join(parts)
+
+
 def _rel_list(meta: dict, key: str) -> List[str]:
     """A skill's `requires:`/`conflicts:` frontmatter as a clean name list."""
     val = meta.get(key)
@@ -301,7 +312,10 @@ def _expand_dependencies(entries: List[dict]) -> tuple[List[dict], resolve.Resol
     already installed), and the :class:`resolve.Resolution` carrying what was
     added, any advisory conflicts, and unresolved (dangling) requirements.
     """
-    installed = frozenset(lockfile.installed())
+    # All three lock sections, not just skills: a rule or workflow already
+    # installed under a required name must not be re-added to the plan.
+    installed = frozenset(n for section in lockfile.all_installed().values()
+                          for n in section)
     res = resolve.resolve(
         [e["name"] for e in entries],
         lambda n: _skill_relations(n, "requires"),
@@ -421,7 +435,9 @@ def cmd_install(argv: List[str]) -> int:
                 k = e["kind"]
                 seen = (lockfile.get_rule if k == "rule"
                         else lockfile.get_workflow)(e["name"])
-                verb = "reinstall" if seen else "install"
+                # Same verb the real run's summary uses ("Upgraded 1 rule");
+                # the skill preview below already says "upgrade".
+                verb = "upgrade" if seen else "install"
                 where = "into this repo" if args.scope == "project" else "user config"
                 out.info("would %s %s %s v%s from %s (%s)" % (verb, k, e["name"],
                                                               e["version"], e["tap"],
@@ -899,25 +915,63 @@ def cmd_update(argv: List[str]) -> int:
 
 def cmd_reinstall(argv: List[str]) -> int:
     ap = cliparse.parser(prog="boost reinstall",
-                                 description="Reinstall a skill or all skills (force)")
+                                 description="Reinstall an installed skill, "
+                                             "rule or workflow (force)")
     ap.add_argument("names", nargs="*", metavar="NAME")
     ap.add_argument("--all", action="store_true",
-                    help="reinstall every installed skill")
+                    help="reinstall every installed skill, rule and workflow")
     args = ap.parse_args(argv)
-    names = sorted(lockfile.installed()) if args.all else args.names
-    if not names:
-        raise BoostError("nothing to reinstall",
-                        hint="no skills installed yet — see `boost list`"
-                        if args.all else "name a skill or pass --all")
     done, failed = 0, 0
-    for name in names:
-        lk = lockfile.get_skill(name)
-        if not lk:
-            if len(names) == 1:
-                raise BoostError("%s is not installed" % name,
-                                hint="see what is with `boost list`")
-            out.warn("%s is not installed — skipped" % name)
-            failed += 1
+    done_kinds: set[str] = set()
+    items: List[tuple] = []
+    if args.all:
+        items = [(kind, name, entry)
+                 for kind, section in lockfile.all_installed().items()
+                 for name, entry in sorted(section.items())]
+        if not items:
+            raise BoostError("nothing to reinstall",
+                            hint="nothing installed yet — see `boost list`")
+    elif not args.names:
+        raise BoostError("nothing to reinstall",
+                        hint="name a skill or pass --all")
+    else:
+        for name in args.names:
+            found = lockfile.find_any(name)
+            if found is None:
+                if len(args.names) == 1:
+                    raise BoostError("%s is not installed" % name,
+                                    hint="see what is with `boost list`")
+                out.warn("%s is not installed — skipped" % name)
+                failed += 1
+                continue
+            items.append((found[0], name, found[1]))
+    for kind, name, lk in items:
+        if kind != "skill":
+            # Rules/workflows always come from a tap (`boost import` is
+            # skill-only), so resolve the catalog entry the way
+            # _update_materialized does and re-materialize where it was
+            # installed (user config vs a specific repo). store.install with
+            # force also clears a quarantine flag — the reinstall puts the
+            # content back, so the lock must say so.
+            matches = [e for e in catalog.find(name)
+                       if e["tap"] == lk.get("tap")
+                       and e.get("kind", "skill") == kind]
+            if not matches:
+                out.warn("%s %s not found in tap %s — skipped (try `boost update`)"
+                         % (kind, name, lk.get("tap")))
+                failed += 1
+                continue
+            try:
+                store.install(matches[0], force=True,
+                              scope=lk.get("scope", "user"), base=lk.get("base"))
+            except BoostError as err:
+                out.warn("%s: %s" % (name, err.message))
+                failed += 1
+                continue
+            out.ok("reinstalled %s %s v%s"
+                   % (kind, name, matches[0].get("version", "0.0.0")))
+            done += 1
+            done_kinds.add(kind)
             continue
         if lk.get("tap") == "local":
             src = Path(str(lk.get("source_dir") or ""))
@@ -935,6 +989,7 @@ def cmd_reinstall(argv: List[str]) -> int:
                     continue
                 out.ok("reinstalled %s (local, from %s)" % (name, _tilde(src)))
                 done += 1
+                done_kinds.add("skill")
             else:
                 out.warn("%s: local source %s is gone — skipped" % (name, _tilde(src)))
                 failed += 1
@@ -953,7 +1008,11 @@ def cmd_reinstall(argv: List[str]) -> int:
             continue
         out.ok("reinstalled %s v%s" % (name, matches[0].get("version", "0.0.0")))
         done += 1
-    out.info("Reinstalled %s" % _plural(done, "skill"))
+        done_kinds.add("skill")
+    # Name the kind when only one was touched; a mixed run says "items".
+    noun = next(iter(done_kinds)) if len(done_kinds) == 1 else (
+        "item" if done_kinds else "skill")
+    out.info("Reinstalled %s" % _plural(done, noun))
     return 1 if failed else 0
 
 
@@ -974,8 +1033,14 @@ def cmd_bundle(argv: List[str]) -> int:
 
 def _bundle_dump(file: Optional[str]) -> int:
     text = _boostfile_text(lockfile.installed())
+    others = _others_installed()
     if not file or file == "-":
         print(text, end="")
+        if others:
+            # stdout IS the Boostfile here; the omission notice goes to stderr
+            # so `boost bundle dump > Boostfile` stays a parseable artifact.
+            print("  ! %s not captured — Boostfiles carry skills only" % others,
+                  file=sys.stderr)
         return 0
     dest = paths.expand(file)
     try:
@@ -987,6 +1052,8 @@ def _bundle_dump(file: Optional[str]) -> int:
     n_skills = sum(1 for ln in text.splitlines() if ln.startswith("skill "))
     out.ok("wrote %s (%s, %s)" % (_tilde(dest), _plural(n_taps, "tap"),
                                   _plural(n_skills, "skill")))
+    if others:
+        out.warn("%s not captured — Boostfiles carry skills only" % others)
     return 0
 
 
@@ -1008,7 +1075,11 @@ def _bundle_install(file: Optional[str]) -> int:
             raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e)) from e
     taps_added = installed_n = present = failed = 0
     have_taps = {t.name for t in registry.list_taps()}
-    have_skills = set(lockfile.installed())
+    # name -> kind across every lock section, so a `skill` line naming an
+    # already-installed rule/workflow is counted present, not re-installed.
+    have_installed = {n: kind
+                      for kind, section in lockfile.all_installed().items()
+                      for n in section}
     for lineno, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -1031,7 +1102,11 @@ def _bundle_install(file: Optional[str]) -> int:
         elif parts[0] == "skill" and len(parts) >= 2:
             tapq, _, rest = parts[1].rpartition(":")
             sname, _, sver = rest.partition("@")
-            if sname in have_skills:
+            kind_here = have_installed.get(sname)
+            if kind_here is not None:
+                if kind_here != "skill":
+                    out.info("%s is already installed as a %s — skipped"
+                             % (sname, kind_here))
                 present += 1
                 continue
             matches = catalog.find(sname, tap=tapq or None)
@@ -1060,7 +1135,7 @@ def _bundle_install(file: Optional[str]) -> int:
                 continue
             out.ok("installed %s v%s (%s)" % (sname, entry.get("version"),
                                               entry["tap"]))
-            have_skills.add(sname)
+            have_installed[sname] = entry.get("kind", "skill")
             installed_n += 1
         else:
             out.warn("line %d: unrecognised: %s" % (lineno, line))
@@ -1258,6 +1333,9 @@ def _snapshot_save(label: Optional[str]) -> int:
     journal.log("snapshot", snap_id, label=label)
     out.ok("saved %s (%s, %s)" % (snap_id, _plural(skill_count, "skill"),
                                   util.human_size(tar_path.stat().st_size)))
+    others = _others_installed()
+    if others:
+        out.warn("%s not captured — snapshots cover the skill store only" % others)
     out.info("restore with `boost snapshot restore %s`" % snap_id)
     return 0
 
@@ -1339,6 +1417,9 @@ def _snapshot_restore(snap_id: str) -> int:
     journal.log("snapshot-restore", snap_id)
     out.ok("restored %s (%s)" % (snap_id,
                                  _plural(len(lockfile.installed()), "skill")))
+    others = _others_installed()
+    if others:
+        out.warn("%s untouched — snapshots cover the skill store only" % others)
     return 0
 
 
@@ -1357,11 +1438,23 @@ def cmd_export(argv: List[str]) -> int:
     installed = lockfile.installed()
     names = args.names or sorted(installed)
     if not names:
+        others = _others_installed()
         raise BoostError("no skills installed to export",
-                        hint="install some with `boost install`")
+                        hint=("%s installed, but export packages skills only"
+                              % others) if others
+                             else "install some with `boost install`")
     chosen = {}
     for name in names:
         if name not in installed:
+            found = lockfile.find_any(name)
+            if found is not None:
+                # Same truth _iter_installed tells: it exists, as another kind
+                # — a rule/workflow has no store directory to package.
+                raise BoostError("%s is a %s — `boost export` applies to skills"
+                                % (name, found[0]),
+                                hint="rules and workflows materialize into "
+                                     "agent config files; reinstall them "
+                                     "from their tap")
             raise BoostError("%s is not installed" % name,
                             hint="see what is with `boost list`")
         if not store.skill_store_dir(name).is_dir():
@@ -1397,6 +1490,9 @@ def cmd_export(argv: List[str]) -> int:
     out.ok("exported %s → %s (%s)" % (_plural(len(chosen), "skill"),
                                       _tilde(dest.resolve()),
                                       util.human_size(dest.stat().st_size)))
+    others = _others_installed()
+    if others:
+        out.warn("%s not included — export packages skills only" % others)
     return 0
 
 

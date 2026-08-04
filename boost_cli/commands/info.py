@@ -33,6 +33,7 @@ from ..core import (
     paths,
     projectlock,
     registry,
+    rules,
     scopes,
     store,
     util,
@@ -88,6 +89,74 @@ def _resolve_skill_md(name: str):
             return p, lock, None
     entry = catalog.resolve_one(name)
     return registry.get(entry["tap"]).path / entry["skill_md"], lock, entry
+
+
+def _materialized_text(name: str, kind: str, entry: dict):
+    """The content an installed rule/workflow actually serves, or None.
+
+    The honest source is the materialized artifact the lock records — that is
+    what the agent loads — not the tap copy, which may have moved on since. A
+    claude-mode materialization is a managed block inside a shared context
+    file, so only the block counts, never the whole file. Mirrors
+    ``integrity.enforce`` for the kinds it never covered: "modified" blocks
+    only with enforcement switched on, UNLOCKED never blocks. Quarantine
+    always errors — the artifacts were removed on purpose, and silently
+    serving the tap copy would resurrect what the user suspended.
+    """
+    if entry.get("quarantined"):
+        raise BoostError(
+            "%s %s is quarantined — its materialized content was removed"
+            % (kind, name),
+            hint="release it with `boost quarantine --release %s`" % name)
+    if integrity.enforcement_enabled():
+        st = integrity.materialized_status(name, entry)
+        if st == integrity.STATUS_MODIFIED:
+            raise BoostError(
+                "%s %s has been modified since install — its materialized "
+                "content no longer matches the lock file" % (kind, name),
+                hint="inspect with `boost verify %s`, then `boost reinstall "
+                     "%s` to restore the locked copy" % (name, name))
+        if st == integrity.STATUS_MISSING:
+            raise BoostError(
+                "%s %s is in the lock file but its materialized artifacts "
+                "are gone" % (kind, name),
+                hint="`boost sync` to restore them, or `boost reinstall %s`"
+                     % name)
+    for m in entry.get("materializations") or []:
+        try:
+            text = Path(m.get("path", "")).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if m.get("mode") == rules.MODE_CLAUDE:
+            block = rules.read_block(text, name)
+            if block is not None:
+                return block
+            continue
+        return text
+    return None
+
+
+def _resolve_text(name: str):
+    """Content for a named item of any kind -> (text, kind, lock, cat).
+
+    Skills keep :func:`_resolve_skill_md`'s contract (store copy,
+    digest-enforced, tap fallback). A rule or workflow serves its
+    materialized artifact, falling back to the tap source file when no
+    materialization is readable.
+    """
+    qualifier, bare = catalog.split_name(name)
+    found = lockfile.find_any(bare)
+    if found is None or found[0] == "skill":
+        path, lock, cat = _resolve_skill_md(name)
+        return _read(path), "skill", lock, cat
+    kind, entry = found
+    lock = _for_tap(entry, qualifier)
+    if lock is not None:
+        text = _materialized_text(bare, kind, lock)
+        if text is not None:
+            return text, kind, lock, None
+    cat = catalog.resolve_one(name)
+    return _read(registry.get(cat["tap"]).path / cat["skill_md"]), kind, lock, cat
 
 
 def _as_list(v) -> list:
@@ -232,6 +301,51 @@ def cmd_list(argv):
     return 0
 
 
+def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
+    """The identity card for an installed rule/workflow — the lock facts.
+
+    No store dir, quality score or file counts here: those describe a skill's
+    directory, which these kinds do not have. What matters is what the lock
+    records — where it came from and which agent files carry it.
+    """
+    if as_json:
+        print(json.dumps({"name": name, "kind": kind, "installed": entry},
+                         indent=2))
+        return 0
+    out.heading(name)
+    badges = [out.badge("installed %s" % kind, "green")]
+    if entry.get("pinned"):
+        badges.append(out.badge("pinned", "yellow"))
+    if entry.get("quarantined"):
+        badges.append(out.badge("quarantined", "pink"))
+    if entry.get("tap"):
+        badges.append(out.badge(str(entry["tap"]), "violet"))
+    out.info(" ".join(badges))
+    out.kv("kind", kind)
+    out.kv("version", str(entry.get("version", "?")))
+    out.kv("tap", entry.get("tap", "?"))
+    if kind == "workflow" and entry.get("slot"):
+        out.kv("slot", str(entry["slot"]))
+    if entry.get("scope"):
+        out.kv("scope", str(entry["scope"]))
+    if entry.get("source_file"):
+        out.kv("source", str(entry["source_file"]))
+    if entry.get("commit"):
+        out.kv("commit", str(entry["commit"])[:9])
+    if entry.get("sha256"):
+        out.kv("sha256", str(entry["sha256"])[:12])
+    ia, ua = entry.get("installed_at"), entry.get("updated_at")
+    if ia:
+        out.kv("installed", "%s (%s)" % (ia, util.rel_time(ia)))
+    if ua and ua != ia:
+        out.kv("updated", "%s (%s)" % (ua, util.rel_time(ua)))
+    agents = [m.get("agent", "?") for m in entry.get("materializations") or []]
+    out.kv("materialized", ", ".join(agents) or "(none)")
+    out.kv("pinned", "yes" if entry.get("pinned") else "no")
+    out.kv("quarantined", "yes" if entry.get("quarantined") else "no")
+    return 0
+
+
 def cmd_info(argv):
     ap = cliparse.parser(prog="boost info",
                                  description="Show detailed info about a skill")
@@ -246,6 +360,14 @@ def cmd_info(argv):
     # component). Everything below this line works from the bare name.
     qualifier, name = catalog.split_name(args.name)
     lock = _for_tap(lockfile.get_skill(name), qualifier)
+    if lock is None:
+        # An installed rule/workflow is installed — `boost list` shows it, so
+        # answering from the catalog (or "unknown") here would deny it exists.
+        found = lockfile.find_any(name)
+        if found is not None and found[0] != "skill":
+            kentry = _for_tap(found[1], qualifier)
+            if kentry is not None:
+                return _info_materialized(name, found[0], kentry, args.json)
     # A project-scoped skill is installed — just not at user scope. Without this
     # `boost info` would call it "not installed" while it sits in the repo, and
     # the install banner's own "next: boost info <name>" would lead nowhere.
@@ -387,8 +509,7 @@ def cmd_cat(argv):
     ap.add_argument("name")
     ap.add_argument("--raw", action="store_true", help="no styling even on a TTY")
     args = ap.parse_args(argv)
-    path, _lock, _cat = _resolve_skill_md(args.name)
-    text = _read(path)
+    text, _kind, _lock, _cat = _resolve_text(args.name)
     if args.raw or not sys.stdout.isatty():
         sys.stdout.write(text if text.endswith("\n") else text + "\n")
         return 0
@@ -411,6 +532,16 @@ def cmd_edit(argv):
     args = ap.parse_args(argv)
     lock = lockfile.get_skill(args.name)
     if not lock:
+        found = lockfile.find_any(args.name)
+        if found is not None:
+            # Editing opens a skill's store dir; a rule/workflow has none — it
+            # materializes into shared agent files (e.g. ~/.claude/CLAUDE.md).
+            raise BoostError(
+                "%s is a %s — boost edit applies to skills"
+                % (args.name, found[0]),
+                hint="a %s materializes into shared agent files, not a store "
+                     "dir you can open; read it with `boost cat %s`"
+                     % (found[0], args.name))
         raise BoostError("%s is not installed" % args.name,
                         hint="install it first, or `boost cat %s` to read the tap copy"
                         % args.name)
@@ -485,8 +616,8 @@ def cmd_preview(argv):
                                  description="Render a SKILL.md with rich formatting")
     ap.add_argument("name")
     args = ap.parse_args(argv)
-    path, lock, cat = _resolve_skill_md(args.name)
-    meta, body = frontmatter.parse(_read(path))
+    text, _kind, lock, cat = _resolve_text(args.name)
+    meta, body = frontmatter.parse(text)
     print(out.titlebar("%s · v%s · %s" % (meta.get("name") or args.name,
                                           meta.get("version") or "?",
                                           (lock or cat or {}).get("tap", "local"))))
@@ -523,8 +654,7 @@ def cmd_explain(argv):
                                  description="Explain what a skill does in plain English")
     ap.add_argument("name")
     args = ap.parse_args(argv)
-    path, _lock, _cat = _resolve_skill_md(args.name)
-    text = _read(path)
+    text, _kind, _lock, _cat = _resolve_text(args.name)
     if ai.available():
         reply = ai.ask(
             "Explain in plain English (4-6 sentences, no markdown) what this "
@@ -638,9 +768,13 @@ def cmd_log(argv):
     if args.diagnostics:
         return _show_diagnostics(args.limit)
     if args.name:
-        lock = lockfile.get_skill(args.name)
-        if lock:
-            tap_name, rel = lock.get("tap", "local"), lock.get("source_dir", ".")
+        found = lockfile.find_any(args.name)
+        if found:
+            # A skill records its source dir; rules/workflows record a source
+            # file — either is a path git can log for.
+            lock = found[1]
+            tap_name = lock.get("tap", "local")
+            rel = lock.get("source_dir") or lock.get("source_file") or "."
         else:
             entry = catalog.resolve_one(args.name)
             tap_name, rel = entry["tap"], entry["rel_dir"]
@@ -684,14 +818,16 @@ def cmd_home(argv):
     ap.add_argument("--print", dest="print_only", action="store_true",
                     help="print the URL without opening a browser")
     args = ap.parse_args(argv)
-    lock = lockfile.get_skill(args.name)
+    found = lockfile.find_any(args.name)
+    lock = found[1] if found else None
     try:
         entry = catalog.resolve_one(args.name)
         tap_name, rel = entry["tap"], entry["rel_dir"]
     except BoostError:
         if not lock:
             raise
-        tap_name, rel = lock.get("tap", "local"), lock.get("source_dir", ".")
+        tap_name = lock.get("tap", "local")
+        rel = lock.get("source_dir") or lock.get("source_file") or "."
     try:
         tap = registry.get(tap_name)
     except BoostError:
@@ -714,34 +850,38 @@ def cmd_deps(argv):
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
     inst = lockfile.installed()
+    # `requires:`/`conflicts:` name an installed item, not a kind — a
+    # requirement met by an installed rule or workflow is met, and denying it
+    # ("✗ not installed" while `boost list` shows it) was the section-blind lie.
+    have = {n for section in lockfile.all_installed().values() for n in section}
 
     if args.name:
-        path, _lock, _cat = _resolve_skill_md(args.name)
-        meta = frontmatter.parse(_read(path))[0]
+        text, _kind, _lock, _cat = _resolve_text(args.name)
+        meta = frontmatter.parse(text)[0]
         requires = _as_list(meta.get("requires"))
         conflicts = _as_list(meta.get("conflicts"))
-        problems = (any(r not in inst for r in requires)
-                    or any(c in inst for c in conflicts))
+        problems = (any(r not in have for r in requires)
+                    or any(c in have for c in conflicts))
         if args.json:
             print(json.dumps({
                 "name": args.name,
-                "requires": [{"name": r, "installed": r in inst,
+                "requires": [{"name": r, "installed": r in have,
                               "requires": _as_list((_skill_meta(r) or {}).get("requires"))}
                              for r in requires],
-                "conflicts": [{"name": c, "installed": c in inst} for c in conflicts],
+                "conflicts": [{"name": c, "installed": c in have} for c in conflicts],
             }, indent=2))
             return 1 if problems else 0
         out.info(out.c(args.name, out.BOLD))
         if not requires:
             out.info("  requires: " + out.role("(none)", "muted"))
         for r in requires:
-            out.info("  requires: %s %s" % (r, _mark(r in inst)))
+            out.info("  requires: %s %s" % (r, _mark(r in have)))
             for sub in _as_list((_skill_meta(r) or {}).get("requires")):
-                out.info("      ↳ %s %s" % (sub, _mark(sub in inst)))
+                out.info("      ↳ %s %s" % (sub, _mark(sub in have)))
         if not conflicts:
             out.info("  conflicts: " + out.role("(none)", "muted"))
         for c_name in conflicts:
-            state = (out.role("✗ installed (conflict!)", "danger") if c_name in inst
+            state = (out.role("✗ installed (conflict!)", "danger") if c_name in have
                      else out.role("not installed", "muted"))
             out.info("  conflicts: %s %s" % (c_name, state))
         return 1 if problems else 0
@@ -754,10 +894,10 @@ def cmd_deps(argv):
         unmet.extend(
             {"skill": name, "requires": r}
             for r in _as_list(meta.get("requires"))
-            if r not in inst
+            if r not in have
         )
         for c_name in _as_list(meta.get("conflicts")):
-            if c_name in inst:
+            if c_name in have:
                 key = tuple(sorted((name, c_name)))
                 if key not in seen:
                     seen.add(key)
@@ -822,6 +962,13 @@ def cmd_tag(argv):
                         hint="`boost tag NAME +tag -tag`, or `boost tag --list`")
     entry = lockfile.get_skill(args.name)
     if not entry:
+        found = lockfile.find_any(args.name)
+        if found is not None:
+            raise BoostError(
+                "%s is a %s — boost tag applies to skills"
+                % (args.name, found[0]),
+                hint="tags are a skill-only label; rules and workflows are "
+                     "governed by pin / quarantine / verify")
         raise BoostError("%s is not installed" % args.name,
                         hint="see what is with `boost list`")
     tags = list(entry.get("tags") or [])

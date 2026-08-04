@@ -26,6 +26,21 @@ def _member(cohort: str, percent: int) -> bool:
     return int(digest, 16) % 100 < percent
 
 
+def _seed_rule(name="house-style", tap="rule-tap"):
+    """A materialized rule in the lock, without a real tap behind it."""
+    from boost_cli.core import rules
+    cm = paths.home() / ".claude" / "CLAUDE.md"
+    cm.parent.mkdir(parents=True, exist_ok=True)
+    cm.write_text(rules.merge_block("", name, "Do the thing."), encoding="utf-8")
+    lockfile.set_rule(name, {
+        "kind": "rule", "version": "1.0.0", "tap": tap,
+        "installed_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "materializations": [
+            {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
+    return cm
+
+
 @pytest.fixture()
 def tick_clock(monkeypatch):
     """Monotonic fake now_iso() so each lock write snapshots separately."""
@@ -97,6 +112,17 @@ class TestCohort:
         assert "brainstorming already installed" in r.out
         assert "applied: 0 installed, 1 already present" in r.out
 
+    def test_apply_does_not_reinstall_an_installed_rule(self, boost, tapped):
+        # Membership checks the whole lock: a cohort item installed as a RULE
+        # used to fail the skills-section check and get re-installed per apply.
+        _seed_rule("house-style")
+        boost("cohort", "create", "pilot", "--skills", "house-style",
+             "--percent", "100")
+        r = boost("cohort", "apply", "pilot")
+        assert "house-style (rule) already installed" in r.out
+        assert "applied: 0 installed, 1 already present" in r.out
+        assert not (paths.store_dir() / "house-style").exists()
+
     def test_delete_declined_then_confirmed(self, boost, tapped, monkeypatch):
         boost("cohort", "create", "pilot", "--skills", "brainstorming")
         monkeypatch.delenv("BOOST_ASSUME_YES")
@@ -145,7 +171,8 @@ class TestProfile:
         assert "(in profile, not installed)" in r.out
         r = boost("profile", "diff", "daily", "--json")
         assert json.loads(r.out) == {"missing": ["tdd-workflow"],
-                                     "extras": [], "changed": []}
+                                     "extras": [], "changed": [],
+                                     "other_kind": {}}
 
         r = boost("profile", "use", "daily")
         assert "installed tdd-workflow → claude-code · windsurf · cursor" in r.out
@@ -184,7 +211,41 @@ class TestProfile:
         assert "~ brainstorming" in r.out and "(version differs)" in r.out
         r = boost("profile", "diff", "pin", "--json")
         assert json.loads(r.out) == {"missing": [], "extras": [],
-                                     "changed": ["brainstorming"]}
+                                     "changed": ["brainstorming"],
+                                     "other_kind": {}}
+
+    def test_save_notes_uncaptured_rules_and_workflows(self, boost, installed):
+        # Profiles carry skills only — with a rule and workflow installed the
+        # save must say so out loud, not silently drop them from the snapshot.
+        _seed_rule("house-style")
+        lockfile.set_workflow("ship-it", {
+            "kind": "workflow", "version": "1.0.0", "tap": "rule-tap",
+            "slot": "commands", "materializations": []})
+        r = boost("profile", "save", "daily")
+        assert "saved profile daily (1 skills)" in r.out
+        assert ("1 rule(s) and 1 workflow(s) not captured — profiles carry "
+                "skills only") in r.out
+
+    def test_diff_and_use_see_a_name_installed_as_a_rule(self, boost, installed):
+        # A profile can hold a name that is installed as a RULE today (saved
+        # before the item changed kind upstream). diff must not report it as a
+        # missing skill, and use must not install a skill over it.
+        boost("profile", "save", "daily")
+        boost("uninstall", "brainstorming")
+        _seed_rule("brainstorming")
+        r = boost("profile", "diff", "daily")
+        assert ("(in profile, installed as a rule — profiles carry skills "
+                "only)") in r.out
+        assert "(in profile, not installed)" not in r.out
+        r = boost("profile", "diff", "daily", "--json")
+        assert json.loads(r.out) == {"missing": [], "extras": [], "changed": [],
+                                     "other_kind": {"brainstorming": "rule"}}
+        r = boost("profile", "use", "daily")
+        assert ("brainstorming is installed as a rule — profiles carry skills "
+                "only, leaving it as-is") in r.out
+        assert "installed brainstorming" not in r.out
+        assert lockfile.get_skill("brainstorming") is None
+        assert lockfile.get_rule("brainstorming")["version"] == "1.0.0"
 
     def test_delete_and_unknown(self, boost, installed):
         boost("profile", "save", "gone")
@@ -393,7 +454,9 @@ class TestReplay:
         r = boost("replay", "show", snap_id, "--json")
         assert json.loads(r.out) == {"id": snap_id, "since_snapshot": {
             "added": ["cowboy-coding"], "removed": ["brainstorming"],
-            "changed": []}}
+            "changed": [],
+            "rules": {"added": [], "removed": [], "changed": []},
+            "workflows": {"added": [], "removed": [], "changed": []}}}
 
     def test_rollback_restores_and_removes(self, boost, tapped, tick_clock):
         _history_ops(boost)
@@ -439,6 +502,36 @@ class TestReplay:
         r = boost("replay", "list")
         assert "no lock history yet" in r.out
 
+    def test_diffs_cover_rules_with_kind_labels(self, boost, tapped,
+                                                tick_clock):
+        # Snapshots hold all three lock sections; a rule that appeared since
+        # the snapshot is a labeled difference, and rollback names it as out
+        # of its reach instead of claiming "already at this snapshot".
+        boost("install", "brainstorming")     # first write: no snapshot yet
+        _seed_rule("house-style")             # snapshots the skills-only lock
+        snap_id = lockfile.history_list()[0]["id"]
+
+        r = boost("replay", "show", snap_id)
+        assert "+ house-style (rule)" in r.out
+        r = boost("replay", "show", snap_id, "--json")
+        data = json.loads(r.out)["since_snapshot"]
+        assert data["rules"]["added"] == ["house-style"]
+        assert data["added"] == []            # no skill drift
+
+        r = boost("replay", "rollback", snap_id)
+        assert ("not rolled back (rollback restores skills only): "
+                "rule house-style") in r.out
+        assert "skills already match this snapshot — nothing to do" in r.out
+        assert lockfile.get_rule("house-style") is not None   # untouched
+
+        boost("uninstall", "brainstorming")   # snapshots the skill+rule lock
+        history = lockfile.history_list()
+        assert [h["count"] for h in history] == [1, 2]  # rule counted
+        r = boost("replay", "list")
+        newest = next(l for l in r.out.splitlines()
+                      if l.startswith(history[1]["id"]))
+        assert "+1" in newest                 # the rule the old delta missed
+
 
 # ---------------------------------------------------------------- who
 
@@ -473,6 +566,18 @@ class TestWho:
         assert data["skill"] == "brainstorming"
         assert data["installed"] is True
         assert data["events"][0]["action"] == "install"
+
+    def test_reports_an_installed_rule_with_kind(self, boost, tapped):
+        # `boost list` shows the rule; who answering "installed: false" for
+        # the same name would read as data loss.
+        _seed_rule("house-style")
+        journal.log("install", "house-style", tap="rule-tap", version="1.0.0")
+        r = boost("who", "house-style")
+        assert "v1.0.0 from rule-tap (rule)" in r.out
+        r = boost("who", "house-style", "--json")
+        data = json.loads(r.out)
+        assert data["installed"] is True
+        assert data["kind"] == "rule"
 
     def test_per_skill_falls_back_to_all_events(self, boost, tapped):
         # only a "tap" event exists for this subject — not an expertise action

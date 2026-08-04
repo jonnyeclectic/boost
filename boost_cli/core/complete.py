@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ..errors import BoostError
-from . import catalog, paths, registry, store
+from . import catalog, lockfile, paths, registry, store
 
 # cli.COMMANDS rows: (name, group, module, summary). Typed here rather than
 # imported so `core` stays the bottom layer.
@@ -83,7 +83,13 @@ def _cached_names() -> List[str]:
 
 
 def _installed_names() -> List[str]:
-    return sorted(store.installed())
+    # store.installed() is the skills lock section only; the commands this
+    # feeds (uninstall, pin, verify, ...) govern rules and workflows too, so
+    # TAB must offer those names as well.
+    names = set(store.installed())
+    names.update(lockfile.installed_rules())
+    names.update(lockfile.installed_workflows())
+    return sorted(names)
 
 
 def _tap_names() -> List[str]:

@@ -55,12 +55,26 @@ _tilde = paths.tilde
 
 
 def _skill_text(name: str) -> Tuple[str, str]:
-    """A skill's SKILL.md text -> (text, origin). Installed store preferred."""
+    """A skill's SKILL.md text -> (text, origin). Installed store preferred.
+
+    A rule/workflow is declined by kind — the callers reason about skill
+    content, and answering "not installed" (or "vanished from tap") for an
+    installed rule would deny what `boost list` shows.
+    """
     if lockfile.get_skill(name):
         p = store.skill_store_dir(name) / "SKILL.md"
         if p.exists():
             return p.read_text(encoding="utf-8", errors="replace"), "installed"
+    found = lockfile.find_any(name)
+    if found is not None and found[0] != "skill":
+        raise BoostError("%s is a %s — this command applies to skills"
+                        % (name, found[0]),
+                        hint="inspect it with `boost info %s`" % name)
     entry = catalog.resolve_one(name)
+    if entry.get("kind") not in (None, "skill"):
+        raise BoostError("%s is a %s — this command applies to skills"
+                        % (name, entry["kind"]),
+                        hint="inspect it with `boost info %s`" % name)
     p = store.source_dir_for(entry) / "SKILL.md"
     return p.read_text(encoding="utf-8", errors="replace"), "tap %s" % entry["tap"]
 
@@ -654,6 +668,13 @@ def cmd_evolve(argv: List[str]) -> int:
 
     entry = lockfile.get_skill(args.name)
     if not entry:
+        found = lockfile.find_any(args.name)
+        if found is not None:
+            raise BoostError(
+                "%s is a %s — boost evolve applies to skills"
+                % (args.name, found[0]),
+                hint="a %s has no editable store copy; it refreshes from its "
+                     "tap via `boost update`" % found[0])
         raise BoostError("%s is not installed — evolve works on installed "
                         "skills" % args.name,
                         hint="install it first with `boost install %s`" % args.name)
@@ -770,13 +791,27 @@ def cmd_context(argv: List[str]) -> int:
         if not skills:
             raise BoostError("no skills given",
                             hint="e.g. `boost context map 'feature/*' tdd-workflow`")
-        missing = [s for s in skills if not lockfile.get_skill(s)]
+        # Membership spans all lock sections: an installed rule mapped here is
+        # installed — it just has no links for context to switch, which is
+        # worth saying instead of the old "not installed yet" lie.
+        missing, nonskill = [], []
+        for s in skills:
+            found = lockfile.find_any(s)
+            if found is None:
+                missing.append(s)
+            elif found[0] != "skill":
+                nonskill.append((s, found[0]))
         rules = [r for r in state["rules"] if r.get("pattern") != args.pattern]
         rules.append({"pattern": args.pattern, "skills": skills})
         state["rules"] = rules
         _save_state(_CONTEXT_STATE, state)
         journal.log("context", args.pattern, op="map", skills=skills)
         out.ok("mapped %s → %s" % (args.pattern, ", ".join(skills)))
+        if nonskill:
+            out.info(out.role(
+                "; ".join("%s is a %s" % (n, k) for n, k in nonskill)
+                + " — context links skills only, so it stays active on every "
+                  "branch", "muted"))
         if missing:
             out.info(out.role("not installed yet: %s" % ", ".join(missing), "muted"))
         return 0
@@ -851,11 +886,18 @@ def _context_apply(state: dict) -> int:
     matched = [r for r in rules if fnmatch.fnmatch(branch, r.get("pattern", ""))]
     active = {s for r in matched for s in r.get("skills", [])}
     inst = lockfile.installed()
-    linked, unlinked, missing = [], [], []
+    linked, unlinked, missing, unswitchable = [], [], [], []
     for name in sorted(_mentioned_skills(state)):
         entry = inst.get(name)
         if not entry:
-            missing.append(name)
+            # A mapped rule/workflow is installed, not missing — it has no
+            # links to switch, so it stays untouched, and saying so beats
+            # both the "not installed" lie and a silent skip.
+            found = lockfile.find_any(name)
+            if found is not None:
+                unswitchable.append("%s (%s)" % (name, found[0]))
+            else:
+                missing.append(name)
             continue
         if entry.get("quarantined"):
             continue
@@ -874,6 +916,9 @@ def _context_apply(state: dict) -> int:
         out.info("nothing to change")
     if missing:
         out.info(out.role("mapped but not installed: %s" % ", ".join(missing), "muted"))
+    if unswitchable:
+        out.info(out.role("mapped but not link-switchable — context links "
+                          "skills only: %s" % ", ".join(unswitchable), "muted"))
     if linked or unlinked:
         journal.log("context", branch, op="apply",
                     linked=linked or None, unlinked=unlinked or None)
@@ -933,6 +978,13 @@ def cmd_focus(argv: List[str]) -> int:
     for name in names:
         entry = inst.get(name)
         if not entry:
+            found = lockfile.find_any(name)
+            if found is not None:
+                raise BoostError(
+                    "%s is a %s — boost focus applies to skills"
+                    % (name, found[0]),
+                    hint="rules and workflows have no links to sideline; "
+                         "`boost quarantine` suspends one")
             raise BoostError("%s is not installed — focus works on installed "
                             "skills" % name, hint="see `boost list`")
         if entry.get("quarantined"):
@@ -968,6 +1020,13 @@ def cmd_impact(argv: List[str]) -> int:
     inst = lockfile.installed()
     if args.name:
         if args.name not in inst:
+            found = lockfile.find_any(args.name)
+            if found is not None:
+                raise BoostError(
+                    "%s is a %s — boost impact applies to skills"
+                    % (args.name, found[0]),
+                    hint="impact correlates a skill's install date with repo "
+                         "activity")
             raise BoostError("%s is not installed" % args.name,
                             hint="see `boost list`")
         names = [args.name]

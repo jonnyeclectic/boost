@@ -1042,7 +1042,9 @@ def cmd_stats(argv):
                    help="machine-readable output")
     args = p.parse_args(argv)
     name = args.name
-    lock = lockfile.get_skill(name)
+    # find_any: a rule's lock facts are the answer, not "no skill named X".
+    found = lockfile.find_any(name)
+    kind, lock = found if found is not None else ("skill", None)
     matches = catalog.find(name)
     cat = matches[0] if matches else None
     if not lock and not cat:
@@ -1050,6 +1052,28 @@ def cmd_stats(argv):
                         hint="try `boost search %s`" % name)
     acts = {a: len(journal.events(action=a, subject=name))
             for a in ("install", "update", "uninstall")}
+    if lock is not None and kind != "skill":
+        # Materialized kinds have no store dir or agent symlinks; the lock
+        # facts and journal activity are their whole stats surface.
+        if args.as_json:
+            print(json.dumps({"name": name, "kind": kind, "installed": True,
+                              "lock": lock, "activity": acts}))
+            return 0
+        out.heading("%s (%s)" % (name, kind))
+        out.kv("version", lock.get("version", "?"))
+        out.kv("tap", lock.get("tap", "?"))
+        out.kv("installed", util.rel_time(lock.get("installed_at", "")))
+        out.kv("updated", util.rel_time(lock.get("updated_at", "")))
+        out.kv("agents", ", ".join(sorted(
+            {m.get("agent", "?") for m in lock.get("materializations") or []}))
+            or "none")
+        out.kv("pinned", "yes" if lock.get("pinned") else "no")
+        if lock.get("quarantined"):
+            out.kv("quarantined", "yes")
+        out.kv("sha256", str(lock.get("sha256", ""))[:12])
+        out.kv("activity", "%d installs · %d updates · %d uninstalls"
+               % (acts["install"], acts["update"], acts["uninstall"]))
+        return 0
     latest = cat["version"] if cat else None
     upstream = None
     if cat:
@@ -1104,7 +1128,9 @@ def cmd_count(argv):
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
-    installed_n = len(lockfile.installed())
+    by_kind = {kind: len(section)
+               for kind, section in lockfile.all_installed().items()}
+    installed_n = sum(by_kind.values())
     taps_n = len(registry.list_taps())
     available_n = len(catalog.all_entries())
     discovery = None
@@ -1115,11 +1141,20 @@ def cmd_count(argv):
         except (json.JSONDecodeError, OSError):
             discovery = None
     if args.as_json:
-        print(json.dumps({"installed": installed_n, "available": available_n,
+        print(json.dumps({"installed": installed_n,
+                          "skills": by_kind["skill"], "rules": by_kind["rule"],
+                          "workflows": by_kind["workflow"],
+                          "available": available_n,
                           "taps": taps_n, "discovery": discovery}))
         return 0
-    summary = ("installed %d · available %d (across %d tap%s) · discovery index %s"
-               % (installed_n, available_n, taps_n, "" if taps_n == 1 else "s",
+    # The breakdown appears exactly when it carries information: with only
+    # skills installed, "installed 2" already means two skills.
+    detail = ("" if not (by_kind["rule"] or by_kind["workflow"])
+              else " (%d skills · %d rules · %d workflows)"
+              % (by_kind["skill"], by_kind["rule"], by_kind["workflow"]))
+    summary = ("installed %d%s · available %d (across %d tap%s) · discovery index %s"
+               % (installed_n, detail, available_n, taps_n,
+                  "" if taps_n == 1 else "s",
                   discovery if discovery is not None else "not built"))
     print(out.panel(summary, title="inventory"))
     return 0

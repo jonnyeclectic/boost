@@ -1002,6 +1002,34 @@ class TestStats:
         assert "no skill named 'nope' installed or in any tap" in r.err
         assert "try `boost search nope`" in r.err
 
+    def test_installed_rule_reports_lock_facts(self, boost, tapped):
+        # Before find_any this raised "no skill named 'house-style'" for a
+        # name `boost list` shows installed.
+        from boost_cli.core import lockfile
+        rp = paths.home() / ".cursor" / "rules" / "house.mdc"
+        rp.parent.mkdir(parents=True)
+        rp.write_text("rule body", encoding="utf-8")
+        lockfile.set_rule("house-style", {
+            "kind": "rule", "version": "1.2.0", "tap": "rule-tap",
+            "sha256": "a" * 64, "pinned": True,
+            "installed_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+            "materializations": [
+                {"agent": "cursor", "mode": "file", "path": str(rp)}]})
+        r = boost("stats", "house-style")
+        lines = {l.split()[0]: l for l in r.out.splitlines() if l.strip()}
+        assert "house-style (rule)" in r.out
+        assert "1.2.0" in lines["version"]
+        assert "rule-tap" in lines["tap"]
+        assert "cursor" in lines["agents"]
+        assert "yes" in lines["pinned"]
+        assert ("a" * 12) in lines["sha256"]
+        assert "0 installs · 0 updates · 0 uninstalls" in lines["activity"]
+        data = json.loads(boost("stats", "house-style", "--json").out)
+        assert data["kind"] == "rule"
+        assert data["installed"] is True
+        assert data["lock"]["version"] == "1.2.0"
+
     def test_json_purity(self, boost, installed):
         r = boost("stats", "brainstorming", "--json")
         data = json.loads(r.out)
@@ -1036,15 +1064,33 @@ class TestCount:
         r = boost("count")
         assert "discovery index 3" in r.out
         r = boost("count", "--json")
-        assert json.loads(r.out) == {"installed": 1, "available": 5,
+        assert json.loads(r.out) == {"installed": 1, "skills": 1, "rules": 0,
+                                     "workflows": 0, "available": 5,
                                      "taps": 1, "discovery": 3}
 
     def test_corrupt_discovery_counts_as_missing(self, boost, sandbox):
         paths.ensure_dirs()
         (paths.cache_dir() / "discovery.json").write_text("{oops", encoding="utf-8")
         r = boost("count", "--json")
-        assert json.loads(r.out) == {"installed": 0, "available": 0,
+        assert json.loads(r.out) == {"installed": 0, "skills": 0, "rules": 0,
+                                     "workflows": 0, "available": 0,
                                      "taps": 0, "discovery": None}
+
+    def test_counts_rules_and_workflows_with_labels(self, boost, installed):
+        # "installed 1" with a rule in the lock was a false total; the
+        # breakdown appears once a non-skill kind is present.
+        from boost_cli.core import lockfile
+        lockfile.set_rule("house-style", {"kind": "rule", "version": "1.0.0",
+                                          "tap": "rule-tap",
+                                          "materializations": []})
+        lockfile.set_workflow("ship-it", {"kind": "workflow", "version": "1.0.0",
+                                          "tap": "rule-tap", "slot": "commands",
+                                          "materializations": []})
+        r = boost("count")
+        assert "installed 3 (1 skills · 1 rules · 1 workflows)" in r.out
+        data = json.loads(boost("count", "--json").out)
+        assert data["installed"] == 3
+        assert (data["skills"], data["rules"], data["workflows"]) == (1, 1, 1)
 
 
 # ---------------------------------------------------------------- reindex

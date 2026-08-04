@@ -22,6 +22,7 @@ from ..core import (
     frontmatter,
     gitutil,
     installscan,
+    integrity,
     journal,
     lockfile,
     mcp,
@@ -890,32 +891,51 @@ def _tool_search(args: dict):
 
 
 def _tool_list(args: dict):
-    skills = lockfile.installed()
-    if not skills:
-        return "no skills installed", False
-    return "\n".join("%s v%s (%s)%s"
-                     % (n, e.get("version", "?"), e.get("tap", "?"),
-                        " [pinned]" if e.get("pinned") else "")
-                     for n, e in sorted(skills.items())), False
+    # All three lock sections: "no skills installed" while `boost list` shows
+    # a rule is the exact disagreement this surface must not have.
+    everything = lockfile.all_installed()
+    if not any(everything.values()):
+        return "nothing installed", False
+    lines = []
+    for kind, section in everything.items():
+        for n, e in sorted(section.items()):
+            lines.append("%s v%s (%s)%s%s"
+                         % (n, e.get("version", "?"), e.get("tap", "?"),
+                            "" if kind == "skill" else " [%s]" % kind,
+                            " [pinned]" if e.get("pinned") else ""))
+    return "\n".join(lines), False
 
 
 def _tool_info(args: dict):
     name = str(args.get("name", ""))
-    entry = lockfile.get_skill(name)
+    found = lockfile.find_any(name)
+    kind, entry = found if found is not None else ("skill", None)
     matches = catalog.find(name)
     if not entry and not matches:
         return "no skill named %r (installed or in any tap)" % name, True
     src = matches[0] if matches else {}
-    lines = ["name: " + name,
-             "version: %s" % (entry or src).get("version", "?"),
-             "tap: %s" % (entry or src).get("tap", "?")]
+    kind_label = kind if entry else src.get("kind", "skill")
+    lines = ["name: " + name]
+    if kind_label != "skill":
+        lines.append("kind: %s" % kind_label)
+    lines.extend(("version: %s" % (entry or src).get("version", "?"),
+                  "tap: %s" % (entry or src).get("tap", "?")))
     if src.get("description"):
         lines.append("description: %s" % src["description"])
     if entry:
+        if kind == "skill":
+            agents_s = ", ".join(entry.get("agents") or []) or "none"
+        else:
+            # Materialized kinds record their reach per materialization.
+            agents_s = ", ".join(sorted(
+                {m.get("agent", "?")
+                 for m in entry.get("materializations") or []})) or "none"
         lines.extend(("installed: yes (%s)" % entry.get("installed_at", "?"),
-                      "agents: %s" % (", ".join(entry.get("agents") or []) or "none")))
+                      "agents: %s" % agents_s))
         if entry.get("pinned"):
             lines.append("pinned: yes")
+        if entry.get("quarantined"):
+            lines.append("quarantined: yes")
     else:
         lines.append("installed: no")
     return "\n".join(lines), False
@@ -957,14 +977,30 @@ def _tool_doctor(args: dict):
     plan = store.sync_plan()
     issues = sum(len(v) for v in plan.values())
     taps = registry.list_taps()
-    lines = ["installed skills: %d" % len(lockfile.installed()),
+    everything = lockfile.all_installed()
+    lines = ["installed skills: %d" % len(everything["skill"]),
+             "installed rules: %d · workflows: %d"
+             % (len(everything["rule"]), len(everything["workflow"])),
              "taps: %d (%d skills available)" % (len(taps), len(catalog.all_entries()))]
     for key, vals in plan.items():
         if vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
-    lines.append("healthy — no issues found" if issues == 0
-                 else "%d issue(s) — run `boost sync` to fix" % issues)
-    return "\n".join(lines), issues > 0
+    # sync_plan already reports MISSING rule/workflow materializations; the
+    # digest check adds the drift sync cannot see — content edited in place.
+    mat_issues = ["%s %s: modified since install" % (kind, n)
+                  for kind in ("rule", "workflow")
+                  for n, e in sorted(everything[kind].items())
+                  if (integrity.materialized_status(n, e)
+                      == integrity.STATUS_MODIFIED)]
+    lines.extend(mat_issues)
+    total = issues + len(mat_issues)
+    if total == 0:
+        lines.append("healthy — no issues found")
+    elif mat_issues:
+        lines.append("%d issue(s) — run `boost doctor` for details" % total)
+    else:
+        lines.append("%d issue(s) — run `boost sync` to fix" % issues)
+    return "\n".join(lines), total > 0
 
 
 def _tool_discover_github(args: dict):

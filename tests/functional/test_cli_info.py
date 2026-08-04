@@ -558,3 +558,115 @@ class TestTag:
         boost("tag", "brainstorming", "+shared")
         r = boost("tag", "--list")
         assert "#shared" in r.out
+
+
+# ── installed rules & workflows ──────────────────────────────────────────
+
+class TestMaterializedKinds:
+    """info/cat/log/home/deps serve installed rules truthfully; edit/tag
+    decline by kind — never the old "not installed" denial."""
+
+    def _seed_claude_rule(self, name="house", body="Do the thing.",
+                          pinned=False):
+        from boost_cli.core import lockfile, rules
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.parent.mkdir(parents=True, exist_ok=True)
+        cm.write_text(rules.merge_block("# my own notes\n", name, body),
+                      encoding="utf-8")
+        lockfile.set_rule(name, {
+            "kind": "rule", "version": "1.2.0", "tap": "some-tap",
+            "source_file": "rules/%s.mdc" % name, "scope": "user",
+            "installed_at": "2026-01-02T03:04:05Z",
+            "pinned": pinned, "quarantined": False,
+            "materializations": [
+                {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
+        return cm
+
+    def test_info_shows_kind_version_tap_and_agents(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("info", "house")
+        assert re.search(r"kind\s+rule", r.out)
+        assert re.search(r"version\s+1\.2\.0", r.out)
+        assert re.search(r"tap\s+some-tap", r.out)
+        assert re.search(r"materialized\s+claude-code", r.out)
+        assert re.search(r"pinned\s+no", r.out)
+        assert re.search(r"quarantined\s+no", r.out)
+        assert "not installed" not in r.out
+
+    def test_info_reports_pinned_and_quarantined(self, boost, sandbox):
+        self._seed_claude_rule()
+        boost("pin", "house")
+        boost("quarantine", "house")
+        r = boost("info", "house")
+        assert re.search(r"pinned\s+yes", r.out)
+        assert re.search(r"quarantined\s+yes", r.out)
+
+    def test_info_json_carries_kind_and_lock_entry(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("info", "house", "--json")
+        data = json.loads(r.out)
+        assert data["kind"] == "rule"
+        assert data["name"] == "house"
+        assert data["installed"]["version"] == "1.2.0"
+        assert data["installed"]["materializations"][0]["agent"] == "claude-code"
+
+    def test_cat_prints_the_materialized_block_only(self, boost, sandbox):
+        self._seed_claude_rule(body="Always use two-space indents.")
+        r = boost("cat", "house")
+        assert "Always use two-space indents." in r.out
+        assert "my own notes" not in r.out   # the managed block, not the file
+
+    def test_preview_titles_the_rule_with_its_tap(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("preview", "house")
+        assert "house" in r.out and "some-tap" in r.out
+        assert "Do the thing." in r.out
+
+    def test_cat_on_a_quarantined_rule_names_the_release(self, boost, sandbox):
+        self._seed_claude_rule()
+        boost("quarantine", "house")
+        r = boost("cat", "house", expect=1)
+        assert "rule house is quarantined" in r.err
+        assert "boost quarantine --release house" in r.err
+
+    def test_edit_declines_a_rule_by_kind(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("edit", "house", expect=1)
+        assert "house is a rule — boost edit applies to skills" in r.err
+        assert "not installed" not in r.err
+
+    def test_tag_declines_a_rule_as_skill_only(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("tag", "house", "+x", expect=1)
+        assert "house is a rule — boost tag applies to skills" in r.err
+        assert "skill-only" in r.err
+        assert "not installed" not in r.err
+
+    def test_log_resolves_an_installed_rule(self, boost, sandbox):
+        # Before find_any, this fell through to the catalog and errored
+        # "no skill named 'house' in any tap" — a denial, not an answer.
+        self._seed_claude_rule()
+        r = boost("log", "house")
+        assert "no upstream history (imported locally)" in r.out
+
+    def test_home_resolves_an_installed_rule(self, boost, sandbox):
+        self._seed_claude_rule()
+        r = boost("home", "house", "--print")
+        assert "rules/house.mdc" in r.out
+
+    def test_deps_counts_an_installed_rule_as_installed(self, boost, tapped):
+        # jira-integration requires commit-messages; a rule of that name is
+        # installed, and requires: names an item, not a kind.
+        boost("install", "jira-integration")
+        from boost_cli.core import lockfile
+        rp = paths.home() / ".cursor" / "rules" / "commit-messages.mdc"
+        rp.parent.mkdir(parents=True, exist_ok=True)
+        rp.write_text("Always write conventional commits.\n", encoding="utf-8")
+        lockfile.set_rule("commit-messages", {
+            "kind": "rule", "version": "1.0.0", "tap": "some-tap",
+            "materializations": [
+                {"agent": "cursor", "mode": "file", "path": str(rp)}]})
+        r = boost("deps", "jira-integration")
+        assert "requires: commit-messages ✓ installed" in r.out
+        r = boost("deps")
+        assert "no unmet requirements or conflicts" in r.out

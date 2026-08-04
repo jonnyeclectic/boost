@@ -956,6 +956,77 @@ class TestMcp:
         assert is_err is False
         assert "no skills match 'zzzznothing'" in text
 
+    def _seed_rule_and_workflow(self):
+        import hashlib
+
+        from boost_cli.core import lockfile
+        rp = paths.home() / ".cursor" / "rules" / "house.mdc"
+        rp.parent.mkdir(parents=True)
+        rp.write_text("rule body", encoding="utf-8")
+        lockfile.set_rule("house-style", {
+            "kind": "rule", "version": "1.0.0", "tap": "rule-tap",
+            "pinned": True, "installed_at": "2026-01-01T00:00:00Z",
+            "materializations": [
+                {"agent": "cursor", "mode": "file", "path": str(rp),
+                 "sha256": hashlib.sha256(b"rule body").hexdigest()}]})
+        lockfile.set_workflow("ship-it", {
+            "kind": "workflow", "version": "2.0.0", "tap": "rule-tap",
+            "slot": "commands", "materializations": []})
+        return rp
+
+    def test_boost_list_includes_rules_and_workflows(self, boost, tapped):
+        # The MCP surface must agree with `boost list`: answering "no skills
+        # installed" with a rule present is the bug this pins closed.
+        from boost_cli.commands import configuration
+        boost("install", "brainstorming")
+        self._seed_rule_and_workflow()
+        text, is_err = configuration._mcp_tool("boost_list", {})
+        assert is_err is False
+        assert "brainstorming v1.4.0 (fixture-tap)" in text
+        assert "house-style v1.0.0 (rule-tap) [rule] [pinned]" in text
+        assert "ship-it v2.0.0 (rule-tap) [workflow]" in text
+
+    def test_boost_list_empty_state(self, boost, sandbox):
+        from boost_cli.commands import configuration
+        text, is_err = configuration._mcp_tool("boost_list", {})
+        assert text == "nothing installed"
+        assert is_err is False
+
+    def test_boost_info_on_an_installed_rule(self, boost, tapped):
+        from boost_cli.commands import configuration
+        self._seed_rule_and_workflow()
+        text, is_err = configuration._mcp_tool("boost_info",
+                                               {"name": "house-style"})
+        assert is_err is False
+        assert "kind: rule" in text
+        assert "version: 1.0.0" in text
+        assert "tap: rule-tap" in text
+        assert "installed: yes (2026-01-01T00:00:00Z)" in text
+        assert "agents: cursor" in text
+        assert "pinned: yes" in text
+
+    def test_boost_doctor_counts_and_checks_rules(self, boost, tapped):
+        from boost_cli.commands import configuration
+        rp = self._seed_rule_and_workflow()
+        text, is_err = configuration._mcp_tool("boost_doctor", {})
+        assert "installed rules: 1 · workflows: 1" in text
+        assert "healthy — no issues found" in text
+        assert is_err is False
+
+        # Edited in place: sync_plan cannot see this (the file exists) — only
+        # the recorded materialization digest can.
+        rp.write_text("tampered body", encoding="utf-8")
+        text, is_err = configuration._mcp_tool("boost_doctor", {})
+        assert "rule house-style: modified since install" in text
+        assert "1 issue(s) — run `boost doctor` for details" in text
+        assert is_err is True
+
+        rp.unlink()      # the cursor materialization vanishes entirely
+        text, is_err = configuration._mcp_tool("boost_doctor", {})
+        assert "missing_materializations: ('rule', 'house-style')" in text
+        assert "1 issue(s) — run `boost sync` to fix" in text
+        assert is_err is True
+
     def test_registry_dispatches_and_lists_all_tools(self, sandbox):
         from boost_cli.commands import configuration
         # tools/list payload and the dispatcher share one registry

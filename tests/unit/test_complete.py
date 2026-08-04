@@ -183,6 +183,18 @@ class TestInstalledAndTapSources:
         assert complete.candidates(["boost", "uninstall", ""], COMMANDS) == [
             "alpha", "mid", "zeta"]
 
+    def test_installed_rules_and_workflows_complete_too(self, sandbox):
+        # pin / uninstall / verify govern rules and workflows now, so TAB must
+        # offer their names — store.installed() alone is the skills section.
+        from boost_cli.core import lockfile
+        lockfile.set_skill("a-skill", {})
+        lockfile.set_rule("z-rule", {"kind": "rule"})
+        lockfile.set_workflow("m-flow", {"kind": "workflow"})
+        assert complete.candidates(["boost", "pin", ""], COMMANDS) == [
+            "a-skill", "m-flow", "z-rule"]
+        assert complete.candidates(["boost", "uninstall", "z"], COMMANDS) == [
+            "z-rule"]
+
     def test_tap_names_are_sorted(self, sandbox):
         _tap("zzz/repo", ["x"])
         cfg = config.load()

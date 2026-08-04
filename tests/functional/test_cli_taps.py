@@ -144,8 +144,8 @@ class TestUntap:
     def test_dependents_declined_keeps_tap(self, boost, installed, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
         r = boost("untap", "fixture-tap", expect=1)
-        assert "1 skill(s) installed from fixture-tap: brainstorming" in r.out
-        assert "installed skills keep working but lose their update source" in r.out
+        assert "1 installed item(s) from fixture-tap: brainstorming" in r.out
+        assert "installed items keep working but lose their update source" in r.out
         assert "cancelled" in r.out
         # the tap survives: clone, cache, config all intact
         assert (paths.repos_dir() / "fixture-tap").is_dir()
@@ -165,8 +165,27 @@ class TestUntap:
     def test_clean_untap_no_dependents(self, boost, tapped):
         r = boost("untap", "fixture-tap")
         assert "untapped fixture-tap" in r.out
-        assert "installed from" not in r.out    # no dependents warning
+        assert "item(s) from" not in r.out    # no dependents warning
         assert "no taps configured" in boost("taps").out
+
+    def test_untap_warns_it_would_orphan_a_rule(self, boost, tapped,
+                                                monkeypatch):
+        # A rule materialized into CLAUDE.md from this tap is a dependent too:
+        # before, untap counted only the skills section and dropped the rule's
+        # update source without a word.
+        from boost_cli.core import lockfile
+        cm = paths.home() / ".claude" / "CLAUDE.md"
+        cm.parent.mkdir(parents=True, exist_ok=True)
+        cm.write_text("rule body", encoding="utf-8")
+        lockfile.set_rule("house-style", {
+            "kind": "rule", "version": "1.0.0", "tap": "fixture-tap",
+            "materializations": [
+                {"agent": "claude-code", "mode": "claude", "path": str(cm)}]})
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("untap", "fixture-tap", expect=1)
+        assert "1 installed item(s) from fixture-tap: house-style (rule)" in r.out
+        assert "cancelled" in r.out
+        assert "fixture-tap" in boost("taps").out
 
 
 # ── taps ─────────────────────────────────────────────────────────────────
@@ -240,7 +259,7 @@ class TestOutdated:
         assert "1.4.0" in r.out and "1.5.0" in r.out
         assert "INSTALLED" in r.out and "LATEST" in r.out
         assert "1 outdated" in r.out
-        assert "pinned skills stay put" in r.out
+        assert "pinned items stay put" in r.out
 
         boost("pin", "brainstorming")
         r = boost("outdated")
@@ -248,6 +267,7 @@ class TestOutdated:
 
         r = boost("outdated", "--json")
         assert json.loads(r.out) == [{"name": "brainstorming",
+                                      "kind": "skill",
                                       "installed": "1.4.0",
                                       "latest": "1.5.0",
                                       "tap": "bumped-tap",
@@ -275,7 +295,8 @@ class TestOutdated:
         assert "1.4.0 (%s)" % head[:7] in r.out
         assert "1 outdated" in r.out
         data = json.loads(boost("outdated", "--json").out)
-        assert data == [{"name": "brainstorming", "installed": "1.4.0",
+        assert data == [{"name": "brainstorming", "kind": "skill",
+                         "installed": "1.4.0",
                          "latest": "1.4.0 (%s)" % head[:7],
                          "tap": "fixture-tap", "pinned": False}]
 
@@ -286,6 +307,35 @@ class TestOutdated:
         r = boost("outdated")
         assert "source missing" in r.out
         assert "1 outdated" in r.out
+
+    def test_changed_rule_source_is_listed_with_kind(self, boost,
+                                                     fixture_tap_src, tmp_path):
+        # A rule whose tap source moved is outdated the same way a skill is —
+        # it used to be invisible here because only the skills section was read.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "rule-tap")
+        rp = tap_dir / "rules" / "house.mdc"
+        rp.parent.mkdir(parents=True)
+        rp.write_text("---\nname: house-style\nversion: 1.0.0\n---\n\n"
+                      "Two-space indents.\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap_dir), "add", "-A"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", "add rule"],
+                       check=True, capture_output=True)
+        boost("tap", tap_dir)
+        boost("install", "house-style")
+        assert "everything up to date" in boost("outdated").out
+
+        clone_rule = paths.repos_dir() / "rule-tap" / "rules" / "house.mdc"
+        clone_rule.write_text("---\nname: house-style\nversion: 1.0.0\n---\n\n"
+                              "Tabs, actually.\n", encoding="utf-8")
+        r = boost("outdated")
+        assert "house-style (rule)" in r.out
+        assert "content changed" in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert data == [{"name": "house-style", "kind": "rule",
+                         "installed": "1.0.0",
+                         "latest": "1.0.0 (content changed)",
+                         "tap": "rule-tap", "pinned": False}]
 
 
 # ── completion cache invalidation ───────────────────────────────────────
