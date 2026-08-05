@@ -124,6 +124,24 @@ def _agents_dir(scope) -> Path:
     return base / ".claude" / "agents"
 
 
+def _never_fails(command: str) -> str:
+    """Make a hook command structurally incapable of reporting failure.
+
+    `_route` is careful to always exit 0 — but argparse never gets that far. The
+    hook is installed against :func:`paths.launcher`, i.e. whatever `boost` is on
+    PATH, which is not necessarily the build that wrote the hook: a stale pipx
+    install, or a later downgrade, reaches `bmad route`, does not recognise the
+    action, and exits **2**. On UserPromptSubmit exit 2 does not merely log — it
+    blocks the prompt and erases it from the transcript, so every message the
+    user typed would vanish until they found the hook.
+
+    `|| true` closes that at the shell, outside any version of boost. The
+    `# boost:<name>` ownership marker `claude_settings` appends still parses as a
+    trailing comment.
+    """
+    return command + " || true"
+
+
 def _autopilot_on(scope) -> int:
     """The one command. Personas + orientation + router, in one idempotent pass.
 
@@ -133,20 +151,24 @@ def _autopilot_on(scope) -> int:
     """
     scope = scope or "global"
     agents = _agents_dir(scope)
-    slugs = core.write_personas(agents)
+    slugs, skipped = core.write_personas(agents)
 
     launcher = shlex.quote(str(paths.launcher()))
     cs.add_hook(scope, "SessionStart", HOOK_NAME,
-                "%s bmad orient --scope %s" % (launcher, scope),
+                _never_fails("%s bmad orient --scope %s" % (launcher, scope)),
                 matcher=HOOK_MATCHER)
     cs.add_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME,
-                "%s bmad route" % launcher)
+                _never_fails("%s bmad route" % launcher))
     _set_scope_state(scope, autopilot=True, startup=True, personas=len(slugs),
                      enabled_at=util.now_iso())
     journal.log("bmad-autopilot", "on", scope=scope, personas=len(slugs))
 
     out.ok("BMAD autopilot ON (%s) — %d persona subagent(s) + prompt router"
            % (scope, len(slugs)))
+    if skipped:
+        out.warn("kept your edits to %d persona(s): %s"
+                 % (len(skipped), ", ".join(skipped)))
+        out.dim("  delete the file to let `boost bmad on` restore the stock version")
     out.dim("  personas → %s" % paths.tilde(agents))
     out.dim("  hooks    → %s (SessionStart + UserPromptSubmit)"
             % paths.tilde(cs.settings_path(scope)))
@@ -175,8 +197,10 @@ def _autopilot_off(scope) -> int:
 def _read_hook_stdin() -> dict:
     """Claude Code's UserPromptSubmit payload, or {} for anything unreadable.
 
-    Accepts plain text too, so `echo "add tests" | boost bmad route` works for
-    a human debugging the routing table.
+    Accepts plain text too, so `echo "add tests for the scanner" | boost bmad
+    route` works for a human debugging the routing table. (Give it a real
+    prompt: anything under `core.MIN_WORDS` words classifies as trivial and
+    prints nothing, which reads like a broken install.)
     """
     try:
         if sys.stdin.isatty():

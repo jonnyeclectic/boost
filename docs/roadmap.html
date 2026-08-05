@@ -6195,10 +6195,37 @@ paths. The same instinct governs when it stays quiet on purpose: acknowledgement
 <code>no bmad</code> opt-out all produce no banner, because a delegation banner on
 &ldquo;what does <code>scan_dir</code> do?&rdquo; is worse than no router at all.
 
-<b><code>off</code> does not eat hand edits.</b> Persona files carry a
-<code>&lt;!-- boost:bmad-persona --&gt;</code> ownership stamp and only stamped files are ever
-rewritten or deleted, so editing <code>~/.claude/agents/bmad-dev.md</code> to taste survives
-<code>boost bmad off</code> — the same rule <code>claude_settings</code> already applies to hooks.</p></details>
+<b>Ownership is content-derived, because marker-presence was wrong in both directions.</b>
+Persona files carry a <code>&lt;!-- boost:bmad-persona &lt;digest&gt; --&gt;</code> stamp, and a file
+counts as boost's only while that digest still matches the rest of the file. The first cut
+tested for the marker alone, which <em>looked</em> like the rule <code>claude_settings</code>
+applies to hooks but was not: the marker is an HTML comment a user editing the body has no
+reason to remove, so an edited persona was silently overwritten by the next
+<code>boost bmad on</code> <em>and</em> deleted by <code>boost bmad off</code> — while that
+command printed &ldquo;hand-edited personas were left in place&rdquo;. Digesting the content
+makes both statements true: <code>on</code> reports an edited file as kept, <code>off</code>
+leaves it, and the README no longer promises something the code did not do.
+
+<b>The router's never-exit-non-zero rule had a hole above it.</b> <code>_route</code> catches
+everything and returns 0, but argparse never reaches it: the hook is installed against
+<code>paths.launcher()</code> — whatever <code>boost</code> is on PATH, not necessarily the
+build that wrote the hook — so a stale pipx install or a later downgrade hits
+<code>bmad route</code>, fails <code>invalid choice</code>, and exits <b>2</b>. On
+<code>UserPromptSubmit</code> that does not merely log: it blocks the prompt and erases it
+from the transcript, so every message the user typed would vanish until they found the hook.
+The guard has to sit outside any version of boost, so the installed command ends
+<code>|| true</code>.
+
+<b>Two keyword-table defects, found by routing real prompts rather than by reading.</b>
+<code>\bfix\w*\b</code> matches &ldquo;fixture&rdquo; and <code>\bchange\w*\b</code> matches
+&ldquo;changelog&rdquo; — the exact words the quality and docs tables claim — so &ldquo;add
+fixtures for the sandbox HOME&rdquo; scored build=2 against quality=1 and went to Amelia.
+Because build won on <em>score</em> it never reached <code>TRACK_ORDER</code>, so the
+&ldquo;build loses every tie&rdquo; invariant was bypassed rather than violated: the fix is to
+enumerate inflections, not to reorder. Separately, the interrogative gate anchored on the
+first token only, making &ldquo;Why is test_catalog flaky on Windows? Fix it and add a
+regression test.&rdquo; trivial — a real task, silently unrouted. A question followed by
+another sentence is a preamble to an instruction, not a question.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>

@@ -177,6 +177,16 @@ class TestDisableEnable:
 
 
 class TestUninstall:
+    def test_uninstall_also_tears_down_the_autopilot(
+            self, boost, sandbox, npx, proj):
+        """Otherwise `uninstall` leaves the router banner on every prompt."""
+        boost("bmad", "on", "--scope", "project")
+        boost("bmad", "install")
+        boost("bmad", "uninstall", "--yes")
+        assert not cs.has_hook("project", "UserPromptSubmit", "bmad-route",
+                               project_dir=proj)
+        assert core_bmad.installed_personas(proj / ".claude" / "agents") == []
+
     def test_removes_skills_and_runtime(self, boost, sandbox, npx, proj):
         boost("bmad", "install", "--startup")
         assert (proj / "_bmad").exists()
@@ -254,12 +264,22 @@ class TestDoctor:
         assert "global" in r.out and "project" in r.out
 
     def test_reports_autopilot_state(self, boost, sandbox, proj):
+        # assert the rendered field, not the bare word: "off" also appears in
+        # `router=off`, and "on" appears inside "pers-on-as", so a loose
+        # substring check passes whatever the autopilot verdict actually is
         r = boost("bmad", "doctor")
-        assert "autopilot" in r.out and "off" in r.out
+        assert "autopilot=off" in r.out
         boost("bmad", "on")
         r = boost("bmad", "doctor")
-        assert "on" in r.out
-        assert "%d persona" % len(core_bmad.PERSONAS) in r.out
+        assert "autopilot=on" in r.out
+        assert "%d personas" % len(core_bmad.PERSONAS) in r.out
+
+    def test_autopilot_reads_as_off_when_the_hook_is_gone(
+            self, boost, sandbox, proj):
+        """State alone is not the truth — the router hook has to be there."""
+        boost("bmad", "on")
+        cs.remove_hook("global", "UserPromptSubmit", "bmad-route")
+        assert "autopilot=off" in boost("bmad", "doctor").out
 
     def test_doctor_needs_no_node(self, boost, sandbox, monkeypatch, proj):
         """The lightweight path must not report as broken on a Node-free box."""
@@ -295,6 +315,25 @@ class TestAutopilotOn:
         assert "BMAD autopilot ON" in r.out
         # the agents dir is only watched if it existed at launch
         assert "restart" in r.out.lower()
+
+    def test_both_hooks_cannot_report_failure(self, boost, sandbox, proj):
+        """A boost older than this change does not know `bmad route` and exits
+        2 — which on UserPromptSubmit erases the user's prompt. The hook is
+        installed against whatever boost is on PATH, so the guard has to live in
+        the shell, outside any version of boost."""
+        boost("bmad", "on")
+        for event, name in (("UserPromptSubmit", "bmad-route"),
+                            ("SessionStart", "bmad")):
+            assert _hook_cmd("global", event, name).endswith("|| true"), event
+
+    def test_the_briefing_hook_names_the_scope_it_was_installed_for(
+            self, boost, sandbox, proj):
+        """`_orient` defaults to project scope, so a global `on` whose hook
+        omitted `--scope global` would read project state and print nothing."""
+        boost("bmad", "on")
+        assert "--scope global" in _hook_cmd("global", "SessionStart", "bmad")
+        r = boost("bmad", "orient", "--scope", "global")
+        assert "BMAD autopilot active" in r.out
 
     def test_is_idempotent(self, boost, sandbox, proj):
         boost("bmad", "on")
@@ -340,6 +379,22 @@ class TestAutopilotOff:
         boost("bmad", "off")
         assert mine.read_text(encoding="utf-8") == (
             "---\nname: bmad-dev\n---\nmine now\n")
+
+    def test_an_edited_persona_that_kept_the_stamp_also_survives(
+            self, boost, sandbox, proj):
+        """The realistic edit: change the body, leave the HTML comment alone."""
+        boost("bmad", "on")
+        mine = sandbox / ".claude" / "agents" / "bmad-dev.md"
+        edited = mine.read_text(encoding="utf-8").replace(
+            "Mission:", "Mission (house rules):")
+        mine.write_text(edited, encoding="utf-8")
+
+        r = boost("bmad", "on")               # re-running must not clobber it
+        assert "kept your edits" in r.out and "bmad-dev" in r.out
+        assert mine.read_text(encoding="utf-8") == edited
+
+        boost("bmad", "off")                  # ...nor must tearing down
+        assert mine.read_text(encoding="utf-8") == edited
 
 
 class TestRoute:
@@ -401,29 +456,45 @@ class TestRoute:
         assert r.rc == 0
 
     def test_survives_an_unreadable_stdin(self, boost, sandbox, monkeypatch, proj):
+        """Note the out-of-band flag: `_route` swallows every exception, so a
+        test that signalled failure by raising inside it would convert its own
+        failure into the success it asserts."""
+        called = []
+
         class Exploding:
             def isatty(self):
                 return False
 
             def read(self):
+                called.append("read")
                 raise OSError("stdin is gone")
 
         monkeypatch.setattr(sys, "stdin", Exploding())
         r = boost("bmad", "route", expect=None)
+        assert called == ["read"]          # it really did go down that path
         assert r.rc == 0 and r.out == ""
 
     def test_an_interactive_stdin_is_not_read(self, boost, sandbox, monkeypatch,
                                               proj):
-        """`boost bmad route` at a prompt must return, not hang on EOF."""
+        """`boost bmad route` at a prompt must return, not hang on EOF.
+
+        Asserted on a recorded flag rather than by raising: an `AssertionError`
+        here would be caught by `_route`'s never-block handler and the test
+        would pass while the command hung in real use.
+        """
+        reads = []
+
         class Tty:
             def isatty(self):
                 return True
 
             def read(self):
-                raise AssertionError("should not read an interactive stdin")
+                reads.append("read")
+                return ""
 
         monkeypatch.setattr(sys, "stdin", Tty())
         r = boost("bmad", "route")
+        assert reads == [], "an interactive stdin must never be read"
         assert r.out == ""
 
     def test_a_project_signal_failure_still_exits_zero(

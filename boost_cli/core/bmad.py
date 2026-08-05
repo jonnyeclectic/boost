@@ -34,14 +34,26 @@ written: boost does not escalate permissions on the user's behalf.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
 from typing import NamedTuple
 
-MARKER = "<!-- boost:bmad-persona -->"
-"""Ownership stamp. Only files carrying it are ever rewritten or deleted, so a
-hand-edited `bmad-dev.md` survives `boost bmad off`."""
+MARKER = "<!-- boost:bmad-persona"
+"""Prefix of the ownership stamp boost writes into every persona file.
+
+The stamp carries a digest of the rest of the file — `<!-- boost:bmad-persona
+9f2c1ab34de5 -->` — and a file counts as boost's only while that digest still
+matches what is on disk. Presence alone was not enough in *either* direction: a
+user who edited the body but left the stamp (the likely case — it is an HTML
+comment, there is no reason to touch it) had their work silently overwritten by
+the next `boost bmad on`, and deleted by `boost bmad off` while it printed that
+hand-edited personas were left in place. Digesting the content makes both
+statements true: edit the file however you like and boost stops claiming it.
+"""
+
+_STAMP_RE = re.compile(r"<!-- boost:bmad-persona ([0-9a-f]{12}) -->")
 
 
 class Persona(NamedTuple):
@@ -306,11 +318,17 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
         r"\bsurvey\b", r"\bprior art\b",
     ),
     "build": (
+        # `fix\w*` and `change\w*` used to live here and were a bug: they match
+        # "fixture(s)" and "changelog" — the exact words the quality and docs
+        # tables above claim. "add fixtures for the sandbox HOME" scored build=2
+        # against quality=1 and went to Amelia, and because build won on *score*
+        # it never reached TRACK_ORDER, so the "build loses every tie" invariant
+        # was bypassed rather than violated. Enumerate the inflections instead.
         r"\bimplement\w*\b", r"\bbuild\b", r"\badd(s|ed|ing)?\b", r"\bcreate\b",
-        r"\bfix\w*\b", r"\bbugs?\b", r"\brefactor\w*\b", r"\bmigrat\w*\b",
-        r"\bupdates?\b", r"\bremove\b", r"\bdeletes?\b", r"\brename\b",
-        r"\bchange\w*\b", r"\bwire\b", r"\bship\b", r"\bsupport for\b",
-        r"\bmake it\b",
+        r"\bfix(es|ed|ing)?\b", r"\bbugs?\b", r"\brefactor\w*\b",
+        r"\bmigrat\w*\b", r"\bupdates?\b", r"\bremove\b", r"\bdeletes?\b",
+        r"\brename\b", r"\bchang(e|es|ed|ing)\b", r"\bwire\b", r"\bship\b",
+        r"\bsupport for\b", r"\bmake it\b",
     ),
 }
 
@@ -321,6 +339,15 @@ _SLASH = re.compile(r"^\s*/")
 _OPT_OUT = re.compile(r"\b(no|skip|without|disable)\s+bmad\b", re.IGNORECASE)
 _INFO_QUESTION = re.compile(
     r"^\s*(what|why|how|when|where|which|who|whose|whom)\b", re.IGNORECASE)
+_SECOND_SENTENCE = re.compile(r"[.?!]\s+\S")
+"""A sentence terminator with more prose after it.
+
+The interrogative gate anchors on the first token only, which made "Why is
+test_catalog flaky on Windows? Fix it and add a regression test." trivial — a
+real task, silently unrouted. A question that is followed by another sentence is
+not a question, it is a preamble to an instruction. Requiring whitespace after
+the terminator keeps "SKILL.md" and "store.install" from reading as boundaries.
+"""
 
 TRIVIAL = "trivial"
 """The "say nothing" verdict.
@@ -357,7 +384,8 @@ def classify(prompt: str) -> str:
     words = text.split()
     if len(words) < MIN_WORDS:
         return TRIVIAL
-    if _INFO_QUESTION.match(text) and len(words) <= QUESTION_MAX_WORDS:
+    if (_INFO_QUESTION.match(text) and len(words) <= QUESTION_MAX_WORDS
+            and not _SECOND_SENTENCE.search(text)):
         return TRIVIAL
     scores = {t: sum(1 for rx in pats if rx.search(text))
               for t, pats in _COMPILED.items()}
@@ -547,7 +575,50 @@ def persona_description(persona: Persona) -> str:
 
 
 def persona_markdown(persona: Persona) -> str:
-    """One persona as a Claude Code subagent definition file."""
+    """One persona as a Claude Code subagent definition file, stamped.
+
+    The stamp is inserted after the frontmatter and carries a digest of
+    everything else in the file, so :func:`is_managed` can tell boost's own
+    output from a copy the user has since edited.
+    """
+    text = _persona_text(persona)
+    head, _sep, tail = text.partition("---\n\n")
+    # The stamp line is *inserted*, not substituted: removing it again has to
+    # yield `text` byte for byte, blank line included, or the digest can never
+    # be recomputed from the file on disk.
+    return "%s---\n%s\n\n%s" % (head, _stamp(_digest(text)), tail)
+
+
+def _stamp(digest: str) -> str:
+    return "%s %s -->" % (MARKER, digest)
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def _unstamp(text: str) -> tuple[str | None, str]:
+    """Split a stamped file into ``(digest, the-text-that-was-digested)``.
+
+    Returns ``(None, text)`` when there is no stamp. Removing the stamp line
+    exactly — comment plus its trailing newline — is what makes the digest
+    reproducible from the file alone.
+    """
+    m = _STAMP_RE.search(text)
+    if not m:
+        return None, text
+    end = m.end() + 1 if text[m.end():m.end() + 1] == "\n" else m.end()
+    return m.group(1), text[:m.start()] + text[end:]
+
+
+def is_managed(text: str) -> bool:
+    """True only for a persona file boost wrote and nobody has edited since."""
+    digest, original = _unstamp(text)
+    return digest is not None and digest == _digest(original)
+
+
+def _persona_text(persona: Persona) -> str:
+    """The persona file *without* its stamp — the bytes the digest covers."""
     playbook = "\n".join("- %s" % b for b in persona.playbook)
     skills = ", ".join("`%s`" % s for s in persona.skills)
     return """---
@@ -556,7 +627,7 @@ description: %s
 model: inherit
 color: %s
 ---
-%s
+
 You are %s, %s — the BMAD Method persona for this kind of work.
 
 Mission: %s
@@ -573,32 +644,42 @@ tracked roadmap or backlog item moved to match, and the repo's own gate green
 with output you have seen. If you could not finish a part of it, say which part
 and why — do not narrow the task silently.
 """ % (persona.slug, json.dumps(persona_description(persona)), persona.color,
-       MARKER, persona.character, persona.title, persona.mission, playbook,
-       skills)
+       persona.character, persona.title, persona.mission, playbook, skills)
 
 
-def write_personas(agents_dir: Path) -> list[str]:
-    """Write every persona into `agents_dir`. Idempotent; returns the slugs."""
+def write_personas(agents_dir: Path) -> tuple[list[str], list[str]]:
+    """Write the personas into `agents_dir`; return ``(written, skipped)``.
+
+    Idempotent, and never destructive: a file that exists but is not boost's own
+    unedited output is left exactly as it is and reported as skipped, so
+    re-running `boost bmad on` cannot silently discard someone's customisation.
+    """
     agents_dir = Path(agents_dir)
     agents_dir.mkdir(parents=True, exist_ok=True)
+    written, skipped = [], []
     for persona in PERSONAS:
-        (agents_dir / ("%s.md" % persona.slug)).write_text(
-            persona_markdown(persona), encoding="utf-8")
-    return sorted(p.slug for p in PERSONAS)
+        path = agents_dir / ("%s.md" % persona.slug)
+        existing = _read(path)
+        if existing and not is_managed(existing):
+            skipped.append(persona.slug)
+            continue
+        path.write_text(persona_markdown(persona), encoding="utf-8")
+        written.append(persona.slug)
+    return sorted(written), sorted(skipped)
 
 
 def installed_personas(agents_dir: Path) -> list[str]:
-    """The boost-authored personas currently on disk (marker-stamped only)."""
+    """The personas on disk that boost still owns (stamp digest still matches)."""
     agents_dir = Path(agents_dir)
     return sorted(p.slug for p in PERSONAS
-                  if MARKER in _read(agents_dir / ("%s.md" % p.slug)))
+                  if is_managed(_read(agents_dir / ("%s.md" % p.slug))))
 
 
 def remove_personas(agents_dir: Path) -> list[str]:
     """Delete only the persona files boost wrote; return the slugs removed.
 
-    A file we no longer recognise — because the user rewrote it — is left
-    alone. `boost bmad off` should never eat someone's edits.
+    A file the user has edited no longer matches its stamp, so it is not ours to
+    delete. `boost bmad off` must never eat someone's work.
     """
     agents_dir = Path(agents_dir)
     removed = []

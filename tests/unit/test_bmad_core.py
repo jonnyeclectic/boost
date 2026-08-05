@@ -17,11 +17,14 @@ Three things are worth pinning here, because all three are load-bearing for
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from boost_cli.core import bmad
+
+_STAMP = re.compile(r"<!-- boost:bmad-persona [0-9a-f]{12} -->")
 
 # --------------------------------------------------------------- classification
 
@@ -84,6 +87,23 @@ class TestClassifyTrivial:
         """MIN_WORDS is a floor on acknowledgements, not on terse instructions."""
         assert bmad.classify("fix the bug") == "build"
 
+    def test_a_prompt_matching_no_track_is_trivial(self):
+        """Long enough, not a question, no slash — only the zero-score guard
+        keeps this silent, so it is the only test that holds that guard."""
+        assert bmad.classify("hello there my friend") == "trivial"
+
+    def test_a_question_followed_by_an_instruction_is_not_a_question(self):
+        """The gate anchors on the first token, which used to swallow these."""
+        assert bmad.classify(
+            "Why is test_catalog flaky on Windows? Fix it and add a regression "
+            "test.") == "quality"
+        assert bmad.classify(
+            "Where the CSS grid wraps, the cards overlap. Fix the layout.") == "ux"
+
+    def test_a_dotted_identifier_is_not_a_sentence_boundary(self):
+        """`SKILL.md` and `store.install` must not read as end-of-sentence."""
+        assert bmad.classify("what does store.install do with SKILL.md?") == "trivial"
+
     def test_a_question_of_exactly_the_cutoff_length_is_trivial(self):
         """The boundary itself is inclusive — 30 words is still a question."""
         prompt = ("how should we handle the case where a tap has no SKILL.md at "
@@ -126,6 +146,18 @@ class TestClassifyTracks:
             assert track.lead in slugs, "%s leads with unknown persona" % name
             for s in track.support:
                 assert s in slugs, "%s supports with unknown persona" % name
+
+    def test_every_track_routes_at_a_skill_its_lead_actually_drives(self):
+        """Only the `build` row is pinned end to end by the golden banner, and
+        mutmut generates no mutants for a module-level dict — so without this
+        the other eight rows could be edited to anything."""
+        for name, track in bmad.TRACKS.items():
+            lead = bmad.PERSONA_BY_SLUG[track.lead]
+            assert track.skill in lead.skills, (
+                "track %r routes at %r, which %s does not drive"
+                % (name, track.skill, lead.character))
+            assert track.lead not in track.support
+            assert track.note.endswith((".", "!"))
 
     def test_track_order_covers_every_track_exactly_once(self):
         assert sorted(bmad.TRACK_ORDER) == sorted(bmad.TRACKS)
@@ -398,7 +430,8 @@ class TestPersonaFiles:
         nowhere. The description is quoted because it contains `.` and `(`
         after a colon, which bare YAML would mis-parse."""
         md = bmad.persona_markdown(bmad.PERSONA_BY_SLUG["bmad-ux"])
-        assert md.splitlines()[:7] == [
+        lines = md.splitlines()
+        assert lines[:6] == [
             "---",
             "name: bmad-ux",
             'description: "Sally, UX Designer (BMAD bmm). Use PROACTIVELY for '
@@ -407,8 +440,74 @@ class TestPersonaFiles:
             "model: inherit",
             "color: pink",
             "---",
-            bmad.MARKER,
         ]
+        assert re.fullmatch(r"<!-- boost:bmad-persona [0-9a-f]{12} -->", lines[6])
+
+    def test_rendering_is_deterministic(self):
+        """Two renders must agree, or every `bmad on` would rewrite every file."""
+        for persona in bmad.PERSONAS:
+            assert bmad.persona_markdown(persona) == bmad.persona_markdown(persona)
+
+
+class TestOwnershipStamp:
+    """`on` must not clobber an edited persona and `off` must not delete one.
+
+    Marker *presence* used to decide this, which was wrong in both directions:
+    the marker is an HTML comment a user editing the body has no reason to
+    remove, so their work was silently overwritten and then deleted while boost
+    printed that hand edits were left in place.
+    """
+
+    def test_boost_owns_what_it_just_wrote(self):
+        assert bmad.is_managed(bmad.persona_markdown(bmad.PERSONAS[0]))
+
+    @pytest.mark.parametrize("edit", [
+        lambda md: md.replace("Mission:", "MY MISSION:"),          # body edited
+        lambda md: md.replace("model: inherit", "model: opus"),    # frontmatter
+        lambda md: md + "\nextra instruction\n",                   # appended
+        lambda md: md.replace("<!-- boost:bmad-persona", "<!-- mine"),
+    ])
+    def test_any_edit_releases_the_claim(self, edit):
+        md = bmad.persona_markdown(bmad.PERSONA_BY_SLUG["bmad-ux"])
+        assert not bmad.is_managed(edit(md))
+
+    def test_a_forged_digest_is_not_ownership(self):
+        md = bmad.persona_markdown(bmad.PERSONA_BY_SLUG["bmad-ux"])
+        forged = _STAMP.sub("<!-- boost:bmad-persona 000000000000 -->", md)
+        assert not bmad.is_managed(forged)
+
+    def test_an_unstamped_file_is_never_ours(self):
+        assert not bmad.is_managed("---\nname: bmad-ux\n---\nmine\n")
+        assert not bmad.is_managed("")
+
+    def test_write_skips_a_file_it_does_not_own(self, tmp_path):
+        bmad.write_personas(tmp_path)
+        mine = tmp_path / "bmad-dev.md"
+        mine.write_text("---\nname: bmad-dev\n---\nmy own version\n",
+                        encoding="utf-8")
+
+        written, skipped = bmad.write_personas(tmp_path)
+        assert skipped == ["bmad-dev"]
+        # every *other* persona is still refreshed: one customised file must not
+        # stop the rest from being updated
+        assert written == sorted(
+            p.slug for p in bmad.PERSONAS if p.slug != "bmad-dev")
+        assert mine.read_text(encoding="utf-8").endswith("my own version\n")
+
+    def test_write_skips_a_stamped_file_whose_body_was_edited(self, tmp_path):
+        """The case marker-presence got wrong: stamp kept, body changed."""
+        bmad.write_personas(tmp_path)
+        mine = tmp_path / "bmad-dev.md"
+        edited = mine.read_text(encoding="utf-8").replace(
+            "Mission:", "Mission (mine):")
+        mine.write_text(edited, encoding="utf-8")
+
+        written, skipped = bmad.write_personas(tmp_path)
+        assert skipped == ["bmad-dev"] and "bmad-dev" not in written
+        assert mine.read_text(encoding="utf-8") == edited
+        # ...and `off` must not delete it either
+        assert "bmad-dev" not in bmad.remove_personas(tmp_path)
+        assert mine.exists()
 
     def test_the_playbook_renders_one_bullet_per_line(self):
         persona = bmad.PERSONA_BY_SLUG["bmad-ux"]
@@ -428,17 +527,20 @@ class TestPersonaFiles:
         assert (nested / "bmad-dev.md").is_file()
 
     def test_write_creates_one_file_per_persona(self, tmp_path):
-        written = bmad.write_personas(tmp_path)
-        assert sorted(written) == sorted(p.slug for p in bmad.PERSONAS)
+        written, skipped = bmad.write_personas(tmp_path)
+        assert written == sorted(p.slug for p in bmad.PERSONAS)
+        assert skipped == []
         for slug in written:
             assert (tmp_path / ("%s.md" % slug)).is_file()
 
     def test_write_is_idempotent(self, tmp_path):
         bmad.write_personas(tmp_path)
         first = (tmp_path / "bmad-dev.md").read_text(encoding="utf-8")
-        bmad.write_personas(tmp_path)
+        written, skipped = bmad.write_personas(tmp_path)
         assert (tmp_path / "bmad-dev.md").read_text(encoding="utf-8") == first
         assert len(list(tmp_path.glob("*.md"))) == len(bmad.PERSONAS)
+        # an untouched file is still ours, so it is rewritten rather than skipped
+        assert skipped == [] and len(written) == len(bmad.PERSONAS)
 
     def test_installed_personas_reports_what_is_on_disk(self, tmp_path):
         assert bmad.installed_personas(tmp_path) == []

@@ -332,15 +332,17 @@ that exits non-zero would erase your prompt, it degrades every failure to
 silence and always exits 0.
 
 ```bash
-boost bmad personas                  # the roster, and whether it's installed
-boost bmad route "add tests" --plain # see what a prompt would route to
-boost bmad doctor                    # autopilot + workflow state, both scopes
-boost bmad off                       # remove the hooks and the personas
-boost bmad on --scope project        # or keep it to one repo
+boost bmad personas                            # the roster, and whether it's installed
+boost bmad route "add tests for the scanner" --plain   # what would this route to?
+boost bmad doctor                              # autopilot + workflow state, both scopes
+boost bmad off                                 # remove the hooks and the personas
+boost bmad on --scope project                  # or keep it to one repo
 ```
 
-`off` only deletes persona files boost wrote — edit `~/.claude/agents/bmad-dev.md`
-to taste and it survives.
+Every persona file carries an ownership stamp containing a digest of its own
+contents, so **the moment you edit one it stops being boost's**: `boost bmad on`
+reports it as kept rather than overwriting it, and `boost bmad off` leaves it
+alone. Delete the file if you want the stock version back.
 
 **The full method** is still a separate, heavier install. `boost bmad install`
 delegates to the canonical `npx bmad-method install` (needs Node.js 20.12+) for
