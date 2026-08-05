@@ -24,6 +24,7 @@ and the lock record so uninstall can reverse them.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from ..errors import BoostError
@@ -135,14 +136,117 @@ def render_gemini_command(name: str, raw: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Gemini validates a subagent's frontmatter with a Zod schema at load time, and
+# rejects the whole FILE when any field fails — so a tap's agent written for
+# another host greets the user with a validation error every session, for a
+# file boost installed. These three constants are the schema, lifted from the
+# shipped bundle's own validator rather than from its documentation: the docs
+# name tools informally while `ALL_BUILTIN_TOOL_NAMES` resolves through
+# per-tool constants (EDIT_TOOL_NAME = "replace", GREP_TOOL_NAME =
+# "grep_search"), so a sanitizer written from the docs would emit a list Gemini
+# rejects. tests/unit/test_gemini_agent_sanitize.py pins all three, the way
+# test_mcphost.py pins the MCP grammar — when Gemini's schema moves, that test
+# goes red instead of somebody's startup.
+GEMINI_NAME_RE = re.compile(r"^[a-z0-9-_]+$")
+
+#: The 13 built-ins the bundle ships, plus the one legacy alias its validator
+#: still accepts (``search_file_content`` -> ``grep_search``).
+GEMINI_TOOL_NAMES = frozenset({
+    "activate_skill", "ask_user", "glob", "google_web_search", "grep_search",
+    "list_directory", "read_file", "read_many_files", "replace",
+    "run_shell_command", "web_fetch", "write_file", "write_todos"})
+GEMINI_TOOL_ALIASES = frozenset({"search_file_content"})
+#: Wildcards and prefixes ``isValidToolName`` accepts beyond the literal names.
+GEMINI_TOOL_WILDCARDS = frozenset({"*", "mcp_*"})
+GEMINI_TOOL_PREFIXES = ("discovered_tool_", "mcp_")
+
+
+def _valid_gemini_tool(name: str) -> bool:
+    """Mirror of the bundle's ``isValidToolName`` for the cases taps produce."""
+    if name in GEMINI_TOOL_NAMES or name in GEMINI_TOOL_ALIASES:
+        return True
+    if name in GEMINI_TOOL_WILDCARDS:
+        return True
+    # `mcp_` alone is rejected by the validator; a real MCP tool name carries a
+    # server and tool part after it, which we do not try to validate further.
+    return any(name.startswith(p) and len(name) > len(p)
+               for p in GEMINI_TOOL_PREFIXES)
+
+
+def _slugify(value: str) -> str:
+    """``Trojan Skill Hunter`` -> ``trojan-skill-hunter``; "" when nothing survives."""
+    slug = re.sub(r"[^a-z0-9_-]+", "-", value.strip().lower()).strip("-")
+    return slug if GEMINI_NAME_RE.match(slug) else ""
+
+
+def sanitize_gemini_agent(name: str, raw: str) -> str:
+    """Make a tap's subagent Markdown loadable by Gemini, body untouched.
+
+    Three fields, three different failure modes, one rule each:
+
+    - ``name`` must match Gemini's slug regex or the file is rejected. A
+      display-style name is slugified and the original preserved in
+      ``display_name``, which is the field Gemini provides for exactly that,
+      so the agent still presents itself the way its author wrote it.
+    - ``tools`` entries must be names Gemini knows. A list containing even one
+      foreign entry is dropped WHOLE rather than filtered: keeping only the
+      names that happen to collide would hand the agent a silently narrower
+      toolset than its author intended, while an omitted list is Gemini's
+      documented "inherit the parent session's tools". Translating Copilot's
+      vocabulary into Gemini's is guesswork boost has no basis for.
+    - ``model`` is the trap, because it *passes* validation — it is just a
+      string — and then fails when the agent runs. Anything that is not
+      ``inherit`` or a Gemini model is dropped, restoring the documented
+      default.
+
+    Everything else is left alone, including keys boost does not recognise:
+    the same file may be read by another host with its own vocabulary. A file
+    with no frontmatter at all is returned unchanged rather than given one.
+    """
+    meta, body = frontmatter.parse(raw)
+    if not meta:
+        return raw
+    clean = dict(meta)
+
+    declared = str(clean.get("name") or "")
+    if not GEMINI_NAME_RE.match(declared):
+        slug = _slugify(declared) or name
+        # The install name is already a slug — it is what the file on disk is
+        # called — so it is the fallback when nothing of the original survives.
+        clean["name"] = slug if GEMINI_NAME_RE.match(slug) else name
+        if declared and not clean.get("display_name"):
+            clean["display_name"] = declared
+
+    tools = clean.get("tools")
+    if isinstance(tools, list) and not all(
+            _valid_gemini_tool(str(t)) for t in tools):
+        clean.pop("tools")
+
+    model = str(clean.get("model") or "")
+    if model and model != "inherit" and not model.startswith("gemini"):
+        clean.pop("model")
+
+    if clean == meta:
+        return raw          # nothing to fix: byte-identical passthrough
+    # `dump` ends at the closing fence and `parse` hands back the body with its
+    # leading newline already consumed, so the separator has to be put back —
+    # without it the fence and the first line of prose fuse into `---Body`,
+    # which reads as a file with no frontmatter at all.
+    return frontmatter.dump(clean) + "\n" + body
+
+
 def render(agent: str | None, slot: str, name: str, raw: str) -> str:
     """The text to write for ``name`` in ``slot`` for ``agent``.
 
-    Verbatim ``raw`` for every agent and slot except a TOML-command agent's
-    ``commands`` slot, which is converted by :func:`render_gemini_command`.
-    Pairs with :func:`target_ext`: the two agree on exactly which combination is
+    Verbatim ``raw`` for every agent and slot except two, both Gemini's: its
+    ``commands`` slot is converted to TOML by :func:`render_gemini_command`,
+    and its ``agents`` slot has its frontmatter sanitized by
+    :func:`sanitize_gemini_agent` — the body is still verbatim there. Pairs
+    with :func:`target_ext`: the two agree on exactly which combination is
     special, so the extension and the content can never disagree.
     """
     if target_ext(agent, slot) == TOML_EXT:
         return render_gemini_command(name, raw)
+    if agent in TOML_COMMAND_AGENTS and slot == SLOT_AGENTS:
+        return sanitize_gemini_agent(name, raw)
     return raw
