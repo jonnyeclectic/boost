@@ -11,6 +11,11 @@ from __future__ import annotations
 import importlib.util
 
 import pytest
+
+pytest.importorskip(
+    "langchain_core",
+    reason="needs the [langchain] extra: pip install -e '.[langchain]'")
+
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from boost_langchain import BoostRetriever, skill_context_node

@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import pytest
 
+pytest.importorskip(
+    "langchain_core",
+    reason="needs the [langchain] extra: pip install -e '.[langchain]'")
+
 from boost_langchain import SkillMarkdownLoader
 
 

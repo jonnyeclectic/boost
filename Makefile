@@ -52,7 +52,7 @@ mutation:
 	$(PY) scripts/mutation_gate.py --run --min 80
 
 lint:
-	$(VENV)/bin/ruff check boost_cli tests evals scripts
+	$(VENV)/bin/ruff check boost_cli boost_langchain tests evals scripts
 	$(VENV)/bin/mypy
 	$(VENV)/bin/pyright
 	$(VENV)/bin/lint-imports
@@ -60,7 +60,7 @@ lint:
 	$(VENV)/bin/xenon --max-absolute F --max-modules E --max-average B boost_cli
 	$(VENV)/bin/interrogate boost_cli/core
 	$(VENV)/bin/refurb boost_cli
-	$(VENV)/bin/codespell boost_cli docs README.md
+	$(VENV)/bin/codespell boost_cli boost_langchain docs README.md
 	@# actionlint does not lint `run:` blocks itself — it shells out to
 	@# shellcheck, and if shellcheck is not on PATH it skips them silently and
 	@# still exits 0. So `make lint` could report a clean workflow lint having

@@ -9,14 +9,14 @@ regression and an offline regression mean the same thing.
 
 Key-gated and opt-in, like every LangSmith surface here: requires
 ``LANGSMITH_API_KEY`` and the ``langsmith`` package (``pip install
-'boost-langchain[langsmith]'``), and exits with a message rather than a
-traceback when either is missing. It must never become part of the required
-gate — a required check that depends on a SaaS account fails when someone
-else's billing lapses.
+langsmith``), and exits with a message rather than a traceback when either
+is missing. It must never become part of the required gate — a required
+check that depends on a SaaS account fails when someone else's billing
+lapses.
 
 Run from a boost checkout (the golden set lives in the repo, not the wheel):
 
-    python integrations/langchain/scripts/publish_golden_dataset.py \
+    python evals/publish_golden_dataset.py \
         [--golden tests/eval/golden.jsonl] [--name boost-golden-retrieval]
 
 Re-running updates the dataset in place: examples are replaced wholesale so
@@ -30,7 +30,7 @@ import os
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def load_golden(path: Path) -> list[dict]:
@@ -57,8 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         from langsmith import Client
     except ImportError:
-        print("langsmith is not installed — `pip install "
-              "'boost-langchain[langsmith]'`", file=sys.stderr)
+        print("langsmith is not installed — `pip install langsmith`",
+              file=sys.stderr)
         return 1
 
     rows = load_golden(args.golden)

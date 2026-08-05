@@ -1,8 +1,10 @@
 # Keep source releases lean: the runtime is boost_cli/ (with its bundled
-# data), plus the usual metadata. Everything below is dev-only or generated
-# and should never ship in the sdist.
+# data) plus boost_langchain/ (the LangChain bindings — in the wheel, inert
+# without the [langchain] extra), plus the usual metadata. Everything below
+# is dev-only or generated and should never ship in the sdist.
 include README.md LICENSE pyproject.toml setup.cfg
 recursive-include boost_cli *.py *.json
+recursive-include boost_langchain *.py py.typed
 prune mutants
 prune dist
 prune .idea
@@ -13,6 +15,6 @@ exclude .coverage
 # only; nothing in the shipped runtime touches node.
 exclude package.json package-lock.json
 global-exclude __pycache__ *.pyc *.pyo .DS_Store
-# integrations/ hosts separately-versioned distributions (boost-langchain);
-# boost-skill-cli's own sdist must not ship a nested pyproject.
-prune integrations
+# The package README is repo documentation, not wheel payload — the wheel's
+# long_description is the root README.
+exclude boost_langchain/README.md

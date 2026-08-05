@@ -2,8 +2,9 @@
 id: langchain-in-the-wheel
 board: code
 section: compat
-status: inflight
+status: shipped
 owner: loop/langchain-extra
+pr: 472
 category: Release
 complexity: M
 impact: High

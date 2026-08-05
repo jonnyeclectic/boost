@@ -6,6 +6,12 @@ field plumbing and the callback contract are exercised too.
 """
 from __future__ import annotations
 
+import pytest
+
+pytest.importorskip(
+    "langchain_core",
+    reason="needs the [langchain] extra: pip install -e '.[langchain]'")
+
 from langchain_core.documents import Document
 
 from boost_langchain import BoostRetriever
