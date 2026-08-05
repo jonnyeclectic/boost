@@ -179,11 +179,11 @@ class TestTheValidatorSetsMatchTheShippedBundle:
     """
 
     def test_the_builtin_names_are_the_thirteen_the_bundle_ships(self):
-        assert workflows.GEMINI_TOOL_NAMES == frozenset({
+        assert frozenset({
             "activate_skill", "ask_user", "glob", "google_web_search",
             "grep_search", "list_directory", "read_file", "read_many_files",
             "replace", "run_shell_command", "web_fetch", "write_file",
-            "write_todos"})
+            "write_todos"}) == workflows.GEMINI_TOOL_NAMES
 
     def test_the_slug_pattern_matches_geminis_regex(self):
         ok = ("trojan-skill-hunter", "a", "a_b", "a-b-1", "123")
