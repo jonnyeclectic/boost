@@ -438,15 +438,23 @@ class TestInstructionsBoundIsATestNotAFeeling:
     because it is free to evaluate. What it missed is the task that has no
     tidy name and is still large. The fix is not to ask the agent to judge
     difficulty (it will say "this looks small", and every turn looks small
-    when it opens) but to give it properties it can read off the work: more
-    than one file, something left behind, a line in a commit message.
+    when it opens) but to give it properties it can read off the REQUEST:
+    more than one file, or something that outlives the session.
     """
 
     def test_the_boundary_is_stated_as_observable_properties(self):
         low = mcp.INSTRUCTIONS.lower()
         assert "more than one file" in low
         assert "outlives" in low or "outlast" in low
-        assert "commit message" in low
+
+    def test_no_trigger_swallows_the_skip_list(self):
+        # "you would name it in a commit message" was drafted as a third
+        # signal and cut: it is true of every edit that ships, INCLUDING the
+        # one-line edit the skip list excuses by name. A trigger that
+        # contradicts its own bound turns "check first" into "check always",
+        # which is the capture this surface exists to avoid.
+        low = mcp.INSTRUCTIONS.lower()
+        assert "commit message" not in low
 
     def test_the_original_nameable_trigger_survives(self):
         # Regression guard: the observable boundary is ADDITIVE. The name test

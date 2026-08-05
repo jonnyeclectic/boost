@@ -131,13 +131,19 @@ PROTOCOL_VERSION = "2024-11-05"
 # whole job is steering toward a better path and away from an anti-pattern,
 # which is exactly the value an agent cannot infer from the bare word "rule".
 #
-# THE BOUNDARY is a test rather than a judgement, and that distinction is the
-# whole reason it works. "Before non-trivial work" lost to its own escape
-# hatch every time, because deciding a task is non-trivial takes judgement
-# while "this turn looks small" is free — and every turn looks small when it
-# opens. Three properties can be read off the work instead of decided about
-# it: more than one file, something left behind, a line in a commit message.
-# The nameable-task trigger stays as the cheapest test of all.
+# THE BOUNDARY is read off the REQUEST rather than judged about the work, and
+# that distinction is the whole reason it works. "Before non-trivial work"
+# lost to its own escape hatch every time, because deciding a task is
+# non-trivial takes judgement while "this turn looks small" is free — and
+# every turn looks small when it opens. Two properties of what was asked
+# survive that: more than one file, or something that outlives the session.
+#
+# A third — "you would name it in a commit message" — was drafted and cut,
+# because it is true of every edit that ships, including the one-line edit the
+# skip list two paragraphs down explicitly excuses. A trigger that swallows
+# its own bound is how "check first" becomes "check always", which is the
+# capture this whole surface is written to avoid. The nameable-task trigger
+# stays as the cheapest test of all.
 #
 # NON-CAPTURING, and this is a measured knife edge rather than a manner.
 # Editing only a tool's description moves how often a model calls it by more
@@ -150,9 +156,9 @@ INSTRUCTIONS = (
     "boost is a shared shelf of version-tracked procedures for AI coding "
     "agents, in three kinds: SKILLS (a procedure someone already worked out "
     "and debugged), RULES (guardrails that steer toward a better path and "
-    "rule out an anti-pattern — these materialize into the context file your "
-    "agent reads every session), and WORKFLOWS (slash-commands and "
-    "subagents).\n"
+    "rule out an anti-pattern — these become part of your agent's standing "
+    "instructions, either a managed block in its context file or a file in "
+    "its rules directory), and WORKFLOWS (slash-commands and subagents).\n"
     "\n"
     "THE CHECK: if the task in front of you has a name — \"set up code "
     "review\", \"add commit conventions\", \"write a migration\", \"debug "
@@ -163,16 +169,14 @@ INSTRUCTIONS = (
     "reranks every match, which is what makes the top result worth acting on "
     "rather than skimming ten.\n"
     "\n"
-    "WORTH THE SECONDS — a test, not a feeling. Any one of these is a yes: "
-    "the work will touch more than one file; it leaves something behind that "
-    "outlives this session (a config, a CI job, a convention); or you would "
-    "name it in a commit message. Check again the moment a small task turns "
+    "WORTH THE SECONDS (boost_search — boost_list is free, call it whenever). "
+    "Two signals, both readable from the request itself rather than from work "
+    "you have not done: it asks you to touch more than one file, or it asks "
+    "for something that outlives this session — a config, a CI job, a "
+    "convention, a dependency. Check again the moment a small task turns "
     "out to be a large one — the first check only fires at a boundary you "
     "recognized at the time, and a question that became an investigation "
-    "never got one. The moments that pay best are the ones where a choice "
-    "gets locked in: starting a project or a subsystem, picking an "
-    "architecture, configuring an environment, adding a linter or formatter, "
-    "setting up tests or CI. One call there steers everything after it.\n"
+    "never got one.\n"
     "\n"
     "Finding nothing is a good outcome, not a wasted call: it tells you to "
     "build it yourself, now knowing that nothing already covers it. Finding "
@@ -222,9 +226,15 @@ def no_results(query: str, *, tapped: int) -> str:
     """
     if tapped > 0:
         return "no skills match %r" % query
+    # Addressed to the user via the agent, and naming ONE command. Telling an
+    # agent to run `boost mcp --seed` itself would have it re-register the
+    # server with every CLI on PATH as a side effect, and would step straight
+    # over a BOOST_NO_SEED the user set deliberately — `--seed` is exactly the
+    # flag that overrides it. `boost tap --defaults` is the precise fix, and
+    # _tool_doctor names the same one in the same order.
     return ("nothing is tapped yet, so there is no catalog to search — this "
-            "is a setup state, not a miss. Run `boost tap --defaults` (or "
-            "`boost mcp --seed`) to add the recommended registries, then "
+            "is a setup state, not a miss. Ask the user to run "
+            "`boost tap --defaults` to add the recommended registries, then "
             "search again.")
 
 

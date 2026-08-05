@@ -871,62 +871,62 @@ facilitate structured divergent thinking:
         <div class="reg-scroll">
           <table class="reg">
             <thead>
-              <tr><th>Tap</th><th>Repository</th><th>Skills</th><th>Focus</th></tr>
+              <tr><th>Tap</th><th>Repository</th><th>Items</th><th>Focus</th></tr>
             </thead>
             <tbody>
               <tr>
                 <td data-label="Tap"><span class="tapname">anthropics/skills</span></td>
                 <td class="repo" data-label="Repository">github.com/anthropics/skills</td>
-                <td data-label="Skills"><span class="cnt" data-count="anthropic">—</span></td>
+                <td data-label="Items"><span class="cnt" data-count="anthropic">—</span></td>
                 <td class="focus" data-label="Focus">Official Anthropic skills — documents, artifacts, MCP builders, agent workflows</td>
               </tr>
               <tr>
                 <td data-label="Tap"><span class="tapname">obra/superpowers</span></td>
                 <td class="repo" data-label="Repository">github.com/obra/superpowers</td>
-                <td data-label="Skills"><span class="cnt" data-count="superpowers">—</span></td>
+                <td data-label="Items"><span class="cnt" data-count="superpowers">—</span></td>
                 <td class="focus" data-label="Focus">Community powerhouse — TDD, debugging, planning, subagent workflows</td>
               </tr>
               <tr>
                 <td data-label="Tap"><span class="tapname">trailofbits/skills</span></td>
                 <td class="repo" data-label="Repository">github.com/trailofbits/skills</td>
-                <td data-label="Skills"><span class="cnt" data-count="trailofbits">—</span></td>
+                <td data-label="Items"><span class="cnt" data-count="trailofbits">—</span></td>
                 <td class="focus" data-label="Focus">Security auditing from Trail of Bits — CodeQL, Semgrep, vulnerability hunting</td>
               </tr>
               <tr>
                 <td data-label="Tap"><span class="tapname">expo/skills</span></td>
                 <td class="repo" data-label="Repository">github.com/expo/skills</td>
-                <td data-label="Skills"><span class="cnt" data-count="expo">—</span></td>
+                <td data-label="Items"><span class="cnt" data-count="expo">—</span></td>
                 <td class="focus" data-label="Focus">Official Expo team skills — EAS builds, app-store submission, deployments</td>
               </tr>
               <tr>
                 <td data-label="Tap"><span class="tapname">K-Dense-AI/scientific-agent-skills</span></td>
                 <td class="repo" data-label="Repository">github.com/K-Dense-AI/scientific-agent-skills</td>
-                <td data-label="Skills"><span class="cnt" data-count="scientific">—</span></td>
+                <td data-label="Items"><span class="cnt" data-count="scientific">—</span></td>
                 <td class="focus" data-label="Focus">Scientific computing — research libraries, databases, data analysis</td>
               </tr>
               <tr>
                 <td data-label="Tap"><span class="tapname">PatrickJS/awesome-cursorrules</span></td>
                 <td class="repo" data-label="Repository">github.com/PatrickJS/awesome-cursorrules</td>
-                <td data-label="Skills"><span class="cnt">257</span></td>
+                <td data-label="Items"><span class="cnt" data-count="cursorrules">—</span></td>
                 <td class="focus" data-label="Focus"><b>Rules</b> — the canonical .cursorrules/.mdc collection: per-stack conventions, and the anti-patterns to avoid</td>
               </tr>
               <tr>
                 <td data-label="Tap"><span class="tapname">qdhenry/Claude-Command-Suite</span></td>
                 <td class="repo" data-label="Repository">github.com/qdhenry/Claude-Command-Suite</td>
-                <td data-label="Skills"><span class="cnt">358</span></td>
+                <td data-label="Items"><span class="cnt" data-count="commandsuite">—</span></td>
                 <td class="focus" data-label="Focus"><b>Workflows</b> — slash commands and subagents for review, testing, refactoring and release</td>
               </tr>
               <tr class="dim">
                 <td data-label="Tap"><span class="tapname">your-org/skills</span></td>
                 <td class="repo" data-label="Repository">any repo with SKILL.md files</td>
-                <td data-label="Skills"><span class="cnt">∞</span></td>
+                <td data-label="Items"><span class="cnt">∞</span></td>
                 <td class="focus" data-label="Focus">Your team’s registry — <code style="color:var(--cyan);font-size:.92em">boost tap your-org/skills</code> (private repos work over ssh)</td>
               </tr>
             </tbody>
           </table>
         </div>
       </div>
-      <p class="reg-note">Skill counts measured from the live repositories ·
+      <p class="reg-note">Item counts (skills + rules + workflows) measured from the live repositories ·
         build the GitHub-wide index with <code>boost index</code>, browse it with <code>boost discover</code></p>
     </div>
   </section>
@@ -948,7 +948,7 @@ facilitate structured divergent thinking:
 pipx install boost-skill-cli        <span class="cm"># or: pip install boost-skill-cli</span>
 <span class="tv">boost</span> --version
 
-<span class="cm"># add the 5 starter registries and go</span>
+<span class="cm"># add the 7 starter registries and go (or just run `boost mcp`)</span>
 <span class="tv">boost</span> <span class="tc">tap</span> --defaults
 <span class="tv">boost</span> <span class="tc">search</span> brainstorming
 
@@ -1102,8 +1102,10 @@ const COMMANDS = [
   ["who","team","Discover who on the team has skill expertise"],
 ];
 
-// live-measured registry skill counts (updated at build time)
-const REG_COUNTS = { anthropic: "18", superpowers: "14", trailofbits: "75", expo: "22", scientific: "149" };
+// live-measured registry ITEM counts — skills + rules + workflows, which is
+// what the catalog actually indexes. Skill-only counts understated the two
+// registries that carry no skills at all (a pure rules repo read as 0).
+const REG_COUNTS = { anthropic: "18", superpowers: "14", trailofbits: "118", expo: "23", scientific: "158", cursorrules: "257", commandsuite: "358" };
 
 // ---------- render ----------
 const groupsEl = document.getElementById("cmd-groups");

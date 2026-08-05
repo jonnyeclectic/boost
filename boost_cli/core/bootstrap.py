@@ -34,7 +34,9 @@ class SeedResult:
     tapped: list[tuple[str, int]] = field(default_factory=list)
     #: One human-readable line per registry that could not be fetched.
     failed: list[str] = field(default_factory=list)
-    #: True when the machine already had taps and nothing was touched.
+    #: Defaults that were already configured, so nothing was done for them.
+    already: list[str] = field(default_factory=list)
+    #: True when nothing was attempted at all (opted out, or already complete).
     skipped: bool = False
 
     @property
@@ -47,33 +49,75 @@ class SeedResult:
         if self.skipped:
             return "catalog already tapped — leaving it alone"
         if not self.tapped:
-            return ("could not reach any default registry — run "
-                    "`boost tap --defaults` once you have a network")
+            # Only claim the network is the problem when the network was
+            # actually the problem. A run where every default was already
+            # configured reaches here too, and telling that user to retry
+            # "once you have a network" is advice about a machine they do
+            # not have — see the `--seed` repair path, which hits it head-on.
+            if self.failed:
+                return ("could not reach any default registry — run "
+                        "`boost tap --defaults` once you have a network")
+            return "catalog already tapped — leaving it alone"
         line = ("tapped %d registries (%d items searchable)"
                 % (len(self.tapped), self.item_count))
+        if self.already:
+            line += " — %d already tapped" % len(self.already)
         if self.failed:
             line += " — %d could not be fetched" % len(self.failed)
         return line
 
 
+def will_seed(*, force: bool = False) -> bool:
+    """True when :func:`seed_catalog` would actually clone something.
+
+    Exists so a caller can announce the wait BEFORE it starts. The seed is
+    14-45s of network with nothing to print until it returns, and on the one
+    command a first-time user was told to run, silence that long reads as a
+    hang. Deliberately mirrors seed_catalog's own gates rather than guessing.
+    """
+    if not force and os.environ.get(NO_SEED_ENV):
+        return False
+    existing = {t.name for t in registry.list_taps()}
+    if not force and existing:
+        return False
+    return any(str(d["name"]) not in existing for d in config.DEFAULT_TAPS)
+
+
 def seed_catalog(*, force: bool = False) -> SeedResult:
-    """Tap the recommended registries when the machine has none.
+    """Tap whichever recommended registries this machine is missing.
 
-    Idempotent by default: a machine that already has taps is left completely
-    alone, because re-tapping someone's configured setup because they re-ran
-    `boost mcp` would be boost editing state it was not asked to touch.
-    ``force`` is the repair path for a machine that lost its taps.
+    The decision is per registry, not per machine, and that distinction is
+    load-bearing twice over. A seed interrupted after two clones used to leave
+    a machine that read as "configured" forever, because the check was "does
+    ANY tap exist" — so the remaining five never arrived and nothing ever said
+    so. And `--seed`, documented as the repair path, called ``registry.add``
+    on registries that were already there; ``add`` rejects those before it
+    touches the network, so the repair reported seven failures and blamed the
+    connection on a machine whose connection was fine.
 
-    Never raises. This runs on the registration path, where the user's actual
-    request was "register the MCP server" — a dead network or one bad remote
-    must cost them a reported line, not the server they asked for.
+    Skips silently when the user opted out (``BOOST_NO_SEED``) or when every
+    default is already present. Never raises: this runs on the registration
+    path, where the user's actual request was "register the MCP server" — a
+    dead network or one bad remote must cost them a reported line, not the
+    server they asked for.
     """
     if not force and os.environ.get(NO_SEED_ENV):
         return SeedResult(skipped=True)
-    if not force and registry.list_taps():
+    existing = {t.name for t in registry.list_taps()}
+    # `force` re-checks the DEFAULTS rather than re-adding them: a machine
+    # missing two of seven is topped up, and one missing none is left alone.
+    missing = [d for d in config.DEFAULT_TAPS if str(d["name"]) not in existing]
+    if not missing:
         return SeedResult(skipped=True)
-    res = SeedResult()
-    for default in config.DEFAULT_TAPS:
+    # Without --seed the implicit path stays conservative: a machine with taps
+    # of its own is somebody's configured setup, and quietly adding seven
+    # registries to it because they re-ran `boost mcp` is boost editing state
+    # it was not asked to touch.
+    if not force and existing:
+        return SeedResult(skipped=True)
+    res = SeedResult(already=[str(d["name"]) for d in config.DEFAULT_TAPS
+                              if str(d["name"]) in existing])
+    for default in missing:
         name = str(default["name"])
         try:
             tap = registry.add(str(default["url"]), curated=True)

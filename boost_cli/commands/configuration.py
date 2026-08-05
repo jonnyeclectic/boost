@@ -1013,9 +1013,14 @@ def _tool_doctor(args: dict):
     # materialization, and folding the two into one branch would hide the
     # issue count behind the setup note.
     if not taps:
-        lines.append("no registries tapped — nothing is searchable yet; run "
-                     "`boost mcp --seed` (or `boost tap --defaults`) to add "
-                     "the recommended ones")
+        # Same command, same order, as mcp.no_results: an agent that calls
+        # both tools in one session must not see the recommendation flipped
+        # and read it as two different fixes. `boost tap --defaults` leads
+        # because it is the precise one — `boost mcp --seed` also
+        # re-registers the server with every agent CLI on PATH.
+        lines.append("no registries tapped — nothing is searchable yet; ask "
+                     "the user to run `boost tap --defaults` to add the "
+                     "recommended ones")
     if total == 0:
         if taps:
             lines.append("healthy — no issues found")
@@ -1099,21 +1104,25 @@ REGISTRY.register(
     "usable this second — capability you own and may not know you own. "
     "Returns one line each: name, version, tap, a [rule] or [workflow] marker "
     "where it is not a skill, and [pinned] where the version is held. "
-    "Read-only, instant, installs nothing. Worth a call at the start of "
-    "anything that will take more than a few steps: planning from memory while "
+    "Read-only, instant, installs nothing — so unlike boost_search there is "
+    "no threshold worth applying: call it whenever you are about to plan "
+    "something. Planning from memory while "
     "the answer already sits on disk is the one avoidable mistake here.",
     {"type": "object", "properties": {}},
     _tool_list)
 REGISTRY.register(
     "boost_info",
-    "The whole picture of one skill by name — what it does, the tap it came "
+    "The whole picture of one skill, rule or workflow by name — what it does, "
+    "its kind, the tap it came "
     "from, its version, and whether it is already installed — so you can "
     "commit or move on without guessing. Reach for it when a name arrives from "
     "somewhere else: a teammate, a README, a repo you are reading. You do not "
     "need this between a search and an install — boost_search already returns "
-    "each match's description.",
+    "each match's kind and description.",
     {"type": "object",
-     "properties": {"name": {"type": "string", "description": "skill name"}},
+     "properties": {"name": {"type": "string",
+                             "description": "the item's name, as boost_search "
+                             "or boost_list returned it"}},
      "required": ["name"]},
     _tool_info)
 REGISTRY.register(
@@ -1128,10 +1137,12 @@ REGISTRY.register(
     "identical thing by name. Worth knowing before you call it: what happens "
     "on disk depends on the kind, which boost_search marks on every hit. A "
     "skill is copied into the store and linked out. A WORKFLOW is rendered "
-    "into each agent's commands/agents directory. A RULE copies nothing into "
-    "the store — it merges into the context file your agent loads every "
-    "session, which is the more invasive change. Check the marker on the hit "
-    "you are installing.",
+    "into each agent's commands or agents directory, in that agent's own "
+    "format. A RULE copies nothing into the store — it becomes part of your "
+    "agent's standing instructions (a managed block in its context file, or a "
+    "file in its rules directory), which is the more invasive change because "
+    "it applies to every session afterwards, not just when you reach for it. "
+    "Check the marker on the hit you are installing.",
     {"type": "object",
      "properties": {"name": {"type": "string",
                              "description": "the name exactly as boost_search "
@@ -1143,7 +1154,9 @@ REGISTRY.register(
 REGISTRY.register(
     "boost_doctor",
     "Prove the skills you think are installed are actually usable. Reports how "
-    "many skills are installed, how many taps and skills are reachable, and "
+    "many skills, rules and workflows are installed, how many taps and items "
+    "are reachable (including the case where nothing is tapped at all, which "
+    "is a setup step rather than a fault), and "
     "anything the store and the lock file disagree about — and when they do "
     "disagree it points at the next action, `boost sync` — though some classes "
     "need `boost sync --prune` — rather than leaving you a "
@@ -1219,6 +1232,13 @@ def _seed_catalog_for_mcp(force: bool) -> None:
     an MCP server, so a dead network costs them a reported line rather than the
     registration itself.
     """
+    # Announced before the clones start, because the loop that follows is
+    # 14-45s of network with nothing to show for it until it finishes — on
+    # the one command a first-time user was told to run, silence that long
+    # reads as a hang.
+    if bootstrap.will_seed(force=force):
+        out.info("no registries tapped yet — adding the %d recommended ones "
+                 "(one-time, needs the network)" % len(config.DEFAULT_TAPS))
     res = bootstrap.seed_catalog(force=force)
     if res.skipped:
         return
@@ -1244,28 +1264,34 @@ def cmd_mcp(argv) -> int:
                         % ", ".join(mcphost.hosts()))
     p.add_argument("--stdio", action="store_true",
                    help="run the MCP server on stdin/stdout (used by the agent)")
-    p.add_argument("--seed", action="store_true",
-                   help="tap the recommended registries even if some tap "
-                        "already exists (the repair path)")
-    p.add_argument("--no-seed", dest="seed_ok", action="store_false",
-                   default=True,
-                   help="register only; do not tap anything")
+    # Mutually exclusive: `--seed --no-seed` used to resolve silently to the
+    # network-touching side, which is the wrong way for an ambiguous pair of
+    # explicitly typed flags to break.
+    seeding = p.add_mutually_exclusive_group()
+    seeding.add_argument("--seed", action="store_true",
+                         help="top up any missing recommended registries even "
+                              "if others are already tapped (the repair path)")
+    seeding.add_argument("--no-seed", dest="seed_ok", action="store_false",
+                         default=True,
+                         help="register only; do not tap anything")
     args = p.parse_args(argv)
 
     if args.stdio:
         return mcp.serve_stdio(REGISTRY, version=__version__)
-
-    # Before registering, not after: the seed is what gives the server
-    # something to answer with, and a user reading the output should see the
-    # catalog appear and then the registration that exposes it.
-    if args.action == "register" and (args.seed_ok or args.seed):
-        _seed_catalog_for_mcp(args.seed)
 
     try:
         targets = mcphost.resolve(args.host)
     except KeyError as e:
         raise BoostError("unknown MCP host %r" % args.host,
                         hint="known hosts: %s" % ", ".join(mcphost.hosts())) from e
+
+    # After the host name is validated and before anything is registered. The
+    # ordering is not cosmetic in either direction: seeding first meant a
+    # typo'd `--host` spent 14-45s and half a gigabyte before argparse's own
+    # error, and seeding last would have registered a server the user then
+    # watches answer nothing while the clones run.
+    if args.action == "register" and (args.seed_ok or args.seed):
+        _seed_catalog_for_mcp(args.seed)
 
     shim = str(paths.launcher())
     # `auto` skips hosts that are not installed; naming a host explicitly (or

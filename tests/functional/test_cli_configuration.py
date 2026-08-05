@@ -1107,7 +1107,14 @@ class TestMcp:
         # list is the free half of the check — capability already on the box.
         assert "installed" in specs["boost_list"]
         assert "read-only" in specs["boost_list"]
-        assert "more than a few steps" in specs["boost_list"]
+        # ...and being free, its trigger must not be STRICTER than the one on
+        # the 10-15s tool. It said "worth a call at the start of anything that
+        # will take more than a few steps" while boost_search invited a call
+        # on two much looser signals — so an agent applying both literally
+        # would pay for the expensive check and skip the instant one. A free,
+        # instant, read-only tool has no threshold worth computing.
+        assert "more than a few steps" not in specs["boost_list"]
+        assert "whenever" in specs["boost_list"]
         # install points back at the search that should precede it
         assert "boost_search" in specs["boost_install"]
         # info is a name lookup, NOT a step between search and install. It has
@@ -1158,7 +1165,7 @@ class TestMcp:
 
         # No claimed corpus size. "thousands of vetted skills" shipped for a
         # long time and is false exactly when it matters most — at a new user's
-        # first search. config.DEFAULT_TAPS is five repos totalling 76
+        # first search. config.DEFAULT_TAPS is seven repos totalling ~950
         # est_items; the tens of thousands only exist once someone has tapped
         # hundreds of registries. Describe the scope ("every registry you have
         # tapped"), never a number the install cannot back.
@@ -1326,6 +1333,76 @@ class TestMcp:
         # Seeding must not displace the thing the user actually asked for.
         assert ("registered boost as an MCP server for Claude Code "
                 "(scope: user)") in r.out
+
+    def test_the_sandbox_fixture_really_suppresses_the_seed(
+            self, boost, sandbox, monkeypatch):
+        # The guard that makes every OTHER test in this file safe. Removing
+        # BOOST_NO_SEED from conftest (or forgetting it in a new harness, as
+        # the behave environment did) produced no failing test at all — the
+        # only symptom was silent network traffic in CI. This is that test:
+        # it does NOT clear the variable, and fails loudly if anything taps.
+        from boost_cli.core import registry
+        monkeypatch.setattr(registry, "add", lambda *a, **kw: pytest.fail(
+            "seeded under the sandbox fixture — the BOOST_NO_SEED guard is "
+            "gone, and every test that runs `boost mcp` now hits the network"))
+        self._fake_clis(monkeypatch, "claude")
+        boost("mcp", "register")
+
+    def test_a_failed_clone_is_reported_without_losing_the_registration(
+            self, boost, sandbox, monkeypatch):
+        # The seed runs on a command whose actual request was "register the
+        # MCP server". A dead remote costs a reported line, never the server.
+        from boost_cli.core import bootstrap, catalog, config, registry
+        from boost_cli.errors import BoostError
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        doomed = str(config.DEFAULT_TAPS[0]["name"])
+
+        class _Tap:
+            def __init__(self, name):
+                self.name = name
+
+        def flaky_add(url, **kw):
+            name = url.split("github.com/")[-1]
+            if name == doomed:
+                raise BoostError("could not clone %s" % name)
+            return _Tap(name)
+
+        monkeypatch.setattr(registry, "add", flaky_add)
+        monkeypatch.setattr(catalog, "rebuild_tap", lambda tap: [{}] * 4)
+        self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register")
+        assert "could not tap %s" % doomed in r.out + r.err
+        assert "1 could not be fetched" in r.out
+        assert "registered boost as an MCP server" in r.out
+
+    def test_a_totally_dead_network_still_registers(self, boost, sandbox,
+                                                    monkeypatch):
+        from boost_cli.core import bootstrap, registry
+        from boost_cli.errors import BoostError
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        monkeypatch.setattr(registry, "add", lambda *a, **kw: (_ for _ in ()).throw(
+            BoostError("network is unreachable")))
+        self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register")
+        assert "could not reach any default registry" in r.out + r.err
+        assert "registered boost as an MCP server" in r.out
+
+    def test_an_unknown_host_fails_before_touching_the_network(
+            self, boost, sandbox, monkeypatch):
+        # Seeding used to run first, so a typo'd --host spent 14-45s and half
+        # a gigabyte before argparse's own error.
+        from boost_cli.core import bootstrap, registry
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        monkeypatch.setattr(registry, "add", lambda *a, **kw: pytest.fail(
+            "cloned before the host name was validated"))
+        r = boost("mcp", "register", "--host", "bogus", expect=1)
+        assert "unknown MCP host" in r.err
+
+    def test_seed_and_no_seed_together_are_rejected(self, boost, sandbox):
+        # Two explicitly typed flags that contradict each other must not
+        # resolve silently — least of all toward the network-touching side.
+        r = boost("mcp", "register", "--seed", "--no-seed", expect=2)
+        assert "not allowed with" in r.err
 
     def test_register_leaves_a_configured_machine_alone(
             self, boost, tapped, monkeypatch):

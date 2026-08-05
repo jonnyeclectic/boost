@@ -20,7 +20,18 @@ class _FakeTap:
         self.name = name
 
 
-def _stub(monkeypatch, *, existing=(), fail=(), counts=None):
+class _Added(list):
+    """The names that were really added, plus the journal calls made.
+
+    A list subclass so every ``added == [...]`` assertion below still reads
+    like one, while the journal record rides along for the tests that check
+    boost recorded the tap it just made.
+    """
+
+    logged: list = []
+
+
+def _stub(monkeypatch, *, existing=(), fail=(), oserror=(), counts=None):
     """Point bootstrap at fakes: no network, no disk, deterministic counts.
 
     Clearing BOOST_NO_SEED is the explicit opt-in the conftest asks for: the
@@ -30,13 +41,18 @@ def _stub(monkeypatch, *, existing=(), fail=(), counts=None):
     """
     from boost_cli.core import catalog, journal, registry
     monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
-    added = []
+    added, logged = _Added(), []
 
-    def fake_add(url, **kw):
+    def fake_add(url, curated=None, **kw):
         name = url.split("github.com/")[-1]
+        # Every default is a curated registry; dropping the flag would
+        # silently demote all seven in `boost taps` listings.
+        assert curated is True, "seeded taps must be marked curated"
         if name in fail:
             from boost_cli.errors import BoostError
             raise BoostError("clone failed: %s" % name)
+        if name in oserror:
+            raise OSError("disk full: %s" % name)
         added.append(name)
         return _FakeTap(name)
 
@@ -45,7 +61,9 @@ def _stub(monkeypatch, *, existing=(), fail=(), counts=None):
     monkeypatch.setattr(registry, "add", fake_add)
     monkeypatch.setattr(catalog, "rebuild_tap",
                         lambda tap: [{}] * (counts or {}).get(tap.name, 3))
-    monkeypatch.setattr(journal, "log", lambda *a, **kw: None)
+    monkeypatch.setattr(journal, "log",
+                        lambda *a, **kw: logged.append(tuple(a)))
+    added.logged = logged      # the journal calls, for tests that check them
     return added
 
 
@@ -142,3 +160,122 @@ class TestSeedRespectsTheEscapeHatch:
         res = bootstrap.seed_catalog(force=True)
         assert res.skipped is False
         assert added
+
+
+class TestSeedDecidesPerRegistryNotPerMachine:
+    """The gate used to be "does ANY tap exist", and that was wrong twice.
+
+    An interrupted seed left a machine with two of seven registries that read
+    as fully configured forever. And `--seed`, the documented repair path,
+    called registry.add on registries already present — add rejects those
+    before it touches the network, so the repair reported seven failures and
+    told the user their connection was down while it was up.
+    """
+
+    def test_force_tops_up_only_what_is_missing(self, sandbox, monkeypatch):
+        from boost_cli.core import config
+        names = [str(t["name"]) for t in config.DEFAULT_TAPS]
+        added = _stub(monkeypatch, existing=tuple(names[:2]))
+        res = bootstrap.seed_catalog(force=True)
+        assert added == names[2:]              # the two present are untouched
+        assert res.already == names[:2]
+        assert res.failed == []                # and NOT reported as failures
+
+    def test_force_on_a_complete_machine_is_a_skip_not_a_failure(
+            self, sandbox, monkeypatch):
+        from boost_cli.core import config
+        added = _stub(monkeypatch,
+                      existing=tuple(str(t["name"]) for t in config.DEFAULT_TAPS))
+        res = bootstrap.seed_catalog(force=True)
+        assert added == []
+        assert res.skipped is True
+        assert res.failed == []
+        assert "already" in res.summary().lower()
+        # The bug this pins: blaming the network on a machine whose network
+        # is fine, because "already configured" was collected as a failure.
+        assert "network" not in res.summary().lower()
+
+    def test_the_summary_names_what_was_already_there(self, sandbox,
+                                                     monkeypatch):
+        from boost_cli.core import config
+        names = [str(t["name"]) for t in config.DEFAULT_TAPS]
+        _stub(monkeypatch, existing=(names[0],))
+        res = bootstrap.seed_catalog(force=True)
+        assert "1 already tapped" in res.summary()
+
+    def test_will_seed_agrees_with_what_seed_catalog_does(self, sandbox,
+                                                          monkeypatch):
+        # will_seed exists so the caller can announce the wait before it
+        # starts; a will_seed that disagrees with seed_catalog would print
+        # "adding the recommended ones" and then add nothing.
+        from boost_cli.core import config
+        names = [str(t["name"]) for t in config.DEFAULT_TAPS]
+        for existing, force, expected in (
+                ((), False, True),                  # empty machine
+                (("someone/theirs",), False, False),  # configured, implicit
+                (("someone/theirs",), True, True),   # configured, forced
+                (tuple(names), True, False),         # complete, forced
+        ):
+            _stub(monkeypatch, existing=existing)
+            assert bootstrap.will_seed(force=force) is expected, (
+                "will_seed(force=%r) with existing=%r" % (force, existing))
+            res = bootstrap.seed_catalog(force=force)
+            assert bool(res.tapped) is expected
+
+    def test_will_seed_honors_the_opt_out(self, sandbox, monkeypatch):
+        _stub(monkeypatch)
+        monkeypatch.setenv(bootstrap.NO_SEED_ENV, "1")
+        assert bootstrap.will_seed() is False
+        assert bootstrap.will_seed(force=True) is True
+
+
+class TestSeedRecordsAndReportsFaithfully:
+    def test_each_added_tap_is_journalled(self, sandbox, monkeypatch):
+        # The journal is how `boost history` explains where a tap came from;
+        # a seed that adds seven registries silently leaves the user unable
+        # to tell later which command did it.
+        from boost_cli.core import config
+        added = _stub(monkeypatch)
+        bootstrap.seed_catalog()
+        assert added.logged == [("tap", n) for n in
+                                [str(t["name"]) for t in config.DEFAULT_TAPS]]
+
+    def test_a_disk_error_is_collected_like_a_clone_failure(self, sandbox,
+                                                            monkeypatch):
+        # registry.add can fail below BoostError — a full disk, a read-only
+        # home. Same contract: reported, loop continues, caller survives.
+        from boost_cli.core import config
+        first = str(config.DEFAULT_TAPS[0]["name"])
+        added = _stub(monkeypatch, oserror=(first,))
+        res = bootstrap.seed_catalog()
+        assert first not in added
+        assert res.failed and res.failed[0].startswith(first + ": ")
+        assert "disk full" in res.failed[0]
+        assert res.tapped                       # the rest still landed
+
+    def test_the_failed_line_names_the_registry_then_the_reason(
+            self, sandbox, monkeypatch):
+        from boost_cli.core import config
+        first = str(config.DEFAULT_TAPS[0]["name"])
+        _stub(monkeypatch, fail=(first,))
+        res = bootstrap.seed_catalog()
+        assert res.failed[0] == "%s: clone failed: %s" % (first, first)
+
+    def test_a_partial_failure_summary_counts_both_sides(self, sandbox,
+                                                          monkeypatch):
+        from boost_cli.core import config
+        names = [str(t["name"]) for t in config.DEFAULT_TAPS]
+        _stub(monkeypatch, fail=(names[0], names[1]))
+        res = bootstrap.seed_catalog()
+        summary = res.summary()
+        assert "tapped %d registries" % (len(names) - 2) in summary
+        assert "2 could not be fetched" in summary
+
+    def test_a_total_failure_blames_the_network_only_when_it_failed(
+            self, sandbox, monkeypatch):
+        from boost_cli.core import config
+        _stub(monkeypatch,
+              fail=tuple(str(t["name"]) for t in config.DEFAULT_TAPS))
+        res = bootstrap.seed_catalog()
+        assert "could not reach any default registry" in res.summary()
+        assert "boost tap --defaults" in res.summary()
