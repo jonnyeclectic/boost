@@ -124,7 +124,7 @@ COMMANDS = [
     ("serve",       "cfg", "configuration", "Serve the skill catalog over HTTP (port 8787)"),
     ("mcp",         "cfg", "configuration", "Register boost as an MCP server (Claude Code, Gemini CLI)"),
     ("hooks",       "cfg", "hooks", "Manage Claude Code hooks (scope-aware) in settings.json"),
-    ("bmad",        "cfg", "bmad", "Install & manage the BMAD Method (scope-aware, toggleable)"),
+    ("bmad",        "cfg", "bmad", "BMAD Method autopilot — `bmad on` routes every task to a persona"),
     ("self-update", "cfg", "configuration", "Update boost itself to the latest version"),
     # Team & Collaboration (6)
     ("cohort",      "team", "team", "Controlled skill rollouts & team A/B testing"),
