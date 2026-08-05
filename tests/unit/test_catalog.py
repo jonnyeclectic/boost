@@ -493,6 +493,44 @@ class TestAllEntriesAndFind:
         )
         assert [e["name"] for e in catalog.all_entries()] == ["z1", "z2", "a1"]
 
+    def test_kind_counts_splits_the_corpus_by_kind(self, sandbox):
+        _fake_taps(("t", [dict(_entry("s", "t"), kind="skill"),
+                          dict(_entry("r", "t"), kind="rule"),
+                          dict(_entry("w", "t"), kind="workflow"),
+                          dict(_entry("r2", "t"), kind="rule")]))
+        assert catalog.kind_counts() == {"skill": 1, "rule": 2, "workflow": 1}
+
+    def test_kind_counts_names_all_three_kinds_even_at_zero(self, sandbox):
+        # `boost_doctor` and boost_list's footer both report a kind sitting at
+        # zero as a fact about the machine — "nothing here could have loaded a
+        # rule" is the inference. A dict that omits empty kinds would make the
+        # caller invent the zero, or quietly drop the line.
+        _fake_taps(("t", [dict(_entry("s", "t"), kind="skill")]))
+        assert catalog.kind_counts() == {"skill": 1, "rule": 0, "workflow": 0}
+
+    def test_kind_counts_with_no_taps_is_three_zeros(self, sandbox):
+        assert catalog.kind_counts() == {"skill": 0, "rule": 0, "workflow": 0}
+
+    def test_an_entry_with_no_kind_counts_as_a_skill(self, sandbox):
+        # Caches written before the kind field existed, and any tap whose
+        # scanner output is thin. Everything else in the catalog reads a
+        # missing kind as a skill; this must not be the one place it vanishes.
+        _fake_taps(("t", [_entry("old", "t")]))
+        assert catalog.kind_counts()["skill"] == 1
+
+    def test_the_total_still_equals_the_full_scan(self, sandbox):
+        # The whole point of this function is that a caller wanting the size of
+        # the corpus never materialises it: `boost_doctor` took
+        # `len(all_entries())`, building 71,655 dicts to produce one integer.
+        # An unrecognised kind therefore gets its own key rather than being
+        # dropped — a silently smaller total would be a worse bug than the
+        # allocation it replaced.
+        _fake_taps(("t", [dict(_entry("s", "t"), kind="skill"),
+                          dict(_entry("x", "t"), kind="mcp-server")]))
+        counts = catalog.kind_counts()
+        assert counts["mcp-server"] == 1
+        assert sum(counts.values()) == len(catalog.all_entries())
+
     def test_find_exact_name(self, sandbox):
         _fake_taps(("t", [_entry("aaa", "t"), _entry("aab", "t")]))
         matches = catalog.find("aaa")

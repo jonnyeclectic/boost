@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
+from itertools import chain
 from pathlib import Path
 
 from .. import __version__, cliparse
@@ -862,6 +863,15 @@ def _ranking_note(ranker: str) -> str:
             "enable it.)" % ranker)
 
 
+# The label for the pre-RAG fallback below. `_ranking_note` needs a name for
+# whatever produced the order, and this branch is neither engine it knows
+# about: `catalog.search` scores names and descriptions from the tap caches
+# because no index exists yet. `rag.rerank`'s own comment is the rule being
+# followed — naming a specific wrong engine is worse than naming none, since
+# the label is the only signal about which retrieval answered.
+FRONTMATTER_RANKER = "frontmatter match, no index built yet"
+
+
 def _tool_search(args: dict):
     query = str(args.get("query", ""))
     rag.ensure()  # build the full-content index on first use (BM25 by default)
@@ -883,26 +893,53 @@ def _tool_search(args: dict):
     # share one sentence, and the fresh-install case is the one an agent reads
     # first and learns the most from.
     tapped = len(registry.list_taps())
+    # The two retrieval branches converge on ONE render. They used to diverge:
+    # the RAG branch appended `_ranking_note`, and the frontmatter fallback
+    # appended nothing at all — so an agent on that path got ten lines with the
+    # exact shape of a reranked ten, and no way to tell. Both now carry the
+    # kind marker, the [installed] marker, the overlap note and a ranking note.
     if rag_result is not None:  # full-content index is built
         hits, ranker = rag_result
-        if not hits:
-            return mcp.no_results(query, tapped=tapped), False
-        lines = [mcp.hit_line(h["entry"]) for h in hits]
-        lines.append(_ranking_note(ranker))
-        return "\n".join(lines), False
-    # no index yet -> keep today's frontmatter search so nothing regresses
-    scored = catalog.search(query)[:10]
-    if not scored:
+        entries = [h["entry"] for h in hits]
+    else:  # no index yet -> today's frontmatter search, so nothing regresses
+        entries = [e for e, _score in catalog.search(query)[:10]]
+        ranker = FRONTMATTER_RANKER
+    if not entries:
+        # mcp.no_results owns the empty reply on both paths, including the
+        # untapped-machine branch that must not read as a genuine miss.
         return mcp.no_results(query, tapped=tapped), False
-    return "\n".join(mcp.hit_line(e) for e, _score in scored), False
+    # Name-keyed, the same test `lockfile.find_any` and `store.install` apply —
+    # those are the tools this marker is advising about. mcp.hit_line's
+    # docstring records why the imprecision is disclosed rather than removed,
+    # and mcp.overlap_note is where the agent is told.
+    #
+    # One lock read for the whole reply, not one per hit: `find_any` re-reads
+    # and re-parses the file on every call, so the obvious `find_any(name)`
+    # inside this comprehension is ten reads of the same bytes. The union of
+    # the three sections is that same predicate, once.
+    installed_names = set(chain.from_iterable(lockfile.all_installed().values()))
+    marks = [e.get("name", "") in installed_names for e in entries]
+    lines = [mcp.hit_line(e, installed=m)
+             for e, m in zip(entries, marks, strict=True)]
+    note = mcp.overlap_note(sum(marks), len(entries))
+    if note:
+        lines.append(note)
+    lines.append(_ranking_note(ranker))
+    return "\n".join(lines), False
 
 
 def _tool_list(args: dict):
     # All three lock sections: "no skills installed" while `boost list` shows
     # a rule is the exact disagreement this surface must not have.
     everything = lockfile.all_installed()
+    # The footer reads the lock file and the tap list and nothing else — no
+    # catalog scan — so boost_list stays the instant, threshold-free tool that
+    # INSTRUCTIONS and its own description both promise. It lands in the empty
+    # state too: a machine with nothing installed is exactly where "what do I
+    # have" is least useful on its own.
+    footer = mcp.coverage_line(everything, tapped=len(registry.list_taps()))
     if not any(everything.values()):
-        return "nothing installed", False
+        return "nothing installed\n" + footer, False
     lines = []
     for kind, section in everything.items():
         for n, e in sorted(section.items()):
@@ -910,6 +947,7 @@ def _tool_list(args: dict):
                          % (n, e.get("version", "?"), e.get("tap", "?"),
                             "" if kind == "skill" else " [%s]" % kind,
                             " [pinned]" if e.get("pinned") else ""))
+    lines.append(footer)
     return "\n".join(lines), False
 
 
@@ -991,7 +1029,13 @@ def _tool_doctor(args: dict):
              # "items", not "skills": the default taps now carry rules and
              # workflows too, so counting all of them as skills overstates one
              # kind and hides the other two in the same breath.
-             "taps: %d (%d items available)" % (len(taps), len(catalog.all_entries()))]
+             #
+             # Counted rather than measured off a list. `len(all_entries())`
+             # concatenated every tap's cache — 71,655 entries on a real
+             # install — to produce this one integer; `kind_counts` does the
+             # same reads without the accumulation.
+             "taps: %d (%d items available)"
+             % (len(taps), sum(catalog.kind_counts().values()))]
     for key, vals in plan.items():
         if vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
@@ -1080,7 +1124,21 @@ REGISTRY.register(
     "locked in for everything after it: a new project or subsystem, an "
     "architecture decision, environment and tooling config, a linter or "
     "formatter, tests, CI. Also before writing a skill, subagent, "
-    "slash-command or rule from scratch. Read-only where it counts: it "
+    "slash-command or rule from scratch. "
+    # The defeater, sitting against the trigger list it defends rather than in
+    # a paragraph of its own. A Gemini CLI session paraphrased that list back
+    # — "a new project or subsystem, an architecture decision, environment and
+    # tooling config" — and had still skipped the call, because two
+    # pre-installed skills had already activated. The trigger fired and lost to
+    # a predicate over the model's own context that boost had never written
+    # down. It is a description, not a denial: an agent told "an active skill
+    # is never enough" has been handed a standing order to search, which is the
+    # capture the skip list and the stated cost exist to prevent.
+    "What is already loaded is a different question: "
+    "a skill that activated here was installed before this request existed, "
+    "matched on its own description, and is one kind of three. Hits you "
+    "already have come back marked [installed], so the reply keeps the two "
+    "apart. Read-only where it counts: it "
     "installs nothing and touches nothing you are working on, though the first "
     "search builds a local index under ~/.boost. A hit commits you to nothing "
     "either: take what fits, discard the rest, the task stays yours. It costs "
@@ -1103,7 +1161,11 @@ REGISTRY.register(
     "The skills, rules and workflows already installed on this machine and "
     "usable this second — capability you own and may not know you own. "
     "Returns one line each: name, version, tap, a [rule] or [workflow] marker "
-    "where it is not a skill, and [pinned] where the version is held. "
+    "where it is not a skill, and [pinned] where the version is held, then a "
+    "closing count per kind. That count is the other half of the answer: it is "
+    "what this machine holds, not what exists, and a kind sitting at zero is a "
+    "kind nothing here could have loaded. boost_search is what reads the "
+    "registries themselves. "
     "Read-only, instant, installs nothing — so unlike boost_search there is "
     "no threshold worth applying: call it whenever you are about to plan "
     "something. Planning from memory while "
