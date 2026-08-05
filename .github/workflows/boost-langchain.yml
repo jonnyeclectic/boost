@@ -1,17 +1,20 @@
 name: boost-langchain
 
-# Opt-in: does the boost-langchain distribution still install, pass its tests,
-# and package cleanly against the live langchain stack?
+# Opt-in: does the LangChain integration — the boost_langchain package that
+# ships INSIDE the boost-skill-cli wheel, behind the [langchain] extra —
+# still install, pass its tests, and package cleanly against the live
+# langchain stack?
 #
-# This is deliberately OUT of the release gate (ci.yml). boost stays
-# zero-dependency and its own suite proves that; integrations/langchain is a
-# SEPARATE distribution (`boost-langchain`) whose entire point is depending on
-# the third-party langchain-core tree we don't control. Coupling boost's PyPI
-# release to whether that stack installs and imports today would let upstream
-# drift redden a release of a package that doesn't even ship the integration —
-# the same reasoning adapter-conformance.yml documents for CrewAI and the
-# Agents SDK. Run this manually before shipping a change under
-# integrations/langchain, and weekly to catch upstream breakage early. It never
+# This is deliberately OUT of the release gate (ci.yml). boost's default
+# install stays zero-dependency and its own suite proves that; the required
+# gate never imports boost_langchain (import-linter forbids the CLI from
+# reaching into it, and tests/langchain skips itself without the extra).
+# This leg is the ONLY place the real langchain-core/langgraph stack is
+# installed, so coupling boost's PyPI release to whether that stack resolves
+# today would let upstream drift redden a release whose runtime never
+# imports it — the same reasoning adapter-conformance.yml documents for
+# CrewAI and the Agents SDK. Run it manually before shipping a change under
+# boost_langchain/, and weekly to catch upstream breakage early. It never
 # blocks a merge.
 on:
   workflow_dispatch:
@@ -19,7 +22,10 @@ on:
   # lesson: a leg nothing exercises on its own pull request merges broken and
   # sits until the weekly cron is the first thing to run it. Deliberately
   # narrow: this job installs the langchain/langgraph stack, far too slow to
-  # hang off every PR.
+  # hang off every PR. pyproject.toml is NOT in the filter on purpose — the
+  # [langchain] extra lives there, but so does every other config table, and
+  # a leg that fires on each ruff-ignore edit stops being narrow; the weekly
+  # cron bounds how long an extra-pin regression can hide.
   #
   # This stays path-filtered, which means it MUST NOT be added to the required
   # status checks (.github/required-checks.txt explains the rule): a required
@@ -27,7 +33,8 @@ on:
   # It is early signal, never a gate.
   pull_request:
     paths:
-      - "integrations/langchain/**"
+      - "boost_langchain/**"
+      - "tests/langchain/**"
       - ".github/workflows/boost-langchain.yml"
   schedule:
     - cron: "0 6 * * 1"   # Mondays 06:00 UTC — early warning on upstream drift
@@ -65,26 +72,49 @@ jobs:
         run: |
           git config --global user.email ci@boost.test
           git config --global user.name "Boost CI"
-      - name: install boost + boost-langchain[test,langgraph]
+      - name: install boost with the [langchain] extra + suite deps
+        # langgraph is not in the extra (the graph node is langchain_core-only
+        # by design); the StateGraph smoke test needs the real thing, so this
+        # leg installs it alongside, with the same bounds the test targets.
         run: |
           python -m venv .venv
-          .venv/bin/pip -q install -e .
-          .venv/bin/pip -q install -e './integrations/langchain[test,langgraph]'
+          .venv/bin/pip -q install -e '.[langchain]' 'langgraph>=1,<2' 'pytest>=8'
       - name: run the integration test suite
-        # From inside the package, so ITS pytest configuration governs. The
-        # root pyproject pins testpaths/filterwarnings for the main suite, and
-        # a run that inherits the wrong rootdir config is how "green" stops
-        # meaning anything.
+        # Explicit path, root config: tests/langchain sits inside the main
+        # suite's tree now, so the root pyproject's pytest configuration
+        # (filterwarnings, addopts) governs — and the suite must be green
+        # under it, because that is exactly how a contributor runs it.
+        run: .venv/bin/pytest tests/langchain -q --junitxml "$RUNNER_TEMP/junit-langchain.xml"
+      - name: assert the suite RAN rather than skipped itself
+        # tests/langchain importorskips langchain_core, so a broken extra
+        # install would let the previous step go green on skips alone — the
+        # exact "green means nothing" failure this leg exists to prevent.
+        # Counted from the junit file, not `--collect-only -q` output: pytest
+        # 9 stopped printing node ids there, which zeroed the first version
+        # of this count while 24 tests were passing right above it.
         run: |
-          cd "$GITHUB_WORKSPACE/integrations/langchain"
-          "$GITHUB_WORKSPACE/.venv/bin/pytest" -q
-      - name: build sdist + wheel and check the metadata
+          ran="$(.venv/bin/python -c "import xml.etree.ElementTree as ET; import os; s = ET.parse(os.environ['RUNNER_TEMP'] + '/junit-langchain.xml').getroot().find('testsuite'); print(int(s.get('tests', 0)) - int(s.get('skipped', 0)))")"
+          echo "$ran tests actually ran"
+          if [ "$ran" -lt 10 ]; then
+            echo "only $ran tests ran — the langchain suite is skipping itself"; exit 1
+          fi
+      - name: build the dist and prove the wheel carries the integration
         # Tooling from the hash-pinned release-tools lock, same reasoning as
         # package-metadata.yml: a twine verdict that changes on an upstream
         # release of twine is a verdict about twine. Installed AFTER the test
         # run so the lock's exact pins can never quietly repin something the
-        # langchain stack resolved for the tests.
+        # langchain stack resolved for the tests. The zipgrep assertions are
+        # the point of the fold: the SAME wheel that publishes on every merge
+        # must contain boost_langchain and declare the [langchain] extra.
         run: |
           .venv/bin/pip -q install -r requirements/release-tools.txt
-          .venv/bin/python -m build --sdist --wheel integrations/langchain
-          .venv/bin/twine check integrations/langchain/dist/*
+          .venv/bin/python -m build
+          .venv/bin/twine check dist/*
+          whls=(dist/*.whl); whl="${whls[0]}"
+          unzip -l "$whl" | grep -q "boost_langchain/__init__.py" \
+            || { echo "wheel is missing boost_langchain"; exit 1; }
+          unzip -l "$whl" | grep -q "boost_langchain/py.typed" \
+            || { echo "wheel is missing py.typed"; exit 1; }
+          unzip -p "$whl" '*.dist-info/METADATA' | grep -q '^Provides-Extra: langchain$' \
+            || { echo "wheel METADATA does not declare the [langchain] extra"; exit 1; }
+          echo "wheel carries boost_langchain + py.typed + the [langchain] extra"

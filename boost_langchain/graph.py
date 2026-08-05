@@ -8,13 +8,13 @@ asked for.
 
 Nothing in this module imports langgraph. A graph node is just a callable
 from state to a partial state update, so building the callable against
-``langchain_core`` types alone keeps langgraph where the pyproject puts it —
-an optional extra — while the node still drops straight into
-``builder.add_node``.
+``langchain_core`` types alone keeps langgraph out of the ``[langchain]``
+extra entirely — install it only if your app actually runs graphs — while
+the node still drops straight into ``builder.add_node``.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 
@@ -35,9 +35,9 @@ def _last_human_text(messages: list[BaseMessage]) -> str:
 
 
 def skill_context_node(
-    retriever: Optional[BoostRetriever] = None,
+    retriever: BoostRetriever | None = None,
     k: int = 3,
-    kind: Optional[str] = None,
+    kind: str | None = None,
 ) -> Callable[[dict], dict]:
     """Build a graph node that injects relevant boost procedures as context.
 

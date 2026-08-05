@@ -129,10 +129,12 @@
   <!-- ===== hero ===== -->
   <div class="wrap hero">
     <p class="crumbs"><a href="index.html">boost</a> / docs / langchain integration</p>
-    <span class="badge">Interop · shipped in PR #466</span>
+    <span class="badge">Interop · shipped in PR #466 · folded into the wheel in PR #472</span>
     <h1>The skill catalog, <span class="grad-text">behind LangChain's</span> retriever contract.</h1>
     <p class="lede">boost's tapped catalog is 10,000+ retrievable procedures with frontmatter,
-      provenance and a lock file. <code>boost-langchain</code> makes it addressable from a Python
+      provenance and a lock file. The <code>boost_langchain</code> package — shipped inside the
+      <code>boost-skill-cli</code> wheel, switched on by the <code>[langchain]</code> extra —
+      makes it addressable from a Python
       agent runtime: a <b>retriever</b> over the same measured engine <code>boost search</code>
       runs on, a <b>document loader</b> for one SKILL.md, and a <b>LangGraph node</b> that pulls
       the right procedure into a run mid-flight. No API key, ever — and nothing tapped means
@@ -182,7 +184,7 @@
         the engine is why wrapping it beats re-embedding the catalog.</p>
 
       <div class="diagram">
-        <svg viewBox="0 0 900 400" role="img" aria-label="boost-langchain architecture: a LangChain app calls the boost_langchain seams, which call boost's retrieval engine over the tapped catalog; the Tier-1 eval gate floors the engine's quality">
+        <svg viewBox="0 0 900 400" role="img" aria-label="boost langchain integration architecture: a LangChain app calls the boost_langchain seams, which call boost's retrieval engine over the tapped catalog; the Tier-1 eval gate floors the engine's quality">
           <defs>
             <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
               <path d="M0,0 L7,3 L0,6 Z" fill="#7dd3fc"></path>
@@ -482,7 +484,7 @@ builder.<span class="fn">add_edge</span>(<span class="s">"skills"</span>, <span 
           story). To run <b>online</b> evals against the <em>same</em> ground truth, publish the
           golden set as a LangSmith dataset with the
           <code>publish_golden_dataset.py</code> script (under
-          <code>integrations/langchain/scripts/</code>) — key-gated,
+          <code>evals/</code>) — key-gated,
           opt-in, run from a boost checkout. Re-running replaces examples wholesale, so the
           dataset always mirrors <code>tests/eval/golden.jsonl</code> rather than accreting. The
           point is one set of judgments in both places: an online regression and an offline
@@ -493,13 +495,14 @@ builder.<span class="fn">add_edge</span>(<span class="s">"skills"</span>, <span 
         <p><b>The honest dependency paragraph.</b> boost's own <code>[eval]</code> extra pins the
           langchain 0.3 stack, because ragas — through 0.4.3 — still imports a
           <code>ChatVertexAI</code> path that langchain-community 0.4 removed, so
-          <code>import ragas</code> crashes beside langchain 1.x. What dissolves the conflict is
-          distribution isolation, not an unpin: <code>boost-langchain</code> is a separately
-          versioned package, so the langchain 1.x stack lives in its own environment and its own
-          CI leg while <code>[eval]</code> keeps its 0.3-stack pins in its own. The two majors
-          never co-install — pip refuses the combination loudly — and each surface tests against
-          the stack it really runs on. The unpin becomes a small follow-up the day ragas ships a
-          release after 0.4.3, which already carries the fix on its main branch.</p>
+          <code>import ragas</code> crashes beside langchain 1.x. What keeps the conflict honest
+          is <b>extra isolation</b>: the integration ships in the same wheel, but its langchain
+          1.x dependencies live in the <code>[langchain]</code> extra while <code>[eval]</code>
+          keeps its 0.3-stack pins. The two majors never co-install — asking pip for both extras
+          at once fails resolution loudly rather than silently breaking one of them — and each
+          surface tests against the stack it really runs on (the conformance leg installs the
+          extra; the eval tooling installs its own). The unpin becomes a small follow-up the day
+          ragas ships a release after 0.4.3, which already carries the fix on its main branch.</p>
       </div>
     </div>
   </section>
@@ -508,34 +511,37 @@ builder.<span class="fn">add_edge</span>(<span class="s">"skills"</span>, <span 
   <section>
     <div class="wrap">
       <span class="eyebrow">Install</span>
-      <h2 class="sec-title">One pip install, two optional extras</h2>
+      <h2 class="sec-title">One extra on the wheel you already have</h2>
       <div class="term-wrap">
         <div class="window">
           <div class="bar"><div class="dots"><i></i><i></i><i></i></div>
-            <div class="bar-title">pip · boost-langchain</div></div>
-          <pre><span class="cm"># the package — pulls in boost-skill-cli + langchain-core</span>
-<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> boost-langchain
+            <div class="bar-title">pip · boost-skill-cli[langchain]</div></div>
+          <pre><span class="cm"># the CLI plus the LangChain bindings — one wheel, one extra</span>
+<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> 'boost-skill-cli[langchain]'
 
 <span class="cm"># give boost something to search (once)</span>
 <span class="tp">$</span> <span class="tv">boost</span> <span class="tc">tap</span> anthropics/skills
 
 <span class="cm"># optional: the LangGraph runtime for skill_context_node graphs</span>
-<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> 'boost-langchain[langgraph]'
+<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> langgraph
 
 <span class="cm"># optional: publish the golden set as a LangSmith dataset</span>
-<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> 'boost-langchain[langsmith]'
-<span class="tp">$</span> <span class="tv">python</span> integrations/langchain/scripts/publish_golden_dataset.py
+<span class="tp">$</span> <span class="tv">pip</span> <span class="tc">install</span> langsmith
+<span class="tp">$</span> <span class="tv">python</span> evals/publish_golden_dataset.py
   <span class="tdim">published 91 examples to LangSmith dataset 'boost-golden-retrieval'</span></pre>
         </div>
       </div>
-      <p class="caption">The dataset publish is illustrative output; it exits with a one-line hint
+      <p class="caption">Without the extra the modules still ship but decline to import — naming
+        this exact fix. The dataset publish is illustrative output; it exits with a one-line hint
         rather than a traceback when the key or package is missing.</p>
       <div class="prose">
         <p>More depth: the
-          <a href="https://github.com/jonnyeclectic/boost/tree/main/integrations/langchain">package
-          README</a> covers the same ground as a reference, and the
-          <a href="roadmap.html#langchain-langgraph-langsmith-integration">roadmap card</a> holds
-          the full reasoning — including the packaging decision and the corrected ragas story.</p>
+          <a href="https://github.com/jonnyeclectic/boost/tree/main/boost_langchain">package
+          README</a> covers the same ground as a reference, and two roadmap cards hold the
+          reasoning: <a href="roadmap.html#langchain-langgraph-langsmith-integration">the
+          integration itself</a> and
+          <a href="roadmap.html#langchain-in-the-wheel">why it rides the wheel</a> instead of a
+          second PyPI project.</p>
       </div>
     </div>
   </section>

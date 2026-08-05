@@ -85,7 +85,7 @@ jobs:
         # whether every PR merges, and leaving them unlinted is how two
         # unguarded zip() sites survived the B905 audit (see the
         # scripts-under-the-lint-gate roadmap card).
-        run: ruff check boost_cli tests evals scripts
+        run: ruff check boost_cli boost_langchain tests evals scripts
       - name: mypy
         run: mypy
       - name: pyright (second type checker)
@@ -123,7 +123,7 @@ jobs:
         # formatting is house style (rationale in pyproject.toml [tool.ruff.lint]).
         run: refurb boost_cli
       - name: codespell (user-facing text)
-        run: codespell boost_cli docs README.md
+        run: codespell boost_cli boost_langchain docs README.md
       - name: secret scan (gitleaks)
         # Scan the full history + working tree for leaked tokens, keys and
         # high-entropy secrets before they can reach a release. boost's own

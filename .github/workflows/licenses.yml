@@ -43,9 +43,13 @@ jobs:
       matrix:
         include:
           # Split so a slow [eval] resolve cannot hide a fast, common failure,
-          # and so the log says which closure is at fault.
+          # and so the log says which closure is at fault. [langchain] rides
+          # this leg because it co-resolves with the light extras; it can
+          # NEVER share a leg with [eval], whose ragas pin holds
+          # langchain-core at 0.3 while [langchain] requires >=1 — pip fails
+          # that pair by design.
           - name: runtime + light extras
-            install: ".[rag,bdd,perf]"
+            install: ".[rag,bdd,perf,langchain]"
           # The pinned langchain 0.3 stack. Heaviest by far and the one the
           # roadmap item was actually worried about.
           - name: eval extra

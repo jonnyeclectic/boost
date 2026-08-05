@@ -1,4 +1,4 @@
-# boost-langchain
+# boost_langchain
 
 LangChain bindings for [boost](https://github.com/jonnyeclectic/boost), the
 package manager for AI coding skills. This package puts boost's tapped catalog
@@ -14,10 +14,20 @@ putting the skill catalog *inside* a LangChain application.
 
 ## Install
 
+The package ships inside the `boost-skill-cli` wheel; the `[langchain]` extra
+is what turns it on (the CLI's default install stays zero-dependency, so
+without the extra the modules are present but decline to import, with a
+message pointing here):
+
 ```bash
-pip install boost-langchain          # pulls in boost-skill-cli + langchain-core
-boost tap anthropics/skills          # give boost something to search (once)
+pip install 'boost-skill-cli[langchain]' # the CLI + langchain-core bindings
+boost tap anthropics/skills              # give boost something to search (once)
 ```
+
+One caveat, temporary by design: `[langchain]` cannot co-install with the
+`[eval]` extra, whose ragas pin still holds langchain-core at 0.3 — asking
+for both fails resolution loudly. The pair stops conflicting when ragas
+ships its langchain-1.x fix.
 
 ## Quickstart
 
@@ -83,7 +93,9 @@ ladder:
 ## LangGraph: skills as mid-run procedures
 
 Instead of stuffing every procedure into the system prompt, let the graph
-pull the right one for its current state (`pip install boost-langchain[langgraph]`):
+pull the right one for its current state (`pip install langgraph` — the node
+itself is `langchain_core`-only, so langgraph is your app's dependency, not
+this package's):
 
 ```python
 from boost_langchain import skill_context_node
@@ -100,7 +112,7 @@ The node retrieves against the last human message and injects the matching
 procedures as one `SystemMessage`, each prefixed with its name, tap, path and
 version — so a bad injection is traceable from the transcript. Nothing
 retrieved (or nothing tapped) is a no-op, never an error. The node itself
-imports only `langchain_core`; langgraph stays an optional extra.
+imports only `langchain_core`; langgraph never becomes a dependency here.
 
 ## Loading a single skill
 
@@ -135,8 +147,8 @@ truth, publish that set as a LangSmith dataset (from a boost checkout —
 key-gated, opt-in, and re-running mirrors the file rather than accreting):
 
 ```bash
-pip install 'boost-langchain[langsmith]'
-python integrations/langchain/scripts/publish_golden_dataset.py
+pip install langsmith
+python evals/publish_golden_dataset.py
 ```
 
 None of this touches boost's required gate: a required check that depends on

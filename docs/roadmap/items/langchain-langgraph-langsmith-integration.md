@@ -13,6 +13,14 @@ note: a second consumer class for the catalogue — blocked on one dependency co
 order: 88
 title: production-ready LangChain / LangGraph / LangSmith integration
 ---
+<b>Update (PR #472):</b> the separate-distribution decision below was revisited with better
+evidence and reversed — <code>boost_langchain</code> now ships <i>inside</i> the
+<code>boost-skill-cli</code> wheel behind a <code>[langchain]</code> extra, and the conflict
+isolation this card attributes to distribution boundaries is carried by extra boundaries instead
+(<code>[eval]</code> and <code>[langchain]</code> never co-install; pip refuses the pair loudly).
+The history below is preserved as written; see <code>langchain-in-the-wheel</code> for the
+reversal's evidence.
+
 Every agent boost supports today is a <b>coding</b> agent that reads files off disk — Claude Code,
 Cursor, Windsurf, Gemini CLI. The catalogue itself is not coding-specific: it is 10,000+ retrievable
 procedures with frontmatter, provenance and a lock file. A LangChain application cannot reach any of
