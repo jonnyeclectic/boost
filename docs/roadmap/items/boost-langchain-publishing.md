@@ -2,15 +2,24 @@
 id: boost-langchain-publishing
 board: code
 section: planned
-status: planned
+status: declined
 category: Release
 complexity: S
 impact: Med
 wow: 2
-note: the artifacts already build and pass twine check in CI — what is missing is a cadence and a Trusted Publisher
+note: declined — superseded by shipping the integration inside the boost-skill-cli wheel (see langchain-in-the-wheel)
 order: 98
 title: give <code>boost-langchain</code> a release path to PyPI
 ---
+<b>Declined, deliberately.</b> Both missing pieces below were owner-only or upstream-blocked, and
+the research they prompted dissolved the premise: a second PyPI project bought a separate release
+cadence nobody needed (boost releases more often than langchain), while the ecosystem evidence —
+langchain-community sunset, non-<code>langchain-*</code> names in LangChain's own integrations
+listing, in-host precedents from <code>ragatouille</code> to <code>mlflow</code> — showed the
+standalone distribution was never required. The integration now ships inside the
+<code>boost-skill-cli</code> wheel behind a <code>[langchain]</code> extra instead; see
+<code>langchain-in-the-wheel</code>. The original card follows for the record.
+
 The <code>boost-langchain</code> distribution shipped under <code>integrations/langchain/</code>
 with its whole point being a <b>separate release cadence</b> from <code>boost-skill-cli</code> —
 langchain majors move faster than boost does, and the conformance workflow already builds the
