@@ -115,7 +115,7 @@ boost_cli = ["data/*.json"]
 boost_langchain = ["py.typed"]
 
 # check-wheel-contents (dist-check + the package-metadata workflow) flags a
-# second top-level package as W005 unless the allowlist names it — and the
+# second top-level package as W009 unless the allowlist names it — and the
 # allowlist doubles as the statement of intent that exactly these two trees
 # ship in the wheel. tests/unit/test_langchain_packaging.py pins this.
 [tool.check-wheel-contents]

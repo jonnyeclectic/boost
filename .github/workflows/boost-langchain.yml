@@ -84,16 +84,19 @@ jobs:
         # suite's tree now, so the root pyproject's pytest configuration
         # (filterwarnings, addopts) governs — and the suite must be green
         # under it, because that is exactly how a contributor runs it.
-        run: .venv/bin/pytest tests/langchain -q
+        run: .venv/bin/pytest tests/langchain -q --junitxml "$RUNNER_TEMP/junit-langchain.xml"
       - name: assert the suite RAN rather than skipped itself
         # tests/langchain importorskips langchain_core, so a broken extra
-        # install would make the previous step pass with 0 tests — the
+        # install would let the previous step go green on skips alone — the
         # exact "green means nothing" failure this leg exists to prevent.
+        # Counted from the junit file, not `--collect-only -q` output: pytest
+        # 9 stopped printing node ids there, which zeroed the first version
+        # of this count while 24 tests were passing right above it.
         run: |
-          count="$(.venv/bin/pytest tests/langchain -q --collect-only 2>/dev/null | grep -c '::' || true)"
-          echo "collected $count tests"
-          if [ "$count" -lt 10 ]; then
-            echo "only $count tests collected — the langchain suite is skipping itself"; exit 1
+          ran="$(.venv/bin/python -c "import xml.etree.ElementTree as ET; import os; s = ET.parse(os.environ['RUNNER_TEMP'] + '/junit-langchain.xml').getroot().find('testsuite'); print(int(s.get('tests', 0)) - int(s.get('skipped', 0)))")"
+          echo "$ran tests actually ran"
+          if [ "$ran" -lt 10 ]; then
+            echo "only $ran tests ran — the langchain suite is skipping itself"; exit 1
           fi
       - name: build the dist and prove the wheel carries the integration
         # Tooling from the hash-pinned release-tools lock, same reasoning as
@@ -107,7 +110,7 @@ jobs:
           .venv/bin/pip -q install -r requirements/release-tools.txt
           .venv/bin/python -m build
           .venv/bin/twine check dist/*
-          whl=(dist/*.whl); whl="${whl[0]}"
+          whls=(dist/*.whl); whl="${whls[0]}"
           unzip -l "$whl" | grep -q "boost_langchain/__init__.py" \
             || { echo "wheel is missing boost_langchain"; exit 1; }
           unzip -l "$whl" | grep -q "boost_langchain/py.typed" \

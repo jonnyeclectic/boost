@@ -50,7 +50,7 @@ def test_wheel_ships_both_top_level_packages():
     tool = _pyproject()["tool"]
     include = tool["setuptools"]["packages"]["find"]["include"]
     assert "boost_cli*" in include and "boost_langchain*" in include, include
-    # check-wheel-contents flags a second top-level package as W005 unless the
+    # check-wheel-contents flags a second top-level package as W009 unless the
     # allowlist names it — and the allowlist doubles as the statement of
     # intent that exactly these two trees, no more, ship in the wheel.
     assert tool["check-wheel-contents"]["toplevel"] == [
@@ -88,5 +88,23 @@ def test_import_without_the_extra_names_the_fix():
     # ModuleNotFoundError pointing at an internal import.
     sys.modules.pop("boost_langchain", None)
     with pytest.raises(ModuleNotFoundError,
-                       match=r"boost-skill-cli\[langchain\]"):
+                       match=r"boost-skill-cli\[langchain\]") as excinfo:
         import boost_langchain  # noqa: F401
+    # The replacement error keeps the ModuleNotFoundError contract: .name
+    # carries the missing root, not None.
+    assert excinfo.value.name == "langchain_core"
+
+
+def test_version_floor_matches_the_extra_pin():
+    # The guard's second half: langchain-core 0.3 (exactly the [eval]
+    # extra's pin) satisfies every import this package makes and then fails
+    # subtly at runtime — BaseMessage.text is a method in 0.3, a property
+    # from 1.0 — so __init__ enforces the declared >=1,<2 major at import
+    # time via this pure, base-venv-testable rule.
+    from boost_langchain._compat import supported_langchain_core
+    assert supported_langchain_core("1.0.0")
+    assert supported_langchain_core("1.5.3")
+    assert not supported_langchain_core("0.3.79")   # the [eval] stack
+    assert not supported_langchain_core("2.0.0")    # contract moves on majors
+    assert not supported_langchain_core("")
+    assert not supported_langchain_core("garbage")

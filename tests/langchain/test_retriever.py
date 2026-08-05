@@ -9,8 +9,9 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip(
-    "langchain_core",
-    reason="needs the [langchain] extra: pip install -e '.[langchain]'")
+    "langchain_core", minversion="1",
+    reason="needs the [langchain] extra: pip install -e '.[langchain]' "
+           "(an [eval] venv's langchain-core 0.3 must skip, not run)")
 
 from langchain_core.documents import Document
 
