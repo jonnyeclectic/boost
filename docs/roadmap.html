@@ -6032,8 +6032,9 @@ output and a PR checklist would cut triage friction more cheaply than most engin
       </article>
 
       <article class="cap rcard" id="mcp-zero-setup-and-three-kinds">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Feature</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Feature</span></div>
         <h3>make <code>boost mcp</code> the whole setup, and put all three kinds behind it</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Measured on a fresh <code>HOME</code>:</b> <code>boost mcp</code> registers the server, and then
 the first thing an agent ever asks it — <code>boost_search("set up code review for a python
 repo")</code> — comes back <code>no skills match 'set up code review for a python repo'</code>.
@@ -6064,7 +6065,7 @@ message — with the skip list kept in plain sight (a question, a one-line edit,
 handed). The moments worth naming are the ones where a choice gets locked in: a new project or
 subsystem, an architecture decision, environment and tooling config, linters, tests, CI. The
 existing guardrails hold: no coercive framing, no claimed corpus size, the stated 10-15s cost, and
-"the task stays yours" — all of them already pinned by tests.</p>
+"the task stays yours" — all of them already pinned by tests.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>

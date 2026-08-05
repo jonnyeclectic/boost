@@ -2,8 +2,9 @@
 id: mcp-zero-setup-and-three-kinds
 board: code
 section: dx
-status: inflight
+status: shipped
 owner: loop/mcp-draw
+pr: 474
 category: Feature
 complexity: M
 impact: High
