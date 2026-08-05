@@ -119,14 +119,17 @@ def cmd_tap(argv) -> int:
                 rc = 1
                 continue
             journal.log("tap", tap.name)
-            out.ok("tapped %s (%d skills) — %s"
+            # "items", not "skills": the defaults now carry rules and
+            # workflows, so a pure rules registry reported "257 skills"
+            # immediately after the README promised three kinds.
+            out.ok("tapped %s (%d items) — %s"
                    % (tap.name, len(entries), default.get("focus", "")))
     if args.spec:
         with spin.Spinner("cloning %s" % args.spec):
             tap = registry.add(args.spec, curated=args.curated)
             entries = catalog.rebuild_tap(tap)
         journal.log("tap", tap.name)
-        out.ok("Tapped %s (%d skills)" % (tap.name, len(entries)))
+        out.ok("Tapped %s (%d items)" % (tap.name, len(entries)))
     # Refresh the TAB-completion name cache so `boost install <TAB>` sees
     # whatever this call just tapped instead of the pre-tap snapshot.
     complete.refresh_names()

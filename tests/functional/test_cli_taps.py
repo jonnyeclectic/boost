@@ -41,7 +41,7 @@ def _commit_clone(repo, msg):
 class TestTap:
     def test_local_dir_happy(self, boost, fixture_tap_src):
         r = boost("tap", fixture_tap_src)
-        assert "Tapped fixture-tap (5 skills)" in r.out
+        assert "Tapped fixture-tap (5 items)" in r.out
         # real effects: clone, cache, config entry
         assert (paths.repos_dir() / "fixture-tap" / "SKILL.md").exists() is False
         assert (paths.repos_dir() / "fixture-tap" / "skills" /
@@ -84,9 +84,9 @@ class TestTap:
             "boost_cli.core.gitutil.clone_shallow",
             lambda url, dest: shutil.copytree(fixture_tap_src, dest))
         r = boost("tap", "--defaults")
-        assert ("tapped anthropics/skills (5 skills) — "
+        assert ("tapped anthropics/skills (5 items) — "
                 "Official Anthropic skills") in r.out
-        assert ("tapped obra/superpowers (5 skills) — "
+        assert ("tapped obra/superpowers (5 items) — "
                 "Community powerhouse") in r.out
         cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
         assert [t["name"] for t in cfg["taps"]] == [

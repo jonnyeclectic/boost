@@ -187,7 +187,7 @@
       <a class="cmd-link" href="#cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --install --uninstall {bash,zsh,fish}">completions</a>
       <a class="cmd-link" href="#cmd-schedule" data-search="schedule manage automatic skill-sync scheduling  --interval {6h,12h,daily} --json {status,enable,disable}">schedule</a>
       <a class="cmd-link" href="#cmd-serve" data-search="serve serve the skill catalog over http (port 8787)  --port port --host host">serve</a>
-      <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio {register,unregister}">mcp</a>
+      <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">mcp</a>
       <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage claude code hooks (scope-aware) in settings.json  -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain {on,off,route,personas,install,init,startup,orient,uninstall,disable,enable,doctor,status} value">bmad</a>
       <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
@@ -1052,10 +1052,10 @@
           <div class="arg"><code>--host HOST</code><span>address to bind (default: 127.0.0.1)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio {register,unregister}">
+      <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">
         <h3><span class="cname">mcp</span><span class="gtag">cfg</span></h3>
         <p class="summary">Register boost as an MCP server (Claude Code, Gemini CLI)</p>
-        <pre class="syn">boost mcp [--host H] [--stdio] [{register,unregister}]</pre>
+        <pre class="syn">boost mcp [--host H] [--stdio] [--seed] [--no-seed] [{register,unregister}]</pre>
         <p class="desc">Register boost as an MCP server for your agent CLIs</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -1065,6 +1065,8 @@
         <div class="args">
           <div class="arg"><code>--host H</code><span>agent CLI to (un)register with: claude, gemini, or `auto` (default) for every one that is installed</span></div>
           <div class="arg"><code>--stdio</code><span>run the MCP server on stdin/stdout (used by the agent)</span></div>
+          <div class="arg"><code>--seed</code><span>top up any missing recommended registries even if others are already tapped (the repair path)</span></div>
+          <div class="arg"><code>--no-seed</code><span>register only; do not tap anything</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-hooks" data-search="hooks manage claude code hooks (scope-aware) in settings.json  -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">

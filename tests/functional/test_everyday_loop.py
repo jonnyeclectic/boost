@@ -13,7 +13,7 @@ from boost_cli.core import paths
 
 def test_tap_search_install_doctor_uninstall(boost, fixture_tap_src):
     r = boost("tap", fixture_tap_src)
-    assert "Tapped" in r.out and "(5 skills)" in r.out
+    assert "Tapped" in r.out and "(5 items)" in r.out
 
     r = boost("search", "jira")
     assert "jira-integration" in r.out

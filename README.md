@@ -14,7 +14,7 @@ Windsurf, Cursor, and Gemini CLI** in a single pass.
 
 ```bash
 pipx install boost-skill-cli
-boost tap --defaults          # 5 curated registries
+boost tap --defaults          # 7 curated registries: skills, rules, workflows
 boost search tdd              # full-content BM25 over every skill
 boost install tdd-workflow    # → every agent, version-pinned, one lock file
 ```
@@ -58,7 +58,7 @@ Needs Python 3.12+ and `git`.
 ```bash
 pipx install boost-skill-cli        # or: pip install boost-skill-cli
 boost --version
-boost tap --defaults          # pull in the 5 starter registries
+boost tap --defaults          # pull in the 7 starter registries
 
 # upgrading later is `upgrade`, not `install --upgrade` — with a bare package
 # name the latter matches the spec you already satisfy and silently does nothing
@@ -240,13 +240,22 @@ just less cleverly.
 
 boost is itself an MCP server, so an agent can search and install skills mid-task
 instead of waiting for you to shell out. `boost mcp register` wires it into every
-agent CLI it finds on your PATH:
+agent CLI it finds on your PATH — and on a machine with no taps yet it also pulls
+in the starter registries first, so **installing boost and running `boost mcp` is
+the whole setup**:
 
 ```bash
 boost mcp register                 # every installed host (default: --host auto)
 boost mcp register --host gemini   # just one
+boost mcp register --no-seed       # register only; tap nothing
+boost mcp register --seed          # re-tap the defaults even if taps exist
 boost mcp unregister               # same host selection, in reverse
 ```
+
+The seed only fires when the catalog is empty — re-running `boost mcp` on a
+configured machine leaves your taps alone — and a failed clone is reported
+without taking the registration down with it. Export `BOOST_NO_SEED=1` to keep
+`boost mcp` a purely local operation (CI images, air-gapped machines).
 
 | Host | CLI | Registered in |
 |------|-----|---------------|

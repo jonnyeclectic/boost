@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 _SANDBOX_ENV = ("BOOST_HOME", "BOOST_AGENTS_STORE", "BOOST_DEBUG",
                 "BOOST_LOG_LEVEL", "BOOST_NO_LOG", "VOYAGE_API_KEY",
-                "OPENAI_API_KEY", "BOOST_NO_EMBED")
+                "OPENAI_API_KEY", "BOOST_NO_EMBED", "BOOST_NO_SEED")
 
 
 def before_all(context):
@@ -44,6 +44,11 @@ def before_scenario(context, scenario):
     os.environ["BOOST_NO_AI"] = "1"       # deterministic: no AI calls
     os.environ["NO_COLOR"] = "1"          # plain output for assertions
     os.environ["BOOST_ASSUME_YES"] = "1"  # never block on confirm()
+    # Same contract as tests/conftest.py's sandbox fixture: `boost mcp` seeds
+    # the default registries on an empty machine, and every scenario here runs
+    # against a fresh HOME. Without this, mcp.feature alone would perform
+    # dozens of real network clones on a required check.
+    os.environ["BOOST_NO_SEED"] = "1"
     context._home = home
     context._tapped = False
     context._patchers = []

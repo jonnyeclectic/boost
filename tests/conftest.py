@@ -89,6 +89,11 @@ def sandbox(tmp_path, monkeypatch):
     monkeypatch.delenv("BOOST_LOG_LEVEL", raising=False)
     monkeypatch.delenv("BOOST_NO_LOG", raising=False)
     monkeypatch.setenv("BOOST_NO_AI", "1")       # deterministic: no AI calls
+    # `boost mcp` seeds the default registries on an empty machine. That is
+    # seven network clones, which no test may perform as a side effect of
+    # checking what registration prints — same contract as BOOST_NO_AI above:
+    # a test that means to exercise the seed unsets this explicitly.
+    monkeypatch.setenv("BOOST_NO_SEED", "1")
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)   # no real embed calls
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("BOOST_NO_EMBED", raising=False)
