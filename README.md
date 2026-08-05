@@ -289,29 +289,77 @@ boost hooks list
 boost hooks remove -n greet --scope project
 ```
 
-`boost bmad` installs and manages the [BMAD Method](https://bmadcode.com/)
-(agentic Analyst / PM / Architect / Dev / QA personas + workflows) as a
-scope-aware, toggleable startup experience. Provisioning is delegated to the
-canonical `npx bmad-method install` (needs Node.js 20.12+); boost owns scope,
-the startup toggle, and teardown.
+### BMAD autopilot
+
+`boost bmad on` is a one-time, global switch that puts the
+[BMAD Method](https://bmadcode.com/)'s personas in charge of every task that
+arrives, without you having to invoke anything. No Node, no network, one
+command:
+
+```bash
+boost bmad on      # ← that's it
+```
+
+It writes seven BMAD persona subagents into `~/.claude/agents/` and installs two
+hooks. A `SessionStart` hook briefs the session on the roster; a
+`UserPromptSubmit` hook classifies each incoming prompt and prefixes it with a
+short routing banner:
+
+```text
+[BMAD autopilot] track: build
+Lead: `bmad-dev` subagent — Amelia, Senior Software Engineer. Ship it complete and verified.
+Support: `bmad-tea` (Murat), `bmad-scribe` (Paige) — spawn them with the Agent tool…
+BMAD skill: `bmad-build` — invoke it if it is installed; otherwise the persona's own playbook stands.
+Done means: tests: add or update coverage under `tests/`, and run them · docs: update
+`README.md` / `docs/` wherever the change shows · roadmap: create or claim the item under
+`docs/roadmap/items/` · gate: `make check` green, with real output · `CLAUDE.md` is binding
+Work autonomously through to a finished, verified change; stop to ask only when a choice
+would change what gets delivered.
+```
+
+Nine tracks (`build`, `quality`, `docs`, `planning`, `product`, `architecture`,
+`ux`, `discovery`, `review`) each name a lead persona, the support personas to
+spawn alongside it, and the canonical BMAD v6 skill for that kind of work.
+**That last line is the point**: the definition of done is read off the repo in
+front of you — your test directory, your docs, your roadmap items, your gate
+command — so documentation, testing and roadmap bookkeeping travel with the task
+instead of being remembered afterwards.
+
+The router costs a question nothing. Acknowledgements, slash commands, short
+informational questions ("what does `scan_dir` do?") and anything containing
+`no bmad` produce **no banner at all** — and because a `UserPromptSubmit` hook
+that exits non-zero would erase your prompt, it degrades every failure to
+silence and always exits 0.
+
+```bash
+boost bmad personas                  # the roster, and whether it's installed
+boost bmad route "add tests" --plain # see what a prompt would route to
+boost bmad doctor                    # autopilot + workflow state, both scopes
+boost bmad off                       # remove the hooks and the personas
+boost bmad on --scope project        # or keep it to one repo
+```
+
+`off` only deletes persona files boost wrote — edit `~/.claude/agents/bmad-dev.md`
+to taste and it survives.
+
+**The full method** is still a separate, heavier install. `boost bmad install`
+delegates to the canonical `npx bmad-method install` (needs Node.js 20.12+) for
+the `bmad-*` workflow skills and the per-project `_bmad/` runtime they read on
+activation:
 
 ```bash
 boost bmad install --scope project   # skills + per-project _bmad/ runtime
 boost bmad install --scope global    # skills into ~/.claude/skills for every session
 boost bmad init                      # add the _bmad/ runtime to the current repo
-boost bmad startup on                # inject light BMAD orientation on session start
-boost bmad startup off               # stop injecting it (skills stay installed)
+boost bmad startup on|off            # just the SessionStart briefing
 boost bmad disable / enable          # quarantine / restore skills (recoverable)
 boost bmad uninstall                 # delete skills + _bmad/ for a scope
-boost bmad doctor                    # what's installed where
 ```
 
-When startup is on, a `SessionStart` hook runs `boost bmad orient`, which prints
-a short orientation into the session only while the toggle is enabled. That
-orientation sets a **default bias**: build/fix/change/refactor requests go
-straight to the `bmad-quick-dev` skill (clarify → plan → implement → review),
-skipping the full brief → PRD → architecture ceremony unless you ask for full
-planning. Global installs stage the installer in a temp dir and copy only the
+The two compose. The autopilot routes at `bmad-build`, `bmad-prd` and friends
+whether or not they are installed and says which case you're in — with the
+skills present you get BMAD's full workflow, without them the persona's own
+playbook. Global installs stage the installer in a temp dir and copy only the
 `bmad-*` skills, so `$HOME` never gets a stray `_bmad/` — the workflow runtime
 stays per-project.
 
