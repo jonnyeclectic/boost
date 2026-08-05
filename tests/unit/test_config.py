@@ -232,16 +232,30 @@ class TestUnset:
 
 class TestDefaultTaps:
     def test_shape(self):
-        assert len(config.DEFAULT_TAPS) == 5
+        assert len(config.DEFAULT_TAPS) == 7
         names = [t["name"] for t in config.DEFAULT_TAPS]
         assert names == ["anthropics/skills", "obra/superpowers",
                          "trailofbits/skills", "expo/skills",
-                         "K-Dense-AI/scientific-agent-skills"]
+                         "K-Dense-AI/scientific-agent-skills",
+                         "PatrickJS/awesome-cursorrules",
+                         "qdhenry/Claude-Command-Suite"]
         for tap in config.DEFAULT_TAPS:
             assert tap["curated"] is True
             assert tap["url"].startswith("https://github.com/")
             assert tap["url"].endswith(tap["name"])
             assert tap["focus"]
+
+    def test_the_defaults_cover_all_three_item_kinds(self):
+        # The five skills-first repos measured 302 skills and 41 workflows
+        # between them and ZERO rules, so a default install could not find a
+        # guardrail at all — the kind whose whole job is steering toward a
+        # better path and away from an anti-pattern. The focus lines are what
+        # a user reads in `boost tap --defaults` output, so each kind has to
+        # be findable there too, not just present in the clone.
+        focus = " ".join(t["focus"].lower() for t in config.DEFAULT_TAPS)
+        assert "rules" in focus
+        assert "workflows" in focus
+        assert "skills" in focus
 
 
 class TestRegistryCatalog:

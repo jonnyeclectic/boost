@@ -51,7 +51,18 @@ DEFAULTS = {
     },
 }
 
-# Recommended public registries, added via `boost tap --defaults`.
+# Recommended public registries, added via `boost tap --defaults` and by the
+# seed that runs on `boost mcp` (core/bootstrap.py) so one command is the
+# whole setup.
+#
+# The list covers all THREE item kinds on purpose. The five skills-first repos
+# measured 302 skills and 41 workflows between them and — the gap this closes
+# — zero rules, so the kind whose entire job is steering toward a better path
+# and away from an anti-pattern could not be found by a default install at
+# all. Adding one canonical rules repo and one commands/agents repo takes the
+# default corpus to 946 items (302 skills, 387 workflows, 257 rules) for about
+# 14 MB more on disk than the five, measured end-to-end at 14-45s across runs
+# (network-bound, hence the range).
 DEFAULT_TAPS = [
     {"name": "anthropics/skills", "url": "https://github.com/anthropics/skills",
      "curated": True,
@@ -69,6 +80,16 @@ DEFAULT_TAPS = [
      "url": "https://github.com/K-Dense-AI/scientific-agent-skills",
      "curated": True,
      "focus": "Scientific computing — research libraries, databases, analysis"},
+    {"name": "PatrickJS/awesome-cursorrules",
+     "url": "https://github.com/PatrickJS/awesome-cursorrules",
+     "curated": True,
+     "focus": "Rules — the canonical .cursorrules/.mdc collection: per-stack "
+              "conventions and anti-patterns to avoid"},
+    {"name": "qdhenry/Claude-Command-Suite",
+     "url": "https://github.com/qdhenry/Claude-Command-Suite",
+     "curated": True,
+     "focus": "Workflows — slash commands and subagents for review, testing, "
+              "refactoring and release"},
 ]
 
 
