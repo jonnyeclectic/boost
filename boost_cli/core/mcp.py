@@ -121,9 +121,38 @@ PROTOCOL_VERSION = "2024-11-05"
 #   "vetted" — the catalog is indexed, not reviewed. #442 struck the word from
 #   every tool description for that reason and left it here, where it did the
 #   same work of implying a guarantee nobody performs.
+#
+# THREE KINDS, stated once and early. Every line of this text used to say
+# "skills", while `boost_search` has always returned rules and workflows too
+# and `store.install` has always installed all three. An agent reading the old
+# text had no reason to look for a guardrail or a slash-command, and no way to
+# know that installing a rule edits the file it reads every session. Rules in
+# particular are the kind the catalog is worst at selling itself on: their
+# whole job is steering toward a better path and away from an anti-pattern,
+# which is exactly the value an agent cannot infer from the bare word "rule".
+#
+# THE BOUNDARY is a test rather than a judgement, and that distinction is the
+# whole reason it works. "Before non-trivial work" lost to its own escape
+# hatch every time, because deciding a task is non-trivial takes judgement
+# while "this turn looks small" is free — and every turn looks small when it
+# opens. Three properties can be read off the work instead of decided about
+# it: more than one file, something left behind, a line in a commit message.
+# The nameable-task trigger stays as the cheapest test of all.
+#
+# NON-CAPTURING, and this is a measured knife edge rather than a manner.
+# Editing only a tool's description moves how often a model calls it by more
+# than 10x ("Tool Preferences in Agentic LLMs are Unreliable", EMNLP 2025),
+# and assertive phrasing is precisely the lever that does it. So the skip list
+# stays in plain sight, the cost stays stated, and nothing here is an order —
+# a surface that captures work it cannot do gets routed around permanently the
+# first time it misses, which costs more than every call it ever won.
 INSTRUCTIONS = (
-    "boost is a shared shelf of version-tracked skills for AI coding "
-    "agents — procedures someone already worked out, ready to follow.\n"
+    "boost is a shared shelf of version-tracked procedures for AI coding "
+    "agents, in three kinds: SKILLS (a procedure someone already worked out "
+    "and debugged), RULES (guardrails that steer toward a better path and "
+    "rule out an anti-pattern — these materialize into the context file your "
+    "agent reads every session), and WORKFLOWS (slash-commands and "
+    "subagents).\n"
     "\n"
     "THE CHECK: if the task in front of you has a name — \"set up code "
     "review\", \"add commit conventions\", \"write a migration\", \"debug "
@@ -134,20 +163,69 @@ INSTRUCTIONS = (
     "reranks every match, which is what makes the top result worth acting on "
     "rather than skimming ten.\n"
     "\n"
+    "WORTH THE SECONDS — a test, not a feeling. Any one of these is a yes: "
+    "the work will touch more than one file; it leaves something behind that "
+    "outlives this session (a config, a CI job, a convention); or you would "
+    "name it in a commit message. Check again the moment a small task turns "
+    "out to be a large one — the first check only fires at a boundary you "
+    "recognized at the time, and a question that became an investigation "
+    "never got one. The moments that pay best are the ones where a choice "
+    "gets locked in: starting a project or a subsystem, picking an "
+    "architecture, configuring an environment, adding a linter or formatter, "
+    "setting up tests or CI. One call there steers everything after it.\n"
+    "\n"
     "Finding nothing is a good outcome, not a wasted call: it tells you to "
     "build it yourself, now knowing that nothing already covers it. Finding "
     "something is a head start, not an instruction — read it, take what fits, "
     "discard the rest. The task stays yours.\n"
     "\n"
-    "Two moments beat the odds: the first step of anything that will take more "
-    "than a few steps, and the moment a small task turns out to be a large "
-    "one. The second matters because the first only fires at a boundary you "
-    "recognized at the time — a question that became an investigation never "
-    "got one.\n"
-    "\n"
     "Flow: boost_search -> boost_install. Skip it for a question, a one-line "
     "edit, or a command you were just handed."
 )
+
+
+def hit_line(entry: dict) -> str:
+    """One search hit rendered for an agent: name, kind, description, tap.
+
+    The kind marker is the load-bearing part. ``boost_install``'s description
+    warns that installing a rule is the more invasive change — it merges into
+    the context file the agent loads every session rather than copying a file
+    into the store — and tells the caller to check what they are installing.
+    Until this marked it, the reply that warning applies to never said which
+    hits were rules, so the check it asked for was impossible.
+
+    Skills render unmarked: they are the common case, and a marker on every
+    line would spend a token per hit to say "nothing unusual here". A missing
+    ``kind`` reads as a skill for the same reason it does everywhere else in
+    the catalog — thin scanner output must not surface ``[None]`` to an agent.
+    """
+    kind = entry.get("kind") or "skill"
+    marker = "" if kind == "skill" else " [%s]" % kind
+    return "%s%s — %s (%s)" % (entry.get("name", "?"), marker,
+                               entry.get("description", ""),
+                               entry.get("tap", "?"))
+
+
+def no_results(query: str, *, tapped: int) -> str:
+    """The reply for a search that returned nothing.
+
+    Two different situations wore one sentence. On a configured machine
+    nothing matching the query is a real answer, and saying so is what makes
+    "finding nothing is a good outcome" true. On a machine with no taps
+    nothing could have matched *anything*, and reporting that as a failed
+    search is how a new user's first question teaches their agent that boost
+    is empty — the reply is byte-identical to a genuine miss.
+
+    So the empty-catalog branch does not repeat the query back: the query was
+    fine. It names the state and the one command that changes it, the way
+    ``tool-design`` asks agent-facing errors to carry their own recovery path.
+    """
+    if tapped > 0:
+        return "no skills match %r" % query
+    return ("nothing is tapped yet, so there is no catalog to search — this "
+            "is a setup state, not a miss. Run `boost tap --defaults` (or "
+            "`boost mcp --seed`) to add the recommended registries, then "
+            "search again.")
 
 
 def engine_note() -> str:

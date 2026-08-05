@@ -905,7 +905,7 @@ class TestMcp:
         assert ("jira-integration — Sync commits and PRs to Jira tickets "
                 "(fixture-tap)") in text(3)
         assert "installed skills: 0" in text(4)
-        assert "taps: 1 (5 skills available)" in text(4)
+        assert "taps: 1 (5 items available)" in text(4)
         assert "healthy — no issues found" in text(4)
         assert "isError" not in by_id[4]["result"]
 
@@ -955,6 +955,59 @@ class TestMcp:
             "boost_search", {"query": "zzzznothing"})
         assert is_err is False
         assert "no skills match 'zzzznothing'" in text
+
+    def test_boost_search_on_a_fresh_machine_reports_setup_not_a_miss(
+            self, sandbox):
+        # The first question any agent ever asks a newly registered server,
+        # on a machine with nothing tapped. It used to answer "no skills
+        # match 'X'" — true, and byte-identical to a genuine miss, so the
+        # agent learns the catalog is empty and stops asking. It must instead
+        # name the state and the command that changes it.
+        from boost_cli.commands import configuration
+        text, is_err = configuration._mcp_tool(
+            "boost_search", {"query": "set up code review for a python repo"})
+        assert is_err is False
+        assert "no skills match" not in text
+        assert "nothing is tapped yet" in text
+        assert "boost tap --defaults" in text
+
+    def test_boost_doctor_does_not_call_an_untapped_machine_healthy(
+            self, sandbox):
+        # Every check passes because there is nothing to check. "healthy — no
+        # issues found" printed directly under "taps: 0 (0 items available)"
+        # is the one clean bill of health that misleads.
+        from boost_cli.commands import configuration
+        text, _is_err = configuration._mcp_tool("boost_doctor", {})
+        assert "taps: 0" in text
+        assert "healthy — no issues found" not in text
+        assert "nothing is searchable yet" in text
+
+    def test_boost_search_marks_the_kind_of_every_hit(self, boost, tapped,
+                                                      monkeypatch):
+        # boost_install's description tells the caller to check what kind of
+        # thing they are installing, because a rule merges into the context
+        # file rather than copying into the store. That check is only
+        # possible if the reply it applies to says which hits are rules — so
+        # this pins the RENDERING of a mixed result set, with the ranking
+        # itself stubbed out (rag's own tests own that half).
+        from boost_cli.commands import configuration
+        from boost_cli.core import rag
+        mixed = [
+            {"entry": {"name": "brainstorming", "kind": "skill",
+                       "description": "diverge then converge", "tap": "t"}},
+            {"entry": {"name": "house-style", "kind": "rule",
+                       "description": "prefer the logger", "tap": "t"}},
+            {"entry": {"name": "ship-it", "kind": "workflow",
+                       "description": "release checklist", "tap": "t"}},
+        ]
+        monkeypatch.setattr(rag, "search",
+                            lambda *a, **kw: (mixed, rag.LLM_RANKER))
+        text, is_err = configuration._mcp_tool(
+            "boost_search", {"query": "anything"})
+        assert is_err is False
+        assert "brainstorming — diverge then converge (t)" in text
+        assert "house-style [rule] — prefer the logger (t)" in text
+        assert "ship-it [workflow] — release checklist (t)" in text
 
     def _seed_rule_and_workflow(self):
         import hashlib
@@ -1245,6 +1298,57 @@ class TestMcp:
                 "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
                 "-e", "no_proxy=*",
                 "boost", self._shim(), "mcp", "--stdio"]
+
+    def test_register_seeds_the_catalog_on_an_empty_machine(
+            self, boost, sandbox, monkeypatch):
+        # The point of the whole change: `boost mcp` is the only command a new
+        # user is told to run, so it has to leave them with a server that can
+        # answer something. BOOST_NO_SEED is cleared explicitly (the conftest
+        # sets it so no other test clones anything) and the clone itself is
+        # faked — this pins the WIRING, not the network.
+        from boost_cli.core import bootstrap, catalog, config, registry
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        seeded = []
+
+        class _Tap:
+            def __init__(self, name):
+                self.name = name
+
+        monkeypatch.setattr(registry, "add",
+                            lambda url, **kw: (
+                                seeded.append(url),
+                                _Tap(url.split("github.com/")[-1]))[1])
+        monkeypatch.setattr(catalog, "rebuild_tap", lambda tap: [{}] * 4)
+        self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register")
+        assert len(seeded) == len(config.DEFAULT_TAPS)
+        assert "items searchable" in r.out
+        # Seeding must not displace the thing the user actually asked for.
+        assert ("registered boost as an MCP server for Claude Code "
+                "(scope: user)") in r.out
+
+    def test_register_leaves_a_configured_machine_alone(
+            self, boost, tapped, monkeypatch):
+        # Re-running `boost mcp` on a machine that already has taps must not
+        # re-clone anything: that would be boost editing state nobody asked
+        # it to touch.
+        from boost_cli.core import bootstrap, registry
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        monkeypatch.setattr(registry, "add", lambda *a, **kw: pytest.fail(
+            "re-tapped a machine that already had taps"))
+        self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register")
+        assert "items searchable" not in r.out
+
+    def test_no_seed_keeps_registration_offline(self, boost, sandbox,
+                                                monkeypatch):
+        from boost_cli.core import bootstrap, registry
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        monkeypatch.setattr(registry, "add", lambda *a, **kw: pytest.fail(
+            "--no-seed still tapped"))
+        self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--no-seed")
+        assert "registered boost as an MCP server" in r.out
 
     def test_register_with_only_claude_cli(self, boost, sandbox, monkeypatch):
         calls = self._fake_clis(monkeypatch, "claude")

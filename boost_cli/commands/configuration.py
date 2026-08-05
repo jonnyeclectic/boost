@@ -16,6 +16,7 @@ from pathlib import Path
 from .. import __version__, cliparse
 from ..core import (
     agents,
+    bootstrap,
     catalog,
     complete,
     config,
@@ -877,23 +878,23 @@ def _tool_search(args: dict):
     # the asymmetry with the CLI is a decision someone can revisit, not a
     # default nobody chose. It degrades on its own when no AI is configured.
     rag_result = rag.search(query, limit=10, smart=True)
+    # Both empty branches route through mcp.no_results, which tells a real
+    # miss apart from a machine that has never been tapped — the two used to
+    # share one sentence, and the fresh-install case is the one an agent reads
+    # first and learns the most from.
+    tapped = len(registry.list_taps())
     if rag_result is not None:  # full-content index is built
         hits, ranker = rag_result
         if not hits:
-            return "no skills match %r" % query, False
-        lines = [
-            "%s — %s (%s)" % (h["entry"]["name"],
-                              h["entry"].get("description", ""),
-                              h["entry"]["tap"])
-            for h in hits]
+            return mcp.no_results(query, tapped=tapped), False
+        lines = [mcp.hit_line(h["entry"]) for h in hits]
         lines.append(_ranking_note(ranker))
         return "\n".join(lines), False
     # no index yet -> keep today's frontmatter search so nothing regresses
     scored = catalog.search(query)[:10]
     if not scored:
-        return "no skills match %r" % query, False
-    return "\n".join("%s — %s (%s)" % (e["name"], e["description"], e["tap"])
-                     for e, _score in scored), False
+        return mcp.no_results(query, tapped=tapped), False
+    return "\n".join(mcp.hit_line(e) for e, _score in scored), False
 
 
 def _tool_list(args: dict):
@@ -987,7 +988,10 @@ def _tool_doctor(args: dict):
     lines = ["installed skills: %d" % len(everything["skill"]),
              "installed rules: %d · workflows: %d"
              % (len(everything["rule"]), len(everything["workflow"])),
-             "taps: %d (%d skills available)" % (len(taps), len(catalog.all_entries()))]
+             # "items", not "skills": the default taps now carry rules and
+             # workflows too, so counting all of them as skills overstates one
+             # kind and hides the other two in the same breath.
+             "taps: %d (%d items available)" % (len(taps), len(catalog.all_entries()))]
     for key, vals in plan.items():
         if vals:
             lines.append("%s: %s" % (key, ", ".join(str(v) for v in vals)))
@@ -1000,8 +1004,21 @@ def _tool_doctor(args: dict):
                       == integrity.STATUS_MODIFIED)]
     lines.extend(mat_issues)
     total = issues + len(mat_issues)
+    # A machine with no taps has nothing to disagree about, so every check
+    # above passes and the old reply called it "healthy" — directly under the
+    # line saying `taps: 0 (0 items available)`. That is the one state where
+    # a clean bill of health is actively misleading: the surface cannot answer
+    # anything yet, which is a setup step, not health. Reported, never fatal.
+    # Additive, deliberately: an untapped machine can ALSO have a broken
+    # materialization, and folding the two into one branch would hide the
+    # issue count behind the setup note.
+    if not taps:
+        lines.append("no registries tapped — nothing is searchable yet; run "
+                     "`boost mcp --seed` (or `boost tap --defaults`) to add "
+                     "the recommended ones")
     if total == 0:
-        lines.append("healthy — no issues found")
+        if taps:
+            lines.append("healthy — no issues found")
     elif mat_issues:
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
     else:
@@ -1045,12 +1062,19 @@ def _tool_discover_github(args: dict):
 REGISTRY.register(
     "boost_search",
     "Someone has probably solved this already — one call tells you. Searches "
-    "every installable AI-agent skill in every registry you have "
-    "tapped and returns ranked matches: each one a procedure a "
-    "practitioner already worked out, debugged and wrote down, edge cases "
-    "included. Reach for it the moment the task in front of you has a name you "
+    "every skill, rule and workflow in every registry you have tapped and "
+    "returns ranked matches, one per line: name, a [rule] or [workflow] kind "
+    "marker where it is not a skill, the one-line description, and the tap it "
+    "came from. The kinds differ in what they do for you — a SKILL is a "
+    "procedure a practitioner already worked out and debugged, edge cases "
+    "included; a RULE is a guardrail that steers toward a better path and "
+    "rules out an anti-pattern; a WORKFLOW is a slash-command or subagent. "
+    "Reach for it the moment the task in front of you has a name you "
     "could say out loud — \"set up code review\", \"add commit conventions\", "
-    "\"debug flaky tests\" — and before writing a skill, subagent, "
+    "\"debug flaky tests\" — and especially where a choice is about to get "
+    "locked in for everything after it: a new project or subsystem, an "
+    "architecture decision, environment and tooling config, a linter or "
+    "formatter, tests, CI. Also before writing a skill, subagent, "
     "slash-command or rule from scratch. Read-only where it counts: it "
     "installs nothing and touches nothing you are working on, though the first "
     "search builds a local index under ~/.boost. A hit commits you to nothing "
@@ -1059,18 +1083,23 @@ REGISTRY.register(
     "result worth acting on rather than skimming. Worth budgeting for, not a "
     "surprise. Coming back empty is a real answer too, not a "
     "wasted turn: it means build it yourself, now knowing nothing already "
-    "covers it.",
+    "covers it — and on a machine with nothing tapped yet it says so and names "
+    "the one command that fixes it, rather than reporting a miss.",
     {"type": "object",
      "properties": {"query": {"type": "string",
-                              "description": "what the skill should do (a task, "
-                              "capability, or topic), not just a keyword"}},
+                              "description": "what you are trying to do, in "
+                              "your own words — a task, capability or problem "
+                              "(\"set up pre-commit hooks for a python repo\") "
+                              "rather than a bare keyword"}},
      "required": ["query"]},
     _tool_search)
 REGISTRY.register(
     "boost_list",
-    "The skills already installed on this machine and usable this second — "
-    "capability you own and may not know you own. Read-only, instant, installs "
-    "nothing. Worth a call at the start of "
+    "The skills, rules and workflows already installed on this machine and "
+    "usable this second — capability you own and may not know you own. "
+    "Returns one line each: name, version, tap, a [rule] or [workflow] marker "
+    "where it is not a skill, and [pinned] where the version is held. "
+    "Read-only, instant, installs nothing. Worth a call at the start of "
     "anything that will take more than a few steps: planning from memory while "
     "the answer already sits on disk is the one avoidable mistake here.",
     {"type": "object", "properties": {}},
@@ -1096,12 +1125,19 @@ REGISTRY.register(
     "a prompt, which lasts one "
     "session and helps nobody else: an installed skill is version-tracked, "
     "survives restarts, updates cleanly, and your team can install the "
-    "identical thing by name. Worth knowing before you call it: boost_search "
-    "also returns rules, and installing a rule copies nothing into the store — "
-    "it merges into the context file your agent loads every session, which is "
-    "the more invasive change. Check what kind of thing you are installing.",
+    "identical thing by name. Worth knowing before you call it: what happens "
+    "on disk depends on the kind, which boost_search marks on every hit. A "
+    "skill is copied into the store and linked out. A WORKFLOW is rendered "
+    "into each agent's commands/agents directory. A RULE copies nothing into "
+    "the store — it merges into the context file your agent loads every "
+    "session, which is the more invasive change. Check the marker on the hit "
+    "you are installing.",
     {"type": "object",
-     "properties": {"name": {"type": "string", "description": "skill name"}},
+     "properties": {"name": {"type": "string",
+                             "description": "the name exactly as boost_search "
+                             "or boost_list returned it; qualify with the tap "
+                             "(\"owner/repo:name\") when the same name exists "
+                             "in more than one"}},
      "required": ["name"]},
     _tool_install)
 REGISTRY.register(
@@ -1170,8 +1206,32 @@ def _run_mcp_host(host: str, action: str, cmd) -> bool:
     return True
 
 
+def _seed_catalog_for_mcp(force: bool) -> None:
+    """Tap the recommended registries so the surface just registered can answer.
+
+    `boost mcp` is the only command a new user is told to run after installing,
+    and it used to leave them with a registered server over an empty catalog —
+    where the first thing any agent asks comes back as a miss. Seeding here is
+    what makes "install boost, run boost mcp" the whole setup.
+
+    Deliberately quiet on an already-tapped machine (see bootstrap.seed_catalog:
+    it returns skipped), and deliberately non-fatal — the user asked to register
+    an MCP server, so a dead network costs them a reported line rather than the
+    registration itself.
+    """
+    res = bootstrap.seed_catalog(force=force)
+    if res.skipped:
+        return
+    for line in res.failed:
+        out.warn("could not tap %s" % line)
+    if res.tapped:
+        out.ok(res.summary())
+    else:
+        out.warn(res.summary())
+
+
 def cmd_mcp(argv) -> int:
-    """boost mcp [register|unregister] [--host H] [--stdio]"""
+    """boost mcp [register|unregister] [--host H] [--stdio] [--seed|--no-seed]"""
     p = cliparse.parser(
         prog="boost mcp",
         description="Register boost as an MCP server for your agent CLIs")
@@ -1184,10 +1244,22 @@ def cmd_mcp(argv) -> int:
                         % ", ".join(mcphost.hosts()))
     p.add_argument("--stdio", action="store_true",
                    help="run the MCP server on stdin/stdout (used by the agent)")
+    p.add_argument("--seed", action="store_true",
+                   help="tap the recommended registries even if some tap "
+                        "already exists (the repair path)")
+    p.add_argument("--no-seed", dest="seed_ok", action="store_false",
+                   default=True,
+                   help="register only; do not tap anything")
     args = p.parse_args(argv)
 
     if args.stdio:
         return mcp.serve_stdio(REGISTRY, version=__version__)
+
+    # Before registering, not after: the seed is what gives the server
+    # something to answer with, and a user reading the output should see the
+    # catalog appear and then the registration that exposes it.
+    if args.action == "register" and (args.seed_ok or args.seed):
+        _seed_catalog_for_mcp(args.seed)
 
     try:
         targets = mcphost.resolve(args.host)

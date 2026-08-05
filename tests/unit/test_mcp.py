@@ -398,3 +398,179 @@ class TestEngineNote:
         note = mcp.engine_note()
         assert "pip install" in note
         assert "VOYAGE_API_KEY" not in note
+
+
+class TestInstructionsCoverAllThreeKinds:
+    """The catalog holds three kinds; the guidance used to describe one.
+
+    `boost_search` returns skills, rules and workflows — `store.install`
+    dispatches all three — but every line of MCP prose said "skills". An agent
+    reading it has no reason to search for a guardrail or a slash-command, and
+    no way to know that installing a rule edits the context file it loads every
+    session. Naming the three is what makes two of them reachable at all.
+    """
+
+    def test_instructions_name_the_three_kinds(self):
+        low = mcp.INSTRUCTIONS.lower()
+        assert "rule" in low and "workflow" in low and "skill" in low
+
+    def test_instructions_say_what_a_rule_does(self):
+        # A rule is the kind that steers: it recommends a better path and
+        # rules out an anti-pattern. That is the whole reason to search for
+        # one, and it is not guessable from the word "rule".
+        low = mcp.INSTRUCTIONS.lower()
+        assert "anti-pattern" in low
+
+    def test_install_description_still_flags_the_invasive_kind(self):
+        # Pre-existing contract, restated here because this change is what
+        # makes it actionable: search output now marks kind, so the warning
+        # names something the caller can actually see.
+        from boost_cli.commands import configuration
+        desc = {s["name"]: s["description"]
+                for s in configuration.REGISTRY.specs()}["boost_install"]
+        assert "rule" in desc.lower()
+
+
+class TestInstructionsBoundIsATestNotAFeeling:
+    """"Non-trivial" is only usable if it decides itself.
+
+    The trigger that shipped before this — does the task have a NAME — stays,
+    because it is free to evaluate. What it missed is the task that has no
+    tidy name and is still large. The fix is not to ask the agent to judge
+    difficulty (it will say "this looks small", and every turn looks small
+    when it opens) but to give it properties it can read off the work: more
+    than one file, something left behind, a line in a commit message.
+    """
+
+    def test_the_boundary_is_stated_as_observable_properties(self):
+        low = mcp.INSTRUCTIONS.lower()
+        assert "more than one file" in low
+        assert "outlives" in low or "outlast" in low
+        assert "commit message" in low
+
+    def test_the_original_nameable_trigger_survives(self):
+        # Regression guard: the observable boundary is ADDITIVE. The name test
+        # is the cheapest one an agent has and predates this change.
+        assert "has a name" in mcp.INSTRUCTIONS.lower()
+
+    def test_the_skip_list_stays_in_plain_sight(self):
+        # An unbounded "check first" gets ignored wholesale. The bound is what
+        # buys the rest of the guidance its credibility.
+        low = mcp.INSTRUCTIONS.lower()
+        assert "skip it for a question" in low
+
+    def test_nothing_in_the_guidance_orders_the_agent(self):
+        # EMNLP 2025 ("Tool Preferences in Agentic LLMs are Unreliable"):
+        # editing only a description moves call rates >10x, and assertive
+        # phrasing is the lever. This surface is deliberately invitational —
+        # the same rule the boost_search description is already held to.
+        low = mcp.INSTRUCTIONS.lower()
+        for coercive in ("always call", "you must", "never skip",
+                         "required before", "do not proceed"):
+            assert coercive not in low, (
+                "coercive framing %r: an agent that is ordered rather than "
+                "persuaded routes around the tool the first time it misses"
+                % coercive)
+
+
+class TestSearchDescriptionNamesTheLockInMoments:
+    """Where a check pays most is where a choice gets frozen.
+
+    Trigger design wants indirect signals, not just direct ones: "user asks
+    about pricing" is direct, "a decision is about to be locked in" is the
+    class an agent recognises on its own. These are the moments where the
+    cost of the wrong path is paid for the rest of the project.
+    """
+
+    def _search(self):
+        from boost_cli.commands import configuration
+        return {s["name"]: s["description"]
+                for s in configuration.REGISTRY.specs()}["boost_search"].lower()
+
+    def test_names_setup_shaped_moments(self):
+        desc = self._search()
+        hits = [m for m in ("new project", "architecture", "linter", "test",
+                            "ci", "environment") if m in desc]
+        assert len(hits) >= 4, (
+            "the description names %r of the lock-in moments; an agent that "
+            "cannot recognise the moment will not reach for the tool at it"
+            % hits)
+
+    def test_states_what_a_match_contains(self):
+        # tool-design's fourth question — "what does it return?" — went
+        # unanswered on every tool. An agent that knows a match carries the
+        # kind does not need an info round-trip to decide.
+        desc = self._search()
+        assert "kind" in desc
+
+    def test_keeps_every_existing_guardrail(self):
+        desc = self._search()
+        assert "the task stays yours" in desc      # non-capture
+        assert "10-15 seconds" in desc             # honest cost
+        assert "vetted" not in desc                # no unperformed guarantee
+        assert "thousands" not in desc             # no unbacked corpus size
+
+
+class TestHitLinesCarryTheKind:
+    """A search reply that hides kind makes `boost_install`'s warning useless.
+
+    Installing a skill copies a file into the store. Installing a RULE merges
+    text into the context file the agent loads every session — boost_install's
+    own description calls that "the more invasive change" and tells the caller
+    to check what kind of thing they are installing. Until the reply said so,
+    there was nowhere to check: every hit rendered `name — description (tap)`.
+    """
+
+    def test_a_skill_renders_without_a_marker(self):
+        # Skills are the common case and the historical shape; marking them
+        # too would cost a token on every line to say "nothing unusual here".
+        line = mcp.hit_line({"name": "brainstorming", "kind": "skill",
+                             "description": "diverge then converge",
+                             "tap": "anthropics/skills"})
+        assert line == "brainstorming — diverge then converge (anthropics/skills)"
+
+    def test_a_rule_is_marked(self):
+        line = mcp.hit_line({"name": "python-style", "kind": "rule",
+                             "description": "format before commit",
+                             "tap": "PatrickJS/awesome-cursorrules"})
+        assert "[rule]" in line
+        assert line.startswith("python-style [rule] — ")
+
+    def test_a_workflow_is_marked(self):
+        line = mcp.hit_line({"name": "ship-it", "kind": "workflow",
+                             "description": "release checklist", "tap": "t"})
+        assert "[workflow]" in line
+
+    def test_a_missing_kind_reads_as_a_skill(self):
+        # Catalog entries predating the kind field, and any tap whose scanner
+        # output is thin, must not render "[None]" at an agent.
+        assert mcp.hit_line({"name": "n", "description": "d", "tap": "t"}) == \
+            "n — d (t)"
+
+    def test_a_missing_description_still_renders_the_name_and_tap(self):
+        line = mcp.hit_line({"name": "n", "kind": "rule", "tap": "t"})
+        assert "n [rule]" in line and "(t)" in line
+
+
+class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
+    """"no skills match X" on a fresh machine is a true sentence that teaches
+    the wrong thing. Nothing matched because nothing is *there* — and an agent
+    that reads it as "boost has nothing on this" has no reason to ask again.
+    tool-design's rule for agent-facing errors applies: say what went wrong
+    AND the move that fixes it.
+    """
+
+    def test_a_real_miss_keeps_todays_wording(self):
+        # Pre-existing contract (tests/functional pin this string): a tapped
+        # machine that genuinely has no match must not start blaming setup.
+        assert mcp.no_results("widgets", tapped=4) == "no skills match 'widgets'"
+
+    def test_nothing_tapped_says_so_and_names_the_fix(self):
+        reply = mcp.no_results("widgets", tapped=0)
+        assert "no skills match" not in reply
+        assert "boost tap --defaults" in reply
+
+    def test_nothing_tapped_does_not_blame_the_query(self):
+        # The query is fine. Repeating it back framed as a failed search is
+        # exactly what makes the reply indistinguishable from a real miss.
+        assert "widgets" not in mcp.no_results("widgets", tapped=0)

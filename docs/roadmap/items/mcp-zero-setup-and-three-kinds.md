@@ -29,8 +29,9 @@ found by a default install at all. And a search hit renders as
 description warns that installing a rule is the more invasive change because it merges into the
 context file the agent loads every session. That warning is unactionable: the reply it applies to
 never says which hits are rules. Adding one canonical rules repo and one commands/agents repo
-takes the default corpus to <b>946 items — 302 skills, 387 workflows, 257 rules</b>, measured at
-~40s and about 14 MB more than today's five.
+takes the default corpus to <b>946 items — 302 skills, 387 workflows, 257 rules</b>, about 14 MB
+more than today's five and measured end-to-end at <b>14-45s</b> across runs (it is network-bound,
+so quote the range rather than either end of it).
 
 <b>Drawn, not forced — and the research says that is a knife edge.</b> Editing only a tool's
 description shifts how often models call it by <b>more than 10×</b> (EMNLP 2025, "Tool Preferences
