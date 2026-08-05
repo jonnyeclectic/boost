@@ -206,7 +206,7 @@ def sanitize_gemini_agent(name: str, raw: str) -> str:
     meta, body = frontmatter.parse(raw)
     if not meta:
         return raw
-    clean = dict(meta)
+    clean = meta.copy()
 
     declared = str(clean.get("name") or "")
     if not GEMINI_NAME_RE.match(declared):
