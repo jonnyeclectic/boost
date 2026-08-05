@@ -28,7 +28,9 @@ class _Added(list):
     boost recorded the tap it just made.
     """
 
-    logged: list = []
+    def __init__(self):
+        super().__init__()
+        self.logged: list = []
 
 
 def _stub(monkeypatch, *, existing=(), fail=(), oserror=(), counts=None):
@@ -41,7 +43,7 @@ def _stub(monkeypatch, *, existing=(), fail=(), oserror=(), counts=None):
     """
     from boost_cli.core import catalog, journal, registry
     monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
-    added, logged = _Added(), []
+    added = _Added()
 
     def fake_add(url, curated=None, **kw):
         name = url.split("github.com/")[-1]
@@ -62,8 +64,7 @@ def _stub(monkeypatch, *, existing=(), fail=(), oserror=(), counts=None):
     monkeypatch.setattr(catalog, "rebuild_tap",
                         lambda tap: [{}] * (counts or {}).get(tap.name, 3))
     monkeypatch.setattr(journal, "log",
-                        lambda *a, **kw: logged.append(tuple(a)))
-    added.logged = logged      # the journal calls, for tests that check them
+                        lambda *a, **kw: added.logged.append(tuple(a)))
     return added
 
 
