@@ -57,7 +57,7 @@ from typing import ClassVar
 
 import pytest
 
-from boost_cli.core import workflows
+from boost_cli.core import frontmatter, workflows
 
 # Gemini's own frontmatter regex, transcribed from the shipped bundle
 # (chunk-2NH5AG3B.js, `FRONTMATTER_REGEX`). Body assertions slice with THIS —
@@ -1274,3 +1274,84 @@ class TestTheValidatorSetsMatchTheShippedBundle:
         block = src[i:src.index("};", i)]
         aliases = set(re.findall(r"^  ([a-z_]+): ", block, re.M))
         assert aliases == set(workflows.GEMINI_TOOL_ALIASES)
+
+
+class TestClaudeDialectGrantKeysAreHonouredNotDeleted:
+    """The widening the `tools` rule missed, arriving under another key name.
+
+    Measured against the shipped loader over the tapped corpus AFTER the
+    `tools` fix: **65 files still loaded carrying strictly more privilege than
+    their author wrote**. Claude/Copilot spell the grant `allowedTools` (33
+    files), `allowed-tools` (13), `allowed_tools` (1) or only as a deny list
+    (18) — none of them one of Gemini's ten keys, so the strict-key rule
+    deleted them, and a file whose ONLY grant lived there then loaded with no
+    `tools` at all. That is Gemini's "inherit the parent session's tools".
+    Four of those agents were handed a shell tool their author never granted.
+
+    An allow list IS Gemini's `tools` under a different name, so it is
+    translated. A deny list has no Gemini form on its own — "everything except
+    X" is not expressible — so it is honoured by SUBTRACTING it from an allow
+    list, and a file that denies without allowing is refused rather than
+    silently un-denied.
+    """
+
+    def _tools(self, raw, install="fallback"):
+        out = workflows.sanitize_gemini_agent(install, raw)
+        if out == raw:
+            return "REFUSED"
+        return frontmatter.parse(out)[0].get("tools", "INHERIT-ALL")
+
+    def test_an_allow_list_becomes_the_tools_grant(self):
+        # Before this rule the whole key vanished and the agent inherited
+        # everything, run_shell_command included.
+        assert self._tools(
+            "---\nname: arch\ndescription: Plans.\n"
+            "allowedTools: [Read, Bash]\n---\nbody\n"
+        ) == ["read_file", "run_shell_command"]
+
+    def test_every_allow_spelling_is_recognised(self):
+        for key in workflows.GEMINI_ALLOW_KEYS:
+            raw = ("---\nname: c\ndescription: d\n%s: Read, Grep\n---\nbody\n"
+                   % key)
+            assert self._tools(raw) == ["read_file", "grep_search"], key
+
+    def test_a_deny_list_is_subtracted_from_the_allow_list(self):
+        assert self._tools(
+            "---\nname: a\ndescription: d\ntools: [Read, Grep, Bash]\n"
+            "disallowedTools: [Bash]\n---\nbody\n"
+        ) == ["read_file", "grep_search"]
+
+    def test_a_deny_with_nothing_to_subtract_from_refuses(self):
+        # "everything except Write" has no Gemini form. Deleting the key would
+        # grant Write back — the exact widening this class exists to stop.
+        assert self._tools(
+            "---\nname: b\ndescription: d\n"
+            "disallowedTools: [Write, Edit]\n---\nbody\n") == "REFUSED"
+
+    def test_a_deny_that_empties_the_grant_yields_an_empty_list(self):
+        # Read translates to read_file, which is then denied. An empty array
+        # is what the author actually wrote; it is not the same as absent.
+        assert self._tools(
+            "---\nname: g\ndescription: d\ntools: [read_file]\n"
+            "disallowedTools: [Read]\n---\nbody\n") == []
+
+    def test_a_partially_mappable_allow_list_refuses(self):
+        # Same rule as `tools`: translating only the entries that resolve
+        # would narrow the grant, dropping it would widen it.
+        assert self._tools(
+            "---\nname: e\ndescription: d\n"
+            "allowedTools: [codebase, Read]\n---\nbody\n") == "REFUSED"
+
+    def test_no_grant_key_survives_into_the_output(self):
+        out = workflows.sanitize_gemini_agent(
+            "x", "---\nname: a\ndescription: d\ntools: [Read]\n"
+                 "disallowedTools: [Write]\n---\nbody\n")
+        meta = frontmatter.parse(out)[0]
+        for key in workflows.GEMINI_ALLOW_KEYS + workflows.GEMINI_DENY_KEYS:
+            assert key not in meta, key
+
+    def test_translating_a_grant_key_is_idempotent(self):
+        raw = ("---\nname: arch\ndescription: Plans.\n"
+               "allowedTools: [Read, Bash]\n---\nbody\n")
+        once = workflows.sanitize_gemini_agent("x", raw)
+        assert workflows.sanitize_gemini_agent("x", once) == once

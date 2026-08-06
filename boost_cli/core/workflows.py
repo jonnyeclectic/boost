@@ -547,6 +547,30 @@ def _yaml_str(text: str) -> str:
         json.dumps(text, ensure_ascii=False))
 
 
+#: Claude/Copilot spellings of "the tools this agent may use". Gemini has no
+#: such key, so the strict-key rule deletes them — and a file whose ONLY grant
+#: was written here then loads with no `tools` at all, which is Gemini's
+#: "inherit the parent session's tools". Measured against the shipped loader:
+#: 47 corpus files widened exactly this way, 4 of them gaining a shell tool
+#: their author never granted. Same defect `_tools_verdict` exists to prevent,
+#: arriving under a different key name.
+GEMINI_ALLOW_KEYS = ("allowedTools", "allowed-tools", "allowed_tools")
+
+#: And the deny spellings. These are the harder half: "everything except X" has
+#: no Gemini form at all, so it is only expressible when an allow list exists to
+#: subtract from. Deleting one always widens — by the denied names when a list
+#: bounds them (331 corpus files), and to EVERYTHING when none does (18).
+GEMINI_DENY_KEYS = ("disallowedTools", "disallowed-tools", "disallowed_tools")
+
+
+def _grant_key(seen: dict[str, _Key], names: tuple[str, ...]) -> _Key | None:
+    """The first of ``names`` present, in the order they are spelled above."""
+    for name in names:
+        if name in seen:
+            return seen[name]
+    return None
+
+
 def _key_is_dropped(lines: list[tuple[str, str]], key: _Key) -> bool:
     """Whether this key's whole span has to go.
 
@@ -655,14 +679,41 @@ def _plan(install: str, lines: list[tuple[str, str]],
     append: list[str] = []
     values: dict[str, str | list[str]] = {}
 
-    tools_key = seen.get("tools")
+    # The agent's tool grant, wherever its author wrote it. `tools` is Gemini's
+    # own key; the Claude/Copilot allow spellings mean the same thing and would
+    # otherwise be deleted by the strict-key rule, leaving the agent inheriting
+    # everything. A deny list has no Gemini form on its own, so it is only
+    # honoured by SUBTRACTING it from an allow list — and a file that denies
+    # without allowing is refused rather than silently un-denied.
+    tools_key = seen.get("tools") or _grant_key(seen, GEMINI_ALLOW_KEYS)
+    deny_key = _grant_key(seen, GEMINI_DENY_KEYS)
+    if tools_key is None and deny_key is not None:
+        return None
     if tools_key is not None:
         verdict, tools = _tools_verdict(lines, tools_key)
         if verdict == _REFUSE:
             return None
+        if verdict == _KEEP and (deny_key is not None
+                                 or tools_key.name != "tools"):
+            # A grant we would otherwise have left byte-identical still has to
+            # be re-emitted when it is moving key, or losing denied names.
+            read = _tools_entries(lines, tools_key)
+            if read is None:
+                return None
+            tools, verdict = list(read[0]), _REWRITE
+        if verdict == _REWRITE and deny_key is not None:
+            denied = _tools_entries(lines, deny_key)
+            if denied is None:
+                return None     # a deny we cannot read is one we cannot honour
+            blocked = {GEMINI_TOOL_TRANSLATIONS.get(d, d) for d in denied[0]}
+            tools = [t for t in tools if t not in blocked]
         if verdict == _REWRITE:
             replace[tools_key.start] = "tools: [%s]" % ", ".join(
                 _yaml_str(t) for t in tools)
+            # An allow-spelling is ALSO in the strict-key drop set, since it is
+            # not one of Gemini's ten. Reclaim its first line — that is the one
+            # the grant is re-emitted on — and drop the remainder of its span.
+            drop -= {tools_key.start}
             drop |= set(range(tools_key.start + 1, tools_key.end))
             values["tools"] = tools
 
@@ -690,7 +741,13 @@ def _plan(install: str, lines: list[tuple[str, str]],
 
     if not (drop or replace or append):
         return None
-    out_keys = [key.name for key in keys if key.start not in drop]
+    # Read the surviving name off the REPLACEMENT line, not off the input key:
+    # a grant written as `allowedTools` is re-emitted as `tools`, so the input
+    # name would describe a key the output does not have and the fidelity guard
+    # would reject a correct edit.
+    out_keys = [replace[key.start].split(":", 1)[0] if key.start in replace
+                else key.name
+                for key in keys if key.start not in drop]
     out_keys += [line.split(":", 1)[0] for line in append]
     return _Plan(frozenset(drop), replace, append, out_keys, values)
 
