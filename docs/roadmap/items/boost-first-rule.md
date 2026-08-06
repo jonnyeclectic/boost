@@ -2,7 +2,7 @@
 id: boost-first-rule
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Interop · Adoption
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: the tool descriptions only help on hosts that deliver them — this is the surface that survives when none do
 order: 76
 owner: loop/boost-first-rule
-pr:
+pr: 480
 title: <code>boost-first</code> — the one rule boost authors, offered opt-in at <code>boost mcp register</code>
 ---
 The companion to <code>mcp-already-covered-defeater</code>, and the half of it that survives a

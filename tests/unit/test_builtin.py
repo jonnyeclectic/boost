@@ -49,7 +49,8 @@ class TestEnsureTapIsIdempotent:
         tap = builtin.ensure_tap()
         landed = tap.path / (builtin.BUILTIN_RULES[0] + ".mdc")
         shipped = builtin.source_dir() / (builtin.BUILTIN_RULES[0] + ".mdc")
-        assert landed.read_text() == shipped.read_text()
+        assert (landed.read_text(encoding="utf-8")
+                == shipped.read_text(encoding="utf-8"))
 
     def test_a_hand_edited_copy_is_restored_from_the_wheel(self, sandbox):
         # The rule tracks boost's version rather than drifting once written:
@@ -57,9 +58,9 @@ class TestEnsureTapIsIdempotent:
         # it because there is nothing to fetch.
         tap = builtin.ensure_tap()
         landed = tap.path / (builtin.BUILTIN_RULES[0] + ".mdc")
-        landed.write_text("clobbered")
+        landed.write_text("clobbered", encoding="utf-8")
         builtin.ensure_tap()
-        assert landed.read_text() != "clobbered"
+        assert landed.read_text(encoding="utf-8") != "clobbered"
 
 
 class TestTheBuiltinTapDoesNotAnswerHasThisUserConfiguredAnything:
@@ -106,7 +107,7 @@ class TestThePackagingIsReal:
     def test_package_data_declares_the_rules_glob(self):
         import pathlib
         root = pathlib.Path(__file__).resolve().parents[2]
-        text = (root / "pyproject.toml").read_text()
+        text = (root / "pyproject.toml").read_text(encoding="utf-8")
         assert "data/rules/*.mdc" in text, (
             "package-data must ship the .mdc or the rule vanishes in the wheel")
 
@@ -127,7 +128,8 @@ class TestTheRuleBodyHoldsTheSameLineAsTheMcpSurface:
 
     def _body(self):
         return (builtin.source_dir()
-                / (builtin.BUILTIN_RULES[0] + ".mdc")).read_text()
+                / (builtin.BUILTIN_RULES[0] + ".mdc")).read_text(
+                    encoding="utf-8")
 
     def test_it_does_not_order_the_agent(self):
         low = self._body().lower()
