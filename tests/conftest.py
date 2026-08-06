@@ -94,6 +94,11 @@ def sandbox(tmp_path, monkeypatch):
     # checking what registration prints — same contract as BOOST_NO_AI above:
     # a test that means to exercise the seed unsets this explicitly.
     monkeypatch.setenv("BOOST_NO_SEED", "1")
+    # `boost mcp register` offers to install boost's own rule into the
+    # agent context files. out.confirm returns True under BOOST_ASSUME_YES,
+    # which this fixture also sets, so without this guard every register
+    # test would silently write a standing block into its sandbox HOME.
+    monkeypatch.setenv("BOOST_NO_RULE", "1")
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)   # no real embed calls
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("BOOST_NO_EMBED", raising=False)
