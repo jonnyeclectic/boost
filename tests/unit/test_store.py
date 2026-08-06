@@ -961,21 +961,25 @@ class TestWorkflowInstall:
         assert not (paths.home() / ".claude" / "commands" / "reviewer.md").exists()
         assert lockfile.get_workflow("reviewer")["slot"] == "agents"
 
-    def test_gemini_subagent_stays_verbatim_markdown(self, tap):
+    def test_gemini_subagent_stays_markdown_not_toml(self, tap):
         """Only Gemini's *commands* slot is TOML — its subagents are Markdown.
 
         The easy way to get this wrong is to key the conversion on the agent
         alone, which would hand Gemini a .toml subagent it cannot load.
+
+        The fixture is already schema-clean, so the file is also byte-identical
+        — the sanitizer's no-op path, which is what the overwhelming majority
+        of syncs must hit.
         """
-        body = ("---\nname: reviewer\ndescription: reviews\ntools: Read\n---\n\n"
-                "Review it.\n")
+        body = ("---\nname: reviewer\ndescription: reviews\n"
+                "tools: [read_file]\n---\n\nReview it.\n")
         entry = _workflow_entry(tap, name="reviewer", rel="agents/reviewer.md",
                                 body=body)
         store.install(entry)
 
         gem = paths.home() / ".gemini" / "agents" / "reviewer.md"
         assert gem.is_file()
-        assert gem.read_text(encoding="utf-8") == body      # byte-for-byte verbatim
+        assert gem.read_text(encoding="utf-8") == body
         assert not (paths.home() / ".gemini" / "agents" / "reviewer.toml").exists()
         assert not (paths.home() / ".gemini" / "commands" / "reviewer.md").exists()
         assert not (paths.home() / ".gemini" / "commands" / "reviewer.toml").exists()
@@ -984,6 +988,33 @@ class TestWorkflowInstall:
         assert rec["slot"] == "agents"
         assert {m["agent"]: m["path"] for m in rec["materializations"]}["gemini"] \
             == str(gem)
+
+    def test_only_the_gemini_copy_of_a_subagent_is_repaired(self, tap):
+        """`tools: Read` is a STRING — Gemini needs an array, Claude does not.
+
+        This is the render-per-agent contract that makes the strict-key
+        allowlist safe to apply: `store` calls `workflows.render` once per
+        enabled agent and writes four separate regular files, so trimming the
+        Gemini copy down to `localAgentSchema` cannot reach the other three.
+
+        `tools` is translated rather than dropped, end to end: an omitted
+        `tools` is Gemini's "inherit the parent session's tools", so an
+        install that deleted this line would hand the agent
+        `run_shell_command` on a file whose author granted it reading only.
+        """
+        body = ("---\nname: reviewer\ndescription: reviews\ntools: Read\n"
+                "color: purple\n---\n\nReview it.\n")
+        store.install(_workflow_entry(tap, name="reviewer",
+                                      rel="agents/reviewer.md", body=body))
+
+        for adir in (".claude", ".windsurf", ".cursor"):
+            path = paths.home() / adir / "agents" / "reviewer.md"
+            assert path.read_text(encoding="utf-8") == body
+
+        gem = (paths.home() / ".gemini" / "agents" / "reviewer.md").read_text(
+            encoding="utf-8")
+        assert gem == ('---\nname: reviewer\ndescription: reviews\n'
+                       'tools: ["read_file"]\n---\n\nReview it.\n')
 
     def test_uninstall_removes_every_dropped_file(self, tap):
         store.install(_workflow_entry(tap))
