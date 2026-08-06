@@ -270,6 +270,28 @@ def all_entries() -> list[dict]:
     return out
 
 
+def kind_counts() -> dict[str, int]:
+    """Per-kind entry counts across every configured tap.
+
+    The same reads :func:`all_entries` does, one tap's cache at a time, without
+    the concatenation. A caller that only wants the size of the corpus should
+    not have to materialise it: the MCP ``boost_doctor`` handler took
+    ``len(all_entries())``, which builds a 71,655-element list on a real
+    install to produce one integer.
+
+    An entry with no ``kind`` counts as a skill, the way it renders everywhere
+    else. An unrecognised kind gets its own key rather than being dropped, so
+    ``sum(kind_counts().values())`` equals ``len(all_entries())`` for any cache
+    — including one written before a kind existed.
+    """
+    counts: dict[str, int] = {KIND_SKILL: 0, KIND_RULE: 0, KIND_WORKFLOW: 0}
+    for tap in registry.list_taps():
+        for entry in load_tap(tap):
+            kind = entry.get("kind") or KIND_SKILL
+            counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
 def split_name(name: str) -> tuple[str | None, str]:
     """Split a possibly tap-qualified name into ``(tap, bare_name)``.
 
