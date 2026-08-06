@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 466,
-  "est_items_total": 32646,
-  "est_items_scannable": 28225,
+  "count": 470,
+  "est_items_total": 32669,
+  "est_items_scannable": 28248,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -467,6 +467,17 @@
       "curated": true
     },
     {
+      "name": "alchaincyf/huashu-design",
+      "url": "https://github.com/alchaincyf/huashu-design",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Huashu Design - HTML-native design skill: hi-fi prototypes, slides, animation, 20 design philosophies, 5-axis review, MP4 export (1 skills)",
+      "est_items": 1,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "algolia/skills",
       "url": "https://github.com/algolia/skills",
       "type": "skill",
@@ -789,7 +800,7 @@
       "name": "bergside/awesome-design-skills",
       "url": "https://github.com/bergside/awesome-design-skills",
       "type": "skill",
-      "category": "meta",
+      "category": "ui",
       "focus": "List of 67 awesome DESIGN.md and SKILL.md design skill files for... (67 skills)",
       "est_items": 67,
       "confidence": "high",
@@ -2205,6 +2216,17 @@
       "curated": true
     },
     {
+      "name": "Leonxlnx/taste-skill",
+      "url": "https://github.com/Leonxlnx/taste-skill",
+      "type": "skill",
+      "category": "ui",
+      "focus": "Anti-slop design taste: high-end visual direction, brutalist and minimalist UI kits, image-to-code, brand kits (13 skills)",
+      "est_items": 13,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "Leooooooow/Awesome-eCommerce-Skills",
       "url": "https://github.com/Leooooooow/Awesome-eCommerce-Skills",
       "type": "skill",
@@ -2453,6 +2475,17 @@
       "category": "general",
       "focus": "Official agent plugin providing skills and MCP server configurations... (33 skills)",
       "est_items": 33,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "microsoft/playwright",
+      "url": "https://github.com/microsoft/playwright",
+      "type": "skill",
+      "category": "devops",
+      "focus": "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (7 skills, 11 workflows)",
+      "est_items": 18,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2967,9 +3000,9 @@
       "name": "Owl-Listener/ai-design-skills",
       "url": "https://github.com/Owl-Listener/ai-design-skills",
       "type": "skill",
-      "category": "general",
-      "focus": "AI Design Skills Collection: agentic skills, commands, and plugins for... (44 skills, 36 workflows)",
-      "est_items": 80,
+      "category": "ai",
+      "focus": "AI Design Skills Collection: agentic skills, commands, and plugins for... (44 skills, 18 workflows)",
+      "est_items": 62,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2978,7 +3011,7 @@
       "name": "Owl-Listener/designer-skills",
       "url": "https://github.com/Owl-Listener/designer-skills",
       "type": "skill",
-      "category": "general",
+      "category": "ui",
       "focus": "Designer Skills Collection: agentic skills, commands, and plugins for... (96 skills, 29 workflows)",
       "est_items": 125,
       "confidence": "high",
@@ -3003,6 +3036,17 @@
       "category": "meta",
       "focus": "A collection of AI agent skills focused on resume optimization, job... (29 skills)",
       "est_items": 29,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "pbakaus/impeccable",
+      "url": "https://github.com/pbakaus/impeccable",
+      "type": "skill",
+      "category": "ui",
+      "focus": "The design language that makes your AI harness better at design - shape/critique/polish plus finish-review, asset and documenter subagents, rendered for 14 agents (2 skills, 7 workflows)",
+      "est_items": 9,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -3814,7 +3858,7 @@
       "name": "thedaviddias/Front-End-Checklist",
       "url": "https://github.com/thedaviddias/Front-End-Checklist",
       "type": "skill",
-      "category": "meta",
+      "category": "ui",
       "focus": "The essential checklist for modern web development, for humans and AI... (390 skills)",
       "est_items": 390,
       "confidence": "high",

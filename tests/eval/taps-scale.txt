@@ -12,9 +12,9 @@
 # fail. It is A scale, not THE scale: hit@1 decays continuously with corpus
 # size and never plateaus, so no size here can be canonical.
 #
-# 163 distractor registries, 20,034 est items (the curated list's own estimate).
+# 163 distractor registries, 20,017 est items (the curated list's own estimate).
 # est_items under-reports by about 2.5x against a real install, so that
-# projects to roughly 50,860 actual entries — a projection, not a measurement.
+# projects to roughly 50,817 actual entries — a projection, not a measurement.
 # The real counts are written in by `eval_corpus.py --refresh`, which is
 # also what pins these rows. Regenerating KEEPS any pin already here, so
 # --check verifies the selection, not the pins.
@@ -169,44 +169,44 @@ tech-leads-club/agent-skills
 klovaaxel/web-a11y-agent-skills
 zhaoxuya520/reverse-skill
 brennercruvinel/CCPlugins
-Owl-Listener/ai-design-skills
-vijaythecoder/awesome-claude-agents
 ninehills/skills
-codenamev/ai-software-architect
+vijaythecoder/awesome-claude-agents
 syncfusion/maui-ui-components-skills
-steipete/agent-rules
+codenamev/ai-software-architect
 ancoleman/ai-design-components
-talknerdytome-labs/claude-agents
+steipete/agent-rules
 deanpeters/Product-Manager-Skills
-anthropics/claude-cookbooks
+talknerdytome-labs/claude-agents
 jamditis/claude-skills-journalism
-glapsfun/cnative-skills
+anthropics/claude-cookbooks
 Houseofmvps/ultraship
-iannuttall/claude-agents
+glapsfun/cnative-skills
 jame581/GodotPrompter
-ducpm2303/claude-java-plugins
+iannuttall/claude-agents
 BuilderIO/agent-native
-piomin/claude-ai-spring-boot
+ducpm2303/claude-java-plugins
 SamurAIGPT/Generative-Media-Skills
-anthropics/claude-code-action
+piomin/claude-ai-spring-boot
 tradermonty/claude-trading-skills
-anthropics/financial-services
+anthropics/claude-code-action
 LambdaTest/agent-skills
-hikarubw/claude-commands
+anthropics/financial-services
 anbeime/skill
-anthropics/claude-agent-sdk-demos
+hikarubw/claude-commands
 internet-court/internet-court-skill
-comet-ml/opik-claude-code-plugin
+anthropics/claude-agent-sdk-demos
 TheGoat395/Codex-Skills
-docker/claude-plugins
+comet-ml/opik-claude-code-plugin
 daymade/claude-code-skills
-langchain-ai/deepagents
+docker/claude-plugins
 JasonColapietro/suede-creator-skills
-zenml-io/skills
+langchain-ai/deepagents
 bergside/awesome-design-skills
-DavidROliverBA/Daves-Claude-Code-Skills
+zenml-io/skills
 air-gapped/skills
-anthropics/claude-agent-sdk-typescript
+DavidROliverBA/Daves-Claude-Code-Skills
 jeffallan/claude-skills
-anthropics/claude-code-security-review
+anthropics/claude-agent-sdk-typescript
 spencerpauly/awesome-cursor-skills
+anthropics/claude-code-security-review
+chaterm/terminal-skills
