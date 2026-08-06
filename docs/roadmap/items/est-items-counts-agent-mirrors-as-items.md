@@ -10,6 +10,7 @@ wow: 3
 note: registries now ship one rendered copy per agent, so a raw walk credits pbakaus/impeccable with 40 items for the 9 it has
 order: 102
 owner: loop/tap-design-batch
+pr: 481
 title: est_items counted one skill fourteen times once registries went multi-agent
 ---
 <code>est_items</code> is the catalog's honest number — the README sells it as
