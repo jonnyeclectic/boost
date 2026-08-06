@@ -1040,9 +1040,16 @@ class TestMcp:
         assert "ship-it v2.0.0 (rule-tap) [workflow]" in text
 
     def test_boost_list_empty_state(self, boost, sandbox):
+        # Relaxed from equality: the reply now closes with the per-kind
+        # coverage footer, in the empty state too. That is deliberate — a
+        # machine with nothing installed is exactly where "what do I have" is
+        # least useful on its own, and where a bare "nothing installed" leaves
+        # an agent with no reason to look further. The opening sentence is
+        # unchanged, which is what this test was pinning.
         from boost_cli.commands import configuration
         text, is_err = configuration._mcp_tool("boost_list", {})
-        assert text == "nothing installed"
+        assert text.startswith("nothing installed")
+        assert "0 skills · 0 rules · 0 workflows" in text
         assert is_err is False
 
     def test_boost_info_on_an_installed_rule(self, boost, tapped):
