@@ -10,7 +10,7 @@ wow: 3
 note: two ~97k-star repos the catalog was missing; both advertise savings their own benchmarks contradict
 order: 103
 owner: loop/tap-design-batch
-pr:
+pr: 483
 title: The catalog was missing the two most-starred token-efficiency registries
 ---
 <code>DietrichGebert/ponytail</code> (98.1k&nbsp;&#9733;) and

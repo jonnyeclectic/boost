@@ -10,7 +10,7 @@ wow: 4
 note: the ambiguity error named the paths and no flag could act on them — a dead end
 order: 104
 owner: loop/efficiency-registries
-pr:
+pr: 483
 title: <code>install</code> refused an ambiguous name and offered no way to answer it
 ---
 <code>resolve_one</code> already gets this mostly right. Identical vendored copies collapse to the
