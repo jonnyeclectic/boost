@@ -1,0 +1,35 @@
+---
+name: boost-first
+description: Check the boost shelf before a choice gets locked in — including when a skill has already matched.
+alwaysApply: true
+globs: "**"
+---
+
+boost is a shelf of procedures other people already wrote and debugged, in
+three kinds: skills, rules and workflows. Two read-only tools reach it —
+`boost_list` for what is installed on this machine, `boost_search` for what
+exists across the registries you have tapped. Some hosts prefix the names, so
+they may appear as `mcp_boost_boost_search`. Neither installs anything. If
+neither tool is present in this session, `boost search "<what you are trying
+to do>"` in the shell asks the same question.
+
+`boost_list` is a local file read. `boost_search` takes longer because it
+retrieves and then reranks, which is what makes its top result worth acting on
+rather than skimming ten.
+
+Reach for the shelf when the request would lock something in for everything
+after it: a new project or subsystem, an architecture or dependency choice,
+environment and tooling config, a linter, tests, CI.
+
+What is already loaded is a different question. A skill that activated here was
+installed before this request existed and matched on its own description — what
+it covers, not what this request needs — and it is one kind of three: a rule you
+never installed cannot activate, and a workflow waits to be called by name. So
+an active skill leaves the question of what exists exactly where it found it.
+
+Coming back empty is a real answer: build it yourself, now knowing nothing
+already covers it. Coming back with something is a head start, not an
+instruction — read it, take what fits, discard the rest. The task stays yours.
+
+Not for: a question, a one-line edit, a command you were just handed, or a
+change that follows conventions already visible in this repo.
