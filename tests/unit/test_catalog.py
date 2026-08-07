@@ -681,6 +681,92 @@ class TestResolveOneVendoredCopies:
         with pytest.raises(BoostError):
             catalog.resolve_one("dbg")
 
+    def test_the_ambiguity_hint_names_the_way_out(self, sandbox):
+        """The error told the user to "inspect the paths above" and offered no
+        syntax that could act on it — a dead end. It must name `--path`."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dbg")
+        assert "--path" in (excinfo.value.hint or "")
+
+    def test_path_picks_one_of_two_real_alternatives(self, sandbox):
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        assert catalog.resolve_one("dbg", path="b/dbg")["description"] == "rust"
+        assert catalog.resolve_one("dbg", path="a/dbg")["description"] == "python"
+
+    def test_path_may_be_a_trailing_segment(self, sandbox):
+        """Users copy a path out of the error, but a deep vendored path is long;
+        matching on a suffix keeps `--path skills/dbg` usable."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="py", rel_dir="deep/x/skills/dbg"),
+                          _entry("dbg", "t", desc="rs", rel_dir="b/dbg")]))
+        assert catalog.resolve_one("dbg", path="skills/dbg")["description"] == "py"
+
+    def test_the_suffix_match_respects_segment_boundaries(self, sandbox):
+        """`endswith(want)` without the leading slash would let `--path s/dbg`
+        be satisfied by `not-s/dbg` — a different directory entirely."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="wrong", rel_dir="x/not-s/dbg"),
+                          _entry("dbg", "t", desc="right", rel_dir="x/s/dbg")]))
+        assert catalog.resolve_one("dbg", path="s/dbg")["description"] == "right"
+
+    def test_path_that_matches_nothing_lists_the_real_ones(self, sandbox):
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dbg", path="nope/dbg")
+        hint = excinfo.value.hint or ""
+        assert "a/dbg" in hint and "b/dbg" in hint
+
+    def test_an_exact_path_beats_a_suffix_match(self, sandbox):
+        """The real shape from DietrichGebert/ponytail: a canonical
+        `skills/ponytail` and an agent mirror `.openclaw/skills/ponytail`. The
+        suffix rule alone matches both, so `--path skills/ponytail` — the exact
+        rel_dir of one of them — must mean that one, not "still ambiguous"."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="canon", rel_dir="skills/dbg"),
+                          _entry("dbg", "t", desc="mirror",
+                                 rel_dir=".openclaw/skills/dbg")]))
+        assert catalog.resolve_one("dbg", path="skills/dbg")["description"] == "canon"
+        assert catalog.resolve_one(
+            "dbg", path=".openclaw/skills/dbg")["description"] == "mirror"
+
+    def test_path_still_ambiguous_is_still_an_error(self, sandbox):
+        """A suffix loose enough to hit both candidates must not silently pick."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/skills/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/skills/dbg")]))
+        with pytest.raises(BoostError):
+            catalog.resolve_one("dbg", path="skills/dbg")
+
+    def test_path_cannot_traverse_out_of_the_catalog(self, sandbox):
+        """--path only *filters* rows the catalog already has; it never builds
+        a filesystem path. Traversal therefore cannot select anything — it can
+        only fail to match. Pinned so a future rewrite cannot quietly make this
+        flag a path constructor.
+        """
+        _fake_taps(("t", [_entry("dbg", "t", desc="a", rel_dir="skills/dbg"),
+                          _entry("dbg", "t", desc="b", rel_dir="other/dbg")]))
+        for hostile in ("../../etc/passwd", "/etc/passwd", "../skills/dbg"):
+            with pytest.raises(BoostError):
+                catalog.resolve_one("dbg", path=hostile)
+
+    def test_path_does_not_defeat_the_cross_tap_refusal(self, sandbox):
+        """Provenance stays load-bearing: --path must never merge two taps."""
+        _fake_taps(("owner/alpha", [_entry("dup", "owner/alpha", rel_dir="s/dup")]),
+                   ("owner/beta", [_entry("dup", "owner/beta", rel_dir="s/dup")]))
+        with pytest.raises(BoostError):
+            catalog.resolve_one("dup", path="s/dup")
+
+    def test_path_is_honoured_when_the_name_is_already_unique(self, sandbox):
+        _fake_taps(("t", [_entry("solo", "t", rel_dir="a/solo")]))
+        assert catalog.resolve_one("solo", path="a/solo")["name"] == "solo"
+
+    def test_a_wrong_path_is_an_error_even_when_the_name_is_unique(self, sandbox):
+        """Ignoring an unmatched --path would install the very copy the user
+        was trying to steer away from, and report success doing it."""
+        _fake_taps(("t", [_entry("solo", "t", rel_dir="a/solo")]))
+        with pytest.raises(BoostError):
+            catalog.resolve_one("solo", path="typo/solo")
+
     def test_identical_across_taps_still_asks(self, sandbox):
         # Provenance is the whole point of a tap. Two registries shipping
         # byte-identical text are still two different supply chains, and

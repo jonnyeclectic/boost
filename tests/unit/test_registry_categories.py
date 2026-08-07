@@ -58,6 +58,24 @@ UI_PINNED = {
 # on the repo name would file it `ui`; it belongs to `ai`.
 AI_NOT_UI = "Owl-Listener/ai-design-skills"
 
+# Token-efficiency registries: repos whose items exist to make an agent emit
+# *less* — less code, or fewer output tokens. Both were filed by reading item
+# names (`ponytail-audit`, `ponytail-debt`, `ponytail-gain`; `caveman-compress`,
+# `caveman-stats`), never the README, which is why they are pinned. Each has a
+# README that reads like general-purpose coding advice, and `general` is where
+# a keyword scorer would drop them — losing the one axis they share.
+EFFICIENCY_PINNED = {
+    "DietrichGebert/ponytail",
+    "JuliusBrussee/caveman",
+}
+
+# Measured with `scripts/measure_registry.py`, not walked: both repos render a
+# copy of each item per agent they support. Raw `scan_dir` walks find 13 and 28.
+EFFICIENCY_MEASURED = {
+    "DietrichGebert/ponytail": (7, 13),
+    "JuliusBrussee/caveman": (21, 28),
+}
+
 # `pbakaus/impeccable` vendors one copy of each item into every agent dir it
 # supports (`.claude/`, `.cursor/`, `.gemini/`, `.github/`, `.grok/`, …), so a
 # naive walk reports this many items for the handful it actually ships.
@@ -158,6 +176,56 @@ class TestDesignDomain:
         assert row["est_items"] < IMPECCABLE_MIRRORED_WALK // 2, (
             "est_items %d looks like the mirrored walk (%d), not the distinct "
             "item count" % (row["est_items"], IMPECCABLE_MIRRORED_WALK))
+
+
+class TestEfficiencyDomain:
+    """`efficiency` is a small domain that reads like `general`, so pin it.
+
+    Both repos are among the most-starred agent-skill registries in existence
+    (~97k each), and both advertise savings their own independent benchmarks
+    do not support — ponytail measured -10.3% cost against -20% advertised,
+    caveman -8.5% output tokens against -65%. The catalog carries them because
+    they exist and are installable, so `focus` must describe what the items
+    *do*, never repeat a marketing multiplier.
+    """
+
+    @pytest.mark.parametrize("name", sorted(EFFICIENCY_PINNED))
+    def test_pack_is_filed_under_efficiency(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["category"] == "efficiency", (
+            "%s ships token/code-reduction items but is filed %r; "
+            "`tap --catalog --category efficiency` would miss it"
+            % (name, row["category"]))
+
+    @pytest.mark.parametrize("name", sorted(EFFICIENCY_PINNED))
+    def test_est_items_is_measured_not_walked(self, catalog, name):
+        """Both vendor one render per agent, so the raw walk overcounts."""
+        measured, walked = EFFICIENCY_MEASURED[name]
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None
+        assert row["est_items"] == measured, (
+            "%s est_items %d != the measured %d (raw walk finds %d) — "
+            "re-run scripts/measure_registry.py"
+            % (name, row["est_items"], measured, walked))
+
+    @pytest.mark.parametrize("name", sorted(EFFICIENCY_PINNED))
+    def test_focus_carries_no_advertised_multiplier(self, catalog, name):
+        """Neither repo's headline number survived independent measurement, so
+        the catalog must not quote one back at the user."""
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None
+        assert not re.search(r"\b(?:54|65|75|94)\s*%", row["focus"]), (
+            "%s focus quotes an advertised saving that independent paired "
+            "benchmarks did not reproduce: %r" % (name, row["focus"]))
+
+    @pytest.mark.parametrize("name", sorted(EFFICIENCY_PINNED))
+    def test_pack_is_scannable_not_list_only(self, catalog, name):
+        """Both ship real items; neither is an index that only links out."""
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None
+        assert not row["list_only"], \
+            "%s ships scannable items and must not be flagged list_only" % name
 
 
 class TestSourceTuples:
