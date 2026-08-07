@@ -2,7 +2,9 @@
 id: gemini-agent-frontmatter-sanitizer
 board: code
 section: compat
-status: planned
+status: shipped
+owner: loop/gemini-sanitize
+pr: 476
 category: Bug
 complexity: S
 impact: Med
@@ -35,5 +37,10 @@ Copilot/Claude names one-to-one is guesswork — inheriting the session toolset 
 safe default); drop a <code>model</code> Gemini cannot resolve. Body stays byte-identical. Pin the
 valid-tool set with a unit test the way <code>tests/unit/test_mcphost.py</code> pins the MCP
 grammar, so a Gemini schema change surfaces as a red test rather than a user-visible load error.
-Hand-editing <code>~/.gemini/agents/</code> is not a fix: <code>boost sync</code> regenerates the
-file from the tap source and the lock's sha256 flags the edit as drift.
+<b>Measured while fixing it, correcting this card's own last line.</b> A hand-edit to
+<code>~/.gemini/agents/</code> does <i>survive</i> <code>boost sync</code> — sync only
+re-materializes files that are <b>missing</b>, so an edited file is left alone. What wipes it is a
+<code>boost install --force</code> or an upgrade of that workflow, and deleting the broken file is
+worse than leaving it: the next sync restores it from the tap, unfixed. So the hand-fix was more
+durable than claimed and still not a fix, for a different reason — it repairs one file on one
+machine while every other Copilot-dialect agent in the tap stays broken.
