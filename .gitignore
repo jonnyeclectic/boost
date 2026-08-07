@@ -271,3 +271,13 @@ tests/visual/out/
 # and 81 (tests/visual) packages, which is what makes `npm ci` reproducible and
 # what OpenSSF Scorecard's Pinned-Dependencies check asks for.
 node_modules/
+
+# macOS Finder metadata. Not ignored for years, so it surfaced as an
+# untracked file in every `git status` on a Mac and was one more line of noise
+# to read past before spotting real uncommitted work.
+.DS_Store
+
+# Serena MCP server project state (symbol cache, its own memories, local
+# config). Written into the repo root by the language-server tooling, not by
+# boost, and specific to one developer's machine.
+.serena/
