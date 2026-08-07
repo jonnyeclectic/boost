@@ -22,7 +22,7 @@ The history below is preserved as written; see <code>langchain-in-the-wheel</cod
 reversal's evidence.
 
 Every agent boost supports today is a <b>coding</b> agent that reads files off disk — Claude Code,
-Cursor, Windsurf, Gemini CLI. The catalogue itself is not coding-specific: it is 10,000+ retrievable
+Cursor, Windsurf, Gemini CLI. The catalogue itself is not coding-specific: it is 70,000+ retrievable
 procedures with frontmatter, provenance and a lock file. A LangChain application cannot reach any of
 it, so the same procedure has to be re-written as a prompt string by hand. This item is about making
 the catalogue addressable from a Python agent runtime as well as from a dotfile.
