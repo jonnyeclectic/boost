@@ -18,6 +18,7 @@ from .. import __version__, cliparse
 from ..core import (
     agents,
     bootstrap,
+    builtin,
     catalog,
     complete,
     config,
@@ -33,6 +34,7 @@ from ..core import (
     policy,
     rag,
     registry,
+    rules,
     selfupdate,
     serve,
     store,
@@ -892,7 +894,7 @@ def _tool_search(args: dict):
     # miss apart from a machine that has never been tapped — the two used to
     # share one sentence, and the fresh-install case is the one an agent reads
     # first and learns the most from.
-    tapped = len(registry.list_taps())
+    tapped = builtin.configured_tap_count()
     # The two retrieval branches converge on ONE render. They used to diverge:
     # the RAG branch appended `_ranking_note`, and the frontmatter fallback
     # appended nothing at all — so an agent on that path got ten lines with the
@@ -937,7 +939,7 @@ def _tool_list(args: dict):
     # INSTRUCTIONS and its own description both promise. It lands in the empty
     # state too: a machine with nothing installed is exactly where "what do I
     # have" is least useful on its own.
-    footer = mcp.coverage_line(everything, tapped=len(registry.list_taps()))
+    footer = mcp.coverage_line(everything, tapped=builtin.configured_tap_count())
     if not any(everything.values()):
         return "nothing installed\n" + footer, False
     lines = []
@@ -1312,6 +1314,78 @@ def _seed_catalog_for_mcp(force: bool) -> None:
         out.warn(res.summary())
 
 
+#: Escape hatch, same shape as BOOST_NO_MCP_OFFER and BOOST_NO_SEED. It is
+#: checked BEFORE `out.confirm`, which is load-bearing: confirm returns True
+#: under BOOST_ASSUME_YES or a bare `--yes` anywhere in argv, and the test
+#: fixtures set BOOST_ASSUME_YES=1 — so without this guard every existing
+#: `boost mcp register` test, and every provisioning script, would silently
+#: write a standing block into a real CLAUDE.md.
+NO_RULE_ENV = "BOOST_NO_RULE"
+
+
+def _offer_boost_first(hosts: list[str]) -> None:
+    """Offer to install boost's own rule into the agent's standing instructions.
+
+    This is the most invasive thing boost can propose, and the only text it
+    asks to put in a file the user reads every session, in every project — so
+    the consent has to be real rather than procedural. The body is printed in
+    full BEFORE the question, the target paths are named, the answer defaults
+    to NO, and the reversal command is shown whether or not they accept.
+
+    Why it exists at all: Gemini never delivers MCP server `instructions` in
+    interactive mode, and in an untrusted folder — which a brand-new project
+    directory is by default — it does not start the server, so boost has no
+    tools there either. `~/.gemini/GEMINI.md` is loaded unconditionally and is
+    the only boost surface that survives both. Declining is a perfectly good
+    answer; the tool descriptions still carry the trigger on every host that
+    delivers them.
+
+    Non-fatal by construction. The user asked to register an MCP server; a
+    failure to materialise an optional rule must never turn that into an
+    error, so everything below degrades to a warning.
+    """
+    from ..core import builtin
+
+    if os.environ.get(NO_RULE_ENV):
+        return
+    # Scoped to hosts where boost actually registered a server. Offering it for
+    # an agent with no boost tools would install standing text naming
+    # `boost_search` to an agent that does not have it.
+    if not hosts or not builtin.rule_is_available():
+        return
+    if lockfile.get_rule(builtin.BUILTIN_RULES[0]):
+        return                      # already installed; do not re-ask
+    body = (builtin.source_dir() / (builtin.BUILTIN_RULES[0] + ".mdc"))
+    targets = [str(rules.rule_target(agent, skills_dir,
+                                     builtin.BUILTIN_RULES[0])[1])
+               for agent, skills_dir in agents.enabled_agents().items()
+               if agent in {builtin.AGENT_FOR_HOST.get(h) for h in hosts}]
+    if not targets:
+        return
+    out.info("")
+    out.info("boost can also add its own rule, `%s`, to your agents' standing "
+             "instructions:" % builtin.BUILTIN_RULES[0])
+    for target in targets:
+        out.info("  %s" % target)
+    out.info("")
+    for line in body.read_text(encoding="utf-8").splitlines():
+        out.info("  | %s" % line)
+    out.info("")
+    if not out.confirm("Install it?", default=False):
+        out.info("Not installed. `boost install %s` any time."
+                 % builtin.BUILTIN_RULES[0])
+        return
+    try:
+        builtin.ensure_tap()
+        catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
+        store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]))
+    except (BoostError, OSError) as exc:
+        out.warn("could not install %s: %s" % (builtin.BUILTIN_RULES[0], exc))
+        return
+    out.ok("installed %s — remove it with `boost uninstall %s`"
+           % (builtin.BUILTIN_RULES[0], builtin.BUILTIN_RULES[0]))
+
+
 def cmd_mcp(argv) -> int:
     """boost mcp [register|unregister] [--host H] [--stdio] [--seed|--no-seed]"""
     p = cliparse.parser(
@@ -1386,6 +1460,8 @@ def cmd_mcp(argv) -> int:
                 out.info(" ".join(mcphost.argv(host, args.action, shim)))
         journal.log("mcp", args.action, hosts="")
         return 0
+    if args.action == "register":
+        _offer_boost_first(done)
     journal.log("mcp", args.action, hosts=",".join(done))
     return 0
 
