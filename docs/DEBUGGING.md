@@ -166,6 +166,41 @@ reports are present, so a stuck environment points you at its own evidence.
 
 ---
 
+## `boost self-update` didn't move
+
+`boost self-update` drives whatever installed this copy — `pipx upgrade`,
+`uv tool upgrade`, or `<this python> -m pip install --upgrade`. Use
+`--dry-run` to see the exact command without running it:
+
+```bash
+boost self-update --dry-run
+#   installed with: pipx
+#   would run: /opt/homebrew/bin/pipx upgrade boost-skill-cli --pip-args=--no-cache-dir
+```
+
+**Why the no-cache flag is there.** PyPI serves its package index with
+`Cache-Control: max-age=600` and pip honours it, so two upgrades inside ten
+minutes are answered from pip's HTTP cache — and a release published in between
+is invisible. pip then says `Requirement already satisfied` and exits 0. Every
+manager is therefore told to refresh its index (`--refresh` for uv, which has an
+index-only refresh; `--no-cache-dir` for pip and pipx, which don't).
+
+**If the version still doesn't move**, boost does not report success. It asks
+PyPI what the newest release is and says which of three things happened:
+
+| What you see | What it means |
+|--------------|---------------|
+| `boost v1.0.422 → v1.0.423` | upgraded |
+| `already up to date (v1.0.423)` | PyPI confirms this is the newest release |
+| `boost is unchanged (v…); could not reach PyPI to confirm…` | nothing moved and the check couldn't run — no claim either way |
+| `pipx exited 0 but boost is still v… — PyPI has v…` | the manager declined to upgrade; the hint gives you a pinned, forced install |
+
+That last case is usually a stale index or an environment whose Python is too
+old for the new wheel. The hint names the exact command to force it, because a
+plain `upgrade` has already been tried and refused.
+
+---
+
 ## Environment variables
 
 Everything that changes boost's runtime behaviour, in one place:
@@ -179,6 +214,7 @@ Everything that changes boost's runtime behaviour, in one place:
 | `BOOST_LOG_FORMAT` | `text` (default) or `json` — one JSON object per log line |
 | `BOOST_NO_LOG` | `=1` → don't write the diagnostic log file |
 | `BOOST_NO_AI` | `=1` → disable all AI calls (offline / deterministic) |
+| `BOOST_NO_NET` | `=1` → skip the PyPI version check in `self-update` (air-gapped) |
 | `BOOST_ASSUME_YES` | `=1` → auto-confirm prompts (also `--yes`/`-y`) |
 | `NO_COLOR` / `CLICOLOR_FORCE` | force color off / on |
 
