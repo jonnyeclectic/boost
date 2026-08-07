@@ -737,6 +737,18 @@ class TestResolveOneVendoredCopies:
         with pytest.raises(BoostError):
             catalog.resolve_one("dbg", path="skills/dbg")
 
+    def test_path_cannot_traverse_out_of_the_catalog(self, sandbox):
+        """--path only *filters* rows the catalog already has; it never builds
+        a filesystem path. Traversal therefore cannot select anything — it can
+        only fail to match. Pinned so a future rewrite cannot quietly make this
+        flag a path constructor.
+        """
+        _fake_taps(("t", [_entry("dbg", "t", desc="a", rel_dir="skills/dbg"),
+                          _entry("dbg", "t", desc="b", rel_dir="other/dbg")]))
+        for hostile in ("../../etc/passwd", "/etc/passwd", "../skills/dbg"):
+            with pytest.raises(BoostError):
+                catalog.resolve_one("dbg", path=hostile)
+
     def test_path_does_not_defeat_the_cross_tap_refusal(self, sandbox):
         """Provenance stays load-bearing: --path must never merge two taps."""
         _fake_taps(("owner/alpha", [_entry("dup", "owner/alpha", rel_dir="s/dup")]),
