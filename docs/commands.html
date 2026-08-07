@@ -129,7 +129,7 @@
     </div>
     <div class="group" data-group="info">
       <div class="group-h">Inspect &amp; explain</div>
-      <a class="cmd-link" href="#cmd-list" data-search="list list installed skills list installed skills, rules and workflows --tag tag --local --json">list</a>
+      <a class="cmd-link" href="#cmd-list" data-search="list list installed skills list installed skills, rules and workflows --kind {skill,rule,workflow} --tag tag --local --json">list</a>
       <a class="cmd-link" href="#cmd-info" data-search="info show detailed info about a skill  --json name">info</a>
       <a class="cmd-link" href="#cmd-cat" data-search="cat print a skill or rule&#x27;s contents  --raw name">cat</a>
       <a class="cmd-link" href="#cmd-edit" data-search="edit open a skill&#x27;s skill.md in your editor  name">edit</a>
@@ -491,13 +491,14 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-info">Inspect &amp; explain</h2>
-      <section class="cmd" id="cmd-list" data-search="list list installed skills list installed skills, rules and workflows --tag tag --local --json">
+      <section class="cmd" id="cmd-list" data-search="list list installed skills list installed skills, rules and workflows --kind {skill,rule,workflow} --tag tag --local --json">
         <h3><span class="cname">list</span><span class="gtag">info</span></h3>
         <p class="summary">List installed skills</p>
-        <pre class="syn">boost list [--tag TAG] [--local] [--json]</pre>
+        <pre class="syn">boost list [--kind {skill,rule,workflow}] [--tag TAG] [--local] [--json]</pre>
         <p class="desc">List installed skills, rules and workflows</p>
         <div class="args-h">Options</div>
         <div class="args">
+          <div class="arg"><code>--kind {skill,rule,workflow}</code><span>only show installed items of this kind</span></div>
           <div class="arg"><code>--tag TAG</code><span>only show skills carrying this tag</span></div>
           <div class="arg"><code>--local</code><span>only the skills installed into this repo</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
