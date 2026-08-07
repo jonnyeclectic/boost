@@ -35,6 +35,34 @@ FOCUS = {
     "infra": (8, "containers, clusters, and networking"),
 }
 
+# Repos whose whole reason to exist is visual/UI design work, pinned by name.
+# The 2026-08 sweep that filed them scored the *names of the items they ship*,
+# never their READMEs, and that is why they are pinned: nothing in
+# `bergside/awesome-design-skills`'s prose says UI, but its 67 items are called
+# `brutalism`, `claymorphism`, `bento` and `editorial`; `Front-End-Checklist`
+# reads like an index but ships 390 `aria-*`/`accessible-*` checks. Both sat in
+# `meta` until the item names were read.
+UI_PINNED = {
+    "pbakaus/impeccable",
+    "Leonxlnx/taste-skill",
+    "nextlevelbuilder/ui-ux-pro-max-skill",
+    "alchaincyf/huashu-design",
+    "Owl-Listener/designer-skills",
+    "thedaviddias/Front-End-Checklist",
+    "bergside/awesome-design-skills",
+}
+
+# The counter-example, and the reason the sweep reads item names rather than
+# repo names: this one's "design" is *AI* design — `chain-of-thought-design`,
+# `guardrail-design`, `prompt-versioning`, `trust-calibration`. Any rule keyed
+# on the repo name would file it `ui`; it belongs to `ai`.
+AI_NOT_UI = "Owl-Listener/ai-design-skills"
+
+# `pbakaus/impeccable` vendors one copy of each item into every agent dir it
+# supports (`.claude/`, `.cursor/`, `.gemini/`, `.github/`, `.grok/`, …), so a
+# naive walk reports this many items for the handful it actually ships.
+IMPECCABLE_MIRRORED_WALK = 40
+
 # The batch this file was written for: the six focus domains together must carry
 # at least this many estimated *scannable* items (list-only index repos excluded).
 FOCUS_SCANNABLE_FLOOR = 5000
@@ -91,6 +119,45 @@ class TestFocusCoverage:
         bad = sorted({e["category"] for e in catalog
                       if not _SLUG.match(e.get("category") or "")})
         assert not bad, "category slugs unusable as --category values: %s" % bad
+
+
+class TestDesignDomain:
+    """`ui` is the domain most easily lost to keyword scoring, so pin it."""
+
+    @pytest.mark.parametrize("name", sorted(UI_PINNED))
+    def test_design_pack_is_filed_under_ui(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["category"] == "ui", (
+            "%s is a visual-design pack but is filed %r; `tap --catalog "
+            "--category ui` would miss it" % (name, row["category"]))
+
+    def test_ai_design_skills_is_not_mistaken_for_ui(self, catalog):
+        row = next((e for e in catalog if e["name"] == AI_NOT_UI), None)
+        assert row is not None, "%s dropped out of the catalog" % AI_NOT_UI
+        assert row["category"] == "ai", (
+            "%s ships prompt/agent-design skills, not interface design; "
+            "filing it %r is the repo-name trap" % (AI_NOT_UI, row["category"]))
+
+    def test_playwright_is_carried_as_a_skill_registry(self, catalog):
+        """The framework repo ships real SKILL.md items under
+        packages/playwright-core, so it is a registry, not just a dependency."""
+        row = next((e for e in catalog if e["name"] == "microsoft/playwright"),
+                   None)
+        assert row is not None, "microsoft/playwright is not in the catalog"
+        assert row["type"] == "skill"
+        assert row["category"] == "devops"
+        assert not row["list_only"]
+
+    def test_mirrored_repos_are_counted_once_per_distinct_item(self, catalog):
+        """est_items must not be the raw walk: a repo that vendors a copy of
+        each item per agent dir would otherwise advertise 6x what it ships."""
+        row = next((e for e in catalog if e["name"] == "pbakaus/impeccable"),
+                   None)
+        assert row is not None
+        assert row["est_items"] < IMPECCABLE_MIRRORED_WALK // 2, (
+            "est_items %d looks like the mirrored walk (%d), not the distinct "
+            "item count" % (row["est_items"], IMPECCABLE_MIRRORED_WALK))
 
 
 class TestSourceTuples:

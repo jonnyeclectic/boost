@@ -246,7 +246,7 @@ These already exist and should be surfaced (and, in Phase 3, exposed through MCP
 | Command | What it does |
 |---|---|
 | `boost tap <owner/repo>` | Add one GitHub repo as a registry (shallow clone → indexed). |
-| `boost tap --catalog [--type/--category/--limit]` | Bulk-add from the curated 94-registry catalog (`boost_cli/data/registries.json`). |
+| `boost tap --catalog [--type/--category/--limit]` | Bulk-add from the curated 470-registry catalog (`boost_cli/data/registries.json`). |
 | `boost index` → `boost discover` | GitHub-wide code search via `gh` (`cmd_index`, `discovery.py:217`) to find new `SKILL.md` repos to tap. |
 
 Every newly tapped repo lands on local disk and is picked up by the next `boost reindex` — corpus growth

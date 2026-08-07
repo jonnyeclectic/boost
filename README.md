@@ -103,13 +103,17 @@ Want the whole ecosystem instead of the starter set? boost ships a **curated
 registry catalog** — 460+ classified GitHub registries of skills, Cursor/Windsurf
 **rules**, and Claude Code **workflows** (slash commands & subagents),
 collectively indexing ~28,000 scannable items. Every `est_items` is *measured*
-from the repo's file tree, not estimated, so `--limit` ranks by real size.
+from the repo's file tree, not estimated, so `--limit` ranks by real size — and
+counted once per item however many agents a repo renders it for, so a pack that
+ships a copy in `.claude/`, `.cursor/` and twelve other dotdirs is not credited
+with fourteen skills (`scripts/measure_registry.py`).
 
 Six domains are curated end to end, each tappable on its own:
 **`ai`** (RAG, evals, tracing, model serving — official OpenAI, Anthropic,
 LangChain, Qdrant, Elastic, MLflow, Langfuse, Arize, W&B, vLLM libraries),
 **`architecture`** (DDD, clean architecture, system design, C4/ADR),
-**`ui`** (data visualization, design systems, accessibility, TUI/dotfiles),
+**`ui`** (design systems, design taste, accessibility, data visualization,
+TUI/dotfiles — including Impeccable, taste-skill and Huashu Design),
 **`java`** (Spring Boot, Kotlin/JVM, Quarkus, JetBrains, Camunda, Vaadin),
 **`ecommerce`** (Shopify, Magento, WooCommerce, Spree, Bagisto, PrestaShop,
 Stripe, Algolia), and **`infra`** (Docker, Kubernetes, OpenShift, Helm, GitOps,

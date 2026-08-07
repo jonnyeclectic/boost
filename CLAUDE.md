@@ -123,6 +123,23 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   `(owner/repo, category, focus, est_items, confidence)`. Add awesome-list repos
   to `LIST_ONLY` so item-count math stays honest. Verify a repo is real
   (`gh api repos/<owner/repo>`) before adding it.
+- **`est_items` is measured, and `len(scan_dir(repo))` is not the measurement.**
+  Run `python3 scripts/measure_registry.py <clone>`; it hashes each item's body
+  with the frontmatter dropped and agent dotdir tokens normalized, so one skill
+  rendered into `.claude/`, `.cursor/`, `.gemini/`, … counts once. Registries
+  increasingly ship a copy per agent: a raw walk of `pbakaus/impeccable` finds
+  40 items for the 9 it has, and `Owl-Listener/ai-design-skills` shipped as 80
+  for years because `claude-plugin/<pack>/commands/x.md` and
+  `commands/<pack>/x.md` were counted as two commands.
+  `measure_registry.py --self-check ~/.boost/repos` re-derives committed counts
+  from local clones, so the convention stays falsifiable.
+- **Category comes from the names of the items a repo ships, not its README or
+  its own name.** `bergside/awesome-design-skills` reads like an index and is a
+  67-item visual-style corpus (`brutalism`, `claymorphism`, `bento`);
+  `Owl-Listener/ai-design-skills` reads like design and is prompt/agent design
+  (`chain-of-thought-design`, `guardrail-design`), so it is `ai`, not `ui`.
+  `tests/unit/test_registry_categories.py::TestDesignDomain` pins both
+  directions.
 - **Sandbox tests via env, and export separately.** boost state lives under
   `HOME`/`BOOST_HOME`; tests point them at a tempdir. In zsh, one-line chains
   like `export A=$(...) B=$A/x` leave `B` broken — use separate `export`

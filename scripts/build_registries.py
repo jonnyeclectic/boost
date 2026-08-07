@@ -315,7 +315,7 @@ SKILLS = [
     ("wanshuiyin/Auto-claude-code-research-in-sleep", "general", "ARIS (Auto-Research-In-Sleep) - Lightweight Markdown-only skills for... (185 skills)", 185, "high"),
     ("rshankras/claude-code-apple-skills", "general", "Claude Code skills for Apple platform development (iOS, macOS, iPadOS)... (183 skills)", 183, "high"),
     ("nexscope-ai/eCommerce-Skills", "general", "E-commerce skills for AI agents - product research, marketing... (162 skills)", 162, "high"),
-    ("Owl-Listener/designer-skills", "general", "Designer Skills Collection: agentic skills, commands, and plugins for... (96 skills, 29 workflows)", 125, "high"),
+    ("Owl-Listener/designer-skills", "ui", "Designer Skills Collection: agentic skills, commands, and plugins for... (96 skills, 29 workflows)", 125, "high"),
     ("guanyang/open-agent-hub", "general", "A lightweight, zero-dependency CLI tool to manage and activate... (106 skills, 8 workflows)", 114, "high"),
     ("phuryn/pm-skills", "general", "PM Skills Marketplace: 100+ agentic skills, commands, and plugins... (68 skills, 42 workflows)", 110, "high"),
     ("browser-act/skills", "general", "Browser automation CLI built for AI agents. Break through anti-bot... (103 skills)", 103, "high"),
@@ -328,7 +328,11 @@ SKILLS = [
     ("inference-sh/skills", "general", "inference.sh Agent skills for using our API to give your agents access... (86 skills)", 86, "high"),
     ("product-on-purpose/pm-skills", "general", "68 plug-and-play, best-practice product management skills for AI... (69 skills, 17 workflows)", 86, "high"),
     ("zhaoxuya520/reverse-skill", "general", "Reverse Engineering / Authorized Penetration Testing / Security... (83 skills)", 83, "high"),
-    ("Owl-Listener/ai-design-skills", "general", "AI Design Skills Collection: agentic skills, commands, and plugins for... (44 skills, 36 workflows)", 80, "high"),
+    # "design" here is prompt/agent design (chain-of-thought-design, guardrail-
+    # design, trust-calibration), not interface design -- hence `ai`, not `ui`.
+    # est_items was 80: the old count read `claude-plugin/<pack>/commands/x.md`
+    # and `commands/<pack>/x.md` as two commands rather than one mirrored pair.
+    ("Owl-Listener/ai-design-skills", "ai", "AI Design Skills Collection: agentic skills, commands, and plugins for... (44 skills, 18 workflows)", 62, "high"),
     ("ninehills/skills", "general", "My LLM skills (78 skills)", 78, "high"),
     ("deanpeters/Product-Manager-Skills", "general", "Product Management skills framework built on battle-tested methods for... (70 skills, 6 workflows)", 76, "high"),
     ("jamditis/claude-skills-journalism", "general", "Claude Code skills for journalism, media, and academia - verification... (60 skills, 15 workflows)", 75, "high"),
@@ -395,7 +399,9 @@ SKILLS = [
     ("github/awesome-copilot", "meta", "Community-contributed instructions, agents, skills, and configurations... (395 skills, 239 workflows)", 634, "high"),
     ("Microck/ordinary-claude-skills", "meta", "An unappealing collection of Claude Skills and resources (416 skills)", 416, "high"),
     ("PramodDutta/qaskills", "meta", "QA Skills Directory QA Skills is a curated directory of... (416 skills)", 416, "high"),
-    ("thedaviddias/Front-End-Checklist", "meta", "The essential checklist for modern web development, for humans and AI... (390 skills)", 390, "high"),
+    # Reads like an index, ships a corpus: 390 single-purpose front-end checks
+    # (`aria-*`, `accessible-*`, `alt-text`), so it is `ui`, not `meta`.
+    ("thedaviddias/Front-End-Checklist", "ui", "The essential checklist for modern web development, for humans and AI... (390 skills)", 390, "high"),
     ("rmyndharis/antigravity-skills", "meta", "A curated collection of Agent Skills for Google Antigravity (306 skills)", 306, "high"),
     ("pproenca/dot-skills", "meta", "A collection of AI agent skills following the Agent Skills open format (207 skills)", 207, "high"),
     ("indranilbanerjee/digital-marketing-pro", "meta", "Open-source AI marketing plugin for agencies & in-house teams - 158... (158 skills, 42 workflows)", 200, "high"),
@@ -403,7 +409,9 @@ SKILLS = [
     ("mohitmishra786/low-level-dev-skills", "meta", "A curated suite of AI agent skills for systems and low-level... (142 skills)", 142, "high"),
     ("glebis/claude-skills", "meta", "Collection of Claude Code skills for enhanced AI workflows (109 skills)", 109, "high"),
     ("elementalsouls/Claude-BugHunter", "meta", "A Claude Code skill bundle for bug hunting and external red-team work... (82 skills, 15 workflows)", 97, "high"),
-    ("bergside/awesome-design-skills", "meta", "List of 67 awesome DESIGN.md and SKILL.md design skill files for... (67 skills)", 67, "high"),
+    # Every item is a visual style -- `brutalism`, `claymorphism`, `bento`,
+    # `editorial` -- which is why the item names, not the blurb, decided it.
+    ("bergside/awesome-design-skills", "ui", "List of 67 awesome DESIGN.md and SKILL.md design skill files for... (67 skills)", 67, "high"),
     ("spencerpauly/awesome-cursor-skills", "meta", "A curated list of awesome skills for Cursor (65 skills)", 65, "high"),
     ("SnailSploit/Claude-Red", "meta", "claude-red is a curated library of offensive security skills designed... (58 skills)", 58, "high"),
     ("bobmatnyc/claude-mpm-skills", "meta", "Curated collection of Claude Code skills for intelligent project... (57 skills)", 57, "high"),
@@ -418,6 +426,21 @@ SKILLS = [
     ("QinghongLin/data2story-skill", "meta", "Data Journalist Agent: Transforming Data into Verifiable Multimodal Story (29 skills)", 29, "high"),
     ("muratcankoylan/Agent-Skills-for-Context-Engineering", "meta", "A comprehensive collection of Agent Skills for context engineering... (22 skills)", 22, "high"),
     # --- end 2026-07 batch ---
+    # --- 2026-08 batch: design/taste packs, plus one framework repo ---------
+    # est_items measured with scripts/measure_registry.py, which counts an item
+    # once however many agents it is rendered for. That matters here more than
+    # in earlier batches: these packs ship a copy per agent dotdir, so a raw
+    # walk of pbakaus/impeccable reports 40 items for the handful it has.
+    ("pbakaus/impeccable", "ui", "The design language that makes your AI harness better at design - shape/critique/polish plus finish-review, asset and documenter subagents, rendered for 14 agents (2 skills, 7 workflows)", 9, "high"),
+    ("Leonxlnx/taste-skill", "ui", "Anti-slop design taste: high-end visual direction, brutalist and minimalist UI kits, image-to-code, brand kits (13 skills)", 13, "high"),
+    ("alchaincyf/huashu-design", "ui", "Huashu Design - HTML-native design skill: hi-fi prototypes, slides, animation, 20 design philosophies, 5-axis review, MP4 export (1 skills)", 1, "high"),
+    # Not a registry by intent: the framework repo ships agent skills next to
+    # the product (packages/playwright-core/src/tools/skills) and the Playwright
+    # Agents that `playwright init-agents` installs. Tapping it clones the whole
+    # framework, so it is worth it for the planner/generator/healer, not as a
+    # cheap pull.
+    ("microsoft/playwright", "devops", "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (7 skills, 11 workflows)", 18, "high"),
+    # --- end 2026-08 batch ---
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------
