@@ -364,9 +364,48 @@ def _canonical(matches: list[dict]) -> dict:
                                        str(e.get("rel_dir", ""))))
 
 
-def resolve_one(name: str) -> dict:
-    """Find exactly one entry or raise with a helpful hint."""
+def _by_path(matches: list[dict], path: str) -> list[dict]:
+    """Narrow candidates to those whose ``rel_dir`` is (or ends with) ``path``.
+
+    Suffix rather than equality because the paths this disambiguates are the
+    ones a registry vendored deep — `plugins/pack-claude/skills/dbg` — and the
+    user is copying out of an error message. Matching on a trailing segment
+    lets `--path skills/dbg` work without pasting the whole prefix. It stays a
+    *segment* match: `s/dbg` must not be satisfied by `.../not-s/dbg`.
+    """
+    want = path.strip("/")
+    exact = [e for e in matches
+             if str(e.get("rel_dir", "")).strip("/") == want]
+    if exact:
+        # An exact rel_dir beats a suffix hit, or naming the canonical
+        # `skills/x` would stay "ambiguous" against the mirror
+        # `.openclaw/skills/x` that also ends with it — leaving the shape this
+        # flag exists for unresolvable by the very path the error printed.
+        return exact
+    return [e for e in matches
+            if str(e.get("rel_dir", "")).strip("/").endswith("/" + want)]
+
+
+def resolve_one(name: str, path: str | None = None) -> dict:
+    """Find exactly one entry or raise with a helpful hint.
+
+    ``path`` answers the one-tap ambiguity below. It deliberately cannot
+    resolve a *cross-tap* collision: two taps are two supply chains, and a
+    path is not provenance.
+    """
     matches = find(name)
+    if path and matches:
+        # Filter even when the name is already unique: a `--path` that matches
+        # nothing is a typo, and silently ignoring it installs something the
+        # user believes they just ruled out. Narrowing never merges two taps,
+        # so the cross-tap refusal below still fires on what survives.
+        narrowed = _by_path(matches, path)
+        if not narrowed:
+            raise BoostError(
+                "no skill named %r under path %r" % (name, path),
+                hint="paths for %r: %s" % (name, ", ".join(
+                    sorted(str(e.get("rel_dir", "?")) for e in matches))))
+        matches = narrowed
     if not matches:
         scored = search(name)[:3]
         hint = None
@@ -395,8 +434,8 @@ def resolve_one(name: str) -> dict:
             raise BoostError(
                 "%r matches %d different skills in %s: %s"
                 % (bare, len(matches), taps[0], paths),
-                hint="that registry ships one name twice — inspect the paths above "
-                     "and raise it with the tap")
+                hint="that registry ships one name twice — pick one with "
+                     "`--path <one of the above>`, and raise it with the tap")
         raise BoostError(
             "%r exists in multiple taps: %s" % (name, ", ".join(taps)),
             hint="qualify it, e.g. `%s:%s`" % (taps[0], bare))

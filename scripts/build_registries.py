@@ -82,6 +82,15 @@ SKILLS = [
     ("sanjay3290/ai-skills", "general", "Skills incl. deep-research, postgres, google-workspace, imagen", 8, "med"),
     ("NeoLabHQ/context-engineering-kit", "meta", "Skills: prompt-engineering, software-architecture, subagent-driven-dev", 6, "med"),
     ("coreyhaines31/marketingskills", "writing", "Marketing and growth-focused agent skills", 10, "med"),
+    # `efficiency`: items that exist to make an agent emit less. Filed by item
+    # name, not README — both of these read like general coding advice up top.
+    # Focus strings describe what the items do and deliberately omit the
+    # headline savings: independent paired benchmarks reproduced roughly a
+    # fifth of each (ponytail -10.3% cost vs -20% advertised; caveman -8.5%
+    # output tokens vs -65%), so quoting the advertised figure would make the
+    # catalog a megaphone for a number its own source contradicts.
+    ("DietrichGebert/ponytail", "efficiency", "Lazy-senior-dev rule + audit/debt/gain/review skills that cut code written (6 skills, 1 rule)", 7, "high"),
+    ("JuliusBrussee/caveman", "efficiency", "Output-compression skill with intensity levels, plus commit/review/compress commands (7 skills, 14 workflows)", 21, "high"),
     ("obra/superpowers-skills", "general", "Community-editable companion skills repo to Superpowers", 30, "med"),
     ("obra/superpowers-lab", "general", "Experimental/evolving Superpowers skills", 15, "med"),
     ("conorluddy/ios-simulator-skill", "web-dev", "Single skill for driving the iOS Simulator", 1, "med"),

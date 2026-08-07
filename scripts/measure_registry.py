@@ -50,6 +50,13 @@ SELF_CHECK = {
     "Owl-Listener/designer-skills": 125,
     "thedaviddias/Front-End-Checklist": 390,
     "bergside/awesome-design-skills": 67,
+    # Both render one copy per agent they support; raw walks find 13 and 28.
+    # caveman's 21 keeps `commands/*.md` and `src/plugins/opencode/commands/*.md`
+    # apart on purpose — they share names but are separately authored prose,
+    # which is the "counts are floors" case above, not a mirror. Its `.toml`
+    # command twins never enter the count at all: `scan_dir` indexes Markdown.
+    "DietrichGebert/ponytail": 7,
+    "JuliusBrussee/caveman": 21,
 }
 
 

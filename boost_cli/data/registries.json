@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 470,
-  "est_items_total": 32669,
-  "est_items_scannable": 28248,
+  "count": 472,
+  "est_items_total": 32697,
+  "est_items_scannable": 28276,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -1270,6 +1270,17 @@
       "curated": true
     },
     {
+      "name": "DietrichGebert/ponytail",
+      "url": "https://github.com/DietrichGebert/ponytail",
+      "type": "skill",
+      "category": "efficiency",
+      "focus": "Lazy-senior-dev rule + audit/debt/gain/review skills that cut code written (6 skills, 1 rule)",
+      "est_items": 7,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "doccker/cc-use-exp",
       "url": "https://github.com/doccker/cc-use-exp",
       "type": "skill",
@@ -2014,6 +2025,17 @@
       "focus": "Single skill wrapping ffuf web fuzzing",
       "est_items": 1,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "JuliusBrussee/caveman",
+      "url": "https://github.com/JuliusBrussee/caveman",
+      "type": "skill",
+      "category": "efficiency",
+      "focus": "Output-compression skill with intensity levels, plus commit/review/compress commands (7 skills, 14 workflows)",
+      "est_items": 21,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },

@@ -119,6 +119,13 @@ TUI/dotfiles — including Impeccable, taste-skill and Huashu Design),
 Stripe, Algolia), and **`infra`** (Docker, Kubernetes, OpenShift, Helm, GitOps,
 networking — plus official Azure, Grafana, Pulumi, Flux, DigitalOcean packs):
 
+Smaller categories fill in around them. **`efficiency`** collects the packs whose
+items exist to make an agent emit *less* — less code (`ponytail`) or fewer output
+tokens (`caveman`). Their `focus` lines describe what the items do and omit the
+headline savings on purpose: independent paired benchmarks reproduce roughly a
+fifth of what each advertises, with no measured quality loss, so the effects are
+real but far smaller than the marketing figure.
+
 ```bash
 boost tap --catalog --dry-run                 # browse the classified catalog
 boost tap --catalog --type skill --limit 20   # tap the 20 biggest skill packs

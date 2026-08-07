@@ -348,6 +348,10 @@ def cmd_install(argv: list[str]) -> int:
                     help="skill name, optionally qualified as tap:skill")
     ap.add_argument("--force", action="store_true",
                     help="reinstall even if already installed or pinned")
+    ap.add_argument("--path", metavar="P", default=None,
+                    help="pick which copy to install when one registry ships "
+                         "the name more than once (see the paths that error "
+                         "lists); may be a trailing path segment")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
     scope_g = ap.add_mutually_exclusive_group()
@@ -373,7 +377,7 @@ def cmd_install(argv: list[str]) -> int:
     entries, failed = [], 0
     for n in args.names:
         try:
-            entries.append(catalog.resolve_one(n))
+            entries.append(catalog.resolve_one(n, path=args.path))
         except BoostError as err:
             if not multi:
                 raise

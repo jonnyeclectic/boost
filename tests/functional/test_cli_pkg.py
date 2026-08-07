@@ -1125,6 +1125,36 @@ class TestInstallEdges:
         assert _lock()["brainstorming"]["agents"] == ["windsurf", "cursor"]
         assert blocker.is_dir() and not blocker.is_symlink()
 
+    def test_path_picks_between_two_same_named_skills(self, boost, tapped):
+        """A registry that ships one name twice was uninstallable: the error
+        named the paths and no flag could act on them. Shape taken from
+        DietrichGebert/ponytail (`skills/x` plus an `.openclaw/skills/x`
+        mirror), where every one of the seven items hit this.
+        """
+        # The sandbox's own clone, never the session-scoped fixture source —
+        # that one is shared read-only and editing it leaks into every test.
+        mirror = (paths.repos_dir() / "fixture-tap" / ".openclaw" / "skills"
+                  / "brainstorming")
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: openclaw variant\n"
+            "version: 2.0.0\n---\n\nMirror body.\n", encoding="utf-8")
+        # Drop the cached catalog so the next command rescans the clone.
+        (paths.cache_dir() / "fixture-tap.json").unlink()
+
+        blocked = boost("install", "brainstorming", expect=1)
+        assert "matches 2 different skills" in blocked.err
+        assert "--path" in blocked.err          # the way out must be named
+
+        r = boost("install", "brainstorming", "--path", "skills/brainstorming")
+        assert "Installed 1 new skill" in r.out
+        assert _lock()["brainstorming"]["version"] != "2.0.0"
+
+    def test_path_that_matches_nothing_is_refused(self, boost, tapped):
+        r = boost("install", "brainstorming", "--path", "nope/here", expect=1)
+        assert "under path" in r.err
+        assert "skills/brainstorming" in r.err   # the hint lists the real one
+
     def test_no_enabled_agents_warns(self, boost, tapped):
         cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
         cfg["agents"] = {a: {"enabled": False}
