@@ -18,7 +18,8 @@ if str(ROOT) not in sys.path:
 
 _SANDBOX_ENV = ("BOOST_HOME", "BOOST_AGENTS_STORE", "BOOST_DEBUG",
                 "BOOST_LOG_LEVEL", "BOOST_NO_LOG", "VOYAGE_API_KEY",
-                "OPENAI_API_KEY", "BOOST_NO_EMBED", "BOOST_NO_SEED")
+                "OPENAI_API_KEY", "BOOST_NO_EMBED", "BOOST_NO_SEED",
+                "BOOST_NO_RULE")
 
 
 def before_all(context):
@@ -49,6 +50,7 @@ def before_scenario(context, scenario):
     # against a fresh HOME. Without this, mcp.feature alone would perform
     # dozens of real network clones on a required check.
     os.environ["BOOST_NO_SEED"] = "1"
+    os.environ["BOOST_NO_RULE"] = "1"
     context._home = home
     context._tapped = False
     context._patchers = []

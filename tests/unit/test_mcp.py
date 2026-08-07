@@ -984,7 +984,13 @@ class TestSearchSaysHowTheOrderWasProduced:
                             lambda *_a, **_k: rag_result)
         monkeypatch.setattr(configuration.catalog, "search",
                             lambda _q: [(e, 1) for e in frontmatter])
-        monkeypatch.setattr(configuration.registry, "list_taps", lambda: ["t"])
+        # A real Tap, not a bare string: the reply now asks each tap whether
+        # it is boost's OWN builtin (which must not answer "has this user
+        # configured anything"), so a stand-in without a name is no longer a
+        # faithful stub of list_taps.
+        monkeypatch.setattr(
+            configuration.registry, "list_taps",
+            lambda: [configuration.registry.Tap(name="t", url="https://x/y")])
         self.lock_reads = []
         monkeypatch.setattr(
             configuration.lockfile, "all_installed",
