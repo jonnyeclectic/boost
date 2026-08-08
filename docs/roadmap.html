@@ -133,7 +133,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>7</b><span>Planned</span></div>
-      <div class="stat"><b>233</b><span>Loop finds</span></div>
+      <div class="stat"><b>234</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -8114,8 +8114,9 @@ job, it hangs it until timeout.</p></details>
       </article>
 
       <article class="cap rcard" id="expanded-card-bodies-overflow">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Docsite · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docsite · Bug</span></div>
         <h3>Expanded card bodies overflow the roadmap board sideways</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>What happens.</b> <code>_body_html</code> wraps a card body in a closed
 <code>&lt;details&gt;</code> only when <code>_SETTLED</code> matches, and
 <code>_SETTLED</code> is the one-tuple <code>("shipped",)</code>. Every other status —
@@ -8181,7 +8182,7 @@ min-content size, which is what lets a grid item in a
 <code>minmax(320px, 1fr)</code> track reach the width the break makes possible.
 <code>TestLongCodeTokensCanBreak</code> pins the declaration on both pages and, in a
 second test, that the class it is scoped to is still the class the generator emits —
-so a card rename cannot leave the boards unprotected behind a green test.</p>
+so a card rename cannot leave the boards unprotected behind a green test.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -8671,8 +8672,9 @@ machine while every other Copilot-dialect agent in the tap stays broken.</p></de
       </article>
 
       <article class="cap rcard" id="langchain-retriever-metadata-and-k-floor">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Compat · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compat · Bug</span></div>
         <h3><code>BoostRetriever</code> advertised a <code>source</code> that does not open, and <code>k=0</code> returned nothing forever</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Two silent failures in the same twelve lines of <code>boost_langchain/retriever.py</code>, both of
 the kind the file's own comments say construction-time validation exists to prevent.
 
@@ -8762,7 +8764,7 @@ Worth recording alongside that: the betweenness figure that started the chase wa
 graphify's report samples 100 pivots and then reports the top three <em>after deleting every file
 node</em>, which turned a rank of <b>148/9301</b> (exact betweenness 0.004141) into a reported "rank
 ~3, 0.020". The investigation that followed was sound; the number that motivated it was inflated
-about 4.7&times; by sampling and then re-ranked by a filter the report never mentions.</p>
+about 4.7&times; by sampling and then re-ranked by a filter the report never mentions.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -9441,6 +9443,55 @@ be skill-only. Fixing twenty commands without that just resets the counter.</p><
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★★</b></span>
           <span class="m">an upstream push rewrote CLAUDE.md silently; pin and quarantine both answered "not installed"</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="serve-404-reflected-the-request">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Security · Bug</span></div>
+        <h3><code>boost serve</code> echoed the request path back into its 404 body</h3>
+        <p><b>What happened.</b> <code>route()</code> unquotes the request path before matching, so
+the segment after <code>/skill/</code> is arbitrary bytes of the caller's choosing. When
+that segment failed <code>SKILL_NAME_RE</code>, it was interpolated straight back into the
+response: <code>json.dumps({"error": "no skill named %r" % name})</code>. Ask for
+<code>/skill/&lt;script&gt;alert(1)&lt;/script&gt;</code> and the script tag came back in the
+body. Snyk Code files it as CWE-79, High.
+
+<b>How bad, honestly.</b> Not a live cross-site scripting hole today, and saying otherwise
+would be inflating it. The body is typed <code>application/json</code>, and no current
+browser renders that as HTML. What made it worth fixing is the distance to one: the
+server sent no <code>X-Content-Type-Options</code> header at all, so the only thing
+standing between the reflection and execution was the browser choosing not to sniff — a
+decision made outside this repo, for a body this repo hands to whoever asks. It is also
+not purely a localhost surface: <code>--host</code> is a documented flag, and the code
+elsewhere already reasons about <code>0.0.0.0</code> exposure (the generic 500 body exists
+for exactly that reason).
+
+<b>Two halves, because either alone leaves the other standing.</b> The invalid-name branch
+no longer names anything — it answers <code>invalid skill name</code>. Nothing is lost:
+the name is invalid <em>by definition</em> in that branch, so repeating it told the caller
+only what it had just sent. The valid-but-unknown branch keeps <code>no skill named
+'ghost'</code>, because it is reachable only for a name that already matched
+<code>[A-Za-z0-9._-]</code> — a charset with nothing in it that can close a tag or a quote
+— and that message is the one signal distinguishing a typo from a skill that simply is not
+installed. Separately, <code>_send</code> now sets
+<code>X-Content-Type-Options: nosniff</code>. It goes on the choke point rather than at
+each <code>return</code>, so it also covers the generic 500 in <code>do_GET</code>, which
+is the response most likely to grow a reflected detail later.
+
+<b>The part worth keeping.</b> The suite already had a test for this path, and it asserted
+the leak: <code>test_route_percent_encoded_traversal_is_404</code> pinned the body as
+<code>no skill named '../../etc/passwd'</code>. So a refused traversal was checked for
+being refused, and the echo it came back with was written down as the expected value. A
+test can hold a defect in place as firmly as it can catch one, and this one had, for as
+long as the endpoint has existed. It now asserts the opposite — that the attempt is not
+repeated back — alongside four payload cases and a check that no <code>&lt;</code>,
+<code>&gt;</code>, <code>&amp;</code> or <code>'</code> reaches the body at all, which are
+bytes a structurally-correct JSON response never emits.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the test suite pinned the echo in place as if it were the contract</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

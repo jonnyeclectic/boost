@@ -15,6 +15,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -832,6 +833,25 @@ class TestServe:
             assert exc.value.code == 404
             assert "no skill named 'ghost'" in json.loads(
                 exc.value.read().decode())["error"]
+
+            # The nosniff header exists only on the wire, so the unit tests
+            # cannot see it at all — and it is what keeps a body we typed
+            # application/json from being sniffed as markup. Asserted on a 200
+            # and on a 404, because the error paths are the ones that carry
+            # anything derived from the request.
+            with urllib.request.urlopen(base + "/catalog.json", timeout=5) as r:
+                assert r.headers["X-Content-Type-Options"] == "nosniff"
+
+            # Percent-encoded because http.client refuses unsafe bytes in a
+            # request line; route() unquotes before matching, so this is the
+            # same path an attacker's browser would send.
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                get("/skill/" + urllib.parse.quote("<script>alert(1)</script>"))
+            assert exc.value.code == 404
+            assert exc.value.headers["X-Content-Type-Options"] == "nosniff"
+            refused = exc.value.read().decode()
+            assert json.loads(refused) == {"error": "invalid skill name"}
+            assert "<script>" not in refused and "alert" not in refused
         finally:
             if "server" in captured:
                 captured["server"].shutdown()
