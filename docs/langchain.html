@@ -318,9 +318,12 @@ chain.<span class="fn">invoke</span>(<span class="s">"how should this repo handl
 
         <div class="callout"><b>Validated at construction, not at query time.</b> <code>k</code>
           and <code>kind</code> are pydantic-checked fields: a typo'd kind would otherwise return
-          <code>[]</code> for every query — indistinguishable from an empty catalog — and a
-          negative <code>k</code> would silently drop the last hit via slice semantics. Both fail
-          loudly the moment you build the retriever instead.</div>
+          <code>[]</code> for every query — indistinguishable from an empty catalog — a
+          negative <code>k</code> would silently drop the last hit via slice semantics, and
+          <code>k=0</code> would slice the hits away entirely, answering <code>[]</code> forever
+          while looking perfectly healthy. <code>k</code> is therefore floored at <b>1</b>: a
+          retriever asked for no documents is a construction mistake, and it says so where the
+          mistake was made rather than at every query that follows.</div>
 
         <p class="prose" style="margin-top:26px">Each Document's <code>page_content</code> is the
           item's <b>indexed text</b> — its name and one-line description followed by the full
@@ -332,7 +335,8 @@ chain.<span class="fn">invoke</span>(<span class="s">"how should this repo handl
           <thead><tr><th>key</th><th>what it holds</th></tr></thead>
           <tbody>
             <tr><td><code>name</code> / <code>kind</code></td><td>the item's name and which of the three kinds it is</td></tr>
-            <tr><td><code>tap</code> / <code>source</code> / <code>version</code></td><td>provenance: registry, in-repo path, frontmatter version</td></tr>
+            <tr><td><code>tap</code> / <code>path</code> / <code>version</code></td><td>provenance: registry, in-repo path (tap-relative, so it reads the same on every machine), frontmatter version</td></tr>
+            <tr><td><code>source</code></td><td>the same file, <b>resolved</b> — an absolute path you can open, matching LangChain's convention and what <code>SkillMarkdownLoader</code> sets. Quote <code>path</code> in a citation; open <code>source</code></td></tr>
             <tr><td><code>engine</code></td><td>which engine actually answered — <code>"BM25 full-content"</code>, <code>"dense vectors"</code>, or <code>"hybrid RRF (BM25 + dense)"</code></td></tr>
           </tbody>
         </table>

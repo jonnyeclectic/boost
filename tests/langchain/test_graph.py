@@ -39,6 +39,24 @@ def test_injects_matching_skill_with_provenance(indexed):
     assert "### brainstorming (skill — fixture-tap:skills/brainstorming/SKILL.md @ 1.4.0)" in content
 
 
+def test_injected_provenance_is_machine_independent(indexed):
+    """The prefix quotes the tap-relative path, never the resolved one.
+
+    This text lands in a live conversation and is read out of transcripts on
+    other machines, so it must identify the file in the upstream repo — a
+    `$HOME`-rooted absolute path names a location the reader does not have and
+    leaks the local layout into the model's context. `metadata["source"]` is
+    the resolved path precisely so this line can keep using `path` instead.
+    """
+    from pathlib import Path
+
+    content = _content(skill_context_node()({"messages": [
+        HumanMessage("structured divergent thinking ideation")]}))
+    home = Path.home().as_posix()
+    assert home not in content
+    assert "fixture-tap:skills/brainstorming/SKILL.md" in content
+
+
 def test_k_caps_the_injected_procedures(indexed):
     # "always" matches five skill bodies plus the rule; count injected blocks
     # by their headers since they all share one SystemMessage.
