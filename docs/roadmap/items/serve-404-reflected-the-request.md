@@ -10,7 +10,7 @@ wow: 3
 note: the test suite pinned the echo in place as if it were the contract
 order: 97
 owner: loop/serve-no-reflected-request
-pr:
+pr: 489
 title: <code>boost serve</code> echoed the request path back into its 404 body
 ---
 <b>What happened.</b> <code>route()</code> unquotes the request path before matching, so
