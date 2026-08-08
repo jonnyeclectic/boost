@@ -386,6 +386,36 @@ def _by_path(matches: list[dict], path: str) -> list[dict]:
             if str(e.get("rel_dir", "")).strip("/").endswith("/" + want)]
 
 
+def _suggestions(scored, limit: int = 3) -> list[str]:
+    """Distinct, typeable labels for a "closest matches" hint.
+
+    Bare names alone could render the same word several times — a registry that
+    mirrors one skill into a directory per agent scores every copy — which
+    offers the user three of nothing. Collapse by name, and qualify with the tap
+    only when one name genuinely spans more than one registry, since that is the
+    case where the bare name would not resolve either.
+
+    ``limit`` is applied *after* collapsing, and that ordering is the point.
+    De-duplicating a pre-sliced top-3 shrinks the hint to one suggestion in
+    exactly the mirrored-registry case this function exists for; taking the
+    first ``limit`` distinct labels instead keeps three real alternatives on
+    screen. Callers pass the whole scored list.
+    """
+    taps_for: dict[str, set] = {}
+    for e, _ in scored:
+        taps_for.setdefault(e["name"], set()).add(e.get("tap", ""))
+    labels: list[str] = []
+    for e, _ in scored:
+        nm = e["name"]
+        label = ("%s:%s" % (e.get("tap", "?"), nm)
+                 if len(taps_for[nm]) > 1 else nm)
+        if label not in labels:
+            labels.append(label)
+            if len(labels) >= limit:
+                break
+    return labels
+
+
 def resolve_one(name: str, path: str | None = None) -> dict:
     """Find exactly one entry or raise with a helpful hint.
 
@@ -407,10 +437,31 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                     sorted(str(e.get("rel_dir", "?")) for e in matches))))
         matches = narrowed
     if not matches:
-        scored = search(name)[:3]
+        qualifier, bare = split_name(name)
+        if qualifier is not None and "/" in bare:
+            # `tap:skill` selects a *registry*, so a path-shaped tail is the
+            # grammar being misread rather than a missing skill — and the
+            # fuzzy hint below cannot say so. Name the confusion and hand back
+            # the command that works.
+            #
+            # The qualifier is carried into the suggestion rather than dropped.
+            # It is the half the user got right, and without it the suggested
+            # command means something different: a leaf name that exists in two
+            # taps resolves elsewhere or raises cross-tap ambiguity, so the
+            # "fix" would fail for the user who most needed the tap.
+            raise BoostError(
+                "no skill named %r — after ':' boost expects a skill name, "
+                "not a path" % bare,
+                hint="`tap:skill` picks the registry; to pick a copy inside "
+                     "one, use --path: `boost install %s:%s --path %s`"
+                     % (qualifier, bare.rsplit("/", 1)[-1], bare))
+        # The whole scored list, not a pre-sliced top 3 — see _suggestions:
+        # slicing first collapses to one suggestion exactly when a registry
+        # mirrors a skill per agent, which is the case it exists to handle.
+        scored = search(name)
         hint = None
         if scored:
-            hint = "closest matches: " + ", ".join(e["name"] for e, _ in scored)
+            hint = "closest matches: " + ", ".join(_suggestions(scored))
         elif not registry.list_taps():
             hint = "no taps configured — start with `boost tap --defaults`"
         raise BoostError("no skill named %r in any tap" % name, hint=hint)

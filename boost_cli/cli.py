@@ -64,7 +64,7 @@ COMMANDS = [
     # Discovery & Search (9)
     ("search",      "find", "discovery", "Search skills across tap registries (AI-ranked)"),
     ("reindex",     "find", "discovery", "Build/refresh the full-content search index"),
-    ("discover",    "find", "discovery", "Browse & search the GitHub-wide skill discovery index"),
+    ("discover",    "find", "discovery", "Search GitHub for skill repos you have not tapped yet"),
     ("recommend",   "find", "discovery", "Suggest skills based on your project's tech stack"),
     ("browse",      "find", "discovery", "Interactive full-screen TUI with fuzzy search"),
     ("index",       "find", "discovery", "Build the discovery registry via GitHub Code Search"),
