@@ -8692,6 +8692,44 @@ it bridges are its own method, its own file, its own tests and its sibling modul
 of those splits are clustering artifacts rather than architecture. Chasing it anyway is what put
 these twelve lines under a microscope.
 
+<b>An adversarial review of the first commit found three more defects, two of them created by the
+fix itself.</b> Recording them because two are the same shape as the bug being fixed &mdash; a
+guarantee asserted in a comment and not actually enforced.
+
+<b>The invariant the commit claimed was enforced in one place out of two.</b> The commit message and
+this card both said "no <code>$HOME</code>-rooted path leaks into a model's context", and that held
+for <code>skill_context_node</code>, which hand-builds its text. It did not hold for the package's
+own flagship example: <code>{"context": retriever, ...} | prompt | model</code> passes the raw
+<code>list[Document]</code> into the template, and LangChain stringifies each Document
+<em>with its whole metadata dict</em> &mdash; verified against langchain-core 1.5.3. So the newly
+resolved <code>source</code> reached the prompt on every query in the shape the README recommends.
+Before the fix, <code>source</code> was tap-relative and that render leaked nothing local. The
+documented chain now carries a <code>format_docs</code> step, in the README and on the docs page,
+with the reason spelled out rather than left as style.
+
+<b>The <code>k</code> floor was construction-only, and so were the two guards beside it.</b>
+pydantic v2 does not validate on attribute set unless the model asks, and langchain's
+<code>model_config</code> does not ask. <code>r = BoostRetriever(); r.k = 0</code> succeeded
+silently &mdash; as did <code>r.k = -1</code> and <code>r.kind = "plugin"</code>, both of which had
+been "validated at construction" since the package shipped. The ordinary build-it-then-tune-it
+idiom walked past all three into exactly the silent-empty failure the comment said it prevented.
+<code>validate_assignment</code> closes it; <code>model_copy(update=...)</code> still bypasses,
+which pydantic documents as never validating and no config changes.
+
+<b>One of the new tests passed against the code it was written to catch.</b>
+<code>test_injected_provenance_is_machine_independent</code> asserted a hard-coded relative string
+and the absence of <code>$HOME</code> &mdash; both true before the split, because
+<code>source</code> <em>was</em> the relative path then. It was a strict subset of an assertion that
+already existed one test above it, and the commit message cited it as evidence for the split. It now
+compares the two metadata keys against each other, so it fails on any build where they hold the same
+value. Worth stating plainly: a test that passes both ways is not evidence, and this one was quoted
+as evidence.
+
+Also corrected: the docs promised <code>source</code> was "an absolute path you can open".
+<code>entry_path</code> is pure path math &mdash; this card's own test pins that it resolves a path
+for a file that does not exist &mdash; and a relative <code>BOOST_HOME</code> yields a relative
+result. The page now says what is true: it is the path boost itself opens to read the item.
+
 Worth recording alongside that: the betweenness figure that started the chase was itself wrong.
 graphify's report samples 100 pivots and then reports the top three <em>after deleting every file
 node</em>, which turned a rank of <b>148/9301</b> (exact betweenness 0.004141) into a reported "rank

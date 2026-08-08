@@ -144,6 +144,30 @@ def test_a_zero_k_is_rejected_at_construction(sandbox):
         BoostRetriever(k=0)
 
 
+def test_the_guards_hold_on_assignment_not_just_construction(sandbox):
+    """`r.k = 0` must fail the same way `BoostRetriever(k=0)` does.
+
+    pydantic v2 does not validate on attribute set unless the model asks for it,
+    and langchain's own model_config does not. So every guard here — the kind
+    literal, the negative k, the new floor — was defeated by the ordinary
+    "build it, tune it later" idiom (`r = BoostRetriever(); r.k = cfg.top_k`),
+    which lands in exactly the silent-empty failure the guards exist to prevent.
+    Construction-time validation is worth nothing if assignment skips it.
+    """
+    import pytest
+    from pydantic import ValidationError
+
+    from boost_langchain import BoostRetriever
+    r = BoostRetriever()
+    for field, bad in (("k", 0), ("k", -1), ("kind", "plugin")):
+        with pytest.raises(ValidationError):
+            setattr(r, field, bad)
+    # ...and a legitimate assignment still works, so the guard is a floor and
+    # not a freeze.
+    r.k = 3
+    assert r.k == 3
+
+
 def test_a_zero_k_is_rejected_through_the_graph_node_too(sandbox):
     # skill_context_node builds the default retriever from its own k, so the
     # floor has to hold on that path as well — not just direct construction.

@@ -6,7 +6,7 @@ from typing import Literal
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from boost_cli.core import rag
 
@@ -29,6 +29,14 @@ class BoostRetriever(BaseRetriever):
     stuffing context wants) or just its one-line description (what a router
     choosing among items wants).
     """
+
+    # pydantic v2 validates on __init__ but NOT on attribute set unless asked,
+    # and langchain's own model_config does not ask. Without this every guard
+    # below was construction-only, so the ordinary "build it, tune it later"
+    # idiom — `r = BoostRetriever(); r.k = cfg.top_k` — walked straight past all
+    # three. (`model_copy(update=...)` still bypasses them; pydantic documents
+    # that as never validating, and there is no config that changes it.)
+    model_config = ConfigDict(validate_assignment=True)
 
     # Validated at construction, because every one of these fails *silently* at
     # query time otherwise: a typo'd kind returns [] for every query,
