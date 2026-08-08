@@ -559,6 +559,44 @@ class TestHelpers:
         output.info("msg")
         assert capsys.readouterr().out == "  msg\n"
 
+    def test_warn_and_info_can_be_routed_to_stderr(self, capsys):
+        # For commands that also speak JSON on stdout: the notice has to survive
+        # `--json`, and the alternatives were corrupting the JSON or dropping
+        # the notice. Default stays stdout, so no caller changes behaviour.
+        output.warn("routed", stream=sys.stderr)
+        output.info("hint", stream=sys.stderr)
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err == "  ! routed\n  hint\n"
+
+
+class TestPlain:
+    """Control characters are stripped from text boost did not author.
+
+    Not cosmetic: `\\x1b[1A\\x1b[2K` moves the cursor up one line and erases it,
+    so a single field in a table can rewrite rows already printed above it. The
+    terminal decides what an escape means, not boost, so anything arriving from
+    a network response or a tapped repo is sanitised at the point of display.
+    """
+
+    def test_a_cursor_escape_is_removed_but_the_text_survives(self):
+        assert output.plain("evil/\x1b[1A\x1b[2Ktrusted") == "evil/[1A[2Ktrusted"
+
+    def test_the_escape_byte_itself_is_gone(self):
+        assert "\x1b" not in output.plain("a\x1b[31mb")
+
+    def test_c0_and_c1_controls_go(self):
+        assert output.plain("a\x00b\x07c\x7fd\x9be") == "abcde"
+
+    def test_ordinary_text_is_untouched(self):
+        # Including the whitespace the table layer folds itself, and non-ASCII,
+        # which must not be mistaken for a control byte.
+        assert output.plain("skills/naïve-café/SKILL.md — 3\tcopies\n") == (
+            "skills/naïve-café/SKILL.md — 3\tcopies\n")
+
+    def test_a_non_string_is_coerced(self):
+        assert output.plain(42) == "42"
+
     def test_info_empty_is_blank_line(self, capsys):
         output.info()
         assert capsys.readouterr().out == "\n"

@@ -203,9 +203,15 @@ def ok(msg: str) -> None:
     print("  " + role("✓", "success") + " " + msg)
 
 
-def warn(msg: str) -> None:
-    """Print msg as an indented `!` warning line, all in the warn role."""
-    print("  " + role("!", "warn") + " " + role(msg, "warn"))
+def warn(msg: str, stream=None) -> None:
+    """Print msg as an indented `!` warning line, all in the warn role.
+
+    ``stream`` exists for the commands that also speak JSON on stdout: a notice
+    about *which corpus answered* has to survive `--json`, and the old choice
+    was between corrupting the JSON and suppressing the notice entirely. Passing
+    ``sys.stderr`` keeps both.
+    """
+    print("  " + role("!", "warn") + " " + role(msg, "warn"), file=stream)
 
 
 def err(msg: str, hint: str | None = None) -> None:
@@ -215,9 +221,33 @@ def err(msg: str, hint: str | None = None) -> None:
         print(c("  hint: " + hint, DIM), file=sys.stderr)
 
 
-def info(msg: str = "") -> None:
-    """Print msg indented two spaces; a blank line when msg is empty."""
-    print("  " + msg if msg else "")
+def info(msg: str = "", stream=None) -> None:
+    """Print msg indented two spaces; a blank line when msg is empty.
+
+    ``stream`` as in :func:`warn` — so a hint can accompany a stderr notice.
+    """
+    print("  " + msg if msg else "", file=stream)
+
+
+# C0 and C1 controls, minus the tab/newline the table layer already folds. ESC
+# is the one that matters: `\x1b[1A\x1b[2K` moves the cursor up and erases, so a
+# single crafted field can rewrite rows already printed above it.
+_CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def plain(text: object) -> str:
+    """Strip terminal control characters from text boost did not author.
+
+    Anything that arrives from a network response, a tapped repo's frontmatter,
+    or a filename is untrusted for display purposes even when it is harmless as
+    data. Rendering it into a table is what makes it executable-ish: the
+    terminal, not boost, decides what an escape sequence means.
+
+    Typed ``object`` rather than ``str`` because the callers are feeding it
+    parsed JSON — a field that is documented as a string is still whatever the
+    remote sent, and coercing here beats a TypeError at render time.
+    """
+    return _CONTROL_RE.sub("", str(text))
 
 
 def dim(msg: str) -> None:

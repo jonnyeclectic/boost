@@ -327,12 +327,19 @@ def cmd_index(argv):
     p = cliparse.parser(
         prog="boost index",
         description="Build the discovery registry via GitHub Code Search")
+    p.add_argument("query", nargs="*",
+                   help="narrow the sample to these terms (default: any SKILL.md)")
     p.add_argument("--limit", type=util.positive_int, default=300,
                    help="max skill files to index (default 300)")
     args = p.parse_args(argv)
     if not shutil.which("gh"):
         raise BoostError("the GitHub CLI (gh) is required to build the index",
                         hint="brew install gh && gh auth login")
+    query = " ".join(t for t in args.query if t.strip())
+    # Unqueried, this samples whatever code search happens to rank first, so an
+    # untargeted build is a lucky draw rather than a corpus. Callers who know
+    # what they are after can now aim it.
+    q = "filename:SKILL.md" + ((" " + query) if query else "")
     items: list[dict] = []
     total = 0
     pages = min((max(1, args.limit) + 99) // 100, 10)  # code search caps at 1000
@@ -343,7 +350,8 @@ def cmd_index(argv):
         try:
             proc = subprocess.run(
                 ["gh", "api", "-H", "Accept: application/vnd.github+json",
-                 "search/code?q=filename:SKILL.md&per_page=100&page=%d" % page],
+                 "search/code?q=%s&per_page=100&page=%d"
+                 % (urllib.parse.quote(q, safe=":"), page)],
                 capture_output=True, text=True, timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
             raise BoostError("gh api timed out on page %d" % page, hint=str(e)) from e
@@ -378,8 +386,8 @@ def cmd_index(argv):
             break
     paths.ensure_dirs()
     _discovery_path().write_text(json.dumps(
-        {"generated": util.now_iso(), "github_total": total, "items": items},
-        indent=1), encoding="utf-8")
+        {"generated": util.now_iso(), "github_total": total, "query": query,
+         "items": items}, indent=1), encoding="utf-8")
     repos = len({it["repo"] for it in items})
     out.ok("indexed %d skill files across %d repos (GitHub reports %d total)"
            % (len(items), repos, total))
@@ -428,17 +436,115 @@ def github_skill_search(query="", limit=20):
     return items
 
 
+def _by_repo(hits):
+    """Collapse per-file code-search hits into one row per repository.
+
+    Code search returns a row per matching SKILL.md, so a repo carrying several
+    skills — or mirroring them into per-agent plugin directories — can fill the
+    whole limit with itself. What `discover` is for is naming a repo worth
+    tapping, so the repo is the unit that belongs on screen.
+    """
+    rows: dict[str, dict] = {}
+    for h in hits:
+        row = rows.get(h["repo"])
+        if row is None:
+            rows[h["repo"]] = h | {"files": 1}
+            continue
+        row["files"] += 1
+        if not row.get("description"):
+            row["description"] = h.get("description") or ""
+        # Show the shallowest copy: `skills/x` is the one a registry means,
+        # and the per-agent mirrors below it are the same skill again.
+        if (str(h.get("path", "")).count("/")
+                < str(row.get("path", "")).count("/")):
+            row["path"], row["url"] = h.get("path", ""), h.get("url", "")
+    return list(rows.values())
+
+
+# Code search caps a page at 100, and the whole page is what we want. `--limit`
+# counts ROWS, and a row is a repo — but code search ranks per *file* with no
+# per-repo cap, so one large registry routinely owns the top 25 hits. Spending
+# the budget on files and collapsing afterwards returned a single row for
+# `--limit 25`.
+_GH_PAGE = 100
+
+
+def _fall_back(why: str, hint: str) -> None:
+    """Explain the fall-through to the local index, then return None.
+
+    On stderr, so it survives ``--json``: suppressing it was the defect. A
+    script piping stdout still gets clean JSON, and nobody is left unable to
+    tell "GitHub has no matches" from "GitHub was never searched".
+    """
+    out.warn("%s — falling back to the local index" % why, stream=sys.stderr)
+    out.info(out.role(hint, "muted"), stream=sys.stderr)
+    return None
+
+
+def _discover_live(args, tokens):
+    """Search GitHub itself — the same reach-out the MCP tool makes.
+
+    Returns an exit code, or None to fall through to the cached index.
+    """
+    if not shutil.which("gh"):
+        return _fall_back("GitHub search needs the `gh` CLI",
+                          "install it with `brew install gh && gh auth login` "
+                          "to search GitHub itself")
+    hits = github_skill_search(" ".join(tokens), _GH_PAGE)
+    if hits is None:
+        return _fall_back("GitHub code search failed", "check `gh auth status`")
+    rows = _by_repo(hits)[:args.limit]
+    if args.as_json:
+        # `source` on every row, in both paths, because the fall-through above
+        # switches corpus *and* row shape. Without it a script cannot tell
+        # "GitHub has no matches" from "GitHub was never searched".
+        print(json.dumps([r | {"source": "github"} for r in rows]))
+        return 0
+    if not rows:
+        out.info("no SKILL.md repositories on GitHub match %r"
+                 % " ".join(tokens))
+        out.info(out.role("try broader terms, or `boost search` for the "
+                          "registries already tapped", "muted"))
+        return 0
+    # The count rides the repo column, which is short: appended to the path it
+    # was the first thing a narrow terminal truncated away. out.plain because
+    # every field here is a GitHub string — a repo name or path carrying a
+    # cursor-movement escape would rewrite the rows printed above it.
+    out.table([(out.plain(it.get("repo", "?"))
+                + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
+                out.plain(it.get("path", "")),
+                out.role(out.plain(it.get("url", "")), "muted")) for it in rows],
+              headers=("repo", "path", "url"))
+    # "(N)" counts files in THIS page, not the repo's skills — say so, rather
+    # than letting a capped sample read as a total.
+    out.info(out.role("%d repo(s) across the top %d code-search hits · live "
+                      "GitHub Code Search" % (len(rows), len(hits)), "muted"))
+    out.info(out.role("add one with `boost tap <repo>`, then `boost install "
+                      "<skill>`", "muted"))
+    return 0
+
+
 def cmd_discover(argv):
-    """Browse/filter the GitHub-wide index built by `boost index`."""
+    """Search GitHub for SKILL.md repos to tap — live, no index required."""
     p = cliparse.parser(
         prog="boost discover",
-        description="Browse & search the GitHub-wide skill discovery index")
-    p.add_argument("query", nargs="*", help="filter terms (repo/path substring)")
+        description="Search GitHub for skill repositories you have not tapped yet")
+    p.add_argument("query", nargs="*", help="search terms (topic, language, name)")
     p.add_argument("--limit", type=util.positive_int, default=25,
                    help="max rows (default 25)")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
+    p.add_argument("--local", action="store_true",
+                   help="search only the cached index, never the network")
     args = p.parse_args(argv)
+    tokens = [t for t in args.query if t.strip()]
+    # A query is a question about GitHub, not about whatever `boost index`
+    # happened to sample — so ask GitHub. The cached index stays the answer for
+    # bare browsing and for --local, where being offline is the point.
+    if tokens and not args.local:
+        code = _discover_live(args, tokens)
+        if code is not None:
+            return code
     dpath = _discovery_path()
     if not dpath.exists():
         if args.as_json:
@@ -464,19 +570,35 @@ def cmd_discover(argv):
                     for t in tokens)]
     shown = items[:args.limit]
     if args.as_json:
-        print(json.dumps(shown))
+        # Tagged like the live rows above: this is the branch a script reaches
+        # after a silent fall-through, and the two row shapes differ.
+        print(json.dumps([it | {"source": "local-index"} for it in shown]))
         return 0
     if not shown:
-        out.info("no indexed skills match %r" % " ".join(args.query))
-        out.info(out.role("the index holds %d entries — rebuild with `boost index`"
-                       % len(all_items), "muted"))
+        out.info("no locally indexed skills match %r" % " ".join(args.query))
+        # Say what was actually consulted. The old wording read as a verdict on
+        # GitHub when it was only ever a verdict on this cache. The next line
+        # depends on WHY we are here: told to stay local, or fell through after
+        # GitHub was unreachable. "drop --local" to someone who never typed it
+        # is advice they cannot act on, contradicting the warning just printed.
+        out.info(out.role(
+            ("this searched a local sample of %d entries, not GitHub — drop "
+             "--local to search GitHub itself" % len(all_items))
+            if args.local else
+            ("this searched a local sample of %d entries because GitHub could "
+             "not be reached" % len(all_items)), "muted"))
         return 0
-    out.table([(it.get("repo", "?"), it.get("path", ""),
-                out.role(it.get("url", ""), "muted")) for it in shown],
+    # out.plain: these rows came from GitHub too, by way of `boost index`.
+    out.table([(out.plain(it.get("repo", "?")), out.plain(it.get("path", "")),
+                out.role(out.plain(it.get("url", "")), "muted")) for it in shown],
               headers=("repo", "path", "url"))
-    out.info(out.role("%d of %d indexed skills · GitHub reports ~%d total"
-                   % (len(shown), len(all_items),
-                      int(data.get("github_total") or 0)), "muted"))
+    # `github_total` is the match count for the query `boost index` was built
+    # with, which since that command took a query is not "all of GitHub".
+    scope = (" matching %r" % data["query"]) if data.get("query") else ""
+    out.info(out.role("%d of %d indexed skills · GitHub reported ~%d total%s "
+                      "when this index was built"
+                      % (len(shown), len(all_items),
+                         int(data.get("github_total") or 0), scope), "muted"))
     return 0
 
 

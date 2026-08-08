@@ -249,6 +249,37 @@ class TestIndex:
              "url": "https://github.com/acme/pack/skills/b/SKILL.md",
              "description": ""}]
 
+    def test_query_narrows_the_sample(self, boost, sandbox, monkeypatch):
+        """Without a query the index is a lucky draw; terms let it be aimed."""
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        seen = []
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page(
+                    [_gh_item("MemPalace/mempalace", "skills/mempalace/SKILL.md")])))
+        boost("index", "memory", "palace", "--limit", "100")
+        assert "filename:SKILL.md" in seen[0][-1]
+        assert "memory" in seen[0][-1] and "palace" in seen[0][-1]
+        data = json.loads((paths.cache_dir() / "discovery.json").read_text(encoding="utf-8"))
+        # recorded, so a later reader can tell an aimed sample from a blind one
+        assert data["query"] == "memory palace"
+
+    def test_no_query_keeps_the_bare_filename_filter(self, boost, sandbox,
+                                                     monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        seen = []
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page([])))
+        boost("index", "--limit", "100")
+        assert "search/code?q=filename:SKILL.md&per_page=100&page=1" in seen[0][-1]
+        data = json.loads((paths.cache_dir() / "discovery.json").read_text(encoding="utf-8"))
+        assert data["query"] == ""
+
     def test_respects_limit(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
                             lambda c: "/usr/bin/gh")
@@ -417,10 +448,11 @@ class TestGithubSkillSearch:
 
 # ---------------------------------------------------------------- discover
 
-def _write_index(items, total=42):
+def _write_index(items, total=42, query=""):
     paths.ensure_dirs()
     (paths.cache_dir() / "discovery.json").write_text(json.dumps(
-        {"generated": util.now_iso(), "github_total": total, "items": items}), encoding="utf-8")
+        {"generated": util.now_iso(), "github_total": total, "query": query,
+         "items": items}), encoding="utf-8")
 
 
 _ITEMS = [
@@ -451,26 +483,41 @@ class TestDiscover:
 
     def test_query_filters_and_footer_counts(self, boost, sandbox):
         _write_index(_ITEMS)
-        r = boost("discover", "acme")
+        r = boost("discover", "--local", "acme")
         assert "octo/skills" not in r.out
         assert "skills/web/SKILL.md" in r.out and "skills/db/SKILL.md" in r.out
-        assert "2 of 3 indexed skills · GitHub reports ~42 total" in r.out
+        # "when this index was built" is load-bearing: `boost index` now takes a
+        # query, so github_total is the total for *that* query at *that* time,
+        # not a live GitHub-wide count.
+        assert ("2 of 3 indexed skills · GitHub reported ~42 total when this "
+                "index was built") in r.out
         # multi-token queries AND together
-        r = boost("discover", "acme", "web")
+        r = boost("discover", "--local", "acme", "web")
         assert "skills/db/SKILL.md" not in r.out
         assert "1 of 3 indexed skills" in r.out
 
+    def test_the_footer_names_the_query_the_index_was_built_with(self, boost,
+                                                                 sandbox):
+        _write_index(_ITEMS, query="react")
+        r = boost("discover", "--local", "acme")
+        assert "~42 total matching 'react' when this index was built" in r.out
+
     def test_json_purity(self, boost, sandbox):
         _write_index(_ITEMS)
-        r = boost("discover", "acme", "--json")
-        assert json.loads(r.out) == _ITEMS[1:]
+        r = boost("discover", "--local", "acme", "--json")
+        rows = json.loads(r.out)
         assert r.out.count("\n") == 1
+        assert [{k: v for k, v in row.items() if k != "source"}
+                for row in rows] == _ITEMS[1:]
+        assert {row["source"] for row in rows} == {"local-index"}
 
-    def test_no_match_reports_index_size(self, boost, sandbox):
+    def test_no_match_names_what_it_searched(self, boost, sandbox):
+        """The miss must not read as a verdict on GitHub — it only saw the cache."""
         _write_index(_ITEMS)
-        r = boost("discover", "zzz")
-        assert "no indexed skills match 'zzz'" in r.out
-        assert "the index holds 3 entries — rebuild with `boost index`" in r.out
+        r = boost("discover", "--local", "zzz")
+        assert "no locally indexed skills match 'zzz'" in r.out
+        assert "a local sample of 3 entries, not GitHub" in r.out
+        assert "drop --local to search GitHub itself" in r.out
 
     def test_limit(self, boost, sandbox):
         _write_index(_ITEMS)
@@ -483,6 +530,198 @@ class TestDiscover:
         (paths.cache_dir() / "discovery.json").write_text("{broken", encoding="utf-8")
         r = boost("discover", expect=1)
         assert "the discovery index is corrupt" in r.err
+
+
+class TestDiscoverLive:
+    """A query asks about GitHub, so it must reach GitHub — no index required.
+
+    This is the parity the MCP `boost_discover_github` tool always had and the
+    CLI did not: before, a query only ever searched whatever untargeted sample
+    `boost index` happened to cache.
+    """
+
+    def _gh(self, monkeypatch, items, rc=0, stdout=None):
+        seen = []
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: seen.append(cmd) or types.SimpleNamespace(
+                returncode=rc, stderr="",
+                stdout=_gh_page(items) if stdout is None else stdout))
+        return seen
+
+    def test_query_hits_github_without_any_index(self, boost, sandbox, monkeypatch):
+        seen = self._gh(monkeypatch, [_gh_item("MemPalace/mempalace",
+                                               "skills/mempalace/SKILL.md")])
+        r = boost("discover", "mempalace")
+        assert "MemPalace/mempalace" in r.out
+        assert "live GitHub Code Search" in r.out
+        assert "boost tap <repo>" in r.out
+        # the user's terms reached the code-search query
+        assert "mempalace" in seen[0][-1] and "filename:SKILL.md" in seen[0][-1]
+
+    def test_repo_rows_collapse_mirrored_copies(self, boost, sandbox, monkeypatch):
+        """One repo mirroring a skill per agent is one row, not four."""
+        self._gh(monkeypatch, [
+            _gh_item("MemPalace/mempalace", "skills/mempalace/SKILL.md"),
+            _gh_item("MemPalace/mempalace", ".claude-plugin/skills/mempalace/SKILL.md"),
+            _gh_item("MemPalace/mempalace", ".codex-plugin/skills/mempalace/SKILL.md"),
+            _gh_item("octo/other", "skills/x/SKILL.md")])
+        r = boost("discover", "mempalace")
+        assert "2 repo(s)" in r.out
+        assert "MemPalace/mempalace (3)" in r.out
+        # the shallowest copy is the one worth naming, not whichever hit first
+        assert "skills/mempalace/SKILL.md" in r.out
+        assert ".codex-plugin" not in r.out
+
+    def test_the_shallowest_copy_wins_whatever_the_hit_order(self, boost, sandbox,
+                                                             monkeypatch):
+        """The tie-break must survive an unsorted page.
+
+        Code search does not rank by path depth, so feeding the shallowest hit
+        first proves nothing — the naive "keep the first" implementation passes
+        that too. Deepest first is the ordering that separates them.
+        """
+        self._gh(monkeypatch, [
+            _gh_item("MemPalace/mempalace", ".codex-plugin/a/b/skills/m/SKILL.md"),
+            _gh_item("MemPalace/mempalace", ".claude-plugin/skills/m/SKILL.md"),
+            _gh_item("MemPalace/mempalace", "skills/m/SKILL.md")])
+        r = boost("discover", "m", "--json")
+        row = json.loads(r.out)[0]
+        assert row["path"] == "skills/m/SKILL.md", row
+        assert row["files"] == 3
+
+    def test_a_description_arrives_from_whichever_copy_has_one(self, boost, sandbox,
+                                                               monkeypatch):
+        # The first hit for a repo can be the one with an empty description;
+        # the row should still end up carrying the text a later copy supplies.
+        self._gh(monkeypatch, [
+            _gh_item("o/r", "a/SKILL.md", desc=""),
+            _gh_item("o/r", "b/SKILL.md", desc="the real blurb")])
+        r = boost("discover", "x", "--json")
+        assert json.loads(r.out)[0]["description"] == "the real blurb"
+
+    def test_json_is_live_rows(self, boost, sandbox, monkeypatch):
+        self._gh(monkeypatch, [_gh_item("o/r", "s/SKILL.md")])
+        r = boost("discover", "x", "--json")
+        data = json.loads(r.out)
+        assert r.out.count("\n") == 1
+        assert data[0]["repo"] == "o/r" and data[0]["files"] == 1
+        assert data[0]["source"] == "github"
+
+    def test_limit_counts_repos_not_code_search_files(self, boost, sandbox,
+                                                      monkeypatch):
+        """`--limit` is documented as "max rows", and a row is a repo.
+
+        Passing it through as the code-search page size spent the budget on
+        files instead: one large registry owns the top hits, so `--limit 25`
+        returned a single row. Here 30 files across 5 repos, 20 of them from one
+        registry — asking for 4 rows must give 4.
+        """
+        hits = [_gh_item("big/registry", "skills/s%d/SKILL.md" % i)
+                for i in range(20)]
+        hits += [_gh_item("r%d/pack" % i, "skills/x/SKILL.md") for i in range(4)]
+        seen = self._gh(monkeypatch, hits)
+        r = boost("discover", "x", "--limit", "4", "--json")
+        assert len(json.loads(r.out)) == 4
+        # and the whole page was requested, not `--limit` files
+        assert "per_page=100" in seen[0][-1]
+
+    def test_local_flag_never_touches_the_network(self, boost, sandbox, monkeypatch):
+        def boom(cmd, **kw):
+            raise AssertionError("--local must not shell out to gh")
+
+        # gh present, or the guard below is vacuous: without a query reaching
+        # `_discover_live`, `boom` is never called and the test passes on any
+        # machine that simply has no gh installed.
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr("boost_cli.commands.discovery.subprocess.run", boom)
+        _write_index(_ITEMS)
+        r = boost("discover", "--local", "acme")
+        assert "2 of 3 indexed skills" in r.out
+
+    def test_bare_discover_still_browses_the_cache(self, boost, sandbox, monkeypatch):
+        """No query is a browse request, and browsing the cache is free."""
+        def boom(cmd, **kw):
+            raise AssertionError("a query-less browse must not shell out to gh")
+
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr("boost_cli.commands.discovery.subprocess.run", boom)
+        _write_index(_ITEMS)
+        r = boost("discover")
+        assert "3 of 3 indexed skills" in r.out
+
+    def test_empty_github_result_is_reported_not_masked(self, boost, sandbox,
+                                                        monkeypatch):
+        self._gh(monkeypatch, [])
+        _write_index(_ITEMS)
+        r = boost("discover", "acme")
+        assert "no SKILL.md repositories on GitHub match 'acme'" in r.out
+        # GitHub is authoritative for "what exists on GitHub" — a stale cache
+        # hit must not be dressed up as a live answer.
+        assert "skills/web/SKILL.md" not in r.out
+
+    def test_gh_failure_falls_back_to_the_index(self, boost, sandbox, monkeypatch):
+        self._gh(monkeypatch, [], rc=1)
+        _write_index(_ITEMS)
+        r = boost("discover", "acme")
+        # The notice belongs on stderr — see test_json_survives_a_fallback.
+        assert "GitHub code search failed" in r.err
+        assert "2 of 3 indexed skills" in r.out
+
+    def test_missing_gh_falls_back_to_the_index(self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: None)
+        _write_index(_ITEMS)
+        r = boost("discover", "acme")
+        assert "GitHub search needs the `gh` CLI" in r.err
+        assert "2 of 3 indexed skills" in r.out
+
+    def test_a_fallback_miss_does_not_blame_a_flag_you_never_passed(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: None)
+        _write_index(_ITEMS)
+        r = boost("discover", "zzz")
+        assert "because GitHub could not be reached" in r.out
+        # "drop --local" contradicts the warning above it for a user who never
+        # typed --local, and is advice they cannot act on.
+        assert "drop --local" not in r.out
+
+    def test_json_survives_a_fallback_and_says_which_corpus_answered(
+            self, boost, sandbox, monkeypatch):
+        """A script must be able to tell the two answers apart.
+
+        Suppressing the warning kept stdout parseable but destroyed the only
+        signal, so "GitHub has no matches" and "GitHub was never searched" came
+        back identical — in *different row shapes*. Warning to stderr, `source`
+        on every row.
+        """
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: None)
+        _write_index(_ITEMS)
+        r = boost("discover", "acme", "--json")
+        rows = json.loads(r.out)          # stdout still parses
+        assert r.out.count("\n") == 1
+        assert {row["source"] for row in rows} == {"local-index"}
+        assert "GitHub search needs the `gh` CLI" in r.err
+
+    def test_terminal_control_bytes_from_github_are_stripped(
+            self, boost, sandbox, monkeypatch):
+        """A repo name is attacker-chosen text rendered into a table.
+
+        `\\x1b[1A\\x1b[2K` moves the cursor up a line and erases it, so one
+        crafted field can rewrite rows already on screen — including the row
+        naming a repo the user was about to tap.
+        """
+        self._gh(monkeypatch, [
+            _gh_item("evil/\x1b[1A\x1b[2Ktrusted-repo", "skills/x/SKILL.md")])
+        r = boost("discover", "x")
+        assert "\x1b[1A" not in r.out and "\x1b[2K" not in r.out
+        assert "trusted-repo" in r.out
 
 
 # ---------------------------------------------------------------- recommend

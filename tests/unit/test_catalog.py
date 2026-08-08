@@ -608,6 +608,108 @@ class TestResolveOne:
         assert len(listed) == 3
         assert all(n.startswith("planner-") for n in listed)
 
+    def test_miss_hint_dedups_mirrored_copies(self, sandbox):
+        # A registry that mirrors one skill per agent scores every copy, and the
+        # old hint rendered them by bare name — "mempalace, mempalace,
+        # mempalace", three of nothing. One tap, so no qualifier is needed.
+        _fake_taps(("MemPalace/mempalace", [
+            _entry("mempalace", "MemPalace/mempalace", rel_dir="skills/mempalace"),
+            _entry("mempalace", "MemPalace/mempalace",
+                   rel_dir=".claude-plugin/skills/mempalace"),
+            _entry("mempalace", "MemPalace/mempalace",
+                   rel_dir=".codex-plugin/skills/mempalace")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("mempal")
+        assert ei.value.hint == "closest matches: mempalace"
+
+    def test_miss_hint_qualifies_a_name_spanning_taps(self, sandbox):
+        # Here the bare name would not resolve either, so the tap earns its keep.
+        _fake_taps(("owner/alpha", [_entry("dup", "owner/alpha")]),
+                   ("beta", [_entry("dup", "beta")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("du")
+        listed = ei.value.hint.replace("closest matches: ", "").split(", ")
+        assert sorted(listed) == ["beta:dup", "owner/alpha:dup"]
+
+    def test_path_shaped_qualifier_names_the_grammar_error(self, sandbox):
+        # `boost install MemPalace/mempalace:skills/mempalace` — the tail is a
+        # path, so the fuzzy hint could only ever guess. Say what went wrong.
+        _fake_taps(("MemPalace/mempalace", [
+            _entry("mempalace", "MemPalace/mempalace", rel_dir="skills/mempalace")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("MemPalace/mempalace:skills/mempalace")
+        assert ei.value.message == (
+            "no skill named 'skills/mempalace' — after ':' boost expects a "
+            "skill name, not a path")
+        assert "--path" in ei.value.hint
+        assert ("boost install MemPalace/mempalace:mempalace --path "
+                "skills/mempalace") in ei.value.hint
+
+    def test_the_suggested_command_actually_resolves(self, sandbox):
+        """Run the hint, do not just match its text.
+
+        A hint is a promise that a command will work, and asserting the string
+        only proves it was formatted. This lifts the arguments back out and
+        feeds them to resolve_one — which is what caught the qualifier being
+        dropped: the bare leaf name is ambiguous the moment a second tap ships
+        a skill by that name, so the "fix" failed for the user who most needed
+        the tap they had already typed correctly.
+        """
+        _fake_taps(("MemPalace/mempalace", [
+            _entry("mempalace", "MemPalace/mempalace", rel_dir="skills/mempalace")]),
+            ("other/pack", [_entry("mempalace", "other/pack",
+                                   rel_dir="skills/mempalace")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("MemPalace/mempalace:skills/mempalace")
+        cmd = re.search(r"`boost install (\S+) --path (\S+)`", ei.value.hint)
+        assert cmd, ei.value.hint
+        entry = catalog.resolve_one(cmd.group(1), path=cmd.group(2))
+        assert entry["tap"] == "MemPalace/mempalace"
+
+    def test_an_entry_with_no_tap_is_labelled_and_counted_as_untapped(self):
+        """Pin the defensive defaults on the two `e.get("tap", …)` reads.
+
+        A catalog row always carries a tap, so this exercises the branch that
+        exists for a malformed one. Both defaults matter and differ: the
+        collision count treats a missing tap as the empty string (so a row with
+        `tap: ""` and a row with no tap are one registry, not two), while the
+        label falls back to `?` — a rendered `None:` would read as a real
+        registry named None.
+        """
+        assert catalog._suggestions([({"name": "a"}, 1.0)]) == ["a"]
+        assert catalog._suggestions(
+            [({"name": "a", "tap": ""}, 1.0), ({"name": "a"}, 0.9)]) == ["a"]
+        assert catalog._suggestions(
+            [({"name": "a", "tap": "t"}, 1.0), ({"name": "a"}, 0.9)]) == [
+                "t:a", "?:a"]
+
+    def test_suggestions_are_deduped_before_the_top_three_are_taken(self, sandbox):
+        """Three distinct suggestions, not three slots eaten by one mirror.
+
+        Slicing to three and *then* collapsing is the trap: the mirrored copies
+        score adjacently, so the pre-slice holds one name three times and the
+        hint shrinks to a single suggestion — in exactly the case the dedupe was
+        written for.
+        """
+        _fake_taps(("reg/pack", [
+            _entry("planner", "reg/pack", rel_dir="skills/planner"),
+            _entry("planner", "reg/pack", rel_dir=".claude-plugin/skills/planner"),
+            _entry("planner", "reg/pack", rel_dir=".codex-plugin/skills/planner"),
+            _entry("planner-pro", "reg/pack", rel_dir="skills/planner-pro"),
+            _entry("planner-lite", "reg/pack", rel_dir="skills/planner-lite")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("planne")
+        listed = ei.value.hint.replace("closest matches: ", "").split(", ")
+        assert len(listed) == 3, listed
+        assert len(set(listed)) == 3, listed
+
+    def test_unqualified_slash_name_is_still_a_plain_miss(self, sandbox):
+        # No ':' means no grammar to misread — the ordinary miss still applies.
+        _fake_taps(("t", [_entry("brainstorming", "t")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("some/thing")
+        assert ei.value.message == "no skill named 'some/thing' in any tap"
+
     def test_miss_no_close_match_no_hint(self, sandbox):
         _fake_taps(("t", [_entry("brainstorming", "t")]))
         with pytest.raises(BoostError) as ei:
