@@ -10,7 +10,7 @@ wow: 3
 note: both found by graphing the repo, not by reading it
 order: 105
 owner: loop/langchain-retriever-contract
-pr:
+pr: 488
 title: <code>BoostRetriever</code> advertised a <code>source</code> that does not open, and <code>k=0</code> returned nothing forever
 ---
 Two silent failures in the same twelve lines of <code>boost_langchain/retriever.py</code>, both of
