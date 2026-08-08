@@ -303,3 +303,4 @@ opt-in LLM-assisted paths (`search --smart`, `explain`, `distill`, `infer`,
 - `boost_cli/data/` — shipped catalog data (generated)   · `scripts/` — build/gate tooling
 - `tests/unit`, `tests/functional`, `tests/smoke.sh` — the three test tiers
 - `docs/` — `index.html` (visual guide), `commands.html` (every flag, generated), `DEBUGGING.md`; `roadmap.html` is generated from `docs/roadmap/items/*.md` (see above)
+BE BRIEF
