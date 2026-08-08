@@ -10,7 +10,7 @@ wow: 4
 note: an adversarial review of the first draft confirmed 21 defects, two of which would have reddened CI
 order: 106
 owner: loop/discover-live-github-search
-pr:
+pr: 490
 title: <code>boost discover &lt;query&gt;</code> asks GitHub, instead of filtering whatever <code>boost index</code> happened to sample
 ---
 <b>What was wrong.</b> <code>boost discover react</code> read as a question about GitHub and
