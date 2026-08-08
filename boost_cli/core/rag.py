@@ -140,6 +140,32 @@ def _tap_commits() -> dict[str, str]:
     return commits
 
 
+def entry_path(entry: dict, tap_paths: dict[str, Path] | None = None
+               ) -> Path | None:
+    """Where a catalog entry's defining file actually lives on this machine.
+
+    ``skill_md`` is stored relative to the tap's repo root (see ``catalog``), so
+    it is not openable on its own; joining it to that tap's clone directory is
+    the only thing that makes it one. That join used to live inside
+    ``read_body``, which kept the answer private — a caller that wanted the
+    *location* rather than the *bytes* had nothing to call, and passed the
+    relative path off as a real one instead. ``boost_langchain`` shipped exactly
+    that bug in its Document metadata.
+
+    Returns ``None`` when the entry names no defining file. A bare tap root is
+    not where the item is, so returning one would hand the caller a path that
+    opens the wrong thing rather than an absence it has to handle.
+    """
+    rel = entry.get("skill_md")
+    if not rel:
+        return None
+    paths_map = _tap_paths() if tap_paths is None else tap_paths
+    base = paths_map.get(entry.get("tap", ""))
+    if base is None:
+        base = paths.repos_dir() / str(entry.get("tap", "")).replace("/", "__")
+    return Path(base) / rel
+
+
 def read_body(entry: dict, tap_paths: dict[str, Path] | None = None) -> str:
     """Return an item's searchable text: name + description + prose body.
 
@@ -147,16 +173,12 @@ def read_body(entry: dict, tap_paths: dict[str, Path] | None = None) -> str:
     description are prepended so short items keep keyword parity with the old
     search. Missing files degrade to just the catalog metadata.
     """
-    paths_map = _tap_paths() if tap_paths is None else tap_paths
     header = "%s\n%s" % (entry.get("name", ""), entry.get("description", ""))
-    base = paths_map.get(entry.get("tap", ""))
-    if base is None:
-        base = paths.repos_dir() / str(entry.get("tap", "")).replace("/", "__")
-    rel = entry.get("skill_md")
-    if not rel:
+    src = entry_path(entry, tap_paths)
+    if src is None:
         return header.strip()
     try:
-        text = (base / rel).read_text(encoding="utf-8", errors="replace")
+        text = src.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return header.strip()
     _meta, body = frontmatter.parse(text)

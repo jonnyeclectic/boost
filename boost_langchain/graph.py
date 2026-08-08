@@ -75,7 +75,12 @@ def skill_context_node(
         blocks = []
         for doc in docs:
             meta = doc.metadata
-            prov = "%s:%s" % (meta.get("tap") or "?", meta.get("source") or "?")
+            # ``path``, not ``source``: this text lands in a live conversation
+            # and gets read out of transcripts on other machines, so provenance
+            # must name the file in the upstream repo. The resolved path in
+            # ``source`` would leak the local layout and identify a location
+            # the reader does not have.
+            prov = "%s:%s" % (meta.get("tap") or "?", meta.get("path") or "?")
             if meta.get("version"):
                 prov = "%s @ %s" % (prov, meta["version"])
             blocks.append("### %s (%s — %s)\n\n%s" % (

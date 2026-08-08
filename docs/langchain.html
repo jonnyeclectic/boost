@@ -304,8 +304,11 @@ docs = retriever.<span class="fn">invoke</span>(<span class="s">"set up code rev
 <span class="k">from</span> langchain_core.output_parsers <span class="k">import</span> <span class="fn">StrOutputParser</span>
 <span class="k">from</span> langchain_core.runnables <span class="k">import</span> <span class="fn">RunnablePassthrough</span>
 
+<span class="k">def</span> <span class="fn">format_docs</span>(docs):
+    <span class="k">return</span> <span class="s">"\n\n"</span>.<span class="fn">join</span>(d.page_content <span class="k">for</span> d <span class="k">in</span> docs)
+
 chain = (
-    {<span class="s">"context"</span>: retriever, <span class="s">"question"</span>: <span class="fn">RunnablePassthrough</span>()}
+    {<span class="s">"context"</span>: retriever | <span class="fn">format_docs</span>, <span class="s">"question"</span>: <span class="fn">RunnablePassthrough</span>()}
     | prompt          <span class="c"># your ChatPromptTemplate</span>
     | model           <span class="c"># your chat model</span>
     | <span class="fn">StrOutputParser</span>()
@@ -316,11 +319,23 @@ chain.<span class="fn">invoke</span>(<span class="s">"how should this repo handl
 <span class="fn">BoostRetriever</span>(kind=<span class="s">"rule"</span>)       <span class="c"># only rules (.mdc, .cursorrules, ...)</span>
 <span class="fn">BoostRetriever</span>(kind=<span class="s">"workflow"</span>)   <span class="c"># only slash commands / subagents</span></pre>
 
+        <div class="callout"><b>The <code>| format_docs</code> step is not decoration.</b> Passing
+          the raw <code>list[Document]</code> into a template renders each Document's <em>whole
+          metadata dict</em> into the prompt — including the resolved <code>source</code> path, so
+          you spend context on your local directory layout and hand it to the model. Format the
+          documents down to the text you want, here and in any chain you build.</div>
+
         <div class="callout"><b>Validated at construction, not at query time.</b> <code>k</code>
           and <code>kind</code> are pydantic-checked fields: a typo'd kind would otherwise return
-          <code>[]</code> for every query — indistinguishable from an empty catalog — and a
-          negative <code>k</code> would silently drop the last hit via slice semantics. Both fail
-          loudly the moment you build the retriever instead.</div>
+          <code>[]</code> for every query — indistinguishable from an empty catalog — a
+          negative <code>k</code> would silently drop the last hit via slice semantics, and
+          <code>k=0</code> would slice the hits away entirely, answering <code>[]</code> forever
+          while looking perfectly healthy. <code>k</code> is therefore floored at <b>1</b>: a
+          retriever asked for no documents is a construction mistake, and it says so where the
+          mistake was made rather than at every query that follows. The same checks run on
+          <em>assignment</em>, so <code>r.k = cfg.top_k</code> is guarded too — pydantic skips
+          assignment validation by default, which quietly made every one of these
+          constructor-only.</div>
 
         <p class="prose" style="margin-top:26px">Each Document's <code>page_content</code> is the
           item's <b>indexed text</b> — its name and one-line description followed by the full
@@ -332,7 +347,8 @@ chain.<span class="fn">invoke</span>(<span class="s">"how should this repo handl
           <thead><tr><th>key</th><th>what it holds</th></tr></thead>
           <tbody>
             <tr><td><code>name</code> / <code>kind</code></td><td>the item's name and which of the three kinds it is</td></tr>
-            <tr><td><code>tap</code> / <code>source</code> / <code>version</code></td><td>provenance: registry, in-repo path, frontmatter version</td></tr>
+            <tr><td><code>tap</code> / <code>path</code> / <code>version</code></td><td>provenance: registry, in-repo path (tap-relative, so it reads the same on every machine), frontmatter version</td></tr>
+            <tr><td><code>source</code></td><td>the same file, <b>resolved</b> against the tap's clone — the path boost itself opens to read the item, and what LangChain's convention means by <code>source</code>. Quote <code>path</code> in a citation; open <code>source</code></td></tr>
             <tr><td><code>engine</code></td><td>which engine actually answered — <code>"BM25 full-content"</code>, <code>"dense vectors"</code>, or <code>"hybrid RRF (BM25 + dense)"</code></td></tr>
           </tbody>
         </table>

@@ -43,8 +43,11 @@ for d in docs:
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
+def format_docs(docs):
+    return "\n\n".join(d.page_content for d in docs)
+
 chain = (
-    {"context": retriever, "question": RunnablePassthrough()}
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
     | prompt          # your ChatPromptTemplate
     | model           # your chat model
     | StrOutputParser()
@@ -52,11 +55,30 @@ chain = (
 chain.invoke("how should this repo handle commit messages?")
 ```
 
+The `| format_docs` step is not decoration. Passing the raw `list[Document]`
+into a template renders each Document's *whole metadata dict* into the prompt —
+including the resolved `source` path, so you spend context on your local
+directory layout and hand it to the model. Format the documents down to the
+text you actually want, here and in any chain you build.
+
 Each `Document`'s `page_content` is the item's *indexed text* — its name and
 one-line description followed by the full body, i.e. exactly the surface BM25
 scored, so what you retrieve is what matched (pass `full_content=False` for
 just the description). `metadata` carries
-`name` / `kind` / `tap` / `version` / `source` / `engine`.
+`name` / `kind` / `tap` / `path` / `version` / `source` / `engine`.
+
+`path` and `source` are the same file seen two ways, and picking the wrong one
+is a quiet bug. **`path`** is tap-relative (`skills/brainstorming/SKILL.md`) —
+it reads the same on every machine, so it is what a citation, a log line or
+anything a model will see should quote. **`source`** is that path resolved
+against the tap's clone: the path boost itself opens to read the item, and what
+LangChain's convention means by `source`. Quote `path`; open `source`.
+
+> **Changed in the release after 1.0.404.** `source` used to hold the
+> tap-relative path — it looked openable and was not. That value now lives in
+> the new `path` key, and `source` resolves. Code that fed `metadata["source"]`
+> into a citation should read `metadata["path"]`; code that tried to open it
+> and silently got nothing now works unchanged.
 
 ## Filtering by kind
 

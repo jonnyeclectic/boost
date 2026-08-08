@@ -6,7 +6,7 @@ from typing import Literal
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from boost_cli.core import rag
 
@@ -30,10 +30,22 @@ class BoostRetriever(BaseRetriever):
     choosing among items wants).
     """
 
-    # Validated at construction: a typo'd kind would otherwise return [] for
-    # every query, indistinguishable from an empty catalog; a negative k
-    # would silently drop the last hit via slice semantics.
-    k: int = Field(default=8, ge=0)
+    # pydantic v2 validates on __init__ but NOT on attribute set unless asked,
+    # and langchain's own model_config does not ask. Without this every guard
+    # below was construction-only, so the ordinary "build it, tune it later"
+    # idiom — `r = BoostRetriever(); r.k = cfg.top_k` — walked straight past all
+    # three. (`model_copy(update=...)` still bypasses them; pydantic documents
+    # that as never validating, and there is no config that changes it.)
+    model_config = ConfigDict(validate_assignment=True)
+
+    # Validated at construction, because every one of these fails *silently* at
+    # query time otherwise: a typo'd kind returns [] for every query,
+    # indistinguishable from an empty catalog; a negative k drops the last hit
+    # via slice semantics; and k=0 slices the hits to nothing, so the retriever
+    # answers [] forever while looking perfectly healthy. The floor is 1 rather
+    # than 0 for that last one — a retriever asked for no documents is a
+    # construction mistake, and it should say so where the mistake was made.
+    k: int = Field(default=8, ge=1)
     kind: Literal["skill", "rule", "workflow"] | None = None
     full_content: bool = True
 
@@ -58,6 +70,17 @@ class BoostRetriever(BaseRetriever):
                 content = rag.read_body(entry)
             else:
                 content = entry.get("description") or rag.surface(entry)
+            # Two paths, because they answer different questions and conflating
+            # them is a silent failure. ``path`` is tap-relative: stable across
+            # machines, and what a provenance line should quote (see
+            # skill_context_node). ``source`` is the resolved one, because
+            # LangChain's convention — and SkillMarkdownLoader right next door —
+            # is that ``source`` locates the bytes. Advertising the relative
+            # path as ``source`` gave chains something that reads as openable,
+            # is not, and resolves against whatever the process CWD happens to
+            # be. ``rag.entry_path`` returns None only for an entry with no
+            # defining file, which no live catalog row has.
+            src = rag.entry_path(entry)
             docs.append(Document(
                 page_content=content,
                 metadata={
@@ -65,7 +88,8 @@ class BoostRetriever(BaseRetriever):
                     "kind": entry.get("kind", "skill"),
                     "tap": entry.get("tap", ""),
                     "version": entry.get("version", ""),
-                    "source": entry.get("skill_md", ""),
+                    "path": entry.get("skill_md", ""),
+                    "source": str(src) if src is not None else "",
                     # Which engine actually answered (BM25 / dense / hybrid
                     # RRF). Carried per-document because it is the first thing
                     # to check when result quality surprises — see rag.rerank

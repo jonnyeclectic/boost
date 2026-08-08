@@ -100,6 +100,78 @@ class TestReadBody:
         assert rag.read_body(e, {}) == "y\nd"  # file absent -> header
 
 
+class TestEntryPath:
+    """rag.entry_path() — the one place an entry becomes a real path.
+
+    `read_body` resolved this inline and kept the answer to itself, so a caller
+    that wanted the *location* rather than the *bytes* had nothing to call. That
+    gap is how `boost_langchain`'s Document metadata came to advertise the
+    tap-relative `skill_md` as an openable `source`. Extracting it makes the one
+    correct join reusable; every branch is pinned because core/ is mutation-gated.
+    """
+
+    def test_joins_the_tap_root_and_the_relative_path(self, tmp_path):
+        e = _entry("jest", skill_md="jest/SKILL.md")
+        assert rag.entry_path(e, {"acme/skills": tmp_path}) == (
+            tmp_path / "jest" / "SKILL.md")
+
+    def test_resolves_without_the_file_existing(self, tmp_path):
+        # Pure path math, deliberately: a caller reporting provenance wants the
+        # location the catalog claims even when the clone has since been pruned.
+        # read_body's own missing-file degrade stays its business, not this one's.
+        p = rag.entry_path(_entry("ghost"), {"acme/skills": tmp_path})
+        assert p == tmp_path / "ghost" / "SKILL.md"
+        assert not p.exists()
+
+    def test_unknown_tap_falls_back_to_the_sanitized_repos_dir(self, sandbox):
+        from boost_cli.core import paths
+        e = _entry("y", tap="who/what", skill_md="y/SKILL.md")
+        assert rag.entry_path(e, {}) == (
+            paths.repos_dir() / "who__what" / "y" / "SKILL.md")
+
+    def test_empty_skill_md_is_none(self, tmp_path):
+        # None rather than the bare tap root: a directory is not where the item
+        # is, and returning one would hand callers a path that opens the wrong
+        # thing instead of an absence they must handle.
+        assert rag.entry_path(_entry("x", skill_md=""),
+                              {"acme/skills": tmp_path}) is None
+
+    def test_absent_skill_md_key_is_none(self, tmp_path):
+        assert rag.entry_path({"name": "x", "tap": "acme/skills"},
+                              {"acme/skills": tmp_path}) is None
+
+    def test_defaults_to_the_live_tap_map(self, sandbox, monkeypatch, tmp_path):
+        monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": tmp_path})
+        assert rag.entry_path(_entry("j", skill_md="j/SKILL.md")) == (
+            tmp_path / "j" / "SKILL.md")
+
+    def test_an_entry_with_no_tap_looks_up_the_empty_name(self, tmp_path):
+        # A row missing `tap` entirely degrades to the empty tap name rather
+        # than to None — so a map that *has* an empty-named entry still resolves
+        # it. Pins the lookup default: None or any other sentinel would silently
+        # divert this row to the repos_dir fallback below.
+        assert rag.entry_path({"name": "x", "skill_md": "x/SKILL.md"},
+                              {"": tmp_path}) == tmp_path / "x" / "SKILL.md"
+
+    def test_an_entry_with_no_tap_falls_back_to_repos_dir_itself(self, sandbox):
+        # Same missing `tap`, but nothing in the map: the sanitized-name join
+        # gets the empty string, so the base is repos_dir() exactly. Pins the
+        # second default — "None" or any placeholder would invent a directory
+        # level that is not there.
+        from boost_cli.core import paths
+        assert rag.entry_path({"name": "x", "skill_md": "x/SKILL.md"}, {}) == (
+            paths.repos_dir() / "x" / "SKILL.md")
+
+    def test_read_body_reads_the_file_entry_path_names(self, tmp_path):
+        """The two must not drift: same entry, same file."""
+        (tmp_path / "jest").mkdir(parents=True)
+        e = _entry("jest", skill_md="jest/SKILL.md", desc="a runner")
+        rag.entry_path(e, {"acme/skills": tmp_path}).write_text(
+            "---\nname: jest\n---\n\nUnit testing for React.\n", encoding="utf-8")
+        assert "Unit testing for React." in rag.read_body(
+            e, {"acme/skills": tmp_path})
+
+
 # ------------------------------------------------------------- build/query
 
 @pytest.fixture()

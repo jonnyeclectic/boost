@@ -12,6 +12,7 @@ which only copies ``boost_cli/``).
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,8 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _ROOT / "scripts" / "build_roadmap.py"
 _ITEMS = _ROOT / "docs" / "roadmap" / "items"
+_CODE_HTML = _ROOT / "docs" / "roadmap.html"
+_DESIGN_HTML = _ROOT / "docs" / "design-roadmap.html"
 
 
 def _load_builder():
@@ -287,3 +290,81 @@ class TestShippedBodiesCollapse:
         # Cards deep-link each other by id; the drift diagnosis also keys on
         # this exact opening tag.
         assert '<article class="cap rcard" id="x">' in self._card(_load_builder())
+
+
+_RULE = re.compile(r"([^{}]+?)\{([^{}]*)\}", re.DOTALL)
+_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _declares(html: str, selector: str, declaration: str) -> bool:
+    """Does the page's stylesheet carry ``declaration`` under ``selector``?
+
+    Crude on purpose — a real CSS parser is a dependency, and the property this
+    pins is written on exactly one line. Comments are stripped first because
+    everything between two braces is captured as the selector, so a rule
+    documented on the line above it would otherwise never match its own name.
+    ``@media`` wrappers do not confuse it: the inner rules still match, and the
+    outer at-rule is only ever consumed into a selector no assertion looks for.
+    """
+    style = html.split("<style", 1)[1].split(">", 1)[1].split("</style>", 1)[0]
+    return any(sel.strip() == selector and declaration in body
+               for sel, body in _RULE.findall(_COMMENT.sub("", style)))
+
+
+@pytest.mark.skipif(not (_CODE_HTML.exists() and _DESIGN_HTML.exists()),
+                    reason="repo-root files not reachable (e.g. mutation sandbox)")
+class TestLongCodeTokensCanBreak:
+    """Card ``<code>`` must be allowed to break mid-token, on both boards.
+
+    Card text is dense with identifiers; the grid track is
+    ``minmax(320px, 1fr)``, a floor that does not shrink; and at a 375px
+    viewport the wrap column is 327px and a card's own content box 283px. One
+    unbreakable identifier wider than that pushes the track past its floor and
+    the whole document scrolls sideways. ``visual_check.mjs`` measures exactly
+    that — document ``scrollWidth`` against ``clientWidth``, at 375px, on these
+    two pages — and it went red the first time an ``inflight`` card carried a
+    46-character test name (68px of overflow on ``docs/roadmap.html``).
+
+    Until then the boards passed by luck: only ``shipped`` bodies collapse into
+    a closed ``<details>``, and a closed ``<details>`` subtree is never laid
+    out, so the 113-character tokens sitting in shipped cards could not
+    overflow. Everything else — ``planned``, ``next``, ``inflight``,
+    ``declined`` — renders laid out, and a declined card in particular stays
+    expanded forever. This test is what replaces that luck.
+
+    ``overflow-wrap: anywhere`` and not ``break-word``: both break the glyph
+    run, but only ``anywhere`` also shrinks the element's *min-content* size,
+    which is what lets the grid item reach the width the break makes possible.
+    """
+
+    CARDS = (("docs/roadmap.html", _CODE_HTML, ".rcard code"),
+             ("docs/design-roadmap.html", _DESIGN_HTML, ".ritem code"))
+
+    def test_each_board_lets_card_code_break(self):
+        for name, path, selector in self.CARDS:
+            assert _declares(path.read_text(encoding="utf-8"), selector,
+                             "overflow-wrap: anywhere"), (
+                "%s needs `%s { overflow-wrap: anywhere }` or one long "
+                "identifier in an unshipped card scrolls the page sideways"
+                % (name, selector))
+
+    def test_the_selector_actually_reaches_a_generated_card(self):
+        """The rule is scoped to a class, so pin that the cards still wear it.
+
+        A stylesheet assertion on its own would keep passing if the generator
+        renamed the card class — the exact drift that would leave the boards
+        unprotected while the test stayed green.
+        """
+        builder = _load_builder()
+        code = builder.render_code_card(
+            {"id": "x", "status": "inflight", "category": "C", "title": "T",
+             "body": "B", "complexity": "S", "impact": "Med", "wow": 1,
+             "note": "n", "_file": "x.md"})
+        design = builder.render_design_card(
+            # The two boards do not share a status vocabulary, so take the
+            # design one from the module rather than pinning a literal here.
+            {"id": "y", "status": next(iter(builder.DESIGN_STATUS)),
+             "track": "T", "title": "T", "body": "B", "impact": "med",
+             "wow": 1, "note": "n", "_file": "y.md"})
+        for html, cls in ((code, "rcard"), (design, "ritem")):
+            assert re.search(r'class="[^"]*\b%s\b' % cls, html), html[:120]

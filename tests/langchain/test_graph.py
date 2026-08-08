@@ -39,6 +39,34 @@ def test_injects_matching_skill_with_provenance(indexed):
     assert "### brainstorming (skill — fixture-tap:skills/brainstorming/SKILL.md @ 1.4.0)" in content
 
 
+def test_injected_provenance_quotes_path_not_the_resolved_source(indexed):
+    """The prefix quotes `path`, and specifically NOT `source`.
+
+    This text lands in a live conversation and is read out of transcripts on
+    other machines, so it must identify the file in the upstream repo — a
+    `$HOME`-rooted path names a location the reader does not have and puts the
+    local layout into the model's context. `metadata["source"]` is the resolved
+    path precisely so this line can keep using `path` instead.
+
+    Asserting against the retriever's own metadata rather than a literal is
+    what makes this a real guard: it compares the two keys, so it fails on any
+    build where they hold the same value — which is exactly the pre-split code.
+    A version of this test that only checked for a hard-coded relative string
+    passed against the bug it was written to prevent.
+    """
+    from pathlib import Path
+
+    query = "structured divergent thinking ideation"
+    doc = BoostRetriever(k=1).invoke(query)[0]
+    content = _content(skill_context_node(k=1)({
+        "messages": [HumanMessage(query)]}))
+
+    assert doc.metadata["path"] in content, "provenance must quote the relative path"
+    assert doc.metadata["source"] not in content, \
+        "the resolved path must never reach the injected text"
+    assert Path.home().as_posix() not in content
+
+
 def test_k_caps_the_injected_procedures(indexed):
     # "always" matches five skill bodies plus the rule; count injected blocks
     # by their headers since they all share one SystemMessage.

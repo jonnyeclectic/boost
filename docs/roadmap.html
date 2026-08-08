@@ -34,6 +34,13 @@
   .rcard p { font-size: 14px; color: var(--text-2); margin-top: 0; line-height: 1.6; }
   .rcard .meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 18px; }
 
+  /* Card text is identifiers, and the track above is a floor that will not
+     shrink, so a single unbreakable token wider than a 283px content box
+     scrolls the whole document sideways at 375px. `anywhere` rather than
+     `break-word` because only `anywhere` also shrinks min-content — which is
+     what lets the grid item reach the width the break makes possible. */
+  .rcard code { overflow-wrap: anywhere; }
+
   /* Finished cards collapse their body. The text still ships — it is just not
      laid out or painted, which is where this page's time actually went:
      705 ms styleLayout + 393 ms paint against 20 ms of script. */
@@ -125,8 +132,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>8</b><span>Planned</span></div>
-      <div class="stat"><b>232</b><span>Loop finds</span></div>
+      <div class="stat"><b>7</b><span>Planned</span></div>
+      <div class="stat"><b>233</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -750,62 +757,6 @@ published version works against PyPI as it stands today.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">declined — superseded by shipping the integration inside the boost-skill-cli wheel (see langchain-in-the-wheel)</span>
-        </div>
-      </article>
-
-      <article class="cap rcard" id="expanded-card-bodies-overflow">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docsite · Bug</span></div>
-        <h3>Expanded card bodies overflow the roadmap board sideways</h3>
-        <p><b>What happens.</b> <code>_body_html</code> wraps a card body in a closed
-<code>&lt;details&gt;</code> only when <code>_SETTLED</code> matches, and
-<code>_SETTLED</code> is the one-tuple <code>("shipped",)</code>. Every other status —
-<code>inflight</code>, <code>planned</code>, <code>next</code>, <code>declined</code> —
-renders its body inline and laid out. Card text is dense with <code>&lt;code&gt;</code>
-spans, nothing in the stylesheet sets <code>overflow-wrap</code> on them, and the grid
-track is <code>minmax(320px, 1fr)</code> — a floor that does not shrink. A single
-identifier wider than the card pushes the track past that floor and the whole document
-scrolls sideways.
-
-<b>Measured.</b> At a 375px viewport the wrap column is 327px and the card's own content
-box is 283px. Claiming <code>boost-first-rule</code> — flipping one item to
-<code>inflight</code> — put its 43-character test-name identifier into a laid-out
-paragraph and the sweep reported 34px of horizontal overflow on
-<code>docs/roadmap.html</code>. Flipping it back to <code>shipped</code> cleared it,
-because the token stopped being laid out at all.
-
-<b>Why the board is green anyway.</b> By luck, not by rule. The six cards that render
-expanded today top out at a 36-character token, which still fits. The shipped cards
-behind closed <code>&lt;details&gt;</code> reach <b>113</b> characters — and a closed
-<code>&lt;details&gt;</code> subtree is never laid out, so none of them can overflow
-while they stay shipped. The collapse landed as a paint-cost fix, with real numbers
-behind it (705ms of styleLayout over 6,316 elements). That it is also the page's only
-defence against an unbreakable identifier is an accident nobody wrote down.
-
-<b>Two ways it bites.</b> A claim is transient — a loop sets <code>inflight</code>, the
-board can overflow for the life of the PR, and merging flips it to <code>shipped</code>
-and hides the evidence, so the sweep goes red and green again for reasons no one
-attributes correctly. A <b>decline</b> is not transient. A declined card is exactly the
-kind that carries a long write-up of what was measured and why the answer was no, and it
-stays expanded forever. Four sit on the board now.
-
-<b>Why no gate stops it.</b> The sweep in <code>visual_check.mjs</code> does measure
-this — document <code>scrollWidth</code> against <code>clientWidth</code>, at 375px,
-on this exact page. But <code>visual</code> is not one of the required contexts, so a
-red sweep never blocks a merge; and the status flip that fixes the symptom rides along
-in the same PR that would have shown it.
-
-<b>The fix is one declaration.</b> <code>overflow-wrap: anywhere</code> on
-<code>.rcard code</code> lets a long identifier break rather than push, which is the
-right behaviour for a card whether it is expanded or not. That demotes the collapse back
-to what it was measured to be — a paint-cost optimisation — instead of load-bearing
-layout. Worth pairing with a check that reads item bodies directly, since the only
-reason the board passes today is that no unshipped card happens to hold a long enough
-token.</p>
-        <div class="meta">
-          <span class="m">Complexity <b>S</b></span>
-          <span class="m">Impact <b>Med</b></span>
-          <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">the closed <code>&lt;details&gt;</code> was added for paint cost and is quietly also the only thing keeping long code tokens on the page</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -8161,6 +8112,83 @@ job, it hangs it until timeout.</p></details>
           <span class="m">the page was never the slow part — the harness sent 3.27x the bytes Pages sends</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="expanded-card-bodies-overflow">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Docsite · Bug</span></div>
+        <h3>Expanded card bodies overflow the roadmap board sideways</h3>
+        <p><b>What happens.</b> <code>_body_html</code> wraps a card body in a closed
+<code>&lt;details&gt;</code> only when <code>_SETTLED</code> matches, and
+<code>_SETTLED</code> is the one-tuple <code>("shipped",)</code>. Every other status —
+<code>inflight</code>, <code>planned</code>, <code>next</code>, <code>declined</code> —
+renders its body inline and laid out. Card text is dense with <code>&lt;code&gt;</code>
+spans, nothing in the stylesheet sets <code>overflow-wrap</code> on them, and the grid
+track is <code>minmax(320px, 1fr)</code> — a floor that does not shrink. A single
+identifier wider than the card pushes the track past that floor and the whole document
+scrolls sideways.
+
+<b>Measured.</b> At a 375px viewport the wrap column is 327px and the card's own content
+box is 283px. Claiming <code>boost-first-rule</code> — flipping one item to
+<code>inflight</code> — put its 43-character test-name identifier into a laid-out
+paragraph and the sweep reported 34px of horizontal overflow on
+<code>docs/roadmap.html</code>. Flipping it back to <code>shipped</code> cleared it,
+because the token stopped being laid out at all.
+
+<b>Why the board is green anyway.</b> By luck, not by rule. The six cards that render
+expanded today top out at a 36-character token, which still fits. The shipped cards
+behind closed <code>&lt;details&gt;</code> reach <b>113</b> characters — and a closed
+<code>&lt;details&gt;</code> subtree is never laid out, so none of them can overflow
+while they stay shipped. The collapse landed as a paint-cost fix, with real numbers
+behind it (705ms of styleLayout over 6,316 elements). That it is also the page's only
+defence against an unbreakable identifier is an accident nobody wrote down.
+
+<b>Two ways it bites.</b> A claim is transient — a loop sets <code>inflight</code>, the
+board can overflow for the life of the PR, and merging flips it to <code>shipped</code>
+and hides the evidence, so the sweep goes red and green again for reasons no one
+attributes correctly. A <b>decline</b> is not transient. A declined card is exactly the
+kind that carries a long write-up of what was measured and why the answer was no, and it
+stays expanded forever. Four sit on the board now.
+
+<b>Why no gate stops it.</b> The sweep in <code>visual_check.mjs</code> does measure
+this — document <code>scrollWidth</code> against <code>clientWidth</code>, at 375px,
+on this exact page. But <code>visual</code> is not one of the required contexts, so a
+red sweep never blocks a merge; and the status flip that fixes the symptom rides along
+in the same PR that would have shown it.
+
+<b>The fix is one declaration.</b> <code>overflow-wrap: anywhere</code> on
+<code>.rcard code</code> lets a long identifier break rather than push, which is the
+right behaviour for a card whether it is expanded or not. That demotes the collapse back
+to what it was measured to be — a paint-cost optimisation — instead of load-bearing
+layout. Worth pairing with a check that reads item bodies directly, since the only
+reason the board passes today is that no unshipped card happens to hold a long enough
+token.
+
+<b>It stopped being hypothetical before it was fixed.</b> The card above predicted
+this in the abstract; the next PR to claim an item walked into it. Claiming
+<code>langchain-retriever-metadata-and-k-floor</code> put a 46-character test name —
+<code>test_injected_provenance_is_machine_independent</code> — into a laid-out
+paragraph, and the sweep reported <b>68px</b> of horizontal overflow on
+<code>docs/roadmap.html</code> at 375px. That is the 36-character ceiling the card
+measured, exceeded by ten characters, in the first PR that had reason to exceed it.
+The <code>visual</code> workflow went red on both heads of that PR while every
+required check stayed green — which is the "no gate stops it" paragraph above,
+observed rather than predicted.
+
+<b>Shipped as diagnosed, on both boards.</b> <code>.rcard code</code> and
+<code>.ritem code</code> each carry <code>overflow-wrap: anywhere</code>.
+<code>anywhere</code> and not <code>break-word</code> is the load-bearing half:
+both break the glyph run, but only <code>anywhere</code> also shrinks the element's
+min-content size, which is what lets a grid item in a
+<code>minmax(320px, 1fr)</code> track reach the width the break makes possible.
+<code>TestLongCodeTokensCanBreak</code> pins the declaration on both pages and, in a
+second test, that the class it is scoped to is still the class the generator emits —
+so a card rename cannot leave the boards unprotected behind a green test.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the closed <code>&lt;details&gt;</code> was added for paint cost and is quietly also the only thing keeping long code tokens on the page</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -8639,6 +8667,107 @@ machine while every other Copilot-dialect agent in the tap stays broken.</p></de
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">measured on Gemini CLI 0.53.1 — a boost-installed agent fails Zod validation at startup, and hand-fixes regress on the next sync</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="langchain-retriever-metadata-and-k-floor">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Compat · Bug</span></div>
+        <h3><code>BoostRetriever</code> advertised a <code>source</code> that does not open, and <code>k=0</code> returned nothing forever</h3>
+        <p>Two silent failures in the same twelve lines of <code>boost_langchain/retriever.py</code>, both of
+the kind the file's own comments say construction-time validation exists to prevent.
+
+<b>1. <code>metadata["source"]</code> was not openable.</b> It carried
+<code>entry["skill_md"]</code>, which the catalog defines as <em>"path of the defining file relative
+to the repo root"</em> (<code>core/catalog.py:7</code>) &mdash; <code>skills/brainstorming/SKILL.md</code>,
+not a path to anything. Only <code>rag.read_body</code> ever made it real, by joining it to the tap's
+clone directory internally and keeping the result to itself. So a chain that did the obvious thing
+with a key named <code>source</code> &mdash; cite it, re-read it, hand it to a file tool &mdash;
+resolved it against whatever the process CWD happened to be and got a miss, with no error to read.
+
+The tell was next door: <code>SkillMarkdownLoader</code>, the sibling seam in the same package, sets
+<code>"source": str(path)</code> (<code>loader.py:59</code>) with a comment insisting that
+<em>"metadata provenance must state where the bytes came from"</em>. Two seams of one package
+disagreed about what <code>source</code> means, and the retriever was the one that was wrong.
+
+<b>The fix keeps both answers rather than trading one for the other</b>, because they are different
+questions. <code>path</code> is the tap-relative one: stable across machines, and what a provenance
+line should quote. <code>source</code> is resolved and openable, matching LangChain's convention and
+the loader. That distinction is load-bearing for <code>skill_context_node</code>, whose injected
+prefix is read out of transcripts on other machines &mdash; it now quotes <code>path</code>, so an
+absolute <code>$HOME</code>-rooted path never leaks into a model's context. A test pins that the
+injected block contains no home directory.
+
+The join itself moved to <code>rag.entry_path(entry, tap_paths=None)</code> in <code>core/</code>,
+where the mutation gate reaches it, and <code>read_body</code> now calls it instead of duplicating
+it. The duplication <em>was</em> the bug: with no public way to ask "where does this entry live?",
+the caller that needed one reached for the closest-looking field.
+
+<b>2. <code>k=0</code> constructed happily and then returned <code>[]</code> forever.</b> The field
+was <code>Field(default=8, ge=0)</code>, and the comment three lines above named exactly this class
+of failure &mdash; a typo'd kind, a negative <code>k</code> &mdash; as the reason the field is
+validated at all. <code>retrieve_any</code> slices its hits to <code>[:k]</code>
+(<code>core/rag.py</code>), so <code>k=0</code> yields an empty list that is indistinguishable from
+an empty catalog, from a query that matched nothing, and from a machine with nothing tapped. The
+existing test pinned <code>k=-1</code> and stopped one short of the edge that actually shipped. The
+floor is now <b>1</b>, with tests on both the direct constructor and the
+<code>skill_context_node(k=...)</code> path that builds the default retriever.
+
+<b>How they were found is the part worth keeping.</b> Neither came out of reading the file. Both
+came out of building a knowledge graph over the repo and asking why
+<code>BoostRetriever</code> had unusually high betweenness &mdash; a question about graph shape, not
+about correctness. The answer to the literal question was mostly deflationary: the four communities
+it bridges are its own method, its own file, its own tests and its sibling module's tests, and two
+of those splits are clustering artifacts rather than architecture. Chasing it anyway is what put
+these twelve lines under a microscope.
+
+<b>An adversarial review of the first commit found three more defects, two of them created by the
+fix itself.</b> Recording them because two are the same shape as the bug being fixed &mdash; a
+guarantee asserted in a comment and not actually enforced.
+
+<b>The invariant the commit claimed was enforced in one place out of two.</b> The commit message and
+this card both said "no <code>$HOME</code>-rooted path leaks into a model's context", and that held
+for <code>skill_context_node</code>, which hand-builds its text. It did not hold for the package's
+own flagship example: <code>{"context": retriever, ...} | prompt | model</code> passes the raw
+<code>list[Document]</code> into the template, and LangChain stringifies each Document
+<em>with its whole metadata dict</em> &mdash; verified against langchain-core 1.5.3. So the newly
+resolved <code>source</code> reached the prompt on every query in the shape the README recommends.
+Before the fix, <code>source</code> was tap-relative and that render leaked nothing local. The
+documented chain now carries a <code>format_docs</code> step, in the README and on the docs page,
+with the reason spelled out rather than left as style.
+
+<b>The <code>k</code> floor was construction-only, and so were the two guards beside it.</b>
+pydantic v2 does not validate on attribute set unless the model asks, and langchain's
+<code>model_config</code> does not ask. <code>r = BoostRetriever(); r.k = 0</code> succeeded
+silently &mdash; as did <code>r.k = -1</code> and <code>r.kind = "plugin"</code>, both of which had
+been "validated at construction" since the package shipped. The ordinary build-it-then-tune-it
+idiom walked past all three into exactly the silent-empty failure the comment said it prevented.
+<code>validate_assignment</code> closes it; <code>model_copy(update=...)</code> still bypasses,
+which pydantic documents as never validating and no config changes.
+
+<b>One of the new tests passed against the code it was written to catch.</b>
+<code>test_injected_provenance_is_machine_independent</code> asserted a hard-coded relative string
+and the absence of <code>$HOME</code> &mdash; both true before the split, because
+<code>source</code> <em>was</em> the relative path then. It was a strict subset of an assertion that
+already existed one test above it, and the commit message cited it as evidence for the split. It now
+compares the two metadata keys against each other, so it fails on any build where they hold the same
+value. Worth stating plainly: a test that passes both ways is not evidence, and this one was quoted
+as evidence.
+
+Also corrected: the docs promised <code>source</code> was "an absolute path you can open".
+<code>entry_path</code> is pure path math &mdash; this card's own test pins that it resolves a path
+for a file that does not exist &mdash; and a relative <code>BOOST_HOME</code> yields a relative
+result. The page now says what is true: it is the path boost itself opens to read the item.
+
+Worth recording alongside that: the betweenness figure that started the chase was itself wrong.
+graphify's report samples 100 pivots and then reports the top three <em>after deleting every file
+node</em>, which turned a rank of <b>148/9301</b> (exact betweenness 0.004141) into a reported "rank
+~3, 0.020". The investigation that followed was sound; the number that motivated it was inflated
+about 4.7&times; by sampling and then re-ranked by a filter the report never mentions.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">both found by graphing the repo, not by reading it</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
