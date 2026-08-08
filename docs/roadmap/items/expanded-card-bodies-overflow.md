@@ -1,16 +1,16 @@
 ---
 id: expanded-card-bodies-overflow
 board: code
-section: planned
-status: planned
+section: docsite
+status: inflight
 category: Docsite · Bug
 complexity: S
 impact: Med
 wow: 3
 note: the closed <code>&lt;details&gt;</code> was added for paint cost and is quietly also the only thing keeping long code tokens on the page
 order: 99
-owner:
-pr:
+owner: loop/langchain-retriever-contract
+pr: 488
 title: Expanded card bodies overflow the roadmap board sideways
 ---
 <b>What happens.</b> <code>_body_html</code> wraps a card body in a closed
@@ -58,3 +58,24 @@ to what it was measured to be — a paint-cost optimisation — instead of load-
 layout. Worth pairing with a check that reads item bodies directly, since the only
 reason the board passes today is that no unshipped card happens to hold a long enough
 token.
+
+<b>It stopped being hypothetical before it was fixed.</b> The card above predicted
+this in the abstract; the next PR to claim an item walked into it. Claiming
+<code>langchain-retriever-metadata-and-k-floor</code> put a 46-character test name —
+<code>test_injected_provenance_is_machine_independent</code> — into a laid-out
+paragraph, and the sweep reported <b>68px</b> of horizontal overflow on
+<code>docs/roadmap.html</code> at 375px. That is the 36-character ceiling the card
+measured, exceeded by ten characters, in the first PR that had reason to exceed it.
+The <code>visual</code> workflow went red on both heads of that PR while every
+required check stayed green — which is the "no gate stops it" paragraph above,
+observed rather than predicted.
+
+<b>Shipped as diagnosed, on both boards.</b> <code>.rcard code</code> and
+<code>.ritem code</code> each carry <code>overflow-wrap: anywhere</code>.
+<code>anywhere</code> and not <code>break-word</code> is the load-bearing half:
+both break the glyph run, but only <code>anywhere</code> also shrinks the element's
+min-content size, which is what lets a grid item in a
+<code>minmax(320px, 1fr)</code> track reach the width the break makes possible.
+<code>TestLongCodeTokensCanBreak</code> pins the declaration on both pages and, in a
+second test, that the class it is scoped to is still the class the generator emits —
+so a card rename cannot leave the boards unprotected behind a green test.

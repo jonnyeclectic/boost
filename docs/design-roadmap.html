@@ -93,6 +93,12 @@
   .ritem > p { font-size: 13.5px; color: var(--text-2); margin-top: 8px; line-height: 1.55; }
   .ritem > p b { color: var(--text); font-weight: 640; }
   .ritem > p code { font-family: var(--mono); font-size: .86em; color: var(--text); background: rgba(255,255,255,.05); border-radius: 5px; padding: 1px 5px; }
+  /* Unscoped to the h3/p split above on purpose: the reason is layout, not
+     typography. A `.ritem` is a grid item in a track that will not shrink, so
+     one unbreakable identifier anywhere inside it scrolls the document
+     sideways at 375px. `anywhere` and not `break-word` — only `anywhere` also
+     shrinks min-content, which is what the grid item needs. */
+  .ritem code { overflow-wrap: anywhere; }
 
   .rmeta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 15px; }
   .rmeta span { font-family: var(--mono); font-size: 11px; font-weight: 600; padding: 4px 9px; border-radius: 7px; border: 1px solid var(--line-soft); color: var(--text-2); background: rgba(255,255,255,.03); white-space: nowrap; }
