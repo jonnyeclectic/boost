@@ -822,7 +822,7 @@ def cmd_serve(argv) -> int:
     """boost serve [--port N] [--host H] — thin wrapper over core.serve."""
     p = cliparse.parser(
         prog="boost serve",
-        description="Serve the skill catalog over HTTP (port 8787)")
+        description="Browse the catalogue in a browser: search, facets and a tap graph")
     p.add_argument("--port", type=int,
                    default=int(config.get("serve.port", 8787) or 8787),
                    help="port to listen on (default: config serve.port)")

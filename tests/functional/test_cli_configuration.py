@@ -820,8 +820,36 @@ class TestServe:
             assert get("/skill/tdd-workflow").startswith("---")
 
             page = get("/")
-            assert "1 installed · 5 available across 1 taps" in page
-            assert "brainstorming" in page
+            # The page is a shell; the rows arrive over fetch. So it is asserted
+            # to be the shell, and the numbers that used to be baked into it are
+            # asserted where they now come from. Deliberately NOT "brainstorming
+            # appears in the HTML" — the whole point is that third-party names
+            # and descriptions never reach the markup.
+            assert 'id="rows"' in page and 'id="gcanvas"' in page
+            assert "brainstorming" not in page
+
+            found = json.loads(get("/search.json"))
+            assert found["total"] == 5
+            rows = {r["name"]: r for r in found["rows"]}
+            assert rows["brainstorming"]["installed"] is True
+            assert rows["tdd-workflow"]["installed"] is False
+            assert "kind:skill" in rows["brainstorming"]["tags"]
+            assert sum(dict(found["facets"]["kind"]).values()) == 5
+
+            hit = json.loads(get("/search.json?q=brainstorming"))
+            assert [r["name"] for r in hit["rows"]] == ["brainstorming"]
+
+            tagged = json.loads(get("/search.json?tag=state:installed"))
+            assert [r["name"] for r in tagged["rows"]] == ["brainstorming"]
+
+            graph = json.loads(get("/graph.json"))
+            # One tap, so one node holding all five — and no edges, because an
+            # overlap needs a name carried by two different taps. The tap's
+            # name is a tempdir basename, so it is counted, not spelled.
+            assert len(graph["nodes"]) == 1
+            assert graph["nodes"][0]["size"] == 5
+            assert graph["links"] == []
+            assert graph["graph"]["items"] == 5
 
             with pytest.raises(urllib.error.HTTPError) as exc:
                 get("/nope")

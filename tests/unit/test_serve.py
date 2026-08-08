@@ -10,6 +10,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,10 @@ def _patch_catalog(monkeypatch, *, installed=None, rules=None, workflows=None,
     monkeypatch.setattr(serve.catalog, "all_entries", lambda: entries or [])
     monkeypatch.setattr(serve.catalog, "find", lambda n: (find or {}).get(n, []))
     monkeypatch.setattr(serve.registry, "list_taps", lambda: taps or [])
+    # The served view is cached on a fingerprint of the on-disk catalogue,
+    # which does not move between tests — so a test that swaps the catalogue
+    # out from under it would otherwise assert against the previous test's.
+    serve._ROWS_CACHE.clear()
 
 
 class TestRoute:
@@ -42,7 +47,7 @@ class TestRoute:
         status, ctype, body = serve.route("/")
         assert status == 200
         assert ctype == "text/html; charset=utf-8"
-        assert b"boost" in body and b"<table>" in body
+        assert b"boost" in body and b'id="rows"' in body
 
     def test_index_html_alias(self, monkeypatch):
         _patch_catalog(monkeypatch)
@@ -151,39 +156,65 @@ class TestSkillText:
 
 
 class TestServePage:
-    def test_empty_state_message(self, monkeypatch):
+    """The page is now a shell and the rows arrive over fetch, so the three
+    guarantees this class held moved rather than went away.
+
+    They are re-pinned where they now live: the empty state and the counts on
+    `/search.json`, and "a rule has no raw-content link" on the two facts that
+    actually enforce it — the row says which kind it is, and there is no
+    endpoint serving a rule's body regardless of what any client renders.
+    """
+
+    def test_the_shell_ships_an_empty_state_for_a_machine_with_nothing(self,
+                                                                       monkeypatch):
         _patch_catalog(monkeypatch, installed={}, entries=[], taps=[])
         page = serve.serve_page()
-        assert "nothing installed" in page
-        assert "0 installed · 0 available across 0 taps" in page
+        assert "no taps configured yet" in page
+        assert "boost tap --defaults" in page
 
-    def test_counts_and_rows(self, monkeypatch):
+    def test_counts_come_from_the_search_endpoint(self, monkeypatch):
         _patch_catalog(
             monkeypatch,
             installed={"brainstorming": {"version": "1.4.0", "tap": "core"}},
-            entries=[{"name": "brainstorming"}, {"name": "other"}],
+            entries=[_entry("brainstorming", version="1.4.0"), _entry("other")],
             taps=[_Tap("a")])
-        page = serve.serve_page()
-        assert "1 installed · 2 available across 1 taps" in page
-        assert 'href="/skill/brainstorming"' in page
-        assert "1.4.0" in page
+        _, _, body = serve.route("/search.json")
+        payload = json.loads(body)
+        assert payload["total"] == 2
+        rows = {r["name"]: r for r in payload["rows"]}
+        assert rows["brainstorming"]["installed"] is True
+        assert rows["brainstorming"]["version"] == "1.4.0"
+        assert rows["other"]["installed"] is False
 
-    def test_rules_and_workflows_rows_carry_kind_and_no_link(self, monkeypatch):
-        # The page is a view of the whole lock file: a rule shows up, labeled,
-        # and does NOT get a /skill/ link (there is no raw endpoint for it).
-        _patch_catalog(
-            monkeypatch,
-            installed={"brainstorming": {"version": "1.4.0", "tap": "core"}},
-            rules={"house-style": {"version": "1.0.0", "tap": "t2"}},
-            workflows={"ship-it": {"version": "2.0.0", "tap": "t2"}},
-            taps=[_Tap("a")])
-        page = serve.serve_page()
-        assert "3 installed" in page
-        assert "<td>house-style</td><td>rule</td>" in page
-        assert "<td>ship-it</td><td>workflow</td>" in page
-        assert 'href="/skill/brainstorming"' in page
-        assert 'href="/skill/house-style"' not in page
-        assert 'href="/skill/ship-it"' not in page
+    def test_a_row_says_which_kind_it_is(self, monkeypatch):
+        # The client links a name only when this reads "skill". Everything the
+        # renderer needs to withhold a link is on the row.
+        _patch_catalog(monkeypatch, entries=[
+            _entry("brainstorming"), _entry("house-style", kind="rule"),
+            _entry("ship-it", kind="workflow")])
+        _, _, body = serve.route("/search.json")
+        kinds = {r["name"]: r["kind"] for r in json.loads(body)["rows"]}
+        assert kinds == {"brainstorming": "skill", "house-style": "rule",
+                         "ship-it": "workflow"}
+
+    def test_the_client_links_only_skills(self, monkeypatch):
+        # Pins the branch itself. Losing it would put a /skill/ link on every
+        # rule and workflow, and each one would answer 404.
+        _patch_catalog(monkeypatch, entries=[])
+        assert "r.kind==='skill'" in serve.serve_page()
+
+    def test_no_endpoint_serves_a_rules_body_whatever_the_client_does(
+            self, monkeypatch, tmp_path):
+        # The half that does not depend on a renderer. `/skill/<name>` reads a
+        # SKILL.md from the store or a tap; a rule has neither, so the raw
+        # endpoint 404s for one however it is reached.
+        _patch_catalog(monkeypatch, rules={"house-style": {"version": "1.0.0"}},
+                       entries=[_entry("house-style", kind="rule")])
+        monkeypatch.setattr(serve.store, "skill_store_dir",
+                            lambda n: tmp_path / n)
+        status, _, body = serve.route("/skill/house-style")
+        assert status == 404
+        assert b"no skill named" in body
 
 
 class TestServeHttp:
@@ -614,3 +645,489 @@ class TestServeHttpRun:
         serve.serve_http("127.0.0.1", 9)
         assert oks == ["server stopped"]
         assert made["srv"].closed == 1
+
+
+# ── the searchable, tagged catalogue ──────────────────────────────────────
+
+def _entry(name, *, tap="o/r", kind="skill", desc="", meta=None, version="1.0.0",
+           curated=False):
+    return {"name": name, "description": desc, "version": version, "tap": tap,
+            "curated": curated, "kind": kind, "rel_dir": ".",
+            "skill_md": name + "/SKILL.md", "meta": meta or {},
+            "search_blob": (name + " " + desc).lower()}
+
+
+class TestEntryTags:
+    """Tags are facets a reader can filter on, not decoration.
+
+    Every value is namespaced (`kind:`, `tap:`, `topic:`, `tag:`) so a filter
+    can be applied per namespace and two namespaces can never collide — a tap
+    literally named "skill" would otherwise be indistinguishable from the kind.
+    """
+
+    def test_kind_and_tap_are_always_present(self):
+        tags = serve.entry_tags(_entry("a", tap="acme/skills", kind="rule"))
+        assert "kind:rule" in tags
+        assert "tap:acme/skills" in tags
+
+    def test_topic_comes_from_the_curated_registry_taxonomy(self):
+        # registries.json is where a repo's category is decided, and it is
+        # decided from the names of the items it ships — not its README. That
+        # judgement is already made and test-pinned; this surfaces it.
+        tags = serve.entry_tags(_entry("a", tap="acme/skills"),
+                                categories={"acme/skills": "ui"})
+        assert "topic:ui" in tags
+
+    def test_a_tap_with_no_curated_category_gets_no_topic(self):
+        tags = serve.entry_tags(_entry("a", tap="who/dis"), categories={})
+        assert not [t for t in tags if t.startswith("topic:")]
+
+    def test_installed_is_a_tag_because_it_is_the_first_thing_you_filter_on(self):
+        e = _entry("a")
+        assert "state:installed" in serve.entry_tags(e, installed={"a"})
+        assert "state:installed" not in serve.entry_tags(e, installed=set())
+
+    def test_frontmatter_tags_come_through_namespaced(self):
+        e = _entry("a", meta={"tags": ["Testing", "ci"]})
+        tags = serve.entry_tags(e)
+        assert "tag:testing" in tags and "tag:ci" in tags
+
+    def test_a_comma_string_of_tags_is_split(self):
+        # Frontmatter is third-party YAML: `tags: a, b` is as common as a list.
+        e = _entry("a", meta={"tags": "alpha, beta"})
+        tags = serve.entry_tags(e)
+        assert "tag:alpha" in tags and "tag:beta" in tags
+
+    @pytest.mark.parametrize("bad", [None, 5, {"x": 1}, [None, ""], ["  "]])
+    def test_junk_frontmatter_tags_never_raise(self, bad):
+        # `meta` is whatever a stranger's YAML parsed to. A serving path that
+        # raises on it takes the whole page down for one bad item in one tap.
+        tags = serve.entry_tags(_entry("a", meta={"tags": bad}))
+        assert "kind:skill" in tags
+
+    def test_tags_are_sorted_and_de_duplicated(self):
+        e = _entry("a", meta={"tags": ["ci", "ci", "CI"]})
+        tags = serve.entry_tags(e)
+        assert tags == sorted(set(tags))
+        assert tags.count("tag:ci") == 1
+
+
+class TestCatalogRows:
+    def test_a_row_carries_what_the_table_renders(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("alpha", desc="does a thing")],
+                       installed={"alpha": {}})
+        (row,) = serve.catalog_rows()
+        assert row["name"] == "alpha"
+        assert row["description"] == "does a thing"
+        assert row["installed"] is True
+        assert "kind:skill" in row["tags"]
+
+    def test_rules_and_workflows_count_as_installed_too(self, monkeypatch):
+        # lockfile.installed() is skills only. A rule shown as "available"
+        # while it is materialized into the user's CLAUDE.md is a lie about
+        # the most invasive kind boost installs.
+        _patch_catalog(monkeypatch,
+                       entries=[_entry("r", kind="rule"), _entry("w", kind="workflow")],
+                       rules={"r": {}}, workflows={"w": {}})
+        rows = {r["name"]: r for r in serve.catalog_rows()}
+        assert rows["r"]["installed"] is True
+        assert rows["w"]["installed"] is True
+
+
+class TestFacetCounts:
+    def test_facets_are_grouped_by_namespace_and_ranked_by_count(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[
+            _entry("a", kind="skill"), _entry("b", kind="skill"),
+            _entry("c", kind="rule")])
+        facets = serve.facet_counts(serve.catalog_rows())
+        assert facets["kind"][0] == ("skill", 2)
+        assert ("rule", 1) in facets["kind"]
+
+    def test_an_empty_catalog_yields_empty_facets(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[])
+        assert serve.facet_counts(serve.catalog_rows()) == {}
+
+
+class TestSearchRows:
+    def _rows(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[
+            _entry("pytest-runner", kind="skill", tap="a/b", desc="run tests"),
+            _entry("commit-style", kind="rule", tap="c/d", desc="commit messages"),
+            _entry("deploy", kind="workflow", tap="a/b", desc="ship it")])
+        return serve.catalog_rows()
+
+    def test_an_empty_query_returns_everything(self, monkeypatch):
+        rows = self._rows(monkeypatch)
+        assert len(serve.search_rows(rows, "")) == 3
+
+    def test_a_query_narrows_to_matches(self, monkeypatch):
+        rows = self._rows(monkeypatch)
+        names = [r["name"] for r in serve.search_rows(rows, "commit")]
+        assert names == ["commit-style"]
+
+    def test_a_tag_filter_narrows_without_a_query(self, monkeypatch):
+        rows = self._rows(monkeypatch)
+        got = serve.search_rows(rows, "", tags=["kind:rule"])
+        assert [r["name"] for r in got] == ["commit-style"]
+
+    def test_tags_across_namespaces_are_ANDed(self, monkeypatch):
+        # Two facets from different namespaces narrow; ORing them would make
+        # every extra chip widen the result, which reads as a broken filter.
+        rows = self._rows(monkeypatch)
+        assert serve.search_rows(rows, "", tags=["kind:rule", "tap:a/b"]) == []
+        got = serve.search_rows(rows, "", tags=["kind:workflow", "tap:a/b"])
+        assert [r["name"] for r in got] == ["deploy"]
+
+    def test_a_query_and_a_tag_compose(self, monkeypatch):
+        rows = self._rows(monkeypatch)
+        assert serve.search_rows(rows, "commit", tags=["kind:skill"]) == []
+
+    def test_the_limit_bounds_rows_returned(self, monkeypatch):
+        rows = self._rows(monkeypatch)
+        assert len(serve.search_rows(rows, "", limit=2)) == 2
+
+
+class TestGraphData:
+    """The graph is of the *catalogue*, so its nodes are taps.
+
+    A node per item would be 10k nodes on a real machine — unrenderable, and
+    it would draw the one structure nobody needs (items are already a list).
+    What a tap-level graph shows is the structure that IS invisible in a
+    table: which registries mirror each other. `code-reviewer` ships from 13
+    different taps, and that overlap is the edge.
+    """
+
+    def _rows(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[
+            _entry("shared", tap="a/b"), _entry("only-a", tap="a/b"),
+            _entry("shared", tap="c/d"), _entry("only-c", tap="c/d"),
+            _entry("lonely", tap="e/f")])
+        return serve.catalog_rows()
+
+    def test_one_node_per_tap_sized_by_item_count(self, monkeypatch):
+        g = serve.graph_data(self._rows(monkeypatch))
+        sizes = {n["id"]: n["size"] for n in g["nodes"]}
+        assert sizes == {"a/b": 2, "c/d": 2, "e/f": 1}
+
+    def test_an_edge_is_a_shared_item_name_and_carries_its_weight(self, monkeypatch):
+        g = serve.graph_data(self._rows(monkeypatch))
+        assert len(g["links"]) == 1
+        (edge,) = g["links"]
+        assert {edge["source"], edge["target"]} == {"a/b", "c/d"}
+        assert edge["weight"] == 1
+
+    def test_a_tap_sharing_nothing_still_gets_a_node(self, monkeypatch):
+        # Dropping isolated nodes would hide exactly the registries that are
+        # unique, which are the interesting ones.
+        g = serve.graph_data(self._rows(monkeypatch))
+        assert "e/f" in {n["id"] for n in g["nodes"]}
+
+    def test_no_self_edges(self, monkeypatch):
+        # Two items with the same name inside ONE tap (an agent mirror) is the
+        # single most common shape in the catalog. It is not an overlap.
+        _patch_catalog(monkeypatch, entries=[
+            _entry("dup", tap="a/b"), _entry("dup", tap="a/b")])
+        g = serve.graph_data(serve.catalog_rows())
+        assert g["links"] == []
+
+    def test_every_node_lands_in_a_community(self, monkeypatch):
+        g = serve.graph_data(self._rows(monkeypatch))
+        assert all("community" in n for n in g["nodes"])
+        assert {n["id"] for n in g["nodes"]} == {"a/b", "c/d", "e/f"}
+
+    def test_connected_taps_share_a_community(self, monkeypatch):
+        g = serve.graph_data(self._rows(monkeypatch))
+        by_id = {n["id"]: n["community"] for n in g["nodes"]}
+        assert by_id["a/b"] == by_id["c/d"]
+        assert by_id["e/f"] != by_id["a/b"]
+
+    def test_it_is_deterministic(self, monkeypatch):
+        rows = self._rows(monkeypatch)
+        assert serve.graph_data(rows) == serve.graph_data(rows)
+
+    def test_an_empty_catalog_is_an_empty_graph_not_a_crash(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[])
+        g = serve.graph_data(serve.catalog_rows())
+        assert g["nodes"] == [] and g["links"] == []
+
+
+class TestTheNewEndpoints:
+    def test_graph_json(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("a")])
+        status, ctype, body = serve.route("/graph.json")
+        assert status == 200 and ctype == "application/json"
+        assert "nodes" in json.loads(body)
+
+    def test_search_json_honours_the_query(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("alpha"), _entry("beta")])
+        _, _, body = serve.route("/search.json?q=alpha")
+        assert [r["name"] for r in json.loads(body)["rows"]] == ["alpha"]
+
+    def test_search_json_honours_repeated_tag_params(self, monkeypatch):
+        _patch_catalog(monkeypatch,
+                       entries=[_entry("a", kind="rule"), _entry("b", kind="skill")])
+        _, _, body = serve.route("/search.json?tag=kind:rule")
+        assert [r["name"] for r in json.loads(body)["rows"]] == ["a"]
+
+    def test_search_json_reports_facets_and_a_total(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("a"), _entry("b")])
+        _, _, body = serve.route("/search.json")
+        payload = json.loads(body)
+        assert payload["total"] == 2
+        assert "kind" in payload["facets"]
+
+    def test_a_bare_search_path_still_answers(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("a")])
+        status, _, _ = serve.route("/search.json")
+        assert status == 200
+
+
+class TestThePageIsSelfContained:
+    """`boost serve` binds a socket on a developer's machine. Every byte the
+    page needs has to come from that socket.
+
+    A CDN reference would make the catalogue silently blank on a plane, and it
+    would hand a third party a request per page view naming the port a
+    developer tool is listening on.
+    """
+
+    def test_no_remote_asset_is_referenced(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("a")])
+        page = serve.serve_page()
+        for scheme in ("http://", "https://", "//cdn", "integrity="):
+            assert scheme not in page, scheme
+
+    def test_both_tabs_are_present(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("a")])
+        page = serve.serve_page().lower()
+        assert "catalogue" in page or "catalog" in page
+        assert "graph" in page
+
+    def test_the_page_embeds_no_catalog_data(self, monkeypatch):
+        # The rows arrive over fetch, never interpolated into a <script>.
+        # A description is third-party text, and one containing `</script>`
+        # closes the block and turns the rest into markup — the exact class of
+        # bug the 404 reflection was. Not embedding it removes the class.
+        _patch_catalog(monkeypatch, entries=[
+            _entry("pwned", desc="</script><img src=x onerror=alert(1)>")])
+        page = serve.serve_page()
+        assert "onerror" not in page
+        assert "pwned" not in page
+
+
+class TestTheViewIsCachedOnTheCatalogueMoving:
+    """71,695 rows take 0.54s to build and 0.12s to facet on a real machine.
+
+    The search box issues a request per keystroke, so rebuilding per request
+    makes the page unusable at exactly the catalogue size that makes it worth
+    having — and caching forever serves a catalogue the machine stopped having
+    the moment `boost update` ran in another terminal.
+    """
+
+    def setup_method(self):
+        serve._ROWS_CACHE.clear()
+
+    def test_a_second_request_does_not_rebuild(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(serve.catalog, "all_entries",
+                            lambda: calls.append(1) or [_entry("a")])
+        _patch_catalog(monkeypatch, entries=[_entry("a")])
+        monkeypatch.setattr(serve.catalog, "all_entries",
+                            lambda: calls.append(1) or [_entry("a")])
+        serve.cached_view()
+        serve.cached_view()
+        assert len(calls) == 1
+
+    def test_a_changed_fingerprint_rebuilds(self, monkeypatch):
+        calls = []
+        _patch_catalog(monkeypatch, entries=[_entry("a")])
+        monkeypatch.setattr(serve.catalog, "all_entries",
+                            lambda: calls.append(1) or [_entry("a")])
+        monkeypatch.setattr(serve, "_catalog_fingerprint", lambda: (1, 1, 1))
+        serve.cached_view()
+        monkeypatch.setattr(serve, "_catalog_fingerprint", lambda: (1, 2, 1))
+        serve.cached_view()
+        assert len(calls) == 2
+
+    def test_an_unreadable_cache_dir_is_a_fingerprint_not_a_crash(self, monkeypatch):
+        def boom(*_a, **_k):
+            raise OSError("gone")
+        monkeypatch.setattr(serve.paths, "cache_dir", boom)
+        assert serve._catalog_fingerprint() == ()
+
+    def test_the_graph_rides_the_same_signal(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("a")])
+        monkeypatch.setattr(serve, "_catalog_fingerprint", lambda: (1, 1, 1))
+        first = serve.cached_graph()
+        assert serve.cached_graph() is first
+        monkeypatch.setattr(serve, "_catalog_fingerprint", lambda: (2, 2, 2))
+        assert serve.cached_graph() is not first
+
+
+class TestTheGraphStaysLegibleAtRealScale:
+    """Measured on a real 445-tap machine: 300 nodes carry 5,181 overlaps, and
+    55% of those are a single shared name — often a coincidence on a generic
+    one. Drawn in full it is a hairball; the strongest few hundred are a graph.
+    """
+
+    def test_only_the_strongest_edges_are_drawn(self, monkeypatch):
+        entries = []
+        # 40 taps, each sharing a name with tap 0 — 40 edges before the cap.
+        for i in range(40):
+            entries.append(_entry("shared-%d" % i, tap="hub/h"))
+            entries.append(_entry("shared-%d" % i, tap="spoke/%d" % i))
+        _patch_catalog(monkeypatch, entries=entries)
+        monkeypatch.setattr(serve, "GRAPH_EDGES", 10)
+        g = serve.graph_data(serve.catalog_rows())
+        assert len(g["links"]) == 10
+        assert g["graph"]["overlaps"] == 40, "the true total stays reported"
+        assert g["graph"]["links_shown"] == 10
+
+    def test_the_node_cap_reports_what_it_dropped(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[
+            _entry("a", tap="t/%d" % i) for i in range(9)])
+        monkeypatch.setattr(serve, "GRAPH_NODES", 4)
+        g = serve.graph_data(serve.catalog_rows())
+        assert len(g["nodes"]) == 4
+        assert g["graph"]["taps"] == 9 and g["graph"]["dropped"] == 5
+
+
+class TestJsonBodiesCannotBeReadAsMarkup:
+    """Every JSON body here carries third-party text — a name, a description
+    and a tap all come from whatever repos the reader has tapped.
+
+    Correct `Content-Type` plus `nosniff` is what makes that safe today. This
+    is the layer that survives either one being got wrong: by a proxy, by a
+    future route that types a body wrong, or by someone saving the response and
+    opening it in a browser.
+    """
+
+    @pytest.mark.parametrize("ch", ["<", ">", "&"])
+    def test_the_markup_characters_never_appear_raw(self, monkeypatch, ch):
+        _patch_catalog(monkeypatch, entries=[
+            _entry("x", desc="</script><img src=x onerror=alert(1)>&lt;")])
+        for path in ("/search.json", "/catalog.json", "/graph.json"):
+            body = serve.route(path)[2]
+            assert ch.encode() not in body, (path, ch)
+
+    def test_the_document_still_parses_to_the_same_object(self, monkeypatch):
+        payload = {"desc": "a <b> & </script> c", "n": [1, 2]}
+        assert json.loads(serve._json_body(payload)) == payload
+
+    def test_a_404_body_is_inert_too(self, monkeypatch):
+        # The generic misses go through the same helper, so a route added later
+        # inherits this rather than having to remember it.
+        _patch_catalog(monkeypatch)
+        assert b"<" not in serve.route("/nope")[2]
+
+
+class TestTheRequestIsNeverReflectedIntoTheResponse:
+    """The falsifiable half of the standing XSS finding on this module.
+
+    Snyk traces request URL -> `route` -> `search_rows` -> body -> `write` and
+    calls it reflected XSS. What the parameters actually do is *select rows*;
+    nothing in the response carries the caller's text. That is a claim a test
+    can settle, and it is the claim the finding rests on — so it is pinned here
+    rather than argued in a comment.
+
+    The one place a request value IS echoed is the `/skill/<name>` 404, and it
+    is reachable only after `SKILL_NAME_RE.fullmatch`, whose charset is
+    [A-Za-z0-9._-] — nothing in it can close a tag or a quote (see #489).
+    """
+
+    PAYLOADS = ("<script>alert(1)</script>", "\"><img src=x onerror=alert(1)>",
+                "javascript:alert(1)", "');alert(1);//", "</script><svg onload=1>")
+
+    @pytest.mark.parametrize("payload", PAYLOADS)
+    def test_a_crafted_query_comes_back_in_nobody(self, monkeypatch, payload):
+        _patch_catalog(monkeypatch, entries=[_entry("real-item", desc="ok")])
+        body = serve.route("/search.json?q=" + urllib.parse.quote(payload))[2]
+        for fragment in ("script", "onerror", "onload", "alert", "img", "svg"):
+            assert fragment.encode() not in body, (payload, fragment)
+
+    @pytest.mark.parametrize("payload", PAYLOADS)
+    def test_a_crafted_tag_comes_back_in_nobody(self, monkeypatch, payload):
+        _patch_catalog(monkeypatch, entries=[_entry("real-item")])
+        body = serve.route("/search.json?tag=" + urllib.parse.quote(payload))[2]
+        for fragment in ("script", "onerror", "onload", "alert"):
+            assert fragment.encode() not in body, (payload, fragment)
+
+    def test_an_unknown_path_does_not_name_itself(self, monkeypatch):
+        _patch_catalog(monkeypatch)
+        body = serve.route("/<script>alert(1)</script>")[2]
+        assert json.loads(body) == {"error": "not found"}
+
+    def test_the_one_echo_is_charset_bounded(self, monkeypatch, tmp_path):
+        # `/skill/<name>` names the name — but only past the regex. Anything
+        # that could break out is rejected before that branch is reachable.
+        _patch_catalog(monkeypatch)
+        monkeypatch.setattr(serve.store, "skill_store_dir",
+                            lambda n: tmp_path / "missing")
+        assert (json.loads(serve.route("/skill/<script>")[2])["error"]
+                == "invalid skill name")
+
+
+class TestTheGraphIsNodeLinkJsonRatherThanASimilarShape:
+    """`/graph.json` is loadable by `networkx.node_link_graph`, and by
+    graphify's tooling, rather than merely resembling them.
+
+    graphify's own `graph.json` is NetworkX node-link: `directed`,
+    `multigraph`, a graph-level attribute dict, `nodes` and — the one that
+    actually breaks a loader — `links`, not `edges`. Pinned because "similar
+    shape" and "same format" look identical in a screenshot and differ the
+    moment anyone tries to feed one to the other.
+    """
+
+    def test_it_carries_the_node_link_envelope(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[_entry("a", tap="t/1")])
+        g = json.loads(serve.route("/graph.json")[2])
+        assert g["directed"] is False and g["multigraph"] is False
+        assert set(g) == {"directed", "multigraph", "graph", "nodes", "links"}
+
+    def test_graph_level_metadata_lives_in_the_graph_dict(self, monkeypatch):
+        # networkx round-trips this into `G.graph`, which is where graph-wide
+        # attributes belong — a sibling "stats" key would be dropped.
+        _patch_catalog(monkeypatch, entries=[_entry("a", tap="t/1")])
+        g = json.loads(serve.route("/graph.json")[2])
+        for key in ("taps", "shown", "dropped", "items", "overlaps"):
+            assert key in g["graph"], key
+
+    def test_links_name_their_endpoints_by_node_id(self, monkeypatch):
+        _patch_catalog(monkeypatch, entries=[
+            _entry("shared", tap="a/b"), _entry("shared", tap="c/d")])
+        g = json.loads(serve.route("/graph.json")[2])
+        ids = {n["id"] for n in g["nodes"]}
+        for link in g["links"]:
+            assert link["source"] in ids and link["target"] in ids
+            assert link["weight"] >= 1 and link["relation"]
+
+
+class TestTheTaggingEdgesTheCoverageReportFound:
+    """Three branches the suite reached around but never through. Each is a
+    live path on real data, and an unexecuted branch is an unkilled mutant."""
+
+    def test_a_non_dict_meta_yields_no_frontmatter_tags(self):
+        # `meta` is whatever a stranger's YAML parsed to — a bare string or
+        # null frontmatter both land here, and neither is a mapping.
+        for meta in (None, "just a string", ["a", "list"], 7):
+            tags = serve.entry_tags(_entry("a", meta=meta))
+            assert tags == ["kind:skill", "tap:o/r"], meta
+
+    def test_a_curated_entry_is_tagged_as_one(self):
+        assert "state:curated" in serve.entry_tags(_entry("a", curated=True))
+        assert "state:curated" not in serve.entry_tags(_entry("a", curated=False))
+
+    def test_unreadable_registry_data_reads_as_no_categories(self, monkeypatch):
+        # A page that failed to render because a shipped data file moved would
+        # be a worse outcome than one with no topic facet.
+        monkeypatch.setattr(serve, "_CATEGORIES", None)
+        monkeypatch.setattr(serve.Path, "read_text",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("gone")))
+        assert serve.registry_categories() == {}
+        monkeypatch.setattr(serve, "_CATEGORIES", None)
+
+    def test_malformed_registry_json_reads_as_no_categories(self, monkeypatch):
+        monkeypatch.setattr(serve, "_CATEGORIES", None)
+        monkeypatch.setattr(serve.Path, "read_text", lambda *a, **k: "{not json")
+        assert serve.registry_categories() == {}
+        monkeypatch.setattr(serve, "_CATEGORIES", None)
