@@ -237,6 +237,8 @@ def _kind_table(heading, items, extra=None):
 def cmd_list(argv):
     ap = cliparse.parser(prog="boost list",
                                  description="List installed skills, rules and workflows")
+    ap.add_argument("--kind", choices=("skill", "rule", "workflow"), default=None,
+                    help="only show installed items of this kind")
     ap.add_argument("--tag", help="only show skills carrying this tag")
     ap.add_argument("--local", action="store_true",
                     help="only the skills installed into this repo")
@@ -251,19 +253,39 @@ def cmd_list(argv):
     project = projectlock.installed(pbase) if pbase is not None else {}
     if args.local:
         skills, rules, workflows = {}, {}, {}
+    if args.tag and args.kind not in (None, "skill"):
+        # Refuse rather than print an empty table. Tags exist only on skills,
+        # so `--kind rule --tag x` can only ever render "no rules installed" —
+        # a different and false statement about the machine.
+        raise BoostError(
+            "--tag applies to skills, and --kind %s excludes them" % args.kind,
+            hint="drop --tag, or use `boost list --kind skill --tag %s`"
+                 % args.tag.lstrip("#"))
     if args.tag:
         # Tags are a skill-only concept, so --tag narrows to skills.
         want = args.tag.lstrip("#")
         skills = {n: e for n, e in skills.items() if want in (e.get("tags") or [])}
         rules, workflows, project = {}, {}, {}
+    if args.kind:
+        # Empty the sections not asked for. The --json envelope keeps all four
+        # keys either way, so a consumer's data["skills"] never starts raising
+        # just because a flag was added.
+        if args.kind != "skill":
+            skills, project = {}, {}
+        if args.kind != "rule":
+            rules = {}
+        if args.kind != "workflow":
+            workflows = {}
     if args.json:
         print(json.dumps({"skills": skills, "rules": rules,
                           "workflows": workflows, "project": project},
                          indent=2, sort_keys=True))
         return 0
     if not skills and not rules and not workflows and not project:
+        # Name the kind that was asked for. "no skills installed" in answer to
+        # `--kind rule` sends you looking for a skill that was never the point.
         print(out.empty_state(
-            "no skills installed"
+            "no %ss installed" % (args.kind or "skill")
             + (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""),
             hint="boost tap --defaults && boost search <topic>"))
         return 0

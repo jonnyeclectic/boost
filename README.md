@@ -139,7 +139,15 @@ boost tap --catalog --category security       # filter by category
 boost indexes three item kinds out of the same registries: `SKILL.md` **skills**,
 `.mdc`/`.cursorrules`/`.windsurfrules` **rules**, and command/agent **workflows**
 (Markdown under `commands/`·`agents/`·`workflows/`, or carrying subagent
-frontmatter). Rules and workflows are searchable today; only skills install.
+frontmatter). All three install, and they land in different places — a skill is
+copied into the canonical store and symlinked out, a rule is materialised into
+each agent's context file (`~/.claude/CLAUDE.md`, `~/.gemini/GEMINI.md`), and a
+workflow is rendered per agent. So a rule has no directory to look in:
+
+```bash
+boost list --kind rule                # just the rules, and where they landed
+boost list --kind workflow            # …and which slot each one fills
+```
 
 Or run it straight from a checkout — the runtime is stdlib-only, so there's
 nothing to install beyond the shim:

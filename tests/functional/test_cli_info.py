@@ -153,6 +153,74 @@ class TestList:
         assert "team-rules" not in r.out
         assert "no skills installed with tag #fav" in r.out
 
+    # ── --kind ───────────────────────────────────────────────────────────
+    # `boost list` prints three sections, so on a machine with 25 skills the
+    # one rule is off the top of the screen. --kind is how you ask for the
+    # section you meant.
+
+    def test_kind_rule_shows_only_rules(self, boost, tapped):
+        boost("install", "brainstorming")
+        self._seed_rule()
+        self._seed_workflow()
+        r = boost("list", "--kind", "rule")
+        assert "team-rules" in r.out
+        assert "1 rule installed" in r.out
+        assert "brainstorming" not in r.out
+        assert "ship-it" not in r.out
+        assert "installed skills" not in r.out
+        assert "installed workflows" not in r.out
+
+    def test_kind_workflow_keeps_the_slot_column(self, boost, sandbox):
+        self._seed_rule()
+        self._seed_workflow()
+        r = boost("list", "--kind", "workflow")
+        assert "ship-it" in r.out and "SLOT" in r.out and "commands" in r.out
+        assert "team-rules" not in r.out
+
+    def test_kind_skill_excludes_rules_and_workflows(self, boost, tapped):
+        boost("install", "brainstorming")
+        self._seed_rule()
+        r = boost("list", "--kind", "skill")
+        assert "brainstorming" in r.out
+        assert "team-rules" not in r.out
+
+    def test_kind_json_keeps_the_four_key_shape(self, boost, sandbox):
+        # Consumers key off a stable envelope: the other kinds go empty rather
+        # than disappearing, so `data["skills"]` never raises under --kind.
+        self._seed_rule()
+        self._seed_workflow()
+        data = json.loads(boost("list", "--kind", "rule", "--json").out)
+        assert set(data) == {"skills", "rules", "workflows", "project"}
+        assert list(data["rules"]) == ["team-rules"]
+        assert data["workflows"] == {} and data["skills"] == {}
+
+    def test_kind_empty_state_names_the_kind(self, boost, sandbox):
+        # "no skills installed" while asking for rules is the wrong answer to
+        # the question asked, and sends you looking for a skill that never was.
+        r = boost("list", "--kind", "rule")
+        assert "no rules installed" in r.out
+        assert "no skills installed" not in r.out
+
+    def test_kind_rejects_an_unknown_kind(self, boost, sandbox):
+        r = boost("list", "--kind", "skils", expect=None)
+        assert r.rc != 0
+        assert "skils" in r.err or "invalid choice" in r.err
+
+    def test_kind_non_skill_with_tag_is_an_error_not_an_empty_table(self, boost, sandbox):
+        # Tags only exist on skills. Printing an empty rule table would read as
+        # "you have no rules", which is a different and false statement.
+        self._seed_rule()
+        r = boost("list", "--kind", "rule", "--tag", "fav", expect=None)
+        assert r.rc != 0
+        assert "tag" in (r.err + r.out).lower()
+
+    def test_kind_skill_with_tag_still_works(self, boost, tapped):
+        boost("install", "brainstorming", "commit-messages")
+        boost("tag", "brainstorming", "+fav")
+        r = boost("list", "--kind", "skill", "--tag", "fav")
+        assert "brainstorming" in r.out
+        assert "commit-messages" not in r.out
+
 
 # ── info ─────────────────────────────────────────────────────────────────
 
