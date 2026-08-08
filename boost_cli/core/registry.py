@@ -150,6 +150,12 @@ def remove(name: str) -> Tap:
     return tap
 
 
+#: URL scheme marking a tap that ships inside the wheel rather than living on
+#: a remote. :func:`update` refreshes such a tap by re-copying package data —
+#: handing this to git is what made a revised built-in rule unreachable.
+WHEEL_SCHEME = "builtin:"
+
+
 def update(name: str | None = None) -> tuple[dict, dict]:
     """git-pull one tap (or all). Returns ``({name: summary}, {name: error})``.
 
@@ -172,7 +178,20 @@ def update(name: str | None = None) -> tuple[dict, dict]:
     failures: dict = {}
     for tap in targets:
         try:
-            if not tap.is_cloned:
+            if tap.url.startswith(WHEEL_SCHEME):
+                # boost's own tap arrives with the wheel, so there is no remote
+                # to pull and the files are re-copied from package data. Git
+                # was reached for anyway, against a directory with no .git —
+                # `is_cloned` is false, so the *clone* branch handed
+                # `builtin:boost` to git as a URL. It failed on every run, and
+                # because every downstream loop skips a tap that is not in
+                # `results`, a revised built-in rule could never reach a
+                # machine that already had it. Imported here rather than at
+                # module scope: `builtin` imports this module.
+                from . import builtin
+                builtin.ensure_tap()
+                results[tap.name] = "refreshed from the installed package"
+            elif not tap.is_cloned:
                 gitutil.clone_shallow(tap.url, tap.path)
                 results[tap.name] = "cloned"
             else:

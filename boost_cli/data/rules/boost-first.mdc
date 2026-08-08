@@ -13,13 +13,28 @@ they may appear as `mcp_boost_boost_search`. Neither installs anything. If
 neither tool is present in this session, `boost search "<what you are trying
 to do>"` in the shell asks the same question.
 
-`boost_list` is a local file read. `boost_search` takes longer because it
-retrieves and then reranks, which is what makes its top result worth acting on
-rather than skimming ten.
+`boost_list` is a local file read: free, and carrying no threshold worth
+applying. Call it whenever you are about to plan something. What is installed
+here is capability you already own, and planning from memory while the answer
+sits on disk is the one avoidable mistake.
 
-Reach for the shelf when the request would lock something in for everything
-after it: a new project or subsystem, an architecture or dependency choice,
-environment and tooling config, a linter, tests, CI.
+`boost_search` costs ten to fifteen seconds, because it retrieves and then
+reranks — which is what makes its top result worth acting on rather than
+skimming ten. The cheapest test of whether that is worth spending is whether
+the task in front of you has a name you could say out loud — "set up code
+review", "add commit conventions", "debug flaky tests".
+
+Two more signals earn the seconds, and both are readable off the request
+rather than off work you have not done yet: it asks you to touch more than one
+file, or it asks for something that outlives this session — a config, a CI job,
+a convention, a dependency, a test suite. A choice about to get locked in for
+everything after it is where the seconds are cheapest of all: a new project or
+subsystem, an architecture or dependency choice, environment and tooling
+config, a linter, tests, CI.
+
+Ask again the moment a small task turns out to be a large one. The first check
+only fires at a boundary you recognised at the time, so a question that became
+an investigation never got one.
 
 What is already loaded is a different question. A skill that activated here was
 installed before this request existed and matched on its own description — what
@@ -30,6 +45,11 @@ an active skill leaves the question of what exists exactly where it found it.
 Coming back empty is a real answer: build it yourself, now knowing nothing
 already covers it. Coming back with something is a head start, not an
 instruction — read it, take what fits, discard the rest. The task stays yours.
+
+Say which way it went, in the first response where you set out what you are
+about to do: name the call you made, or the reason you skipped it. One clause
+either way. A check that leaves no trace reads exactly like a check that never
+happened — to whoever is reading, and a few turns later to you.
 
 Not for: a question, a one-line edit, a command you were just handed, or a
 change that follows conventions already visible in this repo.
