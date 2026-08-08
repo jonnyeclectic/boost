@@ -134,6 +134,13 @@ def route(path: str) -> tuple[int, str, bytes]:
     HTML page; ``/catalog.json`` and ``/installed.json`` the JSON views; a
     ``/skill/<name>`` path the raw SKILL.md (404 for an invalid or unknown name);
     anything else a JSON ``not found``.
+
+    Nothing the caller sent comes back out of the invalid-name branch. ``path``
+    is unquoted above, so the segment after ``/skill/`` is arbitrary bytes of
+    the requester's choosing, and interpolating it into the body made the
+    response a reflection of the request. The name is invalid *by definition*
+    there, so naming it told the caller nothing it had not just sent — see
+    ``_send`` for the nosniff header that is the other half of this.
     """
     path = urllib.parse.unquote(path.split("?", 1)[0])
     if path in ("/", "/index.html"):
@@ -146,9 +153,13 @@ def route(path: str) -> tuple[int, str, bytes]:
         name = path[len("/skill/"):].strip("/")
         if not SKILL_NAME_RE.fullmatch(name):
             return (404, "application/json",
-                    json.dumps({"error": "no skill named %r" % name}).encode())
+                    json.dumps({"error": "invalid skill name"}).encode())
         text = skill_text(name)
         if text is None:
+            # Safe to name here, and worth naming: this branch is reachable
+            # only for a name that already matched SKILL_NAME_RE, whose charset
+            # is [A-Za-z0-9._-] — nothing in it can close a tag or a quote. It
+            # is also the message that tells a typo from a not-installed skill.
             return (404, "application/json",
                     json.dumps({"error": "no skill named %r" % name}).encode())
         return 200, "text/plain; charset=utf-8", text.encode()
@@ -169,6 +180,12 @@ class _CatalogHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # Content sniffing is the only way a body we typed application/json
+        # becomes executable markup in a browser. Set here rather than at each
+        # return in route(), because this is the one choke point every response
+        # passes through — including the generic 500 in do_GET below, which is
+        # the response most likely to grow a reflected detail later.
+        self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
         out.dim("  %s %s → %d" % (self.command, self.path, status))

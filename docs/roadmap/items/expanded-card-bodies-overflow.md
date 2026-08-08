@@ -2,7 +2,7 @@
 id: expanded-card-bodies-overflow
 board: code
 section: docsite
-status: inflight
+status: shipped
 category: Docsite · Bug
 complexity: S
 impact: Med

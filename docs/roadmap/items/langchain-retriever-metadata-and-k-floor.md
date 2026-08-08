@@ -2,7 +2,7 @@
 id: langchain-retriever-metadata-and-k-floor
 board: code
 section: compat
-status: inflight
+status: shipped
 category: Compat · Bug
 complexity: S
 impact: Med

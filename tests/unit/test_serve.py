@@ -56,14 +56,35 @@ class TestRoute:
 
     def test_installed_json(self, monkeypatch):
         _patch_catalog(monkeypatch, installed={"a": {"version": "1"}})
-        status, _ctype, body = serve.route("/installed.json")
-        assert status == 200
+        status, ctype, body = serve.route("/installed.json")
+        assert status == 200 and ctype == "application/json"
         data = json.loads(body)
         assert data["version"] == 3 and "a" in data["skills"]
 
     def test_query_string_stripped(self, monkeypatch):
         _patch_catalog(monkeypatch)
         assert serve.route("/catalog.json?foo=bar")[0] == 200
+
+    def test_only_the_first_question_mark_starts_the_query(self, monkeypatch):
+        # A second `?` is legal in a query string, and the path is everything
+        # before the FIRST one. Splitting on the last (or on all of them) makes
+        # this 404 — the routing table never sees `/catalog.json`.
+        _patch_catalog(monkeypatch)
+        assert serve.route("/catalog.json?a=1?b=2")[0] == 200
+
+    def test_only_surrounding_slashes_are_stripped_from_a_name(self, monkeypatch,
+                                                               tmp_path):
+        # `/skill/ghost/` must resolve to `ghost`, and the strip must take the
+        # slash specifically: stripping whitespace instead leaves the trailing
+        # slash in the name, and stripping a wider character set eats real
+        # leading/trailing characters out of it.
+        _patch_catalog(monkeypatch)
+        monkeypatch.setattr(serve.store, "skill_store_dir",
+                            lambda n: tmp_path / "missing")
+        assert (json.loads(serve.route("/skill/ghost/")[2])["error"]
+                == "no skill named 'ghost'")
+        assert (json.loads(serve.route("/skill/XghostX/")[2])["error"]
+                == "no skill named 'XghostX'")
 
     def test_skill_valid_installed(self, monkeypatch, tmp_path):
         sd = tmp_path / "mine"
@@ -79,7 +100,7 @@ class TestRoute:
         _patch_catalog(monkeypatch)
         status, _ctype, body = serve.route("/skill/bad name!")
         assert status == 404
-        assert "no skill named" in json.loads(body)["error"]
+        assert json.loads(body)["error"] == "invalid skill name"
 
     def test_skill_unknown_404(self, monkeypatch, tmp_path):
         _patch_catalog(monkeypatch)
@@ -91,8 +112,11 @@ class TestRoute:
 
     def test_unknown_path_404(self, monkeypatch):
         _patch_catalog(monkeypatch)
-        status, _ctype, body = serve.route("/nope")
-        assert status == 404
+        status, ctype, body = serve.route("/nope")
+        # The content type is asserted on every JSON route, not just some: it is
+        # what stops a body being interpreted as something else, and the two
+        # routes that skipped it were the two whose type mutants survived.
+        assert status == 404 and ctype == "application/json"
         assert json.loads(body) == {"error": "not found"}
 
 
@@ -324,6 +348,65 @@ class TestSafeJoinWithin:
         os.symlink(outside, base / "link.md")
         assert serve._safe_join_within(base, Path("link.md")) is None
 
+
+# ------------------------------------------------- reflected request content
+
+class TestRequestTextIsNeverEchoed:
+    """A rejected path must not come back out in the response body.
+
+    ``route`` unquotes the path before matching, so the segment after
+    ``/skill/`` is arbitrary attacker-chosen bytes — angle brackets, quotes,
+    whatever survives a URL. It used to be interpolated into the 404 body with
+    ``%r``. The body is typed ``application/json``, which no current browser
+    renders as HTML, so this was one missing header away from a live reflected
+    XSS rather than a live one; ``--host 0.0.0.0`` is a documented flag, so the
+    surface is not only localhost either. Neither half is worth keeping: the
+    name is invalid *by definition* in this branch, so echoing it tells the
+    caller nothing it did not just send.
+    """
+
+    PAYLOADS = (
+        "<script>alert(1)</script>",
+        "%3Cscript%3Ealert(1)%3C/script%3E",   # unquoted by route() first
+        '"><img src=x onerror=alert(1)>',
+        "a b<>&'\"",
+    )
+
+    @pytest.mark.parametrize("payload", PAYLOADS)
+    def test_an_invalid_name_is_not_reflected(self, monkeypatch, payload):
+        _patch_catalog(monkeypatch)
+        status, ctype, body = serve.route("/skill/" + payload)
+        assert status == 404 and ctype == "application/json"
+        assert json.loads(body) == {"error": "invalid skill name"}
+        # Also assert on the raw bytes, so a future body that reflects the name
+        # somewhere other than `error` still fails here. Not `"` — JSON spends
+        # that on its own delimiters — but `<`, `>`, `&` and `'` never appear in
+        # a structurally-correct body, so any occurrence came from the request.
+        for ch in (b"<", b">", b"&", b"'"):
+            assert ch not in body, (ch, body)
+        assert b"alert" not in body and b"img" not in body
+
+    def test_a_valid_but_unknown_name_is_still_named(self, monkeypatch, tmp_path):
+        # The useful message survives where it is safe to keep: this branch is
+        # reachable only for a name that already matched SKILL_NAME_RE, whose
+        # charset ([A-Za-z0-9._-]) has nothing to escape.
+        _patch_catalog(monkeypatch)
+        monkeypatch.setattr(serve.store, "skill_store_dir",
+                            lambda n: tmp_path / "missing")
+        _status, _ctype, body = serve.route("/skill/ghost")
+        assert json.loads(body)["error"] == "no skill named 'ghost'"
+
+    def test_the_two_404s_stay_distinguishable(self, monkeypatch, tmp_path):
+        # Collapsing both into one generic body would lose the only signal that
+        # tells a typo from a name that is simply not installed.
+        _patch_catalog(monkeypatch)
+        monkeypatch.setattr(serve.store, "skill_store_dir",
+                            lambda n: tmp_path / "missing")
+        assert (json.loads(serve.route("/skill/ghost")[2])["error"]
+                != json.loads(serve.route("/skill/gh ost")[2])["error"])
+
+
+
     def test_non_path_rel_is_refused(self, tmp_path):
         assert serve._safe_join_within(tmp_path, None) is None
 
@@ -412,7 +495,11 @@ class TestSkillTextTraversal:
         monkeypatch.setattr(serve.catalog, "find", lambda n: [])
         status, _ctype, body = serve.route("/skill/%2e%2e%2f%2e%2e%2fetc%2fpasswd")
         assert status == 404
-        assert json.loads(body) == {"error": "no skill named '../../etc/passwd'"}
+        # The traversal attempt is refused *and* not repeated back. This used to
+        # assert `no skill named '../../etc/passwd'`, which pinned the echo in
+        # place as if it were the contract.
+        assert json.loads(body) == {"error": "invalid skill name"}
+        assert b"passwd" not in body
 
 
 # ------------------------------------------------------------------- _send
@@ -446,11 +533,33 @@ class TestSend:
         monkeypatch.setattr(serve.out, "dim", dimmed.append)
         h._send(200, "application/json", b'{"ok": true}')
         assert calls["status"] == 200
+        # Exact, and deliberately so: nosniff is a security header, and an
+        # `in` assertion would keep passing if a later edit dropped it while
+        # adding something else.
         assert calls["headers"] == [("Content-Type", "application/json"),
-                                    ("Content-Length", "12")]
+                                    ("Content-Length", "12"),
+                                    ("X-Content-Type-Options", "nosniff")]
         assert calls["ended"] == 1
         assert h.wfile.data == b'{"ok": true}'
         assert dimmed == ["  GET /catalog.json → 200"]
+
+    def test_nosniff_rides_on_every_status_and_type(self, monkeypatch):
+        """Not just the 200 above — the error paths are the ones that matter.
+
+        A 404 or 500 body is where a reflected detail is most likely to reappear
+        later, and ``_send`` is the single choke point all four routes and the
+        generic 500 in ``do_GET`` pass through. Pinned here so the header cannot
+        be scoped to the success path by a later edit.
+        """
+        for status, ctype in ((404, "application/json"),
+                              (500, "application/json"),
+                              (200, "text/html; charset=utf-8"),
+                              (200, "text/plain; charset=utf-8")):
+            h, calls = self._handler(monkeypatch)
+            monkeypatch.setattr(serve.out, "dim", lambda _m: None)
+            h._send(status, ctype, b"x")
+            assert ("X-Content-Type-Options", "nosniff") in calls["headers"], \
+                (status, ctype)
 
     def test_log_message_is_silent(self, monkeypatch, capsys):
         h = serve._CatalogHandler.__new__(serve._CatalogHandler)
