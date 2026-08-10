@@ -136,6 +136,31 @@ boost tap --catalog --category rag            # RAG / vector-search skill packs
 boost tap --catalog --category security       # filter by category
 ```
 
+### Share the catalogue instead of re-tapping it
+
+Tapping is the slowest thing a new install does, and the expensive artifact is
+not the valuable one. On a machine with **458 registries** tapped, the shallow
+clones are **12 GB** — while the catalogue they produce, the JSON boost actually
+searches, is **10.9 MB** gzipped. So hand someone the catalogue:
+
+```bash
+boost catalog --export catalogue.tgz    # 458 taps · 59,972 entries · 10.9 MB
+boost catalog --show catalogue.tgz      # what is in it, without importing
+boost catalog --import catalogue.tgz    # on the other machine
+```
+
+Measured on a fresh `HOME`: import takes **0.3 s**, `boost reindex` a further
+**3.8 s**, and `boost search` then returns real hits over all 59,972 items with
+**zero repositories cloned**. `install` still clones — but only the one registry
+the skill you chose actually lives in, instead of all 458 up front.
+
+Bundles carry catalogue JSON and nothing else. The derived indexes are excluded
+(they are 3.8 GB of a 3.9 GB cache directory and rebuild in seconds), and
+vectors are excluded because they are only valid inside the embedding space that
+made them — `boost reindex --export-shard` is the path for those, with the
+provenance checks a bundle deliberately does not try to carry. Import **merges**,
+so it never silently drops taps the receiving machine already had.
+
 boost indexes three item kinds out of the same registries: `SKILL.md` **skills**,
 `.mdc`/`.cursorrules`/`.windsurfrules` **rules**, and command/agent **workflows**
 (Markdown under `commands/`·`agents/`·`workflows/`, or carrying subagent
@@ -228,7 +253,7 @@ boost doctor               # sanity check: broken links, lock drift, stale taps
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ```
 
-## 78 commands, organized into 8 groups
+## 79 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see
 [`docs/index.html`](docs/index.html), and for every flag of every command see
@@ -442,7 +467,7 @@ Four layers, all enforced (`make check` runs the full set; CI runs the same thin
 
 | Layer | What it does | Gate |
 |---|---|---|
-| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 78 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
+| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 79 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
 | `make smoke` | `tests/smoke.sh` — 170 checks run through the actual `./boost` shim (`--online` also hits real registries) | all pass |
 | `make mutation` | [mutmut] mutates `boost_cli/core` (~9,900 mutants) and reruns the unit suite against each one | **≥80% killed** (`scripts/mutation_gate.py`) |
 | `make evals` | scores the search ranker on a graded golden set — recall@5/@10, MRR, nDCG@5/@10 | **metric floors + no statistically significant regression** (`scripts/eval_gate.py`) |
