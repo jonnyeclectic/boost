@@ -50,8 +50,22 @@ permissions:
   contents: read
 
 concurrency:
-  group: demo
-  cancel-in-progress: true
+  # Per PR, NOT one global `demo` queue. A constant group name puts every run of
+  # this workflow — every pull request, and main — in one queue, and
+  # `cancel-in-progress` then means each new run kills whichever OTHER PR's run
+  # was in flight. On 2026-08-10 #498 and #504 both touched boost_cli/cli.py,
+  # which is in the path filter above, so both triggered this workflow and both
+  # showed `record CANCELLED`; neither could merge, and re-running one just
+  # moved the cancellation to the other. A cancelled check reports no
+  # conclusion, so at the merge button it is indistinguishable from a failure,
+  # and nothing on your PR names the run that killed it.
+  #
+  # Non-PR runs key on the commit rather than the ref, for the reason ci.yml
+  # documents: `cancel-in-progress: false` means a newer run WAITS, and GitHub
+  # cancels the older pending one when a third arrives — so grouping main on
+  # `github.ref` can leave a middle commit whose recording never runs.
+  group: demo-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   record:

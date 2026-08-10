@@ -31,8 +31,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: sonarcloud-${{ github.ref }}
-  cancel-in-progress: true
+  # `github.ref` is per-branch, so this never cancelled across pull requests the
+  # way demo.yml did — but it does put every push to main in ONE group, and with
+  # unconditional cancellation a quick second merge kills the first commit's
+  # analysis. Main's quality history then has silent holes exactly where merges
+  # came fastest. Keying non-PR runs on the commit gives each one its own group.
+  group: sonarcloud-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   sonar-analyze:
