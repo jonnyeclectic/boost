@@ -43,6 +43,20 @@ def parse_spec(spec: str):
     Accepts: owner/repo | full git URL | existing local path.
     """
     spec = spec.strip().rstrip("/")
+    # Reject control characters HERE, at the parse boundary, rather than letting
+    # them travel. A NUL cannot appear in a GitHub owner/repo, a git URL or a
+    # usable directory name, so nothing legitimate is turned away — but accepted,
+    # it reaches a filesystem call and dies as `ValueError: lstat: embedded null
+    # character in path` from inside posixpath, naming neither the tap nor the
+    # command, and as a ValueError rather than a BoostError the CLI's error
+    # handling never gets to frame it. fuzz.yml found this and failed three
+    # scheduled runs out of three before anyone looked (2026-07-25/08-01/08-08).
+    # \x1b matters for a second reason: an escape sequence in a name is echoed
+    # by every surface that prints a tap list.
+    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in spec):
+        raise BoostError(
+            "tap spec contains a control character: %r" % spec,
+            hint="use owner/repo, a git URL, or a local directory")
     # paths.expand(), not Path.expanduser(): expanduser() consults the OS's
     # own home-dir lookup (USERPROFILE on Windows), which ignores the $HOME
     # override the whole test suite (and BOOST_HOME sandboxing) relies on.
