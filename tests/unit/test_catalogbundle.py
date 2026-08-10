@@ -281,3 +281,81 @@ class TestTheArchiveIsTreatedAsHostile:
         self._hostile(bundle, "catalog/big.json", data=b"{}" + b" " * 100)
         with pytest.raises(BoostError):
             catalogbundle.import_bundle(bundle)
+
+
+class TestTheErrorPathsAreReachable:
+    """Every branch here is a real failure someone will hit, not a rare one.
+
+    A corrupt cache file, a full disk, a truncated download: each already had a
+    hand-written message, and an unexercised error path is a message nobody has
+    ever read. These assert the message, not merely the raise.
+    """
+
+    def test_a_corrupt_cache_file_is_skipped_not_fatal(self, sandbox, tmp_path):
+        # Half-written JSON is what a killed `boost tap` leaves behind. Refusing
+        # to export the other taps because of it would make a partial failure
+        # into a total one.
+        _tapped("acme/skills", "corrupt/one")
+        _cache("acme/skills")
+        (paths.cache_dir() / "corrupt__one.json").write_text(
+            '{"tap": "corrupt/one", "skills": [', encoding="utf-8")
+
+        stats = catalogbundle.export_bundle(tmp_path / "c.tgz")
+
+        assert stats["taps"] == 1
+        assert "corrupt/one" in stats["skipped"]
+
+    def test_an_unwritable_destination_names_the_path(self, sandbox, tmp_path):
+        _tapped("acme/skills")
+        _cache("acme/skills")
+        # A directory where the archive should go: open() fails with OSError,
+        # which is the same shape as a full disk or a read-only mount.
+        blocked = tmp_path / "taken.tgz"
+        blocked.mkdir()
+        with pytest.raises(BoostError) as caught:
+            catalogbundle.export_bundle(blocked)
+        assert "taken.tgz" in str(caught.value)
+
+    def test_a_manifest_that_is_not_json_is_reported_as_malformed(
+            self, sandbox, tmp_path):
+        # A truncated download is still a valid gzip of a valid tar.
+        bundle = tmp_path / "c.tgz"
+        with tarfile.open(bundle, "w:gz") as tar:
+            data = b"{not json at all"
+            info = tarfile.TarInfo(catalogbundle.MANIFEST_NAME)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+        with pytest.raises(BoostError) as caught:
+            catalogbundle.read_manifest(bundle)
+        assert "malformed" in str(caught.value)
+
+    def test_a_manifest_that_is_a_directory_is_refused(self, sandbox, tmp_path):
+        # `getmember` succeeds for a directory entry, so without the isfile()
+        # check `extractfile` returns None and the failure would surface as a
+        # TypeError somewhere further down.
+        bundle = tmp_path / "c.tgz"
+        with tarfile.open(bundle, "w:gz") as tar:
+            info = tarfile.TarInfo(catalogbundle.MANIFEST_NAME)
+            info.type = tarfile.DIRTYPE
+            tar.addfile(info)
+        with pytest.raises(BoostError) as caught:
+            catalogbundle.read_manifest(bundle)
+        assert "not a file" in str(caught.value)
+
+    def test_a_config_whose_taps_key_is_not_a_list_is_survivable(
+            self, sandbox, tmp_path):
+        # `config.load()` returns whatever is on disk. A hand-edited
+        # `"taps": null` must import as "no existing taps", never raise —
+        # registry.list_taps() already takes that position.
+        _tapped("acme/skills")
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        catalogbundle.export_bundle(dest)
+        cfg = config.load()
+        cfg["taps"] = None
+        config.save(cfg)
+
+        stats = catalogbundle.import_bundle(dest)
+
+        assert stats["added"] == 1
+        assert [t.name for t in registry.list_taps()] == ["acme/skills"]
