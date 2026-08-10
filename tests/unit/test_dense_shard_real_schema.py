@@ -35,6 +35,44 @@ sqlite_vec = pytest.importorskip(
     reason="the real vec0 schema needs the [rag] extra; the contract is also "
            "pinned extension-free in test_dense_shard_unreadable_vectors.py")
 
+
+def _extension_loadable() -> bool:
+    """True when this interpreter can actually create a vec0 table.
+
+    Importing ``sqlite_vec`` is NOT enough, and assuming it was reddened all
+    three macOS legs of PR #503 with ``sqlite-vec imported but _connect returned
+    None``. Loading an extension needs
+    ``sqlite3.Connection.enable_load_extension``, which CPython only exposes
+    when its bundled SQLite was built with extension support — macOS builds
+    routinely are not. So the package imports, ``dense._load()`` returns it, and
+    ``dense._connect()`` still returns ``None``.
+
+    Probe the capability rather than a proxy for it: build the thing these tests
+    need and see whether it works. Exactly the mistake this file exists to
+    correct, one level up — a fixture that stood in for the real schema is what
+    hid the bug, and an import that stood in for the real capability is what
+    broke the fix.
+    """
+    import sqlite3
+    con = sqlite3.connect(":memory:")
+    try:
+        con.enable_load_extension(True)
+        sqlite_vec.load(con)
+        con.execute("CREATE VIRTUAL TABLE t USING vec0(embedding float[2])")
+        return True
+    except (AttributeError, sqlite3.Error):
+        return False
+    finally:
+        con.close()
+
+
+pytestmark = pytest.mark.skipif(
+    not _extension_loadable(),
+    reason="this interpreter cannot load sqlite extensions (macOS CPython is "
+           "commonly built without support), so the real vec0 schema is "
+           "unreachable — the extension-free half of the contract still runs "
+           "in test_dense_shard_unreadable_vectors.py")
+
 DIM = 4
 
 
@@ -42,7 +80,10 @@ def _production_store(tap: str = "acme/skills", rows: int = 2):
     """A store built the way `dense.build` builds one — vec0 and all."""
     paths.ensure_dirs()
     con = dense._connect()
-    assert con is not None, "sqlite-vec imported but _connect returned None"
+    # The module-level skipif already proved the extension loads here, so a
+    # None now is a real regression in _connect rather than a missing extra.
+    assert con is not None, \
+        "_connect returned None although vec0 loads on this interpreter"
     try:
         dense._ensure_schema(con, DIM)
         for i in range(rows):
