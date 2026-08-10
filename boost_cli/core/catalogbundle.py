@@ -58,18 +58,17 @@ CATALOG_PREFIX = "catalog/"
 MAX_MEMBERS = 5000
 MAX_MEMBER_BYTES = 256 * 1024 * 1024
 
-#: Files that live in the cache directory but are not catalogue data.
-_DERIVED_PREFIXES = ("rag_", "_names")
-
-
-def _is_catalogue_file(path: Path) -> bool:
-    """True for a per-tap catalogue JSON, false for the derived indexes."""
-    return (path.suffix == ".json"
-            and not path.name.startswith(_DERIVED_PREFIXES))
-
-
 def export_bundle(dest: Path) -> dict:
     """Pack every tapped registry's catalogue into ``dest``. Returns stats.
+
+    Driven by the **tap list**, not by a scan of the cache directory, and that
+    is what keeps the derived indexes out rather than any filename filter: a
+    file only becomes a candidate by being named ``<safe_name>.json`` for a
+    configured tap, so ``rag_vectors.sqlite`` is never considered in the first
+    place. It also means a stale catalogue left behind by an untapped registry
+    is not exported. An earlier revision carried an ``_is_catalogue_file``
+    predicate for this and never called it — dead code that made the
+    accompanying test pass for a reason that had nothing to do with the filter.
 
     A configured tap with no cache file yet is **skipped, not fatal**: taps are
     built one at a time, and refusing to export the other 458 because one is

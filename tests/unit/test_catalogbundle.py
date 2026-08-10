@@ -77,6 +77,12 @@ class TestExport:
         # 3.8 GB of the 3.9 GB cache dir, all of it rebuildable in seconds.
         # Shipping vectors here would also ship them without the provenance
         # `import_shard` refuses a mismatched shard on.
+        #
+        # This passes because export is driven by the TAP LIST — see the
+        # companion test below, which pins that mechanism. An earlier revision
+        # of the module carried an `_is_catalogue_file` filter that was never
+        # called, and this assertion held with the filter neutered, so on its
+        # own it says nothing about why the derived files stay out.
         _tapped("acme/skills")
         _cache("acme/skills")
         for junk in ("rag_index.json", "rag_postings.sqlite",
@@ -87,6 +93,26 @@ class TestExport:
         with tarfile.open(dest, "r:gz") as tar:
             names = tar.getnames()
         assert not [n for n in names if "rag_" in n or "_names" in n], names
+
+    def test_only_configured_taps_are_packed(self, sandbox, tmp_path):
+        """The actual mechanism, and the one a refactor would break.
+
+        Export names each candidate from a configured tap rather than scanning
+        the cache directory, so a catalogue left behind by a registry that was
+        untapped is not shipped either — and any future rewrite to a directory
+        walk fails here rather than silently re-admitting `rag_vectors.sqlite`.
+        """
+        _tapped("acme/skills")
+        _cache("acme/skills")
+        _cache("ghost/untapped")          # on disk, not in the tap list
+        dest = tmp_path / "c.tgz"
+
+        stats = catalogbundle.export_bundle(dest)
+
+        assert stats["taps"] == 1
+        with tarfile.open(dest, "r:gz") as tar:
+            names = tar.getnames()
+        assert not [n for n in names if "ghost" in n], names
 
     def test_a_tap_with_no_cache_file_is_skipped_not_fatal(self, sandbox, tmp_path):
         # A tap can be configured and not yet built. Refusing to export the
@@ -218,20 +244,38 @@ class TestTheArchiveIsTreatedAsHostile:
             info.size = len(data)
             tar.addfile(info, io.BytesIO(data))
 
+    @staticmethod
+    def _tree() -> set:
+        """Every file at or above BOOST_HOME that a traversal could reach.
+
+        Snapshotting the tree beats asserting one guessed destination, and the
+        first draft of these tests is why. It checked
+        ``boost_home().parent / "pwned.json"`` against a payload of
+        ``catalog/../../../../pwned.json`` — four levels up from the cache dir,
+        which lands a level ABOVE the path being checked. The assertion probed
+        somewhere the payload could not reach, so it would have held even if
+        the write had happened. A diff of the whole tree cannot be off by one.
+        """
+        root = paths.boost_home().parent.parent
+        return {p for p in root.rglob("*") if p.is_file()}
+
     def test_a_parent_traversal_member_is_not_written(self, sandbox, tmp_path):
+        before = self._tree()
         bundle = tmp_path / "evil.tgz"
         self._hostile(bundle, "catalog/../../../../pwned.json")
         with pytest.raises(BoostError):
             catalogbundle.import_bundle(bundle)
-        assert not (paths.boost_home().parent / "pwned.json").exists()
+        assert self._tree() - before - {bundle} == set()
 
     def test_an_absolute_member_is_not_written(self, sandbox, tmp_path):
         target = tmp_path / "abs-pwned.json"
+        before = self._tree()
         bundle = tmp_path / "evil.tgz"
         self._hostile(bundle, str(target).lstrip("/"))
         with pytest.raises(BoostError):
             catalogbundle.import_bundle(bundle)
         assert not target.exists()
+        assert self._tree() - before - {bundle} == set()
 
     def test_a_member_outside_the_catalog_prefix_is_refused(self, sandbox, tmp_path):
         # Everything the format defines lives under catalog/. Anything else is
