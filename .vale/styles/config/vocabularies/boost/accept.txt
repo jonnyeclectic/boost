@@ -111,4 +111,5 @@ WooCommerce
 wordmark
 worktree
 worktrees
+zizmor
 zsh
