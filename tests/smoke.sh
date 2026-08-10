@@ -201,6 +201,7 @@ tap
 untap
 taps
 outdated
+catalog
 distill
 simulate
 infer
