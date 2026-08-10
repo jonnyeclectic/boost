@@ -1,6 +1,7 @@
 """Thin git wrapper (stdlib subprocess only)."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -27,6 +28,15 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
         proc = subprocess.run(
             ["git", *args], cwd=str(cwd) if cwd else None,
             capture_output=True, text=True, timeout=timeout,
+            # GIT_LFS_SKIP_SMUDGE: taps are indexed for their Markdown, and boost
+            # never reads an LFS payload. Without this, tapping a repo that stores
+            # large media in LFS downloads all of it on clone — heygen-com/hyperframes
+            # tracks 163 files totalling 578 MB (83 .mp4 regression baselines under
+            # packages/producer/tests, plus .png/.webm/.mov) beside the 31 SKILL.md
+            # files boost actually wants. Pointer files still check out as text, so
+            # discovery is unaffected. Only takes effect where git-lfs is installed;
+            # elsewhere it is inert.
+            env=os.environ | {"GIT_LFS_SKIP_SMUDGE": "1"},
         )
     except subprocess.TimeoutExpired:
         raise BoostError("git %s timed out after %ds" % (args[0], timeout)) from None
