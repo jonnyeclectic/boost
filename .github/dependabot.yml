@@ -6,6 +6,40 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # A "dependency" to Dependabot is one `uses:` path, not one action repo. So
+    # a repo we reach through several sub-actions gets a SEPARATE PR each, and
+    # for the ones below that is not merely noisy — it is broken, because the
+    # sub-actions are one repo at the same commit and check each other at run
+    # time. One codeql-action release, 2026-08-09, arrived as three PRs:
+    #
+    #   #495 codeql-action/init         4.37.3 -> 4.37.6   RED
+    #   #496 codeql-action/analyze      4.37.3 -> 4.37.6   RED
+    #   #497 codeql-action/upload-sarif 4.37.3 -> 4.37.6   green
+    #
+    # Both red ones died on `Loaded a configuration file for version '4.37.6',
+    # but running version '4.37.3'` — init stamps its version into the config
+    # and analyze refuses a config written by another release. #497 was green
+    # only because upload-sarif is used alone in scorecard.yml with no partner
+    # to disagree with, so "one of the three is green" said nothing about the
+    # other two, and merging it first would not have unblocked them. No single
+    # one of the three was mergeable; the release had to move in lockstep.
+    #
+    # Grouping puts every sub-action of a repo in one PR, so the pins move
+    # together or not at all. tests/unit/test_action_pin_lockstep.py is the
+    # other half — it fails the build if a split lands anyway, and it is
+    # parametrised over the families the workflows actually use, so adopting a
+    # sub-action of some new repo fails there until it is grouped here too.
+    #
+    # actions/cache is grouped for the same reason before it bites: `cache`,
+    # `cache/save` and `cache/restore` are three pins of one repo, in lockstep
+    # today only because no release has split them yet.
+    groups:
+      codeql-action:
+        patterns:
+          - github/codeql-action*
+      actions-cache:
+        patterns:
+          - actions/cache*
   # The hash-pinned dev/CI toolchain (requirements/*.txt, generated from the
   # *.in files by scripts/lock_toolchain.py).
   #
