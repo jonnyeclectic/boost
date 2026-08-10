@@ -3770,11 +3770,19 @@ actually use</b>, so adopting a sub-action of some new repo fails until it is gr
 than quietly re-introducing this a year from now.
 
 <b>The guard is checked for being able to fail.</b> Its lockstep assertions pass on a correct tree,
-which is exactly when a silently-broken regex would go unnoticed — so three tests assert the parser
+which is exactly when a silently-broken regex would go unnoticed — so four tests assert the parser
 still sees the pins and both known families, and four more feed it the literal content of
 <code>#495</code> and require it to go red. A stale <i>version comment</i> beside a correct SHA
 counts as a split too, since that comment is what a human reads and what <code>zizmor</code>'s
-<code>ref-version-mismatch</code> audit compares against.</p></details>
+<code>ref-version-mismatch</code> audit compares against.
+
+<b>The same instinct applied to the file list, which is the half that is easy to miss.</b> Every pin
+in this repo lives in <code>.github/workflows/*.yml</code> today, so globbing exactly that passes —
+and would keep passing, silently and greenly, the first time someone writes a <code>.yaml</code>
+workflow or factors a job into a composite action under <code>.github/actions/</code>. Both are
+scanned now, and a further test walks <code>.github/</code> itself and fails naming any file that
+pins an action the glob did not hand to the assertions above. A guard that has quietly stopped
+looking is worse than no guard, because the green tick still appears.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

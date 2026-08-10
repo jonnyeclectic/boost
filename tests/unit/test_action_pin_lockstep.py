@@ -41,8 +41,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOWS = ROOT / ".github" / "workflows"
-DEPENDABOT = ROOT / ".github" / "dependabot.yml"
+GITHUB = ROOT / ".github"
+WORKFLOWS = GITHUB / "workflows"
+DEPENDABOT = GITHUB / "dependabot.yml"
 
 pytestmark = pytest.mark.skipif(
     not WORKFLOWS.exists(),
@@ -85,11 +86,31 @@ def action_pins(text: str, where: str = "<text>") -> list[Pin]:
     return pins
 
 
+def pinned_files() -> list[Path]:
+    """Every file GitHub will read a ``uses:`` out of.
+
+    Deliberately wider than the tree needs today, which is the point. Right now
+    every pin lives in ``.github/workflows/*.yml``, so globbing exactly that
+    would pass — and would keep passing, silently, the day someone writes a
+    ``.yaml`` workflow or factors a job into a composite action under
+    ``.github/actions/``. A guard that stops looking is worse than no guard,
+    because the green tick still appears. ``TestTheGuardCanActuallySee`` is the
+    same instinct applied to the regex.
+    """
+    found = sorted(WORKFLOWS.glob("*.yml")) + sorted(WORKFLOWS.glob("*.yaml"))
+    actions = GITHUB / "actions"
+    if actions.is_dir():
+        found += sorted(actions.rglob("action.yml"))
+        found += sorted(actions.rglob("action.yaml"))
+    return found
+
+
 def all_pins() -> list[Pin]:
-    """Every pinned action reference across every workflow."""
+    """Every pinned action reference across every workflow and composite action."""
     pins: list[Pin] = []
-    for path in sorted(WORKFLOWS.glob("*.yml")):
-        pins.extend(action_pins(path.read_text(encoding="utf-8"), path.name))
+    for path in pinned_files():
+        rel = path.relative_to(GITHUB).as_posix()
+        pins.extend(action_pins(path.read_text(encoding="utf-8"), rel))
     return pins
 
 
@@ -128,6 +149,21 @@ class TestTheGuardCanActuallySee:
 
     def test_pins_are_found_at_all(self):
         assert len(all_pins()) > 10, "the uses: pattern matched almost nothing"
+
+    def test_every_file_holding_a_pin_is_scanned(self):
+        # The other half of "can it see": the regex may be fine while the file
+        # list has quietly stopped covering where pins live. Ask the tree
+        # directly rather than trusting the glob that produced the list.
+        scanned = {p.resolve() for p in pinned_files()}
+        missed = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in GITHUB.rglob("*")
+            if path.is_file() and path.suffix in (".yml", ".yaml")
+            and path.resolve() not in scanned
+            and _USES.search(path.read_text(encoding="utf-8", errors="ignore")))
+        assert not missed, (
+            "these files pin an action but no test above ever reads them: %s"
+            % ", ".join(missed))
 
     def test_the_two_known_multi_path_families_are_seen(self):
         families = multi_path_families(all_pins())
@@ -184,7 +220,7 @@ class TestTheGuardRejectsASplit:
         assert "github/codeql-action" in split, split
 
     def test_a_lockstep_pair_is_clean(self):
-        assert split_families(action_pins(self.LOCKSTEP)) == {}
+        assert not split_families(action_pins(self.LOCKSTEP))
 
     def test_a_matching_sha_with_a_stale_version_comment_is_reported(self):
         # The comment is what a human reads and what zizmor's
@@ -198,7 +234,7 @@ class TestTheGuardRejectsASplit:
         # with one path has no partner to disagree with.
         alone = ("      - uses: github/codeql-action/upload-sarif@"
                  + "5" * 40 + " # v4.37.6\n")
-        assert split_families(action_pins(alone)) == {}
+        assert not split_families(action_pins(alone))
 
 
 class TestDependabotGroupsEveryMultiPathFamily:

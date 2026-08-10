@@ -169,7 +169,7 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
 - **Sub-actions of one action repo move in lockstep.** `github/codeql-action/{init,
   analyze,upload-sarif}` and `actions/cache{,/save,/restore}` are each *one repo at
   one commit*, but Dependabot tracks one `uses:` path as one dependency and raises a
-  PR per sub-action — each of which is individually unmergeable (`init` stamps its
+  PR per sub-action — none of which can be merged on its own (`init` stamps its
   version into the config and `analyze` rejects another release's). `.github/
   dependabot.yml` groups them so a release arrives as one PR;
   `tests/unit/test_action_pin_lockstep.py` fails the build if a split lands anyway,
