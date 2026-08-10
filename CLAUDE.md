@@ -166,6 +166,17 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   a workflow is rendered per agent (TOML for Gemini, see
   `workflows.TOML_COMMAND_AGENTS`). Installing a rule therefore edits a file the
   user reads every session — treat it as more invasive than a skill, not less.
+- **Sub-actions of one action repo move in lockstep.** `github/codeql-action/{init,
+  analyze,upload-sarif}` and `actions/cache{,/save,/restore}` are each *one repo at
+  one commit*, but Dependabot tracks one `uses:` path as one dependency and raises a
+  PR per sub-action — none of which can be merged on its own (`init` stamps its
+  version into the config and `analyze` rejects another release's). `.github/
+  dependabot.yml` groups them so a release arrives as one PR;
+  `tests/unit/test_action_pin_lockstep.py` fails the build if a split lands anyway,
+  and is parametrised over the families the workflows use, so a new multi-path
+  action must be grouped before it passes. Bump all of a family's pins together, to
+  the **peeled** commit SHA (`git ls-remote … 'refs/tags/vX.Y.Z^{}'`) or zizmor's
+  `ref-version-mismatch` fails the PR.
 
 ## Parallel work & concurrent loops
 
