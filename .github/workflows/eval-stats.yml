@@ -95,4 +95,15 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/eval-latest.json
           git commit -m "chore(eval): refresh published metrics"
-          git push origin HEAD:main
+          # An explicit token URL, NOT a bare `git push origin`. The checkout
+          # above sets `persist-credentials: false` — correct, and what zizmor's
+          # artipacked rule asks for — so the remote carries no auth and a bare
+          # push cannot work. It never did: docs/eval-latest.json has exactly
+          # ONE commit in its whole history, the one that created it, while this
+          # job has been scheduled to refresh it ever since. The run still
+          # reports success when there is nothing to commit, so the conclusion
+          # column could not tell "no drift" from "cannot publish". Same shape
+          # as ci.yml's badges push, which had this right already.
+          git push -q \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" \
+            HEAD:main
