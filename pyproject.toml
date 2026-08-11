@@ -176,7 +176,11 @@ ignore = [
     # batch. Hoisting the handler out of the loop would trade that resilience
     # for a negligible per-iteration saving.
     "PERF203",  # try-except-in-loop
-    # printf-formatting is this codebase's house style across ~860 call sites.
+    # printf-formatting is this codebase's house style. Measured with
+    # `ruff check --select UP031 --statistics`: 1,005 call sites in boost_cli,
+    # 1,800 across the whole lint scope. (The figure here read "~860" for a
+    # long time — a rationale whose central number has drifted is a rationale
+    # nobody re-checked, so it is stated with the command that reproduces it.)
     # The rewrite is an unsafe fix (`%` and `format` differ on tuples and on
     # types with a custom `__format__`), it would rewrite nearly every file —
     # obliterating blame and conflicting with every branch in flight — and it
