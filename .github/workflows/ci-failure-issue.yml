@@ -8,10 +8,31 @@ name: ci-failure-alert
 # `demo` is watched because it was the case this alerting missed entirely: it
 # failed six runs out of six on main, alerted nobody, and was found by a manual
 # audit instead. Any workflow that runs on main and nobody watches belongs here.
+#
+# That rule was written here and then not applied: the list stayed at `ci` and
+# `demo` while TWENTY-FOUR other workflows ran unattended, fourteen of them on a
+# cron. It cost exactly what you would expect. `fuzz` failed three scheduled
+# runs out of three (2026-07-25/08-01/08-08), each time writing the same
+# libFuzzer reproducer for a real defect in registry.parse_spec, and nobody
+# looked for three weeks. `shards` failed both of its scheduled runs and
+# published zero artifacts, which is how a feature reached a state where it had
+# never once worked. Neither produced a notification: a cron job's failure is a
+# red square on a page nobody opens.
+#
+# The list is now ENFORCED, not curated —
+# tests/unit/test_failure_alerting_covers_unattended.py fails the build when a
+# workflow runs unattended and is neither watched here nor listed in that file's
+# EXPECTED_UNWATCHED with a reason. So a new scheduled workflow cannot quietly
+# join the blind spot.
 
 on:
   workflow_run:
-    workflows: ["ci", "demo"]
+    workflows: ["adapter-conformance", "boost-langchain", "ci", "codeql",
+      "demo", "eval-corpus-refresh", "eval-explain", "eval-scale",
+      "eval-stats", "floors", "fuzz", "html-validate", "licenses",
+      "lighthouse", "links", "lock-refresh", "markdownlint",
+      "package-metadata", "pip-audit", "post-deploy", "prose-lint",
+      "scorecard", "shards", "sonarcloud", "theme-lint", "visual"]
     types: [completed]
 
 permissions:
