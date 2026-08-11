@@ -8,7 +8,7 @@ rules:
       # NOTE: these ignores are keyed by file:LINE, so editing anything above
       # a workflow's `on:` block moves it and silently un-ignores the finding.
       # That is what reddened lint here: four lines of added header comment.
-      - ci-failure-issue.yml:12
+      - ci-failure-issue.yml:28
       # Release pipeline. Explicitly checks out `ref: main` (never the
       # workflow_run head_sha), so a fork PR can't smuggle code into a run
       # holding contents:write + PyPI Trusted Publisher OIDC.
