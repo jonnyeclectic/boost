@@ -73,6 +73,17 @@ lint:
 	  fi; \
 	  PATH="$(CURDIR)/$(VENV)/bin:$$PATH" actionlint; \
 	else echo "actionlint not on PATH — skipping (CI enforces it)"; fi
+	@# zizmor: workflow SAST, and it was MISSING from this recipe entirely while
+	@# CI's lint job ran it — so `make lint` could return 0 on a branch whose
+	@# lint job was already red. That happened: .github/zizmor.yml suppresses
+	@# accepted findings by file:LINE, adding a header comment to
+	@# ci-failure-issue.yml moved its `on:` block from line 12 to 28, and the
+	@# un-anchored `dangerous-triggers` finding went live. Nothing local looked.
+	@# `--offline` because the impostor/ref audits need GitHub API access the
+	@# dev sandbox proxy flakes on; CI runs it online.
+	@if [ -x $(VENV)/bin/zizmor ]; then \
+	  $(VENV)/bin/zizmor --offline .github/workflows/; \
+	else echo "zizmor not in $(VENV) — skipping (CI enforces it)"; fi
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
 	$(PY) scripts/build_command_reference.py --check
