@@ -150,11 +150,13 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   publish workflow filename must stay `publish.yml` (PyPI Trusted Publisher
   matches on it).
 - **Target Python ≥ 3.12** (`requires-python = ">=3.12"`). Structural pattern
-  matching and runtime `X | Y` unions are now legal. The `typing.List` →
-  `list` sweep is deliberately *not* done yet: ruff's UP006/UP035/UP045 stay in
-  the ignore list until their own PR, because rewriting annotations across ~60
-  modules obliterates blame and conflicts with every branch in flight. Write new
-  code in the modern style; don't bulk-rewrite old code in an unrelated PR.
+  matching and runtime `X | Y` unions are now legal. The `typing.List` → `list`
+  sweep is **done**: UP006/UP035/UP045 are selected, not ignored, and report zero
+  violations. (This entry described the sweep as deferred long after it landed —
+  measure before trusting a "not done yet" note.) `UP031` printf-formatting *is*
+  still ignored, and deliberately: it is an unsafe fix over ~1,000 call sites in
+  `boost_cli` alone. Write new code in the modern style; don't bulk-rewrite old
+  code in an unrelated PR.
 - **Three item kinds, one scanner.** `core/catalog.scan_dir` indexes `skill`
   (SKILL.md), `rule` (.mdc/.cursorrules/.windsurfrules/.clinerules), and
   `workflow` (commands/agents/workflows Markdown). **All three install**, and
@@ -294,7 +296,7 @@ each agent's skills dir, and updating the lock file.
 
 **Search has two engines**, both in `core/`: `rag.py` is the always-on,
 zero-dependency BM25 engine (full-content index, auto-builds on first
-search — this is what the required `eval` gate floors at recall@k ≥ 0.85).
+search — this is what the required `eval` gate floors at recall@k ≥ 0.78).
 `dense.py` is optional dense/vector retrieval behind the `[rag]` extra —
 **no API key required**: `embed.py` tries Voyage, then OpenAI, then a local
 `BAAI/bge-small-en-v1.5` that ships with the extra, so a key is a quality

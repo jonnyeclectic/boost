@@ -239,6 +239,11 @@ protocol
 pulse
 replay
 who
+bmad
+chat
+hooks
+run
+trust
 CMDS
 
 if [ "${1:-}" = "--online" ]; then
