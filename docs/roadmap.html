@@ -133,7 +133,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>7</b><span>Planned</span></div>
-      <div class="stat"><b>241</b><span>Loop finds</span></div>
+      <div class="stat"><b>243</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -6187,6 +6187,76 @@ vacuously if the trigger detection silently stops matching.</p></details>
         </div>
       </article>
 
+      <article class="cap rcard" id="unwatched-crons-hid-a-real-fuzz-crash">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Build · Bug</span></div>
+        <h3>The fuzzer found a real crash and nobody was listening</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p><code>fuzz.yml</code> runs libFuzzer over <code>registry.parse_spec</code> weekly. It has failed
+<b>three scheduled runs out of three</b> — 2026-07-25, 08-01 and 08-08 — writing the same minimised
+reproducer each time. It was right every time, and nobody looked for three weeks.
+
+<b>The crash.</b> Ten bytes, <code>/\0\0\0\0\0\0\0\0A</code>. <code>parse_spec</code> accepted them
+and returned a perfectly well-formed pair:
+
+<code>('/\0…A', 'https://github.com//\0…A')</code>
+
+Nothing raised, so the name travelled — into <code>config.json</code> and through
+<code>Tap.safe_name</code> into a clone path built around a NUL byte.
+
+<b>The diagnosis was re-done twice, and both corrections matter.</b> An automated audit first
+reported this as "an uncaught-exception bug in <code>boost tap</code>". Running the payload showed
+<code>parse_spec</code> returning normally, and the real traceback — from the job log — lands on
+<code>tests/fuzz/fuzz_registry.py:85</code>, where the harness's own containment check calls
+<code>os.path.realpath</code>. An adversarial re-check then killed the rest of the product claim, and
+it is worth stating plainly because the first draft of this card got it wrong:
+
+<b>A NUL can never reach the CLI at all.</b> <code>execve</code> refuses an argument containing one
+(<code>ValueError: embedded null byte</code>), so <code>boost tap $'/\0…A'</code> is not a command
+that can be run. And in-process the product does <i>not</i> crash either:
+<code>pathlib</code> swallows the error, so <code>Tap.path.exists()</code> simply returns
+<code>False</code>. Only <code>os.path.realpath</code> raises — and the sole caller of that is the
+fuzz harness.
+
+So the honest case for the fix is not "the CLI crashes". It is three narrower things.
+<b>First</b>, other control characters are <i>not</i> execve-blocked — <code>\x1b</code> survives
+<code>argv</code> intact, so an escape sequence in a tap name reaches the CLI and is echoed by every
+surface that prints a tap list. <b>Second</b>, a NUL-bearing name yields a path whose
+<code>exists()</code> is permanently <code>False</code> — silently wrong beats loudly broken only
+until someone has to debug it. <b>Third</b>, and largest: the harness died on its <b>1,322nd</b>
+unit, so the run recorded <code>new_units_added: 0</code> and
+<code>average_exec_per_sec: 0</code> — <b>the registry parser has had no fuzz coverage at all since
+the workflow was added on 2026-07-24</b>, while still costing a runner slot every Saturday.
+
+<b>Fixed at the parse boundary.</b> A control character cannot appear in a GitHub
+<code>owner/repo</code>, in a git URL, or in a usable directory name, so rejecting them turns nothing
+legitimate away — and it converts an arbitrary later <code>ValueError</code> into the documented
+<code>BoostError</code> rejection path, which the fuzz harness already handles and the CLI already
+renders with a hint. <code>\x1b</code> matters for a second reason: an escape sequence in a name is
+echoed back by every surface that prints a tap list. Verified by running the real harness over the
+exact reproducer, which now passes.
+
+<b>The reason it stayed hidden is the more valuable half.</b>
+<code>ci-failure-issue.yml</code> opens a tracking issue when a watched workflow fails on
+<code>main</code>, and its own header states the rule: <i>"Any workflow that runs on main and nobody
+watches belongs here."</i> It watched <b>two</b>. <b>Twenty-four</b> ran unattended — fourteen on a
+cron. The rule was written down and not applied, which is the most expensive kind of convention,
+and it is the same blind spot that let <code>shards</code> fail both its scheduled runs and publish
+zero artifacts.
+
+All twenty-six are watched now, and the list is <b>enforced rather than curated</b>:
+<code>tests/unit/test_failure_alerting_covers_unattended.py</code> fails the build when a workflow
+runs unattended and is neither watched nor listed in an <code>EXPECTED_UNWATCHED</code> map with a
+reason. A new scheduled workflow therefore cannot quietly join the blind spot — the same shape as
+the action-pin lockstep guard, where the convention stays falsifiable instead of decaying the moment
+the person who wrote it stops looking.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">the fuzzer found a real crash and was right for three weeks — 24 unattended workflows, 2 watched</span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="eval-stats-could-never-publish">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Build · Bug</span></div>
         <h3>The published metrics could never be published</h3>
@@ -6226,6 +6296,57 @@ verified: green on the fix, and red again when the bare push is restored.</p></d
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">the published-metrics file has ONE commit in its whole history — the one that created it</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="zizmor-ignores-drift-and-make-lint-never-ran-it">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Build · Bug</span></div>
+        <h3>A line-anchored suppression drifted, and make lint never ran the tool</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p><code>.github/zizmor.yml</code> silences accepted workflow-SAST findings by
+<b><code>file:LINE</code></b>. That anchor is fragile in a specific way: insert anything above the
+construct and the ignore stops applying — or, worse, starts applying to a <i>different</i> construct
+nobody reviewed.
+
+It drifted here. Adding a header comment to <code>ci-failure-issue.yml</code> (explaining the
+alerting-coverage fix) moved its <code>on:</code> block from <b>line 12 to line 28</b>, and CI's
+<code>lint</code> job went red on <code>dangerous-triggers</code> — for a <code>workflow_run</code>
+trigger that had been reviewed and accepted months earlier, with the reasoning written out in the
+config right above the anchor.
+
+<b>The config predicted it.</b> Its own note reads: <i>"these ignores are keyed by file:LINE, so
+editing anything above a workflow's <code>on:</code> block moves it and silently un-ignores the
+finding."</i> A warning in a comment is not a control — it depends on the next person reading the
+file they are not editing.
+
+<b>The second half is why nothing local caught it.</b> <code>make lint</code> <b>never ran
+zizmor</b>. The recipe runs ruff, mypy, pyright, import-linter, vulture, xenon, interrogate, refurb,
+codespell and actionlint — and CI's <code>lint</code> job additionally runs zizmor, which the
+Makefile did not. So <code>make lint</code> could return <b>0</b> on a branch whose <code>lint</code>
+job was already red, which is exactly what happened: the gate was run, it passed, and it had not
+looked. (<code>CLAUDE.md</code> and an operator note both listed zizmor among the tools
+<code>make lint</code> runs. Neither was true.)
+
+Both halves are closed. zizmor now runs in <code>make lint</code>, guarded the same way actionlint
+is — present, or an explicit "skipping (CI enforces it)" rather than silence — and
+<code>--offline</code>, because the impostor and ref audits need GitHub API access the dev sandbox's
+proxy flakes on.
+
+And <code>tests/unit/test_zizmor_ignores_still_anchor.py</code> checks the cheap mechanical property
+the line numbers depend on: every <code>dangerous-triggers</code> anchor still lands on an
+<code>on:</code> line, no anchor points past the end of its file, no ignore names a workflow that no
+longer exists, and no anchor is duplicated. It does not re-run zizmor — CI owns that — it asserts
+that the anchors still mean what they say.
+
+<b>Both fixes were verified by re-breaking the tree.</b> With the anchor put back to
+<code>:12</code>, the new test goes red naming the drift, and <code>make lint</code> exits
+<b>2</b> — the failure that previously only appeared in CI, now reproducible in one command before
+the push.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">a comment four lines long un-silenced a reviewed finding, and no local gate could see it</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
