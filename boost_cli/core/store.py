@@ -1269,7 +1269,19 @@ def sync_plan() -> dict[str, list]:
             "missing_materializations": [], "out_of_scope_links": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
-        if not sdir.is_dir():
+        # A directory with no SKILL.md counts as missing, not as healthy. The
+        # check used to be `is_dir()` alone, and the gap was reachable: an
+        # interrupted copy, a partial rsync or a user deleting the file leaves
+        # the directory behind. `boost edit` and `boost evolve` both refuse such
+        # a skill with the hint "repair the store with `boost sync`" — and sync
+        # would answer "everything in sync", change nothing, and send the reader
+        # back to the same error. The remedy named the step they had just run.
+        #
+        # `missing_store` is the right bucket rather than a new one: its repair
+        # is already "reinstall this skill from its tap", which is exactly what
+        # a gutted directory needs, and reusing it means sync_apply needs no
+        # change at all.
+        if not sdir.is_dir() or not (sdir / "SKILL.md").is_file():
             plan["missing_store"].append(name)
             continue
         if entry.get("quarantined"):
