@@ -33,6 +33,7 @@ index.
 from __future__ import annotations
 
 import contextlib
+import http.client
 import json
 import os
 import urllib.error
@@ -253,7 +254,14 @@ def _post(url: str, key: str, payload: dict, timeout: int) -> dict | None:
     try:
         with nethttp.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read())
-    except (urllib.error.URLError, OSError, ValueError):
+    # http.client.HTTPException is the gap this list used to have. A connection
+    # cut mid-body raises IncompleteRead, which subclasses HTTPException and
+    # *neither* OSError nor ValueError — so it went straight through and out of
+    # `boost search` as a traceback, for a network hiccup whose right answer is
+    # to fall back to BM25. (RemoteDisconnected was already covered only by
+    # accident: it also subclasses ConnectionResetError.)
+    except (urllib.error.URLError, OSError, ValueError,
+            http.client.HTTPException):
         return None
 
 
