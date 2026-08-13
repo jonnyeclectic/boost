@@ -87,6 +87,7 @@ COMMANDS = [
     ("untap",       "tap", "taps", "Remove a registry tap"),
     ("taps",        "tap", "taps", "List all configured registry taps"),
     ("outdated",    "tap", "taps", "Show skills with available updates"),
+    ("catalog",     "tap", "taps", "Share the tapped catalogue so others skip the clone"),
     # Intelligence (8)
     ("chat",        "ai", "intelligence", "Ask about skills in plain language (RAG-grounded)"),
     ("distill",     "ai", "intelligence", "Merge multiple skills into one deduplicated skill"),

@@ -133,7 +133,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>7</b><span>Planned</span></div>
-      <div class="stat"><b>247</b><span>Loop finds</span></div>
+      <div class="stat"><b>249</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -7812,6 +7812,68 @@ tap. The test now lifts the arguments back out of the hint and feeds them to
         </div>
       </article>
 
+      <article class="cap rcard" id="shareable-catalogue-bundle">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Feature</span></div>
+        <h3>Share the catalogue instead of making everyone re-tap it</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p><b>Tapping is the slowest thing a new install does, and almost none of the cost is the part anyone
+needs.</b> Measured on a real machine with <b>458 registries</b> tapped: the shallow clones are
+<b>12&nbsp;GB</b> on disk, while the catalogue they produce — the JSON boost actually searches — is
+<b>101.1&nbsp;MB</b>, and <b>10.9&nbsp;MB</b> gzipped. Three orders of magnitude, for the artifact
+that carries all of the value.
+
+That gap is only worth acting on if the catalogue is genuinely sufficient on its own, so that was
+checked before a line was written: a <code>HOME</code> holding one cache file and a config entry, no
+clone anywhere, and <code>boost search</code> returned the right skill. The clone is what
+<code>install</code> needs, not what <code>search</code> needs.
+
+<b><code>boost catalog</code> — export, show, import.</b> Verified end-to-end against the real
+458-tap cache rather than a fixture:
+
+<code>--export</code> packed <b>458 taps · 59,972 entries · 10.9 MB</b>. On a brand-new
+<code>HOME</code> reporting <code>available 0 (across 0 taps)</code>, <code>--import</code> took
+<b>0.26&nbsp;s</b>, <code>boost reindex</code> a further <b>3.8&nbsp;s</b>, and
+<code>boost search "code review"</code> then returned real ranked hits over all 59,972 items with
+<b>zero repositories cloned</b> and 170&nbsp;MB on disk. The whole path, cold, is under four seconds.
+
+<b>What the format deliberately omits, and why each one is a decision rather than an oversight.</b>
+The <i>derived indexes</i> (<code>rag_index.json</code>, <code>rag_postings.sqlite</code>,
+<code>rag_vectors.sqlite</code>) are <b>3.8&nbsp;GB of that machine's 3.9&nbsp;GB cache
+directory</b> and rebuild from the catalogue in seconds, so shipping them would trade a 350x size
+increase for four seconds. Vectors are excluded for a second, stronger reason: they are only
+meaningful inside the embedding space that produced them, which is why
+<code>dense.export_shard</code> carries provider/model/dim/commit and <code>import_shard</code>
+refuses a mismatch outright. A bundle carries none of that, so it must not carry vectors either —
+<code>reindex --export-shard</code> is the reviewed path, and this format stays honestly narrower
+than it. The <i>repositories</i> are omitted because that is the point: every tap's URL rides in the
+manifest so the receiver can clone the one repo it ends up wanting, instead of all 458 up front.
+
+<b>Import merges, and never replaces.</b> The receiving machine may already have taps of its own,
+and silently discarding them would be a worse outcome than the slow tap this exists to avoid.
+Re-importing the same bundle is idempotent. A configured tap whose catalogue has not been built yet
+is <i>skipped and named</i> on export rather than being fatal — taps build one at a time, and
+refusing to export the other 457 because one is mid-build would break the feature exactly when it is
+most useful.
+
+<b>A bundle is a file people send each other, which makes it untrusted input in the most ordinary
+way there is.</b> Tar member names are the classic path-traversal vector, so extraction never lets
+the archive choose a destination: members must be regular files directly under
+<code>catalog/</code> with a plain <code>.json</code> basename, and the write path is then rebuilt
+here from that basename — validating the name <i>and</i> discarding it, because a check that feeds
+its own input forward is one refactor from being decorative. Symlink and hardlink members are
+refused (that is how an archive escapes its tree with no <code>..</code> anywhere in it), member
+count and member size are capped against a decompression bomb, and a manifest declaring an unknown
+<code>format</code> is refused rather than guessed at. Seven of the nineteen tests are that hostile
+archive, and each asserts on <i>where the bytes landed</i>, not merely that the call raised — a
+traversal that raises after writing the file has still written the file.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">10.9 MB replaces a 12 GB clone — a fresh machine reaches 59,972 searchable items in 4 seconds</span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="boost-first-carried-the-losing-trigger">
         <div class="head"><span class="pill inflight">In flight</span><span class="cat">Interop · Adoption</span></div>
         <h3><code>boost-first</code> carried the trigger that had already fired and lost — and could never be updated</h3>
@@ -9105,6 +9167,54 @@ nothing, neither does boost.</p></details>
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="self-update-claims-up-to-date-without-asking">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>self-update</code> said "already up to date" without asking PyPI</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p><code>boost self-update</code> inferred "already up to date (vN)" from the fact that
+<code>observed_version()</code> came back unchanged. Those are two different propositions, and the
+gap between them is exactly one stale HTTP cache wide. Observed on the 1.0.422 → 1.0.423 release:
+PyPI serves the simple index with <code>Cache-Control: max-age=600</code> and pip honours it, so a
+<code>pipx upgrade</code> at 13:15 — eight minutes before the 1.0.423 wheel existed — cached an
+index that had never heard of it, and the two retries at 13:22 and 13:23 (the second one
+<em>after</em> the upload) were both answered from that cache. pip's own words each time:
+<code>Requirement already satisfied: boost-skill-cli in ./lib/python3.14/site-packages
+(1.0.422)</code>. pipx exited 0, the version did not move, and boost reported that the user was
+current while they were a release behind — the most expensive kind of wrong answer, because it
+tells you to stop looking.
+
+Fixed at both ends. <code>upgrade_command()</code> now tells each manager to refresh its index
+(<code>--pip-args=--no-cache-dir</code> for pipx, <code>--no-cache-dir</code> for pip,
+<code>--refresh</code> for uv — pip has no index-only refresh and uv does, so the flag is
+per-manager rather than one shape), which removes the cause. And <code>selfupdate.latest_version()</code>
+asks PyPI's JSON API what the newest release actually is, so a no-op upgrade now has three
+distinct outcomes instead of one claim: PyPI is ahead → a <code>BoostError</code> naming both
+versions plus <code>force_command()</code>, which pins the exact version and forces the install
+(a plain upgrade is no help — the resolver has already declined); PyPI agrees → "already up to
+date"; PyPI unreachable → "boost is unchanged (vN); could not reach PyPI to confirm it is the
+latest", because an unearned claim with a different cause is the same bug. <code>None</code> is
+the load-bearing third answer throughout, as in <code>scripts/release_guard.py</code>, and
+<code>is_behind()</code> compares release numbers rather than text — <code>"1.0.9" &gt; "1.0.10"</code>
+lexicographically, which is how a version check ships a nag that never clears.
+
+Two findings came out of pointing the new code at real PyPI rather than only at fakes. The
+payload is ~735 KB (the JSON API embeds every release's file list), and a body that drops
+mid-read raises <code>http.client.IncompleteRead</code> — which on CPython ≤ 3.13 was also a
+<code>ValueError</code> and was caught by accident, but on 3.14 has <code>HTTPException</code> as
+its only base and escaped as a traceback out of a check that must never fail. It is now caught
+explicitly. The endpoint stays the fatter one on purpose: <code>info.version</code> excludes
+yanked releases, and computing the max over the leaner simple-API version list would offer a
+yanked release as "newer" and hand the user a force command that installs it.
+<code>BOOST_NO_NET=1</code> skips the request entirely, the same contract as
+<code>BOOST_NO_AI</code> / <code>BOOST_NO_SEED</code>, and the test sandbox sets it so no test
+reaches the network as a side effect of checking what a command prints.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
         </div>
       </article>
 

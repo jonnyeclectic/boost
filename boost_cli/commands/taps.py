@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 from contextlib import suppress
+from pathlib import Path
 
 from .. import cliparse, spin
 from ..core import (
@@ -316,4 +317,67 @@ def cmd_outdated(argv) -> int:
     print()
     out.dim("%d outdated · `boost update` upgrades (pinned items stay put)"
             % len(results))
+    return 0
+
+
+def cmd_catalog(argv) -> int:
+    """boost catalog --export FILE | --import FILE [--json]"""
+    p = cliparse.parser(
+        prog="boost catalog",
+        description="Share the tapped catalogue so others skip the clone")
+    mode = p.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--export", metavar="FILE",
+                      help="write every tapped registry's catalogue to FILE")
+    mode.add_argument("--import", metavar="FILE", dest="import_",
+                      help="merge a catalogue bundle into this machine")
+    mode.add_argument("--show", metavar="FILE",
+                      help="describe a bundle without importing it")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
+    args = p.parse_args(argv)
+
+    from ..core import catalogbundle
+
+    if args.show:
+        manifest = catalogbundle.read_manifest(Path(args.show))
+        if args.as_json:
+            print(json.dumps(manifest, indent=2))
+            return 0
+        out.heading("catalogue bundle %s" % args.show)
+        out.info("built %s · %d taps · %s entries"
+                 % (manifest.get("generated", "?"),
+                    len(manifest.get("taps") or []),
+                    "{:,}".format(int(manifest.get("entries") or 0))))
+        rows = [(t.get("name", "?"), str(t.get("entries", "?")),
+                 (t.get("commit") or "")[:7])
+                for t in (manifest.get("taps") or [])[:20]]
+        if rows:
+            out.table(rows, headers=("TAP", "ENTRIES", "COMMIT"))
+        return 0
+
+    if args.export:
+        stats = catalogbundle.export_bundle(Path(args.export))
+        if args.as_json:
+            print(json.dumps(stats, indent=2))
+            return 0
+        out.ok("packed %d taps · %s entries · %.1f MB → %s"
+               % (stats["taps"], "{:,}".format(stats["entries"]),
+                  stats["bytes"] / 1e6, stats["path"]))
+        if stats["skipped"]:
+            # Configured but not yet built. Named rather than counted: the
+            # reader needs to know WHICH registry the receiver will not get.
+            out.warn("skipped %d tap(s) with no built catalogue: %s"
+                     % (len(stats["skipped"]), ", ".join(stats["skipped"][:5])))
+        out.dim("the receiver runs `boost catalog --import <file>` — no clone, "
+                "no re-tap")
+        return 0
+
+    stats = catalogbundle.import_bundle(Path(args.import_))
+    if args.as_json:
+        print(json.dumps(stats, indent=2))
+        return 0
+    out.ok("imported %d catalogue file(s) · %s entries · %d new tap(s)"
+           % (stats["files"], "{:,}".format(stats["entries"]), stats["added"]))
+    out.dim("`boost search` works now; `boost install` clones just the one "
+            "registry it needs")
     return 0

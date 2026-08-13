@@ -99,6 +99,10 @@ def sandbox(tmp_path, monkeypatch):
     # which this fixture also sets, so without this guard every register
     # test would silently write a standing block into its sandbox HOME.
     monkeypatch.setenv("BOOST_NO_RULE", "1")
+    # `self-update` asks PyPI which version is newest before it will claim to
+    # be up to date. Same contract again: no test reaches the network as a side
+    # effect of checking what a command prints.
+    monkeypatch.setenv("BOOST_NO_NET", "1")
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)   # no real embed calls
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("BOOST_NO_EMBED", raising=False)

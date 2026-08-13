@@ -33,6 +33,7 @@ gitignored
 GitOps
 glassmorphic
 Grafana
+gzipped
 hardcode
 Helm
 hotspots
@@ -55,6 +56,7 @@ onboards
 OpenShift
 overclaiming
 Pinecone
+pipx
 PrestaShop
 Pulumi
 pytest
@@ -65,12 +67,12 @@ reindex
 repo
 repo's
 repos
-rerank
 Rerank
+rerank
 reranking
 ruleset
-rulesets
 Rulesets
+rulesets
 sandboxed
 sandboxing
 Shopify
@@ -98,6 +100,7 @@ unlinking
 unregister
 unstaged
 untap
+uv
 Vaadin
 vendored
 vendoring
