@@ -1660,7 +1660,8 @@ class TestSelfUpdate:
         self._pipx_install(monkeypatch, sandbox)
         r = boost("self-update", "--dry-run")
         assert "installed with: pipx" in r.out
-        assert "would run: /opt/bin/pipx upgrade boost-skill-cli" in r.out
+        assert ("would run: /opt/bin/pipx upgrade boost-skill-cli "
+                "--pip-args=--no-cache-dir") in r.out
 
     def test_plain_pip_install_upgrades_with_this_interpreter(
             self, boost, sandbox, monkeypatch):
@@ -1670,8 +1671,8 @@ class TestSelfUpdate:
                             lambda: "1.0.0")
         r = boost("self-update", "--dry-run")
         assert "installed with: pip" in r.out
-        assert ("would run: %s -m pip install --upgrade boost-skill-cli"
-                % sys.executable) in r.out
+        assert ("would run: %s -m pip install --no-cache-dir --upgrade "
+                "boost-skill-cli" % sys.executable) in r.out
 
     def test_pipx_upgrade_reports_the_new_version(self, boost, sandbox,
                                                   monkeypatch):
@@ -1683,10 +1684,75 @@ class TestSelfUpdate:
                             lambda: "9.9.9")
         r = boost("self-update")
         from boost_cli import __version__
-        assert ran == [["/opt/bin/pipx", "upgrade", "boost-skill-cli"]]
+        assert ran == [["/opt/bin/pipx", "upgrade", "boost-skill-cli",
+                        "--pip-args=--no-cache-dir"]]
         assert ("boost v%s → v9.9.9" % __version__) in r.out
         ev = journal.events(action="self-update")[0]
         assert ev["subject"] == "9.9.9" and ev["method"] == "pipx"
+
+    def _no_op_upgrade(self, monkeypatch, sandbox, latest):
+        """A manager that exits 0 and leaves the version exactly where it was.
+
+        `latest` is what PyPI is made to report — None for "PyPI would not say".
+        """
+        from boost_cli import __version__
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: None)
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: __version__)
+        monkeypatch.setattr("boost_cli.core.selfupdate.latest_version",
+                            lambda *a, **kw: latest)
+        return __version__
+
+    def test_a_no_op_upgrade_that_leaves_you_behind_is_not_up_to_date(
+            self, boost, sandbox, monkeypatch):
+        # The bug, end to end. pipx exits 0, pip says "Requirement already
+        # satisfied (1.0.422)" because PyPI's simple index was still cached
+        # from before the 1.0.423 upload, the version does not move — and boost
+        # used to print "already up to date (v1.0.422)". It never asked PyPI.
+        here = self._no_op_upgrade(monkeypatch, sandbox, latest="99.0.0")
+        r = boost("self-update", expect=1)
+        assert "already up to date" not in r.out
+        assert ("pipx exited 0 but boost is still v%s — PyPI has v99.0.0"
+                % here) in r.err
+        # The hint has to be actionable: a plain `upgrade` has already been
+        # tried and declined, so it must pin the version and force it.
+        assert "pipx install --force boost-skill-cli==99.0.0" in r.err
+
+    def test_a_no_op_upgrade_at_the_latest_version_is_up_to_date(
+            self, boost, sandbox, monkeypatch):
+        # PyPI agrees this version is the newest, so the claim is earned.
+        from boost_cli import __version__
+        here = self._no_op_upgrade(monkeypatch, sandbox, latest=__version__)
+        r = boost("self-update")
+        assert ("already up to date (v%s)" % here) in r.out
+
+    def test_a_no_op_upgrade_offline_admits_it_could_not_confirm(
+            self, boost, sandbox, monkeypatch):
+        # PyPI unreachable. "Nothing changed" is all boost observed, so that is
+        # all it may claim — asserting "up to date" here is the original bug
+        # with a different cause.
+        here = self._no_op_upgrade(monkeypatch, sandbox, latest=None)
+        r = boost("self-update")
+        assert ("boost is unchanged (v%s)" % here) in r.out
+        assert "could not reach PyPI to confirm" in r.out
+        assert "already up to date" not in r.out
+
+    def test_an_upgrade_that_moved_does_not_ask_pypi(self, boost, sandbox,
+                                                     monkeypatch):
+        # The version moved, so the question is already answered. Asking PyPI
+        # anyway would put a network round-trip on the happy path.
+        self._pipx_install(monkeypatch, sandbox)
+        monkeypatch.setattr("boost_cli.core.selfupdate.run_upgrade",
+                            lambda cmd, **kw: None)
+        monkeypatch.setattr("boost_cli.core.selfupdate.observed_version",
+                            lambda: "9.9.9")
+
+        def never(*a, **kw):
+            raise AssertionError("a successful upgrade must not query PyPI")
+        monkeypatch.setattr("boost_cli.core.selfupdate.latest_version", never)
+        assert "→ v9.9.9" in boost("self-update").out
 
     def test_upgrade_that_reveals_no_version_does_not_claim_one(
             self, boost, sandbox, monkeypatch):

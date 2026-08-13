@@ -1498,12 +1498,40 @@ def _self_update_package(method: str, dry_run: bool) -> int:
     journal.log("self-update", new or old, previous=old, method=method)
     if new and new != old:
         out.ok("boost v%s → v%s" % (old, new))
-    elif new:
-        out.ok("already up to date (v%s)" % new)
-    else:
+        return 0
+    if not new:
         # The upgrade succeeded but we never saw a version — say exactly that
         # rather than claim one.
         out.ok("upgraded via %s; run `boost --version` to confirm" % method)
+        return 0
+    return _report_no_op(method, new)
+
+
+def _report_no_op(method: str, here: str) -> int:
+    """Explain a manager that exited 0 without moving the version.
+
+    "The version did not change" is not "you are on the latest release", and
+    boost used to print the second on evidence for only the first. When the
+    index pip resolved against was stale, that told a user who was a release
+    behind that they were current — so ask PyPI which it is, and let the three
+    possible answers say three different things.
+    """
+    latest = selfupdate.latest_version()
+    if latest is None:
+        # Offline. Report only what was observed; claiming "up to date" here is
+        # the same unearned claim with a different cause.
+        out.ok("boost is unchanged (v%s); could not reach PyPI to confirm it is "
+               "the latest" % here)
+        return 0
+    if selfupdate.is_behind(here, latest):
+        raise BoostError(
+            "%s exited 0 but boost is still v%s — PyPI has v%s"
+            % (method, here, latest),
+            hint="no newer candidate was offered: either the index it resolved "
+                 "against was stale, or this environment's python is too old "
+                 "for the new wheel. Pin it with `%s`"
+                 % " ".join(selfupdate.force_command(method, latest)))
+    out.ok("already up to date (v%s)" % here)
     return 0
 
 
