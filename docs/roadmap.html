@@ -133,7 +133,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>7</b><span>Planned</span></div>
-      <div class="stat"><b>243</b><span>Loop finds</span></div>
+      <div class="stat"><b>246</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -9033,6 +9033,64 @@ nothing, neither does boost.</p></details>
         </div>
       </article>
 
+      <article class="cap rcard" id="sync-reported-success-for-a-link-it-refused">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3><code>sync</code> reported success for a link it had just refused</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p>Observed on a real machine as a closed loop with no exit: <code>boost sync</code> answers
+"✓ everything in sync" &middot; <code>boost doctor</code> answers "! skill hyperframes not linked
+for claude-code — run <code>boost sync</code>" &middot; repeat forever.
+
+Another installer had written <code>~/.claude/skills/hyperframes</code> as a real directory.
+<code>link_agents</code> correctly refuses to delete a path boost does not own and records it in
+<code>.conflicts</code> — but <code>sync_apply</code> dropped that value on the floor, appended no
+action, and the command layer read "no actions" as "nothing to do". Doctor, meanwhile, tested only
+<code>is_symlink()</code> and prescribed the command that had just declined to help.
+
+<code>sync_plan</code> now separates the two cases it had been conflating: a
+<code>missing_link</code> is one sync can create (nothing in the way, or a dangling symlink boost
+owns and may replace), and a <code>blocked_link</code> is a path occupied by a file boost will not
+touch. <code>sync</code> warns and names the path; <code>doctor</code> says why sync did nothing
+and gives the step that unblocks it. store.py's own comment already named this anti-pattern — "sync
+would answer 'everything in sync', change nothing, and send the reader back to the same error" —
+one function above the code that was doing it.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="two-crashes-that-should-have-been-messages">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Two crashes that should have been messages</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p>Both were found by reading the crash reports on a real machine rather than by review, and both are
+the same shape: an expected, fixable condition escaping as a traceback.
+
+<strong>An unwritable store.</strong> <code>store._copy_skill</code> stages its copy with
+<code>tempfile.mkdtemp</code> next to the destination. Where <code>~/.agents/skills</code> could not
+be written — a sandboxed shell is the usual cause — the raw <code>PermissionError</code> escaped, so
+<code>boost install &lt;skill&gt;</code> answered with a stack trace ending in a temp path nobody
+recognises, and filed a crash report for a permissions problem. It now names the directory, which
+is the whole diagnosis. A non-permissions <code>OSError</code> (disk full, read-only mount) is
+reported as itself rather than described as denied.
+
+<strong>A truncated embedding response.</strong> <code>embed._post</code> guarded with
+<code>except (URLError, OSError, ValueError)</code>. <code>http.client.IncompleteRead</code> — what
+a connection cut mid-body raises — subclasses <code>HTTPException</code> and <em>none</em> of those
+three, so it went straight through <code>resp.read()</code> and out of <code>boost search</code>.
+Seen as <code>IncompleteRead(6629 bytes read, 6200 more expected)</code> on
+<code>boost search mempalace</code>. The right answer to a network hiccup is to return None and let
+retrieval fall back to BM25, which is what it now does. <code>RemoteDisconnected</code> had been
+covered only by accident — it also subclasses <code>ConnectionResetError</code>.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+        </div>
+      </article>
+
       <article class="cap rcard" id="mcp-register-names-server-before-env">
         <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · MCP</span></div>
         <h3>Order the server name before -e flags in `boost mcp register`</h3>
@@ -9468,6 +9526,35 @@ the command layer never was.</p></details>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">the one install path with no human watching was the one not scanning</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="crash-reports-leak-api-keys">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Crash reports carried API keys in cleartext</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p>A crash report is the one file boost actively invites a user to paste into a bug report — its
+docstring says so: "a user can attach one file to a bug report instead of reproducing by hand."
+<code>_env_snapshot()</code> built that file by printing every <code>BOOST_*</code> variable
+verbatim. Since boost documents <code>BOOST_ANTHROPIC_API_KEY</code> as the way to supply a key,
+the variable most likely to be <em>set</em> was also the one most likely to be secret.
+
+Found on a real machine, not in review: three reports under <code>~/.boost/logs/</code>, each
+carrying a live <code>sk-ant-api03-…</code> key, written by two ordinary
+<code>boost install</code> failures and one <code>boost search</code>. Nothing had to go wrong
+beyond the crash itself — the leak was the reporting path working as designed.
+
+Values are now withheld two ways, because either alone rots. A name ending in
+<code>KEY</code>/<code>TOKEN</code>/<code>SECRET</code>/<code>PASSWORD</code>/<code>AUTH</code> is
+redacted, which covers every provider without enumerating them; and a value carrying a known
+credential prefix (<code>sk-</code>, <code>ghp_</code>, <code>xox…</code>, <code>AKIA…</code>) is
+redacted whatever it is called, because a name denylist always trails the next provider someone
+adds. Redacted, never dropped: a missing line reads as "unset", and the fact that a key
+<em>was</em> configured is exactly what the reader needs.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
         </div>
       </article>
 

@@ -427,9 +427,21 @@ def cmd_doctor(argv):
             if adir is None:
                 continue
             link = adir / name
-            if not link.is_symlink() or not link.exists():
+            # Two different failures wore one message. `boost sync` creates a
+            # link where nothing is in the way and replaces a boost-owned one
+            # that dangles — but it will not delete a real file or directory
+            # another installer put there, so prescribing it for that case sent
+            # the reader in a circle: sync answers "everything in sync", doctor
+            # repeats itself. Name the thing in the way instead.
+            if link.is_symlink() and link.exists():
+                continue
+            if not link.is_symlink() and link.exists():
+                bad("skill %s not linked for %s — %s exists and is not a boost "
+                    "link; move or delete it, then run `boost sync`"
+                    % (name, agent, paths.tilde(link)))
+            else:
                 bad("skill %s not linked for %s — run `boost sync`" % (name, agent))
-                skill_issues += 1
+            skill_issues += 1
         # The other direction. `agents` records what is linked and `only_agents`
         # what was asked for, so a link the declaration excludes is pure lock
         # arithmetic here — no second walk of the agent dirs. Doctor has to say

@@ -568,6 +568,7 @@ def cmd_uninstall(argv: list[str]) -> int:
 _PLAN_LABELS = [
     ("missing_store", "missing from store"),
     ("missing_links", "missing agent links"),
+    ("blocked_links", "agent links blocked by a foreign file"),
     ("stale_links", "stale links"),
     ("orphaned_store", "orphaned store dirs"),
     ("missing_materializations", "missing rule/workflow files"),
@@ -651,9 +652,11 @@ def cmd_sync(argv: list[str]) -> int:
                 journal.log("prune", name)
                 pruned.append(name)
     left = [n for n in orphans if n not in pruned]
+    blocked = plan["blocked_links"]
     if args.json:
         print(json.dumps({"actions": actions, "pruned": pruned,
-                          "orphaned_store": left, "out_of_scope_links": oos}))
+                          "orphaned_store": left, "out_of_scope_links": oos,
+                          "blocked_links": blocked}))
         return 0
     for a in actions:
         out.ok(a)
@@ -668,7 +671,17 @@ def cmd_sync(argv: list[str]) -> int:
                  "`boost install <skill> --force` naming every `--agent`"
                  % (_plural(len(oos), "link"),
                     ", ".join("%s → %s" % (n, a) for n, a in oos)))
-    if not actions and not pruned and not left and not oos:
+    # Before this, a blocked link produced no action and no warning, so the
+    # branch below reported "everything in sync" for a repair that had just
+    # been refused — and `boost doctor` went on prescribing this command.
+    if blocked:
+        out.warn("%s could not be created: %s. boost will not delete a file it "
+                 "does not own — move or delete the path, then re-run `boost "
+                 "sync`"
+                 % (_plural(len(blocked), "agent link"),
+                    ", ".join("%s → %s (%s in the way)"
+                              % (n, a, _tilde(Path(p))) for n, a, p in blocked)))
+    if not actions and not pruned and not left and not oos and not blocked:
         out.ok("everything in sync")
     return 0
 
