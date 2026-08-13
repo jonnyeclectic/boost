@@ -66,9 +66,21 @@ jobs:
           REGISTRIES_INPUT: ${{ inputs.registries }}
         run: |
           if [ -n "$REGISTRIES_INPUT" ]; then
+            # A dispatch input IS a space-separated list of repositories, so
+            # splitting it on whitespace is correct here and only here.
             repos="$REGISTRIES_INPUT"
           else
-            repos=$(grep -v '^#' tests/eval/taps.txt | grep -v '^[[:space:]]*$' | tr '\n' ' ')
+            # NOT `grep -v '^#' tests/eval/taps.txt`. A row is
+            # `owner/repo <40-char sha> <entry count>`, so splitting the file on
+            # whitespace splits it into FIELDS, not rows: 20 registries became a
+            # 60-entry matrix — 20 repos, 20 bare SHAs and 20 integers, each
+            # dispatched to a job that ran `boost tap` on it. The 2026-08-09 run
+            # is full of `build (18)` and
+            # `build (b29e7cf65e5cb78a5ac33d582270551bc74a14eb)`.
+            # `--list-repos` prints one name per line from the same parser the
+            # eval gate uses, so the row/field distinction is made once, in
+            # tested Python, instead of re-decided in shell.
+            repos=$(python3 scripts/eval_corpus.py --list-repos | tr '\n' ' ')
           fi
           # Split on whitespace in Python, not the shell: `printf '%s\n' $repos`
           # relies on word-splitting that does not survive quoting, and produced
