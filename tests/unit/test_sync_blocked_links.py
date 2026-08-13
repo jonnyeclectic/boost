@@ -19,19 +19,24 @@ same error."
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from boost_cli.core import catalog, paths, registry, store
-
-# Same layout table as tests/unit/test_store.py. Duplicated rather than
-# imported: importing a test module for its fixtures makes pytest collect it
-# twice under some rootdir layouts.
-AGENT_DIRS = {"claude-code": ".claude", "windsurf": ".windsurf",
-              "cursor": ".cursor", "gemini": ".gemini"}
+from boost_cli.core import agents, catalog, registry, store
 
 
 def _agent_path(agent, name="brainstorming"):
-    return paths.home() / AGENT_DIRS[agent] / "skills" / name
+    """Ask the code where the link goes instead of restating the layout.
+
+    This used to build the path from a local ``{agent: dotdir}`` table copied
+    out of test_store.py. That is a second source of truth for a mapping
+    core/agents.py already owns, and it cost all three Windows jobs: the table
+    produced a path that named the same directory as the one ``sync_plan``
+    records but did not spell it the same way, so every assertion comparing the
+    two as strings failed on Windows and passed everywhere else.
+    """
+    return agents.linking_agents()[agent] / name
 
 
 @pytest.fixture()
@@ -60,7 +65,12 @@ class TestBlockedLinks:
         link.unlink()
         link.mkdir()
         blocked = store.sync_plan()["blocked_links"]
-        assert any(str(link) in str(row) for row in blocked)
+        # Compare the paths as paths, not as strings. Two spellings of one
+        # location are equal here and unequal to `in`, which is what made this
+        # the only assertion in the file that Windows failed.
+        assert any(Path(p).resolve() == link.resolve() for _, _, p in blocked), (
+            "the warning has to name the path that is in the way, or the reader "
+            "has nothing to move")
 
     def test_a_genuinely_absent_link_is_still_missing(self, brainstorming):
         # The ordinary case must keep working: nothing in the way, sync fixes it.
