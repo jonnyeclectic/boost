@@ -17,6 +17,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from ..errors import BoostError
 from . import catalog, embed, paths
 from .rag import Hit, chunk, entry_key, read_body
 
@@ -385,29 +386,57 @@ def export_shard(tap: str) -> dict:
     the embedding space that produced them, so provider/model/dim have to travel
     with the rows, and the registry commit has to travel too or a stale shard
     would be indistinguishable from a current one.
+
+    Raises :class:`BoostError` when the rows are present and unreadable, which is
+    a different problem from having none — see below.
     """
-    # Plain sqlite3, NOT _connect: exporting reads `chunks`, `meta` and the
-    # stored embedding blobs, all ordinary tables. Routing through _connect
-    # would make export impossible without the sqlite-vec extension — the same
-    # trap `_recorded_meta` documents — and a machine that built vectors and
-    # then dropped the extra is exactly the one whose shard is worth having.
     if not db_path().exists():
         return {"tap": tap, "chunks": []}
-    try:
-        con = sqlite3.connect(str(db_path()))
-    except sqlite3.Error:
-        return {"tap": tap, "chunks": []}
+    # `vec_chunks` is a vec0 VIRTUAL table, so reading an embedding needs the
+    # extension loaded: on a plain connection the join below raises `no such
+    # module: vec0`, every time, for every tap. An earlier revision opened
+    # plainly on the theory that export "reads ordinary tables" — true of
+    # `chunks` and `meta`, false of the one relation holding the vectors — and
+    # the resulting failure was swallowed into an empty shard. That is why no
+    # scheduled `shards` run has ever produced an artifact. Fall back to a plain
+    # connection anyway: it still serves a store whose vectors live in an
+    # ordinary table, and it is what makes the distinction below observable
+    # rather than an exception from the connect call.
+    con = _connect()
+    if con is None:
+        try:
+            con = sqlite3.connect(str(db_path()))
+        except sqlite3.Error:
+            return {"tap": tap, "chunks": []}
     try:
         meta = _read_meta(con)
         commits = meta.get("commits")
         commit = ""
         if isinstance(commits, dict):
             commit = str(commits.get(tap.replace("/", "__")) or "")
+        # `chunks` alone, first, because it is an ordinary table and therefore
+        # always readable. It answers the question the caller's error message
+        # depends on: are there rows for this tap at all?
+        expected = _tap_chunk_count(con, tap)
         chunks = []
-        for row in con.execute(
+        try:
+            rows = con.execute(
                 "SELECT c.name, c.tap, c.path, c.kind, c.cix, c.snip, v.embedding "
                 "FROM chunks c JOIN vec_chunks v ON v.rowid = c.id "
-                "WHERE c.tap = ? ORDER BY c.id", (tap,)):
+                "WHERE c.tap = ? ORDER BY c.id", (tap,)).fetchall()
+        except sqlite3.Error as exc:
+            # Only a tap that HAS chunks can have unreadable ones. With none,
+            # the vector relation not resolving says nothing about this tap —
+            # it is the ordinary "nothing built here" case, and the caller's
+            # "build them first" is the right answer.
+            if not expected:
+                return {"tap": tap, "chunks": []}
+            raise _unreadable_vectors(tap, expected, exc) from exc
+        if expected and not rows:
+            # The join resolved but produced nothing for a tap that has chunks:
+            # the vector rows are gone or unlinked. Still not "never built".
+            raise _unreadable_vectors(tap, expected, None)
+        for row in rows:
             name, ctap, path, kind, cix, snip, emb = row
             chunks.append({
                 "name": name, "tap": ctap, "path": path, "kind": kind,
@@ -420,10 +449,41 @@ def export_shard(tap: str) -> dict:
                 "provider": meta.get("provider"), "model": meta.get("model"),
                 "dim": meta.get("dim"), "version": INDEX_VERSION,
                 "chunks": chunks}
-    except sqlite3.Error:
-        return {"tap": tap, "chunks": []}
     finally:
         con.close()
+
+
+def _tap_chunk_count(con: sqlite3.Connection, tap: str) -> int:
+    """How many chunk rows this tap has, or 0 when `chunks` is unreadable.
+
+    Deliberately forgiving: a store with no `chunks` table has nothing built,
+    which is the ordinary empty case rather than the corrupt one.
+    """
+    try:
+        row = con.execute("SELECT COUNT(*) FROM chunks WHERE tap = ?",
+                          (tap,)).fetchone()
+    except sqlite3.Error:
+        return 0
+    return int(row[0]) if row else 0
+
+
+def _unreadable_vectors(tap: str, expected: int,
+                        exc: sqlite3.Error | None) -> BoostError:
+    """The error for "the rows are there, and this process cannot read them".
+
+    Kept apart from the empty case on purpose. Both used to surface as `no
+    vectors for <tap>` with the hint `build them first with reindex --dense` —
+    advice that is correct for an unbuilt store and a dead end for this one,
+    because `reindex --dense` is what wrote the rows the message says are
+    missing. Two scheduled `shards` runs died against that loop.
+    """
+    detail = ": %s" % exc if exc is not None else ""
+    return BoostError(
+        "%s has %d embedded chunk%s but its vectors cannot be read%s"
+        % (tap, expected, "" if expected == 1 else "s", detail),
+        hint="reading vectors needs the sqlite-vec extension — install the "
+             "`rag` extra (`pip install 'boost-skill-cli[rag]'`); the rows "
+             "themselves are intact, so no re-embedding is required")
 
 
 def import_shard(shard: dict, commit: str) -> tuple[bool, str]:

@@ -548,6 +548,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="static concentration/count checks, no network")
     p.add_argument("--list", action="store_true",
                    help="print the parsed rows and exit")
+    p.add_argument("--list-repos", action="store_true",
+                   help="print one owner/repo per line and exit (a matrix "
+                        "source that cannot be field-split by mistake)")
     p.add_argument("--taps", metavar="PATH", default=str(DEFAULT_TAPS),
                    help="corpus list to act on (default the required corpus; "
                         "%s is the scale tier)" % SCALE_TAPS.name)
@@ -555,6 +558,14 @@ def main(argv: list[str] | None = None) -> int:
     taps = Path(args.taps)
     if not taps.is_file():
         raise SystemExit("no such corpus list: %s" % taps)
+    if args.list_repos:
+        # Names only, one per line. `--list` prints the SHA and count too, and
+        # a caller that splits THAT on whitespace gets three matrix entries per
+        # row — which is exactly how shards.yml ended up dispatching 60 jobs
+        # for 20 registries, two thirds of them tapping a bare SHA or integer.
+        for repo, _sha, _count in parse_taps(taps.read_text(encoding="utf-8")):
+            print(repo)
+        return 0
     if args.list:
         for repo, sha, count in parse_taps(taps.read_text(encoding="utf-8")):
             print("%s %s %s" % (repo, sha or "", "" if count is None else count))
@@ -567,7 +578,8 @@ def main(argv: list[str] | None = None) -> int:
         return _ensure(taps, relock=True)
     if args.ensure:
         return _ensure(taps)
-    p.error("provide --ensure, --relock, --refresh, --audit or --list")
+    p.error("provide --ensure, --relock, --refresh, --audit, --list "
+            "or --list-repos")
     return 2
 
 
