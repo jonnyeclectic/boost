@@ -98,7 +98,7 @@
   <aside>
     <div class="brand"><b>✦ boost</b><span>commands</span></div>
     <a class="home" href="index.html">← back to overview</a>
-    <input id="q" type="search" placeholder="Filter 78 commands…" autocomplete="off" aria-label="Filter commands">
+    <input id="q" type="search" placeholder="Filter 79 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">install</a>
@@ -146,6 +146,7 @@
       <a class="cmd-link" href="#cmd-untap" data-search="untap remove a registry tap  -f, --force name">untap</a>
       <a class="cmd-link" href="#cmd-taps" data-search="taps list all configured registry taps  --json">taps</a>
       <a class="cmd-link" href="#cmd-outdated" data-search="outdated show skills with available updates  --json">outdated</a>
+      <a class="cmd-link" href="#cmd-catalog" data-search="catalog share the tapped catalogue so others skip the clone  --export file --import file --show file --json">catalog</a>
     </div>
     <div class="group" data-group="ai">
       <div class="group-h">AI-assisted</div>
@@ -205,7 +206,7 @@
   </aside>
   <main id="top">
     <h1>boost <b>command reference</b></h1>
-    <p class="lead">All <b>78</b> commands, generated from the CLI itself —
+    <p class="lead">All <b>79</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
       <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">
@@ -668,6 +669,18 @@
         <pre class="syn">boost outdated [--json]</pre>
         <div class="args-h">Options</div>
         <div class="args">
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
+        </div>
+      </section>
+      <section class="cmd" id="cmd-catalog" data-search="catalog share the tapped catalogue so others skip the clone  --export file --import file --show file --json">
+        <h3><span class="cname">catalog</span><span class="gtag">tap</span></h3>
+        <p class="summary">Share the tapped catalogue so others skip the clone</p>
+        <pre class="syn">boost catalog [--export FILE] [--import FILE] [--show FILE] [--json]</pre>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--export FILE</code><span>write every tapped registry&#x27;s catalogue to FILE</span></div>
+          <div class="arg"><code>--import FILE</code><span>merge a catalogue bundle into this machine</span></div>
+          <div class="arg"><code>--show FILE</code><span>describe a bundle without importing it</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>

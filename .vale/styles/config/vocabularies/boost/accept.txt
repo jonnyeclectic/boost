@@ -33,6 +33,7 @@ gitignored
 GitOps
 glassmorphic
 Grafana
+gzipped
 hardcode
 Helm
 hotspots
