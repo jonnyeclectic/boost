@@ -491,7 +491,7 @@ class TestUninstall:
 
 class TestSyncPlan:
     EMPTY: ClassVar[dict] = {"missing_store": [], "missing_links": [],
-             "stale_links": [], "orphaned_store": [],
+             "blocked_links": [], "stale_links": [], "orphaned_store": [],
              "missing_materializations": [], "out_of_scope_links": []}
 
     def test_clean_state_empty_plan(self, brainstorming):

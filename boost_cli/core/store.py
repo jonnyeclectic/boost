@@ -251,9 +251,29 @@ def _copy_skill(src: Path, dest: Path) -> None:
     fast renames, and a failed swap rolls back to the original.
     """
     dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    staged = Path(tempfile.mkdtemp(dir=str(dest.parent),
-                                   prefix="." + dest.name + ".tmp"))
+    # Staging needs to *write* next to dest, and a store that cannot be written
+    # is an ordinary, fixable condition — a sandboxed shell, a synced folder, a
+    # store owned by another user. It used to escape as a raw PermissionError
+    # from tempfile.mkdtemp, so boost answered `boost install <skill>` with a
+    # stack trace ending in a temp path nobody recognises, and filed a crash
+    # report for it. Name the directory instead: that is the whole diagnosis.
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        staged = Path(tempfile.mkdtemp(dir=str(dest.parent),
+                                       prefix="." + dest.name + ".tmp"))
+    except PermissionError as exc:
+        raise BoostError(
+            "cannot write to the skill store at %s" % dest.parent,
+            hint="check that you own the directory and it is writable "
+                 "(`ls -ld %s`); a sandboxed shell is the usual cause"
+                 % dest.parent) from exc
+    except OSError as exc:
+        # Not a permissions problem — disk full, read-only mount, name too
+        # long. Say which, rather than describing every one of them as denied.
+        raise BoostError(
+            "cannot stage a copy in %s: %s"
+            % (dest.parent, exc.strerror or exc),
+            hint="free space or fix the mount, then re-run") from exc
     backup = None
     try:
         shutil.copytree(
@@ -1257,15 +1277,27 @@ def sync_plan() -> dict[str, list]:
 
     Returns {missing_store, missing_links, stale_links, orphaned_store}
       missing_store:  lock entries whose store dir is gone
-      missing_links:  (skill, agent) pairs that should be linked but aren't
+      missing_links:  (skill, agent) pairs that should be linked but aren't,
+                      and that sync *can* create
+      blocked_links:  (skill, agent, path) where something that is not a boost
+                      symlink occupies the link path — sync will not clobber it
       stale_links:    paths in agent dirs that are broken/unmanaged symlinks
       orphaned_store: store dirs not present in the lock file
       out_of_scope_links: (skill, agent) pairs linked outside a declared
                       ``--agent`` narrowing — reported, never auto-removed
+
+    ``blocked_links`` exists because lumping it into ``missing_links`` made
+    ``boost sync`` promise a repair it could never perform. ``link_agents``
+    refuses to delete a real file or directory it does not own (right), records
+    it in ``.conflicts`` — and ``sync_apply`` dropped that on the floor, so the
+    command printed "everything in sync" while ``boost doctor`` went on
+    reporting the same skill unlinked and prescribing ``boost sync``. Seen for
+    real where another installer had written ``~/.claude/skills/hyperframes``
+    as a directory: a closed loop with no exit.
     """
     lock = lockfile.installed()
     plan: dict[str, list] = {"missing_store": [], "missing_links": [],
-            "stale_links": [], "orphaned_store": [],
+            "blocked_links": [], "stale_links": [], "orphaned_store": [],
             "missing_materializations": [], "out_of_scope_links": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
@@ -1298,7 +1330,14 @@ def sync_plan() -> dict[str, list]:
         in_scope = scoped_agents(entry, linking)
         for agent, adir in in_scope.items():
             link = adir / name
-            if not link.is_symlink() or not link.exists():
+            # A symlink is boost's to replace even when it dangles; anything
+            # else that exists is someone else's file and stays put.
+            if link.is_symlink():
+                if not link.exists():
+                    plan["missing_links"].append((name, agent))
+            elif link.exists():
+                plan["blocked_links"].append((name, agent, str(link)))
+            else:
                 plan["missing_links"].append((name, agent))
         # The other direction, which nothing checked: a link that exists in an
         # agent the declaration excludes. The loop above is narrowed to the

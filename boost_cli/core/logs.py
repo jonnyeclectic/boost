@@ -47,6 +47,7 @@ import logging
 import logging.handlers
 import os
 import platform
+import re
 import sys
 import time
 import traceback
@@ -262,10 +263,46 @@ def _boost_version() -> str:
         return "unknown"
 
 
+#: Variable names whose value is a credential by definition. Matched on the
+#: trailing word so ``BOOST_ANTHROPIC_API_KEY``, ``BOOST_GITHUB_TOKEN`` and
+#: ``BOOST_TAP_PASSWORD`` are all caught without enumerating providers.
+_SECRET_NAME = re.compile(
+    r"(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|AUTH)$", re.IGNORECASE)
+
+#: Value prefixes that are unmistakably a credential whatever the variable is
+#: called. A name denylist alone always trails the next provider someone adds,
+#: and the leak this guards against cost nothing to introduce: boost documents
+#: ``BOOST_ANTHROPIC_API_KEY``, so the variable most likely to be *set* was also
+#: the one most likely to be secret.
+_SECRET_VALUE = re.compile(
+    r"^(?:sk-|pk-|rk-|voy-|pa-|ghp_|gho_|ghu_|ghs_|ghr_|github_pat_"
+    r"|xox[abprs]-|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35})")
+
+REDACTED = "<REDACTED>"
+
+
+def _redact(name: str, value: str) -> str:
+    """The value to print for ``name``, with credentials withheld.
+
+    Redacts rather than drops. A missing line reads as "unset", which sends
+    whoever is reading the crash report down the wrong path — the fact that a
+    key *was* configured is exactly what they need to know.
+    """
+    if _SECRET_NAME.search(name) or _SECRET_VALUE.match(value):
+        return REDACTED
+    # Belt and braces for the shape a credential takes even when it carries no
+    # recognised prefix: one long opaque run with no separators. Excluding
+    # anything path-like keeps ordinary debug values (dirs, URLs) readable.
+    if (len(value) >= 40 and not set(value) & set(" \t/\\")
+            and re.fullmatch(r"[A-Za-z0-9_.+=-]+", value)):
+        return REDACTED
+    return value
+
+
 def _env_snapshot() -> list[str]:
     keys = sorted(k for k in os.environ
                   if k.startswith("BOOST_") or k in ("NO_COLOR", "CLICOLOR_FORCE"))
-    return ["%s=%s" % (k, os.environ[k]) for k in keys]
+    return ["%s=%s" % (k, _redact(k, os.environ[k])) for k in keys]
 
 
 def write_crash_report(exc: BaseException, argv: list[str]) -> Path | None:
