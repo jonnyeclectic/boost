@@ -1,4 +1,4 @@
-"""boost CLI dispatcher — 78 commands across 8 groups.
+"""boost CLI dispatcher — 80 commands across 8 groups.
 
 Each command lives in boost_cli/commands/<module>.py as
     def cmd_<name_with_underscores>(argv: list[str]) -> int
@@ -47,7 +47,7 @@ GROUPS = {
 # (name, group, module, summary) — the single source of truth for the
 # command surface. docs/overview.html mirrors this list.
 COMMANDS = [
-    # Package Management (14)
+    # Package Management (13)
     ("install",     "pkg", "pkg", "Install a skill from a tap registry"),
     ("uninstall",   "pkg", "pkg", "Remove an installed skill, rule, workflow, or config"),
     ("sync",        "pkg", "pkg", "Reconcile installed skills & symlinks against the lock file"),
@@ -82,13 +82,13 @@ COMMANDS = [
     ("home",        "info", "info", "Open a skill's GitHub page in the browser"),
     ("deps",        "info", "info", "Show dependency & conflict relationships"),
     ("tag",         "info", "info", "Custom labels for organizing skills"),
-    # Registry (Taps) (4)
+    # Registry (Taps) (5)
     ("tap",         "tap", "taps", "Add a GitHub repo as a skill registry"),
     ("untap",       "tap", "taps", "Remove a registry tap"),
     ("taps",        "tap", "taps", "List all configured registry taps"),
     ("outdated",    "tap", "taps", "Show skills with available updates"),
     ("catalog",     "tap", "taps", "Share the tapped catalogue so others skip the clone"),
-    # Intelligence (8)
+    # Intelligence (9)
     ("chat",        "ai", "intelligence", "Ask about skills in plain language (RAG-grounded)"),
     ("distill",     "ai", "intelligence", "Merge multiple skills into one deduplicated skill"),
     ("simulate",    "ai", "intelligence", "Preview how a skill would change Claude's behavior"),
@@ -114,9 +114,10 @@ COMMANDS = [
     ("attest",      "chk", "safety", "Display/verify the install record for skills"),
     ("health",      "chk", "quality", "Dashboard of skill-environment health"),
     ("trust",       "chk", "quality", "Manage signing keys & verify tap provenance"),
-    # Configuration (12)
+    # Configuration (13)
     ("config",      "cfg", "configuration", "Display or modify boost configuration"),
     ("clean",       "cfg", "configuration", "Clear stale caches & broken symlinks"),
+    ("compact",     "cfg", "configuration", "Shrink tap clones to the files boost indexes"),
     ("create",      "cfg", "configuration", "Scaffold a new skill from a template"),
     ("policy",      "cfg", "configuration", "Manage & enforce skill governance policies"),
     ("onboard",     "cfg", "configuration", "Add skill-tracker telemetry to a repo & open a PR"),

@@ -98,7 +98,7 @@
   <aside>
     <div class="brand"><b>✦ boost</b><span>commands</span></div>
     <a class="home" href="index.html">← back to overview</a>
-    <input id="q" type="search" placeholder="Filter 79 commands…" autocomplete="off" aria-label="Filter commands">
+    <input id="q" type="search" placeholder="Filter 80 commands…" autocomplete="off" aria-label="Filter commands">
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">install</a>
@@ -182,6 +182,7 @@
       <div class="group-h">Config &amp; setup</div>
       <a class="cmd-link" href="#cmd-config" data-search="config display or modify boost configuration  --json {list,get,set,unset} key value">config</a>
       <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep">clean</a>
+      <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone tap">compact</a>
       <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">create</a>
       <a class="cmd-link" href="#cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">policy</a>
       <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run -f, --force">onboard</a>
@@ -206,7 +207,7 @@
   </aside>
   <main id="top">
     <h1>boost <b>command reference</b></h1>
-    <p class="lead">All <b>79</b> commands, generated from the CLI itself —
+    <p class="lead">All <b>80</b> commands, generated from the CLI itself —
        run <code>boost &lt;command&gt; --help</code> for the same in your terminal.</p>
       <h2 class="group-h" id="grp-pkg">Install &amp; lifecycle</h2>
       <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">
@@ -990,6 +991,20 @@
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show what would be removed without touching anything</span></div>
           <div class="arg"><code>--deep</code><span>also remove snapshots older than 90 days</span></div>
+        </div>
+      </section>
+      <section class="cmd" id="cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone tap">
+        <h3><span class="cname">compact</span><span class="gtag">cfg</span></h3>
+        <p class="summary">Shrink tap clones to the files boost indexes</p>
+        <pre class="syn">boost compact [--dry-run] [--reclone] [tap ...]</pre>
+        <div class="args-h">Arguments</div>
+        <div class="args">
+          <div class="arg"><code>tap</code><span>taps to compact (default: all cloned taps)</span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--dry-run</code><span>show what would be reclaimed without touching anything</span></div>
+          <div class="arg"><code>--reclone</code><span>re-clone blobless for the smallest result (needs network)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">

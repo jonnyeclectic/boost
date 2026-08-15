@@ -140,6 +140,30 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   (`chain-of-thought-design`, `guardrail-design`), so it is `ai`, not `ui`.
   `tests/unit/test_registry_categories.py::TestDesignDomain` pins both
   directions.
+- **A tap clone holds Markdown and nothing else.** Taps clone
+  `--filter=blob:none --sparse` with a cone covering exactly what
+  `catalog.scan_dir` opens (`gitutil.SPARSE_PATTERNS`, pinned against catalog's
+  own constants by `tests/unit/test_gitutil_sparse.py` — gitutil can't import
+  catalog, catalog imports gitutil). 458 taps held 12 GB to index 1.9 GB of
+  Markdown; `Shopify/agent-skills` was 611 MB for its 30 SKILL.md files and is
+  11 MB under the cone, with a byte-identical catalog. So **anything reading a
+  tap's real files must go through `store.source_dir_for`**, which calls
+  `gitutil.materialize` first — a skill's own `scripts/`/`assets/` sit outside
+  the cone, and `_copy_skill` is a `copytree` that would copy the half of the
+  directory that exists and report success. Use `sparse-checkout add`, never
+  `set`: `set` replaces the pattern list and un-fetches every skill materialized
+  before it. `boost import` clones `sparse=False` — it reads the whole repo.
+  `boost compact` narrows clones that predate this (offline; measured 177 MB →
+  93 MB), and must `update-index --refresh` first, because git silently declines
+  to remove a path whose stat data looks dirty and otherwise reports success
+  having changed nothing.
+- **`~/.boost/cache/` holds boost's own indexes, not just tap catalogs.**
+  `paths.INTERNAL_CACHE_FILES` names them. `boost clean` sweeps `cache/*.json`
+  whose stem is not a configured tap, which described `rag_index.json` and
+  `discovery.json` perfectly — it deleted the BM25 index on every run, and
+  rebuilding it re-parses every tap catalog on the machine (~71k items). A new
+  derived artifact goes in that set or `tests/unit/test_clean_internal_cache.py`
+  fails.
 - **Sandbox tests via env, and export separately.** boost state lives under
   `HOME`/`BOOST_HOME`; tests point them at a tempdir. In zsh, one-line chains
   like `export A=$(...) B=$A/x` leave `B` broken — use separate `export`
@@ -233,7 +257,7 @@ for both — edit items, run `build_roadmap.py`, never touch the HTML by hand.
 ## Architecture
 
 **CLI dispatch.** `boost_cli/cli.py` holds `COMMANDS`, the single
-source-of-truth list of `(name, group, module, summary)` for all 79 commands.
+source-of-truth list of `(name, group, module, summary)` for all 80 commands.
 Each command is implemented as `def cmd_<name_with_underscores>(argv) -> int`
 inside `boost_cli/commands/<module>.py`, and `_dispatch` imports that module
 lazily on invocation — so `boost --help` stays instant and command modules are
@@ -254,7 +278,7 @@ in `boost_cli/core/paths.py`, which is what makes `HOME=<tempdir>` sandboxing
 work in tests and the dev loop:
 
 ```text
-~/.boost/repos/     shallow git clones of tapped registries
+~/.boost/repos/     blobless, sparse git clones of tapped registries
 ~/.boost/cache/     JSON catalogs built from SKILL.md/rule/workflow frontmatter
 ~/.boost/logs/      rotating diagnostic log + crash reports
 ~/.boost/state/     pins, tags, policy, profiles, pulse feed, snapshots

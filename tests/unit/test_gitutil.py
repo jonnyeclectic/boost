@@ -143,19 +143,32 @@ class TestCloneAndInspect:
 
     def test_clone_shallow_issues_exact_argv(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch)
-        gitutil.clone_shallow("git@example:x.git", tmp_path / "d")
+        gitutil.clone_shallow("git@example:x.git", tmp_path / "d", sparse=False)
         (args, kw), = calls
         assert args == ["clone", "--depth", "1", "--quiet",
                         "-c", "core.autocrlf=false", "-c", "core.eol=lf", "--",
                         "git@example:x.git", str(tmp_path / "d")]
         assert kw.get("timeout") == 600     # long clone timeout, not the 300 default
 
+    def test_sparse_clone_issues_exact_argv(self, tmp_path, monkeypatch):
+        """The default: same flags plus the blobless/sparse pair, then the cone."""
+        calls = _record_run(monkeypatch)
+        gitutil.clone_shallow("git@example:x.git", tmp_path / "d")
+        (clone_args, kw), (cone_args, _) = calls
+        assert clone_args == ["clone", "--depth", "1", "--quiet",
+                              "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+                              "--filter=blob:none", "--sparse", "--",
+                              "git@example:x.git", str(tmp_path / "d")]
+        assert kw.get("timeout") == 600
+        assert cone_args == ["-C", str(tmp_path / "d"), "sparse-checkout",
+                             "set", "--no-cone", *gitutil.SPARSE_PATTERNS]
+
     def test_clone_shallow_puts_end_of_options_before_url(self, tmp_path,
                                                           monkeypatch):
         # a URL beginning with `-` must be a positional, never a git flag
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("--upload-pack=evil", tmp_path / "d")
-        (args, _kw), = calls
+        args, _kw = calls[0]
         assert "--" in args and args.index("--") < args.index("--upload-pack=evil")
 
     @pytest.mark.parametrize("bad", [
@@ -174,7 +187,10 @@ class TestCloneAndInspect:
     def test_clone_shallow_allows_ordinary_https(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("https://github.com/o/r", tmp_path / "d")
-        assert len(calls) == 1       # a normal remote clones, not rejected
+        # a normal remote clones, not rejected: the clone, then its sparse cone
+        assert len(calls) == 2
+        assert calls[0][0][0] == "clone"
+        assert "sparse-checkout" in calls[1][0]
 
     def test_head_commit_argv_is_rev_parse_head(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch, stdout="c0ffee\n")

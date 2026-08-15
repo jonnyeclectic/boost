@@ -15,6 +15,7 @@ from pathlib import Path
 from ..errors import BoostError
 from . import (
     agents,
+    gitutil,
     journal,
     lockfile,
     paths,
@@ -75,9 +76,18 @@ def installed() -> dict:
 
 
 def source_dir_for(entry: dict) -> Path:
-    """Absolute path of a catalog entry's skill dir inside its tap clone."""
+    """Absolute path of a catalog entry's skill dir inside its tap clone.
+
+    Materializes the directory first. Taps check out Markdown only, so a skill
+    that ships `scripts/` or `assets/` has them in the index and not on disk;
+    `_copy_skill` is a copytree, and handed a partial directory it copies what
+    is there and reports success. Every consumer of a tap's real files — both
+    install paths, `sha256_dir`, `boost info` — comes through here, so this is
+    the one place that has to get it right.
+    """
     tap = registry.get(entry["tap"])
     src = tap.path if entry["rel_dir"] == "." else tap.path / entry["rel_dir"]
+    gitutil.materialize(tap.path, entry["rel_dir"])
     if not (src / "SKILL.md").exists():
         raise BoostError("source for %s vanished from tap %s" % (entry["name"], tap.name),
                         hint="run `boost update %s`" % tap.name)
