@@ -143,11 +143,12 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
 - **A tap clone holds Markdown and nothing else.** Taps clone
   `--filter=blob:none --sparse` with a cone covering exactly what
   `catalog.scan_dir` opens (`gitutil.SPARSE_PATTERNS`, pinned against catalog's
-  own constants by `tests/unit/test_gitutil_sparse.py` — gitutil can't import
-  catalog, catalog imports gitutil). 458 taps held 12 GB to index 1.9 GB of
-  Markdown; `Shopify/agent-skills` was 611 MB for its 30 SKILL.md files and is
-  11 MB under the cone, with a byte-identical catalog. So **anything reading a
-  tap's real files must go through `store.source_dir_for`**, which calls
+  own constants by `tests/unit/test_gitutil_sparse.py` — `gitutil` can't
+  import `catalog`, `catalog` imports `gitutil`). 458 taps held 12 GB to index
+  1.9 GB of Markdown; `Shopify/agent-skills` was 611 MB for its 30 SKILL.md
+  files and is 11 MB under the cone, with a byte-identical catalog. So
+  **anything reading a tap's real files must go through
+  `store.source_dir_for`**, which calls
   `gitutil.materialize` first — a skill's own `scripts/`/`assets/` sit outside
   the cone, and `_copy_skill` is a `copytree` that would copy the half of the
   directory that exists and report success. Use `sparse-checkout add`, never
