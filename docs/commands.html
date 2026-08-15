@@ -185,7 +185,7 @@
       <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">create</a>
       <a class="cmd-link" href="#cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">policy</a>
       <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run -f, --force">onboard</a>
-      <a class="cmd-link" href="#cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --install --uninstall {bash,zsh,fish}">completions</a>
+      <a class="cmd-link" href="#cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --dry-run --install --uninstall {bash,zsh,fish}">completions</a>
       <a class="cmd-link" href="#cmd-schedule" data-search="schedule manage automatic skill-sync scheduling  --interval {6h,12h,daily} --json {status,enable,disable}">schedule</a>
       <a class="cmd-link" href="#cmd-serve" data-search="serve browse the catalogue in a browser: search, facets and a tap graph  --port port --host host">serve</a>
       <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">mcp</a>
@@ -1034,10 +1034,10 @@
           <div class="arg"><code>-f, --force</code><span>overwrite existing files without confirming</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --install --uninstall {bash,zsh,fish}">
+      <section class="cmd" id="cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --dry-run --install --uninstall {bash,zsh,fish}">
         <h3><span class="cname">completions</span><span class="gtag">cfg</span></h3>
         <p class="summary">Generate shell tab-completion scripts</p>
-        <pre class="syn">boost completions [--eval] [--install] [--uninstall] [{bash,zsh,fish}]</pre>
+        <pre class="syn">boost completions [--eval] [--dry-run] [--install] [--uninstall] [{bash,zsh,fish}]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{bash,zsh,fish}</code><span>target shell (default: from $SHELL)</span></div>
@@ -1045,6 +1045,7 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--eval</code><span>print the variant safe to `eval` directly (what --install wires up)</span></div>
+          <div class="arg"><code>--dry-run</code><span>with --install/--uninstall: report what would change in the rc file without writing it</span></div>
           <div class="arg"><code>--install</code><span>wire completions into the shell&#x27;s rc file (bash/zsh — one-shot, no manual editing)</span></div>
           <div class="arg"><code>--uninstall</code><span>remove what --install wired up</span></div>
         </div>

@@ -337,10 +337,19 @@ class TestInstallUninstall:
         # A start marker with no matching end marker means someone hand-edited
         # the file after boost wrote it — guessing at intent here would risk
         # eating content that was never boost's to remove.
+        #
+        # The file is still untouched; what changed is that boost now *says so*
+        # instead of exiting 0 as though it had done the job. Silently doing
+        # nothing was only safe while the orphan start was the sole marker: with
+        # a well-formed block below it, the old scan paired the orphan with that
+        # block's end and deleted everything between. See
+        # tests/unit/test_complete_rc_block.py for both preconditions.
+        from boost_cli.errors import BoostError
         rc = sandbox / ".bashrc"
         broken = "before\n# >>> boost completions >>>\nno end marker here\n"
         rc.write_text(broken, encoding="utf-8")
-        complete.uninstall("bash")
+        with pytest.raises(BoostError):
+            complete.uninstall("bash")
         assert rc.read_text(encoding="utf-8") == broken
 
 

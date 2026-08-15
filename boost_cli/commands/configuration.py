@@ -3,6 +3,7 @@ completions, schedule, serve, mcp, self-update."""
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -555,8 +556,42 @@ def _sq(s: str) -> str:
     return s.replace("'", "'\\''")
 
 
+def _report_rc_plan(plan, install: bool, shell: str) -> None:
+    """Print what `--dry-run` would do to an rc file, and nothing else."""
+    if not plan.changes:
+        out.ok("%s already %s — no change"
+               % (_tilde(plan.path),
+                  "wired for boost completions" if install
+                  else "free of boost completions"))
+        return
+    verb = {
+        "create": "would create %s and wire boost completions into it",
+        "add": "would wire boost completions into %s",
+        # `replace` also covers collapsing a duplicated block back to one.
+        "replace": "would rewrite the boost completions block in %s",
+        "remove": "would remove boost completions from %s",
+    }[plan.action]
+    out.info(verb % _tilde(plan.path))
+    for line in _rc_plan_diff(plan):
+        out.dim("  " + line)
+    out.dim("  re-run without --dry-run to apply")
+
+
+def _rc_plan_diff(plan) -> list[str]:
+    """The +/- lines between a plan's before and after, for the dry run.
+
+    The ``---``/``+++``/``@@`` scaffolding is dropped: the file is named on the
+    line above, and line numbers earn nothing on a five-line rc edit.
+    """
+    return [ln.rstrip("\n")
+            for ln in difflib.unified_diff(plan.before.splitlines(),
+                                           plan.after.splitlines(), n=1)
+            if not ln.startswith(("---", "+++", "@@"))]
+
+
 def cmd_completions(argv) -> int:
-    """boost completions [bash|zsh|fish] [--install|--uninstall] [--eval]"""
+    """boost completions [bash|zsh|fish] [--install|--uninstall] [--eval]
+    [--dry-run]"""
     p = cliparse.parser(
         prog="boost completions",
         description="Generate shell tab-completion scripts")
@@ -565,6 +600,9 @@ def cmd_completions(argv) -> int:
     p.add_argument("--eval", action="store_true",
                    help="print the variant safe to `eval` directly "
                         "(what --install wires up)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="with --install/--uninstall: report what would change "
+                        "in the rc file without writing it")
     group = p.add_mutually_exclusive_group()
     group.add_argument("--install", action="store_true",
                        help="wire completions into the shell's rc file "
@@ -575,11 +613,28 @@ def cmd_completions(argv) -> int:
 
     detected = args.shell or Path(os.environ.get("SHELL", "")).name
 
+    if args.dry_run and not (args.install or args.uninstall):
+        p.error("--dry-run qualifies --install or --uninstall; "
+                "pass one of them")
+
     if args.install or args.uninstall:
-        rc = (complete.install if args.install else complete.uninstall)(detected)
+        # Plan first either way, so a malformed rc file is reported before
+        # anything is written rather than after.
+        plan = (complete.plan_install if args.install
+                else complete.plan_uninstall)(detected)
+        if args.dry_run:
+            _report_rc_plan(plan, install=args.install, shell=detected)
+            return 0
+        complete.apply(plan)
+        if not plan.changes:
+            out.ok("%s already %s — no change"
+                   % (_tilde(plan.path),
+                      "wired for boost completions" if args.install
+                      else "free of boost completions"))
+            return 0
         out.ok("%s boost completions %s %s"
                % ("wired" if args.install else "removed",
-                  "into" if args.install else "from", _tilde(rc)))
+                  "into" if args.install else "from", _tilde(plan.path)))
         if args.install:
             out.dim("  restart your shell (or run `exec %s`) to pick it up"
                     % detected)
