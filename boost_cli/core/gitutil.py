@@ -41,9 +41,30 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
     except subprocess.TimeoutExpired:
         raise BoostError("git %s timed out after %ds" % (args[0], timeout)) from None
     if check and proc.returncode != 0:
-        raise BoostError("git %s failed: %s"
-                         % (args[0], _git_error(proc.stderr or proc.stdout or "")))
+        name = _subcommand(args)
+        raise BoostError("git%s failed: %s"
+                         % (" " + name if name else "",
+                            _git_error(proc.stderr or proc.stdout or "")))
     return proc
+
+
+def _subcommand(args: list[str]) -> str:
+    """The git subcommand in `args`, skipping global flags.
+
+    Most calls in this module are repo-scoped (`-C <path> …`), so `args[0]` is
+    `-C` and every one of their failures read `git -C failed` — naming a flag
+    as if it were the command. `-C` and `-c` take a value; other leading flags
+    do not.
+    """
+    i = 0
+    while i < len(args):
+        if args[i] in ("-C", "-c"):
+            i += 2
+        elif args[i].startswith("-"):
+            i += 1
+        else:
+            return args[i]
+    return ""
 
 
 def _git_error(text: str) -> str:
@@ -232,7 +253,15 @@ def materialize(repo: Path, rel_dir: str) -> None:
         return
     if not is_sparse(Path(repo)):
         return
-    run(["-C", str(repo), "sparse-checkout", "add", pattern])
+    try:
+        run(["-C", str(repo), "sparse-checkout", "add", pattern])
+    except BoostError as e:
+        # The blobs live in the promisor remote, so this is the one step in an
+        # install that can need the network. Say that, rather than leaving a
+        # bare transport error to read as a broken tap.
+        raise BoostError(
+            "could not fetch %s from the %s tap: %s" % (rel, Path(repo).name, e),
+            hint="this needs network — the tap stores only Markdown locally") from None
 
 
 def pull(repo: Path) -> str:

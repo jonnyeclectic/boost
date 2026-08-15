@@ -51,6 +51,30 @@ class TestSourceDirMaterializes:
         with pytest.raises(BoostError):
             store.source_dir_for(entry)
 
+    def test_an_unreachable_remote_is_explained_not_dumped(self, entry,
+                                                           monkeypatch):
+        """The one install step that can need the network deserves to say so.
+
+        Driven through a failing `run` rather than a dead remote: the blobs a
+        real fetch would want only go missing on a blobless clone, which needs
+        a network origin to create.
+        """
+        tap = registry.get(entry["tap"])
+        monkeypatch.setattr(gitutil, "is_sparse", lambda repo: True)
+        monkeypatch.setattr(gitutil, "_sparse_list", lambda repo: set())
+
+        def boom(argv, **kw):
+            raise BoostError("git fetch failed: fatal: unable to access")
+
+        monkeypatch.setattr(gitutil, "run", boom)
+
+        with pytest.raises(BoostError) as excinfo:
+            gitutil.materialize(tap.path, entry["rel_dir"])
+
+        msg = str(excinfo.value)
+        assert "could not fetch" in msg and entry["rel_dir"] in msg
+        assert "-C" not in msg, "a global flag must not be named as the command"
+
     def test_an_offline_materialize_failure_names_the_cause(self, entry, monkeypatch):
         """A blob outside the cone needs the network; say so rather than
         reporting the skill as vanished."""

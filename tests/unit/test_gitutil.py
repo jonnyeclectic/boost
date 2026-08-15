@@ -121,6 +121,29 @@ class TestHasGitAndRun:
             gitutil.run(["cat-file", "-p", "deadbeef"])
         assert ei.value.message == "git cat-file failed: fatal: bad object"
 
+    def test_failure_names_the_subcommand_not_a_global_flag(self, monkeypatch):
+        """Most calls here are repo-scoped (`-C <path> …`), and taking args[0]
+        reported every one of them as `git -C failed` — a flag, not a command."""
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+                            lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
+        with pytest.raises(BoostError) as ei:
+            gitutil.run(["-C", "/some/repo", "fetch", "--depth", "1", "origin"])
+        assert ei.value.message == "git fetch failed: fatal: nope"
+
+    def test_failure_skips_dash_c_config_pairs_too(self, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+                            lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
+        with pytest.raises(BoostError) as ei:
+            gitutil.run(["-c", "user.name=x", "commit", "-m", "y"])
+        assert ei.value.message == "git commit failed: fatal: nope"
+
+    def test_failure_on_an_all_flag_argv_still_says_git(self, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+                            lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
+        with pytest.raises(BoostError) as ei:
+            gitutil.run(["--version"])
+        assert ei.value.message == "git failed: fatal: nope"
+
 
 class TestCloneAndInspect:
     def test_clone_shallow_and_head_commit(self, tmp_path, fixture_tap_src):
