@@ -22,6 +22,7 @@ def _capture(monkeypatch) -> dict:
     seen: dict = {}
 
     def fake_run(argv, **kwargs):
+        seen.setdefault("calls", []).append(argv)
         seen["argv"] = argv
         seen.update(kwargs)
         return subprocess.CompletedProcess(argv, 0, "", "")
@@ -45,7 +46,9 @@ class TestLfsSmudgeIsSkipped:
         gitutil.clone_shallow("https://example.test/repo.git", tmp_path / "dest")
 
         assert seen["env"]["GIT_LFS_SKIP_SMUDGE"] == "1"
-        assert "--depth" in seen["argv"] and "1" in seen["argv"]
+        # `argv` is the last call — the sparse cone. The clone itself is first.
+        clone = seen["calls"][0]
+        assert "--depth" in clone and "1" in clone
 
     def test_the_inherited_environment_is_preserved(self, monkeypatch):
         """Only one variable is added; PATH and friends must survive."""

@@ -1373,8 +1373,9 @@ class TestBundleEdges:
 class TestImportEdges:
     def test_git_url_clone(self, boost, sandbox, tmp_path, monkeypatch):
         src = _skill_dir(tmp_path, "url-skill")
-        monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow",
-                            lambda url, dest: shutil.copytree(src, dest))
+        monkeypatch.setattr(
+            "boost_cli.core.gitutil.clone_shallow",
+            lambda url, dest, sparse=True: shutil.copytree(src, dest))
         r = boost("import", "https://github.com/team/url-skill.git")
         assert "cloning https://github.com/team/url-skill.git" in r.out
         assert "Imported url-skill" in r.out
