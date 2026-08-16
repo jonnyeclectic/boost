@@ -29,6 +29,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
@@ -257,31 +258,78 @@ def _rc_block(shell: str) -> str:
             % (_RC_START, shell, _RC_END))
 
 
-def _merge_rc(text: str, block: str) -> str:
+def _spans(text: str, rc: Path | None = None) -> list[tuple[int, int]]:
+    """Half-open (start, end) index pairs of every managed block in ``text``.
+
+    Raises :class:`BoostError` for a start marker with no matching end, because
+    an rc file in that state cannot be edited safely by index. Both writers used
+    to pair the *first* start with the *next* end found anywhere after it, so an
+    orphan start marker sitting above real config made the next edit delete
+    every line in between — reported as ``✓ wired boost completions``. Refusing
+    costs the user one hand-edit; guessing cost them their shell config.
+
+    An orphan *end* is not an error: nothing pairs to it, it is skipped, and the
+    file keeps working. Only an unclosed block is ambiguous.
+    """
+    spans: list[tuple[int, int]] = []
+    i = 0
+    while (s := text.find(_RC_START, i)) != -1:
+        after = s + len(_RC_START)
+        e = text.find(_RC_END, after)
+        nxt = text.find(_RC_START, after)
+        # A block must close before the next one opens. Testing only `e == -1`
+        # is the original bug in a new place: an orphan start sitting above a
+        # real block finds *that* block's end and swallows every line between.
+        if e == -1 or (nxt != -1 and nxt < e):
+            where = " in %s" % paths.tilde(rc) if rc is not None else ""
+            raise BoostError(
+                "boost completions block%s starts but never ends" % where,
+                hint="%s has no matching %s — delete the stray start line (or "
+                     "close the block), then re-run"
+                     % (_RC_START, _RC_END))
+        e += len(_RC_END)
+        spans.append((s, e))
+        i = e
+    return spans
+
+
+def _outside(text: str, spans: list[tuple[int, int]]) -> list[str]:
+    """The stretches of ``text`` that sit outside every managed block."""
+    parts, prev = [], 0
+    for s, e in spans:
+        parts.append(text[prev:s])
+        prev = e
+    parts.append(text[prev:])
+    return parts
+
+
+def _merge_rc(text: str, block: str, rc: Path | None = None) -> str:
     """Idempotently set ``block`` in ``text``: replace a prior boost block in
     place, or append one after a single blank line. Mirrors
-    :func:`core.rules.merge_block`'s shape with rc-file-safe markers."""
-    i = text.find(_RC_START)
-    if i != -1:
-        j = text.find(_RC_END, i)
-        if j != -1:
-            j += len(_RC_END)
-            return (text[:i] + block + text[j:]).rstrip("\n") + "\n"
-    base = text.rstrip("\n")
-    return (base + "\n\n" + block + "\n") if base else block + "\n"
+    :func:`core.rules.merge_block`'s shape with rc-file-safe markers.
+
+    Collapses to exactly one block. Replacing only the first left a second one
+    live, so `--install` was idempotent in content but not in count.
+    """
+    spans = _spans(text, rc)
+    if not spans:
+        base = text.rstrip("\n")
+        return (base + "\n\n" + block + "\n") if base else block + "\n"
+    parts = _outside(text, spans)
+    return (parts[0] + block + "".join(parts[1:])).rstrip("\n") + "\n"
 
 
-def _strip_rc(text: str) -> str:
-    """Inverse of :func:`_merge_rc`: remove the managed block, if present."""
-    i = text.find(_RC_START)
-    if i == -1:
+def _strip_rc(text: str, rc: Path | None = None) -> str:
+    """Inverse of :func:`_merge_rc`: remove every managed block, if present.
+
+    Every, not the first: `--uninstall` on a doubled block used to report
+    "removed" while the shell went on sourcing the survivor.
+    """
+    spans = _spans(text, rc)
+    if not spans:
         return text
-    j = text.find(_RC_END, i)
-    if j == -1:
-        return text  # no end marker: malformed, leave the file untouched
-    j += len(_RC_END)
-    before, after = text[:i].rstrip("\n"), text[j:].strip("\n")
-    parts = [p for p in (before, after) if p]
+    parts = [p.strip("\n") for p in _outside(text, spans)]
+    parts = [p for p in parts if p]
     return "\n\n".join(parts) + "\n" if parts else ""
 
 
@@ -295,22 +343,76 @@ def _rc_path(shell: str) -> Path:
     return paths.expand("~/" + RC_FILE[shell])
 
 
+@dataclass(frozen=True)
+class RcPlan:
+    """What an install/uninstall would do to one rc file, before it does it.
+
+    ``--dry-run`` prints this; ``install``/``uninstall`` apply it. One code path
+    computes both, so the preview cannot disagree with the write.
+    """
+    path: Path
+    action: str        # create | add | replace | remove | none
+    before: str
+    after: str
+
+    @property
+    def changes(self) -> bool:
+        """True when applying this would alter the file."""
+        return self.before != self.after
+
+
+def _read_rc(shell: str) -> tuple[Path, str, bool]:
+    rc = _rc_path(shell)
+    exists = rc.exists()
+    return rc, (rc.read_text(encoding="utf-8") if exists else ""), exists
+
+
+def plan_install(shell: str) -> RcPlan:
+    """Describe wiring ``shell``'s rc file, writing nothing.
+
+    Raises :class:`BoostError` for a shell with no rc-file install path, and for
+    an rc file holding an unclosed block — so a dry run answers the dangerous
+    question too, rather than only the safe one.
+    """
+    rc, text, exists = _read_rc(shell)
+    after = _merge_rc(text, _rc_block(shell), rc)
+    if not exists:
+        action = "create"
+    elif after == text:
+        action = "none"
+    elif _spans(text, rc):
+        action = "replace"
+    else:
+        action = "add"
+    return RcPlan(path=rc, action=action, before=text, after=after)
+
+
+def plan_uninstall(shell: str) -> RcPlan:
+    """Describe removing what :func:`install` wired up, writing nothing."""
+    rc, text, _ = _read_rc(shell)
+    after = _strip_rc(text, rc)
+    return RcPlan(path=rc, action=("remove" if after != text else "none"),
+                  before=text, after=after)
+
+
+def apply(plan: RcPlan) -> Path:
+    """Write ``plan``'s result. A no-op when it changes nothing, so an rc file
+    keeps its mtime (and its place in the user's backups) on a repeat run."""
+    if plan.changes:
+        plan.path.write_text(plan.after, encoding="utf-8")
+    return plan.path
+
+
 def install(shell: str) -> Path:
     """Idempotently wire ``shell``'s rc file to eval boost's completions on
     every startup. Returns the rc file path. Raises :class:`BoostError` for
     a shell with no rc-file install path (currently anything but bash/zsh)."""
-    rc = _rc_path(shell)
-    text = rc.read_text(encoding="utf-8") if rc.exists() else ""
-    rc.write_text(_merge_rc(text, _rc_block(shell)), encoding="utf-8")
-    return rc
+    return apply(plan_install(shell))
 
 
 def uninstall(shell: str) -> Path:
     """Remove what :func:`install` wired up. A no-op if never installed."""
-    rc = _rc_path(shell)
-    if rc.exists():
-        rc.write_text(_strip_rc(rc.read_text(encoding="utf-8")), encoding="utf-8")
-    return rc
+    return apply(plan_uninstall(shell))
 
 
 def detect_shell() -> str:
