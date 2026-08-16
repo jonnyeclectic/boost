@@ -270,6 +270,49 @@ boost doctor               # sanity check: broken links, lock drift, stale taps
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ```
 
+### Browsing the catalogue
+
+`boost browse` is a full-screen picker over every tapped item — a filterable
+list on the left, the selected item's full detail on the right.
+
+```text
+╭─ ●●●  boost browse  ──────────────────────────────────┬──────────────────────╮
+│ ❯ co re                                          2/4  │ code-review  v1.0.0  │
+│ match (●) all ( ) name ( ) descr ( ) tap              │ ──────────────────── │
+│ ↑↓ move  ⇥ select  → detail  ^T scope  ↵ install      │ Review a pull …      │
+├───────────────────────────────────────────────────────┤ ● installed          │
+│  ★● code-review  [skill] v1.0.0 [acme/quality]        │ SOURCE · FRONTMATTER │
+╰───────────────────────────────────────────────────────┴──────────────────────╯
+```
+
+| key | does |
+|---|---|
+| any character, **including space** | types into the query |
+| `↑` `↓` | walk the whole surface: query → match toggles → results |
+| `→` `←` | into and out of the detail pane, where `↑`/`↓` scroll it |
+| `←` `→` *on the toggle row* | pick what the query matches |
+| `⇥` | select (multi-select for a batch install) |
+| `^T` | cycle the match toggles without leaving the results |
+| `↵` | install — **in place**, without leaving the browser |
+| `esc` | quit |
+
+The query splits on spaces and **every** token must match, so `code review`
+narrows where `code` alone would not. Selection lives on `⇥` rather than space
+for exactly that reason, and `q` stays a character so `quality` is searchable.
+
+`↵` installs without dropping you back to the shell, and the detail pane
+reports it — `◐ installing…`, then `● installed` with the destination, or
+`✗` with the reason. Installs queue and run one at a time, because each one
+rewrites the lock file.
+
+**Duplicates are collapsed.** Registries render one skill into `.claude/`,
+`.cursor/`, `.gemini/` and a plugin root, so the same thing was listed four
+times — on a real 60,047-entry catalogue **22,535 rows (37%) are duplicates**.
+Rows whose name *and* description match (or are ≥95% alike) fold into one,
+badged `×5`, with the hidden total in the counter and `^D` to show them again.
+Identity is the description, never the name: `code-reviewer` appears 75 times
+with 42 *different* descriptions, and those are 42 real skills.
+
 ## 80 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see

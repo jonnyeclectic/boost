@@ -138,8 +138,22 @@ _BLOCK_TAGS = ("pre", "table", "div", "ul", "ol", "blockquote", "hr",
 _BLOCK_RE = re.compile(r"<(%s)[\s/>]" % "|".join(_BLOCK_TAGS), re.IGNORECASE)
 
 
+#: A `<` that opens nothing. Anything not followed by a tag name, a closing
+#: slash or a `!` (comment/doctype) is a literal less-than, which html-validate
+#: rejects as `Raw "<" must be encoded as "&lt;"`. Same trap as the block tags
+#: above and the same cost: a separate required workflow, minutes later, long
+#: after every roadmap script has said clean. `x < w - 1` shipped that way.
+_RAW_LT_RE = re.compile(r"<(?![/!a-zA-Z])")
+
+#: Inline tags a card body may use. Everything else — including the accidental
+#: `<y>` that `x<y` opens — is refused here rather than by html-validate.
+_INLINE_TAGS = frozenset({"a", "b", "br", "code", "em", "i", "s", "small",
+                          "span", "strong", "sub", "sup", "u"})
+_ANY_TAG_RE = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)")
+
+
 def check_body_is_inline(where: str, body: str) -> None:
-    """Raise if ``body`` contains a tag that a `<p>` cannot hold."""
+    """Raise if ``body`` holds a tag a `<p>` cannot contain, or a bare `<`."""
     found = _BLOCK_RE.search(body or "")
     if found:
         raise RoadmapError(
@@ -147,6 +161,25 @@ def check_body_is_inline(where: str, body: str) -> None:
             "implicitly closes the paragraph and html-validate fails the build. "
             "Use inline markup (<code>, <b>, <em>, &middot; separators)."
             % (where, found.group(1)))
+    raw = _RAW_LT_RE.search(body or "")
+    if raw:
+        near = (body or "")[max(0, raw.start() - 30):raw.start() + 30]
+        raise RoadmapError(
+            "%s: a raw \"<\" that opens no tag is invalid HTML — html-validate "
+            "fails the build with 'Raw \"<\" must be encoded as \"&lt;\"'. "
+            "Write &lt; instead, including inside <code>. Near: ...%s..."
+            % (where, near.replace("\n", " ")))
+    # A `<` followed by a letter *does* open a tag — just not necessarily a real
+    # one. `x<y` reads as `<y>` and html-validate rejects it as an unknown
+    # element, which is the same trap wearing a different message. An allowlist
+    # rather than a denylist: card bodies use a handful of inline tags, and the
+    # cost of adding one is a line here.
+    for name in set(_ANY_TAG_RE.findall(body or "")):
+        if name.lower() not in _INLINE_TAGS:
+            raise RoadmapError(
+                "%s: <%s> is not an inline tag card bodies may use (allowed: "
+                "%s). If you meant a literal less-than, write &lt;."
+                % (where, name, ", ".join(sorted(_INLINE_TAGS))))
 
 
 def _body_html(status: str, body: str) -> str:
