@@ -1193,7 +1193,9 @@ def cmd_import(argv: list[str]) -> int:
             tmp = Path(tempfile.mkdtemp(prefix="boost-import-"))
             root = tmp / "repo"
             out.info("cloning %s …" % args.source)
-            gitutil.clone_shallow(args.source, root)
+            # Full checkout, not a tap's Markdown cone: import reads whatever the
+            # repo ships and copies it verbatim, assets included.
+            gitutil.clone_shallow(args.source, root, sparse=False)
         else:
             root = paths.expand(args.source)
             if not root.is_dir():

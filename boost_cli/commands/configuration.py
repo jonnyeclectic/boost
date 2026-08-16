@@ -142,10 +142,14 @@ def cmd_clean(argv) -> int:
 
     configured = {t.safe_name for t in registry.list_taps()}
     if paths.cache_dir().is_dir():
+        # Skip boost's own derived artifacts. They live in the same directory and
+        # end in .json, but no tap is named `rag_index` or `discovery`, so the
+        # stem test alone called both stale and deleted them every run — see
+        # paths.INTERNAL_CACHE_FILES.
         items.extend(
             (f, "stale tap cache", f.stat().st_size)
             for f in sorted(paths.cache_dir().glob("*.json"))
-            if f.stem not in configured
+            if f.stem not in configured and f.name not in paths.INTERNAL_CACHE_FILES
         )
 
     if paths.lock_history_dir().is_dir():
@@ -197,6 +201,106 @@ def cmd_clean(argv) -> int:
     else:
         journal.log("clean", "%d items" % len(items), freed=util.human_size(freed))
         out.ok("cleaned %d item(s) · %s freed" % (len(items), util.human_size(freed)))
+    return 0
+
+
+def _freight_bytes(tap_path: Path, keep_dirs: list[str]) -> int:
+    """Bytes that would leave `tap_path`'s working tree when the cone applies.
+
+    Mirrors what `gitutil.SPARSE_PATTERNS` keeps rather than approximating it,
+    so the dry run does not promise back the provenance files or the assets of
+    an already-installed skill — both of which survive and neither of which is
+    freed.
+    """
+    kept = tuple("%s/" % d.strip("/") for d in keep_dirs)
+    total = 0
+    for f in tap_path.rglob("*"):
+        if not f.is_file():
+            continue
+        # Relative to the tap, never absolute: every clone lives *under*
+        # ~/.boost, so testing the absolute parts for ".boost" excluded every
+        # file in every tap and reported that nothing could be freed.
+        rel = f.relative_to(tap_path)
+        if ".git" in rel.parts or ".boost" in rel.parts:
+            continue
+        if (f.suffix.lower() in (".md", ".mdc")
+                or f.name in catalog.RULE_FILENAMES):
+            continue
+        if kept and rel.as_posix().startswith(kept):
+            continue
+        total += f.stat().st_size
+    return total
+
+
+def cmd_compact(argv) -> int:
+    """boost compact [--dry-run] [--reclone] [TAP ...]"""
+    p = cliparse.parser(
+        prog="boost compact",
+        description="Shrink tap clones to the files boost indexes")
+    p.add_argument("tap", nargs="*",
+                   help="taps to compact (default: all cloned taps)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="show what would be reclaimed without touching anything")
+    p.add_argument("--reclone", action="store_true",
+                   help="re-clone blobless for the smallest result (needs network)")
+    args = p.parse_args(argv)
+
+    taps = [registry.get(n) for n in args.tap] if args.tap else registry.list_taps()
+    taps = [t for t in taps if t.is_cloned]
+    if not taps:
+        out.ok("no cloned taps to compact")
+        return 0
+
+    # source_dir keeps an installed skill's own assets on disk, so routine
+    # hashing (`outdated`, `doctor`) stays offline after the freight is gone.
+    keep: dict[str, list[str]] = {}
+    for section in lockfile.all_installed().values():
+        for entry in section.values():
+            if entry.get("source_dir"):
+                keep.setdefault(entry.get("tap", ""), []).append(entry["source_dir"])
+
+    freed = 0
+    changed = 0
+    for tap in taps:
+        before = util.dir_size(tap.path)
+        if args.dry_run:
+            loose = _freight_bytes(tap.path, keep.get(tap.name, []))
+            if loose:
+                changed += 1
+                freed += loose
+                out.info("would free %s from %s"
+                         % (util.human_size(loose), tap.name))
+            continue
+        try:
+            if args.reclone:
+                util.rmtree(tap.path)
+                gitutil.clone_shallow(tap.url, tap.path)
+            else:
+                gitutil.narrow(tap.path)
+            for rel in keep.get(tap.name, []):
+                gitutil.materialize(tap.path, rel)
+        except BoostError as e:
+            out.warn("could not compact %s: %s" % (tap.name, e))
+            continue
+        after = util.dir_size(tap.path)
+        if after < before:
+            changed += 1
+            freed += before - after
+            out.info("%s  %s → %s" % (tap.name, util.human_size(before),
+                                      util.human_size(after)))
+
+    if args.dry_run:
+        out.dim("  %d tap(s) · %s would be freed"
+                % (changed, util.human_size(freed)))
+        return 0
+    journal.log("compact", "%d taps" % changed, freed=util.human_size(freed))
+    if not changed:
+        out.ok("every tap is already compact")
+        return 0
+    out.ok("compacted %d tap(s) · %s freed" % (changed, util.human_size(freed)))
+    if not args.reclone:
+        out.dim("  `boost compact --reclone` also drops already-downloaded "
+                "git objects")
     return 0
 
 

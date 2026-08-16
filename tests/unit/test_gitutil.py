@@ -121,6 +121,29 @@ class TestHasGitAndRun:
             gitutil.run(["cat-file", "-p", "deadbeef"])
         assert ei.value.message == "git cat-file failed: fatal: bad object"
 
+    def test_failure_names_the_subcommand_not_a_global_flag(self, monkeypatch):
+        """Most calls here are repo-scoped (`-C <path> …`), and taking args[0]
+        reported every one of them as `git -C failed` — a flag, not a command."""
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+                            lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
+        with pytest.raises(BoostError) as ei:
+            gitutil.run(["-C", "/some/repo", "fetch", "--depth", "1", "origin"])
+        assert ei.value.message == "git fetch failed: fatal: nope"
+
+    def test_failure_skips_dash_c_config_pairs_too(self, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+                            lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
+        with pytest.raises(BoostError) as ei:
+            gitutil.run(["-c", "user.name=x", "commit", "-m", "y"])
+        assert ei.value.message == "git commit failed: fatal: nope"
+
+    def test_failure_on_an_all_flag_argv_still_says_git(self, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
+                            lambda *a, **k: FakeProc(rc=1, stdout="fatal: nope\n"))
+        with pytest.raises(BoostError) as ei:
+            gitutil.run(["--version"])
+        assert ei.value.message == "git failed: fatal: nope"
+
 
 class TestCloneAndInspect:
     def test_clone_shallow_and_head_commit(self, tmp_path, fixture_tap_src):
@@ -143,19 +166,32 @@ class TestCloneAndInspect:
 
     def test_clone_shallow_issues_exact_argv(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch)
-        gitutil.clone_shallow("git@example:x.git", tmp_path / "d")
+        gitutil.clone_shallow("git@example:x.git", tmp_path / "d", sparse=False)
         (args, kw), = calls
         assert args == ["clone", "--depth", "1", "--quiet",
                         "-c", "core.autocrlf=false", "-c", "core.eol=lf", "--",
                         "git@example:x.git", str(tmp_path / "d")]
         assert kw.get("timeout") == 600     # long clone timeout, not the 300 default
 
+    def test_sparse_clone_issues_exact_argv(self, tmp_path, monkeypatch):
+        """The default: same flags plus the blobless/sparse pair, then the cone."""
+        calls = _record_run(monkeypatch)
+        gitutil.clone_shallow("git@example:x.git", tmp_path / "d")
+        (clone_args, kw), (cone_args, _) = calls
+        assert clone_args == ["clone", "--depth", "1", "--quiet",
+                              "-c", "core.autocrlf=false", "-c", "core.eol=lf",
+                              "--filter=blob:none", "--sparse", "--",
+                              "git@example:x.git", str(tmp_path / "d")]
+        assert kw.get("timeout") == 600
+        assert cone_args == ["-C", str(tmp_path / "d"), "sparse-checkout",
+                             "set", "--no-cone", *gitutil.SPARSE_PATTERNS]
+
     def test_clone_shallow_puts_end_of_options_before_url(self, tmp_path,
                                                           monkeypatch):
         # a URL beginning with `-` must be a positional, never a git flag
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("--upload-pack=evil", tmp_path / "d")
-        (args, _kw), = calls
+        args, _kw = calls[0]
         assert "--" in args and args.index("--") < args.index("--upload-pack=evil")
 
     @pytest.mark.parametrize("bad", [
@@ -174,7 +210,10 @@ class TestCloneAndInspect:
     def test_clone_shallow_allows_ordinary_https(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch)
         gitutil.clone_shallow("https://github.com/o/r", tmp_path / "d")
-        assert len(calls) == 1       # a normal remote clones, not rejected
+        # a normal remote clones, not rejected: the clone, then its sparse cone
+        assert len(calls) == 2
+        assert calls[0][0][0] == "clone"
+        assert "sparse-checkout" in calls[1][0]
 
     def test_head_commit_argv_is_rev_parse_head(self, tmp_path, monkeypatch):
         calls = _record_run(monkeypatch, stdout="c0ffee\n")
