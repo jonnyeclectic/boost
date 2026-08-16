@@ -23,6 +23,7 @@ from .. import cliparse, spin
 from ..core import (
     agents,
     ai,
+    browse,
     catalog,
     config,
     gitutil,
@@ -920,14 +921,38 @@ def _aurora_theme(curses):
 _NAME_X = 4  # column the name (and everything under it) starts at
 
 
+def _theme_extras(curses, th):
+    """Border/panel roles layered on the Aurora theme.
+
+    Kept beside the theme rather than inlined at the call sites so a terminal
+    without colour degrades in one place: every role here has a monochrome
+    fallback that is still legible.
+    """
+    th.setdefault("border", th.get("scroll", curses.A_DIM))
+    th.setdefault("border_hi", th.get("title", curses.A_BOLD))
+    th.setdefault("row_sel", curses.A_REVERSE)
+    th.setdefault("radio_on", th.get("title", curses.A_BOLD))
+    th.setdefault("radio_off", curses.A_DIM)
+    th.setdefault("head", th.get("detail_name", curses.A_BOLD))
+    th.setdefault("field", curses.A_NORMAL)
+    th.setdefault("state", th.get("check", curses.A_BOLD))
+    return th
+
+
 def _browse_tui(curses, entries):
     """Run the curses UI. Returns the list of entries picked for install
     (one or more, via multi-select), or None if the user quit without picking.
+
+    Layout is a single framed surface: title bar, query, scope radios, then a
+    list pane and a detail pane divided by a rule. All of the geometry and all
+    of the matching come from :mod:`core.browse`, which is where they can be
+    tested — this function only draws and dispatches keys.
     """
     state: dict[str, Any] = {"picks": None}
     categories = _tap_categories()
     desc_cache: dict = {}
     loading: set = set()
+    installed_names = set(store.installed())
 
     def describe(e):
         """Description text for a row, kicking off a background lazy-load
@@ -952,130 +977,242 @@ def _browse_tui(curses, entries):
         with contextlib.suppress(curses.error):
             curses.curs_set(0)
         scr.timeout(80)  # short poll so a finished lazy-load redraws promptly
-        th = _aurora_theme(curses)
+        th = _theme_extras(curses, _aurora_theme(curses))
 
         def put(y, x, s, attr=0):  # clip-safe cell writer
-            if 0 <= y < _h and 0 <= x < _w - 1 and s:
+            # `x < _w`, not `_w - 1`: the right-hand border lives in the last
+            # column, and the old bound made it unwritable — the frame drew
+            # with three sides. Writing the very last cell can make curses
+            # scroll, which is what the suppressed error covers.
+            if 0 <= y < _h and 0 <= x < _w and s:
                 with contextlib.suppress(curses.error):
-                    scr.addnstr(y, x, s, _w - 1 - x, attr)
+                    scr.addnstr(y, x, s, _w - x, attr)
 
-        filt, sel, detail = "", 0, False
+        filt, sel, detail = "", 0, True
+        focus, scope, dscroll = "list", browse.SCOPES[0], 0
         selected: set = set()
+        # One haystack per entry per scope, built on first use and reused for
+        # every keystroke: re-deriving it inside the filter cost 125 ms per key
+        # over 71,700 entries, which is slower than the draw poll.
+        index: dict = {}
         while True:
-            q = filt.lower()
-            matches = [e for e in entries
-                       if _subseq(q, (e["name"] + " " + e["tap"]).lower())]
-            sel = max(0, min(sel, len(matches) - 1))
             _h, _w = scr.getmaxyx()
-            pane = 6 if detail and matches else 0
+            if scope not in index:
+                index[scope] = browse.index_entries(entries, scope)
+            found = browse.matches_indexed(index[scope], filt)
+            sel = max(0, min(sel, len(found) - 1))
+            lay = browse.layout(_w, _h, detail=detail)
             try:
                 scr.erase()
-                # titlebar: macOS traffic dots + wordmark + gradient rule
-                put(0, 0, "●", th["dot_r"])
-                put(0, 2, "●", th["dot_y"])
-                put(0, 4, "●", th["dot_g"])
-                title = " boost browse"
-                put(0, 6, title, th["title"])
-                rx = 6 + len(title) + 1
-                # strict=False: a terminal narrower than the 3-color palette
-                # yields fewer segments, and the extra attrs go unused.
-                for (start, length), attr in zip(
-                        _grad_segments(max(0, _w - 1 - rx)), th["rule"],
-                        strict=False):
-                    put(0, rx + start, "─" * length, attr)
-                # prompt line: cyan chevron, query, cursor, right-aligned count
-                put(1, 0, "❯", th["prompt"])
-                put(1, 2, filt, th["query"])
-                put(1, 2 + len(filt), "▏", th["prompt"])
-                sel_txt = "%d selected · " % len(selected) if selected else ""
-                count = "%s%d/%d" % (sel_txt, len(matches), len(entries))
-                put(1, max(2 + len(filt) + 2, _w - 1 - len(count)), count,
-                    th["count"])
-                put(2, 0, "↑↓ move  space select  ↵ detail  i install  q quit",
-                    th["help"])
-                # each result is a two-row card: name/badges, then description
-                avail = max(0, _h - 3 - pane)
-                rows = max(1, avail // 2)
-                top = max(0, sel - rows + 1)
-                view = matches[top:top + rows]
-                namew = min(max((len(e["name"]) for e in view), default=4),
-                            max(8, _w - _NAME_X - 30))
-                bar = _scrollbar(len(matches), rows, top)
-                for i, e in enumerate(view):
-                    y = 3 + i * 2
-                    chosen = top + i == sel
-                    checked = _desc_key(e) in selected
-                    put(y, 0, "▎" if chosen else " ", th["sel_bar"])
-                    put(y, 1, "✓" if checked else " ", th["check"])
-                    put(y, 2, "★" if e.get("curated") else " ", th["star"])
-                    nm = out.truncate(e["name"], namew)
-                    put(y, _NAME_X, nm.ljust(namew),
-                        th["sel_name"] if chosen else th["name"])
-                    for pos in _match_positions(q, nm.lower()):
-                        put(y, _NAME_X + pos, nm[pos], th["match"])
-                    bx = _NAME_X + namew + 2
-                    for text, tkey in _row_badges(e, categories):
-                        if bx + len(text) > _w - 2:
-                            break
-                        put(y, bx, text, th[tkey])
-                        bx += len(text) + 1
-                    put(y + 1, _NAME_X, out.truncate(describe(e), _w - 1 - _NAME_X),
-                        th["desc"])
-                    if bar:
-                        bstart, blen = bar
-                        thumb = bstart <= i < bstart + blen
-                        ch = "█" if thumb else "│"
-                        put(y, _w - 2, ch, th["scroll"])
-                        put(y + 1, _w - 2, ch, th["scroll"])
-                if pane and matches:
-                    e = matches[sel]
-                    y0 = _h - pane
-                    # strict=False: same narrow-terminal truncation as the
-                    # titlebar rule above.
-                    for (start, length), attr in zip(
-                            _grad_segments(_w - 1), th["rule"],
-                            strict=False):
-                        put(y0, start, "─" * length, attr)
-                    tags = "  ".join("#" + str(t) for t in
-                                     (e.get("meta", {}).get("tags") or []))
-                    put(y0 + 1, 1, "%s  v%s" % (e["name"], e["version"]),
-                        th["detail_name"])
-                    put(y0 + 2, 1, out.truncate(describe(e), _w - 3),
-                        th["name"])
-                    put(y0 + 3, 1, "tap %s   dir %s" % (e["tap"], e["rel_dir"]),
-                        th["detail_meta"])
-                    put(y0 + 4, 1, tags or "no tags", th["detail_tag"])
+                _draw_frame(put, th, lay, focus)
+                _draw_query(put, th, lay, filt, focus, len(found), len(entries),
+                            len(selected))
+                _draw_scopes(put, th, lay, scope, focus)
+                rows = _draw_rows(put, th, lay, found, sel, selected, filt,
+                                  focus, describe, categories, installed_names)
+                if lay.has_detail and found:
+                    dscroll = _draw_detail(put, th, lay, found[sel], dscroll,
+                                           focus, installed_names)
                 scr.refresh()
             except curses.error:
                 pass  # terminal too small mid-draw; retry on next key
+                rows = 1
             key = scr.getch()
             if key == -1:                                 # poll tick, no key
                 continue
-            if key in (ord("q"), 27):                    # q / ESC
+            if key == 9 and found:                        # TAB: multi-select
+                selected.symmetric_difference_update({_desc_key(found[sel])})
+                continue
+            if key == 27:                                 # ESC: quit
                 return
-            if key == ord("i") and matches:
-                state["picks"] = ([e for e in entries if _desc_key(e) in selected]
-                                  if selected else [matches[sel]])
+            if key in (10, 13, curses.KEY_ENTER) and found:
+                # Enter confirms, the way every other picker does. `i` used to
+                # install and `q` used to quit; both are printable, and once
+                # space types into the query every printable key has to.
+                state["picks"] = ([e for e in entries
+                                   if _desc_key(e) in selected]
+                                  if selected else [found[sel]])
                 return
-            if key == ord(" ") and matches:
-                k = _desc_key(matches[sel])
-                if k in selected:
-                    selected.discard(k)
-                else:
-                    selected.add(k)
-            elif key == curses.KEY_UP:
-                sel = max(0, sel - 1)
+            if key == curses.KEY_UP:
+                focus, sel = browse.move_focus(focus, "up", sel, len(found),
+                                               lay.has_detail)
+                if focus == "detail":
+                    dscroll -= 1
             elif key == curses.KEY_DOWN:
-                sel = min(sel + 1, max(0, len(matches) - 1))
-            elif key in (10, 13, curses.KEY_ENTER):
-                detail = not detail
+                focus, sel = browse.move_focus(focus, "down", sel, len(found),
+                                               lay.has_detail)
+                if focus == "detail":
+                    dscroll += 1
+            elif key == curses.KEY_RIGHT:
+                focus, sel = browse.move_focus(focus, "right", sel, len(found),
+                                               lay.has_detail)
+            elif key == curses.KEY_LEFT:
+                focus, sel = browse.move_focus(focus, "left", sel, len(found),
+                                               lay.has_detail)
+            elif key == curses.KEY_NPAGE:
+                sel = min(sel + max(1, rows), max(0, len(found) - 1))
+            elif key == curses.KEY_PPAGE:
+                sel = max(0, sel - max(1, rows))
             elif key in (curses.KEY_BACKSPACE, 127, 8):
-                filt = filt[:-1]
-            elif 33 <= key <= 126:                        # printable, not space
-                filt += chr(key)
+                filt, sel, dscroll = filt[:-1], 0, 0
+            elif key == 20:                               # ^T: cycle scope
+                scope, sel = browse.next_scope(scope), 0
+            elif 32 <= key <= 126:
+                # 32 is SPACE, and it belongs to the query: the range used to
+                # start at 33 with space bound to select, so two words could
+                # never be searched for at once. Selection moved to TAB.
+                filt, sel, dscroll = filt + chr(key), 0, 0
+                focus = "search" if focus == "search" else focus
 
     curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
     return state["picks"]
+
+
+def _draw_frame(put, th, lay, focus):
+    """Outer box, column divider, and the title sitting in the top rule."""
+    w, h = lay.w, lay.h
+    if w < 4 or h < 6:
+        return
+    inner = w - 2
+    put(0, 0, "╭" + "─" * inner + "╮", th["border"])
+    # Dots grouped rather than dash-separated: spaced out they read as part of
+    # the rule instead of as a cluster of window controls.
+    put(0, 2, " ", th["border"])
+    put(0, 3, "●", th["dot_r"])
+    put(0, 4, "●", th["dot_y"])
+    put(0, 5, "●", th["dot_g"])
+    put(0, 6, "  boost browse  ", th["title"])
+    for y in range(1, h - 1):
+        put(y, 0, "│", th["border"])
+        put(y, w - 1, "│", th["border"])
+    # rule between the chrome and the body, tee'd where the divider lands
+    sep = lay.body_y - 1
+    put(sep, 0, "├" + "─" * inner + "┤", th["border"])
+    if lay.has_detail:
+        put(sep, lay.detail_x - 1, "┬", th["border"])
+        for y in range(lay.body_y, h - 1):
+            put(y, lay.detail_x - 1, "│", th["border"])
+    put(h - 1, 0, "╰" + "─" * inner + "╯", th["border"])
+    if lay.has_detail:
+        put(h - 1, lay.detail_x - 1, "┴", th["border"])
+    # The hint used to live in the bottom rule, where the column divider's
+    # tee landed on top of it and turned "esc quit" into "┴sc quit". It has
+    # its own row now, above the rule that separates chrome from body.
+    # Two hints, not one truncated: clipping the long one mid-word ends the
+    # line on "esc", which reads as a key rather than as a cut-off phrase.
+    hint = "↑↓ move  ⇥ select  → detail  ^T scope  ↵ install  esc quit"
+    if len(hint) > inner - 2:
+        hint = "↑↓ move  ⇥ select  ↵ install  esc quit"
+    if len(hint) > inner - 2:
+        hint = "↑↓  ⇥ sel  ↵ add  esc"
+    put(lay.body_y - 2, 2, hint[:max(0, inner - 2)], th["help"])
+
+
+def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel):
+    """The query row: chevron, text, cursor when focused, right-aligned count."""
+    active = focus == "search"
+    put(1, 2, "❯", th["prompt"] if active else th["border"])
+    put(1, 4, filt or "type to filter…",
+        th["query"] if filt else th["help"])
+    if active:
+        put(1, 4 + len(filt), "▏", th["prompt"])
+    tail = "%s%d/%d" % ("%d selected · " % n_sel if n_sel else "",
+                        n_found, n_all)
+    put(1, max(4 + len(filt) + 2, lay.w - 2 - len(tail)), tail, th["count"])
+
+
+def _draw_scopes(put, th, lay, scope, focus):
+    """Radio row — which field the query is matched against."""
+    x = 2
+    put(2, x, "match", th["help"])
+    x += 6
+    for name in browse.SCOPES:
+        on = name == scope
+        mark = "(●)" if on else "( )"
+        put(2, x, mark, th["radio_on"] if on else th["radio_off"])
+        label = browse.scope_label(name)
+        put(2, x + 4, label, th["radio_on"] if on else th["radio_off"])
+        x += 5 + len(label)
+        if x > lay.w - 6:
+            break
+
+
+def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
+               describe, categories, installed_names):
+    """The result list. Returns how many rows fit, for page-up/down."""
+    rows = max(1, lay.body_h // 2)
+    top = max(0, min(sel - rows + 1, max(0, len(found) - rows)))
+    if sel < top:
+        top = sel
+    view = found[top:top + rows]
+    lw = lay.list_w
+    for i, e in enumerate(view):
+        y = lay.body_y + i * 2
+        if y + 1 >= lay.h - 1:
+            break
+        chosen = top + i == sel
+        # Item 5: the whole row highlights, not just its marker. Painting the
+        # full span first means the badges and description inherit it too.
+        row_attr = th["row_sel"] if chosen else 0
+        if chosen:
+            put(y, lay.list_x, " " * lw, row_attr)
+            put(y + 1, lay.list_x, " " * lw, row_attr)
+        x = lay.list_x + 1
+        put(y, x, "✓" if _desc_key(e) in selected else " ",
+            row_attr or th["check"])
+        put(y, x + 1, "★" if e.get("curated") else " ", row_attr or th["star"])
+        put(y, x + 2, "●" if e["name"] in installed_names else " ",
+            row_attr or th["state"])
+        nx = x + 4
+        namew = max(4, min(len(e["name"]), lw - 6))
+        nm = out.truncate(e["name"], namew)
+        put(y, nx, nm, row_attr or th["name"])
+        if not chosen:
+            for pos in browse.highlight_positions(filt, nm):
+                if pos < len(nm):
+                    put(y, nx + pos, nm[pos], th["match"])
+        bx = nx + len(nm) + 2
+        for text, tkey in _row_badges(e, categories):
+            if bx + len(text) > lay.list_x + lw - 1:
+                break
+            put(y, bx, text, row_attr or th[tkey])
+            bx += len(text) + 1
+        put(y + 1, nx, out.truncate(describe(e), max(4, lw - 6)),
+            row_attr or th["desc"])
+    return rows
+
+
+def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names):
+    """The right-hand panel. Returns the clamped scroll offset."""
+    lines = browse.detail_lines(entry, width=max(8, lay.detail_w - 2),
+                               installed=entry["name"] in installed_names)
+    visible = max(0, lay.body_h)
+    dscroll = browse.clamp_scroll(dscroll, len(lines), visible)
+    active = focus == "detail"
+    for i, (role, text) in enumerate(lines[dscroll:dscroll + visible]):
+        y = lay.body_y + i
+        if y >= lay.h - 1:
+            break
+        if role == "rule":
+            put(y, lay.detail_x, "─" * max(0, lay.detail_w), th["border"])
+            continue
+        attr = {"title": th["detail_name"], "head": th["head"],
+                "desc": th["name"], "state": th["state"],
+                "field": th["field"]}.get(role, th["field"])
+        put(y, lay.detail_x + 1, text, attr)
+    if len(lines) > visible and visible > 0:
+        bar = _scrollbar(len(lines), visible, dscroll)
+        if bar:
+            bstart, blen = bar
+            for i in range(visible):
+                y = lay.body_y + i
+                if y >= lay.h - 1:
+                    break
+                thumb = bstart <= i < bstart + blen
+                put(y, lay.detail_x + lay.detail_w - 1,
+                    "█" if thumb else "│",
+                    th["border_hi"] if active else th["border"])
+    return dscroll
 
 
 def cmd_browse(argv):

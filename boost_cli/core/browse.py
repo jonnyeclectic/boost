@@ -1,0 +1,332 @@
+"""Pure logic behind `boost browse` — everything the curses layer draws.
+
+The TUI's drawing lives in ``commands/discovery.py``; every decision it makes
+lives here. Curses cannot be asserted on, so a browser whose logic sits inside
+the draw loop is a browser with no tests and no mutation coverage. Splitting it
+this way is what lets the matching rules, the pane geometry, the focus model
+and the detail panel each be checked directly.
+
+The rule that shaped the matching: **a space is a token separator, so a space
+has to reach the query.** It used to be bound to multi-select, with the
+printable range starting at 33 to keep it out — which meant two words could
+never be searched for at once. Space now types, the query splits on whitespace,
+and every token must match somewhere in the scope. Tab took over selection.
+"""
+from __future__ import annotations
+
+import textwrap
+from dataclasses import dataclass
+
+#: Search scopes, in cycle order. `all` first because it is the useful default:
+#: one token can come from the name and another from the description.
+SCOPES = ("all", "name", "description", "tap")
+
+_SCOPE_LABELS = {
+    "all": "all",
+    "name": "name",
+    "description": "descr",
+    "tap": "tap",
+}
+
+#: Minimum readable width for the detail pane. Below this the pane is dropped
+#: rather than rendered as a column of two-character fragments — a narrow
+#: terminal is better served by a full-width list.
+# Measured against the real row: a name, a [kind] badge, a version and a tap
+# badge need ~34 columns before descriptions start truncating to ellipsis, and
+# a detail pane under ~32 wraps `Review a pull request for…` into ribbons. At
+# 58 columns the old 28/24 pair kept a 27-column list that clipped every
+# description — technically two panes, practically neither.
+_MIN_DETAIL_W = 32
+_MIN_LIST_W = 34
+
+
+def scope_label(scope: str) -> str:
+    """Short display label for a scope."""
+    return _SCOPE_LABELS.get(scope, scope)
+
+
+def next_scope(scope: str, step: int = 1) -> str:
+    """The next scope in cycle order, wrapping in both directions."""
+    try:
+        i = SCOPES.index(scope)
+    except ValueError:
+        return SCOPES[0]
+    return SCOPES[(i + step) % len(SCOPES)]
+
+
+def tokens(query: str) -> list[str]:
+    """Split a query into lowercased search tokens.
+
+    Whitespace-separated, empties dropped. This is the whole reason space must
+    reach the query: without it there is exactly one token and no way to say
+    "name mentions code AND description mentions review".
+    """
+    return [t for t in query.lower().split() if t]
+
+
+def haystack(entry: dict, scope: str) -> str:
+    """The text ``scope`` searches for one entry."""
+    name = str(entry.get("name", ""))
+    if scope == "name":
+        return name.lower()
+    if scope == "description":
+        return str(entry.get("description", "")).lower()
+    if scope == "tap":
+        return str(entry.get("tap", "")).lower()
+    # `all`, and any unrecognised scope: never raise on a keystroke.
+    return " ".join((name, str(entry.get("description", "")),
+                     str(entry.get("tap", "")),
+                     str(entry.get("kind", "")))).lower()
+
+
+def subseq(needle: str, hay: str) -> bool:
+    """True when needle is a subsequence of hay (the fuzzy test).
+
+    ``str.find`` rather than the shorter ``all(ch in iter(hay))``: the iterator
+    form advances one character at a time in Python, and this runs once per
+    entry per token on every keystroke. Over a 71,700-entry catalogue that
+    difference is 4.5x — measured 66 ms vs 15 ms for a four-character token —
+    which is the gap between a browser that keeps up with typing and one that
+    does not.
+    """
+    i = 0
+    for ch in needle:
+        i = hay.find(ch, i)
+        if i < 0:
+            return False
+        i += 1
+    return True
+
+
+def index_entries(entries, scope: str) -> list[tuple[dict, str]]:
+    """Pair each entry with its lowercased haystack for ``scope``.
+
+    Built once per scope and reused for every keystroke. Rebuilding the joined
+    string inside the filter cost 125 ms per key on a 71,700-entry catalogue —
+    worse than the 80 ms draw poll, so the browser fell behind a typist. The
+    index is caller-owned rather than a module cache: the TUI holds the entry
+    list for the whole session, and a global keyed on object identity would be
+    a use-after-free waiting for the first caller that does not.
+    """
+    return [(e, haystack(e, scope)) for e in entries]
+
+
+def matches_indexed(indexed, query: str) -> list[dict]:
+    """Filter a list built by :func:`index_entries`."""
+    toks = tokens(query)
+    if not toks:
+        return [e for e, _hay in indexed]
+    return [e for e, hay in indexed
+            if all(subseq(t, hay) for t in toks)]
+
+
+def matches(entries, query: str, scope: str = "all") -> list[dict]:
+    """Entries where **every** token matches, order preserved.
+
+    Every rather than any: typing more must narrow. An `any` rule would make a
+    second word widen the result set, which reads as the filter breaking.
+
+    Convenience wrapper that indexes on the spot; a repeated caller should hold
+    an :func:`index_entries` result instead.
+    """
+    return matches_indexed(index_entries(entries, scope), query)
+
+
+def match_positions(needle: str, hay: str) -> list[int]:
+    """Indices of hay consumed by a subsequence match, or [] if it does not."""
+    positions, i = [], 0
+    for j, ch in enumerate(hay):
+        if i < len(needle) and ch == needle[i]:
+            positions.append(j)
+            i += 1
+    return positions if i == len(needle) else []
+
+
+def highlight_positions(query: str, text: str) -> set[int]:
+    """Every index of ``text`` any query token lands on.
+
+    A union across tokens, so `code review` lights up both words rather than
+    only whichever one the single-token highlighter happened to see.
+    """
+    low = text.lower()
+    hits: set[int] = set()
+    for t in tokens(query):
+        hits.update(match_positions(t, low))
+    return hits
+
+
+# --------------------------------------------------------------- focus
+
+#: Panes the focus ring can hold, left to right as the user sees them.
+PANES = ("search", "list", "detail")
+
+
+def move_focus(focus: str, direction: str, row: int, n: int,
+               detail: bool) -> tuple[str, int]:
+    """Where an arrow key lands: ``(focus, row)``.
+
+    The arrows cross pane boundaries rather than dead-ending, which is what
+    makes the search bar and the list feel like one surface: *up* from the top
+    row goes to the query, *down* from the query comes back. Right and left
+    cross into the detail pane when it is open.
+    """
+    if direction == "down":
+        if focus == "search":
+            return ("list", row) if n else ("search", row)
+        if focus == "list":
+            return ("list", min(row + 1, max(0, n - 1)))
+        return (focus, row)
+    if direction == "up":
+        if focus == "list":
+            # The top row is the boundary: one more `up` is the query.
+            return ("search", row) if row <= 0 else ("list", row - 1)
+        return (focus, row)
+    if direction == "right":
+        if focus == "list" and detail and n:
+            return ("detail", row)
+        return (focus, row)
+    if direction == "left":
+        if focus == "detail":
+            return ("list", row)
+        return (focus, row)
+    return (focus, row)
+
+
+# --------------------------------------------------------------- layout
+
+@dataclass(frozen=True)
+class Layout:
+    """Pane geometry for one frame, in absolute terminal cells.
+
+    A frozen record rather than loose ints so the draw loop cannot quietly
+    disagree with itself about where a border goes.
+    """
+    w: int
+    h: int
+    body_y: int          # first row inside the outer box that holds content
+    body_h: int          # rows available to the list / detail panes
+    list_x: int
+    list_w: int
+    detail_x: int
+    detail_w: int        # 0 when there is no room for a readable detail pane
+
+    @property
+    def has_detail(self) -> bool:
+        return self.detail_w > 0
+
+
+def layout(w: int, h: int, detail: bool = False) -> Layout:
+    """Compute pane geometry for a ``w`` x ``h`` terminal.
+
+    Total column budget, left to right: outer border, list, divider, detail,
+    outer border. The detail pane is dropped entirely below
+    ``_MIN_DETAIL_W + _MIN_LIST_W`` of usable width — a pane too narrow to hold
+    a wrapped sentence costs the list its room and gives nothing back.
+
+    Never raises and never returns a negative span: it is called from inside
+    the draw loop on every resize, including the 1x1 frame a terminal reports
+    mid-drag.
+    """
+    w = max(0, w)
+    h = max(0, h)
+    # Rows 0..4: top rule (with title), query, scope radios, key hints, and the
+    # rule that separates chrome from body. Content starts at 5; the last row
+    # is the bottom rule.
+    body_y = 5
+    body_h = max(0, h - body_y - 1)
+    inner_w = max(0, w - 2)          # inside the outer left/right border
+    list_x = 1
+
+    if not detail or inner_w < _MIN_LIST_W + _MIN_DETAIL_W + 1:
+        return Layout(w=w, h=h, body_y=body_y, body_h=body_h,
+                      list_x=list_x, list_w=inner_w,
+                      detail_x=w, detail_w=0)
+
+    # Roughly a 55/45 split, with the divider column paid for out of the list.
+    detail_w = max(_MIN_DETAIL_W, (inner_w - 1) * 45 // 100)
+    list_w = inner_w - 1 - detail_w
+    if list_w < _MIN_LIST_W:                 # give the shortfall back
+        list_w = _MIN_LIST_W
+        detail_w = inner_w - 1 - list_w
+    return Layout(w=w, h=h, body_y=body_y, body_h=body_h,
+                  list_x=list_x, list_w=list_w,
+                  detail_x=list_x + list_w + 1, detail_w=detail_w)
+
+
+def clamp_scroll(offset: int, total: int, visible: int) -> int:
+    """Keep a scroll offset inside its content."""
+    if total <= visible or visible <= 0:
+        return 0
+    return max(0, min(offset, total - visible))
+
+
+# --------------------------------------------------------------- detail
+
+def _render_value(value) -> str:
+    """A frontmatter value as display text, never as a Python repr.
+
+    `['a', 'b']` is data leaking through the UI; `a, b` is a rendering.
+    """
+    if isinstance(value, (list, tuple)):
+        return ", ".join(str(v) for v in value)
+    if isinstance(value, dict):
+        return ", ".join("%s=%s" % (k, v) for k, v in value.items())
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    return str(value)
+
+
+def detail_lines(entry: dict, width: int = 60,
+                 installed: bool | None = None) -> list[tuple[str, str]]:
+    """``(role, text)`` lines for the detail pane, wrapped to ``width``.
+
+    Roles let the curses layer theme without re-deriving meaning from the text.
+    The whole frontmatter is included, not a known-keys allowlist: the request
+    was to scroll through *the entire frontmatter*, and an allowlist silently
+    hides exactly the custom key a registry author cared about.
+    """
+    width = max(8, width)
+    lines: list[tuple[str, str]] = []
+
+    def add(role: str, text: str, indent: str = "") -> None:
+        if not text:
+            lines.append((role, ""))
+            return
+        lines.extend((role, chunk) for chunk in textwrap.wrap(
+            text, width=width, initial_indent=indent,
+            subsequent_indent=indent) or [""])
+
+    name = str(entry.get("name", "?"))
+    version = entry.get("version")
+    add("title", "%s%s" % (name, "  v%s" % version if version else ""))
+    lines.append(("rule", ""))
+
+    if entry.get("description"):
+        add("desc", str(entry["description"]))
+        lines.append(("blank", ""))
+
+    if installed is not None:
+        add("state", "● installed" if installed else "○ not installed")
+        lines.append(("blank", ""))
+
+    add("head", "SOURCE")
+    for label, key in (("kind", "kind"), ("tap", "tap"), ("path", "rel_dir"),
+                       ("file", "skill_md")):
+        if entry.get(key):
+            add("field", "%-8s %s" % (label, _render_value(entry[key])))
+    if entry.get("curated"):
+        add("field", "%-8s %s" % ("curated", "yes"))
+
+    meta = entry.get("meta") or {}
+    if isinstance(meta, dict) and meta:
+        lines.append(("blank", ""))
+        add("head", "FRONTMATTER")
+        for key in sorted(meta):
+            value = _render_value(meta[key])
+            if not value:
+                continue
+            # Pad for alignment, never truncate: the key name is how the reader
+            # knows *which* field this is, so clipping `custom-key` to
+            # `custom-k` throws away the only identifying part of the line.
+            add("field", "%-8s %s" % (str(key), value))
+    return lines

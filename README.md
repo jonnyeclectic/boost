@@ -270,6 +270,35 @@ boost doctor               # sanity check: broken links, lock drift, stale taps
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ```
 
+### Browsing the catalogue
+
+`boost browse` is a full-screen picker over every tapped item — a filterable
+list on the left, the selected item's full detail on the right.
+
+```text
+╭─ ●●●  boost browse  ──────────────────────────────────┬──────────────────────╮
+│ ❯ co re                                          2/4  │ code-review  v1.0.0  │
+│ match (●) all ( ) name ( ) descr ( ) tap              │ ──────────────────── │
+│ ↑↓ move  ⇥ select  → detail  ^T scope  ↵ install      │ Review a pull …      │
+├───────────────────────────────────────────────────────┤ ● installed          │
+│  ★● code-review  [skill] v1.0.0 [acme/quality]        │ SOURCE · FRONTMATTER │
+╰───────────────────────────────────────────────────────┴──────────────────────╯
+```
+
+| key | does |
+|---|---|
+| any character, **including space** | types into the query |
+| `↑` `↓` | move; `↑` from the top row goes to the query, `↓` comes back |
+| `→` `←` | into and out of the detail pane, where `↑`/`↓` scroll it |
+| `⇥` | select (multi-select for a batch install) |
+| `^T` | cycle what the query matches: all · name · description · tap |
+| `↵` | install the selection |
+| `esc` | quit |
+
+The query splits on spaces and **every** token must match, so `code review`
+narrows where `code` alone would not. Selection lives on `⇥` rather than space
+for exactly that reason.
+
 ## 80 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see
