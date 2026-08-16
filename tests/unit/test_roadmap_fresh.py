@@ -110,6 +110,41 @@ def test_every_shipped_card_body_is_inline():
             builder.check_body_is_inline(item["_file"], item["body"])
 
 
+@pytest.mark.skipif(not _SCRIPT.exists(), reason="repo-root files not reachable")
+@pytest.mark.parametrize("body", [
+    "the clip bound was <code>x < w - 1</code>, which fails",
+    "compare <code>a < b</code>",
+    "prose with a < b comparison",
+    "<code>if x<y</code>",
+])
+def test_a_raw_angle_bracket_is_refused(body):
+    """Same trap as the block-tag check, different symptom.
+
+    A `<` that does not open a tag is invalid HTML, and html-validate says so
+    in a separate workflow minutes after every roadmap script reports clean —
+    which is exactly how `x < w - 1` shipped in a card body. Catching it at
+    generation time names the file while the author is still holding it.
+    """
+    builder = _load_builder()
+    with pytest.raises(builder.RoadmapError) as ei:
+        builder.check_body_is_inline("some-card.md", body)
+    assert "some-card.md" in str(ei.value)
+    assert "&lt;" in str(ei.value), "the message must say what to write instead"
+
+
+@pytest.mark.skipif(not _SCRIPT.exists(), reason="repo-root files not reachable")
+@pytest.mark.parametrize("body", [
+    "plain prose with no markup at all",
+    "<b>bold</b> and <em>italic</em> and <code>code</code>",
+    "an escaped <code>a &lt; b</code> comparison",
+    "an arrow → and a middot &middot; and an entity &amp;",
+    "<a href='#x'>a link</a>",
+])
+def test_legitimate_inline_markup_still_passes(body):
+    """The guard must not start rejecting the markup every card already uses."""
+    _load_builder().check_body_is_inline("some-card.md", body)
+
+
 @pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
                     reason="repo-root files not reachable (e.g. mutation sandbox)")
 def test_every_design_item_has_required_fields():

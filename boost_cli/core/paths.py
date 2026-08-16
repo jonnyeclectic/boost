@@ -70,6 +70,26 @@ def cache_dir() -> Path:
     return boost_home() / "cache"
 
 
+# Files under `cache/` that are boost's own derived artifacts, not a tap's
+# catalog. `boost clean` sweeps `cache/*.json` whose stem is not a configured
+# tap; `rag_index.json` and `discovery.json` match that shape and no tap can
+# ever be named after them, so both were deleted on every run. Losing the BM25
+# index is not a cheap self-repair — the next search re-parses every tap catalog
+# on the machine (~71k items on a full install).
+#
+# The .sqlite and .txt entries are outside today's `*.json` glob and are listed
+# so a future sweep that widens the glob inherits the guard rather than
+# rediscovering the bug. `tests/unit/test_clean_internal_cache.py` fails the
+# build when a module writes a cache artifact without registering it here.
+INTERNAL_CACHE_FILES = frozenset({
+    "rag_index.json",       # rag.index_path()       — BM25 index
+    "rag_postings.sqlite",  # rag.postings_path()    — BM25 postings
+    "rag_vectors.sqlite",   # dense.db_path()        — dense vectors
+    "discovery.json",       # discovery._discovery_path()
+    "_names.txt",           # complete.names_file()  — shell completion
+})
+
+
 def logs_dir() -> Path:
     """Return the directory holding diagnostic logs and crash reports."""
     return boost_home() / "logs"

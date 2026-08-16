@@ -9,6 +9,7 @@ import json
 import re
 import sqlite3
 import subprocess
+import time
 import types
 
 import pytest
@@ -832,14 +833,16 @@ class _FakeCurses:
 
     A_BOLD, A_DIM, A_REVERSE, A_NORMAL = 1, 2, 4, 0
     KEY_UP, KEY_DOWN, KEY_ENTER, KEY_BACKSPACE = 259, 258, 343, 263
+    KEY_LEFT, KEY_RIGHT, KEY_NPAGE, KEY_PPAGE = 260, 261, 338, 339
     ACS_HLINE = ord("-")
 
     class error(Exception):
         pass
 
-    def __init__(self, keys):
+    def __init__(self, keys, size=(24, 80)):
         self.keys = list(keys)
         self.drawn = []
+        self.size = size
 
     def curs_set(self, n):
         raise self.error("no cursor support")
@@ -852,7 +855,7 @@ class _FakeCurses:
 
     # screen protocol
     def getmaxyx(self):
-        return (24, 80)
+        return self.size
 
     def erase(self):
         pass
@@ -867,7 +870,9 @@ class _FakeCurses:
         pass
 
     def getch(self):
-        return self.keys.pop(0) if self.keys else ord("q")
+        # ESC, not "q": once space types into the query every printable key
+        # types, so `q` is a character and only ESC still quits.
+        return self.keys.pop(0) if self.keys else 27
 
 
 class TestBrowse:
@@ -934,10 +939,10 @@ class TestBrowse:
         from boost_cli.core import catalog
 
         entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
-        fake = _FakeCurses([ord("t"), _FakeCurses.KEY_DOWN, 10, _FakeCurses.KEY_UP,
-                            _FakeCurses.KEY_BACKSPACE, ord("i")])
+        fake = _FakeCurses([ord("t"), _FakeCurses.KEY_DOWN, _FakeCurses.KEY_UP,
+                            _FakeCurses.KEY_BACKSPACE, 10])
         picked = discovery._browse_tui(fake, entries)
-        # a plain "i" with nothing space-selected installs just the highlighted pick
+        # Enter with nothing Tab-selected installs just the highlighted pick
         assert [e["name"] for e in picked] == ["brainstorming"]
         # the typed query is echoed after the "❯" prompt
         assert "t" in fake.drawn
@@ -945,33 +950,99 @@ class TestBrowse:
         # ESC quits without a pick
         assert discovery._browse_tui(_FakeCurses([27]), entries) is None
 
-    def test_tui_space_selects_multiple_for_batch_install(self, boost, tapped):
+    def test_tab_selects_multiple_for_batch_install(self, boost, tapped):
+        """Selection moved from SPACE to TAB so a space can reach the query."""
         from boost_cli.commands import discovery
         from boost_cli.core import catalog
 
         # alphabetical: brainstorming, commit-messages, cowboy-coding, ...
         entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
-        keys = [ord(" "),                                    # check brainstorming
+        keys = [9,                                            # check brainstorming
                 _FakeCurses.KEY_DOWN, _FakeCurses.KEY_DOWN,   # -> cowboy-coding
-                ord(" "),                                     # check cowboy-coding
-                ord("i")]                                     # install the batch
+                9,                                            # check cowboy-coding
+                10]                                           # Enter: install both
         fake = _FakeCurses(keys)
         picked = discovery._browse_tui(fake, entries)
         assert [e["name"] for e in picked] == ["brainstorming", "cowboy-coding"]
         assert any("2 selected" in s for s in fake.drawn)
+
+    def test_a_batch_install_runs_one_at_a_time(self, boost, tapped):
+        """Every `store.install` read-modify-writes the lock file, so two at
+        once lost an entry — a Tab-select of two skills wrote both to disk and
+        recorded one. Caught as a test that passed alone and failed 3 runs in 5
+        in the suite, so the check is on overlap, not on the outcome."""
+        import threading
+
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        live, overlapped = [], []
+        gate = threading.Lock()
+
+        def slow_install(entry):
+            with gate:
+                live.append(entry["name"])
+                if len(live) > 1:
+                    overlapped.append(tuple(live))
+            time.sleep(0.05)
+            with gate:
+                live.remove(entry["name"])
+            return types.SimpleNamespace(dest=paths.store_dir() / entry["name"],
+                                         linked=[], conflicts=[])
+
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        keys = [9, _FakeCurses.KEY_DOWN, 9, _FakeCurses.KEY_DOWN, 9, 10]
+        discovery._browse_tui(_FakeCurses(keys), entries, install=slow_install)
+        assert not overlapped, "installs ran concurrently: %r" % overlapped
+
+    def test_space_types_into_the_query_instead_of_selecting(self, boost, tapped):
+        """The reported bug: SPACE was bound to select and excluded from the
+        printable range, so two words could never be searched for."""
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        fake = _FakeCurses([ord("t"), ord("d"), ord(" "), ord("w")])
+        assert discovery._browse_tui(fake, entries) is None   # ESC quits
+        assert any("td w" in s for s in fake.drawn), \
+            "the space never reached the query"
+
+    def test_a_two_word_query_narrows_to_the_matching_skill(self, boost, tapped):
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        # "tdd" from the name, "workflow" from the name too — both must match
+        fake = _FakeCurses([ord(c) for c in "tdd work"] + [10])
+        picked = discovery._browse_tui(fake, entries)
+        assert [e["name"] for e in picked] == ["tdd-workflow"]
 
     def test_tui_cards_show_type_tap_badges_and_descriptions(self, boost, tapped):
         from boost_cli.commands import discovery
         from boost_cli.core import catalog
 
         entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
-        fake = _FakeCurses([])  # no keys queued -> one draw, then default "q" quits
+        # Wide enough for the whole badge row: on a narrow list pane the tap
+        # badge is dropped from the tail by design, and the detail panel on the
+        # right carries the tap instead.
+        fake = _FakeCurses([], size=(24, 140))  # one draw, then ESC quits
         picked = discovery._browse_tui(fake, entries)
         assert picked is None
         assert "[skill]" in fake.drawn
         assert "[fixture-tap]" in fake.drawn
         assert "v1.0.2" in fake.drawn          # commit-messages' version
         assert "Conventional, atomic commit message discipline" in fake.drawn
+
+    def test_the_detail_panel_carries_the_tap_when_the_badge_is_dropped(
+            self, boost, tapped):
+        """Nothing is lost on a narrow list — it moves to the right pane."""
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        fake = _FakeCurses([], size=(24, 80))
+        discovery._browse_tui(fake, entries)
+        assert any("fixture-tap" in s for s in fake.drawn)
 
 
 class TestBrowseAurora:

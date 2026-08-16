@@ -47,12 +47,40 @@ if (!bin) {
   process.exit(2);
 }
 
+// `--single-process` (and the `--in-process-gpu` half of the same workaround)
+// exists for exactly one binary: `chrome-headless-shell` is the only thing that
+// starts under a macOS sandbox denying Mach port rendezvous, and it needs the
+// flag to get there — see the matching block in a11y_check.mjs, which scoped it
+// first and recorded that this file still passed it unconditionally.
+//
+// That prediction came true. On CI the binary is /usr/bin/google-chrome, where
+// the flag is debug-only and unsupported; when the runner image bumped Chrome,
+// the browser began dying during the CDP startup handshake and every `sweep`
+// run failed before a page loaded:
+//
+//   TargetCloseError: Protocol error (Target.setAutoAttach): Target closed
+//       at ChromeLauncher.launch (…/ChromeLauncher.js:39:16)
+//
+// The tell that it was the environment and not the repo: #515's own PR run
+// passed on 2026-08-13 and the byte-identical squash-merge failed on 08-15.
+//
+// `headless` moves with it. "shell" is the old headless mode, which is what the
+// separate chrome-headless-shell binary provides; against full Chrome we take
+// puppeteer's default (new headless), which is the mode a11y_check.mjs has been
+// driving on this runner all along. Keyed on the binary rather than on
+// `process.platform`, so a macOS run pointed at full Chrome does not inherit a
+// flag meant for the shell.
+const needsSingleProcess = /chrome[-_]headless[-_]shell/.test(bin);
+
 const browser = await launch({
   executablePath: bin,
   pipe: true,                       // no listening socket (sandbox-safe)
-  headless: "shell",
-  args: ["--no-sandbox", "--disable-gpu", "--in-process-gpu", "--single-process",
-         "--disable-dev-shm-usage", "--hide-scrollbars"],
+  ...(needsSingleProcess ? { headless: "shell" } : {}),
+  args: [
+    "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+    "--hide-scrollbars",
+    ...(needsSingleProcess ? ["--in-process-gpu", "--single-process"] : []),
+  ],
 });
 
 // Containers allowed to hide content behind their own horizontal scroll.

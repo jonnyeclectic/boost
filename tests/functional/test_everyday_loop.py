@@ -62,7 +62,7 @@ def test_unknown_command_suggests_closest(boost):
 def test_version_and_help(boost):
     assert re.match(r"boost \S+", boost("--version").out)
     r = boost("--help")
-    assert "79 commands · 8 groups" in r.out
+    assert "80 commands · 8 groups" in r.out
     for group in ("Package Management", "Discovery & Search", "Intelligence",
                   "Quality & Health", "Team & Collaboration"):
         assert group in r.out
