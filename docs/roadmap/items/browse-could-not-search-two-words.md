@@ -94,6 +94,31 @@ serial now, drained by one worker so the draw loop still answers keys, and the
 regression test asserts on <em>overlap</em> rather than on the outcome, because
 the outcome was right two times in five.
 
+<b>The browser was also listing the same skill four times.</b> Registries
+render one skill into <code>.claude/</code>, <code>.cursor/</code>,
+<code>.gemini/</code> and a plugin root, and every copy got a row. Measured on
+the real catalogue: <b>22,535 of 60,047 rows (37.5%) are duplicates of another
+row</b>, so the list is now 37,512.
+
+<b>Identity is the description, never the name — and that distinction is the
+whole risk.</b> <code>code-reviewer</code> appears 75 times with <b>42 distinct
+descriptions</b>, and <code>rule</code> 47 times with 47 distinct. Those are
+different skills that happen to share a name, and collapsing them would hide
+real results — the same mistake the eval scoring made once, crediting the ranker
+with a compression that existed only in the scoring code.
+
+<b>Two passes, and their value is wildly different.</b> Exact signature match
+costs 34 ms and does 22,379 of the 22,535 collapses; the fuzzy pass at 95% costs
+301 ms and merges the remaining 156. Nine times the cost for under half a
+percent more. It stays because 95% is the stated contract and this runs once
+when the browser opens rather than per keystroke — but the numbers are recorded
+so whoever revisits it decides with data rather than a guess.
+
+<b>Nothing disappears silently.</b> A collapsed row is badged
+<code>×5</code>, the counter says how many are hidden, and <code>^D</code> shows
+them all again. A browser that quietly drops a third of the catalogue and
+reports a smaller total is indistinguishable from one with a broken filter.
+
 <b>It also got faster than what it replaces.</b> Searching the description as
 well as the name is more text per entry, and the first cut cost <b>125 ms per
 keystroke</b> over a 71,700-entry catalogue — slower than the 80 ms draw poll,

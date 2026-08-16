@@ -159,6 +159,85 @@ class TestScopes:
         assert browse.scope_label(scope)
 
 
+class TestDedupe:
+    """Near-identical rows collapse; homonyms must not.
+
+    A registry that renders one skill into `.claude/`, `.cursor/`, `.gemini/`
+    and a plugin root ships it four times, and the browser listed all four.
+    Measured on a real 60,047-entry catalogue: 22,379 rows (37%) are exact
+    duplicates of another row.
+
+    The dangerous half is the opposite case. `code-reviewer` appears 75 times
+    with **42 distinct descriptions**, and `rule` 47 times with 47 distinct —
+    those are different skills that share a name, and collapsing them would
+    hide real results. So identity is the description, never the name.
+    """
+
+    def test_identical_rows_collapse_to_one(self):
+        rows = [_e("a", "same text"), _e("a", "same text"), _e("a", "same text")]
+        out = browse.dedupe(rows)
+        assert len(out) == 1
+        assert out[0][1] == 3, "the survivor must carry the copy count"
+
+    def test_the_first_occurrence_is_the_survivor(self):
+        rows = [_e("a", "same", tap="first/one"), _e("a", "same", tap="second/two")]
+        assert browse.dedupe(rows)[0][0]["tap"] == "first/one"
+
+    def test_a_shared_name_with_different_descriptions_never_collapses(self):
+        """`rule` x47 with 47 distinct descriptions — all real, all different."""
+        rows = [_e("rule", "format imports"), _e("rule", "no bare except"),
+                _e("rule", "prefer pathlib")]
+        assert len(browse.dedupe(rows)) == 3
+
+    @pytest.mark.parametrize("suffix,ratio", [(" v2", 0.992), (".", 0.997),
+                                              (" (updated)", 0.973)])
+    def test_near_identical_descriptions_collapse_at_the_threshold(self, suffix,
+                                                                   ratio):
+        """Real ratios, computed rather than guessed: a 25-character clause on
+        a 177-character description is only 0.934 and must NOT collapse."""
+        long = "Security audit, hardening, threat modeling and code review " * 3
+        rows = [_e("x", long), _e("x", long + suffix)]
+        assert len(browse.dedupe(rows, threshold=0.95)) == 1
+
+    def test_a_visible_edit_stays_two_rows(self):
+        long = "Security audit, hardening, threat modeling and code review " * 3
+        rows = [_e("x", long), _e("x", long + " plus one trailing clause")]
+        assert len(browse.dedupe(rows, threshold=0.95)) == 2, \
+            "0.934 is below the threshold — collapsing it would hide an edit"
+
+    def test_a_lower_similarity_survives_as_its_own_row(self):
+        rows = [_e("x", "Security audit and hardening"),
+                _e("x", "Completely different subject matter entirely here")]
+        assert len(browse.dedupe(rows, threshold=0.95)) == 2
+
+    def test_the_threshold_is_honoured(self):
+        a, b = "abcdefghij" * 6, "abcdefghij" * 5 + "abcdefghiZ" * 1
+        assert len(browse.dedupe([_e("x", a), _e("x", b)], threshold=0.99)) == 2
+        assert len(browse.dedupe([_e("x", a), _e("x", b)], threshold=0.90)) == 1
+
+    def test_order_is_preserved(self):
+        rows = [_e("b", "one"), _e("a", "two"), _e("c", "three")]
+        assert [e["name"] for e, _n in browse.dedupe(rows)] == ["b", "a", "c"]
+
+    def test_singletons_report_a_count_of_one(self):
+        assert browse.dedupe([_e("solo", "unique")])[0][1] == 1
+
+    def test_an_empty_catalogue_is_fine(self):
+        assert browse.dedupe([]) == []
+
+    def test_entries_with_no_description_do_not_all_merge(self):
+        """Empty descriptions are identical strings; the name must still
+        separate them, or every undescribed skill becomes one row."""
+        rows = [_e("alpha", ""), _e("beta", ""), _e("gamma", "")]
+        assert len(browse.dedupe(rows)) == 3
+
+    def test_collapsed_total_is_recoverable(self):
+        rows = [_e("a", "x"), _e("a", "x"), _e("b", "y")]
+        out = browse.dedupe(rows)
+        assert sum(n for _e, n in out) == len(rows), \
+            "the counts must account for every input row"
+
+
 class TestFocusMovement:
     """Arrows cross pane boundaries — item 2 of the request."""
 
@@ -493,6 +572,81 @@ class TestFocusIsVisible:
         right = lay.w - 1
         assert seen["list"][right] != seen["detail"][right], \
             "the right-hand border must change when the detail pane is focused"
+
+
+class TestDedupeIsVisible:
+    """Collapsing is fine; collapsing silently is not.
+
+    A browser that drops a third of the catalogue and shows a smaller total is
+    indistinguishable from one with a broken filter.
+    """
+
+    def test_a_collapsed_row_says_how_many_it_stands_for(self):
+        from boost_cli.commands import discovery
+
+        rows, copies = [], {}
+        dup = _e("007", "Security audit")
+        copies[id(dup)] = 5
+        rows.append(dup)
+
+        painted = []
+
+        class _Theme(dict):
+            def __missing__(self, _k):
+                return 0
+
+        def put(y, x, s, attr=0):
+            painted.append(str(s))
+
+        lay = browse.layout(100, 24, detail=True)
+        discovery._draw_rows(put, _Theme(), lay, rows, 0, set(), "", "list",
+                             lambda e: "", {}, set(), copies)
+        assert any("×5" in s for s in painted)
+
+    def test_a_unique_row_gets_no_badge(self):
+        from boost_cli.commands import discovery
+
+        painted = []
+
+        class _Theme(dict):
+            def __missing__(self, _k):
+                return 0
+
+        lay = browse.layout(100, 24, detail=True)
+        discovery._draw_rows(put := (lambda y, x, s, attr=0:
+                                     painted.append(str(s))),
+                             _Theme(), lay, [_e("solo", "x")], 0, set(), "",
+                             "list", lambda e: "", {}, set(), {})
+        assert not any("×" in s for s in painted)
+        assert put is not None
+
+    def test_the_hidden_total_is_stated_in_the_count(self):
+        from boost_cli.commands import discovery
+
+        painted = []
+
+        class _Theme(dict):
+            def __missing__(self, _k):
+                return 0
+
+        lay = browse.layout(100, 24, detail=True)
+        discovery._draw_query(lambda y, x, s, attr=0: painted.append(str(s)),
+                              _Theme(), lay, "", "list", 10, 10, 0, 22379)
+        assert any("22379" in s and "hidden" in s for s in painted)
+
+    def test_no_hidden_rows_means_no_note(self):
+        from boost_cli.commands import discovery
+
+        painted = []
+
+        class _Theme(dict):
+            def __missing__(self, _k):
+                return 0
+
+        lay = browse.layout(100, 24, detail=True)
+        discovery._draw_query(lambda y, x, s, attr=0: painted.append(str(s)),
+                              _Theme(), lay, "", "list", 10, 10, 0, 0)
+        assert not any("hidden" in s for s in painted)
 
 
 class TestInstallStatusInThePane:

@@ -14,6 +14,7 @@ and every token must match somewhere in the scope. Tab took over selection.
 """
 from __future__ import annotations
 
+import difflib
 import textwrap
 from dataclasses import dataclass
 
@@ -153,6 +154,92 @@ def highlight_positions(query: str, text: str) -> set[int]:
     for t in tokens(query):
         hits.update(match_positions(t, low))
     return hits
+
+
+# --------------------------------------------------------------- dedupe
+
+#: Above this many distinct descriptions under one name, the fuzzy pass is
+#: skipped for that name. It is quadratic, and the largest real bucket
+#: (`rule`, 47 distinct) is already the pathological case — a bigger one is a
+#: registry doing something strange, not a user waiting to be helped.
+_FUZZY_BUCKET_CAP = 80
+
+
+def _sig(entry: dict) -> tuple[str, str]:
+    """Identity of a row for dedupe: name plus description, normalised.
+
+    The description is what makes this safe. Keying on the name alone would
+    collapse `code-reviewer` — 75 rows with **42 distinct descriptions** on a
+    real catalogue — into one, hiding 41 genuinely different skills. Keying on
+    the pair collapses only rows that say the same thing.
+    """
+    return (str(entry.get("name", "")).strip().lower(),
+            str(entry.get("description", "")).strip().lower())
+
+
+def dedupe(entries, threshold: float = 0.95) -> list[tuple[dict, int]]:
+    """Collapse near-identical rows -> ``[(survivor, copies)]``, order kept.
+
+    Registries render one skill into `.claude/`, `.cursor/`, `.gemini/` and a
+    plugin root, so the browser listed the same thing four times. On a real
+    60,047-entry catalogue **22,379 rows (37%) are exact duplicates**.
+
+    Two passes, because their value is wildly different and it is worth knowing
+    which is carrying the weight:
+
+    * exact signature match — 34 ms, and it does 22,379 of the 22,535 collapses;
+    * fuzzy match at ``threshold`` — 301 ms, and it merges the remaining 156.
+
+    The fuzzy pass is nine times the cost for under half a percent more
+    collapse. It stays because "95% similar" is the stated contract and this
+    runs once when the browser opens rather than per keystroke — but a future
+    reader deciding whether to keep it deserves the numbers rather than a guess.
+    """
+    order: list[tuple[str, str]] = []
+    groups: dict[tuple[str, str], list] = {}
+    for e in entries:
+        sig = _sig(e)
+        if sig not in groups:
+            groups[sig] = [e, 0]
+            order.append(sig)
+        groups[sig][1] += 1
+
+    # Fuzzy pass, confined to signatures that already share a name: two rows
+    # with different names are different skills however similar the prose.
+    by_name: dict[str, list] = {}
+    for sig in order:
+        by_name.setdefault(sig[0], []).append(sig)
+    absorbed: set[tuple[str, str]] = set()
+    for sigs in by_name.values():
+        if len(sigs) < 2 or len(sigs) > _FUZZY_BUCKET_CAP:
+            continue
+        for i, a in enumerate(sigs):
+            if a in absorbed:
+                continue
+            for b in sigs[i + 1:]:
+                if b in absorbed:
+                    continue
+                if _similar(a[1], b[1], threshold):
+                    absorbed.add(b)
+                    groups[a][1] += groups[b][1]
+    return [(groups[s][0], groups[s][1]) for s in order if s not in absorbed]
+
+
+def _similar(a: str, b: str, threshold: float) -> bool:
+    """True when two descriptions are at least ``threshold`` alike.
+
+    The two cheap ratios first: both are upper bounds on the real one, so a
+    failure short-circuits before the quadratic matcher runs. Over a real
+    catalogue that is most pairs.
+    """
+    if a == b:
+        return True
+    if not a or not b:
+        return False
+    sm = difflib.SequenceMatcher(None, a, b)
+    return (sm.real_quick_ratio() >= threshold
+            and sm.quick_ratio() >= threshold
+            and sm.ratio() >= threshold)
 
 
 # --------------------------------------------------------------- focus

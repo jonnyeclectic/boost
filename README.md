@@ -305,6 +305,14 @@ reports it — `◐ installing…`, then `● installed` with the destination, o
 `✗` with the reason. Installs queue and run one at a time, because each one
 rewrites the lock file.
 
+**Duplicates are collapsed.** Registries render one skill into `.claude/`,
+`.cursor/`, `.gemini/` and a plugin root, so the same thing was listed four
+times — on a real 60,047-entry catalogue **22,535 rows (37%) are duplicates**.
+Rows whose name *and* description match (or are ≥95% alike) fold into one,
+badged `×5`, with the hidden total in the counter and `^D` to show them again.
+Identity is the description, never the name: `code-reviewer` appears 75 times
+with 42 *different* descriptions, and those are 42 real skills.
+
 ## 80 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see

@@ -1009,6 +1009,14 @@ def _browse_tui(curses, entries, install=None):
     loading: set = set()
     installed_names = set(store.installed())
     do_install = install or store.install
+    # Collapse rows that say the same thing. A registry renders one skill into
+    # .claude/, .cursor/, .gemini/ and a plugin root, so 37% of a real 60,047
+    # entry catalogue is a duplicate of another row. Kept as (entry, copies) so
+    # the count can be shown — hiding rows silently is worse than showing them.
+    deduped = browse.dedupe(entries)
+    copies = {id(e): n for e, n in deduped}
+    unique_entries = [e for e, _n in deduped]
+    hidden = len(entries) - len(unique_entries)
     # name -> (state, message). Item 1: an install runs without leaving the
     # browser, and the detail pane reports it. Threaded so the draw loop keeps
     # answering keys while files are written — an install that freezes the UI
@@ -1098,6 +1106,7 @@ def _browse_tui(curses, entries, install=None):
 
         filt, sel, detail = "", 0, True
         focus, scope, dscroll = "list", browse.SCOPES[0], 0
+        collapse = True
         selected: set = set()
         # One haystack per entry per scope, built on first use and reused for
         # every keystroke: re-deriving it inside the filter cost 125 ms per key
@@ -1105,19 +1114,22 @@ def _browse_tui(curses, entries, install=None):
         index: dict = {}
         while True:
             _h, _w = scr.getmaxyx()
-            if scope not in index:
-                index[scope] = browse.index_entries(entries, scope)
-            found = browse.matches_indexed(index[scope], filt)
+            pool = unique_entries if collapse else entries
+            key = (scope, collapse)
+            if key not in index:
+                index[key] = browse.index_entries(pool, scope)
+            found = browse.matches_indexed(index[key], filt)
             sel = max(0, min(sel, len(found) - 1))
             lay = browse.layout(_w, _h, detail=detail)
             try:
                 scr.erase()
                 _draw_frame(put, th, lay, focus)
-                _draw_query(put, th, lay, filt, focus, len(found), len(entries),
-                            len(selected))
+                _draw_query(put, th, lay, filt, focus, len(found), len(pool),
+                            len(selected), hidden if collapse else 0)
                 _draw_scopes(put, th, lay, scope, focus)
                 rows = _draw_rows(put, th, lay, found, sel, selected, filt,
-                                  focus, describe, categories, installed_names)
+                                  focus, describe, categories, installed_names,
+                                  copies if collapse else None)
                 if lay.has_detail and found:
                     dscroll = _draw_detail(put, th, lay, found[sel], dscroll,
                                            focus, installed_names, status)
@@ -1179,6 +1191,8 @@ def _browse_tui(curses, entries, install=None):
                 filt, sel, dscroll = filt[:-1], 0, 0
             elif key == 20:                               # ^T: cycle scope
                 scope, sel = browse.next_scope(scope), 0
+            elif key == 4:                                # ^D: show duplicates
+                collapse, sel, dscroll = not collapse, 0, 0
             elif 32 <= key <= 126:
                 # 32 is SPACE, and it belongs to the query: the range used to
                 # start at 33 with space bound to select, so two words could
@@ -1242,7 +1256,8 @@ def _draw_frame(put, th, lay, focus):
     # its own row now, above the rule that separates chrome from body.
     # Two hints, not one truncated: clipping the long one mid-word ends the
     # line on "esc", which reads as a key rather than as a cut-off phrase.
-    hint = "↑↓ move  ⇥ select  → detail  ^T scope  ↵ install  esc quit"
+    hint = ("↑↓ move  ⇥ select  → detail  ^T scope  ^D dupes  "
+            "↵ install  esc quit")
     if len(hint) > inner - 2:
         hint = "↑↓ move  ⇥ select  ↵ install  esc quit"
     if len(hint) > inner - 2:
@@ -1250,16 +1265,22 @@ def _draw_frame(put, th, lay, focus):
     put(lay.body_y - 2, 2, hint[:max(0, inner - 2)], th["help"])
 
 
-def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel):
-    """The query row: chevron, text, cursor when focused, right-aligned count."""
+def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel, hidden=0):
+    """The query row: chevron, text, cursor when focused, right-aligned count.
+
+    ``hidden`` is stated, never implied: a browser that quietly drops a third of
+    the catalogue and shows a smaller total is indistinguishable from one with a
+    broken filter.
+    """
     active = focus == "search"
     put(1, 2, "❯", th["prompt"] if active else th["border"])
     put(1, 4, filt or "type to filter…",
         th["query"] if filt else th["help"])
     if active:
         put(1, 4 + len(filt), "▏", th["prompt"])
-    tail = "%s%d/%d" % ("%d selected · " % n_sel if n_sel else "",
-                        n_found, n_all)
+    tail = "%s%d/%d%s" % ("%d selected · " % n_sel if n_sel else "",
+                          n_found, n_all,
+                          "  (%d dupes hidden)" % hidden if hidden else "")
     put(1, max(4 + len(filt) + 2, lay.w - 2 - len(tail)), tail, th["count"])
 
 
@@ -1292,7 +1313,7 @@ def _draw_scopes(put, th, lay, scope, focus):
 
 
 def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
-               describe, categories, installed_names):
+               describe, categories, installed_names, copies=None):
     """The result list. Returns how many rows fit, for page-up/down."""
     rows = max(1, lay.body_h // 2)
     top = max(0, min(sel - rows + 1, max(0, len(found) - rows)))
@@ -1326,6 +1347,13 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
                 if pos < len(nm):
                     put(y, nx + pos, nm[pos], th["match"])
         bx = nx + len(nm) + 2
+        # A collapsed row says how many it stands for, so the copies are
+        # accounted for rather than disappeared.
+        n_copies = (copies or {}).get(id(e), 1)
+        if n_copies > 1:
+            tag = "×%d" % n_copies
+            put(y, bx, tag, row_attr or th["accent_dim"])
+            bx += len(tag) + 1
         for text, tkey in _row_badges(e, categories):
             if bx + len(text) > lay.list_x + lw - 1:
                 break
