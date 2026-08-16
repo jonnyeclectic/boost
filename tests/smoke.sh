@@ -226,6 +226,7 @@ attest
 health
 config
 clean
+compact
 create
 policy
 onboard

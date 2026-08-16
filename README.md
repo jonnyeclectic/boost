@@ -190,11 +190,28 @@ whichever agents you've got — all of it tracked in a lock file so state
 stays reproducible.
 
 ```text
-GitHub registries  ──boost update──▶  ~/.boost/repos/    (shallow clones)
+GitHub registries  ──boost update──▶  ~/.boost/repos/    (blobless sparse clones)
                                      ~/.boost/cache/    (JSON catalogs)
                    ──boost install─▶  ~/.agents/skills/ (canonical store)
                                      .skill-lock.json  (v3 lock file)
                    ────symlinks───▶  ~/.claude/skills/  ~/.windsurf/skills/  ~/.cursor/skills/
+```
+
+A tap clone holds **only the files boost indexes** — `SKILL.md`, workflow
+Markdown, and rule files. Everything else a registry ships (`node_modules`,
+binary assets, bundled JS) is neither downloaded nor checked out, because the
+catalog is built from Markdown and nothing else. `Shopify/agent-skills` is
+611 MB as a normal clone and 11 MB as a tap, and produces an identical catalog.
+When a skill you install owns its own `scripts/` or `assets/`, those are fetched
+on demand at install time, so nothing is missing from what lands in the store.
+
+If you tapped heavily before this landed, `boost compact` narrows the clones you
+already have — offline, no re-clone, no loss of search coverage:
+
+```bash
+boost compact --dry-run     # what it would reclaim
+boost compact               # narrow every clone in place
+boost compact --reclone     # also drop already-downloaded git objects (needs network)
 ```
 
 Gemini CLI is the one agent that needs no symlink: it implements the
@@ -253,7 +270,50 @@ boost doctor               # sanity check: broken links, lock drift, stale taps
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
 ```
 
-## 79 commands, organized into 8 groups
+### Browsing the catalogue
+
+`boost browse` is a full-screen picker over every tapped item — a filterable
+list on the left, the selected item's full detail on the right.
+
+```text
+╭─ ●●●  boost browse  ──────────────────────────────────┬──────────────────────╮
+│ ❯ co re                                          2/4  │ code-review  v1.0.0  │
+│ match (●) all ( ) name ( ) descr ( ) tap              │ ──────────────────── │
+│ ↑↓ move  ⇥ select  → detail  ^T scope  ↵ install      │ Review a pull …      │
+├───────────────────────────────────────────────────────┤ ● installed          │
+│  ★● code-review  [skill] v1.0.0 [acme/quality]        │ SOURCE · FRONTMATTER │
+╰───────────────────────────────────────────────────────┴──────────────────────╯
+```
+
+| key | does |
+|---|---|
+| any character, **including space** | types into the query |
+| `↑` `↓` | walk the whole surface: query → match toggles → results |
+| `→` `←` | into and out of the detail pane, where `↑`/`↓` scroll it |
+| `←` `→` *on the toggle row* | pick what the query matches |
+| `⇥` | select (multi-select for a batch install) |
+| `^T` | cycle the match toggles without leaving the results |
+| `↵` | install — **in place**, without leaving the browser |
+| `esc` | quit |
+
+The query splits on spaces and **every** token must match, so `code review`
+narrows where `code` alone would not. Selection lives on `⇥` rather than space
+for exactly that reason, and `q` stays a character so `quality` is searchable.
+
+`↵` installs without dropping you back to the shell, and the detail pane
+reports it — `◐ installing…`, then `● installed` with the destination, or
+`✗` with the reason. Installs queue and run one at a time, because each one
+rewrites the lock file.
+
+**Duplicates are collapsed.** Registries render one skill into `.claude/`,
+`.cursor/`, `.gemini/` and a plugin root, so the same thing was listed four
+times — on a real 60,047-entry catalogue **22,535 rows (37%) are duplicates**.
+Rows whose name *and* description match (or are ≥95% alike) fold into one,
+badged `×5`, with the hidden total in the counter and `^D` to show them again.
+Identity is the description, never the name: `code-reviewer` appears 75 times
+with 42 *different* descriptions, and those are 42 real skills.
+
+## 80 commands, organized into 8 groups
 
 `boost --help` prints the full grouped command list; for a visual tour see
 [`docs/index.html`](docs/index.html), and for every flag of every command see
@@ -268,10 +328,10 @@ install path — see [`docs/architecture/`](docs/architecture/README.md).
 | **Package Management** | install · uninstall · sync · update · reinstall · bundle · import · pin · unpin · snapshot · export · adapt · run |
 | **Discovery & Search** | search · reindex · discover · recommend · browse · index · trending · stats · count |
 | **Skill Information** | list · info · cat · edit · preview · explain · log · home · deps · tag |
-| **Registry (Taps)** | tap · untap · taps · outdated |
-| **Intelligence** | distill · simulate · infer · absorb · evolve · context · focus · impact |
+| **Registry (Taps)** | tap · untap · taps · outdated · catalog |
+| **Intelligence** | chat · distill · simulate · infer · absorb · evolve · context · focus · impact |
 | **Quality & Health** | doctor · lint · audit · verify · drift · test · fingerprint · quarantine · decay · heal · conflict · changelog · attest · health · trust |
-| **Configuration** | config · clean · create · policy · onboard · completions · schedule · serve · mcp · hooks · bmad · self-update |
+| **Configuration** | config · clean · compact · create · policy · onboard · completions · schedule · serve · mcp · hooks · bmad · self-update |
 | **Team & Collaboration** | cohort · profile · protocol · pulse · replay · who |
 
 The AI-assisted commands (`search --smart`, `explain`, `distill`, `infer`,
@@ -467,7 +527,7 @@ Four layers, all enforced (`make check` runs the full set; CI runs the same thin
 
 | Layer | What it does | Gate |
 |---|---|---|
-| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 79 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
+| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 80 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
 | `make smoke` | `tests/smoke.sh` — 175 checks run through the actual `./boost` shim (`--online` also hits real registries) | all pass |
 | `make mutation` | [mutmut] mutates `boost_cli/core` (~9,900 mutants) and reruns the unit suite against each one | **≥80% killed** (`scripts/mutation_gate.py`) |
 | `make evals` | scores the search ranker on a graded golden set — recall@5/@10, MRR, nDCG@5/@10 | **metric floors + no statistically significant regression** (`scripts/eval_gate.py`) |

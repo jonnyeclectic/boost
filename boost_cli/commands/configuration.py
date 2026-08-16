@@ -3,6 +3,7 @@ completions, schedule, serve, mcp, self-update."""
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -141,10 +142,14 @@ def cmd_clean(argv) -> int:
 
     configured = {t.safe_name for t in registry.list_taps()}
     if paths.cache_dir().is_dir():
+        # Skip boost's own derived artifacts. They live in the same directory and
+        # end in .json, but no tap is named `rag_index` or `discovery`, so the
+        # stem test alone called both stale and deleted them every run — see
+        # paths.INTERNAL_CACHE_FILES.
         items.extend(
             (f, "stale tap cache", f.stat().st_size)
             for f in sorted(paths.cache_dir().glob("*.json"))
-            if f.stem not in configured
+            if f.stem not in configured and f.name not in paths.INTERNAL_CACHE_FILES
         )
 
     if paths.lock_history_dir().is_dir():
@@ -196,6 +201,106 @@ def cmd_clean(argv) -> int:
     else:
         journal.log("clean", "%d items" % len(items), freed=util.human_size(freed))
         out.ok("cleaned %d item(s) · %s freed" % (len(items), util.human_size(freed)))
+    return 0
+
+
+def _freight_bytes(tap_path: Path, keep_dirs: list[str]) -> int:
+    """Bytes that would leave `tap_path`'s working tree when the cone applies.
+
+    Mirrors what `gitutil.SPARSE_PATTERNS` keeps rather than approximating it,
+    so the dry run does not promise back the provenance files or the assets of
+    an already-installed skill — both of which survive and neither of which is
+    freed.
+    """
+    kept = tuple("%s/" % d.strip("/") for d in keep_dirs)
+    total = 0
+    for f in tap_path.rglob("*"):
+        if not f.is_file():
+            continue
+        # Relative to the tap, never absolute: every clone lives *under*
+        # ~/.boost, so testing the absolute parts for ".boost" excluded every
+        # file in every tap and reported that nothing could be freed.
+        rel = f.relative_to(tap_path)
+        if ".git" in rel.parts or ".boost" in rel.parts:
+            continue
+        if (f.suffix.lower() in (".md", ".mdc")
+                or f.name in catalog.RULE_FILENAMES):
+            continue
+        if kept and rel.as_posix().startswith(kept):
+            continue
+        total += f.stat().st_size
+    return total
+
+
+def cmd_compact(argv) -> int:
+    """boost compact [--dry-run] [--reclone] [TAP ...]"""
+    p = cliparse.parser(
+        prog="boost compact",
+        description="Shrink tap clones to the files boost indexes")
+    p.add_argument("tap", nargs="*",
+                   help="taps to compact (default: all cloned taps)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="show what would be reclaimed without touching anything")
+    p.add_argument("--reclone", action="store_true",
+                   help="re-clone blobless for the smallest result (needs network)")
+    args = p.parse_args(argv)
+
+    taps = [registry.get(n) for n in args.tap] if args.tap else registry.list_taps()
+    taps = [t for t in taps if t.is_cloned]
+    if not taps:
+        out.ok("no cloned taps to compact")
+        return 0
+
+    # source_dir keeps an installed skill's own assets on disk, so routine
+    # hashing (`outdated`, `doctor`) stays offline after the freight is gone.
+    keep: dict[str, list[str]] = {}
+    for section in lockfile.all_installed().values():
+        for entry in section.values():
+            if entry.get("source_dir"):
+                keep.setdefault(entry.get("tap", ""), []).append(entry["source_dir"])
+
+    freed = 0
+    changed = 0
+    for tap in taps:
+        before = util.dir_size(tap.path)
+        if args.dry_run:
+            loose = _freight_bytes(tap.path, keep.get(tap.name, []))
+            if loose:
+                changed += 1
+                freed += loose
+                out.info("would free %s from %s"
+                         % (util.human_size(loose), tap.name))
+            continue
+        try:
+            if args.reclone:
+                util.rmtree(tap.path)
+                gitutil.clone_shallow(tap.url, tap.path)
+            else:
+                gitutil.narrow(tap.path)
+            for rel in keep.get(tap.name, []):
+                gitutil.materialize(tap.path, rel)
+        except BoostError as e:
+            out.warn("could not compact %s: %s" % (tap.name, e))
+            continue
+        after = util.dir_size(tap.path)
+        if after < before:
+            changed += 1
+            freed += before - after
+            out.info("%s  %s → %s" % (tap.name, util.human_size(before),
+                                      util.human_size(after)))
+
+    if args.dry_run:
+        out.dim("  %d tap(s) · %s would be freed"
+                % (changed, util.human_size(freed)))
+        return 0
+    journal.log("compact", "%d taps" % changed, freed=util.human_size(freed))
+    if not changed:
+        out.ok("every tap is already compact")
+        return 0
+    out.ok("compacted %d tap(s) · %s freed" % (changed, util.human_size(freed)))
+    if not args.reclone:
+        out.dim("  `boost compact --reclone` also drops already-downloaded "
+                "git objects")
     return 0
 
 
@@ -555,8 +660,42 @@ def _sq(s: str) -> str:
     return s.replace("'", "'\\''")
 
 
+def _report_rc_plan(plan, install: bool, shell: str) -> None:
+    """Print what `--dry-run` would do to an rc file, and nothing else."""
+    if not plan.changes:
+        out.ok("%s already %s — no change"
+               % (_tilde(plan.path),
+                  "wired for boost completions" if install
+                  else "free of boost completions"))
+        return
+    verb = {
+        "create": "would create %s and wire boost completions into it",
+        "add": "would wire boost completions into %s",
+        # `replace` also covers collapsing a duplicated block back to one.
+        "replace": "would rewrite the boost completions block in %s",
+        "remove": "would remove boost completions from %s",
+    }[plan.action]
+    out.info(verb % _tilde(plan.path))
+    for line in _rc_plan_diff(plan):
+        out.dim("  " + line)
+    out.dim("  re-run without --dry-run to apply")
+
+
+def _rc_plan_diff(plan) -> list[str]:
+    """The +/- lines between a plan's before and after, for the dry run.
+
+    The ``---``/``+++``/``@@`` scaffolding is dropped: the file is named on the
+    line above, and line numbers earn nothing on a five-line rc edit.
+    """
+    return [ln.rstrip("\n")
+            for ln in difflib.unified_diff(plan.before.splitlines(),
+                                           plan.after.splitlines(), n=1)
+            if not ln.startswith(("---", "+++", "@@"))]
+
+
 def cmd_completions(argv) -> int:
-    """boost completions [bash|zsh|fish] [--install|--uninstall] [--eval]"""
+    """boost completions [bash|zsh|fish] [--install|--uninstall] [--eval]
+    [--dry-run]"""
     p = cliparse.parser(
         prog="boost completions",
         description="Generate shell tab-completion scripts")
@@ -565,6 +704,9 @@ def cmd_completions(argv) -> int:
     p.add_argument("--eval", action="store_true",
                    help="print the variant safe to `eval` directly "
                         "(what --install wires up)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="with --install/--uninstall: report what would change "
+                        "in the rc file without writing it")
     group = p.add_mutually_exclusive_group()
     group.add_argument("--install", action="store_true",
                        help="wire completions into the shell's rc file "
@@ -575,11 +717,28 @@ def cmd_completions(argv) -> int:
 
     detected = args.shell or Path(os.environ.get("SHELL", "")).name
 
+    if args.dry_run and not (args.install or args.uninstall):
+        p.error("--dry-run qualifies --install or --uninstall; "
+                "pass one of them")
+
     if args.install or args.uninstall:
-        rc = (complete.install if args.install else complete.uninstall)(detected)
+        # Plan first either way, so a malformed rc file is reported before
+        # anything is written rather than after.
+        plan = (complete.plan_install if args.install
+                else complete.plan_uninstall)(detected)
+        if args.dry_run:
+            _report_rc_plan(plan, install=args.install, shell=detected)
+            return 0
+        complete.apply(plan)
+        if not plan.changes:
+            out.ok("%s already %s — no change"
+                   % (_tilde(plan.path),
+                      "wired for boost completions" if args.install
+                      else "free of boost completions"))
+            return 0
         out.ok("%s boost completions %s %s"
                % ("wired" if args.install else "removed",
-                  "into" if args.install else "from", _tilde(rc)))
+                  "into" if args.install else "from", _tilde(plan.path)))
         if args.install:
             out.dim("  restart your shell (or run `exec %s`) to pick it up"
                     % detected)
