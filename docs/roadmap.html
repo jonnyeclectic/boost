@@ -8334,7 +8334,7 @@ helpers take <code>put</code> as a parameter, the frame itself renders into a
 text grid, so "the box has four sides" is an assertion rather than a hope.
 
 <b>That immediately caught a real defect.</b> The right-hand border never drew:
-the clip bound was <code>x < w - 1</code>, which makes the last column
+the clip bound was <code>x &lt; w - 1</code>, which makes the last column
 unwritable, so the frame shipped with three sides. Also caught: the column
 divider's <code>┴</code> landing on top of the help text and rendering
 <code>esc quit</code> as <code>┴sc quit</code>.
