@@ -64,6 +64,36 @@ thresholds (24/28) were guesses and looked it — at 58 columns they kept a
 27-column list that ellipsised every description. Measured against the real row,
 the minimums are 34 and 32, so 58 columns now gets one full-width readable list.
 
+<b>A second pass on the interface, from a screenshot of the real thing.</b>
+Rendering it against 60,047 live entries showed what synthetic fixtures could
+not: six hues at once — cyan kinds, violet taps, pink matches, yellow
+categories, green states — reading as confetti rather than as one surface. The
+fix is Refactoring UI's first rule, that hierarchy comes from weight and colour
+is added last for meaning only. The tiers are now bold / normal / dim, and the
+palette is one accent (cyan) plus two semantics that earn their place: green for
+installed, yellow for the curated star. Colour is layered <em>on</em> the tiers,
+so a monochrome terminal keeps the whole hierarchy.
+
+<b>Three affordances were missing, and each was invisible rather than absent.</b>
+The detail pane could be focused and scrolled but said nothing about it — it now
+brightens its border and captions itself <code>details · ↑↓ scroll</code>. The
+match toggles could only be reached by <code>^T</code>, so a control you could
+see but not walk to read as decoration — the arrow ring now includes them, and
+left/right pick one while they hold focus. And installing dropped you back to
+the shell after the first pick, which is the wrong shape for a browser: it
+installs in place now, with the detail pane reporting
+<code>◐ installing…</code> → <code>● installed</code> with the destination, or
+<code>✗</code> with the reason.
+
+<b>Installing in place introduced a race, and a flaky test caught it.</b> Two
+Tab-selected skills installed in parallel threads, and every
+<code>store.install</code> does a read-modify-write of
+<code>.skill-lock.json</code> — so both landed on disk and one vanished from the
+lock. It passed alone and failed three runs in five in the suite. Installs are
+serial now, drained by one worker so the draw loop still answers keys, and the
+regression test asserts on <em>overlap</em> rather than on the outcome, because
+the outcome was right two times in five.
+
 <b>It also got faster than what it replaces.</b> Searching the description as
 well as the name is more text per entry, and the first cut cost <b>125 ms per
 keystroke</b> over a 71,700-entry catalogue — slower than the 80 ms draw poll,

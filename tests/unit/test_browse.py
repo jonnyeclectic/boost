@@ -162,21 +162,102 @@ class TestScopes:
 class TestFocusMovement:
     """Arrows cross pane boundaries — item 2 of the request."""
 
-    def test_up_from_the_first_row_lands_on_the_search_bar(self):
+    def test_up_from_the_first_row_lands_on_the_toggle_row(self):
         assert browse.move_focus("list", "up", row=0, n=5, detail=False) == (
+            "scopes", 0)
+
+    def test_up_again_reaches_the_search_bar(self):
+        assert browse.move_focus("scopes", "up", row=0, n=5, detail=False) == (
             "search", 0)
 
     def test_up_within_the_list_stays_in_the_list(self):
         assert browse.move_focus("list", "up", row=3, n=5, detail=False) == (
             "list", 2)
 
-    def test_down_from_the_search_bar_enters_the_list(self):
+    def test_down_from_the_search_bar_enters_the_toggle_row(self):
         assert browse.move_focus("search", "down", row=0, n=5, detail=False) == (
+            "scopes", 0)
+
+    def test_down_from_the_toggle_row_enters_the_list(self):
+        assert browse.move_focus("scopes", "down", row=0, n=5, detail=False) == (
             "list", 0)
 
-    def test_down_from_search_with_no_matches_stays_put(self):
-        assert browse.move_focus("search", "down", row=0, n=0, detail=False) == (
-            "search", 0)
+    def test_down_from_the_toggles_with_no_matches_stays_put(self):
+        assert browse.move_focus("scopes", "down", row=0, n=0, detail=False) == (
+            "scopes", 0)
+
+    def test_the_whole_ring_is_walkable_down_and_back_up(self):
+        """Every pane must be reachable by arrow alone — a control you can see
+        but cannot walk to reads as decoration."""
+        focus, row, seen = "search", 0, []
+        for _ in range(4):
+            seen.append(focus)
+            focus, row = browse.move_focus(focus, "down", row, 5, True)
+        assert seen == ["search", "scopes", "list", "list"]
+        focus, row = browse.move_focus("list", "right", 0, 5, True)
+        assert focus == "detail"
+        for _ in range(3):
+            focus, row = browse.move_focus(focus, "left" if focus == "detail"
+                                           else "up", row, 5, True)
+        assert focus == "search"
+
+
+class TestScopeStepping:
+    """Item 2: arrow onto the toggle row, then left/right picks one."""
+
+    def test_left_and_right_move_the_scope_only_while_it_is_focused(self):
+        assert browse.scope_step("scopes", "right") == 1
+        assert browse.scope_step("scopes", "left") == -1
+
+    def test_elsewhere_the_same_keys_mean_something_else(self):
+        for focus in ("search", "list", "detail"):
+            assert browse.scope_step(focus, "right") == 0
+            assert browse.scope_step(focus, "left") == 0
+
+    def test_vertical_keys_never_step_the_scope(self):
+        assert browse.scope_step("scopes", "up") == 0
+        assert browse.scope_step("scopes", "down") == 0
+
+    def test_stepping_walks_every_scope_and_wraps(self):
+        scope = browse.SCOPES[0]
+        for _ in range(len(browse.SCOPES)):
+            scope = browse.next_scope(scope, browse.scope_step("scopes", "right"))
+        assert scope == browse.SCOPES[0]
+
+
+class TestInstallStatusLine:
+    """Item 1: the detail pane reports the install it just started."""
+
+    def test_busy_is_distinguishable_from_done(self):
+        assert browse.status_line(browse.BUSY)[1] != \
+            browse.status_line(browse.OK)[1]
+
+    def test_each_state_has_its_own_role_for_theming(self):
+        roles = {browse.status_line(s)[0]
+                 for s in (browse.BUSY, browse.OK, browse.FAILED)}
+        assert len(roles) == 3
+
+    def test_a_failure_shows_the_reason(self):
+        role, text = browse.status_line(browse.FAILED, "already installed")
+        assert "already installed" in text
+        assert role == "failed"
+
+    def test_a_failure_with_no_reason_still_says_something(self):
+        assert browse.status_line(browse.FAILED)[1].strip() not in ("", "✗")
+
+    def test_success_can_carry_the_destination(self):
+        assert "~/.agents" in browse.status_line(browse.OK, "~/.agents/skills/x")[1]
+
+    def test_with_no_action_it_falls_back_to_installed_state(self):
+        assert "not installed" in browse.status_line(None, installed=False)[1]
+        assert browse.status_line(None, installed=True)[0] == "ok"
+
+    def test_the_detail_pane_shows_the_live_state_over_the_static_one(self):
+        e = _e("x")
+        text = " ".join(t for _r, t in browse.detail_lines(
+            e, installed=False, state=browse.BUSY))
+        assert "installing" in text
+        assert "not installed" not in text
 
     def test_right_from_the_list_enters_the_detail_pane(self):
         assert browse.move_focus("list", "right", row=2, n=5, detail=True) == (
@@ -372,6 +453,56 @@ class TestScopeRadios:
             row = _render(scope=scope)[2]
             i = row.index("(●)")
             assert row[i + 4:].startswith(browse.scope_label(scope))
+
+
+class TestFocusIsVisible:
+    """Item 1: you can tell which pane you are driving."""
+
+    def test_the_detail_pane_announces_itself_when_focused(self):
+        lay = browse.layout(110, 24, detail=True)
+        unfocused = _render(w=110, h=24, focus="list")[lay.body_y - 1]
+        focused = _render(w=110, h=24, focus="detail")[lay.body_y - 1]
+        assert "details" in unfocused
+        assert "scroll" in focused, "a scrollable pane must say it scrolls"
+        assert focused != unfocused
+
+    def test_the_toggle_row_announces_itself_when_focused(self):
+        assert "pick" in _render(focus="scopes")[2]
+        assert "pick" not in _render(focus="list")[2]
+
+    def test_the_focused_border_differs_from_the_unfocused_one(self):
+        """Rendered to a grid the glyphs match; the attribute is the signal."""
+        from boost_cli.commands import discovery
+
+        seen = {}
+
+        def make_put(bucket):
+            def put(y, x, s, attr=0):
+                if s == "│":
+                    bucket.setdefault(x, set()).add(attr)
+            return put
+
+        class _Theme(dict):
+            def __missing__(self, k):
+                return {"border": 1, "border_focus": 2}.get(k, 0)
+
+        lay = browse.layout(110, 24, detail=True)
+        for focus in ("list", "detail"):
+            seen[focus] = {}
+            discovery._draw_frame(make_put(seen[focus]), _Theme(), lay, focus)
+        right = lay.w - 1
+        assert seen["list"][right] != seen["detail"][right], \
+            "the right-hand border must change when the detail pane is focused"
+
+
+class TestInstallStatusInThePane:
+    def test_each_state_reaches_the_rendered_pane(self):
+        for state, needle in ((browse.BUSY, "installing"),
+                              (browse.OK, "installed"),
+                              (browse.FAILED, "✗")):
+            lines = browse.detail_lines(CORPUS[0], width=40, installed=False,
+                                        state=state, message="boom")
+            assert any(needle in t for _r, t in lines), state
 
 
 class TestRowRendering:

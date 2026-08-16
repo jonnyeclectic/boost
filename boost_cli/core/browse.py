@@ -157,8 +157,11 @@ def highlight_positions(query: str, text: str) -> set[int]:
 
 # --------------------------------------------------------------- focus
 
-#: Panes the focus ring can hold, left to right as the user sees them.
-PANES = ("search", "list", "detail")
+#: Panes the focus ring can hold, top to bottom as the user reads them.
+#: `scopes` is in the ring so the match toggles are reachable by arrow rather
+#: than only by the ^T shortcut — a control you can see but not walk to reads
+#: as decoration.
+PANES = ("search", "scopes", "list", "detail")
 
 
 def move_focus(focus: str, direction: str, row: int, n: int,
@@ -166,20 +169,25 @@ def move_focus(focus: str, direction: str, row: int, n: int,
     """Where an arrow key lands: ``(focus, row)``.
 
     The arrows cross pane boundaries rather than dead-ending, which is what
-    makes the search bar and the list feel like one surface: *up* from the top
-    row goes to the query, *down* from the query comes back. Right and left
-    cross into the detail pane when it is open.
+    makes the query, the toggles and the list feel like one surface. Vertically
+    the ring is search → scopes → list; horizontally, right and left cross into
+    and out of the detail pane. While the scope row holds focus, left and right
+    move between the toggles instead (see :func:`scope_step`).
     """
     if direction == "down":
         if focus == "search":
-            return ("list", row) if n else ("search", row)
+            return ("scopes", row)
+        if focus == "scopes":
+            return ("list", row) if n else ("scopes", row)
         if focus == "list":
             return ("list", min(row + 1, max(0, n - 1)))
         return (focus, row)
     if direction == "up":
         if focus == "list":
-            # The top row is the boundary: one more `up` is the query.
-            return ("search", row) if row <= 0 else ("list", row - 1)
+            # The top row is the boundary: one more `up` is the toggle row.
+            return ("scopes", row) if row <= 0 else ("list", row - 1)
+        if focus == "scopes":
+            return ("search", row)
         return (focus, row)
     if direction == "right":
         if focus == "list" and detail and n:
@@ -190,6 +198,17 @@ def move_focus(focus: str, direction: str, row: int, n: int,
             return ("list", row)
         return (focus, row)
     return (focus, row)
+
+
+def scope_step(focus: str, direction: str) -> int:
+    """How far left/right moves the scope selection, given the focused pane.
+
+    Non-zero only while the toggle row holds focus, so the same arrow keys can
+    mean "cross into the detail pane" everywhere else.
+    """
+    if focus != "scopes":
+        return 0
+    return {"right": 1, "left": -1}.get(direction, 0)
 
 
 # --------------------------------------------------------------- layout
@@ -262,6 +281,35 @@ def clamp_scroll(offset: int, total: int, visible: int) -> int:
 
 # --------------------------------------------------------------- detail
 
+#: Install lifecycle as the detail pane shows it. `busy` exists because an
+#: install writes files and can take a visible moment; without it the pane sits
+#: unchanged and the keypress reads as ignored.
+BUSY, OK, FAILED = "busy", "ok", "failed"
+
+_STATUS_GLYPH = {BUSY: "◐", OK: "●", FAILED: "✗"}
+
+
+def status_line(state: str | None, message: str = "",
+                installed: bool | None = None) -> tuple[str, str]:
+    """``(role, text)`` for the install line in the detail pane.
+
+    One function so the pane cannot disagree with itself about what a state
+    looks like, and so "what does a failed install say" is testable without a
+    terminal.
+    """
+    if state == BUSY:
+        return ("busy", "◐ installing…")
+    if state == OK:
+        return ("ok", "%s installed%s" % (_STATUS_GLYPH[OK],
+                                          "  " + message if message else ""))
+    if state == FAILED:
+        return ("failed", "%s %s" % (_STATUS_GLYPH[FAILED],
+                                     message or "install failed"))
+    if installed:
+        return ("ok", "● installed")
+    return ("muted", "○ not installed")
+
+
 def _render_value(value) -> str:
     """A frontmatter value as display text, never as a Python repr.
 
@@ -277,7 +325,9 @@ def _render_value(value) -> str:
 
 
 def detail_lines(entry: dict, width: int = 60,
-                 installed: bool | None = None) -> list[tuple[str, str]]:
+                 installed: bool | None = None,
+                 state: str | None = None,
+                 message: str = "") -> list[tuple[str, str]]:
     """``(role, text)`` lines for the detail pane, wrapped to ``width``.
 
     Roles let the curses layer theme without re-deriving meaning from the text.
@@ -305,8 +355,9 @@ def detail_lines(entry: dict, width: int = 60,
         add("desc", str(entry["description"]))
         lines.append(("blank", ""))
 
-    if installed is not None:
-        add("state", "● installed" if installed else "○ not installed")
+    if installed is not None or state:
+        role, text = status_line(state, message, installed)
+        add(role, text)
         lines.append(("blank", ""))
 
     add("head", "SOURCE")

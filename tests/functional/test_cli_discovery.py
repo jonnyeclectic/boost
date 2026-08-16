@@ -9,6 +9,7 @@ import json
 import re
 import sqlite3
 import subprocess
+import time
 import types
 
 import pytest
@@ -964,6 +965,35 @@ class TestBrowse:
         picked = discovery._browse_tui(fake, entries)
         assert [e["name"] for e in picked] == ["brainstorming", "cowboy-coding"]
         assert any("2 selected" in s for s in fake.drawn)
+
+    def test_a_batch_install_runs_one_at_a_time(self, boost, tapped):
+        """Every `store.install` read-modify-writes the lock file, so two at
+        once lost an entry — a Tab-select of two skills wrote both to disk and
+        recorded one. Caught as a test that passed alone and failed 3 runs in 5
+        in the suite, so the check is on overlap, not on the outcome."""
+        import threading
+
+        from boost_cli.commands import discovery
+        from boost_cli.core import catalog
+
+        live, overlapped = [], []
+        gate = threading.Lock()
+
+        def slow_install(entry):
+            with gate:
+                live.append(entry["name"])
+                if len(live) > 1:
+                    overlapped.append(tuple(live))
+            time.sleep(0.05)
+            with gate:
+                live.remove(entry["name"])
+            return types.SimpleNamespace(dest=paths.store_dir() / entry["name"],
+                                         linked=[], conflicts=[])
+
+        entries = sorted(catalog.all_entries(), key=lambda e: e["name"])
+        keys = [9, _FakeCurses.KEY_DOWN, 9, _FakeCurses.KEY_DOWN, 9, 10]
+        discovery._browse_tui(_FakeCurses(keys), entries, install=slow_install)
+        assert not overlapped, "installs ran concurrently: %r" % overlapped
 
     def test_space_types_into_the_query_instead_of_selecting(self, boost, tapped):
         """The reported bug: SPACE was bound to select and excluded from the

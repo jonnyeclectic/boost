@@ -288,16 +288,22 @@ list on the left, the selected item's full detail on the right.
 | key | does |
 |---|---|
 | any character, **including space** | types into the query |
-| `↑` `↓` | move; `↑` from the top row goes to the query, `↓` comes back |
+| `↑` `↓` | walk the whole surface: query → match toggles → results |
 | `→` `←` | into and out of the detail pane, where `↑`/`↓` scroll it |
+| `←` `→` *on the toggle row* | pick what the query matches |
 | `⇥` | select (multi-select for a batch install) |
-| `^T` | cycle what the query matches: all · name · description · tap |
-| `↵` | install the selection |
+| `^T` | cycle the match toggles without leaving the results |
+| `↵` | install — **in place**, without leaving the browser |
 | `esc` | quit |
 
 The query splits on spaces and **every** token must match, so `code review`
 narrows where `code` alone would not. Selection lives on `⇥` rather than space
-for exactly that reason.
+for exactly that reason, and `q` stays a character so `quality` is searchable.
+
+`↵` installs without dropping you back to the shell, and the detail pane
+reports it — `◐ installing…`, then `● installed` with the destination, or
+`✗` with the reason. Installs queue and run one at a time, because each one
+rewrites the lock file.
 
 ## 80 commands, organized into 8 groups
 

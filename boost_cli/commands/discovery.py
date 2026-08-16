@@ -921,25 +921,80 @@ def _aurora_theme(curses):
 _NAME_X = 4  # column the name (and everything under it) starts at
 
 
-def _theme_extras(curses, th):
-    """Border/panel roles layered on the Aurora theme.
+def _browse_theme(curses):
+    """Role -> curses attr for the browser, built grayscale-first.
 
-    Kept beside the theme rather than inlined at the call sites so a terminal
-    without colour degrades in one place: every role here has a monochrome
-    fallback that is still legible.
+    The browser used six hues at once — cyan kinds, violet taps, pink matches,
+    yellow categories, green states — and read as confetti rather than as one
+    surface. Refactoring UI's rule is the fix: hierarchy comes from weight, and
+    colour is added last, for meaning only.
+
+    So the tiers are BOLD / normal / DIM, and the palette is one accent plus two
+    semantics that earn their place:
+
+      accent (cyan)   focus, selection, section heads — the one brand colour
+      ok (green)      installed; the only "this succeeded" signal
+      warn (yellow)   curated star, and a failed install
+      everything else BOLD for primary, plain for values, DIM for labels,
+                      badges, descriptions and chrome
+
+    Monochrome terminals keep the whole hierarchy, because the tiers are
+    attributes rather than colours.
     """
-    th.setdefault("border", th.get("scroll", curses.A_DIM))
-    th.setdefault("border_hi", th.get("title", curses.A_BOLD))
-    th.setdefault("row_sel", curses.A_REVERSE)
-    th.setdefault("radio_on", th.get("title", curses.A_BOLD))
-    th.setdefault("radio_off", curses.A_DIM)
-    th.setdefault("head", th.get("detail_name", curses.A_BOLD))
-    th.setdefault("field", curses.A_NORMAL)
-    th.setdefault("state", th.get("check", curses.A_BOLD))
-    return th
+    B, D, N, R = curses.A_BOLD, curses.A_DIM, curses.A_NORMAL, curses.A_REVERSE
+    t = {
+        # structural tiers
+        "primary": B, "value": N, "muted": D,
+        "accent": B, "accent_dim": N,
+        "ok": B, "warn": N, "err": B,
+        # chrome
+        "border": D, "border_focus": B, "title": B, "help": D,
+        "prompt": B, "query": B, "count": D,
+        "row_sel": R, "scroll": D,
+        # rows
+        "name": B, "desc": D, "match": B, "star": N, "check": B, "state": N,
+        "version": D, "tap": D,
+        "badge_skill": D, "badge_rule": D, "badge_workflow": D,
+        "badge_category": D,
+        # detail pane
+        "detail_name": B, "head": B, "field": N, "label": D,
+        "busy": B, "failed": B,
+        "dot_r": N, "dot_y": N, "dot_g": N,
+        "rule": [D, D, D],
+    }
+    if not hasattr(curses, "start_color"):
+        return t
+    try:
+        curses.start_color()
+        curses.use_default_colors()
+    except curses.error:
+        return t
+    p = _aurora_pairs(curses)
+
+    def P(nm, bold=False):
+        a = p.get(nm, 0)
+        return (a | curses.A_BOLD) if bold else a
+
+    # Colour is layered ON the tiers, never instead of them: every role below
+    # keeps the weight it had, so removing colour changes nothing structural.
+    t.update({
+        "accent": P("cyan", True), "accent_dim": P("cyan"),
+        "ok": P("green", True), "warn": P("yellow"), "err": P("red", True),
+        "title": P("cyan", True), "prompt": P("cyan", True),
+        "border": P("cyan"), "border_focus": P("cyan", True),
+        "row_sel": P("cyan", True) | curses.A_REVERSE,
+        "scroll": P("cyan"),
+        "match": P("cyan", True), "star": P("yellow"), "check": P("green", True),
+        "state": P("green"), "detail_name": P("cyan", True),
+        "head": P("cyan", True), "busy": P("cyan", True),
+        "ok_line": P("green", True), "failed": P("yellow", True),
+        "dot_r": P("red"), "dot_y": P("yellow"), "dot_g": P("green"),
+        "rule": [P("cyan"), P("cyan"), P("cyan")],
+    })
+    return t
 
 
-def _browse_tui(curses, entries):
+def _browse_tui(curses, entries, install=None):
     """Run the curses UI. Returns the list of entries picked for install
     (one or more, via multi-select), or None if the user quit without picking.
 
@@ -953,6 +1008,59 @@ def _browse_tui(curses, entries):
     desc_cache: dict = {}
     loading: set = set()
     installed_names = set(store.installed())
+    do_install = install or store.install
+    # name -> (state, message). Item 1: an install runs without leaving the
+    # browser, and the detail pane reports it. Threaded so the draw loop keeps
+    # answering keys while files are written — an install that freezes the UI
+    # reads as a crash.
+    status: dict[str, tuple[str, str]] = {}
+    done: list = []
+    workers: list = []
+    queue: list = []
+    queue_lock = threading.Lock()
+
+    def start_install(entry):
+        """Queue an install. Installs run one at a time, in a single worker.
+
+        Serial on purpose. Running them in parallel threads was a lost update:
+        every `store.install` does a read-modify-write of `.skill-lock.json`, so
+        two at once raced and one entry vanished from the lock — a Tab-select of
+        two skills installed both to disk and recorded one. It showed up as a
+        test that passed alone and failed 3 runs in 5 in the suite.
+
+        One background worker still keeps the draw loop answering keys, which is
+        the property that actually mattered.
+        """
+        name = entry["name"]
+        with queue_lock:
+            if status.get(name, ("", ""))[0] in (browse.BUSY, browse.OK):
+                return
+            status[name] = (browse.BUSY, "")
+            queue.append(entry)
+            if any(t.is_alive() for t in workers):
+                return                                  # a worker is draining
+
+        def worker():
+            while True:
+                with queue_lock:
+                    if not queue:
+                        return
+                    item = queue.pop(0)
+                nm = item["name"]
+                try:
+                    res = do_install(item)
+                except BoostError as e:
+                    status[nm] = (browse.FAILED, e.message)
+                except Exception as e:                  # never kill the TUI
+                    status[nm] = (browse.FAILED, str(e))
+                else:
+                    installed_names.add(nm)
+                    done.append(item)
+                    status[nm] = (browse.OK, _tilde(getattr(res, "dest", "")))
+
+        t = threading.Thread(target=worker, daemon=True)
+        workers.append(t)
+        t.start()
 
     def describe(e):
         """Description text for a row, kicking off a background lazy-load
@@ -977,7 +1085,7 @@ def _browse_tui(curses, entries):
         with contextlib.suppress(curses.error):
             curses.curs_set(0)
         scr.timeout(80)  # short poll so a finished lazy-load redraws promptly
-        th = _theme_extras(curses, _aurora_theme(curses))
+        th = _browse_theme(curses)
 
         def put(y, x, s, attr=0):  # clip-safe cell writer
             # `x < _w`, not `_w - 1`: the right-hand border lives in the last
@@ -1012,7 +1120,7 @@ def _browse_tui(curses, entries):
                                   focus, describe, categories, installed_names)
                 if lay.has_detail and found:
                     dscroll = _draw_detail(put, th, lay, found[sel], dscroll,
-                                           focus, installed_names)
+                                           focus, installed_names, status)
                 scr.refresh()
             except curses.error:
                 pass  # terminal too small mid-draw; retry on next key
@@ -1029,10 +1137,24 @@ def _browse_tui(curses, entries):
                 # Enter confirms, the way every other picker does. `i` used to
                 # install and `q` used to quit; both are printable, and once
                 # space types into the query every printable key has to.
-                state["picks"] = ([e for e in entries
-                                   if _desc_key(e) in selected]
-                                  if selected else [found[sel]])
-                return
+                #
+                # It installs in place rather than exiting: the browser is for
+                # finding several things, and dropping to a shell after the
+                # first one makes the user re-run and re-type to get the next.
+                for e in ([e for e in entries if _desc_key(e) in selected]
+                          if selected else [found[sel]]):
+                    start_install(e)
+                selected.clear()
+                continue
+            if key in (curses.KEY_LEFT, curses.KEY_RIGHT) and \
+                    browse.scope_step(focus, "left" if key == curses.KEY_LEFT
+                                      else "right"):
+                # Item 2: on the toggle row the horizontal arrows pick a scope.
+                scope = browse.next_scope(
+                    scope, browse.scope_step(
+                        focus, "left" if key == curses.KEY_LEFT else "right"))
+                sel, dscroll = 0, 0
+                continue
             if key == curses.KEY_UP:
                 focus, sel = browse.move_focus(focus, "up", sel, len(found),
                                                lay.has_detail)
@@ -1065,7 +1187,16 @@ def _browse_tui(curses, entries):
                 focus = "search" if focus == "search" else focus
 
     curses.wrapper(ui)  # wrapper guards drawing with try/finally endwin()
-    return state["picks"]
+    # Join before returning. The workers are daemons so the draw loop can exit
+    # promptly, but a daemon dies with the process — quitting right after Enter
+    # would abandon an install mid-write. `store.install` stages atomically, so
+    # the store survives either way; what would not survive is the user's
+    # belief that it finished.
+    for t in workers:
+        t.join(timeout=60)
+    # Installs already happened in-loop; hand back what landed so the caller
+    # can print a summary rather than repeating the work.
+    return done or state["picks"]
 
 
 def _draw_frame(put, th, lay, focus):
@@ -1082,16 +1213,27 @@ def _draw_frame(put, th, lay, focus):
     put(0, 4, "●", th["dot_y"])
     put(0, 5, "●", th["dot_g"])
     put(0, 6, "  boost browse  ", th["title"])
+    # Item 1: the focused pane is obvious. Its border brightens and it gets a
+    # caption in the divider — a scrollable pane with no focus affordance is a
+    # pane the user cannot tell they are driving.
+    list_edge = th["border_focus"] if focus in ("list", "search", "scopes") \
+        else th["border"]
+    detail_edge = th["border_focus"] if focus == "detail" else th["border"]
     for y in range(1, h - 1):
-        put(y, 0, "│", th["border"])
-        put(y, w - 1, "│", th["border"])
+        put(y, 0, "│", list_edge if y >= lay.body_y else th["border"])
+        put(y, w - 1, "│",
+            detail_edge if lay.has_detail and y >= lay.body_y else th["border"])
     # rule between the chrome and the body, tee'd where the divider lands
     sep = lay.body_y - 1
     put(sep, 0, "├" + "─" * inner + "┤", th["border"])
     if lay.has_detail:
         put(sep, lay.detail_x - 1, "┬", th["border"])
         for y in range(lay.body_y, h - 1):
-            put(y, lay.detail_x - 1, "│", th["border"])
+            put(y, lay.detail_x - 1, "│", detail_edge)
+        cap = " details " if focus != "detail" else " details · ↑↓ scroll "
+        if lay.detail_w > len(cap) + 2:
+            put(sep, lay.detail_x + 1, cap,
+                th["accent"] if focus == "detail" else th["muted"])
     put(h - 1, 0, "╰" + "─" * inner + "╯", th["border"])
     if lay.has_detail:
         put(h - 1, lay.detail_x - 1, "┴", th["border"])
@@ -1122,19 +1264,31 @@ def _draw_query(put, th, lay, filt, focus, n_found, n_all, n_sel):
 
 
 def _draw_scopes(put, th, lay, scope, focus):
-    """Radio row — which field the query is matched against."""
+    """Radio row — which field the query is matched against.
+
+    Item 2: reachable by arrow. When the row holds focus it says so and shows
+    that left/right pick, rather than leaving ^T as the only way in.
+    """
+    active = focus == "scopes"
     x = 2
-    put(2, x, "match", th["help"])
+    put(2, x, "match", th["accent"] if active else th["help"])
     x += 6
     for name in browse.SCOPES:
         on = name == scope
-        mark = "(●)" if on else "( )"
-        put(2, x, mark, th["radio_on"] if on else th["radio_off"])
+        if on:
+            mark, attr = "(●)", th["accent"]
+        else:
+            mark, attr = "( )", th["muted"]
+        put(2, x, mark, attr)
         label = browse.scope_label(name)
-        put(2, x + 4, label, th["radio_on"] if on else th["radio_off"])
+        # The active toggle is underlined while the row is focused, so "which
+        # one is selected" and "which pane am I in" stay separate signals.
+        put(2, x + 4, label, attr | (4 if active and on else 0))
         x += 5 + len(label)
         if x > lay.w - 6:
             break
+    if active and x + 12 < lay.w - 2:
+        put(2, x + 1, "← → pick", th["help"])
 
 
 def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
@@ -1182,10 +1336,15 @@ def _draw_rows(put, th, lay, found, sel, selected, filt, focus,
     return rows
 
 
-def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names):
+def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names,
+                 status=None):
     """The right-hand panel. Returns the clamped scroll offset."""
-    lines = browse.detail_lines(entry, width=max(8, lay.detail_w - 2),
-                               installed=entry["name"] in installed_names)
+    st, msg = (status or {}).get(entry["name"], (None, ""))
+    # -3, not -2: one column of left padding, and one on the right reserved for
+    # the scrollbar. At -2 a wrapped sentence ran into the thumb.
+    lines = browse.detail_lines(entry, width=max(8, lay.detail_w - 3),
+                               installed=entry["name"] in installed_names,
+                               state=st, message=msg)
     visible = max(0, lay.body_h)
     dscroll = browse.clamp_scroll(dscroll, len(lines), visible)
     active = focus == "detail"
@@ -1197,7 +1356,9 @@ def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names):
             put(y, lay.detail_x, "─" * max(0, lay.detail_w), th["border"])
             continue
         attr = {"title": th["detail_name"], "head": th["head"],
-                "desc": th["name"], "state": th["state"],
+                "desc": th["value"], "state": th["state"],
+                "ok": th.get("ok_line", th["ok"]), "busy": th["busy"],
+                "failed": th["failed"], "muted": th["muted"],
                 "field": th["field"]}.get(role, th["field"])
         put(y, lay.detail_x + 1, text, attr)
     if len(lines) > visible and visible > 0:
@@ -1211,7 +1372,7 @@ def _draw_detail(put, th, lay, entry, dscroll, focus, installed_names):
                 thumb = bstart <= i < bstart + blen
                 put(y, lay.detail_x + lay.detail_w - 1,
                     "█" if thumb else "│",
-                    th["border_hi"] if active else th["border"])
+                    th["border_focus"] if active else th["border"])
     return dscroll
 
 
@@ -1234,7 +1395,14 @@ def cmd_browse(argv):
     picked = _browse_tui(curses, entries)
     if not picked:
         return 0
-    for entry in picked:
+    # The browser installs in place now, so anything it hands back is usually
+    # already on disk. Install only what still needs it — that keeps this path
+    # correct whether the TUI did the work or merely picked.
+    settled = set(store.installed())
+    staged = [e for e in picked if e["name"] in settled]
+    for entry in staged:
+        out.ok("installed %s v%s" % (entry["name"], entry.get("version", "?")))
+    for entry in [e for e in picked if e["name"] not in settled]:
         try:
             res = store.install(entry)
         except BoostError as e:
