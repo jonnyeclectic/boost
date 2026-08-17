@@ -20,9 +20,24 @@ name: shards
 #
 # SCALE — one job per registry, not one job for everything. A 20-tap corpus is
 # ~3.4 h of embedding against the 6 h job limit, and the full 466-registry
-# catalogue is far beyond it. The matrix keeps each job to one registry (the
-# largest pinned tap is ~75 min) and lets failures be per-registry rather than
-# all-or-nothing.
+# catalogue is far beyond it. The matrix keeps each job to one registry and lets
+# failures be per-registry rather than all-or-nothing.
+#
+# The largest pinned tap is `sickn33/antigravity-awesome-skills` and it is not
+# "~75 min", which is what this comment used to claim: 6,309 entries become
+# 77,423 chunks, and the 2026-08-16 scheduled run burned its entire
+# `timeout-minutes: 330` on it and was cancelled with nothing published. Raising
+# the timeout was never available — 330 is already under the 6 h ceiling.
+#
+# What made it fit was de-duplicating the embedding work. **68.7% of that
+# registry's chunks are byte-identical repeats** (77,423 -> 24,246 distinct), and
+# embeddings are deterministic, so each copy was bought at full price for the
+# same vector. With that collapsed the same job **completed in 2 h 07 m** and
+# published a 129 MB shard of 78,095 chunks (verified: run #4, 2026-08-17).
+#
+# So the per-registry budget is set by DISTINCT chunk text, not entry count. A
+# registry that mirrors itself heavily is far cheaper than its size suggests;
+# one that does not is the case to watch against the ceiling.
 
 on:
   workflow_dispatch:
