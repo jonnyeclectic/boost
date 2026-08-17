@@ -10,7 +10,7 @@ wow: 4
 note: one publisher could never publish and one alert could never stand down — both reported success
 order: 119
 owner: fix/ci-controls-that-cannot-act
-pr:
+pr: 529
 title: a publisher that could not publish, and an alert that could not stand down
 ---
 <b>Two controls, the same failure mode: present, running, and structurally unable to do the thing
