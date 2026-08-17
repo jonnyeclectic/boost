@@ -34,9 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      # write so the scheduled run can commit the refreshed metrics; every
-      # other trigger skips those steps.
-      contents: write
+      contents: write            # push the branch carrying the refreshed metrics
+      pull-requests: write       # open the PR that carries it
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -81,29 +80,48 @@ jobs:
         run: |
           .venv/bin/python scripts/publish_eval_json.py \
             --generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      - name: commit if it changed
+      # It used to `git push … HEAD:main` from here, and could never work. main
+      # carries a ruleset with a `pull_request` rule and an EMPTY bypass list, so
+      # no token — not this one, not a PAT, not any bot — can push to it, and
+      # every scheduled run died on `GH013: Repository rule violations found for
+      # refs/heads/main`. Adding a bypass actor to publish a metrics file would
+      # open the protection guarding every other change to main, which is a bad
+      # trade for a docs payload.
+      #
+      # So it goes through a pull request, the same way eval-corpus-refresh.yml
+      # lands its moved pins — one long-lived branch that each run updates in
+      # place, rather than a new PR a week.
+      - name: say what will be published
+        id: body
         if: github.event_name != 'pull_request'
-        env:
-          # Contents write is scoped to this step's job, declared below.
-          GH_TOKEN: ${{ github.token }}
         run: |
-          if git diff --quiet -- docs/eval-latest.json; then
-            echo "eval-latest.json unchanged"
-            exit 0
-          fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/eval-latest.json
-          git commit -m "chore(eval): refresh published metrics"
-          # An explicit token URL, NOT a bare `git push origin`. The checkout
-          # above sets `persist-credentials: false` — correct, and what zizmor's
-          # artipacked rule asks for — so the remote carries no auth and a bare
-          # push cannot work. It never did: docs/eval-latest.json has exactly
-          # ONE commit in its whole history, the one that created it, while this
-          # job has been scheduled to refresh it ever since. The run still
-          # reports success when there is nothing to commit, so the conclusion
-          # column could not tell "no drift" from "cannot publish". Same shape
-          # as ci.yml's badges push, which had this right already.
-          git push -q \
-            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" \
-            HEAD:main
+          {
+            echo "text<<PRBODY"
+            echo "The weekly significance run measured new numbers for"
+            echo "\`docs/eval-latest.json\`, the payload the docs site and the"
+            echo "portfolio read. Merging republishes the figures those pages"
+            echo "show; declining leaves them at the previous run's."
+            echo
+            echo "Measured by: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "**This PR arrives with no check runs.** \`create-pull-request\`"
+            echo "pushes with \`GITHUB_TOKEN\`, and a \`GITHUB_TOKEN\` push never"
+            echo "triggers workflows, so required contexts will not report until"
+            echo "someone presses **Update branch**. An empty check list looks"
+            echo "identical to \"CI has not started yet\" — make CI actually run"
+            echo "before merging."
+            echo
+            echo "Close it if the refresh is not wanted; the next scheduled run"
+            echo "reopens it from the current measurement."
+            echo "PRBODY"
+          } >> "$GITHUB_OUTPUT"
+      - name: open a PR if the numbers moved
+        if: github.event_name != 'pull_request'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: docs/eval-latest.json
+          branch: bot/eval-metrics
+          delete-branch: true
+          commit-message: "chore(eval): refresh published metrics"
+          title: "chore(eval): refresh published metrics"
+          body: ${{ steps.body.outputs.text }}
