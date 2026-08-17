@@ -10,7 +10,7 @@ wow: 5
 note: 5h30m cancelled at the ceiling, then 2h07m green — the same job, with duplicate embeddings collapsed
 order: 120
 owner: docs/shards-measured-scale
-pr:
+pr: 531
 title: the shard job that had never once finished, and the timeout that could not be raised
 ---
 <b><code>shards</code> exists so a keyless user gets semantic search without paying to embed the
