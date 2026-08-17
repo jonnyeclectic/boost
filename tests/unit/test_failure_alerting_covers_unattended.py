@@ -130,3 +130,47 @@ class TestEveryUnattendedWorkflowIsWatched:
         names = {workflow_name(p.read_text(encoding="utf-8"), p.stem)
                  for p in WORKFLOWS.glob("*.yml")}
         assert watched() <= names, sorted(watched() - names)
+
+
+class TestTheAlertCanStandDown:
+    """An alert that cannot close is only half an alert.
+
+    The tracker opened issues, commented on repeats, and never closed one — so
+    its own closing line, "close this once CI is green again", was a manual step
+    nobody had a reason to take. `visual` stayed open through four consecutive
+    green runs, and a list that mixes live outages with fixed ones makes every
+    entry in it read as equally suspect.
+    """
+
+    def test_a_success_on_main_closes_the_tracker(self):
+        text = ALERT.read_text(encoding="utf-8")
+        assert "conclusion == 'success'" in text, (
+            "nothing reacts to a watched workflow going green, so every "
+            "tracker this file opens stays open until someone closes it")
+        assert "state: 'closed'" in text
+
+    def test_closing_is_keyed_by_workflow_like_opening(self):
+        """A `ci` success must not close a `demo` tracker.
+
+        The opener keys its marker on the workflow name for exactly this
+        reason; a closer that matched any `ci-failure` issue would undo that.
+        """
+        text = ALERT.read_text(encoding="utf-8")
+        assert text.count("ci-failure-tracker:${run.name}") >= 2, (
+            "the closing half must use the same per-workflow marker the "
+            "opening half writes")
+
+    def test_only_main_can_close_it(self):
+        """`workflow_run` fires for the default branch, but the opener still
+        checks — and an asymmetry here would let a non-main success close a
+        tracker for a failure that is still live on main."""
+        text = ALERT.read_text(encoding="utf-8")
+        assert text.count("head_branch == 'main'") >= 2
+
+    def test_permissions_are_not_granted_workflow_wide(self):
+        """`issues: write` at the top reaches every job, including any added
+        later. zizmor's excessive-permissions audit fails the build on it."""
+        text = ALERT.read_text(encoding="utf-8")
+        assert re.search(r"^permissions:\s*\{\}\s*$", text, re.M), \
+            "workflow-level permissions must be empty; each job asks for its own"
+        assert text.count("issues: write") >= 2

@@ -85,6 +85,46 @@ class TestTheGuardCanActuallySee:
         assert _AUTHED_PUSH.search(join_continuations(wrapped))
 
 
+#: `HEAD:main`, `HEAD:refs/heads/main`, or a bare push whose refspec is main.
+_PUSHES_TO_MAIN = re.compile(r"git push[^\n]*\b(HEAD|[\w./-]+):(refs/heads/)?main\b")
+
+
+class TestNothingPushesToMain:
+    """Credentials were only the first layer; the branch is the second.
+
+    Fixing the missing token got `eval-stats` as far as a *different* permanent
+    failure — `GH013: Repository rule violations found for refs/heads/main`.
+    main carries a ruleset with a `pull_request` rule and an **empty bypass
+    list**, so no token can push to it: not `github.token`, not a PAT, not any
+    bot. A workflow that pushes there is not misconfigured, it is impossible.
+
+    The remedy is never to add a bypass actor. That would open the protection
+    guarding every change to main so a docs payload can skip review. `ci.yml`
+    pushes `badges:badges` and `eval-stats.yml` now pushes `eval-metrics`;
+    merging either into main stays a pull request, like everything else.
+    """
+
+    def test_the_guard_recognises_a_push_to_main(self):
+        for line in ("git push -q origin HEAD:main",
+                     'git push -q "https://x@github.com/o/r" HEAD:refs/heads/main',
+                     "git push origin main:main"):
+            assert _PUSHES_TO_MAIN.search(line), line
+
+    def test_the_guard_does_not_flag_a_side_branch(self):
+        for line in ("git push -qf origin badges:badges",
+                     'git push -qf "https://x@github.com/o/r" HEAD:eval-metrics'):
+            assert not _PUSHES_TO_MAIN.search(line), line
+
+    @pytest.mark.parametrize("name", sorted(pushing_workflows()))
+    def test_no_workflow_pushes_to_main(self, name):
+        hits = [line.strip() for line in pushing_workflows()[name].splitlines()
+                if _PUSHES_TO_MAIN.search(line)]
+        assert not hits, (
+            "%s pushes to main, which main's ruleset forbids for every token "
+            "(GH013). Push to a side branch and open a pull request; do NOT "
+            "add a bypass actor to the ruleset: %s" % (name, hits))
+
+
 @pytest.mark.parametrize("name", sorted(pushing_workflows()))
 def test_a_push_after_an_unpersisted_checkout_carries_a_token(name):
     text = pushing_workflows()[name]

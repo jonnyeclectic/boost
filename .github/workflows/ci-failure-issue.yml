@@ -35,8 +35,10 @@ on:
       "scorecard", "shards", "sonarcloud", "theme-lint", "visual"]
     types: [completed]
 
-permissions:
-  issues: write
+# Nothing at the workflow level: `issues: write` granted here reaches every job,
+# and zizmor's excessive-permissions audit is right that a second job made that
+# visible. Each job asks for it on its own.
+permissions: {}
 
 jobs:
   open-issue:
@@ -45,8 +47,11 @@ jobs:
       github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      issues: write
     steps:
       - name: open or update the CI-failure tracking issue
+        # (see close-issue below: this half only ever opens)
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
@@ -94,8 +99,51 @@ jobs:
                   '',
                   note,
                   '',
-                  'Opened automatically; updated on repeat failures. ' +
-                  'Close this once CI is green again.',
+                  'Opened automatically; updated on repeat failures, and ' +
+                  'closed automatically once this workflow is green on main.',
                 ].join('\n'),
               });
             }
+
+  # The other half, and it was missing. The tracker opened issues and commented
+  # on them and never closed one, so its own instruction — "close this once CI
+  # is green again" — was a manual step nobody had a reason to take. The result
+  # is an issue list that reads as a list of live outages and is not: `visual`
+  # was fixed and green for four consecutive runs while its tracker stayed open,
+  # which makes every OTHER open tracker look equally suspect. An alert that
+  # cannot stand down is only half an alert.
+  close-issue:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      issues: write
+    steps:
+      - name: close the tracking issue once this workflow is green again
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const run = context.payload.workflow_run;
+            // The same key the opener writes, so a `ci` success can never close
+            // a `demo` tracker. Issues carrying the older unkeyed marker do not
+            // match and are still closed by hand, exactly as the opener says.
+            const marker = `<!-- ci-failure-tracker:${run.name} -->`;
+
+            const open = await github.rest.issues.listForRepo({
+              owner, repo, state: 'open', labels: 'ci-failure', per_page: 20,
+            });
+            const hit = open.data.find(i => (i.body || '').includes(marker));
+            if (!hit) return;   // nothing tracking this workflow — the normal case
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: hit.number,
+              body: `Green again — \`${run.name}\` passed on \`main\` ` +
+                    `(commit ${run.head_sha})\nrun: ${run.html_url}`,
+            });
+            await github.rest.issues.update({
+              owner, repo, issue_number: hit.number,
+              state: 'closed', state_reason: 'completed',
+            });
