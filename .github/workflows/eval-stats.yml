@@ -34,9 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      # write so the scheduled run can commit the refreshed metrics; every
-      # other trigger skips those steps.
-      contents: write
+      contents: write            # push the branch carrying the refreshed metrics
+      pull-requests: write       # open the PR that carries it
     steps:
       - name: harden runner (egress audit)
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2.20.1
@@ -81,58 +80,48 @@ jobs:
         run: |
           .venv/bin/python scripts/publish_eval_json.py \
             --generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      - name: publish the refreshed metrics to the eval-metrics branch
+      # It used to `git push … HEAD:main` from here, and could never work. main
+      # carries a ruleset with a `pull_request` rule and an EMPTY bypass list, so
+      # no token — not this one, not a PAT, not any bot — can push to it, and
+      # every scheduled run died on `GH013: Repository rule violations found for
+      # refs/heads/main`. Adding a bypass actor to publish a metrics file would
+      # open the protection guarding every other change to main, which is a bad
+      # trade for a docs payload.
+      #
+      # So it goes through a pull request, the same way eval-corpus-refresh.yml
+      # lands its moved pins — one long-lived branch that each run updates in
+      # place, rather than a new PR a week.
+      - name: say what will be published
+        id: body
         if: github.event_name != 'pull_request'
-        env:
-          # Contents write is scoped to this step's job, declared below.
-          GH_TOKEN: ${{ github.token }}
         run: |
-          if git diff --quiet -- docs/eval-latest.json; then
-            {
-              echo ""
-              echo "### published metrics"
-              echo "\`docs/eval-latest.json\` is unchanged — nothing to publish."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          # NOT `HEAD:main`. main carries a ruleset with a `pull_request` rule
-          # and an EMPTY bypass list, so no token — not this one, not any bot —
-          # can push to it, and this step failed every scheduled run with
-          # `GH013: Repository rule violations found for refs/heads/main`.
-          # Adding a bypass actor to publish a metrics file would poke a hole in
-          # the protection that guards every other change to main, which is a
-          # bad trade for a docs payload.
-          #
-          # So it lands on its own branch, the same shape as ci.yml's
-          # `badges:badges` push, which works for exactly this reason. The data
-          # is published, diffable and never silently lost; merging it into main
-          # stays a pull request, like every other change.
-          #
-          # The step does NOT fail when the push is refused. This job's product
-          # is the significance report, and failing it on a publishing
-          # side-effect turned a working weekly monitor into a weekly red square
-          # plus an auto-filed issue — burying the signal it exists to give. But
-          # it must not lie in the other direction either, so the summary always
-          # states which of the three things happened.
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/eval-latest.json
-          git commit -qm "chore(eval): refresh published metrics"
-          if git push -qf \
-               "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}" \
-               HEAD:eval-metrics; then
-            {
-              echo ""
-              echo "### published metrics"
-              echo "Pushed to the \`eval-metrics\` branch."
-              echo ""
-              echo "[Open a PR to publish it](https://github.com/${{ github.repository }}/compare/main...eval-metrics?expand=1)"
-            } >> "$GITHUB_STEP_SUMMARY"
-          else
-            {
-              echo ""
-              echo "### published metrics"
-              echo ":warning: the numbers changed but the push was refused —"
-              echo "\`docs/eval-latest.json\` on the site is now stale."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          {
+            echo "text<<PRBODY"
+            echo "The weekly significance run measured new numbers for"
+            echo "\`docs/eval-latest.json\`, the payload the docs site and the"
+            echo "portfolio read. Merging republishes the figures those pages"
+            echo "show; declining leaves them at the previous run's."
+            echo
+            echo "Measured by: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "**This PR arrives with no check runs.** \`create-pull-request\`"
+            echo "pushes with \`GITHUB_TOKEN\`, and a \`GITHUB_TOKEN\` push never"
+            echo "triggers workflows, so required contexts will not report until"
+            echo "someone presses **Update branch**. An empty check list looks"
+            echo "identical to \"CI has not started yet\" — make CI actually run"
+            echo "before merging."
+            echo
+            echo "Close it if the refresh is not wanted; the next scheduled run"
+            echo "reopens it from the current measurement."
+            echo "PRBODY"
+          } >> "$GITHUB_OUTPUT"
+      - name: open a PR if the numbers moved
+        if: github.event_name != 'pull_request'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: docs/eval-latest.json
+          branch: bot/eval-metrics
+          delete-branch: true
+          commit-message: "chore(eval): refresh published metrics"
+          title: "chore(eval): refresh published metrics"
+          body: ${{ steps.body.outputs.text }}

@@ -4182,14 +4182,13 @@ list</b>, so no token can push to it &mdash; not <code>github.token</code>, not 
 The workflow was not misconfigured; it was impossible.
 
 <b>The remedy is not a bypass actor.</b> Adding one would open the protection guarding every change
-to main so that a docs payload can skip review. The metrics now land on an <code>eval-metrics</code>
-branch &mdash; the same shape as <code>ci.yml</code>'s <code>badges:badges</code> push, which works
-for exactly this reason &mdash; and merging them into main stays a pull request, like everything
-else. The publish no longer fails the job, because this job's product is the significance report and
-failing it on a side-effect turned a working weekly monitor into a weekly red square plus an
-auto-filed issue, burying the signal it exists to give. It must not lie in the other direction
-either, so the run summary now always says which of the three things happened: unchanged, published,
-or refused.
+to main so that a docs payload can skip review. The refreshed metrics now arrive the way
+<code>eval-corpus-refresh.yml</code> already lands its moved pins &mdash; as a pull request on one
+long-lived <code>bot/eval-metrics</code> branch that each run updates in place, rather than a new PR
+a week. Reviewable, mergeable, and no weaker than any other change to main. It carries the same
+warning that workflow's PRs do: a <code>GITHUB_TOKEN</code> push never triggers workflows, so the
+check list is empty until someone presses <b>Update branch</b>, and empty looks exactly like
+&ldquo;not started yet&rdquo;.
 
 <b>2. The failure tracker opened issues and never closed one.</b> Its own closing line said
 &ldquo;close this once CI is green again&rdquo; &mdash; a manual step nobody had a reason to take. So
@@ -4204,7 +4203,8 @@ workflow level, where it reaches every job including any added later; zizmor's e
 audit says so and now fails the build on it. Each job asks for its own.
 
 <b>Both halves are pinned statically</b>, and the push guard was verified by reversion: restore the
-old <code>HEAD:main</code> and the test names the exact line.</p></details>
+old <code>HEAD:main</code> and the test names the exact line. The guard outlives this fix &mdash; it
+is parametrised over every workflow that pushes, so the next one cannot rediscover the same wall.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
