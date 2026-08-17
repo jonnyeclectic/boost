@@ -163,16 +163,35 @@ def highlight_positions(query: str, text: str) -> set[int]:
 #: (`rule`, 47 distinct) is already the pathological case — a bigger one is a
 #: registry doing something strange, not a user waiting to be helped.
 _FUZZY_BUCKET_CAP = 80
+# Bucket name reserved for rows keyed by content digest. A NUL can't occur in a
+# slugified skill name, so a digested row can never share a fuzzy bucket with a
+# real one — and the fuzzy pass skips this bucket outright, because "95% similar"
+# is a question about prose and asking it of two hex digests is meaningless.
+_DIGEST_SIG = "\x00digest"
 
 
 def _sig(entry: dict) -> tuple[str, str]:
-    """Identity of a row for dedupe: name plus description, normalised.
+    """Identity of a row for dedupe: the scanner's content digest when it has
+    one, else name plus description, normalised.
 
-    The description is what makes this safe. Keying on the name alone would
-    collapse `code-reviewer` — 75 rows with **42 distinct descriptions** on a
-    real catalogue — into one, hiding 41 genuinely different skills. Keying on
-    the pair collapses only rows that say the same thing.
+    The digest is the right key and the pair is a fallback, not a peer. Keying
+    on name+description alone over-collapses: on a real 60,047-entry catalogue
+    it merges **3,383 clusters** the digest keeps apart — items that share a
+    name and a description while carrying genuinely different prose, one of
+    which then becomes unreachable in the browser. It is still the only key
+    available for a row from a cache written before `catalog.CACHE_FORMAT`, so
+    it stays.
+
+    Digested and undigested rows can never merge into each other: the two keys
+    live in different halves of the tuple, so an unknown is only ever equal to
+    another unknown with the same visible metadata.
+
+    Keying on the name alone was never an option — `code-reviewer` is 75 rows
+    with **42 distinct descriptions** on a real catalogue.
     """
+    content = str(entry.get("content", "")).strip()
+    if content:
+        return (_DIGEST_SIG, content)
     return (str(entry.get("name", "")).strip().lower(),
             str(entry.get("description", "")).strip().lower())
 
@@ -208,6 +227,8 @@ def dedupe(entries, threshold: float = 0.95) -> list[tuple[dict, int]]:
     # with different names are different skills however similar the prose.
     by_name: dict[str, list] = {}
     for sig in order:
+        if sig[0] == _DIGEST_SIG:
+            continue        # exact content already decided; see _DIGEST_SIG
         by_name.setdefault(sig[0], []).append(sig)
     absorbed: set[tuple[str, str]] = set()
     for sigs in by_name.values():

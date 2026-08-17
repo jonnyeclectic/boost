@@ -17,6 +17,7 @@ that ship in the same GitHub registries:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import operator
 import os
@@ -25,6 +26,14 @@ from pathlib import Path
 
 from ..errors import BoostError
 from . import frontmatter, gitutil, paths, registry, util
+
+# Bumped whenever a scan starts recording something the previous scan did not,
+# so 460 caches on a real machine invalidate on read instead of needing a
+# re-tap. `catalogbundle.BUNDLE_FORMAT` and `rag.INDEX_VERSION` self-version for
+# the same reason; the tap cache was the one derived artifact that did not, and
+# without it there was no way to ship a new entry field at all.
+#   1 -- entries carry `content` (see `_content_digest`)
+CACHE_FORMAT = 1
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -61,6 +70,36 @@ def _description(meta: dict, body: str) -> str:
     return ""
 
 
+def _content_digest(name: str, description: str, body: str) -> str:
+    """Content identity for an item: what it *is*, independent of where it sits.
+
+    Deliberately not the file bytes and not the body alone. The text hashed here
+    is exactly what :func:`rag.read_body` assembles — ``name``, ``description``,
+    then the frontmatter-stripped body — because that is the string boost
+    already treats as an item's content everywhere it clusters copies, and two
+    identity keys that *nearly* agree are worse than one.
+
+    Measured over a real 460-tap install (60,047 entries), against the two
+    alternatives that look reasonable:
+
+        name+description+body   41,051 clusters   0 span >1 name   <- this
+        body only               40,372 clusters   259 span >1 name
+        name+description        37,668 clusters   2 span >1 name
+
+    Body-only merges 259 clusters that span different names — the
+    ``admin-interface-rule`` collision #366 fixed, where one registry ships two
+    unrelated rules under one name. Metadata-only over-collapses in the other
+    direction: 3,383 clusters of items that share a name and description while
+    carrying genuinely different prose. Including all three separates both.
+
+    Truncated to 16 hex chars to match the index, which stores one of these per
+    document; the full digest doubles the index for collision odds that are
+    already negligible at 60k items.
+    """
+    text = "%s\n%s\n%s" % (name, description, body)
+    return hashlib.sha256(text.strip().encode("utf-8", "replace")).hexdigest()[:16]
+
+
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
                 tap_name: str, curated: bool, meta: dict, body: str) -> dict:
     name = str(meta.get("name") or "").strip() or default_name
@@ -80,6 +119,11 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
         "rel_dir": item_dir.relative_to(root).as_posix() if item_dir != root else ".",
         "skill_md": defining_file.relative_to(root).as_posix(),
         "meta": meta,
+        # Free here and nowhere else: the body is already read, parsed and about
+        # to be discarded. `rag` used to re-open all 60k files at index time to
+        # recompute exactly this (~14 s on a real install) because the entry did
+        # not carry it.
+        "content": _content_digest(slug, description, body),
         # Lowercased substring-search blob, flattened once at index time so
         # search() never re-walks the frontmatter per query (see _search_blob).
         "search_blob": _search_blob(slug, description, meta),
@@ -176,6 +220,7 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
     tap.cache_file.write_text(json.dumps({
         "tap": tap.name,
         "url": tap.url,
+        "format": CACHE_FORMAT,
         "generated": util.now_iso(),
         "commit": gitutil.head_commit(tap.path),
         "skills": entries,
@@ -192,12 +237,21 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
 # the cached list is shared by reference (matching the index cache). Keying on
 # nanosecond mtime + size catches rewrites a bare second-resolution mtime would
 # miss.
-_ENTRY_CACHE: dict[str, tuple[tuple[int, int], list[dict]]] = {}
+_ENTRY_CACHE: dict[str, tuple[tuple[int, int], list[dict], bool]] = {}
 
 
-def _cached_tap(tap: registry.Tap) -> list[dict] | None:
-    """Memoized ``skills`` for a tap's cache file, or ``None`` to force a
-    rebuild (file missing, unreadable, or corrupt JSON)."""
+def _cached_tap(tap: registry.Tap) -> tuple[list[dict], bool] | None:
+    """``(skills, is_current)`` for a tap's cache, or ``None`` to force a
+    rebuild (file missing, unreadable, or corrupt JSON).
+
+    ``is_current`` says whether the cache was written by this scanner. It is
+    reported rather than acted on here because the right response depends on
+    something this function cannot see: whether the clone is still on disk to
+    rescan. A stale cache is not *wrong* — it is missing fields its consumers
+    have since learned to want, and every one of them degrades cleanly without
+    them — so discarding it unconditionally would trade a missing digest for
+    missing entries, which is the worse failure.
+    """
     p = tap.cache_file
     key = str(p)
     try:
@@ -208,14 +262,16 @@ def _cached_tap(tap: registry.Tap) -> list[dict] | None:
     stamp = (st.st_mtime_ns, st.st_size)
     cached = _ENTRY_CACHE.get(key)
     if cached is not None and cached[0] == stamp:
-        return cached[1]
+        return cached[1], cached[2]
     try:
-        skills = json.loads(p.read_text(encoding="utf-8")).get("skills", [])
+        data = json.loads(p.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         _ENTRY_CACHE.pop(key, None)
         return None
-    _ENTRY_CACHE[key] = (stamp, skills)
-    return skills
+    skills = data.get("skills", [])
+    current = data.get("format") == CACHE_FORMAT
+    _ENTRY_CACHE[key] = (stamp, skills, current)
+    return skills, current
 
 
 def load_tap(tap: registry.Tap, rebuild: bool = False) -> list[dict]:
@@ -223,11 +279,20 @@ def load_tap(tap: registry.Tap, rebuild: bool = False) -> list[dict]:
 
     `rebuild=True` or a missing/corrupt cache forces a rescan; an
     uncloned tap yields `[]`.
+
+    A cache written by an older scanner is rescanned *when the clone is still
+    there to rescan* — that is what backfills a new entry field across every tap
+    on a machine (460 of them on a real install) without asking anyone to re-tap.
+    When the clone is gone the stale entries are served as they are: consumers
+    all degrade cleanly on a missing field, so refusing to answer would cost the
+    user their catalogue to buy a digest.
     """
     if not rebuild:
         cached = _cached_tap(tap)
         if cached is not None:
-            return cached
+            skills, current = cached
+            if current or not tap.is_cloned:
+                return skills
     if tap.is_cloned:
         return rebuild_tap(tap)
     return []
@@ -487,10 +552,46 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 % (bare, len(matches), taps[0], paths),
                 hint="that registry ships one name twice — pick one with "
                      "`--path <one of the above>`, and raise it with the tap")
+        # Several taps, one thing. Registries mirror each other constantly, so
+        # the common cross-tap collision is N byte-identical copies of one
+        # skill — and the within-tap branch above already decided that
+        # indistinguishable candidates are boost's problem to resolve, not the
+        # user's. Applying the same judgement here removes a dead end (a
+        # mirrored skill could not be installed unqualified at all) without
+        # touching the genuine-ambiguity error, which still fires whenever the
+        # copies actually differ.
+        best = _same_thing(matches)
+        if best is not None:
+            return best
         raise BoostError(
             "%r exists in multiple taps: %s" % (name, ", ".join(taps)),
             hint="qualify it, e.g. `%s:%s`" % (taps[0], bare))
     return matches[0]
+
+
+def _same_thing(matches: list[dict]) -> dict | None:
+    """The copy to install when every candidate is the same content, else None.
+
+    Returns None unless *every* candidate carries a digest and they all agree.
+    A missing digest is an unknown, never a match: assuming two unknowns equal
+    would silently install one skill when the user asked about another, which is
+    strictly worse than the error it would be replacing.
+
+    Ranked by :func:`rag.source_rank` — the user's own ``curated`` flag first,
+    the shipped registry confidence second — which exists for exactly this
+    decision and is what `dedupe_by_content` already uses to choose between
+    identical bodies in search results. Ties break on ``(tap, rel_dir)`` so the
+    pick cannot vary between runs.
+    """
+    digests = {e.get("content") for e in matches}
+    if len(digests) != 1 or not next(iter(digests)):
+        return None
+    # Local import: `rag` imports this module, so the edge only exists at call
+    # time. Same shape as `store.install`'s deferred `gitutil` import.
+    from . import rag
+    return min(matches, key=lambda e: (rag.source_rank(e),
+                                       str(e.get("tap", "")),
+                                       str(e.get("rel_dir", ""))))
 
 
 def _meta_text(meta) -> str:

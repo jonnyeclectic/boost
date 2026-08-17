@@ -222,9 +222,13 @@ def _make_docs(entries: list[dict], tap_paths: dict[str, Path]) -> list[dict]:
     docs: list[dict] = []
     for e in entries:
         body = read_body(e, tap_paths)
-        # Hashed here because the body is already in hand; doing it at query
-        # time would mean re-reading ~30k files to answer one search.
-        digest = hashlib.sha256(body.strip().encode("utf-8", "replace")).hexdigest()[:16]
+        # The scanner already hashed this exact text (`catalog._content_digest`
+        # assembles name + description + body, the same string `read_body`
+        # returns), so an entry from a current cache hands the value over. The
+        # fallback is not dead code: a cache written before CACHE_FORMAT, or an
+        # entry synthesised by a caller rather than scanned, still has to index.
+        digest = e.get("content") or hashlib.sha256(
+            body.strip().encode("utf-8", "replace")).hexdigest()[:16]
         tf: dict[str, int] = defaultdict(int)
         for tok in tokenize(surface(e) + "\n" + body):
             tf[tok] += 1
