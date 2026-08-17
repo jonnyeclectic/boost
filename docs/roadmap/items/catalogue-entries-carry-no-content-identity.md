@@ -10,7 +10,7 @@ wow: 5
 note: 42.9% of 750,416 embedded chunks are duplicates — one was embedded 1,464 times
 order: 116
 owner: feat/catalogue-content-identity
-pr:
+pr: 526
 title: A catalog entry knew where it came from, never what it was
 ---
 <b>boost collapses duplicate copies at both places a user sees them</b> &mdash;
