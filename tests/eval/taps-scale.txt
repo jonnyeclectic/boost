@@ -25,26 +25,26 @@
 # rule registries, and a corpus that is 95% skills is not an install.
 
 # --- the required corpus, verbatim (holds every golden target) ---
-anthropics/skills                       b29e7cf65e5cb78a5ac33d582270551bc74a14eb    18
-0xfurai/claude-code-subagents           9236d10702cdbba37eaa34515f1e1dbff8452506   138
-NeoLabHQ/context-engineering-kit        555b95263ecf13d2ad9be14df676a1263d5a62b2    92
-Aaronontheweb/dotnet-cursor-rules       9be2d201482bdafca8c687359f0ef0a71895d7af    11
-ChrisWiles/claude-code-showcase         a95518f0cb67e86230119da40429169bc4c35a6f    14
-LessUp/awesome-cursorrules-zh           cd6a1f34f4f9eed7a01084751b9f6514eee1882d   470
-aliarghyani/vue-cursor-rules            92609798e192312ce16edb78aa5424a8caaa415b    14
-affaan-m/ECC                            e4e4163101f162881e628f300a9ca4e6a940bcea  1616
-BagelHole/DevOps-Security-Agent-Skills  0365f57a079b1332f95cf26e31dd2d5332a8399f   163
-composio-community/awesome-codex-skills 0930e1373789d2eda449039f7ac154b33031de89   880
-first-fluke/oh-my-agent                 3016e9df463f28f8c9c33f4e810a1901425a8bb0   136
-iktakahiro/python-fastapi-ddd-skill     aa498d4c81acae475e05528520009c275cbe554f     6
-langchain-ai/skills-benchmarks          064a5087fda3472a6b2883be7841441d038d2e2f    21
-minio/skills                            d54382989a5ccc5fcc7de2905f7454f944a28d76     3
-OneWave-AI/claude-skills                27f8cdcea225e627a73de89b9a3d477af9e249da   204
-quarkusio/quarkusdev-skills             b7c025b996bb4b9c3054740b242d1f368ae0eadd     5
-sickn33/antigravity-awesome-skills      d43065e483d9057e5c5dd50ca3647652ca7c0b43  6309
-tuanhaviet22/magento-skills             32d21015bd8eb46b8351fc87a8988ddca44de0f7     5
-anthropics/claude-agent-sdk-python      f8b9ec923982082a02c485924e0f60367949c3a1     6
-eclosion-labs/terraform-cursor-plugin   bcaad7033598c7bbb4efd73483b49962bd3398d9    41
+anthropics/skills                                 f379e5ad66e2febc1616cf8d6284666fecbe514e    20
+0xfurai/claude-code-subagents                     9236d10702cdbba37eaa34515f1e1dbff8452506   138
+NeoLabHQ/context-engineering-kit                  8539779375f4e24b80f61476cfeaef330fa2d318   183
+Aaronontheweb/dotnet-cursor-rules                 9be2d201482bdafca8c687359f0ef0a71895d7af    11
+ChrisWiles/claude-code-showcase                   a95518f0cb67e86230119da40429169bc4c35a6f    14
+LessUp/awesome-cursorrules-zh                     ce39351450c4720a11c7edeadaef26d60c5c02e7   470
+aliarghyani/vue-cursor-rules                      92609798e192312ce16edb78aa5424a8caaa415b    14
+affaan-m/ECC                                      06c5e118c4d3e6c3b7f9445f973a2194c82de193  1620
+BagelHole/DevOps-Security-Agent-Skills            0365f57a079b1332f95cf26e31dd2d5332a8399f   163
+composio-community/awesome-codex-skills           0930e1373789d2eda449039f7ac154b33031de89   880
+first-fluke/oh-my-agent                           e48a6dd64cab566bce64dca41f0acb149cc2f7dc   205
+iktakahiro/python-fastapi-ddd-skill               aa498d4c81acae475e05528520009c275cbe554f     6
+langchain-ai/skills-benchmarks                    064a5087fda3472a6b2883be7841441d038d2e2f    21
+minio/skills                                      32b7d3e3e23de7595bd4c6051941d1215521fe2a     3
+OneWave-AI/claude-skills                          82859c0ebaff803889be6ca2efa0834ba8787773   205
+quarkusio/quarkusdev-skills                       b7c025b996bb4b9c3054740b242d1f368ae0eadd     5
+sickn33/antigravity-awesome-skills                1f67c44dc9aeaad2baa5130460a1f850d357a9ff  6364
+tuanhaviet22/magento-skills                       32d21015bd8eb46b8351fc87a8988ddca44de0f7     5
+anthropics/claude-agent-sdk-python                d416278da98d61261fab0305036eacf19aa83ebc     6
+eclosion-labs/terraform-cursor-plugin             bcaad7033598c7bbb4efd73483b49962bd3398d9    41
 
 # --- distractors, curated registries (bare until the first --refresh pins them) ---
 sanjeed5/awesome-cursor-rules-mdc
