@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 472,
-  "est_items_total": 32697,
-  "est_items_scannable": 28276,
+  "count": 470,
+  "est_items_total": 32628,
+  "est_items_scannable": 28207,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -2535,17 +2535,6 @@
       "curated": true
     },
     {
-      "name": "MikroJit-Technologies/claude-skills",
-      "url": "https://github.com/MikroJit-Technologies/claude-skills",
-      "type": "skill",
-      "category": "infra",
-      "focus": "13 skills for infra engineers - MikroTik RouterOS Proxmox K3s... (21 skills)",
-      "est_items": 21,
-      "confidence": "med",
-      "list_only": false,
-      "curated": true
-    },
-    {
       "name": "minhnv0807/ai-business-skills",
       "url": "https://github.com/minhnv0807/ai-business-skills",
       "type": "skill",
@@ -4950,17 +4939,6 @@
       "category": "general",
       "focus": "19 AI Agents + 44 Commands for Gemini CLI - Code 10x faster with auto... (15 skills, 58 workflows)",
       "est_items": 73,
-      "confidence": "high",
-      "list_only": false,
-      "curated": true
-    },
-    {
-      "name": "pcliangx/AppGenesisForge",
-      "url": "https://github.com/pcliangx/AppGenesisForge",
-      "type": "workflow",
-      "category": "meta",
-      "focus": "AI Agent Team scaffold for Claude Code - 19 roles collaborate through... (19 skills, 29 workflows)",
-      "est_items": 48,
       "confidence": "high",
       "list_only": false,
       "curated": true

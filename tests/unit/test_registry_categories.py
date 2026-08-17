@@ -260,6 +260,36 @@ class TestSourceTuples:
         assert not orphans, (
             "LIST_ONLY names no longer in any tuple (dead entries): %s" % orphans)
 
+    def test_retired_repos_are_gone_from_every_source_tuple(self, builder):
+        """A repo verified dead upstream must not be advertised again.
+
+        The catalogue is assembled from research batches, and a batch written
+        before a repo was deleted still names it. Removing the row is therefore
+        not the fix on its own — the next sweep re-adds it from the same stale
+        source. `RETIRED` is the record that survives the sweep.
+        """
+        known = {r[0] for tup in (builder.SKILLS, builder.RULES,
+                                  builder.WORKFLOWS) for r in tup}
+        back = sorted(known & set(builder.RETIRED))
+        assert not back, (
+            "retired repos are back in the source tuples: %s — they 404 on "
+            "GitHub, so every `boost tap` of them fails" % back)
+        assert not (builder.LIST_ONLY & set(builder.RETIRED)), \
+            "LIST_ONLY still names a retired repo"
+
+    def test_retired_repos_are_gone_from_the_shipped_catalog(self, catalog, builder):
+        """The generated payload is what a user actually taps from."""
+        shipped = {e.get("name") for e in catalog}
+        back = sorted(shipped & set(builder.RETIRED))
+        assert not back, "registries.json still ships retired repos: %s" % back
+
+    def test_every_retired_repo_records_why(self, builder):
+        """A bare name is unfalsifiable later; the reason is what makes it
+        checkable against GitHub again in a year."""
+        for name, reason in builder.RETIRED.items():
+            assert name.count("/") == 1, "%r is not owner/repo" % name
+            assert reason.strip(), "%s is retired with no reason given" % name
+
     def test_repo_names_are_case_unique(self, builder):
         """GitHub is case-insensitive on owner/repo, the payload dedupe is not:
         two rows differing only in case would ship as two registries."""
