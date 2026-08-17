@@ -10,7 +10,7 @@ wow: 4
 note: the weekly fuzzer has now found two crashes in one function, three weeks apart, and been ignored both times
 order: 118
 owner: fix/tap-spec-name-too-long
-pr:
+pr: 528
 title: <code>Path.exists()</code> looks total, and is not
 ---
 <b><code>boost tap &lt;anything long enough&gt;</code> died with a raw traceback on Linux.</b>
