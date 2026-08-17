@@ -46,6 +46,26 @@ LIST_ONLY = {
     "langgptai/awesome-claude-prompts",
 }
 
+# Repos that were curated here and have since been deleted or made private.
+# They are recorded rather than merely deleted because the catalogue is
+# assembled from research batches: a batch written before the repo vanished
+# still names it, so dropping the row alone lets the next sweep re-add it from
+# the same stale source. Verified with `--verify-live`, which is the runnable
+# form of CLAUDE.md's "verify a repo is real before adding it" — a convention
+# that six dead rows proved does not enforce itself.
+#
+# Archived-but-reachable repos are deliberately NOT here. They still clone and
+# still ship their items; frozen is not gone.
+RETIRED = {
+    "MikroJit-Technologies/claude-skills":
+        "404 since 2026-08 — the tap that broke `boost update` for every "
+        "other tap on the maintainer's machine (see roadmap "
+        "one-dead-tap-broke-every-update)",
+    "pcliangx/AppGenesisForge":
+        "404 since 2026-08 — clone prompts for credentials, which is what "
+        "fails the scheduled eval-scale gate on its pinned corpus",
+}
+
 # --- skills (SKILL.md registries) -------------------------------------------
 SKILLS = [
     ("travisvn/awesome-claude-skills", "meta", "Curated awesome-list of Claude Skills, tools, and resources", 60, "high"),
@@ -291,7 +311,6 @@ SKILLS = [
     ("anmolnagpal/devops-skills", "infra", "Multi-tool DevOps skills for Claude Code, Cursor, and Codex... (18 skills, 17 rules)", 35, "med"),
     ("kcns008/cluster-skills", "infra", "A collection of skills for AI coding agents working with Kubernetes... (19 skills, 13 workflows)", 32, "med"),
     ("oci-ai-architects/cline-oci-ai-architect-skills", "infra", "Cline skills, rules, and workflows for AI Architects. Cross-platform... (14 skills, 2 rules, 11 workflows)", 27, "med"),
-    ("MikroJit-Technologies/claude-skills", "infra", "13 skills for infra engineers - MikroTik RouterOS Proxmox K3s... (21 skills)", 21, "med"),
     ("qwedsazxc78/devops-ai-skill", "infra", "Cross-platform DevOps AI Skill Pack - Horus (IaC) + Zeus (GitOps)... (14 skills, 7 workflows)", 21, "med"),
     ("foxj77/claude-code-skills", "infra", "Claude Code skills for Kubernetes platform engineering, GitOps, and... (19 skills)", 19, "med"),
     ("pulumi/agent-skills", "infra", "15 skills", 15, "high"),
@@ -581,7 +600,6 @@ WORKFLOWS = [
     ("composio-community/awesome-claude-plugins", "meta", "A curated list of Plugins that let you extend Claude Code with custom... (23 skills, 38 workflows)", 61, "high"),
     ("anthropics/claude-plugins-official", "meta", "Official, Anthropic-managed directory of high quality Claude Code Plugins (60 workflows)", 60, "high"),
     ("glittercowboy/taches-cc-resources", "meta", "A collection of my favorite custom Claude Code resources to make life... (12 skills, 42 workflows)", 54, "high"),
-    ("pcliangx/AppGenesisForge", "meta", "AI Agent Team scaffold for Claude Code - 19 roles collaborate through... (19 skills, 29 workflows)", 48, "high"),
     ("anthropics/claude-cookbooks", "meta", "A collection of notebooks/recipes showcasing some fun and effective... (4 skills, 11 workflows)", 15, "high"),
     # --- end 2026-07 batch ---
 ]
@@ -659,6 +677,57 @@ def _summary(payload: dict) -> None:
         print("  %-9s %3d repos  ~%d items" % (typ, n, est))
 
 
+def verify_live(names: list[str], token: str | None = None) -> int:
+    """Report which of ``names`` no longer resolve on GitHub.
+
+    Deliberately NOT part of `--check` or any required gate. The lesson
+    `tests/eval/taps.txt` already records — pin third-party repos, never let
+    someone else's push decide whether our build is green — applies here twice
+    over: a required check that queries 470 repos would go red the day any one
+    of them is deleted, which is a fact about GitHub rather than about this
+    commit. Run it when curating, and record what it finds in RETIRED.
+
+    Returns the number of repos that could not be resolved.
+    """
+    import http.client
+    import urllib.error
+    import urllib.request
+
+    missing, archived = [], []
+    for i, name in enumerate(names, 1):
+        req = urllib.request.Request(  # noqa: S310  the https prefix is a literal
+            "https://api.github.com/repos/%s" % name,
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "boost-registry-audit"})
+        if token:
+            req.add_header("Authorization", "token %s" % token)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as fh:  # noqa: S310  same
+                if json.loads(fh.read().decode("utf-8")).get("archived"):
+                    archived.append(name)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (404, 451):
+                missing.append(name)
+            else:                       # rate limit, transient 5xx — not a verdict
+                print("  ? %-50s HTTP %s" % (name, exc.code), file=sys.stderr)
+        except (OSError, http.client.HTTPException,
+                json.JSONDecodeError) as exc:
+            # A truncated response is a fact about the network, not about the
+            # repo — 470 sequential requests will hit one, and a sweep that
+            # aborts on it reports "clean" for everything it never reached.
+            print("  ? %-50s %s" % (name, exc), file=sys.stderr)
+        if i % 50 == 0:
+            print("  ...%d/%d" % (i, len(names)), file=sys.stderr)
+
+    for name in archived:
+        print("archived  %s" % name)
+    for name in missing:
+        print("MISSING   %s" % name)
+    print("%d checked: %d missing, %d archived"
+          % (len(names), len(missing), len(archived)), file=sys.stderr)
+    return len(missing)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -666,10 +735,21 @@ def main(argv: list[str] | None = None) -> int:
         help="verify the committed JSON matches a fresh build; exit 1 on drift "
              "(does not write). Used in CI to catch un-regenerated edits.",
     )
+    parser.add_argument(
+        "--verify-live", action="store_true",
+        help="ask GitHub whether every shipped registry still exists and print "
+             "the ones that do not. Needs network; never part of a gate. Set "
+             "GITHUB_TOKEN to lift the 60/hour anonymous rate limit.",
+    )
     args = parser.parse_args(argv)
 
     payload = build_payload()
     fresh = render(payload)
+
+    if args.verify_live:
+        import os
+        names = [e["name"] for e in payload["registries"]]
+        return 1 if verify_live(names, os.environ.get("GITHUB_TOKEN")) else 0
 
     if args.check:
         current = DEST.read_text(encoding="utf-8") if DEST.exists() else ""
