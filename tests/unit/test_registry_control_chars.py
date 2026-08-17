@@ -65,6 +65,126 @@ class TestControlCharactersAreRejected:
                 registry.parse_spec(spec)
 
 
+#: The 91 bytes libFuzzer minimised to on 2026-08-15, decoded the way the
+#: harness does: `0x38` then ninety `0xff`, each of which is un-decodable and so
+#: becomes U+FFFD — three UTF-8 bytes apiece, 271 bytes for the name alone.
+TOO_LONG = "8" + "�" * 90
+
+
+class TestAnOverlongSpecIsRejected:
+    """The second thing the fuzzer found, and the same shape as the first.
+
+    ``p.exists()`` looks total and is not. ``pathlib`` swallows only ENOENT,
+    ENOTDIR, EBADF and ELOOP; **ENAMETOOLONG is not in that set**, so on a
+    filesystem with a 255-byte component limit — ext4, which is to say every
+    Linux runner and most users — a long enough spec makes ``os.stat`` raise
+    straight through ``parse_spec``. macOS does not reproduce it, which is why
+    only the scheduled Linux fuzz job ever saw it.
+
+    Rejecting is not the whole fix. A *legitimate* long path (a deep directory
+    with a short basename) must still parse, so the probe treats "too long for
+    this OS" as "not an existing directory" and the length rule applies to the
+    derived NAME, which is what becomes a single component under
+    ``~/.boost/repos``.
+    """
+
+    def test_the_fuzzer_reproducer_raises_boost_error(self):
+        with pytest.raises(BoostError):
+            registry.parse_spec(TOO_LONG)
+
+    def test_an_overlong_owner_repo_is_rejected(self):
+        """Plain ASCII reaches the same limit, it just takes 256 of them."""
+        with pytest.raises(BoostError):
+            registry.parse_spec("owner/" + "r" * 300)
+
+    def test_the_error_names_the_problem(self):
+        """Only for a spec that *parses* — the fuzzer's own reproducer carries
+        no separator, so it is rejected as unparseable and never reaches the
+        length rule. Both paths raise BoostError, which is the invariant; this
+        pins the message on the one where length is the actual reason."""
+        with pytest.raises(BoostError) as caught:
+            registry.parse_spec("owner/" + "r" * 300)
+        assert "too long" in str(caught.value).lower()
+
+    def test_the_limit_is_on_bytes_not_characters(self):
+        """A component limit is a *byte* limit, and non-ASCII costs more.
+
+        90 characters is nothing; 90 U+FFFD is 270 bytes and does not fit.
+        Measuring characters would let exactly the fuzzer's input through.
+        """
+        assert len(TOO_LONG) < 255 < len(TOO_LONG.encode("utf-8"))
+        with pytest.raises(BoostError):
+            registry.parse_spec(TOO_LONG)
+
+    def test_a_probe_that_cannot_stat_is_not_an_existing_directory(self, tmp_path):
+        """The OS refusing to look is a "no", not a crash.
+
+        This is the assertion that actually fails on Linux without the fix:
+        the spec is a path shape, so it reaches the filesystem probe before any
+        length rule could have rejected it.
+        """
+        spec = str(tmp_path / ("d" * 400))
+        with pytest.raises(BoostError):
+            registry.parse_spec(spec)
+
+    def test_a_stat_that_raises_reads_as_not_a_directory(self):
+        """Pinned on every platform, because it only *fails* on one.
+
+        macOS returns False where Linux raises ENAMETOOLONG, so a test that
+        relies on a real long path proves nothing on the machine most of this
+        is written on — and this bug reached production precisely because the
+        scheduled Linux job was the only thing that ever saw it.
+        """
+        class Raises:
+            def is_dir(self):
+                raise OSError(36, "File name too long")
+
+        assert registry._looks_like_a_directory(Raises()) is False
+
+    def test_a_stat_that_succeeds_is_still_a_directory(self, tmp_path):
+        """The guard must not swallow the answer it exists to return."""
+        assert registry._looks_like_a_directory(tmp_path) is True
+        assert registry._looks_like_a_directory(tmp_path / "nope") is False
+
+    def test_the_rejection_carries_a_hint(self):
+        """A BoostError with no hint is the CLI printing a dead end.
+
+        Every other rejection in `parse_spec` says what to do instead, and this
+        one has something specific to say: the name is about to become a
+        directory, which is why the limit is what it is.
+        """
+        with pytest.raises(BoostError) as caught:
+            registry.parse_spec("owner/" + "r" * 300)
+        assert caught.value.hint
+        assert "~/.boost/repos" in caught.value.hint
+
+    def test_a_url_whose_derived_name_is_too_long_names_the_spec(self):
+        """The URL branch derives a name too, and the error must be traceable
+        back to what the user typed rather than to the name we computed."""
+        with pytest.raises(BoostError) as caught:
+            registry.parse_spec("https://github.com/owner/" + "r" * 300)
+        assert "owner" in str(caught.value)
+
+    def test_a_long_path_with_a_short_basename_still_parses(self, tmp_path):
+        """The rule is about the derived name, never the spec's own length."""
+        deep = tmp_path
+        for _ in range(6):
+            deep = deep / ("segment-" + "x" * 30)
+        deep = deep / "my-tap"
+        deep.mkdir(parents=True)
+        assert len(str(deep)) > 255
+        name, url = registry.parse_spec(str(deep))
+        assert name == "my-tap"
+        assert url == str(deep.resolve())
+
+    def test_a_name_at_the_limit_is_still_accepted(self):
+        """Reject one byte over, not one byte under — the boundary is pinned
+        because an off-by-one here silently turns away a legal repo name."""
+        name = "o" * 100 + "/" + "r" * 154        # 255 bytes exactly
+        assert len(name.encode("utf-8")) == 255
+        assert registry.parse_spec(name)[0] == name
+
+
 class TestOrdinarySpecsStillParse:
     """The rejection must not widen. Each of these is a documented input."""
 
