@@ -37,6 +37,29 @@ class Tap:
         return self.path.is_dir()
 
 
+# One path component, in BYTES. ext4, APFS and NTFS all stop at 255, and
+# `Tap.safe_name` maps "/" to "__" — so the whole tap name becomes exactly one
+# component under `~/.boost/repos` and this is its ceiling. A GitHub owner/repo
+# maxes out at 140 (39 + 1 + 100), so nothing real comes near it.
+MAX_NAME_BYTES = 255
+
+
+def _looks_like_a_directory(p: Path) -> bool:
+    """True if `p` is an existing directory, False if the OS will not say.
+
+    `Path.exists()` is not total. pathlib swallows ENOENT, ENOTDIR, EBADF and
+    ELOOP — ENAMETOOLONG is *not* in that set, so a long enough component makes
+    `os.stat` raise straight out of `parse_spec` as a bare OSError, which is not
+    a BoostError and so is never framed by the CLI's error handling. A path the
+    OS refuses to look at is not a directory we can tap; that is a "no", not a
+    crash.
+    """
+    try:
+        return p.is_dir()
+    except OSError:
+        return False
+
+
 def parse_spec(spec: str):
     """Resolve a tap spec -> (name, url).
 
@@ -61,16 +84,33 @@ def parse_spec(spec: str):
     # own home-dir lookup (USERPROFILE on Windows), which ignores the $HOME
     # override the whole test suite (and BOOST_HOME sandboxing) relies on.
     p = paths.expand(spec)
-    if p.exists() and p.is_dir():
-        return (p.resolve().name, str(p.resolve()))
+    if _looks_like_a_directory(p):
+        return _checked(p.resolve().name, str(p.resolve()), spec)
     if spec.startswith(("http://", "https://", "git@", "ssh://")):
         tail = spec.split(":")[-1] if spec.startswith("git@") else spec
         parts = [x for x in tail.replace(".git", "").split("/") if x][-2:]
-        return ("/".join(parts), spec)
+        return _checked("/".join(parts), spec, spec)
     if "/" in spec and " " not in spec:
-        return (spec, "https://github.com/%s" % spec)
+        return _checked(spec, "https://github.com/%s" % spec, spec)
     raise BoostError("cannot parse tap spec %r" % spec,
                     hint="use owner/repo, a git URL, or a local directory")
+
+
+def _checked(name: str, url: str, spec: str) -> tuple[str, str]:
+    """The derived pair, or a BoostError if the name cannot be a directory.
+
+    The rule is on the *name*, never on the spec: a deep local path with a short
+    basename is a perfectly good tap, and its own length says nothing about the
+    component we are about to create. Caught here rather than at clone time,
+    where it surfaces as git's own ENAMETOOLONG on a path the user never typed.
+    """
+    if len(name.encode("utf-8")) > MAX_NAME_BYTES:
+        raise BoostError(
+            "tap name is too long (%d bytes, limit %d): %r"
+            % (len(name.encode("utf-8")), MAX_NAME_BYTES, spec[:80]),
+            hint="the name becomes one directory under ~/.boost/repos, and "
+                 "no filesystem accepts a longer component")
+    return (name, url)
 
 
 def list_taps() -> list[Tap]:
