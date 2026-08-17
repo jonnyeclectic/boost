@@ -10,7 +10,7 @@ wow: 3
 note: a scheduled gate had never once passed, and the reason was one deleted upstream in its pinned corpus
 order: 117
 owner: fix/retire-dead-registries
-pr:
+pr: 527
 title: a convention that said "verify the repo is real" verified nothing
 ---
 <b>The <code>eval-scale</code> workflow has run once and failed once.</b> Not a retrieval
