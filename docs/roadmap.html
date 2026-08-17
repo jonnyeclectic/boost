@@ -4154,7 +4154,7 @@ not a crash, so the probe is now total by construction &mdash; and pinned by a t
 platform, not only the one where it fails, because a test that needs a real over-long path proves
 nothing on the machine most of this is written on.
 
-<b>Both reproducers are now seeds.</b> The NUL crasher was fixed and never added to the corpus, so
+<b>Both reproducers are now seeds.</b> The NUL one was fixed and never added to the corpus, so
 the fuzzer was free to spend runs rediscovering it. <code>tests/fuzz/corpus/registry/</code> carries
 both, which means the no-atheris seed smoke &mdash; the path that runs without the fuzzer installed
 &mdash; is now a regression test for both.</p></details>
