@@ -67,6 +67,9 @@ reindex
 repo
 repo's
 repos
+rescan
+rescanned
+rescans
 Rerank
 rerank
 reranking
