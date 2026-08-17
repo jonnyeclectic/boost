@@ -580,23 +580,47 @@ def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
     for e in entries:
         for ci, text in enumerate(_chunk_texts(e, tap_paths)):
             rows.append((e, ci, text))
+
+    # Embed each DISTINCT text once. Registries mirror each other, so one text
+    # arrives many times in a single build: 42.9% of 750,416 chunks on a real
+    # 460-tap install are repeats, worst case 1,464 identical copies. The
+    # provider is deterministic, so the copies were being bought at full price
+    # for a byte-identical vector — and `retrieve_any` runs `dedupe_by_content`
+    # on every retrieval path, so they were discarded before reaching a result
+    # slot. Insertion below is still per row, because `chunks.tap` is what
+    # scopes tap deletion and collapsing rows would strand a tap's vectors.
+    order: list[str] = []
+    seen: set[str] = set()
+    for _e, _ci, text in rows:
+        if text not in seen:
+            seen.add(text)
+            order.append(text)
+
+    vec_of: dict[str, object] = {}
+    for start in range(0, len(order), _BATCH):
+        batch = order[start:start + _BATCH]
+        vecs = embed.embed(batch, input_type="document")
+        if not vecs or len(vecs) != len(batch):
+            continue     # taps are attributed per row below, not per batch
+        vec_of.update(zip(batch, vecs, strict=True))
+
     added = 0
     failed_taps: set = set()
-    for start in range(0, len(rows), _BATCH):
-        batch = rows[start:start + _BATCH]
-        vecs = embed.embed([t for _e, _c, t in batch], input_type="document")
-        if not vecs or len(vecs) != len(batch):
-            failed_taps.update(e["tap"] for e, _c, _t in batch)
+    for e, ci, text in rows:
+        vec = vec_of.get(text)
+        if vec is None:
+            # Every tap owning a copy of a text the provider rejected, not just
+            # whichever copy happened to sit in the failed batch.
+            failed_taps.add(e["tap"])
             continue
-        for (e, ci, text), vec in zip(batch, vecs, strict=True):
-            cur = con.execute(
-                "INSERT INTO chunks (name, tap, path, kind, cix, snip) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (e["name"], e["tap"], e["skill_md"],
-                 e.get("kind", "skill"), ci, text[:200].strip()))
-            con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
-                        (cur.lastrowid, mod.serialize_float32(vec)))
-            added += 1
+        cur = con.execute(
+            "INSERT INTO chunks (name, tap, path, kind, cix, snip) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (e["name"], e["tap"], e["skill_md"],
+             e.get("kind", "skill"), ci, text[:200].strip()))
+        con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
+                    (cur.lastrowid, mod.serialize_float32(vec)))
+        added += 1
     return added, failed_taps
 
 

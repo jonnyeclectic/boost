@@ -182,6 +182,25 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   still ignored, and deliberately: it is an unsafe fix over ~1,000 call sites in
   `boost_cli` alone. Write new code in the modern style; don't bulk-rewrite old
   code in an unrelated PR.
+- **A catalog entry has two identities, and they are not interchangeable.**
+  *Row* identity is `(tap, skill_md)` (`rag.entry_key`) — which file, in which
+  tap. *Content* identity is `entry["content"]`, a truncated sha256 of
+  `name + "\n" + description + "\n" + body` stamped by `catalog._content_digest`
+  at scan time. Use the row key to address a row and the digest to ask whether
+  two rows are the same thing. The digest must stay byte-identical to what
+  `rag.read_body` assembles — `tests/unit/test_content_identity.py` pins the
+  parity, because a digest that drifts keeps *looking* right while clustering
+  nothing. Name-based keys are wrong at both layers: over 60,047 real entries,
+  hashing the body alone merges 259 clusters spanning different names, and
+  name+description over-collapses 3,383 clusters of genuinely different prose.
+  Consumers must degrade cleanly when `content` is absent (a cache written
+  before `CACHE_FORMAT`, or a synthesised entry) — and must never treat two
+  absences as a match.
+- **The tap cache is versioned; bump `catalog.CACHE_FORMAT` to backfill.** It is
+  how a new entry field reaches 460 caches on a real machine without a re-tap:
+  `load_tap` rescans a stale cache *when the clone is still there*, and serves
+  the stale entries as-is when it is not. Never make a stale cache an error —
+  that trades a missing field for a missing catalogue.
 - **Three item kinds, one scanner.** `core/catalog.scan_dir` indexes `skill`
   (SKILL.md), `rule` (.mdc/.cursorrules/.windsurfrules/.clinerules), and
   `workflow` (commands/agents/workflows Markdown). **All three install**, and
