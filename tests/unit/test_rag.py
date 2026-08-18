@@ -576,6 +576,23 @@ class TestRerank:
         assert "beta-snippet" in p
 
 
+def _wire_live_catalog(monkeypatch, entries):
+    """Serve ``entries`` as the machine's live catalogue for ``entries=None``.
+
+    The fast path sources from ``registry.list_taps()`` + ``catalog.load_tap``
+    (never the whole catalogue); its vanished-entry fallback still reads
+    ``all_entries``. Wire all three seams so either route sees the same data.
+    """
+    from boost_cli.core import registry
+    taps = sorted({e["tap"] for e in entries})
+    monkeypatch.setattr(registry, "list_taps",
+                        lambda: [registry.Tap(name=t, url="") for t in taps])
+    monkeypatch.setattr(
+        rag.catalog, "load_tap",
+        lambda tap, rebuild=False: [e for e in entries if e["tap"] == tap.name])
+    monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
+
+
 class TestSearchSeam:
     def test_search_none_without_index(self, sandbox):
         assert rag.search("x") is None
@@ -583,8 +600,7 @@ class TestSearchSeam:
     def test_search_smart_false_returns_bm25(self, corpus, monkeypatch):
         _root, entries = corpus
         rag.build(entries=entries, force=True)
-        # search() defaults to all_entries(); point it at our patched taps
-        monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
+        _wire_live_catalog(monkeypatch, entries)
         result = rag.search("testing", limit=5, smart=False)
         assert result is not None
         hits, label = result
@@ -594,7 +610,7 @@ class TestSearchSeam:
     def test_search_smart_degrades_without_ai(self, corpus, monkeypatch):
         _root, entries = corpus
         rag.build(entries=entries, force=True)
-        monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
+        _wire_live_catalog(monkeypatch, entries)
         monkeypatch.setattr(rag.ai, "available", lambda: False)
         _hits, label = rag.search("testing", limit=5)
         assert label == "BM25 full-content"
@@ -602,7 +618,7 @@ class TestSearchSeam:
     def test_search_smart_is_default_and_uses_ai(self, corpus, monkeypatch):
         _root, entries = corpus
         rag.build(entries=entries, force=True)
-        monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
+        _wire_live_catalog(monkeypatch, entries)
         monkeypatch.setattr(rag.ai, "available", lambda: True)
         monkeypatch.setattr(rag.ai, "ask",
                             lambda *a, **k: '["pytest-helper", "jest-runner"]')
@@ -621,7 +637,7 @@ class TestSearchSeam:
             entries.append(_entry(name, skill_md="%s/SKILL.md" % name))
         monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": root})
         monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
-        monkeypatch.setattr(rag.catalog, "all_entries", lambda: entries)
+        _wire_live_catalog(monkeypatch, entries)
         monkeypatch.setattr(rag.ai, "available", lambda: False)
         rag.build(entries=entries, force=True)
         hits, _label = rag.search("testing common")   # default limit == 10

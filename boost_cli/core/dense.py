@@ -263,8 +263,16 @@ def status() -> dict:
 
 
 def ready() -> bool:
-    """True when a usable, provider-matched vector index exists on disk."""
-    if not have_backend() or not embed.available() or not db_path().exists():
+    """True when a usable, provider-matched vector index exists on disk.
+
+    The stat comes first, deliberately: on a machine with no vector store —
+    every BM25-only install — this must answer False without importing the
+    backend, because ``have_backend()`` drags in numpy via sqlite_vec
+    (~120 ms measured) and every cold ``boost search`` asks.
+    """
+    if not db_path().exists():
+        return False
+    if not have_backend() or not embed.available():
         return False
     con = _connect()
     if con is None:

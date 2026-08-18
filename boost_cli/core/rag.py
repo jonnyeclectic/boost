@@ -445,12 +445,16 @@ def _load_raw() -> dict | None:
     p = index_path()
     key = str(p)
     try:
-        mtime = p.stat().st_mtime
+        st = p.stat()
     except OSError:
         _CACHE.pop(key, None)
         return None
+    # (mtime_ns, size), not bare mtime: a rewrite landing inside one mtime
+    # tick would otherwise serve the previous index from this cache forever —
+    # the same stamp `catalog._cached_tap` already uses, for the same reason.
+    stamp = (st.st_mtime_ns, st.st_size)
     cached = _CACHE.get(key)
-    if isinstance(cached, tuple) and cached[0] == mtime:
+    if isinstance(cached, tuple) and cached[0] == stamp:
         return cached[1]  # type: ignore[return-value]
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
@@ -458,7 +462,7 @@ def _load_raw() -> dict | None:
         return None
     if not isinstance(data, dict) or data.get("version") != INDEX_VERSION:
         return None
-    _CACHE[key] = (mtime, data)
+    _CACHE[key] = (stamp, data)
     return data
 
 
@@ -699,14 +703,95 @@ def dedupe_by_content(hits: list[Hit], limit: int) -> list[Hit]:
         # Same body already shown. Keep its rank, but prefer a better source.
         kept = out[seen]
         if source_rank(hit["entry"]) < source_rank(kept["entry"]):
-            # cast, not a literal annotation: `Hit` is total=False for the
-            # optional `content` key, and NotRequired needs 3.11 while boost
-            # targets 3.9.
-            out[seen] = cast(Hit, {"entry": hit["entry"],
-                                   "score": kept["score"],
-                                   "snippet": kept["snippet"],
-                                   "content": digest})
+            # Copy the kept hit wholesale and swap only the entry: a literal
+            # rebuild here would silently drop anything else the caller
+            # carried on the hit (retrieve defers snippet windowing through
+            # this function, so the carry is load-bearing, not hygiene).
+            out[seen] = cast(Hit, {**kept, "entry": hit["entry"]})
     return out[:limit]
+
+
+def _windowed(hits: list[Hit], terms: Sequence[str]) -> list[Hit]:
+    """Window each hit's raw stored snip onto the query terms.
+
+    Deferred to the hits actually returned: ranking carries the raw ``snip``
+    through dedupe, and only the survivors pay ``_passage`` — the eager
+    version computed 39,726 windows on a real machine to display 60.
+    """
+    return [cast(Hit, {**h, "snippet": _passage(h["snippet"], terms)})
+            for h in hits]
+
+
+def _retrieve_from_index(docs: list[dict], scores: dict[int, float],
+                         terms: list[str], k: int, kind: str | None,
+                         ) -> list[Hit] | None:
+    """Rank from the index's own doc metadata — no full-catalogue parse.
+
+    The slow path builds a ``live`` map by parsing every tap cache on the
+    machine (458 files, ~100 MB, 0.32 s measured) to serve two needs: filter
+    docs whose entry is gone, and hand back real entry dicts. On a fresh index
+    both are answerable cheaper: every doc of a still-configured tap is live
+    by construction (``ensure()`` rebuilds on staleness), and only the final
+    ``k`` survivors need materialising — so only *their* taps' caches load.
+
+    Ranking, dedupe and tie-breaks use index-side values (``n``/``h``/``k``)
+    that ``build()`` copied from the same cache entries the slow path reads,
+    plus a shadow entry carrying the two fields ``source_rank`` consults
+    (``tap``, ``curated``) from one ``registry.list_taps()`` snapshot — never
+    a second config read, and never :func:`registry.get`, which raises for a
+    concurrently-untapped name.
+
+    Returns ``None`` when any survivor's entry cannot be materialised (a tap
+    cache vanished or moved under a stat-fresh index): the caller reruns the
+    query through the explicit-entries path, whose output is the contract.
+    Byte-identical-or-fall-back, never approximate.
+    """
+    taps = {t.name: t for t in registry.list_taps()}
+    best: dict[tuple[str, str], tuple[float, str, str, str]] = {}
+    for doc_id, score in scores.items():
+        d = docs[doc_id]
+        if kind is not None and d["k"] != kind:
+            continue
+        if d["t"] not in taps:      # untapped repos stop ranking, stale or not
+            continue
+        key = (d["t"], d["f"])
+        prev = best.get(key)
+        if prev is None or score > prev[0]:
+            best[key] = (score, d["snip"], d.get("h", ""), d["n"])
+    ranked = sorted(best.items(),
+                    key=lambda kv: (-kv[1][0], kv[1][3], kv[0]))
+    # The shadow entry carries exactly what downstream code reads before
+    # materialisation: `source_rank` consults tap + curated, and the loop
+    # below reads tap + skill_md. Nothing else — an extra field here would
+    # be dead weight pretending to be contract.
+    hits: list[Hit] = [
+        {"entry": {"tap": key[0], "skill_md": key[1],
+                   "curated": taps[key[0]].curated},
+         "score": score, "content": digest,
+         "snippet": snip}  # type: ignore[typeddict-item]
+        for key, (score, snip, digest, _name) in ranked]
+    # The FULL ranked list flows through dedupe, exactly as the slow path's
+    # does: a curated duplicate at rank 3,000 legally replaces the displayed
+    # source of survivor #1, so the promotion scan cannot be truncated.
+    survivors = dedupe_by_content(hits, len(hits))
+    loaded: dict[str, dict[tuple[str, str], dict]] = {}
+    out: list[Hit] = []
+    for hit in survivors:
+        if len(out) == k:
+            break
+        tap_name = hit["entry"]["tap"]
+        tap = taps.get(tap_name)
+        if tap is None:             # promoted source raced an untap
+            return None
+        if tap_name not in loaded:
+            loaded[tap_name] = {entry_key(e): e
+                                for e in catalog.load_tap(tap)}
+        entry = loaded[tap_name].get((tap_name, hit["entry"]["skill_md"]))
+        if entry is None:
+            return None
+        out.append(cast(Hit, {**hit, "entry": entry,
+                              "snippet": _passage(hit["snippet"], terms)}))
+    return out
 
 
 def retrieve(query: str, k: int = 60, kind: str | None = None,
@@ -718,11 +803,20 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
     terms = tokenize(query)
     if not terms:
         return []
-    entries = catalog.all_entries() if entries is None else entries
-    live = {entry_key(e): e for e in entries}
     docs = raw["docs"]
+    scores = _bm25(terms, raw, read_postings(terms))
+    if entries is None:
+        fast = _retrieve_from_index(docs, scores, terms, k, kind)
+        if fast is not None:
+            return fast
+        # An entry vanished between index and cache: answer from the full
+        # catalogue exactly as before the fast path existed. One side effect
+        # rides along only here now — load_tap's rescan of old-CACHE_FORMAT
+        # caches, which otherwise happens on tap operations and build().
+        entries = catalog.all_entries()
+    live = {entry_key(e): e for e in entries}
     best: dict[tuple[str, str], tuple[float, str, str]] = {}
-    for doc_id, score in _bm25(terms, raw, read_postings(terms)).items():
+    for doc_id, score in scores.items():
         d = docs[doc_id]
         if kind is not None and d["k"] != kind:
             continue
@@ -742,9 +836,9 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
     # or they still consume the slots they were removed from.
     hits: list[Hit] = [
         {"entry": live[key], "score": score, "content": digest,
-         "snippet": _passage(snip, terms)}  # type: ignore[typeddict-item]
+         "snippet": snip}  # type: ignore[typeddict-item]
         for key, (score, snip, digest) in ranked]
-    return dedupe_by_content(hits, k)
+    return _windowed(dedupe_by_content(hits, k), terms)
 
 
 #: The label `rerank` returns when the LLM pass actually ran. Every other value
