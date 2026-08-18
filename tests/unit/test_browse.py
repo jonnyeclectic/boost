@@ -13,6 +13,8 @@ must match — and Tab took over selection.
 """
 from __future__ import annotations
 
+import typing
+
 import pytest
 
 from boost_cli.core import browse
@@ -632,7 +634,9 @@ class TestDedupeIsVisible:
         lay = browse.layout(100, 24, detail=True)
         discovery._draw_query(lambda y, x, s, attr=0: painted.append(str(s)),
                               _Theme(), lay, "", "list", 10, 10, 0, 22379)
-        assert any("22379" in s and "hidden" in s for s in painted)
+        # Thousands-grouped: at real scale "22379" is a smudge, "22,379" is a
+        # number.
+        assert any("22,379" in s and "hidden" in s for s in painted)
 
     def test_no_hidden_rows_means_no_note(self):
         from boost_cli.commands import discovery
@@ -680,8 +684,371 @@ class TestRowRendering:
         assert painted, "the selected row was never filled"
         assert max(n for _y, _x, n in painted) == lay.list_w
 
-    def test_a_query_with_no_matches_renders_an_empty_list(self):
+    def test_a_query_with_no_matches_shows_the_empty_state(self):
+        """A silent void is indistinguishable from a hung draw — the pane
+        says what happened and which keys widen the net."""
         g = _render(query="zzzzz")
+        body = "\n".join(g)
+        assert "no matches for 'zzzzz'" in body
+        assert "backspace" in body
+
+    def test_a_query_with_matches_shows_no_empty_state(self):
+        g = _render(query="code")
+        assert "backspace" not in "\n".join(g)
+
+
+class TestEmptyLines:
+    """The zero-match pane's text — pure, so 'what does nothing look like'
+    is an assertion instead of a screenshot."""
+
+    def test_never_returns_nothing(self):
+        assert browse.empty_lines("", "all")
+
+    def test_names_the_query_and_the_scope(self):
+        text = " ".join(t for _r, t in browse.empty_lines("zzq", "name"))
+        assert "'zzq'" in text
+        assert "name" in text
+
+    def test_uses_the_shared_empty_state_grammar(self):
+        lines = browse.empty_lines("x", "all")
+        assert lines[0][1].startswith("○ ")
+        assert lines[1][1].startswith("→ ")
+
+    def test_every_role_is_muted(self):
+        for role, _t in browse.empty_lines("x", "all", hidden=5):
+            assert role == "muted"
+
+    def test_the_dupes_hint_appears_only_when_hidden(self):
+        joined = " ".join(t for _r, t in browse.empty_lines("x", "all"))
+        assert "^D" not in joined
+        with_hidden = " ".join(
+            t for _r, t in browse.empty_lines("x", "all", hidden=22379))
+        assert "^D" in with_hidden
+        assert "22,379" in with_hidden
+
+    def test_scope_shows_its_display_label(self):
+        text = " ".join(t for _r, t in browse.empty_lines("q", "description"))
+        assert browse.scope_label("description") in text
+
+    def test_an_empty_query_says_nothing_here_verbatim(self):
+        # The no-entries branch (can only happen mid-refresh) is a fixed
+        # phrase, not a template with an empty hole.
+        assert browse.empty_lines("", "all")[0][1] == "○ nothing here"
+        assert browse.empty_lines("   ", "all")[0][1] == "○ nothing here"
+
+    def test_query_whitespace_collapses_in_the_echo(self):
+        assert browse.empty_lines("code  review", "all")[0][1] == \
+            "○ no matches for 'code review' in all"
+
+    def test_the_hint_lines_verbatim(self):
+        # Exact bytes: a drifted keycap ("^t") or a mangled template would
+        # pass any substring check while lying about the keys.
+        lines = browse.empty_lines("q", "all", hidden=22379)
+        assert lines[1][1] == "→ backspace widens · ^T scope"
+        assert lines[2][1] == "→ ^D shows 22,379 hidden duplicates"
+
+    def test_a_single_hidden_duplicate_still_gets_the_hint(self):
+        assert len(browse.empty_lines("q", "all", hidden=1)) == 3
+
+
+class TestRuleSegments:
+    """Moved from the command layer so the gradient rule's geometry sits
+    under the mutation gate."""
+
+    def test_zero_width_is_empty(self):
+        assert browse.rule_segments(0) == []
+
+    def test_segments_partition_the_width_exactly(self):
+        segs = browse.rule_segments(10, 3)
+        assert [s[1] for s in segs] == [4, 3, 3]
+        assert sum(s[1] for s in segs) == 10
+        assert [s[0] for s in segs] == [0, 4, 7]
+
+    def test_n_clamps_to_width(self):
+        assert len(browse.rule_segments(2, 3)) == 2
+
+    def test_partition_holds_across_widths(self):
+        for width in range(1, 40):
+            segs = browse.rule_segments(width, 3)
+            assert sum(s[1] for s in segs) == width
+            x = 0
+            for start, length in segs:
+                assert start == x
+                x += length
+
+
+class TestScrollbarGeometry:
+    """discovery._scrollbar moved into core; list and detail panes share it."""
+
+    def test_none_when_everything_fits(self):
+        assert browse.scrollbar(5, 10, 0) is None
+
+    def test_none_when_no_rows(self):
+        assert browse.scrollbar(10, 0, 0) is None
+
+    def test_thumb_is_at_least_one_cell(self):
+        start, length = browse.scrollbar(100, 10, 0)
+        assert start == 0 and 1 <= length <= 10
+
+    def test_bottom_scrolled_thumb_ends_at_the_last_cell(self):
+        _start, length = browse.scrollbar(100, 10, 0)
+        end_start, _ = browse.scrollbar(100, 10, 90)
+        assert end_start == 10 - length
+
+    def test_exact_geometry(self):
+        # Exact values, so the arithmetic (integer division, the 1-cell
+        # floor, the proportional start) cannot drift: 10²//100 = 1,
+        # 10²//30 = 3, and at top=45 of 90 the thumb sits at round(9·0.5).
+        assert browse.scrollbar(100, 10, 0) == (0, 1)
+        assert browse.scrollbar(100, 10, 45) == (4, 1)
+        assert browse.scrollbar(30, 10, 0) == (0, 3)
+        assert browse.scrollbar(30, 10, 20) == (7, 3)
+
+    def test_the_thumb_length_is_an_int(self):
+        _start, length = browse.scrollbar(30, 10, 5)
+        assert isinstance(length, int)
+
+    def test_a_one_row_window_still_gets_a_bar(self):
+        assert browse.scrollbar(10, 1, 0) == (0, 1)
+
+    def test_exactly_filled_needs_no_bar(self):
+        assert browse.scrollbar(10, 10, 0) is None
+
+
+class TestBadgePositions:
+    RAIL = (("×4", "accent_dim"), ("[skill]", "badge_skill"),
+            ("v1.2", "version"), ("[a/b]", "tap"), ("[ui]", "badge_category"))
+
+    def test_the_cluster_right_edge_lands_on_width(self):
+        placed = browse.badge_positions(10, self.RAIL, 60)
+        x, text, _key = placed[-1]
+        assert x + len(text) == 60
+
+    def test_badges_never_overlap_the_name(self):
+        for width in range(12, 60):
+            placed = browse.badge_positions(10, self.RAIL, width)
+            if placed:
+                assert placed[0][0] >= 10, width
+
+    def test_one_space_between_badges(self):
+        import itertools
+        placed = browse.badge_positions(0, self.RAIL, 60)
+        for (x1, t1, _k1), (x2, _t2, _k2) in itertools.pairwise(placed):
+            assert x2 == x1 + len(t1) + 1
+
+    def test_drops_from_the_least_important_end(self):
+        full = browse.badge_positions(0, self.RAIL, 80)
+        assert [t for _x, t, _k in full] == [t for t, _k in self.RAIL]
+        # 22 columns: the category badge is the one casualty (cluster is 21).
+        assert [t for _x, t, _k in browse.badge_positions(0, self.RAIL, 22)] \
+            == ["×4", "[skill]", "v1.2", "[a/b]"]
+        # 20 columns: the tap follows it.
+        assert [t for _x, t, _k in browse.badge_positions(0, self.RAIL, 20)] \
+            == ["×4", "[skill]", "v1.2"]
+
+    def test_the_copies_tag_survives_longest(self):
+        placed = browse.badge_positions(0, self.RAIL, 3)
+        assert [t for _x, t, _k in placed] == ["×4"]
+
+    def test_empty_when_nothing_fits(self):
+        assert browse.badge_positions(10, self.RAIL, 11) == []
+
+    def test_a_cluster_may_start_exactly_at_name_end(self):
+        # The whole rail is 26 wide; at width 36 with name_end 10 it fits
+        # with zero slack, and zero slack is a fit.
+        placed = browse.badge_positions(10, self.RAIL, 36)
+        assert [t for _x, t, _k in placed] == [t for t, _k in self.RAIL]
+        assert placed[0][0] == 10
+
+    def test_theme_keys_ride_along(self):
+        placed = browse.badge_positions(0, self.RAIL, 80)
+        assert [k for _x, _t, k in placed] == [k for _t, k in self.RAIL]
+
+
+class TestStateGlyph:
+    def test_the_four_states(self):
+        assert browse.state_glyph(browse.BUSY, False) == ("◐", "busy")
+        assert browse.state_glyph(browse.FAILED, True) == ("✗", "failed")
+        assert browse.state_glyph(browse.OK, False) == ("●", "check")
+        assert browse.state_glyph(None, False) == (" ", "muted")
+
+    def test_installed_without_a_session_state_is_the_check(self):
+        assert browse.state_glyph(None, True) == ("●", "check")
+
+    def test_glyphs_come_from_the_status_table_the_detail_pane_uses(self):
+        # One glyph source: mutating _STATUS_GLYPH breaks both surfaces'
+        # assertions, so the list and the pane can never disagree.
+        assert browse.state_glyph(browse.BUSY, False)[0] == \
+            browse._STATUS_GLYPH[browse.BUSY]
+        assert browse.state_glyph(browse.OK, False)[0] == \
+            browse._STATUS_GLYPH[browse.OK]
+        assert browse.state_glyph(browse.FAILED, False)[0] == \
+            browse._STATUS_GLYPH[browse.FAILED]
+        assert browse.status_line(browse.FAILED, "x")[1].startswith(
+            browse.state_glyph(browse.FAILED, False)[0])
+
+
+class TestInstallTarget:
+    TARGETS: typing.ClassVar[dict[str, str]] = {
+        "skill": "~/.agents/skills · linked to claude-code",
+        "rule": "~/.claude/CLAUDE.md",
+        "workflow": "each agent's commands dir (TOML for gemini)"}
+
+    def test_dispatches_on_kind(self):
+        assert browse.install_target({"kind": "rule"}, self.TARGETS) == \
+            self.TARGETS["rule"]
+        assert browse.install_target({"kind": "workflow"}, self.TARGETS) == \
+            self.TARGETS["workflow"]
+
+    def test_missing_kind_is_a_skill(self):
+        assert browse.install_target({}, self.TARGETS) == self.TARGETS["skill"]
+
+    def test_unknown_kind_stays_honest(self):
+        assert browse.install_target({"kind": "mystery"}, self.TARGETS) == "?"
+
+    def test_no_targets_mapping_degrades(self):
+        assert browse.install_target({"kind": "skill"}, None) == "?"
+
+
+class TestCountTail:
+    def test_minimal_form(self):
+        assert browse.count_tail(5, 9, 0, 0) == "5/9"
+
+    def test_thousands_are_grouped(self):
+        assert browse.count_tail(128, 71700, 0, 0) == "128/71,700"
+
+    def test_selection_prefix_only_when_selected(self):
+        assert browse.count_tail(1, 2, 2, 0) == "2 selected · 1/2"
+
+    def test_hidden_suffix_only_when_hidden(self):
+        assert browse.count_tail(1, 2, 0, 22379) == "1/2  (22,379 dupes hidden)"
+
+    def test_everything_at_once(self):
+        assert browse.count_tail(128, 71700, 2, 22379) == \
+            "2 selected · 128/71,700  (22,379 dupes hidden)"
+
+
+class TestSessionSummary:
+    def test_empty_map_is_none(self):
+        assert browse.session_summary({}) is None
+
+    def test_ok_installs_are_counted(self):
+        assert browse.session_summary(
+            {"a": (browse.OK, ""), "b": (browse.OK, "x")}) == \
+            ("ok_line", "✓ 2 installed")
+
+    def test_busy_outranks_ok(self):
+        assert browse.session_summary(
+            {"a": (browse.OK, ""), "b": (browse.BUSY, "")}) == \
+            ("busy", "◐ 1 installing…")
+
+    def test_failed_outranks_everything(self):
+        got = browse.session_summary({"a": (browse.OK, ""),
+                                      "b": (browse.BUSY, ""),
+                                      "c": (browse.FAILED, "boom")})
+        assert got == ("failed", "✗ 1 failed")
+
+
+class TestGradientRuleInTheFrame:
+    """The one gradient moment browse gets: the top border rule."""
+
+    def test_three_distinct_runs_paint_the_top_rule(self):
+        from boost_cli.commands import discovery
+
+        attrs = []
+
+        def put(y, x, s, attr=0):
+            if y == 0 and set(str(s)) == {"─"}:
+                attrs.append((x, len(str(s)), attr))
+
+        class _Theme(dict):
+            def __missing__(self, _k):
+                return 0
+
+        th = _Theme()
+        th["rule"] = [11, 22, 33]
         lay = browse.layout(100, 24, detail=True)
-        body = "".join(row[1:lay.list_w] for row in g[lay.body_y:-1])
-        assert not body.strip()
+        discovery._draw_frame(put, th, lay, "list")
+        seen = {a for _x, _n, a in attrs}
+        assert {11, 22, 33} <= seen, "all three gradient runs must paint"
+        # The runs abut and end just before the corner glyph.
+        import itertools
+        runs = sorted((x, n) for x, n, a in attrs if a in (11, 22, 33))
+        for (x1, n1), (x2, _n2) in itertools.pairwise(runs):
+            assert x2 == x1 + n1
+        assert runs[-1][0] + runs[-1][1] == lay.w - 1
+
+    def test_the_grid_glyphs_are_unchanged_by_the_gradient(self):
+        g = _render()
+        assert g[0][0] == "╭" and g[0][-1] == "╮"
+        assert "boost browse" in g[0]
+
+
+class TestSessionChipInTheFrame:
+    def _grid(self, summary, w=100, h=24):
+        from boost_cli.commands import discovery
+
+        grid = [[" "] * w for _ in range(h)]
+
+        def put(y, x, s, attr=0):
+            if 0 <= y < h and 0 <= x < w and s:
+                for i, ch in enumerate(str(s)):
+                    if 0 <= x + i < w:
+                        grid[y][x + i] = ch
+
+        class _Theme(dict):
+            def __missing__(self, _k):
+                return 0
+
+        lay = browse.layout(w, h, detail=True)
+        discovery._draw_frame(put, _Theme(), lay, "list", summary=summary)
+        return ["".join(r) for r in grid], lay
+
+    def test_the_chip_lands_in_the_bottom_rule(self):
+        g, _lay = self._grid(("ok_line", "✓ 2 installed"))
+        assert "✓ 2 installed" in g[-1]
+        assert g[-1][0] == "╰" and g[-1][-1] == "╯"
+
+    def test_no_summary_keeps_the_idle_rule_byte_identical(self):
+        g, lay = self._grid(None)
+        expected = list("╰" + "─" * (lay.w - 2) + "╯")
+        expected[lay.detail_x - 1] = "┴"
+        assert g[-1] == "".join(expected)
+
+    def test_the_chip_never_overwrites_the_divider_tee(self):
+        g, lay = self._grid(("failed", "✗ " + "x" * 200))
+        assert g[-1][lay.detail_x - 1] == "┴"
+        assert g[-1][-1] == "╯"
+
+
+class TestListScrollbar:
+    def test_the_thumb_appears_when_rows_overflow(self):
+        entries = [_e("skill-%02d" % i, "desc") for i in range(40)]
+        g = _render(h=14, entries=entries)
+        lay = browse.layout(100, 14, detail=True)
+        col = [row[lay.list_x + lay.list_w - 1] for row in g[lay.body_y:-1]]
+        assert "█" in col, "an overflowing list must show where you are"
+
+    def test_no_bar_when_everything_fits(self):
+        g = _render()
+        lay = browse.layout(100, 24, detail=True)
+        col = [row[lay.list_x + lay.list_w - 1] for row in g[lay.body_y:-1]]
+        assert "█" not in col
+
+
+class TestBadgeRailAlignment:
+    def test_badges_right_align_to_the_pane_edge(self):
+        g = _render()
+        lay = browse.layout(100, 24, detail=True)
+        row = g[lay.body_y]
+        # CORPUS[0] is code-review from acme/quality: the rail ends with the
+        # tap badge, whose closing bracket sits one column short of the
+        # divider gap.
+        assert row[lay.list_x + lay.list_w - 2] == "]"
+        assert "[acme/quality]" in row
+
+    def test_the_kind_badge_text_matches_the_search_vocabulary(self):
+        from boost_cli.core import output as out
+        g = _render(query="rag")
+        assert "[rule]" in "\n".join(g)
+        assert out.kind_label("rule") == "[rule]"
