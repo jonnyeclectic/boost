@@ -71,6 +71,14 @@ jobs:
           PYTHONPATH=. python scripts/eval_corpus.py --refresh \
             --taps tests/eval/taps-scale.txt \
             --summary-md "$RUNNER_TEMP/scale-summary.md"
+      - name: the refresh did not disturb the selection
+        # The guard that was missing. `--refresh` rewrites pins; the generator
+        # owns which rows exist, in what order, and copies the required block
+        # verbatim from taps.txt. When the two disagreed, this job opened a PR
+        # that `--check` had already failed one step earlier — unmergeable by
+        # construction, every month, and the diff looked like ordinary pin
+        # movement. Failing here says so at the point it happens.
+        run: python scripts/build_scale_corpus.py --check
       - name: score it
         id: gate
         # Non-blocking on purpose: worse numbers here are the finding, and a
