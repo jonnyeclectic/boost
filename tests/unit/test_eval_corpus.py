@@ -543,3 +543,156 @@ class TestTheSentinelIsKeyedOnTheTapList:
         out = self._wrapper_run(tmp_path, "owner/repo %s 2\n" % ("a" * 40), calls)
         assert "skipping" not in out
         assert calls.read_text(encoding="utf-8").count("ensure") == 2
+
+
+class TestRefreshingTheScaleCorpusLeavesTheRequiredRowsAlone:
+    """The required rows in `taps-scale.txt` belong to `taps.txt`.
+
+    `build_scale_corpus.render` copies them in verbatim — pin and count
+    included — because both tiers must start from the same trees: the golden
+    floors were calibrated against the required corpus, and a scale tier
+    measuring a *different* snapshot of the same repos reports a difference
+    that is not scale. The generator's own section header says "verbatim".
+
+    Nothing enforced it. `--refresh` walked every row of whatever file it was
+    given, so the monthly scale job moved the required pins too, and the two
+    tiers silently decoupled. It also re-columned the whole file (the width is
+    the longest name in the file, and the distractor names are longer), so
+    every required row changed even where the pin did not.
+
+    The PR it opened could never merge: `build_scale_corpus.py --check` — which
+    the same workflow runs one step earlier — calls the result stale, forever.
+    """
+
+    def _scale_file(self, tmp_path):
+        required = ("anthropics/skills     %s    18\n" % ("a" * 40)
+                    + "minio/skills          %s     3\n" % ("b" * 40))
+        scale = tmp_path / "taps-scale.txt"
+        scale.write_text(
+            "# --- the required corpus, verbatim ---\n"
+            + required
+            + "\n# --- distractors ---\n"
+            + "some-very-long-owner/some-very-long-repo-name\n",
+            encoding="utf-8")
+        (tmp_path / "taps.txt").write_text(required, encoding="utf-8")
+        return scale, required
+
+    def test_a_required_row_is_not_re_pinned(self, tmp_path):
+        scale, required = self._scale_file(tmp_path)
+        frozen = _load().frozen_rows(scale, tmp_path / "taps.txt")
+        assert frozen == {"anthropics/skills", "minio/skills"}
+        # A refresh that measured new trees for them must still not write them.
+        out = _load().relock_text(
+            scale.read_text(encoding="utf-8"),
+            {"anthropics/skills": 20, "minio/skills": 9},
+            {"anthropics/skills": "c" * 40, "minio/skills": "d" * 40},
+            frozen=frozen)
+        for row in required.splitlines():
+            assert row in out, "required row was rewritten: %r" % row
+
+    def test_a_frozen_row_keeps_its_column_width(self, tmp_path):
+        """The subtler half: even an unchanged pin was being re-columned.
+
+        `relock_text` pads to the longest name it is rewriting, and the scale
+        file's distractors are longer than anything in `taps.txt` — so the
+        required block came back at a different width and stopped matching the
+        generator byte for byte.
+        """
+        scale, _required = self._scale_file(tmp_path)
+        out = _load().relock_text(
+            scale.read_text(encoding="utf-8"),
+            {"anthropics/skills": 18,
+             "some-very-long-owner/some-very-long-repo-name": 7},
+            {"some-very-long-owner/some-very-long-repo-name": "e" * 40},
+            frozen={"anthropics/skills"})
+        assert "anthropics/skills     %s    18" % ("a" * 40) in out
+        assert "some-very-long-owner/some-very-long-repo-name %s" % ("e" * 40) in out
+
+    def test_distractors_are_still_refreshed(self, tmp_path):
+        # Freezing must not turn the monthly job into a no-op.
+        scale, _required = self._scale_file(tmp_path)
+        out = _load().relock_text(
+            scale.read_text(encoding="utf-8"),
+            {"some-very-long-owner/some-very-long-repo-name": 7},
+            {"some-very-long-owner/some-very-long-repo-name": "e" * 40},
+            frozen={"anthropics/skills", "minio/skills"})
+        assert "some-very-long-owner/some-very-long-repo-name %s     7" % ("e" * 40) in out
+
+    def test_refreshing_the_required_corpus_itself_freezes_nothing(self, tmp_path):
+        """`--refresh` on taps.txt is exactly the job that MAY move those pins.
+
+        Freezing on identity rather than on membership would make the required
+        corpus permanently unrefreshable — the opposite failure, and a quieter
+        one.
+        """
+        _scale, required = self._scale_file(tmp_path)
+        taps = tmp_path / "taps.txt"
+        assert _load().frozen_rows(taps, taps) == set()
+        out = _load().relock_text(required, {"anthropics/skills": 20},
+                             {"anthropics/skills": "c" * 40},
+                             frozen=_load().frozen_rows(taps, taps))
+        assert "c" * 40 in out
+
+    def test_a_missing_required_file_freezes_nothing(self, tmp_path):
+        # A refresh must degrade to the old behaviour, never crash.
+        scale, _required = self._scale_file(tmp_path)
+        assert _load().frozen_rows(scale, tmp_path / "absent.txt") == set()
+
+
+class TestRefreshPinsARowThatArrivedBare:
+    """`--refresh` resolves a new SHA, so it can pin a row that has none.
+
+    `relock_text` skipped any row with fewer than two fields, on a rule that is
+    right for `--relock` and wrong for `--refresh`. The two differ in exactly
+    the way that matters: `--relock` re-measures the *same* tree and has no SHA
+    to offer, so writing a count beside an unpinned repo would describe a tree
+    free to change underneath it. `--refresh` has just resolved upstream HEAD,
+    so it has both halves and the row can be closed.
+
+    Measured cost of the old rule: the shipped scale corpus is 165 bare rows
+    and 20 pinned ones, and the monthly job rewrote exactly the 20 — the
+    required block it must not touch — while pinning none of the 165 it exists
+    to pin. The tier that is supposed to measure a pinned 20,000-entry corpus
+    was floating on upstream HEAD for 89% of its rows.
+
+    The durable rule is about the SHA, not about the row: never write a count
+    without one.
+    """
+
+    def test_a_bare_row_gains_a_pin_when_a_sha_was_resolved(self):
+        m = _load()
+        out = m.relock_text("a/b\n", {"a/b": 7}, {"a/b": "f" * 40})
+        assert out == "a/b %s     7\n" % ("f" * 40)
+
+    def test_a_bare_row_is_left_alone_when_no_sha_was_resolved(self):
+        """The property the old rule was protecting, kept.
+
+        This is `--relock`: the scanner changed, the trees did not, and there
+        is no SHA on offer. A count here would claim a measurement of a tree
+        nobody pinned.
+        """
+        m = _load()
+        assert m.relock_text("a/b\n", {"a/b": 7}) == "a/b\n"
+
+    def test_a_bare_row_with_no_count_is_left_alone(self):
+        m = _load()
+        assert m.relock_text("a/b\n", {}, {"a/b": "f" * 40}) == "a/b\n"
+
+    def test_a_malformed_pin_is_still_refused(self):
+        # Not a SHA and nothing resolved for it: writing would launder a typo
+        # into a row that reads as measured.
+        m = _load()
+        assert m.relock_text("a/b nope 3\n", {"a/b": 7}) == "a/b nope 3\n"
+
+    def test_a_malformed_pin_is_replaced_when_a_sha_was_resolved(self):
+        m = _load()
+        out = m.relock_text("a/b nope 3\n", {"a/b": 7}, {"a/b": "f" * 40})
+        assert out == "a/b %s     7\n" % ("f" * 40)
+
+    def test_the_width_covers_rows_that_were_bare(self):
+        # A newly-pinned long name must not be excluded from the column maths.
+        m = _load()
+        out = m.relock_text("short/x\nmuch-longer-owner/repo\n",
+                            {"short/x": 1, "much-longer-owner/repo": 2},
+                            {"short/x": "a" * 40, "much-longer-owner/repo": "b" * 40})
+        assert "short/x                %s     1" % ("a" * 40) in out

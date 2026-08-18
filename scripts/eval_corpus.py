@@ -77,7 +77,7 @@ import argparse
 import re
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -346,37 +346,77 @@ def _report_failures(failures: Sequence[CorpusError], total_rows: int) -> int:
 
 
 def relock_text(text: str, counts: dict[str, int],
-                shas: dict[str, str] | None = None) -> str:
+                shas: dict[str, str] | None = None,
+                frozen: Collection[str] | None = None) -> str:
     """Rewrite each pinned row's entry count — and its SHA when ``shas`` says so.
 
     A whole-file rewrite would lose the header, which is where the reasoning
-    lives; this touches only rows it has a new count for. A row with no SHA is
-    left alone — a count beside an unpinned repo describes a tree free to change
-    underneath it, so it must never be written.
+    lives; this touches only rows it has a new count for. A count is never
+    written without a SHA — beside an unpinned repo it would describe a tree
+    free to change underneath it — but the SHA may come from ``shas`` rather
+    than from the row, which is how ``--refresh`` closes a row that arrived
+    bare. Gating on "the row already has a pin" instead left the scale corpus
+    at 165 bare rows to 20 pinned, refreshing only the 20 it did not own.
 
     ``shas`` is what makes ``--refresh`` a rewrite of the pins rather than of
     the counts alone. It is optional because the two operations are genuinely
     different: ``--relock`` re-measures the *same* trees (the scanner changed),
     ``--refresh`` moves to *new* trees (the world changed).
+
+    ``frozen`` names repos whose rows this file does not own, and they are
+    emitted byte for byte — not re-pinned, and *not re-columned*. Both halves
+    matter: the width is the longest name being rewritten, so refreshing
+    ``taps-scale.txt`` (whose distractor names are longer than anything in
+    ``taps.txt``) moved every required row even where its pin had not changed.
     """
     shas = shas or {}
-    width = max([len(r) for r in counts] or [1])
+    frozen = frozen or ()
+    width = max([len(r) for r in counts if r not in frozen] or [1])
     out = []
     for raw in text.splitlines():
         line = raw.strip()
         parts = line.split()
-        if not line or line.startswith("#") or len(parts) < 2 \
-                or parts[0] not in counts or not _SHA.fullmatch(parts[1]):
+        if not line or line.startswith("#") or not parts \
+                or parts[0] not in counts or parts[0] in frozen:
             out.append(raw)
             continue
         repo = parts[0]
-        sha = shas.get(repo, parts[1])
+        # The row's own pin is only a fallback, and only when well formed: a
+        # malformed one is not a value to carry forward, it is a row nothing
+        # may claim to have measured.
+        committed = (parts[1] if len(parts) > 1
+                     and _SHA.fullmatch(parts[1]) else None)
+        sha = shas.get(repo) or committed
+        if sha is None:
+            out.append(raw)
+            continue
         if not _SHA.fullmatch(sha):
             raise SystemExit(
                 "refusing to write %s: %r is not a 40-character commit SHA"
                 % (repo, sha))
         out.append("%-*s %s %5d" % (width, repo, sha, counts[repo]))
     return "\n".join(out) + ("\n" if text.endswith("\n") else "")
+
+
+def frozen_rows(taps: Path, required: Path = DEFAULT_TAPS) -> set[str]:
+    """Repos in ``taps`` whose pins belong to ``required``, not to ``taps``.
+
+    The scale corpus is the required corpus PLUS distractors, and
+    ``build_scale_corpus.render`` copies the required block in verbatim so both
+    tiers start from the same trees. The golden floors were calibrated against
+    those trees; a scale tier measuring a *different* snapshot of the same
+    repos reports a difference that is not scale.
+
+    Membership, not identity, decides. ``--refresh`` on ``taps.txt`` itself is
+    exactly the job that MAY move those pins, so it must freeze nothing —
+    freezing on "is this a required repo" rather than "does another file own
+    this row" would make the required corpus permanently unrefreshable, which
+    is the same bug pointed the other way and far quieter.
+    """
+    if taps.resolve() == required.resolve() or not required.exists():
+        return set()
+    return {repo for repo, _sha, _n in
+            parse_taps(required.read_text(encoding="utf-8"))}
 
 
 def refresh_summary(rows: Sequence[Row], shas: dict[str, str],
@@ -465,10 +505,20 @@ def _refresh(taps: Path, summary_path: str | None = None) -> int:
     from boost_cli.core import catalog, gitutil, registry  # deferred: path shim
 
     rows = parse_taps(taps.read_text(encoding="utf-8"))
+    # Rows another file owns are neither measured nor written — skipping the
+    # measurement is not just an optimisation here, it is what keeps the two
+    # tiers pinned to one set of trees. It also saves re-cloning the required
+    # corpus, whose largest member is 6,309 entries.
+    frozen = frozen_rows(taps)
+    failures: list[CorpusError] = []
     shas: dict[str, str] = {}
     counts: dict[str, int] = {}
-    failures: list[CorpusError] = []
+    if frozen:
+        print("  %d rows are owned by %s and are left alone"
+              % (len(frozen & {r for r, _s, _n in rows}), DEFAULT_TAPS.name))
     for repo, old_sha, _n in rows:
+        if repo in frozen:
+            continue
         try:
             try:
                 tap = registry.get(repo)
@@ -499,8 +549,10 @@ def _refresh(taps: Path, summary_path: str | None = None) -> int:
                  "" if sha == old_sha else "   MOVED"))
     if failures:
         return _report_failures(failures, len(rows))
-    taps.write_text(relock_text(taps.read_text(encoding="utf-8"), counts, shas),
-                    encoding="utf-8")
+    taps.write_text(
+        relock_text(taps.read_text(encoding="utf-8"), counts, shas,
+                    frozen=frozen),
+        encoding="utf-8")
     summary = refresh_summary(rows, shas, counts)
     print("\n" + summary)
     if summary_path:

@@ -230,3 +230,37 @@ class TestPinsSurviveRegeneration:
         refreshed = first.replace("\ns/one\n", "\ns/one %s 99\n" % ("d" * 40))
         again = m.render(required, picked, 30, m.existing_pins(refreshed))
         assert again == refreshed
+
+
+class TestTheScheduledJobCannotOpenAnUnmergeablePR:
+    """`--check` must run AFTER the refresh, not only before it.
+
+    Running it first proves the committed file is fresh; it says nothing about
+    what the refresh then wrote. For months the job checked, refreshed, and
+    opened a PR that the very same check would have rejected — because
+    `--refresh` re-pinned and re-columned the required block, which the
+    generator copies verbatim from `taps.txt`. The PR was unmergeable by
+    construction and the diff read as ordinary pin movement.
+    """
+
+    _WORKFLOW = _ROOT / ".github" / "workflows" / "eval-scale.yml"
+
+    @pytest.mark.skipif(not _WORKFLOW.exists(), reason="workflow not reachable")
+    def test_the_check_runs_after_the_refresh(self):
+        text = self._WORKFLOW.read_text(encoding="utf-8")
+        check = "build_scale_corpus.py --check"
+        refresh = "eval_corpus.py --refresh"
+        assert text.count(check) >= 2, (
+            "only one --check: a refresh that breaks the selection would still "
+            "open a PR")
+        assert text.index(refresh) < text.rindex(check), (
+            "the last --check must follow the refresh")
+
+    @pytest.mark.skipif(not _WORKFLOW.exists(), reason="workflow not reachable")
+    def test_the_check_is_not_allowed_to_fail_quietly(self):
+        # `score it` is continue-on-error by design; the selection check is not.
+        text = self._WORKFLOW.read_text(encoding="utf-8")
+        tail = text[text.rindex("build_scale_corpus.py --check"):]
+        head = text[:text.rindex("build_scale_corpus.py --check")]
+        step = head[head.rindex("      - name:"):] + tail.split("      - name:")[0]
+        assert "continue-on-error" not in step
