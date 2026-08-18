@@ -10,7 +10,7 @@ wow: 4
 note: search rows learned kind/tap/installed with a stated drop order; browse got its gradient, an empty state, a badge rail, a list scrollbar and a session chip
 order: 122
 owner: feat/tui-visual-refresh
-pr:
+pr: 540
 title: One design system across <code>search</code> and <code>browse</code>
 ---
 <b>The brief was "make the CLI look good", and the answer was a design pass,
