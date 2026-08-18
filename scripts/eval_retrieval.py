@@ -50,6 +50,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -306,7 +307,12 @@ def hybrid_ranker(k: int) -> Ranker:
 
 
 def rerank_ranker(k: int) -> Ranker:
-    """BM25 shortlist reordered by the LLM rerank stage (Tier 2a)."""
+    """BM25 shortlist reordered by the LLM rerank stage (Tier 2a).
+
+    The rerank cache is disabled for the whole run: a graded rerank must be
+    live, or the eval silently measures a stale cached order.
+    """
+    os.environ["BOOST_NO_RERANK_CACHE"] = "1"
     def rank(q: str) -> list[str]:
         hits = rag.retrieve(q, k=max(k * 4, 60))
         reranked, _label = rag.rerank(q, hits, limit=max(k, 15))

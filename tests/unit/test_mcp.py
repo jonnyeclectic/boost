@@ -198,6 +198,11 @@ class TestHandleRequest:
         assert "10-15 seconds" in mcp.INSTRUCTIONS
         assert "10-15 seconds" in desc["boost_search"]
         assert "a few seconds" not in mcp.INSTRUCTIONS.lower()
+        # The repeat-search cost claim is backed by rag's rerank cache; both
+        # surfaces must state it, or an agent budgets 15 s for a lookup that
+        # would have been free.
+        assert "answers from a local cache" in mcp.INSTRUCTIONS
+        assert "answers from a local cache" in desc["boost_search"]
 
     def test_instructions_still_separate_the_free_tool_from_the_slow_one(self):
         # boost_list really is instant, and collapsing the two costs into one

@@ -85,6 +85,7 @@ INTERNAL_CACHE_FILES = frozenset({
     "rag_index.json",       # rag.index_path()       — BM25 index
     "rag_postings.sqlite",  # rag.postings_path()    — BM25 postings
     "rag_vectors.sqlite",   # dense.db_path()        — dense vectors
+    "rerank_cache.json",    # rag.rerank_cache_path() — LLM rerank orders
     "discovery.json",       # discovery._discovery_path()
     "_names.txt",           # complete.names_file()  — shell completion
 })

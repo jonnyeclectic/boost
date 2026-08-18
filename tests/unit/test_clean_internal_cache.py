@@ -86,6 +86,7 @@ class TestInternalCacheRegistryHasNoDrift:
         owners = {
             "rag.index_path": rag.index_path,
             "rag.postings_path": rag.postings_path,
+            "rag.rerank_cache_path": rag.rerank_cache_path,
             "dense.db_path": dense.db_path,
             "discovery._discovery_path": discovery._discovery_path,
             "complete.names_file": complete.names_file,
