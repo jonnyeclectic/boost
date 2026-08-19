@@ -1887,7 +1887,7 @@ class TestSearchNamesItsRanker:
         assert "did NOT run" not in text
 
     def test_rerank_returns_that_label_only_when_the_llm_answered(
-            self, monkeypatch):
+            self, monkeypatch, sandbox):
         """The producer and the consumer of the label must agree.
 
         `rag.LLM_RANKER` exists so this is impossible to drift rather than
@@ -1910,8 +1910,16 @@ class TestSearchNamesItsRanker:
         assert label == rag.LLM_RANKER
         assert [h["entry"]["name"] for h in order] == ["a", "b"]
 
+        # Repeating the SAME query now answers from the rerank cache: the
+        # order is still the LLM's, so the label stays with it — no new ask.
+        monkeypatch.setattr(ai, "ask",
+                            lambda *a, **k: pytest.fail("cache must answer"))
+        assert rag.rerank("q", hits, engine="BM25 full-content")[1] == \
+            rag.LLM_RANKER
+
         # The model replied, but not with an order — the label must fall back
         # with the ordering, or it claims a rerank that did not take effect.
+        # A fresh query, so the cache cannot answer for the degraded model.
         monkeypatch.setattr(ai, "ask", lambda *a, **k: "sorry, I cannot")
-        assert rag.rerank("q", hits, engine="BM25 full-content")[1] == \
+        assert rag.rerank("q2", hits, engine="BM25 full-content")[1] == \
             "BM25 full-content"

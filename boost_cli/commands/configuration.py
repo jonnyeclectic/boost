@@ -1305,7 +1305,9 @@ REGISTRY.register(
     "either: take what fits, discard the rest, the task stays yours. It costs "
     "10-15 seconds — an LLM reranks every match, which is what makes the top "
     "result worth acting on rather than skimming. Worth budgeting for, not a "
-    "surprise. Coming back empty is a real answer too, not a "
+    "surprise — and only a novel search pays it: repeating an identical "
+    "search skips the LLM and answers from a local cache. "
+    "Coming back empty is a real answer too, not a "
     "wasted turn: it means build it yourself, now knowing nothing already "
     "covers it — and on a machine with nothing tapped yet it says so and names "
     "the one command that fixes it, rather than reporting a miss.",

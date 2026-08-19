@@ -230,7 +230,8 @@ class TestRerankPreservesTheEngineLabel:
     def _hits():
         return [_hit("a", 2.0), _hit("b", 1.0)]
 
-    def test_no_ai_reports_the_engine_that_retrieved(self, monkeypatch):
+    def test_no_ai_reports_the_engine_that_retrieved(self, monkeypatch,
+                                                     sandbox):
         # THE regression. Fusion ran, the LLM was absent, and the old code
         # answered "BM25 full-content" — naming an engine that did not rank
         # these hits alone.
@@ -239,14 +240,16 @@ class TestRerankPreservesTheEngineLabel:
                                  engine="hybrid RRF (BM25 + dense)")
         assert label == "hybrid RRF (BM25 + dense)"
 
-    def test_no_ai_reports_dense_when_dense_retrieved(self, monkeypatch):
+    def test_no_ai_reports_dense_when_dense_retrieved(self, monkeypatch,
+                                                      sandbox):
         monkeypatch.setattr(rag.ai, "available", lambda: True)
         monkeypatch.setattr(rag.ai, "ask", lambda *_a, **_k: "not json at all")
         _out, label = rag.rerank("q", self._hits(), limit=5,
                                  engine="dense vectors")
         assert label == "dense vectors"
 
-    def test_an_unparseable_reply_keeps_the_engine_too(self, monkeypatch):
+    def test_an_unparseable_reply_keeps_the_engine_too(self, monkeypatch,
+                                                       sandbox):
         # The second degrade path: the model answered, but not with a JSON
         # array. Ordering falls back, so the label must fall back with it.
         monkeypatch.setattr(rag.ai, "available", lambda: True)
@@ -255,7 +258,7 @@ class TestRerankPreservesTheEngineLabel:
                                  engine="hybrid RRF (BM25 + dense)")
         assert label == "hybrid RRF (BM25 + dense)"
 
-    def test_a_successful_rerank_still_says_claude(self, monkeypatch):
+    def test_a_successful_rerank_still_says_claude(self, monkeypatch, sandbox):
         # The LLM really did decide the order here, so crediting the retrieval
         # engine instead would be the same bug pointing the other way.
         monkeypatch.setattr(rag.ai, "available", lambda: True)

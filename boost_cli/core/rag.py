@@ -19,6 +19,7 @@ import contextlib
 import hashlib
 import json
 import math
+import os
 import re
 import sqlite3
 from collections import defaultdict
@@ -841,6 +842,49 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
     return _windowed(dedupe_by_content(hits, k), terms)
 
 
+def rerank_cache_path() -> Path:
+    """Where cached rerank orders live; in ``paths.INTERNAL_CACHE_FILES``."""
+    return paths.cache_dir() / "rerank_cache.json"
+
+
+#: FIFO cap on cached rerank orders. 200 entries is a few days of real use at
+#: a few KB total; the point is bounding the file, not maximising hits.
+RERANK_CACHE_CAP = 200
+
+
+def _rerank_cache_load() -> dict:
+    """The cache as a dict, ``{}`` for missing/corrupt — never an error."""
+    try:
+        data = json.loads(rerank_cache_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _rerank_cache_get(key: str) -> list | None:
+    """A cached name order for ``key``, or None on any doubt at all."""
+    order = _rerank_cache_load().get(key)
+    return order if isinstance(order, list) and order else None
+
+
+def _rerank_cache_put(key: str, order: list) -> None:
+    """Store ``order``, evicting oldest-inserted beyond the cap.
+
+    JSON objects round-trip in insertion order, so the dict itself is the
+    FIFO — no timestamps to tie-break. Best-effort on purpose: a read-only
+    cache dir loses the cache, never the search, and a concurrent writer
+    clobbering this write costs a future miss, not corruption.
+    """
+    cache = _rerank_cache_load()
+    cache.pop(key, None)
+    cache[key] = order
+    while len(cache) > RERANK_CACHE_CAP:
+        cache.pop(next(iter(cache)))
+    with contextlib.suppress(OSError):
+        paths.ensure_dirs()
+        util.atomic_write_text(rerank_cache_path(), json.dumps(cache))
+
+
 #: The label `rerank` returns when the LLM pass actually ran. Every other value
 #: is a retrieval engine's own name, i.e. "the rerank did not happen". Callers
 #: that quote what the rerank buys have to be able to tell those apart without
@@ -860,6 +904,15 @@ def rerank(query: str, hits: list[Hit], limit: int = 10,
     answered, so a confident "BM25 full-content" sent debugging somewhere else.
 
     The default keeps direct callers unchanged; ``search`` passes the real one.
+
+    Repeat calls answer from a small on-disk cache keyed on a hash of exactly
+    what the LLM would see — query, limit, and the candidate listing — so it
+    self-invalidates on any reindex, ranking drift, or snippet change without
+    ever inspecting why. Only the parsed name order is stored; a hit replays
+    through the same deterministic reorder below, and keeps the LLM_RANKER
+    label because it *is* the LLM's ordering. ``BOOST_NO_RERANK_CACHE=1``
+    bypasses both read and write (the Tier 2a eval sets it, so a graded
+    rerank is always live).
     """
     top = hits[:max(limit, 15)]
     if not ai.available():
@@ -868,17 +921,26 @@ def rerank(query: str, hits: list[Hit], limit: int = 10,
         "- %s [%s]: %s" % (h["entry"]["name"], h["entry"].get("kind", "skill"),
                            (h["snippet"] or h["entry"].get("description", ""))[:180])
         for h in top)
-    reply = ai.ask(
-        "Task: %s\n\nCandidate skills (name, kind, best matching text):\n%s\n\n"
-        "Order the skill names best-match-first for the task. "
-        "Reply with ONLY a JSON array of names." % (query, listing),
-        system="You rank AI coding skills by how well they fit a task.",
-        max_tokens=400)
-    order = _json_array(reply)
-    if not order:
-        # The model answered but not with a JSON array, so the ordering falls
-        # back to whatever retrieval produced — and so must the label.
-        return hits[:limit], engine
+    caching = not os.environ.get("BOOST_NO_RERANK_CACHE")
+    cache_key = hashlib.sha256(
+        ("%s\n%d\n%s" % (query, limit, listing)).encode("utf-8", "replace")
+    ).hexdigest()
+    order = _rerank_cache_get(cache_key) if caching else None
+    if order is None:
+        reply = ai.ask(
+            "Task: %s\n\nCandidate skills (name, kind, best matching text):\n%s\n\n"
+            "Order the skill names best-match-first for the task. "
+            "Reply with ONLY a JSON array of names." % (query, listing),
+            system="You rank AI coding skills by how well they fit a task.",
+            max_tokens=400)
+        order = _json_array(reply)
+        if not order:
+            # The model answered but not with a JSON array, so the ordering
+            # falls back to whatever retrieval produced — and so must the
+            # label. Not cached: a degrade reply is a retry, not an answer.
+            return hits[:limit], engine
+        if caching:
+            _rerank_cache_put(cache_key, [str(n) for n in order])
     by_name = {h["entry"]["name"]: h for h in hits}
     picked = [by_name[str(n)] for n in order if str(n) in by_name]
     rest = [h for h in hits if h["entry"]["name"]

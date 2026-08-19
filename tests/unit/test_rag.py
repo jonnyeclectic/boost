@@ -523,14 +523,14 @@ def _hit(name, score, snippet="s", kind="skill", desc="d"):
 
 
 class TestRerank:
-    def test_no_ai_returns_bm25_order(self, monkeypatch):
+    def test_no_ai_returns_bm25_order(self, monkeypatch, sandbox):
         monkeypatch.setattr(rag.ai, "available", lambda: False)
         hits = [_hit("a", 2.0), _hit("b", 1.0)]
         out, label = rag.rerank("q", hits, limit=5)
         assert [h["entry"]["name"] for h in out] == ["a", "b"]
         assert label == "BM25 full-content"
 
-    def test_ai_reorders(self, monkeypatch):
+    def test_ai_reorders(self, monkeypatch, sandbox):
         monkeypatch.setattr(rag.ai, "available", lambda: True)
         monkeypatch.setattr(rag.ai, "ask", lambda *a, **k: '["b", "a"]')
         hits = [_hit("a", 2.0), _hit("b", 1.0)]
@@ -538,14 +538,14 @@ class TestRerank:
         assert [h["entry"]["name"] for h in out] == ["b", "a"]
         assert label == "Claude relevance"
 
-    def test_ai_partial_order_appends_rest(self, monkeypatch):
+    def test_ai_partial_order_appends_rest(self, monkeypatch, sandbox):
         monkeypatch.setattr(rag.ai, "available", lambda: True)
         monkeypatch.setattr(rag.ai, "ask", lambda *a, **k: '["b"]')
         hits = [_hit("a", 2.0), _hit("b", 1.0)]
         out, _label = rag.rerank("q", hits, limit=5)
         assert [h["entry"]["name"] for h in out] == ["b", "a"]
 
-    def test_ai_garbage_reply_degrades(self, monkeypatch):
+    def test_ai_garbage_reply_degrades(self, monkeypatch, sandbox):
         monkeypatch.setattr(rag.ai, "available", lambda: True)
         monkeypatch.setattr(rag.ai, "ask", lambda *a, **k: "no json here")
         hits = [_hit("a", 2.0), _hit("b", 1.0)]
@@ -553,13 +553,13 @@ class TestRerank:
         assert [h["entry"]["name"] for h in out] == ["a", "b"]
         assert label == "BM25 full-content"
 
-    def test_limit_truncates(self, monkeypatch):
+    def test_limit_truncates(self, monkeypatch, sandbox):
         monkeypatch.setattr(rag.ai, "available", lambda: False)
         hits = [_hit("a", 3.0), _hit("b", 2.0), _hit("c", 1.0)]
         out, _ = rag.rerank("q", hits, limit=2)
         assert len(out) == 2
 
-    def test_prompt_carries_task_and_candidate_snippets(self, monkeypatch):
+    def test_prompt_carries_task_and_candidate_snippets(self, monkeypatch, sandbox):
         captured = {}
         monkeypatch.setattr(rag.ai, "available", lambda: True)
 
@@ -1100,7 +1100,7 @@ class TestRetrieveInternals:
 
 
 class TestRerankExact:
-    def test_exact_prompt_and_kwargs(self, monkeypatch):
+    def test_exact_prompt_and_kwargs(self, monkeypatch, sandbox):
         cap = {}
         monkeypatch.setattr(rag.ai, "available", lambda: True)
 
