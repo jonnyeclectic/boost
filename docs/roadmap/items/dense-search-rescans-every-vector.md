@@ -10,7 +10,7 @@ wow: 5
 note: 33.9s cold search; 28.2s of it was one brute-force scan of 3.08 GB
 order: 1
 owner: loop/dense-quantization
-pr:
+pr: 544
 title: Every dense search re-scanned all 3.08&nbsp;GB of vectors &mdash; <code>vec0</code> has no ANN index
 ---
 <b>A user reported <code>boost search "refactor UI with taste"</code> taking 34 seconds.</b> The
