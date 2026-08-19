@@ -599,12 +599,25 @@ def _report_search_engine(bad) -> None:
     # Local import: the dense/embedding engines are opt-in and stay out of
     # startup for every other command (scripts/import_budget.py enforces it).
     from ..core import dense
-    st = dense.status()
+    # count=True: doctor prints the chunk total, and a health check is the one
+    # caller that can afford the scan when a legacy store never recorded it.
+    # `boost search`'s hint deliberately does not (see `dense._chunk_total`).
+    st = dense.status(count=True)
 
     if st["ready"]:
         out.ok("semantic search active — %s %s (%d-d), %d chunk%s across %d tap%s"
                % (st["provider"], st["model"], st["dim"] or 0,
                   st["chunks"], _s(st["chunks"]), st["taps"], _s(st["taps"])))
+        if not st["quantized"]:
+            # Ready but slow, which no other line here would say. `vec0` has no
+            # ANN index, so an unquantized store re-scans every vector on every
+            # query — 28.2 s measured at 750,416 chunks. The remedy costs no
+            # embedding calls, so it is worth naming rather than leaving the
+            # user to wonder why the search they enabled feels broken.
+            out.warn("the vector store predates binary quantization, so every "
+                     "query scans all %d vectors — `boost reindex --dense` "
+                     "converts it offline (no re-embedding, no API cost)"
+                     % st["chunks"])
         return
 
     fix = dense.fix_hint(st["reason"], st)

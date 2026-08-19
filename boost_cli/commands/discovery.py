@@ -316,6 +316,10 @@ def cmd_reindex(argv):
             else:
                 out.ok("embedded %d passages (%s) into the dense vector store"
                        % (dense_stats["chunks"], dense_stats["provider"]))
+            if dense_stats.get("quantized"):
+                out.ok("quantized %d existing vectors — dense search no longer "
+                       "scans the whole store on every query"
+                       % dense_stats["quantized"])
     journal.log("reindex", "%d passages" % stats["docs"],
                 entries=stats["entries"])
     return 0
@@ -328,7 +332,16 @@ def _reindex_dense(force):
     from ..core import dense, embed
     if not dense.have_backend() or not embed.available():
         return None
-    return dense.build(force=force)
+    # Convert a pre-quantization store first, so a user who reindexes gets the
+    # speedup without having to know the word "quantize". It re-encodes vectors
+    # already on disk — no provider call, no cost — and `build` below then adds
+    # only what changed. Doing it after would quantize, then write float32 rows
+    # into a store that no longer has a float32 table.
+    migrated = dense.quantize()
+    stats = dense.build(force=force)
+    if migrated and isinstance(stats, dict):
+        stats = stats | {"quantized": migrated["chunks"]}
+    return stats
 
 
 def cmd_index(argv):

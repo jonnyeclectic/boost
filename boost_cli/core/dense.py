@@ -62,15 +62,105 @@ def _connect() -> sqlite3.Connection | None:
     return con
 
 
+# How many binary candidates the exact rescore re-ranks. `vec0` has no ANN
+# index — a `MATCH` is a full scan — so this is the only knob that decides how
+# much of the store a query touches.
+#
+# Measured on a real 750,416-chunk / 1024-d store: 2048 gives recall@60 of
+# 1.000 against a full float32 scan, for 0.35 s of rescore. 4096 costs 0.57 s
+# and returns the same 60 rows, so the extra candidates are pure overhead.
+RESCORE_POOL = 2048
+
+
+def _quantizable(dim: int) -> bool:
+    """Whether ``dim`` can be binary-quantized at all.
+
+    `bit[N]` packs eight dimensions per byte, so sqlite-vec rejects any N that
+    is not a multiple of 8. Every real embedding width is (384, 768, 1024,
+    1536); the toy 3-d vectors in the unit suite are not, which is what keeps
+    the float32 path exercised rather than dead.
+    """
+    return bool(dim) and dim % 8 == 0
+
+
+def _has_table(con: sqlite3.Connection, name: str) -> bool:
+    try:
+        return con.execute("SELECT 1 FROM sqlite_master WHERE name = ? LIMIT 1",
+                           (name,)).fetchone() is not None
+    except sqlite3.DatabaseError:
+        return False
+
+
+def quantized(con: sqlite3.Connection) -> bool:
+    """True when this store holds the two-stage (binary + exact) layout.
+
+    Both halves are required and neither is useful alone: `vec_chunks_bin`
+    ranks, `vec_raw` re-ranks. A store carrying only one is a half-finished
+    migration, and answering True for it would route queries into a rescore
+    with nothing to rescore against.
+    """
+    return _has_table(con, "vec_chunks_bin") and _has_table(con, "vec_raw")
+
+
 def _ensure_schema(con: sqlite3.Connection, dim: int) -> None:
     con.execute(
         "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY AUTOINCREMENT,"
         " name TEXT, tap TEXT, path TEXT, kind TEXT, cix INTEGER, snip TEXT)")
     con.execute("CREATE INDEX IF NOT EXISTS chunks_tap ON chunks(tap)")
     con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
-    con.execute(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING "
-        "vec0(embedding float[%d] distance_metric=cosine)" % dim)
+    if _quantizable(dim):
+        # Two relations, because one cannot do both jobs. `vec0` is the only
+        # thing that can run a KNN, and it cannot fetch a row by rowid: an
+        # `id IN (...)` against it plans as `SCAN ... VIRTUAL TABLE`, and 256
+        # single-row lookups measured 3.2 s. A plain rowid-keyed table is the
+        # opposite — useless for KNN, O(log n) per row — so the coarse pass
+        # lives in `vec_chunks_bin` and the exact rescore reads `vec_raw`.
+        con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks_bin USING "
+                    "vec0(embedding bit[%d])" % dim)
+        con.execute("CREATE TABLE IF NOT EXISTS vec_raw "
+                    "(id INTEGER PRIMARY KEY, embedding BLOB)")
+    else:
+        con.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING "
+            "vec0(embedding float[%d] distance_metric=cosine)" % dim)
+
+
+def _store_vector(con: sqlite3.Connection, rowid: int | None,
+                  blob: bytes) -> None:
+    """Write one chunk's vector into whichever layout this store uses.
+
+    Quantization happens in SQL rather than in Python: `vec_quantize_binary`
+    is the same function the query side calls on the query vector, so the two
+    can never disagree about how a float becomes a bit.
+
+    ``rowid`` is a caller's ``cursor.lastrowid``, which sqlite3 types as
+    optional. It is None only if the INSERT that produced it did not happen, so
+    this refuses rather than storing a vector nothing can join back to — an
+    orphan in `vec_raw` outlives every tap deletion, since those are scoped
+    through `chunks.tap`.
+    """
+    if rowid is None:
+        raise BoostError("vector store insert produced no row id")
+    if quantized(con):
+        con.execute("INSERT INTO vec_chunks_bin (rowid, embedding) "
+                    "VALUES (?, vec_quantize_binary(vec_f32(?)))", (rowid, blob))
+        con.execute("INSERT INTO vec_raw (id, embedding) VALUES (?, ?)",
+                    (rowid, blob))
+    else:
+        con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
+                    (rowid, blob))
+
+
+def _drop_vectors(con: sqlite3.Connection, ids: list[int]) -> None:
+    """Remove these chunk ids from every vector relation the store has."""
+    for i in ids:
+        # vec0 deletes one rowid at a time; the plain table takes a set.
+        for tbl in ("vec_chunks", "vec_chunks_bin"):
+            if _has_table(con, tbl):
+                con.execute("DELETE FROM %s WHERE rowid = ?" % tbl, (i,))  # noqa: S608  table name from a literal tuple
+    if ids and _has_table(con, "vec_raw"):
+        con.execute("DELETE FROM vec_raw WHERE id IN (%s)"  # noqa: S608  interpolates only `?` placeholders
+                    % ",".join("?" * len(ids)), ids)
 
 
 def _read_meta(con: sqlite3.Connection) -> dict[str, object]:
@@ -95,6 +185,10 @@ def _write_meta(con: sqlite3.Connection, meta: dict[str, object]) -> None:
 def _wipe(con: sqlite3.Connection) -> None:
     con.execute("DROP TABLE IF EXISTS chunks")
     con.execute("DROP TABLE IF EXISTS vec_chunks")
+    # Both halves of the quantized layout, or a --force rebuild leaves the old
+    # vectors behind to be merged with the new ones under reused rowids.
+    con.execute("DROP TABLE IF EXISTS vec_chunks_bin")
+    con.execute("DROP TABLE IF EXISTS vec_raw")
 
 
 def _chunk_texts(entry: dict, tap_paths: dict[str, Path] | None
@@ -103,7 +197,51 @@ def _chunk_texts(entry: dict, tap_paths: dict[str, Path] | None
     return chunk(body) or [body]
 
 
-def _recorded_meta() -> dict:
+def _chunk_total(con: sqlite3.Connection, meta: dict,
+                 *, exact: bool) -> tuple[int | None, bool]:
+    """``(count-or-None, has-any-rows)`` — O(1) unless ``exact`` is asked for.
+
+    Counting `chunks` was the single most expensive thing a `boost search` did.
+    Every BM25-only search ends in a hint that calls :func:`status`, and
+    `SELECT COUNT(*) FROM chunks` scans the whole `chunks_tap` covering index:
+    measured on a real 445-tap store, 8,419 pages / 34.5 MB inside a 3.4 GB
+    file, 1.94 s with those pages already warm and the dominant term in a
+    33.9 s cold search — about 79% of a warm one, to choose the wording of a
+    single muted line.
+
+    The hot path never actually needed the number. It needs to know whether the
+    store has *any* rows, which is one indexed probe, and one `fix_hint` branch
+    wants the total, which a store built after this change records in `meta` —
+    9 pages, read anyway.
+
+    Three sources, cheapest first:
+
+    * ``meta["chunks"]``, stamped by :func:`build` and :func:`import_shard`;
+    * a ``LIMIT 1`` existence probe, which answers the `empty` reason exactly
+      and leaves the total unknown;
+    * the full scan, only when a caller says it can afford one (`boost doctor`).
+
+    Returning ``None`` for "not recorded" rather than ``0`` is the load-bearing
+    part: a legacy store has vectors the user paid to embed, and reporting zero
+    would route it to advice that re-embeds all of them.
+    """
+    recorded = meta.get("chunks")
+    if isinstance(recorded, int) and not isinstance(recorded, bool) and recorded >= 0:
+        return recorded, recorded > 0
+    try:
+        if exact:
+            n = int(con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
+            return n, n > 0
+        # Stops at the first row: a b-tree descent, not a walk.
+        row = con.execute("SELECT 1 FROM chunks LIMIT 1").fetchone()
+    except sqlite3.DatabaseError:
+        # No `chunks` table at all — nothing built, which is the ordinary
+        # empty case rather than the corrupt one. Exact by definition.
+        return 0, False
+    return None, row is not None
+
+
+def _recorded_meta(*, count: bool = False) -> dict:
     """What an existing store says it was built with, read WITHOUT sqlite-vec.
 
     Deliberately not routed through :func:`_connect`, which loads the extension
@@ -121,11 +259,8 @@ def _recorded_meta() -> dict:
         return {}
     try:
         meta = _read_meta(con)
-        try:
-            meta["_chunks"] = con.execute(
-                "SELECT COUNT(*) FROM chunks").fetchone()[0]
-        except sqlite3.DatabaseError:
-            meta["_chunks"] = 0
+        meta["_chunks"], meta["_nonempty"] = _chunk_total(con, meta, exact=count)
+        meta["_quantized"] = quantized(con)
         return meta
     except sqlite3.DatabaseError:
         # A truncated or non-sqlite file: report "no store", never raise into
@@ -186,16 +321,32 @@ def fix_hint(reason: str, status: dict | None = None) -> str:
         # there is nothing a key would revive, and "build it" is the real next
         # step. A store built by the local model has no env var and correctly
         # falls through — that user does need the package back.
-        if env and status.get("chunks"):
+        count = status.get("chunks")
+        # `None` is "a store is here and never recorded its total" — a legacy
+        # store, not an unfinished one. Only a *known* zero means there are no
+        # vectors to revive; reading unknown as zero would send exactly the
+        # user this branch exists to protect to the re-embed-everything answer.
+        if env and (count is None or count > 0):
+            n = f"{int(count):,} vectors" if count else "vectors"
             return ("set the key it was built with: `export %s=...` — "
                     "reinstalling the extra swaps in the local model and "
-                    "forces all %s vectors to be re-embedded"
-                    % (env, "{:,}".format(int(status["chunks"]))))
+                    "forces all %s to be re-embedded" % (env, n))
     return _FIX.get(reason, "see `boost reindex --dense`")
 
 
-def status() -> dict:
+def status(*, count: bool = False) -> dict:
     """Why dense retrieval is, or is not, serving queries.
+
+    ``count`` buys an exact ``chunks`` total at the price of scanning the store
+    (see :func:`_chunk_total`). It is off by default because the caller that
+    runs on every single search — `boost search`'s one-line hint — does not use
+    the number, while paying for it made that scan ~79% of a warm search and
+    the bulk of a cold one. `boost doctor` prints the total, so it asks.
+
+    With ``count=True`` the total is always an int. Without it, ``chunks`` is
+    ``None`` whenever a pre-existing store never recorded its own total;
+    ``chunks_exact`` says which you got, and ``reason`` is still exact either
+    way — emptiness comes from a cheap probe, not from the count.
 
     Pure inspection — never builds, never embeds, never needs the extra. Three
     independent things must line up (the ``[rag]`` extra, an embeddings key, a
@@ -210,13 +361,17 @@ def status() -> dict:
     """
     have_be = have_backend()
     prov, mdl, dim = embed.provider(), embed.model(), embed.dimension()
-    meta = _recorded_meta()
+    meta = _recorded_meta(count=count)
     b_prov = meta.get("provider")
     b_mdl = meta.get("model")
     b_dim = meta.get("dim")
     b_ver = meta.get("version")
     commits = meta.get("commits")
-    chunks = int(meta.get("_chunks") or 0)
+    raw_chunks = meta.get("_chunks")
+    chunks = int(raw_chunks) if isinstance(raw_chunks, int) else None
+    # Emptiness is answered by the probe, never by the count — that is what
+    # lets the count stay unknown without any reason becoming a guess.
+    nonempty = bool(meta.get("_nonempty"))
     store_exists = bool(meta)
 
     # Order matters: report the *first* missing link, so the message names the
@@ -235,7 +390,7 @@ def status() -> dict:
         reason = "model-changed"
     elif b_dim != dim:
         reason = "dim-changed"
-    elif chunks <= 0:
+    elif not nonempty:
         reason = "empty"
     else:
         reason = None
@@ -255,6 +410,11 @@ def status() -> dict:
         "built_provider": b_prov, "built_model": b_mdl,
         "built_dim": b_dim, "built_version": b_ver,
         "chunks": chunks,
+        "chunks_exact": chunks is not None,
+        # Ready-but-unquantized is a real state and the only one that is fast
+        # to fix and expensive to leave: correct answers, at a full scan per
+        # query. Nothing else in this dict distinguishes it.
+        "quantized": bool(meta.get("_quantized")),
         "taps": len(commits) if isinstance(commits, dict) else 0,
         "ready": reason is None,
         "reason": reason,
@@ -291,11 +451,11 @@ def ready() -> bool:
             return False
         if meta.get("dim") != embed.dimension():
             return False
-        try:
-            rows = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        except sqlite3.OperationalError:
-            return False
-        return rows > 0
+        # Existence, not a total: this runs on every search that has a store to
+        # consult, and counting `chunks` walks its whole covering index — 34.5
+        # MB on a real 445-tap store — to answer a yes/no question. `LIMIT 1`
+        # stops at the first row. See `_chunk_total` for the measurements.
+        return _chunk_total(con, meta, exact=False)[1]
     finally:
         con.close()
 
@@ -363,10 +523,14 @@ def build(entries: list[dict] | None = None,
         failed_safe = {t.replace("/", "__") for t in failed_taps}
         recorded = {safe: c for safe, c in commits.items()
                     if safe not in failed_safe}
-        _write_meta(con, {"version": INDEX_VERSION, "provider": prov,
-                          "model": mdl, "dim": dim, "commits": recorded})
-        con.commit()
+        # Counted before the meta write, not after, so the total can be stamped
+        # into `meta` — that is what lets every later `status()` skip the scan
+        # (see `_chunk_total`). The build already paid for this count.
         total = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        _write_meta(con, {"version": INDEX_VERSION, "provider": prov,
+                          "model": mdl, "dim": dim, "commits": recorded,
+                          "chunks": total})
+        con.commit()
         return {
             "entries": len({entry_key(e) for e in entries}),
             "chunks": total,
@@ -428,10 +592,15 @@ def export_shard(tap: str) -> dict:
         expected = _tap_chunk_count(con, tap)
         chunks = []
         try:
+            # `vec_raw` on a quantized store is an ordinary table, so this
+            # join needs no extension at all — which is the failure this
+            # function's docstring describes, gone rather than worked around.
+            vt = "vec_raw v ON v.id = c.id" if quantized(con) \
+                else "vec_chunks v ON v.rowid = c.id"
             rows = con.execute(
-                "SELECT c.name, c.tap, c.path, c.kind, c.cix, c.snip, v.embedding "
-                "FROM chunks c JOIN vec_chunks v ON v.rowid = c.id "
-                "WHERE c.tap = ? ORDER BY c.id", (tap,)).fetchall()
+                "SELECT c.name, c.tap, c.path, c.kind, c.cix, c.snip, v.embedding "  # noqa: S608  relation name from a literal pair
+                "FROM chunks c JOIN %s WHERE c.tap = ? ORDER BY c.id" % vt,
+                (tap,)).fetchall()
         except sqlite3.Error as exc:
             # Only a tap that HAS chunks can have unreadable ones. With none,
             # the vector relation not resolving says nothing about this tap —
@@ -534,15 +703,18 @@ def import_shard(shard: dict, commit: str) -> tuple[bool, str]:
                 (c.get("name"), c.get("tap"), c.get("path"), c.get("kind"),
                  c.get("cix"), c.get("snip")))
             blob = base64.b64decode(c["embedding"])
-            con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
-                        (cur.lastrowid, blob))
+            _store_vector(con, cur.lastrowid, blob)
         commits = meta.get("commits")
         commits = dict(commits) if isinstance(commits, dict) else {}
         commits[str(shard.get("tap") or "").replace("/", "__")] = commit
         _write_meta(con, {"version": INDEX_VERSION,
                           "provider": shard.get("provider"),
                           "model": shard.get("model"), "dim": dim,
-                          "commits": commits})
+                          "commits": commits,
+                          # Keep the recorded total true after a merge, or the
+                          # next `status()` serves a stale number forever.
+                          "chunks": con.execute(
+                              "SELECT COUNT(*) FROM chunks").fetchone()[0]})
         con.commit()
         _ = mod          # extension loaded by _connect; kept for symmetry
         return True, "imported %d chunks" % len(shard.get("chunks") or [])
@@ -564,8 +736,7 @@ def _delete_taps(con: sqlite3.Connection, taps: list[str]) -> None:
     for tap in taps:
         ids = [r[0] for r in
                con.execute("SELECT id FROM chunks WHERE tap = ?", (tap,))]
-        for i in ids:
-            con.execute("DELETE FROM vec_chunks WHERE rowid = ?", (i,))
+        _drop_vectors(con, ids)
         con.execute("DELETE FROM chunks WHERE tap = ?", (tap,))
 
 
@@ -626,10 +797,119 @@ def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
             "VALUES (?, ?, ?, ?, ?, ?)",
             (e["name"], e["tap"], e["skill_md"],
              e.get("kind", "skill"), ci, text[:200].strip()))
-        con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
-                    (cur.lastrowid, mod.serialize_float32(vec)))
+        _store_vector(con, cur.lastrowid, mod.serialize_float32(vec))
         added += 1
     return added, failed_taps
+
+
+def quantize() -> dict | None:
+    """Convert an existing float32 store to the two-stage layout, in place.
+
+    Offline and free: it re-reads vectors the user already paid to embed and
+    re-encodes them locally. No provider is called, no text is re-chunked, and
+    nothing is lost — `vec_raw` receives the *same* float32 blobs `vec_chunks`
+    held, so dropping `vec_chunks` relocates the data rather than discarding it.
+
+    It costs disk, in two ways worth stating plainly. While it runs the copy
+    sits beside the original, so the file grows to roughly twice the store
+    before the ``DROP`` and ``VACUUM``. And it does not come all the way back:
+    an ordinary table pays overflow-page overhead on 4 KB blobs that vec0's
+    packed storage does not, so `vec_raw` lands ~12% larger than the
+    `vec_chunks` it replaces, and the binary index adds its own 114 MB.
+    Measured end to end on a real 750,416-chunk store: **3.40 GB -> 3.87 GB**,
+    a 14% permanent increase, in 1360 s. That is the price of the 19-27x query
+    speedup, and it is a trade rather than a free win.
+
+    Returns None when there is nothing to do (no store, no backend, a
+    non-quantizable width, or a store already converted).
+    """
+    if not db_path().exists():
+        return None
+    con = _connect()
+    if con is None:
+        return None
+    try:
+        meta = _read_meta(con)
+        dim = meta.get("dim")
+        if not isinstance(dim, int) or not _quantizable(dim):
+            return None
+        if quantized(con) or not _has_table(con, "vec_chunks"):
+            return None
+        before = _chunk_total(con, {}, exact=True)[0] or 0
+        _ensure_schema(con, dim)
+        con.execute("INSERT INTO vec_raw (id, embedding) "
+                    "SELECT rowid, embedding FROM vec_chunks")
+        con.execute("INSERT INTO vec_chunks_bin (rowid, embedding) "
+                    "SELECT rowid, vec_quantize_binary(vec_f32(embedding)) "
+                    "FROM vec_chunks")
+        moved = con.execute("SELECT COUNT(*) FROM vec_raw").fetchone()[0]
+        # Verify before destroying. A short copy means the drop below would be
+        # the one step in this function that loses vectors, and re-embedding
+        # 750,416 chunks is a bill, not an inconvenience.
+        if moved != before:
+            con.rollback()
+            raise BoostError(
+                "quantize copied %d of %d vectors — store left unchanged"
+                % (moved, before),
+                hint="rebuild instead: `boost reindex --dense --force`")
+        con.execute("DROP TABLE IF EXISTS vec_chunks")
+        _write_meta(con, {"chunks": before})
+        con.commit()
+    finally:
+        con.close()
+    # Outside the transaction: VACUUM cannot run inside one, and without it the
+    # freed float32 pages stay allocated to the file.
+    con2 = _connect()
+    if con2 is not None:
+        try:
+            con2.execute("VACUUM")
+        except sqlite3.DatabaseError:
+            pass            # a bigger file is a cosmetic loss, not a failure
+        finally:
+            con2.close()
+    return {"chunks": before, "bytes": db_path().stat().st_size}
+
+
+def _knn(con: sqlite3.Connection, qblob: bytes,
+         pool: int) -> list[tuple[int, float]]:
+    """``(chunk_id, cosine_distance)`` for the ``pool`` nearest chunks.
+
+    Two-stage on a quantized store, one stage on a legacy one, and the answer
+    is the same either way — which is the whole point. `vec0` has no ANN index,
+    so a float32 `MATCH` computes a distance against every vector in the store:
+    on a real 750,416-chunk / 1024-d install that is 3.08 GB read and 28.2 s of
+    arithmetic **per query**, and it was ~85% of a 33.9 s `boost search`.
+
+    Binary quantization makes the same comparison 32x smaller — one bit per
+    dimension, 128 bytes instead of 4096, 114 MB instead of 3.08 GB — and
+    Hamming distance over it is a popcount. That pass alone takes 0.70 s, but
+    it is an *approximation*: measured against a full float32 scan it recovers
+    only 0.667 of the true top 60, which is a quality regression no amount of
+    speed pays for.
+
+    So it is a filter, not an answer. The 2048 nearest binary candidates are
+    re-ranked on their exact float32 vectors, which restores the true ordering
+    — measured recall@60 of **1.000**, the same rows in the same order — for
+    0.35 s more. Together: 28.2 s -> 1.05 s, 27x, with identical results.
+    """
+    if quantized(con):
+        cand = [r[0] for r in con.execute(
+            "SELECT rowid FROM vec_chunks_bin "
+            "WHERE embedding MATCH vec_quantize_binary(vec_f32(?)) "
+            "ORDER BY distance LIMIT ?", (qblob, max(pool, RESCORE_POOL)))]
+        if not cand:
+            return []
+        # Exact cosine over the candidates only. `vec_raw` is an ordinary
+        # rowid-keyed table precisely so this `IN` is an index lookup; the same
+        # clause against a vec0 table plans as a full scan (see _ensure_schema).
+        return con.execute(
+            "SELECT id, vec_distance_cosine(embedding, ?) AS d FROM vec_raw "  # noqa: S608  interpolates only `?` placeholders
+            "WHERE id IN (%s) ORDER BY d LIMIT ?"
+            % ",".join("?" * len(cand)), (qblob, *cand, pool)).fetchall()
+    return con.execute(
+        "SELECT rowid, distance FROM vec_chunks "
+        "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+        (qblob, pool)).fetchall()
 
 
 def retrieve(query: str, k: int = 60, kind: str | None = None,
@@ -647,10 +927,7 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
     try:
         pool = max(k * _POOL, 200)
         try:
-            knn = con.execute(
-                "SELECT rowid, distance FROM vec_chunks "
-                "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-                (mod.serialize_float32(qv[0]), pool)).fetchall()
+            knn = _knn(con, mod.serialize_float32(qv[0]), pool)
         except sqlite3.OperationalError:
             # Some sqlite3/sqlite-vec combinations (observed on Windows)
             # reject this exact query shape ("a LIMIT or 'k = ?' constraint

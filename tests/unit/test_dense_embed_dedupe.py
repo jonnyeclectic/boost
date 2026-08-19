@@ -18,17 +18,17 @@ import pytest
 
 from boost_cli.core import dense, embed, rag
 
-_VOCAB = {"testing": (1.0, 0.0, 0.0), "react": (0.0, 1.0, 0.0),
-          "python": (0.0, 0.0, 1.0)}
+_VOCAB = {"testing": (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), "react": (0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+          "python": (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0)}
 
 
 def _toy_embed(texts, input_type=None, timeout=60):
     out = []
     for t in texts:
-        v = [0.0, 0.0, 0.0]
+        v = [0.0] * 8
         for word, base in _VOCAB.items():
             if word in t.lower():
-                for i in range(3):
+                for i in range(8):
                     v[i] += base[i]
         norm = math.sqrt(sum(x * x for x in v)) or 1.0
         out.append([x / norm for x in v])
@@ -51,8 +51,8 @@ def counting_env(sandbox, monkeypatch):
 
     monkeypatch.setattr(embed, "embed", recording)
     monkeypatch.setattr(embed, "provider", lambda: "openai")
-    monkeypatch.setattr(embed, "model", lambda: "toy-3")
-    monkeypatch.setattr(embed, "dimension", lambda: 3)
+    monkeypatch.setattr(embed, "model", lambda: "toy-8")
+    monkeypatch.setattr(embed, "dimension", lambda: 8)
     monkeypatch.setattr(embed, "available", lambda: True)
     monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": "/x",
                                                     "other/skills": "/y"})
@@ -104,7 +104,7 @@ def test_duplicates_get_the_same_vector(counting_env):
     con = dense._connect()
     rows = list(con.execute(
         "SELECT c.name, v.embedding FROM chunks c "
-        "JOIN vec_chunks v ON v.rowid = c.id ORDER BY c.name"))
+        "JOIN vec_raw v ON v.id = c.id ORDER BY c.name"))
     assert len(rows) == 2
     assert rows[0][1] == rows[1][1], "same text must store the same vector"
     con.close()
@@ -136,8 +136,8 @@ def test_texts_are_embedded_as_documents(sandbox, monkeypatch):
 
     monkeypatch.setattr(embed, "embed", recording)
     monkeypatch.setattr(embed, "provider", lambda: "openai")
-    monkeypatch.setattr(embed, "model", lambda: "toy-3")
-    monkeypatch.setattr(embed, "dimension", lambda: 3)
+    monkeypatch.setattr(embed, "model", lambda: "toy-8")
+    monkeypatch.setattr(embed, "dimension", lambda: 8)
     monkeypatch.setattr(embed, "available", lambda: True)
     monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": "/x"})
     monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})

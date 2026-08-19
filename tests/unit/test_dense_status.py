@@ -23,7 +23,15 @@ from boost_cli.core import dense, embed, logs, paths
 
 def _write_store(provider="voyage", model="voyage-4", dim=1024,
                  version=dense.INDEX_VERSION, chunks=3, taps=("acme__skills",)):
-    """A store carrying `meta` + `chunks` — no vec0, so no extra required."""
+    """A store carrying `meta` + `chunks` — no vec0, so no extra required.
+
+    `meta` records the chunk total, as every store `dense.build()` writes now
+    does: `status()` reads the number from there rather than counting the
+    table, so a fixture that omits it models a *legacy* store instead of a
+    current one. The legacy path has its own coverage in
+    `test_dense_status_cheap.py`, which is also where the reason it exists —
+    that count being ~79% of a warm `boost search` — is pinned.
+    """
     paths.ensure_dirs()
     con = sqlite3.connect(str(dense.db_path()))
     try:
@@ -31,7 +39,8 @@ def _write_store(provider="voyage", model="voyage-4", dim=1024,
                     " name TEXT, tap TEXT, kind TEXT, cix INTEGER, snip TEXT)")
         con.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
         meta = {"version": version, "provider": provider, "model": model,
-                "dim": dim, "commits": dict.fromkeys(taps, "c0ffee")}
+                "dim": dim, "commits": dict.fromkeys(taps, "c0ffee"),
+                "chunks": chunks}
         con.executemany("INSERT INTO meta (k, v) VALUES (?, ?)",
                         [(k, json.dumps(v)) for k, v in meta.items()])
         for i in range(chunks):

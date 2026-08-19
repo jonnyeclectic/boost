@@ -350,8 +350,47 @@ reports `hybrid RRF`; it degrades to whichever single engine is ready, and to
 BM25 alone otherwise. `dense.status()` names which of the three links (extra,
 backend, built store) is missing, and `dense.fix_hint()` maps that to the one
 next action — both `boost doctor` and `boost search` read that same table, so
-they can't give contradictory advice. `core/ai.py` wraps the
-opt-in LLM-assisted paths (`search --smart`, `explain`, `distill`, `infer`,
+they can't give contradictory advice.
+
+**The dense store ranks twice, and `vec0` is why.** `sqlite-vec` has no ANN
+index: a float32 `MATCH` scores *every* vector in the store, which on a real
+750,416-chunk / 1024-d install is 3.08 GB and **28.2 s per query** — it was ~85%
+of a 33.9 s `boost search`. So a query runs a coarse pass over
+`vec_chunks_bin` (binary-quantized, one bit per dimension — 114 MB, Hamming) and
+re-ranks the top `RESCORE_POOL` (2048) on their exact float32 vectors from
+`vec_raw`. Measured: **28.2 s → 1.05 s at recall@60 = 1.000** — the same rows in
+the same order. Both stages are required: the binary pass alone recovers 0.667
+of the true top 60, so deleting the rescore as an "optimization" is a quality
+regression, and `tests/unit/test_dense_quantized.py` fails if it goes.
+`vec_raw` is an ordinary rowid-keyed table on purpose — `id IN (...)` against a
+vec0 table plans as a full scan (256 point lookups measured 3.2 s), so the
+rescore would cost more than the thing it replaced.
+
+Consequences for code you write here:
+
+- **`dim` must be a multiple of 8** for `bit[N]`, so `_quantizable()` gates the
+  layout and a non-conforming width keeps the old float32 `vec_chunks`. The
+  toy 3-d fixtures elsewhere in the suite are what keep that fallback covered;
+  `tests/unit/test_dense_quantized.py` uses 8-d.
+- **`dense.quantize()` migrates in place and re-embeds nothing** — it re-encodes
+  vectors already on disk. It counts rows into `vec_raw` and refuses to drop
+  `vec_chunks` unless the copy is complete, because re-embedding 750k chunks is
+  a bill, not an inconvenience. `boost reindex --dense` runs it; `boost doctor`
+  names a ready-but-unquantized store. **It costs disk**: a plain table pays
+  overflow-page overhead on 4 KB blobs that vec0's packed storage does not, so
+  the measured trade is **3.40 GB → 3.87 GB (+14%), in 1360 s**, peaking at
+  ~2× while both copies coexist. Don't describe it as size-neutral — an earlier
+  draft of this section did, from prediction rather than measurement.
+- **Nothing on the search path may count `chunks`.** `SELECT COUNT(*)` scans the
+  `chunks_tap` covering index — 8,419 pages / 34.5 MB, measured 1.94 s — and
+  both `ready()` and `status()` did it on every search, the latter only to word
+  one muted hint. The total now comes from `meta["chunks"]`, emptiness from a
+  `LIMIT 1` probe, and the scan only when `status(count=True)` asks. A store
+  that never recorded a total reports `chunks: None`, **not 0**: `fix_hint`
+  reads a zero as an unfinished install and would send that user to the one
+  remedy that re-embeds everything.
+
+`core/ai.py` wraps the opt-in LLM-assisted paths (`search --smart`, `explain`, `distill`, `infer`,
 `absorb`, `evolve`, `simulate`, …), shelling out to the `claude` CLI or
 `ANTHROPIC_API_KEY` when available and degrading to heuristics when not.
 
