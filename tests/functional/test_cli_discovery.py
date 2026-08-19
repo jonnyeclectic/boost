@@ -138,6 +138,42 @@ class TestSearch:
         assert "no matches for 'zzzznothing'" in r.out
         assert "try `boost discover zzzznothing`" in r.out
 
+    def test_no_matches_wears_the_standard_empty_state(self, boost, tapped):
+        # The ○/→ grammar every other empty surface uses — "nothing here"
+        # reads identically across commands.
+        r = boost("search", "zzzznothing")
+        assert "○ no matches" in r.out
+        assert "→ try `boost discover" in r.out
+
+    def test_rows_carry_the_kind_column(self, boost, tapped):
+        r = boost("search", "commit", "messages")
+        top = next(ln for ln in r.out.splitlines() if "commit-messages" in ln)
+        assert "[skill]" in top
+
+    def test_installed_names_get_a_dot(self, boost, tapped):
+        boost("install", "brainstorming")
+        r = boost("search", "brainstorming")
+        top = next(ln for ln in r.out.splitlines() if "brainstorming" in ln)
+        assert "●" in top
+
+    def test_uninstalled_names_get_no_dot(self, boost, tapped):
+        r = boost("search", "brainstorming")
+        top = next(ln for ln in r.out.splitlines() if "brainstorming" in ln)
+        assert "●" not in top
+
+    def test_tap_column_appears_only_on_wide_terminals(self, boost, tapped,
+                                                       monkeypatch):
+        monkeypatch.setenv("COLUMNS", "100")
+        wide = boost("search", "commit", "messages")
+        top = next(ln for ln in wide.out.splitlines()
+                   if "commit-messages" in ln)
+        assert "fixture-tap" in top
+        monkeypatch.setenv("COLUMNS", "60")
+        narrow = boost("search", "commit", "messages")
+        top = next(ln for ln in narrow.out.splitlines()
+                   if "commit-messages" in ln)
+        assert "fixture-tap" not in top
+
     def test_curated_tap_gets_star(self, boost, fixture_tap_src):
         boost("tap", fixture_tap_src, "--curated")
         r = boost("search", "brainstorming")
@@ -1073,15 +1109,19 @@ class TestBrowseAurora:
         assert base["violet"] == base["pink"] == curses.COLOR_MAGENTA
 
     def test_match_positions(self):
-        from boost_cli.commands import discovery
-        assert discovery._match_positions("bs", "brainstorm") == [0, 5]
-        assert discovery._match_positions("", "anything") == []
-        assert discovery._match_positions("zzz", "brainstorm") == []
+        from boost_cli.core import browse
+        assert browse.match_positions("bs", "brainstorm") == [0, 5]
+        assert browse.match_positions("", "anything") == []
+        assert browse.match_positions("zzz", "brainstorm") == []
         # left-to-right greedy: first 'o', then trailing 'm'
-        assert discovery._match_positions("om", "brainstorm") == [7, 9]
+        assert browse.match_positions("om", "brainstorm") == [7, 9]
 
     def test_scrollbar_math(self):
+        # The geometry moved into core (mutation-gated); the command layer
+        # keeps a thin alias so both panes provably share one implementation.
         from boost_cli.commands import discovery
+        from boost_cli.core import browse
+        assert discovery._scrollbar is browse.scrollbar
         assert discovery._scrollbar(5, 10, 0) is None      # all fits
         assert discovery._scrollbar(10, 0, 0) is None      # no rows
         start, length = discovery._scrollbar(100, 10, 0)
@@ -1091,6 +1131,8 @@ class TestBrowseAurora:
 
     def test_grad_segments_partition(self):
         from boost_cli.commands import discovery
+        from boost_cli.core import browse
+        assert discovery._grad_segments is browse.rule_segments
         assert discovery._grad_segments(0) == []
         segs = discovery._grad_segments(10, 3)
         assert [s[1] for s in segs] == [4, 3, 3]           # sums to width
@@ -1098,13 +1140,12 @@ class TestBrowseAurora:
         assert [s[0] for s in segs] == [0, 4, 7]           # contiguous
         assert len(discovery._grad_segments(2, 3)) == 2    # n clamps to width
 
-    def test_theme_upgrades_to_colour(self):
-        from boost_cli.commands import discovery
-
+    @staticmethod
+    def _color_curses(colors=256, can_change=True):
         class ColorCurses:
             COLOR_CYAN, COLOR_MAGENTA, COLOR_GREEN = 6, 5, 2
             COLOR_YELLOW, COLOR_RED = 3, 1
-            COLORS = 256
+            COLORS = colors
             A_BOLD, A_DIM, A_REVERSE, A_NORMAL = 1, 2, 4, 0
 
             class error(Exception):
@@ -1120,7 +1161,7 @@ class TestBrowseAurora:
                 pass
 
             def can_change_color(self):
-                return True
+                return can_change
 
             def init_color(self, slot, r, g, b):
                 self.colors[slot] = (r, g, b)
@@ -1131,25 +1172,43 @@ class TestBrowseAurora:
             def color_pair(self, i):
                 return i << 8
 
-        cc = ColorCurses()
-        th = discovery._aurora_theme(cc)
+        return ColorCurses()
+
+    def test_theme_upgrades_to_colour(self):
+        from boost_cli.commands import discovery
+
+        cc = self._color_curses()
+        th = discovery._browse_theme(cc)
         # custom colours were defined from the parity-locked palette
         assert cc.colors[16] == discovery._curses_rgb1000()["cyan"]
         # title carries a colour pair plus bold, not bare monochrome
         assert th["title"] & cc.A_BOLD
         assert th["title"] & ~cc.A_BOLD
+        # truecolor-capable terminals get the cyan -> violet -> pink rule
         assert len(th["rule"]) == 3
-        assert th["rule"][0] != th["rule"][1] != th["rule"][2]
+        assert len(set(th["rule"])) == 3
+
+    def test_gradient_rule_collapses_to_one_hue_on_8_colour(self):
+        """Mirrors out.gradient's 16-colour fallback: cyan/magenta/magenta
+        would read as confetti, so a terminal that cannot define custom
+        colours paints the whole rule in the one accent."""
+        from boost_cli.commands import discovery
+
+        cc = self._color_curses(colors=8, can_change=False)
+        th = discovery._browse_theme(cc)
+        assert len(th["rule"]) == 3
+        assert len(set(th["rule"])) == 1
+        assert th["rule"][0]                    # the accent pair, not bare 0
 
     def test_theme_falls_back_without_colour(self):
         from boost_cli.commands import discovery
 
         class MonoCurses:
             A_BOLD, A_DIM, A_REVERSE, A_NORMAL = 1, 2, 4, 0
-        th = discovery._aurora_theme(MonoCurses)
+        th = discovery._browse_theme(MonoCurses)
         assert th["title"] == MonoCurses.A_BOLD
-        assert th["sel_bar"] == MonoCurses.A_REVERSE
-        assert th["rule"] == [MonoCurses.A_NORMAL] * 3
+        assert th["row_sel"] == MonoCurses.A_REVERSE
+        assert th["rule"] == [MonoCurses.A_DIM] * 3
 
 
 class TestBrowseCards:

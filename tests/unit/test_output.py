@@ -966,3 +966,287 @@ class TestRoleNamesAreReal:
         from boost_cli.commands import safety
         self._assert_renders(safety._SEV_ROLE.values())
         self._assert_renders(safety._TRUST_ROLE.values())
+
+
+class TestMeterHue:
+    """The search screen's one gradient moment: magnitude rides the Aurora
+    ramp. The thresholds are the contract — a drifted boundary silently
+    re-tints every result row."""
+
+    def test_top_third_is_cyan(self):
+        assert output.meter_hue(1.0) == "cyan"
+        assert output.meter_hue(0.66) == "cyan"
+
+    def test_middle_third_is_violet(self):
+        assert output.meter_hue(0.659) == "violet"
+        assert output.meter_hue(0.33) == "violet"
+
+    def test_bottom_third_is_pink(self):
+        assert output.meter_hue(0.329) == "pink"
+        assert output.meter_hue(0.0) == "pink"
+
+    def test_out_of_range_clamps_to_the_ends(self):
+        assert output.meter_hue(7.5) == "cyan"
+        assert output.meter_hue(-1.0) == "pink"
+
+    def test_every_hue_is_an_aurora_token(self):
+        for frac in (0.0, 0.33, 0.66, 1.0):
+            assert output.meter_hue(frac) in output.TOKENS
+
+
+class TestKindLabel:
+    """One vocabulary for what a catalog kind is called, shared by search
+    rows and browse badges — the surfaces can never disagree."""
+
+    def test_the_three_kinds_verbatim(self):
+        assert output.kind_label("skill") == "[skill]"
+        assert output.kind_label("rule") == "[rule]"
+        assert output.kind_label("workflow") == "[workflow]"
+
+    def test_unknown_kind_is_bracketed_verbatim(self):
+        assert output.kind_label("agent") == "[agent]"
+
+    def test_missing_kind_defaults_to_skill(self):
+        assert output.kind_label("") == "[skill]"
+
+    def test_browse_badges_share_the_vocabulary(self):
+        from boost_cli.commands import discovery
+        e = {"name": "x", "version": "1.0.0", "tap": "a/b", "kind": "workflow"}
+        assert discovery._row_badges(e, {})[0][0] == output.kind_label("workflow")
+
+
+class TestSearchLayout:
+    NAMES = ("commit-messages", "tdd-workflow", "safe-refactors")
+    KINDS = ("skill", "workflow", "rule")
+    TAPS = ("anthropics/skills", "obra/superpowers", "sdi/agent-rules")
+
+    def test_name_column_fits_the_widest_shown_name(self):
+        lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)
+        assert lay.name_w == len("commit-messages")
+
+    def test_name_column_caps_at_32(self):
+        lay = output.search_layout(120, ["x" * 60], ["skill"], ["a/b"])
+        assert lay.name_w == 32
+
+    def test_kind_column_fits_the_widest_kind_shown(self):
+        lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)
+        assert lay.kind_w == len("[workflow]")
+
+    def test_an_all_skill_page_pays_only_for_skill(self):
+        lay = output.search_layout(100, self.NAMES, ["skill"] * 3, self.TAPS)
+        assert lay.kind_w == len("[skill]")
+
+    def test_tap_appears_at_84_columns_and_not_below(self):
+        wide = output.search_layout(84, self.NAMES, self.KINDS, self.TAPS)
+        narrow = output.search_layout(83, self.NAMES, self.KINDS, self.TAPS)
+        assert wide.tap_w > 0
+        assert narrow.tap_w == 0
+
+    def test_tap_drops_before_the_description_starves(self):
+        # 90 cols, a 32-char name and a 20-char tap: keeping the tap would
+        # leave the description under 24 columns, so provenance goes first.
+        lay = output.search_layout(90, ["x" * 32], ["workflow"], ["o" * 20])
+        assert lay.tap_w == 0
+        assert lay.desc_w >= 24
+
+    def test_kind_drops_below_48_columns(self):
+        assert output.search_layout(47, self.NAMES, self.KINDS, self.TAPS).kind_w == 0
+        assert output.search_layout(48, self.NAMES, self.KINDS, self.TAPS).kind_w > 0
+
+    def test_name_tightens_stepwise_before_desc_starves(self):
+        lay = output.search_layout(55, ["x" * 32], ["workflow"], ["a/b"])
+        assert lay.name_w == 24
+        assert lay.desc_w >= 8
+
+    def test_name_never_tightens_below_12(self):
+        for cols in range(40, 121):
+            lay = output.search_layout(cols, ["x" * 40], ["workflow"], ["o" * 60])
+            assert lay.name_w >= 12
+
+    def test_desc_floor_is_8(self):
+        for cols in range(40, 121):
+            lay = output.search_layout(cols, ["x" * 40], ["workflow"], ["o" * 60])
+            assert lay.desc_w >= 8
+
+    def test_empty_inputs_degrade_to_minimal_columns(self):
+        # The `default=` guards on the max() calls are contract, not
+        # decoration: an empty screen plans 1-wide names and no kind column.
+        lay = output.search_layout(80, [], [], [])
+        assert (lay.name_w, lay.kind_w, lay.tap_w) == (1, 0, 0)
+        assert lay.desc_w >= 8
+        # …including on a terminal wide enough for the tap branch to run.
+        assert output.search_layout(100, [], [], []).tap_w == 0
+
+    def test_column_caps_are_exact(self):
+        # kind caps at [workflow]'s 10 even for a stranger kind; tap at 20.
+        assert output.search_layout(100, ["a"], ["extra-long"], []).kind_w == 10
+        assert output.search_layout(120, ["a"], ["skill"], ["x" * 25]).tap_w == 20
+
+    def test_desc_gets_every_remaining_cell_when_kind_drops(self):
+        # Below 48 columns the kind column costs exactly nothing: at 44 cols
+        # a 16-wide name leaves 44 - 2 - 7 - 16 - 2 = 17 cells of prose.
+        lay = output.search_layout(44, ["x" * 16], ["skill"], [])
+        assert (lay.name_w, lay.kind_w, lay.tap_w, lay.desc_w) == (16, 0, 0, 17)
+
+    def test_every_assembled_row_fits_the_terminal(self):
+        """The property behind the pinned COLUMNS=60 clamp test: whatever the
+        inputs, a row built from the layout measures within the terminal
+        (2-column indent included) at every width from 40 up."""
+        extremes = [
+            ("x" * 40, "workflow", "o" * 60, "d" * 200),
+            ("commit-messages", "skill", "fixture-tap", "short"),
+            ("a", "rule", "", ""),
+        ]
+        for cols in range(40, 121):
+            names = [n for n, _k, _t, _d in extremes]
+            kinds = [k for _n, k, _t, _d in extremes]
+            taps = [t for _n, _k, t, _d in extremes]
+            lay = output.search_layout(cols, names, kinds, taps)
+            for name, kind, tap, desc in extremes:
+                for curated in (False, True):
+                    row = output.format_search_row(
+                        name, desc, kind, tap, 1.0,
+                        curated=curated, installed=True, lay=lay)
+                    assert output.visible_len(row) + 2 <= cols, (cols, name, curated)
+
+
+class TestFormatSearchRow:
+    DESC = "Conventional, atomic commit message discipline"
+
+    def _lay(self, cols=60):
+        return output.search_layout(
+            cols, ["commit-messages", "tdd-workflow"],
+            ["skill", "workflow"], ["fixture-tap", "fixture-tap"])
+
+    def test_plain_row_exact_bytes(self):
+        row = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=False, installed=False, lay=self._lay(60))
+        expected = ("▰▰▰▰   commit-messages  "
+                    + "[skill]".ljust(len("[workflow]")) + "  "
+                    + output.truncate(self.DESC, self._lay(60).desc_w))
+        assert row == expected
+
+    def test_curated_tail_is_verbatim_with_two_space_lead(self):
+        row = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=True, installed=False, lay=self._lay(60))
+        assert row.endswith("  ★ curated")
+
+    def test_curated_pays_for_its_tail_out_of_the_description(self):
+        lay = self._lay(60)
+        plainr = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=False, installed=False, lay=lay)
+        curated = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=True, installed=False, lay=lay)
+        assert output.visible_len(curated) <= output.visible_len(plainr) + len("  ★ curated")
+
+    def test_installed_mark_fills_its_reserved_column(self):
+        lay = self._lay(60)
+        on = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=False, installed=True, lay=lay)
+        off = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=False, installed=False, lay=lay)
+        assert on[5] == "●" and off[5] == " "
+        # the column is reserved either way, so names still align
+        assert on.index("commit-messages") == off.index("commit-messages")
+
+    def test_tap_column_present_at_100_columns(self):
+        row = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=False, installed=False, lay=self._lay(100))
+        assert "fixture-tap" in row
+
+    def test_tap_column_absent_at_60_columns(self):
+        row = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=False, installed=False, lay=self._lay(60))
+        assert "fixture-tap" not in row
+
+    def test_no_trailing_whitespace_ever(self):
+        for curated in (False, True):
+            row = output.format_search_row(
+                "tdd-workflow", "", "workflow", "", 0.5,
+                curated=curated, installed=False, lay=self._lay(60))
+            assert row == row.rstrip()
+
+    def test_color_state_never_changes_the_glyphs(self, monkeypatch):
+        lay = self._lay(60)
+        plainr = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=True, installed=True, lay=lay)
+        monkeypatch.setenv("BOOST_COLOR", "always")
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        colored = output.format_search_row(
+            "commit-messages", self.DESC, "skill", "fixture-tap", 1.0,
+            curated=True, installed=True, lay=lay)
+        assert output._ANSI_RE.sub("", colored) == plainr
+        assert colored.count("▰") == plainr.count("▰")
+
+    def test_wide_row_exact_bytes_with_kind_and_tap(self):
+        # The 100-column shape end to end: a workflow's kind text, the tap
+        # cell, and everything before them — one mangled cell breaks the row.
+        lay = self._lay(100)
+        row = output.format_search_row(
+            "tdd-workflow", self.DESC, "workflow", "fixture-tap", 1.0,
+            curated=False, installed=False, lay=lay)
+        expected = ("▰▰▰▰   " + "tdd-workflow".ljust(lay.name_w) + "  "
+                    + "[workflow]".ljust(lay.kind_w) + "  "
+                    + "fixture-tap".ljust(lay.tap_w) + "  "
+                    + output.truncate(self.DESC, lay.desc_w))
+        assert row == expected.rstrip()
+
+    def test_wide_color_row_strips_back_to_the_plain_row(self, monkeypatch):
+        # Runs every colored cell (meter, mark, name, kind, tap) through its
+        # role for real — a misnamed role raises here instead of shipping.
+        lay = self._lay(100)
+        plainr = output.format_search_row(
+            "tdd-workflow", self.DESC, "workflow", "fixture-tap", 0.5,
+            curated=True, installed=True, lay=lay)
+        monkeypatch.setenv("BOOST_COLOR", "always")
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        colored = output.format_search_row(
+            "tdd-workflow", self.DESC, "workflow", "fixture-tap", 0.5,
+            curated=True, installed=True, lay=lay)
+        assert output._ANSI_RE.sub("", colored) == plainr
+
+    def test_trailing_padding_is_actually_stripped(self):
+        # A short kind cell ends the row in pad spaces before the rstrip; the
+        # stripped row must end on the glyph, not the padding.
+        row = output.format_search_row(
+            "tdd-workflow", "", "skill", "", 0.5,
+            curated=False, installed=False, lay=self._lay(60))
+        assert row.endswith("[skill]")
+
+    def test_curated_lead_boundary_exact_bytes(self):
+        # The tail's lead shrinks to one space exactly when the description
+        # budget cannot cover the 11-cell tail: two spaces at desc_w 10, one
+        # at desc_w 9 — asserted as whole rows so the tail cannot detach.
+        base = "▰▰▰▰   commit-messages  " + "[skill]".ljust(10)
+        two = output.format_search_row(
+            "commit-messages", "", "skill", "", 1.0, curated=True,
+            installed=False,
+            lay=output.SearchLayout(cols=60, name_w=15, kind_w=10, tap_w=0,
+                                    desc_w=10))
+        assert two == base + "  ★ curated"
+        one = output.format_search_row(
+            "commit-messages", "", "skill", "", 1.0, curated=True,
+            installed=False,
+            lay=output.SearchLayout(cols=60, name_w=15, kind_w=10, tap_w=0,
+                                    desc_w=9))
+        assert one == base + " ★ curated"
+
+    def test_meter_is_tinted_by_magnitude_hue(self, monkeypatch):
+        monkeypatch.setenv("BOOST_COLOR", "always")
+        monkeypatch.setenv("COLORTERM", "truecolor")
+        lay = self._lay(60)
+        top = output.format_search_row(
+            "a", "d", "skill", "", 1.0, curated=False, installed=False, lay=lay)
+        low = output.format_search_row(
+            "a", "d", "skill", "", 0.1, curated=False, installed=False, lay=lay)
+        assert top.startswith(output.rgb(*output.TOKENS["cyan"]))
+        assert low.startswith(output.rgb(*output.TOKENS["pink"]))

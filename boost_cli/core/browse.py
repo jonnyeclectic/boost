@@ -387,6 +387,101 @@ def clamp_scroll(offset: int, total: int, visible: int) -> int:
     return max(0, min(offset, total - visible))
 
 
+def rule_segments(width: int, n: int = 3) -> list[tuple[int, int]]:
+    """Split a ``width``-wide rule into ``n`` near-equal ``(start, length)``
+    runs that partition it exactly — [] when there is no width, ``n`` clamped
+    to it.
+
+    This is how the frame paints the Aurora cyan → violet → pink gradient
+    across the top rule, the browser's one brand moment. It lives here rather
+    than in the draw layer so the partition arithmetic sits under the
+    mutation gate.
+    """
+    if width <= 0:
+        return []
+    n = min(n, width)
+    base, extra = divmod(width, n)
+    segs, pos = [], 0
+    for k in range(n):
+        length = base + (1 if k < extra else 0)
+        segs.append((pos, length))
+        pos += length
+    return segs
+
+
+def scrollbar(total: int, visible: int, top: int) -> tuple[int, int] | None:
+    """``(thumb_start, thumb_len)`` for a ``visible``-tall proportional
+    scrollbar over ``total`` rows scrolled to ``top`` — None when everything
+    fits (or there is no room), so callers can skip drawing entirely.
+
+    One geometry shared by the list and detail panes; two implementations is
+    how the two thumbs come to move differently.
+    """
+    if visible <= 0 or total <= visible:
+        return None
+    thumb = max(1, visible * visible // total)
+    # total > visible here, so max_top >= 1 — no zero-divide guard needed.
+    max_top = total - visible
+    return (round((visible - thumb) * top / max_top), thumb)
+
+
+def empty_lines(query: str, scope: str, hidden: int = 0) -> list[tuple[str, str]]:
+    """``(role, text)`` lines for a zero-match list pane.
+
+    A silent void is indistinguishable from a hung draw, so the pane says
+    what happened and which keys widen the net — in the same ○/→ grammar
+    every other boost empty state uses, and every line muted, because an
+    absence is the quietest thing on screen. Never returns nothing.
+    """
+    q = " ".join(query.split())
+    head = ("○ no matches for '%s' in %s" % (q, scope_label(scope))
+            if q else "○ nothing here")
+    lines = [("muted", head), ("muted", "→ backspace widens · ^T scope")]
+    if hidden > 0:
+        lines.append(("muted",
+                      "→ ^D shows %s hidden duplicates" % format(hidden, ",")))
+    return lines
+
+
+def badge_positions(name_end: int, badges, width: int) -> list[tuple[int, str, str]]:
+    """Right-align a badge cluster into a ``width``-column row.
+
+    ``badges`` arrives most-important-first as ``(text, theme_key)`` pairs;
+    the cluster is placed as ``(x, text, theme_key)`` triples ending exactly
+    at ``width``, one space between badges, never crossing ``name_end``.
+    When it does not fit, badges drop from the least-important end until it
+    does — [] when even the first survivor cannot fit. Right-aligning is what
+    stops the rail wandering with every name length; the drop order is what
+    keeps the honest badges (the ×N copies count, the kind) alive longest.
+    """
+    kept = list(badges)
+    while kept:
+        total = sum(len(t) for t, _k in kept) + (len(kept) - 1)
+        start = width - total
+        if start >= name_end:
+            placed, x = [], start
+            for text, key in kept:
+                placed.append((x, text, key))
+                x += len(text) + 1
+            return placed
+        kept.pop()
+    return []
+
+
+def count_tail(n_found: int, n_all: int, n_sel: int, hidden: int) -> str:
+    """The query row's right-aligned tail, e.g.
+    ``2 selected · 128/71,700  (22,379 dupes hidden)``.
+
+    Thousands are grouped — at real catalogue scale ``22379`` is a smudge —
+    and each segment appears only when it carries information.
+    """
+    tail = "%s%s/%s" % ("%d selected · " % n_sel if n_sel else "",
+                        format(n_found, ","), format(n_all, ","))
+    if hidden:
+        tail += "  (%s dupes hidden)" % format(hidden, ",")
+    return tail
+
+
 # --------------------------------------------------------------- detail
 
 #: Install lifecycle as the detail pane shows it. `busy` exists because an
@@ -418,6 +513,60 @@ def status_line(state: str | None, message: str = "",
     return ("muted", "○ not installed")
 
 
+def state_glyph(state: str | None, installed: bool) -> tuple[str, str]:
+    """``(glyph, theme_role)`` for a row's status mark in the list pane.
+
+    Drawn from the same ``_STATUS_GLYPH`` table :func:`status_line` uses, so
+    the list and the detail pane can never disagree about what a state looks
+    like: ``◐`` while installing, ``✗`` on failure, ``●`` once installed
+    (this session or before), a reserved blank otherwise.
+    """
+    if state == BUSY:
+        return (_STATUS_GLYPH[BUSY], "busy")
+    if state == FAILED:
+        return (_STATUS_GLYPH[FAILED], "failed")
+    if state == OK or installed:
+        return (_STATUS_GLYPH[OK], "check")
+    return (" ", "muted")
+
+
+def session_summary(status) -> tuple[str, str] | None:
+    """Fold the ``name -> (state, message)`` install map into one bottom-rule
+    chip: ``(role, text)``, or None when nothing happened so the idle frame
+    stays byte-identical.
+
+    Precedence failed > busy > ok — the worst news owns the chip. Installs
+    otherwise report only inside the detail pane, which may be closed or
+    parked on a different entry; callers pass a shallow copy when another
+    thread owns the mapping.
+    """
+    states = [s for s, _m in status.values()]
+    n_failed = states.count(FAILED)
+    if n_failed:
+        return ("failed", "✗ %d failed" % n_failed)
+    n_busy = states.count(BUSY)
+    if n_busy:
+        return ("busy", "◐ %d installing…" % n_busy)
+    n_ok = states.count(OK)
+    if n_ok:
+        return ("ok_line", "✓ %d installed" % n_ok)
+    return None
+
+
+def install_target(entry: dict, targets) -> str:
+    """Destination text for the detail pane's ``installs`` line — what Enter
+    will actually touch, stated before it is pressed.
+
+    Dispatches on the entry's kind over a caller-supplied ``targets`` mapping
+    (kind -> destination text) so this stays pure and import-light: the
+    command layer knows the store path, the context files and the per-agent
+    command slots; this decides only which of them applies. A missing kind is
+    the default kind; an unknown one answers ``?`` rather than guessing.
+    """
+    kind = str(entry.get("kind") or "skill")
+    return str((targets or {}).get(kind, "?"))
+
+
 def _render_value(value) -> str:
     """A frontmatter value as display text, never as a Python repr.
 
@@ -435,7 +584,8 @@ def _render_value(value) -> str:
 def detail_lines(entry: dict, width: int = 60,
                  installed: bool | None = None,
                  state: str | None = None,
-                 message: str = "") -> list[tuple[str, str]]:
+                 message: str = "",
+                 install_to: str | None = None) -> list[tuple[str, str]]:
     """``(role, text)`` lines for the detail pane, wrapped to ``width``.
 
     Roles let the curses layer theme without re-deriving meaning from the text.
@@ -473,6 +623,11 @@ def detail_lines(entry: dict, width: int = 60,
                        ("file", "skill_md")):
         if entry.get(key):
             add("field", "%-8s %s" % (label, _render_value(entry[key])))
+    if install_to:
+        # The cost of Enter, stated before it is pressed — for a rule this is
+        # the highest-stakes fact on the screen, because it edits a file the
+        # user reads every session.
+        add("field", "%-8s %s" % ("installs", install_to))
     if entry.get("curated"):
         add("field", "%-8s %s" % ("curated", "yes"))
 

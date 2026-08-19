@@ -14,6 +14,8 @@ import os
 import re
 import shutil
 import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 RESET = "\033[0m"
 BOLD = "\033[1m"
@@ -372,6 +374,125 @@ def meter(fraction: float, width: int = 4) -> str:
         fraction = 1.0
     filled = round(fraction * width)
     return "▰" * filled + "▱" * (width - filled)
+
+
+def meter_hue(frac: float) -> str:
+    """Aurora tint name for a 0..1 relevance fraction.
+
+    The search screen's one gradient moment: magnitude rides the brand ramp
+    (cyan for the top third, violet for the middle, pink below), so the
+    ranking itself is the gradient. Out-of-range fractions clamp to the ends.
+    """
+    if frac >= 0.66:
+        return "cyan"
+    if frac >= 0.33:
+        return "violet"
+    return "pink"
+
+
+def kind_label(kind: str) -> str:
+    """Bracketed display text for a catalog kind — ``[skill]`` / ``[rule]`` /
+    ``[workflow]``, an unknown kind bracketed verbatim, a missing one shown as
+    the default kind. The single vocabulary both search rows and the browse
+    badges render, so the two surfaces cannot drift apart.
+    """
+    return "[%s]" % (kind or "skill")
+
+
+#: Fixed cells of a search row before the name column: the 4-glyph meter, a
+#: space, the 1-column installed mark, a space.
+_SEARCH_FIXED = 7
+#: out.info's lead-in, which the row itself never contains but must budget for.
+_SEARCH_INDENT = 2
+#: Visible width of the pinned curated tail, "  ★ curated".
+_CURATED_TAIL_W = 11
+
+
+@dataclass(frozen=True)
+class SearchLayout:
+    """Column plan for one search-result screen, in visible cells.
+
+    Frozen so every row of a screen is measured against the same plan — a
+    per-row recomputation is how columns come to wander.
+    """
+    cols: int            # full terminal width the plan was built for
+    name_w: int
+    kind_w: int          # 0 = the kind column is dropped
+    tap_w: int           # 0 = the tap column is dropped
+    desc_w: int          # room for an uncurated row's description
+
+
+def search_layout(cols: int, names: Sequence[str], kinds: Sequence[str],
+                  taps: Sequence[str]) -> SearchLayout:
+    """Plan the search-result columns for a ``cols``-wide terminal.
+
+    Sizing: the name column fits the widest shown name (capped at 32), the
+    kind column the widest shown kind label (capped at ``[workflow]``'s 10),
+    the tap column the widest shown tap (capped at 20). The description gets
+    the remainder.
+
+    Drop priority when narrow — provenance is the first luxury, prose the
+    last: the tap goes below 84 columns or whenever it would leave the
+    description under 24 cells; then the description shrinks toward its floor
+    of 8; then the name cap tightens 32 → 24 → 16 → 12; the kind column is
+    dropped outright below 48 columns. The meter, the mark column, the name
+    and the curated tail are never dropped. Every row assembled from the plan
+    measures within ``cols`` (indent included) for any terminal 40 cells wide
+    or more.
+    """
+    avail = cols - _SEARCH_INDENT - _SEARCH_FIXED
+    name_w = min(max((len(n) for n in names), default=1), 32)
+    kind_w = 0
+    if cols >= 48:
+        kind_w = min(max((len(kind_label(k)) for k in kinds), default=0), 10)
+    tap_w = 0
+    if cols >= 84:
+        tap_w = min(max((len(t) for t in taps), default=0), 20)
+
+    def desc_room(nw: int) -> int:
+        return (avail - nw - 2 - (kind_w + 2 if kind_w else 0)
+                - (tap_w + 2 if tap_w else 0))
+
+    if tap_w and desc_room(name_w) < 24:
+        tap_w = 0
+    for cap in (24, 16, 12):
+        if desc_room(name_w) >= 8:
+            break
+        name_w = min(name_w, cap)
+    return SearchLayout(cols=cols, name_w=name_w, kind_w=kind_w, tap_w=tap_w,
+                        desc_w=max(8, desc_room(name_w)))
+
+
+def format_search_row(name: str, desc: str, kind: str, tap: str, frac: float,
+                      *, curated: bool, installed: bool,
+                      lay: SearchLayout) -> str:
+    """Assemble one search-result line (without the 2-space print indent).
+
+    Everything resolves through roles, so the plain path (NO_COLOR, pipes) is
+    byte-stable text and the colored path strips back to exactly it. The
+    meter glyph count never varies with color state; the installed mark's
+    column is reserved either way so names align; a curated row pays for its
+    pinned ``  ★ curated`` tail out of its own description.
+    """
+    row = (aurora(meter(frac), meter_hue(frac)) + " "
+           + (role("●", "success") if installed else " ") + " "
+           + _pad(role(truncate(name, lay.name_w), "accent"), lay.name_w))
+    if lay.kind_w:
+        row += "  " + _pad(role(truncate(kind_label(kind), lay.kind_w),
+                                "muted"), lay.kind_w)
+    if lay.tap_w:
+        row += "  " + _pad(role(truncate(tap, lay.tap_w), "muted"), lay.tap_w)
+    dw = lay.desc_w - (_CURATED_TAIL_W if curated else 0)
+    clipped = truncate(desc, dw)
+    if clipped:
+        row += "  " + clipped
+    if curated:
+        # At the description floor the 11-cell tail is one cell wider than
+        # the 2 + desc_w budget it replaces, so its lead shrinks to a single
+        # space there — the ★ and its word are pinned, the gutter is not.
+        lead = "  " if clipped or lay.desc_w >= _CURATED_TAIL_W - 1 else " "
+        row += lead + role("★ curated", "warn")
+    return row.rstrip()
 
 
 def kv(key: str, value: str, width: int = 14) -> None:
