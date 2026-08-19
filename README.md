@@ -281,8 +281,8 @@ list on the left, the selected item's full detail on the right.
 │ match (●) all ( ) name ( ) descr ( ) tap              │ ──────────────────── │
 │ ↑↓ move  ⇥ select  → detail  ^T scope  ↵ install      │ Review a pull …      │
 ├───────────────────────────────────────────────────────┤ ● installed          │
-│  ★● code-review  [skill] v1.0.0 [acme/quality]        │ SOURCE · FRONTMATTER │
-╰───────────────────────────────────────────────────────┴──────────────────────╯
+│  ★● code-review         [skill] v1.0.0 [acme/quality] │ SOURCE · FRONTMATTER │
+╰─ ✓ 1 installed ───────────────────────────────────────┴──────────────────────╯
 ```
 
 | key | does |
@@ -300,10 +300,18 @@ The query splits on spaces and **every** token must match, so `code review`
 narrows where `code` alone would not. Selection lives on `⇥` rather than space
 for exactly that reason, and `q` stays a character so `quality` is searchable.
 
-`↵` installs without dropping you back to the shell, and the detail pane
-reports it — `◐ installing…`, then `● installed` with the destination, or
-`✗` with the reason. Installs queue and run one at a time, because each one
-rewrites the lock file.
+`↵` installs without dropping you back to the shell, and the whole surface
+reports it: the row's mark cycles `◐` → `●` (or `✗`), the detail pane narrates
+with the destination or the reason, and a chip in the bottom rule keeps the
+session tally (`✓ 2 installed`) visible even with the pane closed. Installs
+queue and run one at a time, because each one rewrites the lock file.
+
+The list is honest at the edges too: badges sit in a right-aligned rail
+(dropping least-important-first when narrow, the `×N` copies count last), an
+overflowing list gets a scrollbar, a zero-match filter says
+`○ no matches for '…'` with the keys that widen it, and the detail pane's
+`installs` line states what `↵` will touch **before** it is pressed — for a
+rule that is each agent's context file, which is why it earns the line.
 
 **Duplicates are collapsed.** Registries render one skill into `.claude/`,
 `.cursor/`, `.gemini/` and a plugin root, so the same thing was listed four
