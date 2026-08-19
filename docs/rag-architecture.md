@@ -135,6 +135,21 @@ normalization, which matters when bodies vary from 3 lines to 300). Sparse term 
 Scoring is standard BM25 (`k1≈1.2`, `b≈0.75`). At ~9k items / tens of thousands of chunks this is a
 dict-of-postings scan — comfortably sub-second per query in Python.
 
+**Query path as shipped** (post `cold-search-reads-the-whole-catalogue`): with
+`entries=None` — the CLI, MCP and eval path — `rag.retrieve` ranks straight off
+the index's own doc metadata and materialises real catalog entries only for the
+final `k` survivors, loading only *their* taps' caches (`_retrieve_from_index`).
+The previous shape parsed every tap cache on the machine per query
+(`catalog.all_entries()`: 458 files / ~100 MB / 0.32 s measured at 71.6k
+entries) and computed a display snippet for every scored doc (39,726 calls to
+serve 60). Snippet windowing now runs on returned hits only, on both paths.
+The contract is byte-identical-or-fall-back: any survivor whose entry cannot be
+materialised (a tap cache vanished under a stat-fresh index) reruns the query
+through the explicit-`entries` path rather than approximating. An explicit
+`entries=` list (the eval harness, `boost chat`) keeps today's exact path.
+`dense.ready()` stats the store before importing the backend for the same
+cold-path reason. Measured end to end: 0.94 s → 0.49 s cold at 458 taps.
+
 ### 6b. Two-stage pipeline — upgrade `boost_search` / `catalog.search` **in place**
 
 No parallel MCP tool (per decision). The upgraded flow:

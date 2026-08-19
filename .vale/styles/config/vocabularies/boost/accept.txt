@@ -25,6 +25,7 @@ dotfiles
 DSPy
 else's
 env
+eval
 evals
 freemium
 frontmatter
