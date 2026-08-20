@@ -29,7 +29,18 @@ import pytest
 from boost_cli.core import dense, paths
 
 
-def _store(provider="local", model="bge", dim=3, rows=(("a", "acme/skills"),),
+def _pack_bits(blob):
+    """One sign bit per float, eight to a byte — what vec_quantize_binary does."""
+    import struct
+    vals = struct.unpack("%df" % (len(blob) // 4), blob)
+    out = bytearray(len(vals) // 8)
+    for i, x in enumerate(vals):
+        if x > 0:
+            out[i // 8] |= 1 << (i % 8)
+    return bytes(out)
+
+
+def _store(provider="local", model="bge", dim=8, rows=(("a", "acme/skills"),),
            commits=None):
     """A hand-built store, so these tests never need the sqlite-vec extension."""
     paths.ensure_dirs()
@@ -39,15 +50,25 @@ def _store(provider="local", model="bge", dim=3, rows=(("a", "acme/skills"),),
                     "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, tap TEXT,"
                     " path TEXT, kind TEXT, cix INTEGER, snip TEXT)")
         con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
-        con.execute("CREATE TABLE IF NOT EXISTS vec_chunks ("
+        # The quantized layout, as ordinary tables. Production makes
+        # `vec_chunks_bin` a vec0 virtual table, but nothing here queries it —
+        # these tests exchange shards — and building it plainly is what keeps
+        # the whole class runnable without the extension. `_ensure_schema`
+        # short-circuits on `IF NOT EXISTS`, exactly as it always did for the
+        # float32 `vec_chunks` this replaced.
+        con.execute("CREATE TABLE IF NOT EXISTS vec_chunks_bin ("
                     "rowid INTEGER PRIMARY KEY, embedding BLOB)")
+        con.execute("CREATE TABLE IF NOT EXISTS vec_raw ("
+                    "id INTEGER PRIMARY KEY, embedding BLOB)")
         for name, tap in rows:
             cur = con.execute(
                 "INSERT INTO chunks (name, tap, path, kind, cix, snip) "
                 "VALUES (?, ?, ?, ?, 0, ?)",
                 (name, tap, "%s/SKILL.md" % name, "skill", "snip of %s" % name))
-            con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
+            con.execute("INSERT INTO vec_raw (id, embedding) VALUES (?, ?)",
                         (cur.lastrowid, b"\x00" * (4 * dim)))
+            con.execute("INSERT INTO vec_chunks_bin (rowid, embedding) VALUES (?, ?)",
+                        (cur.lastrowid, b"\x00" * (dim // 8)))
         meta = {"version": dense.INDEX_VERSION, "provider": provider,
                 "model": model, "dim": dim,
                 "commits": commits if commits is not None else {"acme__skills": "c1"}}
@@ -65,18 +86,18 @@ class TestExport:
         assert {r["tap"] for r in shard["chunks"]} == {"acme/skills"}
 
     def test_a_shard_records_the_backend_that_made_it(self, sandbox):
-        _store(provider="voyage", model="voyage-4", dim=3)
+        _store(provider="voyage", model="voyage-4", dim=8)
         shard = dense.export_shard("acme/skills")
         assert shard["provider"] == "voyage"
         assert shard["model"] == "voyage-4"
-        assert shard["dim"] == 3
+        assert shard["dim"] == 8
 
     def test_a_shard_records_the_commit_it_was_built_from(self, sandbox):
         _store(commits={"acme__skills": "deadbeef"})
         assert dense.export_shard("acme/skills")["commit"] == "deadbeef"
 
     def test_vectors_survive_the_round_trip_as_bytes(self, sandbox):
-        _store(dim=3)
+        _store(dim=8)
         chunk = dense.export_shard("acme/skills")["chunks"][0]
         assert isinstance(chunk["embedding"], str)   # base64, JSON-safe
         assert chunk["snip"] == "snip of a"
@@ -108,31 +129,44 @@ def with_backend(monkeypatch):
             import struct
             return struct.pack("%df" % len(vec), *vec)
 
+    def _plain():
+        """A connection carrying the two vec0 SQL functions writes now use.
+
+        `_store_vector` quantizes in SQL so the write and query sides can never
+        disagree about how a float becomes a bit. That is right for production
+        and invisible here — no test in this file runs a KNN — but it does mean
+        a bare connection can no longer INSERT. Registering the pair keeps the
+        class extension-free without pretending the write path is a no-op.
+        """
+        con = sqlite3.connect(str(dense.db_path()))
+        con.create_function("vec_f32", 1, lambda b: b)
+        con.create_function("vec_quantize_binary", 1, _pack_bits)
+        return con
+
     monkeypatch.setattr(dense, "_load", lambda: _FakeVec)
-    monkeypatch.setattr(dense, "_connect",
-                        lambda: sqlite3.connect(str(dense.db_path())))
+    monkeypatch.setattr(dense, "_connect", _plain)
 
 
 class TestImportRefusesMismatchedVectors:
     """The failure that must never happen quietly."""
 
     def test_a_different_provider_is_refused(self, sandbox, with_backend):
-        _store(provider="local", model="bge", dim=3)
+        _store(provider="local", model="bge", dim=8)
         shard = {"tap": "x/y", "provider": "voyage", "model": "voyage-4",
-                 "dim": 3, "commit": "c1", "chunks": []}
+                 "dim": 8, "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is False and "provider" in reason
 
     def test_a_different_model_is_refused(self, sandbox, with_backend):
-        _store(provider="local", model="bge", dim=3)
+        _store(provider="local", model="bge", dim=8)
         shard = {"tap": "x/y", "provider": "local", "model": "other-model",
-                 "dim": 3, "commit": "c1", "chunks": []}
+                 "dim": 8, "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is False and "model" in reason
 
     def test_a_different_dimension_is_refused(self, sandbox, with_backend):
         # Would corrupt the vec0 table outright, not merely rank badly.
-        _store(dim=3)
+        _store(dim=8)
         shard = {"tap": "x/y", "provider": "local", "model": "bge",
                  "dim": 384, "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
@@ -141,14 +175,14 @@ class TestImportRefusesMismatchedVectors:
     def test_a_stale_commit_is_refused(self, sandbox, with_backend):
         # Accepting it would mark the tap "reused" and it would never re-embed.
         _store()
-        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
+        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 8,
                  "commit": "old", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="new")
         assert ok is False and "commit" in reason
 
     def test_a_matching_shard_is_accepted(self, sandbox, with_backend):
         _store()
-        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
+        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 8,
                  "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is True, reason
@@ -170,7 +204,7 @@ class TestImportIntoAnEmptyStore:
             # condition that actually decides whether this can run.
             pytest.skip("sqlite-vec extension not loadable here")
         con.close()
-        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
+        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 8,
                  "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is True, reason
@@ -207,7 +241,7 @@ class TestImportIntoAnEmptyStore:
 
 class TestRoundTrip:
     def test_export_then_import_preserves_the_vector_bytes(self, sandbox, with_backend):
-        _store(dim=3)
+        _store(dim=8)
         shard = dense.export_shard("acme/skills")
         before = shard["chunks"][0]["embedding"]
         dense.import_shard(shard, commit="c1")
@@ -248,7 +282,7 @@ class TestWorksWithoutTheExtension:
         # The asymmetry is deliberate: writing vectors needs the vec0 virtual
         # table, so import cannot degrade the way export can.
         monkeypatch.setattr(dense, "_load", lambda: None)
-        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 3,
+        shard = {"tap": "x/y", "provider": "local", "model": "bge", "dim": 8,
                  "commit": "c1", "chunks": []}
         ok, reason = dense.import_shard(shard, commit="c1")
         assert ok is False and "backend" in reason
@@ -282,9 +316,9 @@ class TestDeltaTopUp:
         embedded = []
         monkeypatch.setattr(embed, "embed",
                             lambda texts, **kw: embedded.extend(texts) or
-                            [[0.1, 0.2, 0.3] for _ in texts])
+                            [[0.1, 0.2, 0.3] + [0.0] * 5 for _ in texts])
         monkeypatch.setattr(embed, "available", lambda: True)
-        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "dimension", lambda: 8)
         monkeypatch.setattr(embed, "provider", lambda: "local")
         monkeypatch.setattr(embed, "model", lambda: "bge")
         self._tap_seen(monkeypatch, {"acme__skills": "c1"})
@@ -304,9 +338,9 @@ class TestDeltaTopUp:
         from boost_cli.core import embed
         _store(rows=(("a", "acme/skills"),))
         monkeypatch.setattr(embed, "embed",
-                            lambda texts, **kw: [[0.1, 0.2, 0.3] for _ in texts])
+                            lambda texts, **kw: [[0.1, 0.2, 0.3] + [0.0] * 5 for _ in texts])
         monkeypatch.setattr(embed, "available", lambda: True)
-        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "dimension", lambda: 8)
         monkeypatch.setattr(embed, "provider", lambda: "local")
         monkeypatch.setattr(embed, "model", lambda: "bge")
         self._tap_seen(monkeypatch, {"acme__skills": "c1", "new__repo": "z9"})

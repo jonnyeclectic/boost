@@ -151,15 +151,15 @@ class TestReadyGuards:
         monkeypatch.setattr(dense, "db_path", lambda: dbfile)
         monkeypatch.setattr(embed, "available", lambda: True)
         monkeypatch.setattr(embed, "provider", lambda: "openai")
-        monkeypatch.setattr(embed, "model", lambda: "toy-3")
-        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "model", lambda: "toy-8")
+        monkeypatch.setattr(embed, "dimension", lambda: 8)
         return monkeypatch
 
     def _use(self, monkeypatch, con):
         monkeypatch.setattr(dense, "_connect", lambda: con)
 
     _GOOD: ClassVar[dict] = {"version": dense.INDEX_VERSION,
-                             "provider": "openai", "model": "toy-3", "dim": 3}
+                             "provider": "openai", "model": "toy-8", "dim": 8}
 
     def test_true_when_everything_matches(self, wired):
         self._use(wired, self._seed(self._GOOD, rows=1))
@@ -234,7 +234,7 @@ class TestMetaRoundtrip:
 
     def test_write_meta_is_upsert(self):
         con = self._con()
-        dense._write_meta(con, {"dim": 3})
+        dense._write_meta(con, {"dim": 8})
         dense._write_meta(con, {"dim": 7})       # INSERT OR REPLACE
         assert dense._read_meta(con) == {"dim": 7}
 
@@ -417,8 +417,8 @@ class TestBuildWithoutExtension:
                             lambda e, tp=None: e["name"] + " " + e["_body"])
         monkeypatch.setattr(embed, "available", lambda: True)
         monkeypatch.setattr(embed, "provider", lambda: "openai")
-        monkeypatch.setattr(embed, "model", lambda: "toy-3")
-        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "model", lambda: "toy-8")
+        monkeypatch.setattr(embed, "dimension", lambda: 8)
         monkeypatch.setattr(embed, "embed", _toy_embed)
         monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": "/x"})
         monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
@@ -430,7 +430,7 @@ class TestBuildWithoutExtension:
         assert stats["chunks"] == 2
         assert stats["added"] == 2
         assert stats["provider"] == "openai"
-        assert stats["model"] == "toy-3"
+        assert stats["model"] == "toy-8"
         assert stats["reindexed"] == ["acme/skills"]
         assert stats["reused"] == []
         con = sqlite3.connect(str(dense.db_path()))

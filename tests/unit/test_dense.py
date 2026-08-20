@@ -53,17 +53,17 @@ def _vec_loadable() -> bool:
 pytestmark = pytest.mark.skipif(
     not _vec_loadable(), reason="sqlite-vec extension not loadable here")
 
-_VOCAB = {"react": (1.0, 0.0, 0.0), "python": (0.0, 1.0, 0.0),
-          "testing": (0.0, 0.0, 1.0)}
+_VOCAB = {"react": (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0), "python": (0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+          "testing": (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0)}
 
 
 def _toy_embed(texts, input_type=None, timeout=60):
     out = []
     for t in texts:
-        v = [0.0, 0.0, 0.0]
+        v = [0.0] * 8
         for word, base in _VOCAB.items():
             if word in t.lower():
-                for i in range(3):
+                for i in range(8):
                     v[i] += base[i]
         norm = math.sqrt(sum(x * x for x in v)) or 1.0
         out.append([x / norm for x in v])
@@ -84,8 +84,8 @@ def dense_env(sandbox, monkeypatch):
     """sqlite-vec backend wired to the toy embedder + patched tap plumbing."""
     monkeypatch.setattr(embed, "embed", _toy_embed)
     monkeypatch.setattr(embed, "provider", lambda: "openai")
-    monkeypatch.setattr(embed, "model", lambda: "toy-3")
-    monkeypatch.setattr(embed, "dimension", lambda: 3)
+    monkeypatch.setattr(embed, "model", lambda: "toy-8")
+    monkeypatch.setattr(embed, "dimension", lambda: 8)
     monkeypatch.setattr(embed, "available", lambda: True)
     monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": "/x"})
     monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
@@ -139,7 +139,7 @@ class TestBuildAndRetrieve:
         assert stats["chunks"] == 2
         assert stats["added"] == 2
         assert stats["provider"] == "openai"
-        assert stats["model"] == "toy-3"
+        assert stats["model"] == "toy-8"
         assert dense.ready() is True
 
     def test_ranks_by_cosine(self, dense_env):

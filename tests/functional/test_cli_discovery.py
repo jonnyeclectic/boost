@@ -1571,12 +1571,12 @@ class TestReindex:
         from boost_cli.core import dense, embed
 
         def toy(texts, input_type=None, timeout=60):
-            return [[float(len(t) % 5) + 1.0, 2.0, 3.0] for t in texts]
+            return [[float(len(t) % 5) + 1.0, 2.0, 3.0] + [0.0] * 5 for t in texts]
         monkeypatch.setattr(embed, "embed", toy)
         monkeypatch.setattr(embed, "available", lambda: True)
         monkeypatch.setattr(embed, "provider", lambda: "openai")
-        monkeypatch.setattr(embed, "model", lambda: "toy-3")
-        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "model", lambda: "toy-8")
+        monkeypatch.setattr(embed, "dimension", lambda: 8)
         data = json.loads(boost("reindex", "--dense", "--json").out)
         assert data["bm25"]["docs"] >= 1
         assert data["dense"]["chunks"] >= 1
@@ -1595,12 +1595,12 @@ class TestReindex:
         from boost_cli.core import dense, embed
 
         def toy(texts, input_type=None, timeout=60):
-            return [[1.0, 2.0, 3.0] for _ in texts]
+            return [[1.0, 2.0, 3.0] + [0.0] * 5 for _ in texts]
         monkeypatch.setattr(embed, "embed", toy)
         monkeypatch.setattr(embed, "available", lambda: True)
         monkeypatch.setattr(embed, "provider", lambda: "openai")
-        monkeypatch.setattr(embed, "model", lambda: "toy-3")
-        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "model", lambda: "toy-8")
+        monkeypatch.setattr(embed, "dimension", lambda: 8)
         boost("reindex", "--dense")
         assert dense.ready() is True
         r = boost("search", "brainstorming")
@@ -1625,12 +1625,12 @@ class TestReindex:
         from boost_cli.core import dense, embed
 
         def toy(texts, input_type=None, timeout=60):
-            return [[1.0, 2.0, 3.0] for _ in texts]
+            return [[1.0, 2.0, 3.0] + [0.0] * 5 for _ in texts]
         monkeypatch.setattr(embed, "embed", toy)
         monkeypatch.setattr(embed, "available", lambda: True)
         monkeypatch.setattr(embed, "provider", lambda: "openai")
-        monkeypatch.setattr(embed, "model", lambda: "toy-3")
-        monkeypatch.setattr(embed, "dimension", lambda: 3)
+        monkeypatch.setattr(embed, "model", lambda: "toy-8")
+        monkeypatch.setattr(embed, "dimension", lambda: 8)
         # Records every tap commit while storing nothing — the exact state a
         # rate-limited pre-fix run left behind.
         dense.build(entries=[], force=True)
@@ -1714,7 +1714,7 @@ class TestReindexShards:
         from boost_cli.core import dense
         monkeypatch.setattr(dense, "export_shard", lambda tap: {
             "tap": tap, "commit": "c1", "provider": "local", "model": "bge",
-            "dim": 3, "chunks": [{"name": "a", "tap": tap, "path": "a/SKILL.md",
+            "dim": 8, "chunks": [{"name": "a", "tap": tap, "path": "a/SKILL.md",
                                   "kind": "skill", "cix": 0, "snip": "s",
                                   "embedding": "AAAA"}]})
         r = boost("reindex", "--export-shard", "acme/skills")
