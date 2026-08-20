@@ -45,6 +45,7 @@ jonnyeclectic's
 Kotlin
 langchain
 Langfuse
+lookups
 lowercasing
 Magento
 mcp
