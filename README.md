@@ -100,15 +100,15 @@ rather than failing: no extra, no key, or no built store each fall back to BM25,
 and `boost doctor` reports which engine is actually serving and why.
 
 Want the whole ecosystem instead of the starter set? boost ships a **curated
-registry catalog** — 460+ classified GitHub registries of skills, Cursor/Windsurf
+registry catalog** — 480+ classified GitHub registries of skills, Cursor/Windsurf
 **rules**, and Claude Code **workflows** (slash commands & subagents),
-collectively indexing ~28,000 scannable items. Every `est_items` is *measured*
+collectively indexing ~30,000 scannable items. Every `est_items` is *measured*
 from the repo's file tree, not estimated, so `--limit` ranks by real size — and
 counted once per item however many agents a repo renders it for, so a pack that
 ships a copy in `.claude/`, `.cursor/` and twelve other dotdirs is not credited
 with fourteen skills (`scripts/measure_registry.py`).
 
-Six domains are curated end to end, each tappable on its own:
+Seven domains are curated end to end, each tappable on its own:
 **`ai`** (RAG, evals, tracing, model serving — official OpenAI, Anthropic,
 LangChain, Qdrant, Elastic, MLflow, Langfuse, Arize, W&B, vLLM libraries),
 **`architecture`** (DDD, clean architecture, system design, C4/ADR),
@@ -116,8 +116,13 @@ LangChain, Qdrant, Elastic, MLflow, Langfuse, Arize, W&B, vLLM libraries),
 TUI/dotfiles — including Impeccable, taste-skill and Huashu Design),
 **`java`** (Spring Boot, Kotlin/JVM, Quarkus, JetBrains, Camunda, Vaadin),
 **`ecommerce`** (Shopify, Magento, WooCommerce, Spree, Bagisto, PrestaShop,
-Stripe, Algolia), and **`infra`** (Docker, Kubernetes, OpenShift, Helm, GitOps,
-networking — plus official Azure, Grafana, Pulumi, Flux, DigitalOcean packs):
+Stripe, Algolia), **`infra`** (Docker, Kubernetes, OpenShift, Helm, GitOps,
+networking — plus official Azure, Grafana, Pulumi, Flux, DigitalOcean packs),
+and **`marketing`** (marketing, CRM, email campaigns and customer outreach —
+20 registries, ~2,400 measured items: cold-email and ABM sequences from
+ColdIQ, CRM setup and hygiene for Salesforce/HubSpot/Attio from LeadMagic,
+B2B RevOps lead routing, Zapier's GTM cheat codes, plus paid media, SEO/GEO
+and lifecycle email):
 
 Smaller categories fill in around them. **`efficiency`** collects the packs whose
 items exist to make an agent emit *less* — less code (`ponytail`) or fewer output
