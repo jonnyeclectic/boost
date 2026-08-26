@@ -137,6 +137,42 @@ class TestMainDispatch:
         for _icon, title, _desc in cli.GROUPS.values():
             assert title in out
 
+    @pytest.mark.parametrize("cols", [60, 80, 100, 120])
+    def test_help_never_overflows_the_terminal(self, sandbox, capsys,
+                                               monkeypatch, cols):
+        """The top-level help was the one screen in the CLI that ignored the
+        terminal: `search` drops columns and truncates at 60, while `boost
+        --help` emitted a 105-column banner at every width, wrapping mid-word
+        for anyone not running a wide pane.
+        """
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(cli.out, "term_width", lambda: cols)
+        assert cli.main(["--help"]) == 0
+        for line in capsys.readouterr().out.splitlines():
+            assert cli.out.visible_len(line) <= cols, line
+
+    def test_help_keeps_the_product_name_and_version_at_60_columns(
+            self, sandbox, capsys, monkeypatch):
+        """Fitting the banner must not cost the two facts it carries."""
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(cli.out, "term_width", lambda: 60)
+        assert cli.main(["--help"]) == 0
+        out = capsys.readouterr().out
+        assert "Homebrew for AI coding skills" in out
+        assert cli.__version__ in out
+        assert "80 commands · 8 groups" in out
+
+    def test_help_still_names_every_command_when_narrow(self, sandbox, capsys,
+                                                        monkeypatch):
+        """Summaries may be clipped to fit; command names never are, or the
+        help stops being usable as an index."""
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(cli.out, "term_width", lambda: 60)
+        assert cli.main(["--help"]) == 0
+        out = capsys.readouterr().out
+        for name, _g, _m, _s in cli.COMMANDS:
+            assert "\n  %s" % name in out, name
+
     def test_help_word(self, sandbox, capsys):
         assert cli.main(["help"]) == 0
         assert "80 commands · 8 groups" in capsys.readouterr().out
