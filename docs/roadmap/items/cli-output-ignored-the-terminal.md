@@ -10,7 +10,7 @@ wow: 3
 note: an 80-command sweep found a box that drew wider than the pane, a help screen that never measured it, and a literal %% on screen
 order: 125
 owner: loop/cli-output-defects
-pr:
+pr: 552
 title: The box drew 108 columns into an 80-column pane, and <code>--help</code> never asked how wide the pane was
 ---
 <b>Every one of the 80 commands was run, not just read.</b> All 80 answered
