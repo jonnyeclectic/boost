@@ -69,7 +69,7 @@ def cmd_cohort(argv) -> int:
     p = cliparse.parser(
         prog="boost cohort",
         description="Controlled skill rollouts & team A/B testing",
-        epilog="Membership is a deterministic hash of user+cohort, so a 50%% "
+        epilog="Membership is a deterministic hash of user+cohort, so a 50% "
                "rollout lands on the same half of the team every time. "
                "This machine evaluates its own membership locally.")
     p.add_argument("action", nargs="?", default="list",
@@ -177,7 +177,7 @@ def cmd_cohort(argv) -> int:
         return 0
     out.table(rows, headers=("COHORT", "SKILLS", "ROLLOUT", "YOU"))
     print()
-    out.dim("membership = sha256(user:cohort) %% 100 < rollout · apply with `boost cohort apply`")
+    out.dim("membership = sha256(user:cohort) % 100 < rollout · apply with `boost cohort apply`")
     return 0
 
 
