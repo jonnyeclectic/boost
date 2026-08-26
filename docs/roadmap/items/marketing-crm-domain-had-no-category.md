@@ -10,7 +10,7 @@ wow: 3
 note: the four marketing registries already carried were filed under writing and general, so the category returned nothing
 order: 124
 owner: loop/marketing-crm-registries
-pr:
+pr: 551
 title: <code>--category marketing</code> matched nothing, while four marketing registries sat in the catalog under other names
 ---
 <b>The catalog carried marketing registries and could not hand you one.</b>
