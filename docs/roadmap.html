@@ -133,7 +133,7 @@
       <div class="stat"><b>16</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>7</b><span>Planned</span></div>
-      <div class="stat"><b>263</b><span>Loop finds</span></div>
+      <div class="stat"><b>267</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -4395,6 +4395,75 @@ all 185 rows: the 20 required rows come back byte-identical, all 185 end up pinn
           <span class="m">185 rows, 20 pinned — the monthly job moved exactly the 20 it did not own and pinned none of the 165 it existed to pin</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="marketing-crm-domain-had-no-category">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Catalog · Curation</span></div>
+        <h3><code>--category marketing</code> matched nothing, while four marketing registries sat in the catalog under other names</h3>
+        <p><b>The catalog carried marketing registries and could not hand you one.</b>
+<code>boost tap --catalog --category marketing</code> returned zero rows, because no row was filed
+that way. Four already existed: <code>coreyhaines31/marketingskills</code> (45,374 stars) under
+<code>writing</code>, and <code>minhnv0807/ai-business-skills</code>,
+<code>AgriciDaniel/claude-ads</code> and <code>AgriciDaniel/claude-seo</code> under
+<code>general</code>. Their items are named <code>cold-email</code>, <code>email-sequence</code>,
+<code>market-emails</code>, <code>ads-attribution</code>, <code>seo-backlinks</code>. Nothing about
+that is writing, and nothing about it is general.
+
+<b>The misfiling has one cause, and it is the counterpart of the <code>ui</code> trap.</b>
+<code>ui</code> is pinned because a scorer keyed on the <em>repo name</em> files
+<code>ai-design-skills</code> as design. This domain fails one step earlier: every repo in it
+describes itself in agent vocabulary before it says what the skills do — &ldquo;345 skills for
+Claude Code, Codex, Gemini CLI, Cursor and 8 more coding agents&rdquo; — so a scorer keyed on the
+<em>README</em> lands on <code>general</code> every time and never reaches the word
+<code>hubspot</code>. Reading item names is what separates them, which is the rule
+<code>CLAUDE.md</code> already states and which this batch is a second proof of.
+
+<b>Twenty registries, 2,388 measured items, seventh curated domain.</b> Sixteen new rows plus the
+four recategorised. Every count is <code>scripts/measure_registry.py</code> against a fresh
+<code>--filter=blob:none --depth=1</code> clone, never the repo's advertised figure — and the two
+recategorised counts moved a long way when re-measured: <code>marketingskills</code> from 10 to
+<b>50</b> items and <code>ai-business-skills</code> from 62 to <b>169</b>. Both old numbers were
+that repo's own README total from an earlier release. Moving a row's category is not a reason to
+trust the number attached to it, so <code>MARKETING_MEASURED</code> pins both.
+
+<b>The cut that nearly shipped a CRM category with no CRM in it.</b> Thirty candidates were cloned
+and measured; ten were dropped — <code>mikiarlo3/awesome-growth-hacking-skills</code> scans to
+<b>0</b> items, <code>CosmoBlk/email-marketing-bible</code> to 1,
+<code>mysticaltech/marketingskills</code> is a stale fork of a repo already in the batch, and
+<code>gtm-skills/gtm</code> ships 5 items under names (<code>rep</code>, <code>scout</code>,
+<code>closer</code>) that say nothing. Ranking the survivors by adoption then produced a top 20 in
+which <b>the CRM half of the domain's own name had no coverage at all</b>: the CRM registries are
+the least-starred rows in the batch — <code>LeadMagic/gtm-skills</code> at 42 stars for 206 items
+covering Salesforce, HubSpot and Attio setup, <code>NEON-Rutger/B2B-revops-skills</code> at 45 for
+CRM migration and lead routing — against 45,374 for the top content-marketing pack. Popularity and
+coverage disagree here, and coverage wins:
+<code>TestMarketingDomain::test_every_advertised_subdomain_has_a_registry</code> names the registry
+carrying each of the four advertised sub-domains (CRM, RevOps, cold outreach, campaigns) and fails
+if one is dropped or flagged <code>list_only</code>.
+
+<b>Discovery was <code>boost_search</code> first, and it earned its ten seconds by narrowing the
+question.</b> The corpus already tapped on this machine returned <code>cold-email</code>,
+<code>deal-outreach</code>, <code>ai-cold-outreach</code> and <code>emails</code> — real hits, from
+repos mostly already in the catalog. That is what said the gap was not <em>items</em> but a
+<em>category</em>: the skills existed and were unreachable by domain. GitHub code search over
+<code>filename:SKILL.md</code> with CRM vocabulary (<code>hubspot</code>,
+<code>salesforce</code>, <code>pipeline</code>) is what surfaced the two CRM registries; repo search
+alone never returned either, because neither repo's description mentions a CRM by name.
+
+<b>What is deliberately not here.</b> Six live candidates were measured and left out for being
+mixed rather than bad: <code>Varnan-Tech/opendirectory</code> (64 items, but
+<code>dependency-update-bot</code> and <code>explain-this-pr</code> sit beside the marketing ones),
+<code>TheCraigHewitt/skills</code> (65 items, roughly a quarter marketing, the rest founder ops),
+<code>citedy/adclaw</code>, <code>manojbajaj95/claude-gtm-plugin</code>,
+<code>markster-public/markster-os</code> and <code>hyperfx-ai/marketing-skills</code>. They are
+recorded here rather than merely dropped, so the next sweep does not re-derive them from the same
+search and re-litigate the same call.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the four marketing registries already carried were filed under writing and general, so the category returned nothing</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -6984,6 +7053,70 @@ state where that line is the advice.</p>
           <span class="m">0.94 s cold search at 71.6k entries — ~0.5 s spent materialising data the top hits never use</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="bm25-has-no-stemming">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Retrieval</span></div>
+        <h3><code>boost search brainstorm</code> finds nothing, and <code>brainstorming</code> finds it</h3>
+        <p><b>The symptom, in two commands against the same five-skill tap.</b>
+<code>boost search brainstorming</code> returns the skill.
+<code>boost search brainstorm</code> returns <b>zero</b> matches and sends the user to
+<code>boost discover</code> to search all of GitHub for something already sitting in their
+catalogue. <code>boost chat "what helps me brainstorm"</code> has the same hole and answers with
+two unrelated skills. <code>core/rag.tokenize</code> lowercases, splits on non-alphanumerics and
+drops a small stopword list — there is no stemming and no prefix fallback, so
+<code>brainstorm</code> and <code>brainstorming</code> are simply different terms.
+
+<b>Measured on the 461 tap caches on this machine: 29,607 distinct item names, 9,739 distinct
+name tokens.</b> <b>4,663 of those names (15.7%)</b> carry a token whose stem finds nothing —
+counting only stems that appear at least five times elsewhere in the corpus, so each is
+demonstrably a word people type rather than an artefact of naive suffix stripping. The worst are
+not exotic: <code>pattern</code> misses <b>474</b> names ending <code>-patterns</code>,
+<code>skill</code> misses <b>252</b> ending <code>-skills</code>, <code>implement</code> misses
+161, <code>event</code> 115, <code>error</code> 112, <code>webhook</code> 109,
+<code>agent</code> 83, <code>market</code> 81 named <code>-marketing</code>. A user searching
+this catalogue for <code>skill</code> cannot reach a quarter of a thousand items named for it.
+
+<b>It is invisible from a developer install, which is why it survived.</b> This machine has the
+<code>[rag]</code> extra and a built dense store, so search reports <code>hybrid RRF (BM25 +
+dense)</code> and the embeddings absorb the morphology: <code>webhook</code> returns 51 matches
+and <code>webhooks</code> returns 47. The gap is only visible on the always-on, zero-dependency
+BM25 path — which is what every user without the extra runs, what
+<code>search</code> prints <code>semantic search is off</code> for, and what the required
+<code>eval</code> gate floors. There is no <code>--engine</code> flag, so a maintainer cannot
+easily reproduce a plain user's result.
+
+<b>What shipped: per-term expansion, not per-query.</b> The obvious design — widen only when the
+whole query returns zero hits — was drafted and rejected, because it does not fix the reported
+case. <code>boost chat &ldquo;what helps me brainstorm&rdquo;</code> already returns non-empty
+results from its other words, so a zero-hit trigger never fires and chat stays broken.
+Expansion is therefore per-term: a term with <b>no</b> posting list is replaced by the commonest
+term it prefixes, found by an index-backed range scan (<code>term &gt; ? AND term &lt; ?</code>,
+upper bound <code>term + "~"</code> because <code>~</code> outranks every character
+<code>tokenize</code> can emit — a bound of <code>"z"</code> silently loses
+<code>analy</code> &rarr; <code>analyze</code>). Measured after: <code>search brainstorm</code>
+returns the skill, and the chat question promotes it from <em>absent</em> to <b>rank 1</b>.
+
+<b>The invariant is the whole safety argument, and it is a test rather than a comment.</b>
+<em>A term that has postings is never expanded.</em> <code>_bm25</code> already skips a term with
+no posting list, so expansion can only add signal where there was exactly none — meaning any
+query whose terms all exist ranks byte-identically and the four retrieval floors cannot move.
+<code>test_a_term_that_has_postings_is_never_expanded</code> pins it against a corpus where
+<code>pattern</code> and <code>patterns</code> both exist, so a build that dropped the guard
+rewrites a query that already worked and fails. Nine hand-written mutants were run against the
+new lines and all nine died, including that one.
+
+<b>Still open: a real stemmer.</b> This fallback cannot help where a term exists but is the wrong
+inflection — a user typing <code>patterns</code> still will not reach an item named
+<code>pattern</code>, because <code>patterns</code> has postings of its own and is left alone.
+Closing that means conflating terms that both exist, which changes established rankings and costs
+an index-format bump plus a regenerated <code>tests/eval/baseline.json</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">a term with no postings is now replaced by the commonest term it prefixes; a term that has postings is never touched, which is what keeps the eval floors still</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -8938,6 +9071,92 @@ the same search from 0.94 s to 0.49 s.</p>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">MCP boost_search measured 11.7-17 s per call — every call, even a repeat of the last one</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="cli-output-ignored-the-terminal">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Output</span></div>
+        <h3>The box drew 108 columns into an 80-column pane, and <code>--help</code> never asked how wide the pane was</h3>
+        <p><b>Every one of the 80 commands was run, not just read.</b> All 80 answered
+<code>--help</code> with exit 0 and no traceback; ~73 were then driven for their real effect
+against a disposable <code>HOME</code> — install, link, quarantine, focus, snapshot, replay,
+cohort, hooks and the rest, checking the filesystem after each rather than trusting the success
+line. <code>boost focus tdd-workflow</code> was confirmed by listing
+<code>~/.claude/skills</code> and finding the other two skills genuinely unlinked with the
+canonical store intact, and <code>focus --clear</code> by finding all three back. Seven commands
+could not run here and are recorded as blocked rather than passed: <code>serve</code> (the
+sandbox denies <code>socket.bind</code>), <code>discover</code> and <code>index</code> (no
+<code>gh</code> auth), <code>run</code> live (no Agents SDK — <code>--print</code> was verified
+instead), plus the interactive halves of <code>browse</code>, <code>chat</code> and
+<code>edit</code>, each of which degraded with a correct hint.
+
+<b>A literal <code>%%</code> was reaching the terminal.</b>
+<code>boost cohort</code> printed <code>sha256(user:cohort) %% 100 &lt; rollout</code> and its
+<code>--help</code> epilog offered <code>a 50%% rollout</code>. Both strings carry printf
+escaping and neither is ever <code>%</code>-formatted, so the escape survived to the screen. The
+existing test asserted <code>"membership = sha256(user:cohort)" in r.out</code> — it stops one
+character short of the defect, which is exactly how it survived. Four other <code>%%</code> in
+the same file are correct: they sit inside real <code>%</code>-format calls, including the
+<code>Exec=%s %%u</code> that a <code>.desktop</code> file requires.
+
+<b><code>panel()</code> sized itself to its content and never asked the terminal.</b> Measured:
+<code>boost count</code> drew <b>108 columns into an 80-column pane</b>. A box is the worst
+thing to overflow, because the border wraps and the shape itself breaks. It now clamps to
+<code>term_width() - 4</code> — the four columns the border costs — and clips over-long content,
+so every row stays the same width at any pane size.
+
+<b>The help screen was the one screen that never measured the pane.</b>
+<code>search</code> already adapts, dropping the tap column and truncating at 60 columns —
+<code>term_width()</code> existed and <code>discovery.py</code> was its only caller. Meanwhile
+<code>boost --help</code>, the first thing a new user sees, emitted a fixed <b>102-column</b>
+banner at every width. It now fits exactly at 60, 80 and 100. Command <em>names</em> are never
+clipped, because the help's whole job is to be an index you can copy a command out of; summaries
+and the tagline are. The version never is — it is what a bug report needs.
+
+<b>Two findings were measured and deliberately left for their own items.</b> Eleven commands
+still overflow 80 columns, but the remainder are prose hints, and the worst of them is one shared
+string that six test files and a BDD feature pin by substring — wrapping it is a cross-cutting
+output change, not a rider on this one. See <code>long-hints-overflow-narrow-panes</code> and
+<code>bm25-has-no-stemming</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">an 80-command sweep found a box that drew wider than the pane, a help screen that never measured it, and a literal %% on screen</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="long-hints-overflow-narrow-panes">
+        <div class="head"><span class="pill next">Next</span><span class="cat">CLI · Output</span></div>
+        <h3>The hints still run past the pane, and the worst one is pinned by six test files</h3>
+        <p><b>Measured, at <code>COLUMNS=80</code>, over 46 commands.</b> After the box and the help screen
+were fitted, <b>11</b> still emit a line past 80 columns. Ranked:
+<code>doctor</code>'s semantic-search hint at <b>127</b>; the AI-fallback notice at <b>101</b>,
+which is one shared string surfacing in <code>explain</code>, <code>impact</code> and
+<code>simulate</code>; <code>protocol</code>'s URL forms at 100; <code>changelog</code>'s
+unshallow hint at 93; <code>who</code>'s footer at 87; <code>search</code>'s extra hint at 82;
+<code>replay</code>'s footer at 81.
+
+<b>Two of the eleven must be left alone.</b> <code>pulse</code>'s <code>source=</code> paths and
+<code>fingerprint</code>'s hash are data, not chrome — clipping them destroys the information the
+line exists to carry. So a blanket "no line exceeds <code>term_width()</code>" assertion is the
+wrong gate: it would false-positive on exactly the lines that should be long. Pin the composed
+sites individually.
+
+<b>Why this is not a quick wrap.</b> The 101-column offender contains
+<code>using the heuristic fallback</code>, which is asserted by <b>six</b> test files plus
+<code>tests/bdd/features/explain.feature</code>. Wrapping inserts a newline mid-sentence and
+breaks every one of them; and under pytest <code>term_width()</code> falls back to 80, so the
+wrap fires in the suite rather than only on a narrow terminal. The change is a
+<code>wrap()</code> helper in <code>core/output.py</code> — mutation-gated, so boundary-width
+tests, not coverage — plus re-pinning those assertions. Shortening the strings instead is a
+smaller diff but a voice decision, and the substring pinned by the tests would have to survive
+either way.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">11 commands still emit prose hints past 80 columns; the worst is one string pinned by six test files</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
