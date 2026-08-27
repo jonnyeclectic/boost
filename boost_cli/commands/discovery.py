@@ -176,8 +176,27 @@ def cmd_search(argv):
             installed=e["name"] in installed, lay=lay))
     out.info(out.role("%d match%s · ranked by %s"
                    % (len(scored), "" if len(scored) == 1 else "es", ranker), "muted"))
+    if use_rag:
+        _note_stem_expansions(query)
     _hint_semantic_search(engine)
     return 0
+
+
+def _note_stem_expansions(query: str) -> None:
+    """Say when a query term was widened to the word actually indexed.
+
+    Staying quiet would be a worse answer than the old empty one: the user
+    asked for `brainstorm` and is looking at results for `brainstorming`, and
+    only one of those is a word they typed.
+    """
+    subs = rag.stem_expansions(rag.tokenize(query))
+    if not subs:
+        return
+    said = ", ".join("%r" % term for term in subs)
+    shown = ", ".join("%r" % term for term in subs.values())
+    out.info(out.role(out.truncate(
+        "no exact match for %s — showing %s" % (said, shown),
+        max(0, out.term_width() - 2)), "muted"))
 
 
 def _hint_semantic_search(engine: str) -> None:

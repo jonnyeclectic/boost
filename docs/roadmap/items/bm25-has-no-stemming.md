@@ -2,14 +2,14 @@
 id: bm25-has-no-stemming
 board: code
 section: pipeline
-status: next
+status: inflight
 category: Search · Retrieval
 complexity: M
 impact: High
 wow: 4
-note: boost search brainstorm finds nothing while brainstorming finds it; 15.7% of catalog names are unreachable by their own stem
+note: a term with no postings is now replaced by the commonest term it prefixes; a term that has postings is never touched, which is what keeps the eval floors still
 order: 127
-owner:
+owner: loop/bm25-stem-fallback
 pr:
 title: <code>boost search brainstorm</code> finds nothing, and <code>brainstorming</code> finds it
 ---
@@ -41,10 +41,28 @@ BM25 path — which is what every user without the extra runs, what
 <code>eval</code> gate floors. There is no <code>--engine</code> flag, so a maintainer cannot
 easily reproduce a plain user's result.
 
-<b>Two fixes, and they are not the same size.</b> A <b>zero-match prefix fallback</b> — on 0
-hits, retry against vocabulary tokens by prefix — touches no index format, needs no baseline
-regeneration, and fires only where BM25 currently returns nothing, so it cannot move a single
-eval metric; it fixes the exact observed symptom in both <code>search</code> and
-<code>chat</code>. A <b>real stemmer</b> is the better answer and costs an index-format bump plus
-a regenerated <code>tests/eval/baseline.json</code>, and would move all four floored metrics.
-Either lands in <code>core/rag.py</code>, so the tests must kill mutants, not merely cover lines.
+<b>What shipped: per-term expansion, not per-query.</b> The obvious design — widen only when the
+whole query returns zero hits — was drafted and rejected, because it does not fix the reported
+case. <code>boost chat &ldquo;what helps me brainstorm&rdquo;</code> already returns non-empty
+results from its other words, so a zero-hit trigger never fires and chat stays broken.
+Expansion is therefore per-term: a term with <b>no</b> posting list is replaced by the commonest
+term it prefixes, found by an index-backed range scan (<code>term &gt; ? AND term &lt; ?</code>,
+upper bound <code>term + "~"</code> because <code>~</code> outranks every character
+<code>tokenize</code> can emit — a bound of <code>"z"</code> silently loses
+<code>analy</code> &rarr; <code>analyze</code>). Measured after: <code>search brainstorm</code>
+returns the skill, and the chat question promotes it from <em>absent</em> to <b>rank 1</b>.
+
+<b>The invariant is the whole safety argument, and it is a test rather than a comment.</b>
+<em>A term that has postings is never expanded.</em> <code>_bm25</code> already skips a term with
+no posting list, so expansion can only add signal where there was exactly none — meaning any
+query whose terms all exist ranks byte-identically and the four retrieval floors cannot move.
+<code>test_a_term_that_has_postings_is_never_expanded</code> pins it against a corpus where
+<code>pattern</code> and <code>patterns</code> both exist, so a build that dropped the guard
+rewrites a query that already worked and fails. Nine hand-written mutants were run against the
+new lines and all nine died, including that one.
+
+<b>Still open: a real stemmer.</b> This fallback cannot help where a term exists but is the wrong
+inflection — a user typing <code>patterns</code> still will not reach an item named
+<code>pattern</code>, because <code>patterns</code> has postings of its own and is left alone.
+Closing that means conflating terms that both exist, which changes established rankings and costs
+an index-format bump plus a regenerated <code>tests/eval/baseline.json</code>.

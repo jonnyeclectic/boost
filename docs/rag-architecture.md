@@ -135,6 +135,20 @@ normalization, which matters when bodies vary from 3 lines to 300). Sparse term 
 Scoring is standard BM25 (`k1≈1.2`, `b≈0.75`). At ~9k items / tens of thousands of chunks this is a
 dict-of-postings scan — comfortably sub-second per query in Python.
 
+**Tokenization is exact-match, and `stem_expansions` is the one concession to that.**
+A query term and its own inflection are unrelated strings, so `boost search brainstorm`
+returned nothing while `brainstorming` returned the skill. Measured over 461 tap caches,
+4,663 of 29,607 item names (15.7%) were unreachable by an attested stem — `pattern` missed
+474 names ending `-patterns`. Before scoring, any term with **no** posting list is replaced
+by the commonest term it prefixes, found with an index-backed range scan over the postings
+table. A term that *has* postings is never touched: expansion only ever adds signal where
+`_bm25` scored exactly none, so a query whose terms all exist ranks byte-identically and the
+retrieval floors cannot move. That is what makes it a fallback rather than a stemmer — a real
+stemmer conflates terms that both exist, which changes established rankings and would need an
+index-format bump and a regenerated baseline. Terms shorter than `STEM_MIN_LEN` (4) are left
+alone, because a three-letter prefix expands to a guess. `boost search` states the
+substitution rather than silently answering a different question.
+
 **Query path as shipped** (post `cold-search-reads-the-whole-catalogue`): with
 `entries=None` — the CLI, MCP and eval path — `rag.retrieve` ranks straight off
 the index's own doc metadata and materialises real catalog entries only for the
