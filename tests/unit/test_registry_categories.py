@@ -1,9 +1,9 @@
 """Curation guarantees for the bundled registry catalog's focus domains.
 
 ``boost tap --catalog --category <slug>`` is only worth offering if every
-advertised domain actually has registries behind it, so the six focus domains
+advertised domain actually has registries behind it, so the seven focus domains
 below are contract, not incident: AI engineering, architecture, UI, Java/Spring,
-eCommerce, and container/cluster infrastructure.
+eCommerce, container/cluster infrastructure, and marketing/CRM.
 
 The floors are deliberately set below the committed numbers — ordinary additions
 never trip them, but deleting a domain's repos, renaming a category slug, or
@@ -33,6 +33,7 @@ FOCUS = {
     "java": (5, "Java / Spring Boot"),
     "ecommerce": (5, "eCommerce platforms"),
     "infra": (8, "containers, clusters, and networking"),
+    "marketing": (14, "marketing, CRM, email campaigns, and customer outreach"),
 }
 
 # Repos whose whole reason to exist is visual/UI design work, pinned by name.
@@ -81,9 +82,47 @@ EFFICIENCY_MEASURED = {
 # naive walk reports this many items for the handful it actually ships.
 IMPECCABLE_MIRRORED_WALK = 40
 
-# The batch this file was written for: the six focus domains together must carry
+# The batch this file was written for: the seven focus domains together must carry
 # at least this many estimated *scannable* items (list-only index repos excluded).
 FOCUS_SCANNABLE_FLOOR = 5000
+
+# Marketing/CRM registries, pinned by name. The 2026-08 sweep that filed them
+# scored the *names of the items they ship*: `cold-email`, `email-sequence`,
+# `crm-integration`, `hubspot-setup`, `apollo-outreach`, `lead-routing`. Four of
+# them were already in the catalog under `writing` or `general` — categories a
+# README-keyed scorer lands on, because every one of these repos describes
+# itself as "skills for AI agents" before it says what the skills do. Filed
+# there, `boost tap --catalog --category marketing` returned nothing at all.
+MARKETING_PINNED = {
+    "coreyhaines31/marketingskills",
+    "minhnv0807/ai-business-skills",
+    "AgriciDaniel/claude-ads",
+    "AgriciDaniel/claude-seo",
+}
+
+# The user-facing promise of the domain is four sub-domains, not one, and the
+# rank-by-stars cut kept dropping the CRM half: the CRM registries are the
+# smallest and least-starred of the batch (42 and 45 stars against 45,374 for
+# the top marketing pack), so a purely popularity-ordered top-20 covers
+# marketing and email and silently ships a `marketing` category with no CRM in
+# it. Each sub-domain therefore names the registry that carries it.
+MARKETING_SUBDOMAIN = {
+    "crm": "LeadMagic/gtm-skills",              # salesforce/hubspot/attio setup
+    "revops": "NEON-Rutger/B2B-revops-skills",  # crm-migration, lead-routing
+    "cold-outreach": "Cold-IQ/ColdIQ-s-GTM-Skills",   # cold-email sequences
+    "campaigns": "zapier/gtm-cheat-codes",      # cross-crm-opportunity-sync
+}
+
+# Measured with `scripts/measure_registry.py` against a fresh clone, not
+# inherited from the row that was already there. Both stale counts were the
+# repo's own README figure from an earlier release — `marketingskills` had
+# grown 10 -> 50 items and `ai-business-skills` 62 -> 169 — so re-filing a row
+# without re-measuring it would have carried a two-release-old number into a
+# domain advertised as measured.
+MARKETING_MEASURED = {
+    "coreyhaines31/marketingskills": 50,
+    "minhnv0807/ai-business-skills": 169,
+}
 
 _SLUG = re.compile(r"^[a-z][a-z0-9-]*$")
 
@@ -226,6 +265,55 @@ class TestEfficiencyDomain:
         assert row is not None
         assert not row["list_only"], \
             "%s ships scannable items and must not be flagged list_only" % name
+
+
+class TestMarketingDomain:
+    """`marketing` is the domain most easily lost to *self-description*.
+
+    `ui` is pinned because a keyword scorer reads the repo name; this one is
+    pinned because the repos describe themselves in agent-vocabulary ("345
+    skills for Claude Code, Codex, Cursor") long before they say the skills are
+    cold-email sequences and CRM hygiene. Four of them sat in `writing` and
+    `general` for exactly that reason.
+    """
+
+    @pytest.mark.parametrize("name", sorted(MARKETING_PINNED))
+    def test_pack_is_filed_under_marketing(self, catalog, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, "%s dropped out of the catalog" % name
+        assert row["category"] == "marketing", (
+            "%s ships marketing/CRM items but is filed %r; `tap --catalog "
+            "--category marketing` would miss it" % (name, row["category"]))
+
+    @pytest.mark.parametrize("area,name", sorted(MARKETING_SUBDOMAIN.items()))
+    def test_every_advertised_subdomain_has_a_registry(self, catalog, area, name):
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None, (
+            "%s is the %s registry of the marketing domain and is gone; the "
+            "category still advertises %s" % (name, area, area))
+        assert row["category"] == "marketing"
+        assert not row["list_only"], (
+            "%s must be scannable — it is the only %s coverage the domain has"
+            % (name, area))
+
+    @pytest.mark.parametrize("name", sorted(MARKETING_MEASURED))
+    def test_recategorised_rows_were_re_measured(self, catalog, name):
+        """Moving a row's category is not a reason to trust its old count."""
+        row = next((e for e in catalog if e["name"] == name), None)
+        assert row is not None
+        assert row["est_items"] == MARKETING_MEASURED[name], (
+            "%s est_items %d != the measured %d — re-run "
+            "scripts/measure_registry.py against a fresh clone"
+            % (name, row["est_items"], MARKETING_MEASURED[name]))
+
+    def test_domain_is_not_a_pile_of_index_repos(self, catalog):
+        """Marketing attracts awesome-lists; the domain must ship real items."""
+        rows = [e for e in catalog if e["category"] == "marketing"]
+        scannable = [e for e in rows if not e["list_only"]]
+        assert len(scannable) >= 14, (
+            "only %d of %d marketing registries are scannable"
+            % (len(scannable), len(rows)))
+        assert sum(e["est_items"] for e in scannable) >= 1800
 
 
 class TestSourceTuples:

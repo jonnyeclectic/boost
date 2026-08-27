@@ -317,9 +317,20 @@ def panel(lines, title: str | None = None, hue: str = "cyan") -> str:
     """
     if isinstance(lines, str):
         lines = [lines]
+    # The border costs four columns — "\u2502 " on the left, " \u2502" on the right —
+    # so that is what the content may not exceed. Without this the box sized
+    # itself to its content and sailed past the pane: `boost count` drew 108
+    # columns into an 80-column terminal, and a box whose border wraps is the
+    # worst-looking overflow the CLI has, because the shape itself breaks.
+    room = term_width() - 4
+    if title:
+        title = _clip_visible(title, room - 2)
+    lines = [_clip_visible(x, room) for x in lines]
     widths = [visible_len(x) for x in lines]
     tw = visible_len(title) if title else 0
-    inner = max([*widths, tw + 2])  # a titled rule needs a space each side
+    # A titled rule needs a space each side, hence the +2 / -2. Clipping above
+    # already bounds every width by `room`, so no second clamp is needed here.
+    inner = max([*widths, tw + 2])
 
     def b(s: str) -> str:
         return aurora(s, hue)

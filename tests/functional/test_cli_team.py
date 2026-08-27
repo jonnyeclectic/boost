@@ -89,6 +89,22 @@ class TestCohort:
         assert data[0]["member"] == _member("pilot", 100)
         assert data[1]["member"] == _member("zero", 0)
 
+    def test_no_literal_double_percent_reaches_the_terminal(self, boost, tapped):
+        """`%%` is printf escaping, and neither of these two strings is ever
+        %-formatted — so both reached the terminal verbatim as `%%`. The
+        membership assertion above stops one character short of the listing's
+        occurrence, which is how it survived.
+        """
+        boost("cohort", "create", "pilot", "--skills", "brainstorming",
+             "--percent", "50")
+        listing = boost("cohort", "list")
+        assert "%%" not in listing.out
+        assert "sha256(user:cohort) % 100 < rollout" in listing.out
+
+        helptext = boost("cohort", "--help")
+        assert "%%" not in helptext.out
+        assert "a 50% rollout" in helptext.out
+
     def test_zero_percent_creates_out_and_apply_skips(self, boost, tapped):
         r = boost("cohort", "create", "zero", "--skills", "brainstorming",
                  "--percent", "0")

@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 470,
-  "est_items_total": 32628,
-  "est_items_scannable": 28207,
+  "count": 486,
+  "est_items_total": 34840,
+  "est_items_scannable": 30419,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -357,6 +357,17 @@
       "curated": true
     },
     {
+      "name": "aaron-he-zhu/aaron-marketing-skills",
+      "url": "https://github.com/aaron-he-zhu/aaron-marketing-skills",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "Marketing staff across narrative, SEO/GEO, social, email, paid, influencer and launch, with auditor gates",
+      "est_items": 128,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "abubakarsiddik31/claude-skills-collection",
       "url": "https://github.com/abubakarsiddik31/claude-skills-collection",
       "type": "skill",
@@ -404,8 +415,8 @@
       "name": "AgriciDaniel/claude-ads",
       "url": "https://github.com/AgriciDaniel/claude-ads",
       "type": "skill",
-      "category": "general",
-      "focus": "Claude-first paid-media operations skill for Claude Code across 12 ad... (34 skills, 25 workflows)",
+      "category": "marketing",
+      "focus": "Paid-media operations across 12 ad platforms: audits, budgets, creative, landing pages, attribution",
       "est_items": 59,
       "confidence": "high",
       "list_only": false,
@@ -426,9 +437,9 @@
       "name": "AgriciDaniel/claude-seo",
       "url": "https://github.com/AgriciDaniel/claude-seo",
       "type": "skill",
-      "category": "general",
-      "focus": "Universal SEO skill for Claude Code. 25 sub-skills + 18 sub-agents... (25 skills, 20 workflows)",
-      "est_items": 45,
+      "category": "marketing",
+      "focus": "Technical and content SEO: audits, backlinks, schema, clustering, local, international and ecommerce",
+      "est_items": 51,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -1094,6 +1105,17 @@
       "curated": true
     },
     {
+      "name": "Cold-IQ/ColdIQ-s-GTM-Skills",
+      "url": "https://github.com/Cold-IQ/ColdIQ-s-GTM-Skills",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "Cold email sequences, ABM messaging, buying signals, list building and deliverability",
+      "est_items": 90,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "comet-ml/opik-skills",
       "url": "https://github.com/comet-ml/opik-skills",
       "type": "skill",
@@ -1141,10 +1163,10 @@
       "name": "coreyhaines31/marketingskills",
       "url": "https://github.com/coreyhaines31/marketingskills",
       "type": "skill",
-      "category": "writing",
-      "focus": "Marketing and growth-focused agent skills",
-      "est_items": 10,
-      "confidence": "med",
+      "category": "marketing",
+      "focus": "CRO, copywriting, cold email, SEO, analytics and growth-engineering skills",
+      "est_items": 50,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -1430,6 +1452,17 @@
       "category": "architecture",
       "focus": "18 Universal AI Skills for Claude Code, GitHub Copilot & 6 more... (18 skills, 1 rules)",
       "est_items": 19,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "ericosiu/ai-marketing-skills",
+      "url": "https://github.com/ericosiu/ai-marketing-skills",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "Growth experiments, cold outbound, sales pipeline, content ops and revenue intelligence",
+      "est_items": 27,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2095,6 +2128,17 @@
       "curated": true
     },
     {
+      "name": "kostja94/marketing-skills",
+      "url": "https://github.com/kostja94/marketing-skills",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "SEO, content, 40+ page-type generators, paid ads, channel and growth strategy",
+      "est_items": 172,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "Kotlin/kotlin-agent-skills",
       "url": "https://github.com/Kotlin/kotlin-agent-skills",
       "type": "skill",
@@ -2216,6 +2260,17 @@
       "curated": true
     },
     {
+      "name": "LeadMagic/gtm-skills",
+      "url": "https://github.com/LeadMagic/gtm-skills",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "CRM setup and hygiene (Salesforce, HubSpot, Attio), enrichment, AI SDR, ABM and lifecycle",
+      "est_items": 206,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "lebsral/DSPy-Programming-not-prompting-LMs-skills",
       "url": "https://github.com/lebsral/DSPy-Programming-not-prompting-LMs-skills",
       "type": "skill",
@@ -2256,6 +2311,17 @@
       "focus": "97 skills",
       "est_items": 97,
       "confidence": "med",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "LeoYeAI/openclaw-marketing-skills",
+      "url": "https://github.com/LeoYeAI/openclaw-marketing-skills",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "Cold email, email sequences, churn prevention, CRO, copywriting and paid ads",
+      "est_items": 39,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -2538,9 +2604,9 @@
       "name": "minhnv0807/ai-business-skills",
       "url": "https://github.com/minhnv0807/ai-business-skills",
       "type": "skill",
-      "category": "general",
-      "focus": "63 bilingual AI marketing skills (31 VN + 31 Global) for Claude Code... (49 skills, 13 workflows)",
-      "est_items": 62,
+      "category": "marketing",
+      "focus": "Bilingual VN/global marketing SOP packs: plans, content calendars, campaign briefs, ad copy, reporting",
+      "est_items": 169,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -2733,6 +2799,17 @@
       "curated": true
     },
     {
+      "name": "NEON-Rutger/B2B-revops-skills",
+      "url": "https://github.com/NEON-Rutger/B2B-revops-skills",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "B2B RevOps: CRM migration, lead routing, deal desk, pipeline visibility, ICP and forecasting",
+      "est_items": 38,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "nexscope-ai/Amazon-Skills",
       "url": "https://github.com/nexscope-ai/Amazon-Skills",
       "type": "skill",
@@ -2795,6 +2872,17 @@
       "focus": "A collection of reusable DevOps Agent Skills for incident response... (10 skills)",
       "est_items": 10,
       "confidence": "low",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "nowork-studio/notfair-plugin",
+      "url": "https://github.com/nowork-studio/notfair-plugin",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "SEO, GEO and Google/Meta ads: keyword research, audits, ad copy, landing pages, analytics",
+      "est_items": 90,
+      "confidence": "high",
       "list_only": false,
       "curated": true
     },
@@ -2942,6 +3030,17 @@
       "curated": true
     },
     {
+      "name": "OpenClaudia/openclaudia-skills",
+      "url": "https://github.com/OpenClaudia/openclaudia-skills",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "SEO, content, email, ads, analytics and growth, including Apollo outreach and backlink audits",
+      "est_items": 75,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "OpenSenseNova/SenseNova-Skills",
       "url": "https://github.com/OpenSenseNova/SenseNova-Skills",
       "type": "skill",
@@ -3003,6 +3102,17 @@
       "category": "general",
       "focus": "Persistent file-based planning for AI coding agents and long-running... (18 skills, 15 workflows)",
       "est_items": 33,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "Othmane-Khadri/YALC-the-GTM-operating-system",
+      "url": "https://github.com/Othmane-Khadri/YALC-the-GTM-operating-system",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "GTM operating system: campaign strategy, multi-touch copywriting sequences, CRM and sequencer adapters",
+      "est_items": 61,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -4251,6 +4361,17 @@
       "curated": true
     },
     {
+      "name": "zapier/gtm-cheat-codes",
+      "url": "https://github.com/zapier/gtm-cheat-codes",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "GTM field guide: campaign planning, cross-CRM opportunity sync, customer proof, lead stewardship",
+      "est_items": 21,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "zhaoxuya520/reverse-skill",
       "url": "https://github.com/zhaoxuya520/reverse-skill",
       "type": "skill",
@@ -4284,6 +4405,39 @@
       "curated": true
     },
     {
+      "name": "zubair-trabzada/ai-marketing-claude",
+      "url": "https://github.com/zubair-trabzada/ai-marketing-claude",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "Site audit through to email sequences, ad campaigns, content calendars and client-ready reports",
+      "est_items": 20,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "zubair-trabzada/ai-sales-team-claude",
+      "url": "https://github.com/zubair-trabzada/ai-sales-team-claude",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "Sales outreach workflow: ICP, prospecting, qualification, objection handling, follow-up",
+      "est_items": 19,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "zubair-trabzada/geo-seo-claude",
+      "url": "https://github.com/zubair-trabzada/geo-seo-claude",
+      "type": "skill",
+      "category": "marketing",
+      "focus": "GEO / AI-search optimisation: citability scoring, AI-crawler analysis, schema, brand mentions",
+      "est_items": 21,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
       "name": "0xfurai/claude-code-subagents",
       "url": "https://github.com/0xfurai/claude-code-subagents",
       "type": "workflow",
@@ -4301,6 +4455,17 @@
       "category": "meta",
       "focus": "Agent OS: keep specialist agents in a hub, spin up a temporary... (48 skills, 2 rules, 62 workflows)",
       "est_items": 112,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "aitytech/agentkits-marketing",
+      "url": "https://github.com/aitytech/agentkits-marketing",
+      "type": "workflow",
+      "category": "marketing",
+      "focus": "Marketing-automation commands and agents: campaigns, ads, analytics, content ops",
+      "est_items": 399,
       "confidence": "high",
       "list_only": false,
       "curated": true
@@ -4752,6 +4917,17 @@
       "category": "meta",
       "focus": "A collection of my favorite custom Claude Code resources to make life... (12 skills, 42 workflows)",
       "est_items": 54,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true
+    },
+    {
+      "name": "gtmagents/gtm-agents",
+      "url": "https://github.com/gtmagents/gtm-agents",
+      "type": "workflow",
+      "category": "marketing",
+      "focus": "GTM agents and commands for sales, marketing, customer success and revenue operations",
+      "est_items": 653,
       "confidence": "high",
       "list_only": false,
       "curated": true
