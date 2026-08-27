@@ -16,6 +16,19 @@ from boost_cli.core import frontmatter, journal, paths
 FALLBACK = "using the heuristic fallback"
 
 
+def flat(text: str) -> str:
+    """Collapse whitespace before matching a hint.
+
+    The AI-fallback note is prose wrapped to the pane, so the phrase
+    legitimately spans a line break — and `term_width()` falls back to 80 under
+    pytest, so it wraps in the suite and not only on a narrow terminal.
+    Matching on the collapsed text asserts *that the note was shown* without
+    also pinning *where the wrap happened to land*, which is not behaviour any
+    of these tests are about.
+    """
+    return " ".join(text.split())
+
+
 def _git(cwd, *args):
     subprocess.run(["git", "-c", "user.email=t@t.test", "-c", "user.name=t", *list(args)], cwd=str(cwd), check=True, capture_output=True)
 
@@ -59,7 +72,7 @@ class TestDistill:
         r = boost("distill", "tdd-workflow", "cowboy-coding")
         assert ("distilling tdd-workflow, cowboy-coding → "
                 "tdd-workflow-distilled") in r.out
-        assert FALLBACK in r.out
+        assert FALLBACK in flat(r.out)
         assert "install it with `boost import ./tdd-workflow-distilled`" in r.out
         text = (tmp_path / "tdd-workflow-distilled" / "SKILL.md").read_text(encoding="utf-8")
         meta, body = frontmatter.parse(text)
@@ -125,7 +138,7 @@ class TestDistill:
                          "version: 1.0.0\n---\n\n# Merged X\n\n"
                          "- Always do the AI thing.\n```")
         r = boost("distill", "brainstorming", "commit-messages", "-o", "merged-x")
-        assert FALLBACK not in r.out
+        assert FALLBACK not in flat(r.out)
         text = (tmp_path / "merged-x" / "SKILL.md").read_text(encoding="utf-8")
         assert "Always do the AI thing." in text
         assert frontmatter.parse(text)[0]["name"] == "merged-x"
@@ -135,7 +148,7 @@ class TestDistill:
         monkeypatch.chdir(tmp_path)
         ai_on(ask_author=None)
         r = boost("distill", "tdd-workflow", "cowboy-coding")
-        assert FALLBACK in r.out
+        assert FALLBACK in flat(r.out)
         assert (tmp_path / "tdd-workflow-distilled" / "SKILL.md").is_file()
 
     def test_needs_two_distinct_skills(self, boost, tapped):
@@ -167,7 +180,7 @@ class TestSimulate:
         r = boost("simulate", "tdd-workflow")
         assert "simulating tdd-workflow" in r.out
         assert "(tap fixture-tap)" in r.out
-        assert FALLBACK in r.out
+        assert FALLBACK in flat(r.out)
         assert "a typical coding task in this repo" in r.out
         assert "Without it: default behavior" in r.out
         assert "With tdd-workflow active, Claude would:" in r.out
@@ -175,7 +188,7 @@ class TestSimulate:
         assert "• always run the full suite before committing" in r.out
         assert "• follow: write a failing test first. Watch it fail" in r.out
         assert ('likely triggers when the task involves: '
-                '"Red-green-refactor test-driven development loop"') in r.out
+                '"Red-green-refactor test-driven development loop"') in flat(r.out)
 
     def test_installed_origin_and_custom_task(self, boost, installed):
         r = boost("simulate", "brainstorming", "--task", "plan a feature")
@@ -188,7 +201,7 @@ class TestSimulate:
         r = boost("simulate", "tdd-workflow")
         assert "WITH: writes tests first" in r.out
         assert "Without it: default behavior" not in r.out
-        assert FALLBACK not in r.out
+        assert FALLBACK not in flat(r.out)
 
 
 # ---------------------------------------------------------------- infer
@@ -207,8 +220,8 @@ def py_project(tmp_path):
 class TestInfer:
     def test_template_to_stdout(self, boost, sandbox, py_project):
         r = boost("infer", "--path", py_project)
-        assert FALLBACK in r.out
-        meta, _ = frontmatter.parse(r.out.split(FALLBACK, 1)[1].lstrip())
+        assert FALLBACK in flat(r.out)
+        meta, _ = frontmatter.parse(r.out.split("heuristic fallback", 1)[1].lstrip())
         assert meta["name"] == "project-conventions"
         assert meta["description"] == "Working conventions for this repository (python)"
         assert meta["version"] == "1.0.0"
@@ -252,7 +265,7 @@ class TestInfer:
                          "version: 1.0.0\n---\n\n# Rules\n\n- Use ruff always.\n")
         r = boost("infer", "--path", py_project)
         assert "- Use ruff always." in r.out
-        assert FALLBACK not in r.out
+        assert FALLBACK not in flat(r.out)
 
     def test_bad_path(self, boost, sandbox):
         r = boost("infer", "--path", "/nope/nowhere", expect=1)
@@ -325,7 +338,7 @@ class TestAbsorb:
             [_history_line("please write docstrings for every function")] * 3), encoding="utf-8")
         r = boost("absorb", "--history", f)
         assert "- AI absorbed rule." in r.out
-        assert FALLBACK not in r.out
+        assert FALLBACK not in flat(r.out)
 
 
 # ---------------------------------------------------------------- evolve
@@ -510,7 +523,7 @@ class TestImpact:
         row = next(l for l in r.out.splitlines()
                    if l.startswith("brainstorming"))
         assert "—" in row
-        assert FALLBACK in r.out
+        assert FALLBACK in flat(r.out)
         assert "correlation, not causation" in r.out
 
     def test_named_in_repo_json(self, boost, installed, tmp_path, monkeypatch):
@@ -535,7 +548,7 @@ class TestImpact:
         ai_on(ask="This data is correlational only.")
         r = boost("impact", "brainstorming")
         assert "This data is correlational only." in r.out
-        assert FALLBACK not in r.out
+        assert FALLBACK not in flat(r.out)
 
 
 # ---------------------------------------------------------------- kind declines

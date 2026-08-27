@@ -88,6 +88,20 @@ def step_output_contains(context, text):
         "expected %r in output:\n%s" % (text, context.combined))
 
 
+@then('the output should contain wrapped "{text}"')
+def step_output_contains_wrapped(context, text):
+    """Match a hint that is wrapped to the pane, ignoring where it broke.
+
+    Deliberately a separate step rather than whitespace-collapsing inside
+    `the output should contain` — that one is used ~87 times across eleven
+    feature files, and collapsing there would quietly weaken every one of them,
+    including assertions about lines and columns.
+    """
+    flat = " ".join(context.combined.split())
+    assert text in flat, (
+        "expected %r in wrapped output:\n%s" % (text, context.combined))
+
+
 @then('the output should not contain "{text}"')
 def step_output_not_contains(context, text):
     assert text not in context.combined, (

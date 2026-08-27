@@ -46,7 +46,7 @@ def _note_fallback() -> None:
     """Warn once per invocation that the AI path is unavailable."""
     global _warned_fallback
     if not _warned_fallback:
-        out.warn(ai.fallback_note())
+        out.warn(ai.fallback_note(), wrap=True)
         _warned_fallback = True
 
 
@@ -279,8 +279,12 @@ def cmd_simulate(argv: list[str]) -> int:
         out.info("  • (no imperative rules found in the skill body)")
     desc = str(meta.get("description") or "").strip()
     if desc:
-        out.info(out.role('likely triggers when the task involves: "%s"'
-                       % desc[:100], "muted"))
+        # Clipped to 100 characters, which is a length and not a width: at
+        # 80 columns the quoted description ran seven past the pane. Wrapping
+        # shows the same clipped text and fits it.
+        trigger = 'likely triggers when the task involves: "%s"' % desc[:100]
+        for line in out.wrap(trigger, max(out.term_width() - 2, 20)):
+            out.info(out.role(line, "muted"))
     return 0
 
 
@@ -1191,8 +1195,10 @@ def _chat_session(args) -> int:
     if not ai.available():
         # Worth saying up front rather than letting every answer look terse for
         # an unexplained reason.
-        out.info(out.role("no AI configured — answers are the grounded matches "
-                          "themselves (%s)" % ai.fallback_note(), "muted"))
+        note = ("no AI configured — answers are the grounded matches "
+                "themselves (%s)" % ai.fallback_note())
+        for line in out.wrap(note, max(out.term_width() - 2, 20)):
+            out.info(out.role(line, "muted"))
     out.info(out.role("ask about skills; blank line or Ctrl-D to exit", "muted"))
     history: list[chat_engine.Turn] = []
     while True:

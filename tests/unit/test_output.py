@@ -1300,3 +1300,220 @@ class TestFormatSearchRow:
             "a", "d", "skill", "", 0.1, curated=False, installed=False, lay=lay)
         assert top.startswith(output.rgb(*output.TOKENS["cyan"]))
         assert low.startswith(output.rgb(*output.TOKENS["pink"]))
+
+
+class TestWrap:
+    """`wrap()` breaks prose to the pane without breaking a copyable command.
+
+    The hints that overflow a narrow pane are prose ending in a backticked
+    shell command — `pip install 'boost-skill-cli[rag]'`. A greedy word wrap
+    splits that mid-command and the user copies something that does not run, so
+    a code span is one atomic token here even though it contains spaces. That
+    is the whole reason this is not two lines of `textwrap`.
+    """
+
+    def test_short_text_is_one_line_unchanged(self):
+        assert output.wrap("a short hint", 40) == ["a short hint"]
+
+    def test_empty_text_wraps_to_nothing(self):
+        assert output.wrap("", 40) == []
+        assert output.wrap("   ", 40) == []
+
+    def test_exactly_at_the_width_does_not_break(self):
+        # 40 columns of content at width 40: the boundary a mutant flipping
+        # <= to < would split into two lines.
+        text = " ".join(["abcd"] * 8)          # 8*4 + 7 == 39
+        assert output.visible_len(text) == 39
+        assert output.wrap(text + "z", 40) == [text + "z"]
+
+    def test_one_column_over_breaks(self):
+        text = " ".join(["abcd"] * 8) + "zz"   # 41
+        assert output.visible_len(text) == 41
+        assert len(output.wrap(text, 40)) == 2
+
+    def test_every_line_fits_the_width(self):
+        text = " ".join("word%d" % i for i in range(60))
+        for line in output.wrap(text, 32):
+            assert output.visible_len(line) <= 32
+
+    def test_a_code_span_is_never_split(self):
+        text = ("semantic search is off — install the extra: "
+                "`pip install 'boost-skill-cli[rag]'`")
+        lines = output.wrap(text, 40)
+        assert any("`pip install 'boost-skill-cli[rag]'`" in ln for ln in lines)
+        # and it is not spread across the break
+        for ln in lines:
+            assert ln.count("`") % 2 == 0
+
+    def test_a_code_span_wider_than_the_pane_stays_whole(self):
+        # Overflowing beats corrupting: a command the user can select and paste
+        # is worth one long line; a command cut in half is worth nothing.
+        span = "`" + "x" * 50 + "`"
+        lines = output.wrap("run " + span + " now", 20)
+        assert span in lines
+
+    def test_a_single_word_longer_than_the_width_is_not_broken(self):
+        lines = output.wrap("tiny " + "y" * 40, 20)
+        assert "y" * 40 in lines
+
+    def test_continuation_lines_carry_the_indent(self):
+        text = " ".join(["word"] * 20)
+        lines = output.wrap(text, 24, indent="    ")
+        assert not lines[0].startswith(" ")
+        assert all(ln.startswith("    ") for ln in lines[1:])
+        assert all(output.visible_len(ln) <= 24 for ln in lines)
+
+    def test_indent_wider_than_the_width_still_terminates(self):
+        # A pathological pane must not loop or emit empty lines forever.
+        lines = output.wrap("one two three", 3, indent="        ")
+        assert lines
+        assert all(ln.strip() for ln in lines)
+
+    def test_width_defaults_to_the_terminal(self, monkeypatch):
+        monkeypatch.setattr(output, "term_width", lambda: 24)
+        text = " ".join(["word"] * 20)
+        assert all(output.visible_len(ln) <= 24 for ln in output.wrap(text))
+
+    def test_it_measures_visible_columns_not_bytes(self, monkeypatch):
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr(output, "use_color", lambda *a, **k: True)
+        coloured = output.c("word", output.BOLD)
+        assert len(coloured) > output.visible_len(coloured)
+        lines = output.wrap(" ".join([coloured] * 6), 24)
+        assert all(output.visible_len(ln) <= 24 for ln in lines)
+
+    def test_newlines_and_runs_of_space_collapse(self):
+        assert output.wrap("a\n\n  b\tc", 40) == ["a b c"]
+
+    def test_no_content_is_lost(self):
+        text = "keep every word of this hint including `a b c` intact"
+        assert " ".join(output.wrap(text, 12)).split() == text.split()
+
+
+class TestWrappingEmitters:
+    """`warn`/`info`/`dim` wrap only when asked, and to their own prefix."""
+
+    def _out(self, capsys, monkeypatch, fn, text, cols=40, **kw):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: cols)
+        fn(text, **kw)
+        return capsys.readouterr().out.rstrip("\n").split("\n")
+
+    LONG = " ".join(["word"] * 20)
+
+    def test_warn_does_not_wrap_by_default(self, capsys, monkeypatch):
+        lines = self._out(capsys, monkeypatch, output.warn, self.LONG)
+        assert len(lines) == 1
+
+    def test_info_does_not_wrap_by_default(self, capsys, monkeypatch):
+        lines = self._out(capsys, monkeypatch, output.info, self.LONG)
+        assert len(lines) == 1
+
+    def test_dim_does_not_wrap_by_default(self, capsys, monkeypatch):
+        lines = self._out(capsys, monkeypatch, output.dim, self.LONG)
+        assert len(lines) == 1
+
+    def test_warn_wrapped_fits_including_its_marker(self, capsys, monkeypatch):
+        lines = self._out(capsys, monkeypatch, output.warn, self.LONG, wrap=True)
+        assert len(lines) > 1
+        assert all(output.visible_len(ln) <= 40 for ln in lines)
+        assert lines[0].startswith("  ! ")
+
+    def test_warn_continuations_align_under_the_message(self, capsys, monkeypatch):
+        lines = self._out(capsys, monkeypatch, output.warn, self.LONG, wrap=True)
+        assert all(ln.startswith("    ") for ln in lines[1:])
+        assert not lines[1].startswith("    !")
+
+    def test_info_wrapped_fits(self, capsys, monkeypatch):
+        lines = self._out(capsys, monkeypatch, output.info, self.LONG, wrap=True)
+        assert len(lines) > 1
+        assert all(output.visible_len(ln) <= 40 for ln in lines)
+        assert all(ln.startswith("  ") for ln in lines)
+
+    def test_dim_wrapped_fits(self, capsys, monkeypatch):
+        lines = self._out(capsys, monkeypatch, output.dim, self.LONG, wrap=True)
+        assert len(lines) > 1
+        assert all(output.visible_len(ln) <= 40 for ln in lines)
+
+    def test_an_empty_wrapped_message_still_prints_a_blank_line(self, capsys,
+                                                               monkeypatch):
+        monkeypatch.setattr(output, "term_width", lambda: 40)
+        output.info("", wrap=True)
+        assert capsys.readouterr().out == "\n"
+
+    def test_wrapped_warn_reaches_the_requested_stream(self, capsys, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: 40)
+        output.warn(self.LONG, stream=sys.stderr, wrap=True)
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert len(cap.err.rstrip("\n").split("\n")) > 1
+
+
+class TestKvWrap:
+    """A wrapped `kv` value folds under the value column, not under the key."""
+
+    def _lines(self, capsys, monkeypatch, value, cols=40, **kw):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: cols)
+        output.kv("key", value, **kw)
+        return capsys.readouterr().out.rstrip("\n").split("\n")
+
+    LONG = " ".join(["value"] * 12)
+
+    def test_it_does_not_wrap_by_default(self, capsys, monkeypatch):
+        assert len(self._lines(capsys, monkeypatch, self.LONG)) == 1
+
+    def test_wrapped_lines_fit_the_pane(self, capsys, monkeypatch):
+        lines = self._lines(capsys, monkeypatch, self.LONG, wrap=True)
+        assert len(lines) > 1
+        assert all(output.visible_len(ln) <= 40 for ln in lines)
+
+    def test_continuations_align_under_the_value(self, capsys, monkeypatch):
+        lines = self._lines(capsys, monkeypatch, self.LONG, wrap=True)
+        col = lines[0].index("value")
+        assert col == 16                       # 2 indent + 14 key column
+        for ln in lines[1:]:
+            assert ln.index("value") == col
+
+    def test_a_non_string_value_still_works(self, capsys, monkeypatch):
+        # `boost impact` passes raw ints; wrapping must not reintroduce the
+        # TypeError the str() call exists to prevent.
+        assert self._lines(capsys, monkeypatch, 42, wrap=True) == [
+            "  key           42"]
+
+
+class TestWrapBoundaries:
+    """The two distinctions the shape of `wrap()` turns on."""
+
+    def test_the_first_line_is_not_charged_for_the_indent(self):
+        # Four 4-char words plus three spaces is 19. At width 19 with a 6-column
+        # indent they all fit line one only if the indent is charged to the
+        # *continuations* — charging it up front would break after three.
+        text = "aaaa bbbb cccc dddd"
+        assert output.visible_len(text) == 19
+        assert output.wrap(text, 19, indent="      ") == [text]
+
+    def test_a_coloured_indent_costs_its_columns_not_its_bytes(self, monkeypatch):
+        # `wrap` is public and the indent is a caller's string, so it is
+        # measured the way every other width in this module is. A plain len()
+        # here charges the escape bytes and wraps far short of the pane.
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.setattr(output, "use_color", lambda *a, **k: True)
+        indent = output.c("  ", output.DIM)
+        assert len(indent) > output.visible_len(indent)
+        plain = output.wrap(" ".join(["word"] * 12), 20, indent="  ")
+        tinted = output.wrap(" ".join(["word"] * 12), 20, indent=indent)
+        assert [output.visible_len(x) for x in plain] == \
+               [output.visible_len(x) for x in tinted]
+
+    def test_two_code_spans_are_two_tokens_not_one(self):
+        # A greedy `` `.*` `` would swallow the prose between them and wrap the
+        # pair as a single unbreakable token.
+        lines = output.wrap("run `alpha` between `beta` here", 16)
+        assert len(lines) > 1
+        assert "`alpha`" in " ".join(lines) and "`beta`" in " ".join(lines)
+        # Under a greedy regex the two spans and the word between them are one
+        # 21-column token, which cannot break and lands on a line of its own.
+        assert not any("`alpha` between `beta`" in ln for ln in lines)
+        assert all(output.visible_len(ln) <= 16 for ln in lines)

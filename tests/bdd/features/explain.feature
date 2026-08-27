@@ -10,14 +10,14 @@ Feature: boost explain
     Given the "brainstorming" skill is installed
     When I run "boost explain brainstorming"
     Then the exit code should be 0
-    And the output should contain "using the heuristic fallback"
+    And the output should contain wrapped "using the heuristic fallback"
     And the output should contain "Outline:"
     And the output should contain "Key rules:"
 
   Scenario: explaining a skill that is only in a tap (not installed)
     When I run "boost explain jira-integration"
     Then the exit code should be 0
-    And the output should contain "using the heuristic fallback"
+    And the output should contain wrapped "using the heuristic fallback"
 
   Scenario: explaining an unknown skill fails
     When I run "boost explain does-not-exist"

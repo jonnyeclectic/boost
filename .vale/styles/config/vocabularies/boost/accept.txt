@@ -5,6 +5,8 @@ allowlisted
 argparse
 Arize
 Attio
+backtick
+backticks
 Bagisto
 bmad
 bookended
