@@ -417,7 +417,7 @@ class TestPreview:
 class TestExplain:
     def test_no_ai_fallback(self, boost, installed):
         r = boost("explain", "brainstorming")
-        assert "using the heuristic fallback" in r.out
+        assert "using the heuristic fallback" in " ".join(r.out.split())
         assert "Structured ideation & divergent-thinking facilitation" in r.out
         assert "Outline:" in r.out
         assert "Brainstorming" in r.out and "Rules" in r.out

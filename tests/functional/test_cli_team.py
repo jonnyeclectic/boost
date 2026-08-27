@@ -296,8 +296,12 @@ class TestProtocol:
         r = boost("protocol", "status")
         assert "Darwin" in r.out
         assert "not registered" in r.out
-        assert ("boost://install/<skill> · boost://install/<tap>:<skill> "
-                "· boost://tap/<owner>/<repo>") in r.out
+        # One form per row now, not a `·`-joined run: the run was 100 columns
+        # and wrapping it stranded a bare `·` at the start of a line.
+        for form in ("boost://install/<skill>", "boost://install/<tap>:<skill>",
+                     "boost://tap/<owner>/<repo>"):
+            assert form in r.out
+        assert "·" not in r.out
         assert "try it: boost protocol open boost://install/brainstorming" in r.out
 
     def test_open_installs(self, boost, tapped):

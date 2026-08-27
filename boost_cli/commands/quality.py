@@ -364,10 +364,10 @@ def cmd_doctor(argv):
 
     out.heading("boost doctor")
 
-    def bad(msg):
+    def bad(msg, wrap=False):
         nonlocal issues
         issues += 1
-        out.warn(msg)
+        out.warn(msg, wrap=wrap)
 
     if gitutil.has_git():
         out.ok("git on PATH")
@@ -633,11 +633,12 @@ def _report_search_engine(bad) -> None:
         elif st["reason"] == "empty":
             detail += " but holds no vectors"
         bad("semantic search silently off — %d-chunk vector store %s; "
-            "searches are using BM25. %s" % (st["chunks"], detail, fix))
+            "searches are using BM25. %s" % (st["chunks"], detail, fix),
+            wrap=True)
         return
 
     out.info("semantic search not configured — using the full-content BM25 "
-             "engine (%s)" % fix)
+             "engine (%s)" % fix, wrap=True)
 
 
 def _print_skipped(skipped: list[dict]) -> None:
@@ -1010,7 +1011,7 @@ def cmd_conflict(argv):
                 if i in confirmed:
                     p["kind"] = "ai-confirmed"
     elif heuristic and not args.json:
-        out.warn(ai.fallback_note())
+        out.warn(ai.fallback_note(), wrap=True)
 
     if args.json:
         print(json.dumps({"pairs": pairs}))
@@ -1058,8 +1059,10 @@ def cmd_changelog(argv):
     if not lines:
         out.warn("no history found for %s in %s" % (rel, tap.name))
     if len(lines) < 3:
-        print(out.role("  (shallow clone: run `git -C %s fetch --unshallow` "
-                    "for full history)" % _tilde(tap.path), "muted"))
+        note = ("(shallow clone: run `git -C %s fetch --unshallow` "
+                "for full history)" % _tilde(tap.path))
+        for line in out.wrap(note, max(out.term_width() - 2, 20)):
+            print(out.role("  " + line, "muted"))
     return 0
 
 

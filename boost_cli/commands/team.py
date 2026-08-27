@@ -481,8 +481,14 @@ def cmd_protocol(argv) -> int:
     if system == "Linux":
         out.kv("desktop", _tilde(_desktop_file())
                if _desktop_file().exists() else "not registered")
-    out.kv("URL forms", "boost://install/<skill> · boost://install/<tap>:<skill> "
-                        "· boost://tap/<owner>/<repo>")
+    # One form per row rather than a `·`-joined run: the run was 100 columns,
+    # and wrapping it strands a bare `·` at the start of a line, because the
+    # separator is a word to any wrapper. A form per row needs no separator and
+    # reads the same at every width.
+    for i, form in enumerate(("boost://install/<skill>",
+                              "boost://install/<tap>:<skill>",
+                              "boost://tap/<owner>/<repo>")):
+        out.kv("URL forms" if i == 0 else "", form)
     out.dim("  try it: boost protocol open boost://install/brainstorming")
     return 0
 
@@ -713,7 +719,7 @@ def cmd_who(argv) -> int:
         out.table(rows[:20], headers=("WHEN", "USER", "ACTION"))
         print()
         out.dim("based on the local journal — in a team setup, pulse feeds "
-                "aggregate via `boost onboard`")
+                "aggregate via `boost onboard`", wrap=True)
         return 0
 
     users: dict[str, dict] = {}
@@ -738,5 +744,5 @@ def cmd_who(argv) -> int:
     out.table(board, headers=("USER", "EVENTS", "SKILLS", "INSTALLS", "LAST ACTIVE"))
     print()
     out.dim("based on the local journal — in a team setup, pulse feeds aggregate "
-            "via `boost onboard`")
+            "via `boost onboard`", wrap=True)
     return 0
