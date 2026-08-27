@@ -3,7 +3,7 @@
   "private": true,
   "description": "Lint toolchain for the theme assets (style/boost.css via stylelint, style/boost.js via eslint). Lives at the repo root because .stylelintrc.json's `extends: stylelint-config-standard` and eslint.config.mjs both resolve modules from the config file's directory \u2014 a node_modules under tests/ would not be found. Committed alongside package-lock.json so CI installs a hash-pinned tree with `npm ci` (OpenSSF Scorecard Pinned-Dependencies).",
   "devDependencies": {
-    "eslint": "10.8.1",
+    "eslint": "10.9.1",
     "stylelint": "17.14.1",
     "stylelint-config-standard": "40.0.0"
   }
