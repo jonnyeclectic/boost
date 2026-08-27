@@ -383,6 +383,65 @@ def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
     return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
 
 
+# A query term shorter than this expands to noise: `cal` prefixes `calendar`,
+# `calculate` and `callbacks` alike, and picking one of them for the user is a
+# guess rather than a correction.
+STEM_MIN_LEN = 4
+
+
+def stem_expansions(terms: Sequence[str]) -> dict[str, str]:
+    """Map each term that indexes *nothing* to the commonest term it prefixes.
+
+    `tokenize` is exact-match, so a query term and its own inflection are
+    unrelated strings: `boost search brainstorm` returned zero matches while
+    `brainstorming` returned the skill, and `boost chat` had the same hole.
+    Measured over the 461 tap caches on one real machine, 4,663 of 29,607 item
+    names (15.7%) were unreachable by an attested stem — `pattern` missed 474
+    names ending `-patterns`, `skill` missed 252 ending `-skills`.
+
+    **A term that has postings is never expanded.** That is the whole safety
+    argument: this can only ever add signal where `_bm25` scored exactly none
+    (it skips a term with no posting list), so a query whose terms all exist
+    ranks byte-identically and the retrieval floors cannot move. It is also why
+    this is a fallback rather than a stemmer — a real stemmer conflates terms
+    that both exist, which changes established rankings and needs an index
+    format bump and a regenerated baseline.
+
+    Returns ``{}`` — never raises — when the store is missing or unreadable,
+    matching :func:`read_postings`.
+    """
+    uniq = [t for t in dict.fromkeys(terms) if len(t) >= STEM_MIN_LEN]
+    if not uniq:
+        return {}
+    indexed = read_postings(uniq)
+    missing = [t for t in uniq if not indexed.get(t)]
+    if not missing:
+        return {}
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % postings_path(), uri=True)
+    except sqlite3.Error:
+        return {}
+    out: dict[str, str] = {}
+    try:
+        for term in missing:
+            # `tokenize` emits only [a-z0-9]+, and "~" sorts above every
+            # character it can produce — so this half-open range is exactly the
+            # terms beginning with `term`, and it rides the postings_term index
+            # instead of scanning. Ties break on the term itself so the choice
+            # is deterministic across machines.
+            row = con.execute(
+                "SELECT term FROM postings WHERE term > ? AND term < ? "
+                "GROUP BY term ORDER BY COUNT(*) DESC, term LIMIT 1",
+                (term, term + "~")).fetchone()
+            if row:
+                out[term] = row[0]
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+    return out
+
+
 def _all_postings() -> dict[str, list[list[int]]]:
     """Every posting — only the incremental rebuild path needs this."""
     try:
@@ -804,6 +863,12 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
     terms = tokenize(query)
     if not terms:
         return []
+    # Substitute before scoring, not after: the expanded term has to reach the
+    # snippet windowing too, or the hit is highlighted on a word it does not
+    # contain.
+    substitutions = stem_expansions(terms)
+    if substitutions:
+        terms = [substitutions.get(t, t) for t in terms]
     docs = raw["docs"]
     scores = _bm25(terms, raw, read_postings(terms))
     if entries is None:

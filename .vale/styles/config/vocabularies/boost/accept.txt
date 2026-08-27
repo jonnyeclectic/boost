@@ -98,6 +98,8 @@ stderr
 Stdlib
 stdlib
 stdout
+stemmer
+stemming
 subagents
 subcommand
 tappable

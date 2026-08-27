@@ -431,6 +431,129 @@ class TestBuildAndRetrieve:
         assert len(snip) <= rag.SNIP_WIDTH + 2        # windowed, not whole chunk
 
 
+@pytest.fixture()
+def stem_corpus(tmp_path, monkeypatch, sandbox):
+    """A corpus with deliberately paired singular/plural vocabulary.
+
+    `pattern` AND `patterns` both exist as terms, which is what lets the
+    never-expand-an-existing-token invariant be tested: a build that dropped
+    that guard would expand `pattern` to `patterns` and change a query that
+    already worked.
+    """
+    root = tmp_path / "stems"
+    items = {
+        "alpha": "pattern matching for structured logs.",
+        "beta": "patterns and antipatterns in distributed systems.",
+        "gamma": "webhook delivery retries.",
+        "delta": "webhooks and callbacks delivery.",
+        "epsilon": "delivered payloads and receipts to analyze.",
+    }
+    entries = []
+    for name, body in items.items():
+        (root / name).mkdir(parents=True)
+        (root / name / "SKILL.md").write_text(
+            "---\nname: %s\n---\n\n%s\n" % (name, body), encoding="utf-8")
+        entries.append(_entry(name, skill_md="%s/SKILL.md" % name))
+    monkeypatch.setattr(rag, "_tap_paths", lambda: {"acme/skills": root})
+    monkeypatch.setattr(rag, "_tap_commits", lambda: {"acme__skills": "c1"})
+    rag.build(entries=entries, force=True)
+    return entries
+
+
+class TestStemExpansions:
+    """`boost search brainstorm` found nothing while `brainstorming` found the
+    skill: `tokenize` is exact-match, so a query term and its own inflection are
+    unrelated strings. Measured over the 461 tap caches on one real machine,
+    4,663 of 29,607 item names (15.7%) were unreachable by an attested stem —
+    `pattern` missed 474 names ending `-patterns`, `skill` missed 252.
+    """
+
+    def test_a_term_that_has_postings_is_never_expanded(self, stem_corpus):
+        """The invariant the whole design rests on.
+
+        Expansion may only ever add signal where there was exactly none, which
+        is what makes it unable to move a ranking that already worked — and so
+        unable to move the eval floors. `pattern` and `patterns` both exist
+        here, so a build that dropped the guard would rewrite `pattern` into
+        `patterns` and this fails.
+        """
+        assert rag.stem_expansions(["pattern"]) == {}
+        assert rag.stem_expansions(["webhook"]) == {}
+        assert rag.stem_expansions(["pattern", "webhook", "delivery"]) == {}
+
+    def test_only_the_missing_term_of_a_mixed_query_is_expanded(self, stem_corpus):
+        assert rag.stem_expansions(["pattern", "callback"]) == {
+            "callback": "callbacks"}
+
+    def test_picks_the_commonest_expansion_not_the_first_alphabetically(
+            self, stem_corpus):
+        """`delivery` is in two documents and `delivered` in one, and
+        `delivered` sorts first — so ordering by document count is the only way
+        to land on `delivery`."""
+        assert rag.stem_expansions(["deliver"]) == {"deliver": "delivery"}
+
+    @pytest.mark.parametrize("term,expected", [
+        ("cal", {}),                       # 3 chars: below the floor
+        ("call", {"call": "callbacks"}),   # 4 chars: exactly at it
+        ("callb", {"callb": "callbacks"}),
+    ])
+    def test_the_minimum_term_length_boundary(self, stem_corpus, term, expected):
+        """Short prefixes expand to noise, so there is a floor; these pin it at
+        exactly 4, which a mutant moving it either way breaks."""
+        assert rag.stem_expansions([term]) == expected
+
+    def test_a_term_whose_next_character_is_z_is_still_found(self, stem_corpus):
+        """`z` is the highest character `tokenize` can emit, so an upper bound
+        of ``term + "z"`` silently excludes exactly the terms that continue
+        with one — `analy` would never reach `analyze`. The bound is `~`,
+        which sorts above every character a token can contain.
+        """
+        assert rag.stem_expansions(["analy"]) == {"analy": "analyze"}
+
+    def test_a_term_that_prefixes_nothing_stays_missing(self, stem_corpus):
+        assert rag.stem_expansions(["zzzznothing"]) == {}
+
+    def test_the_upper_bound_does_not_leak_past_the_prefix(self, stem_corpus):
+        """`camel` sorts after `call` but is not a `call`-prefixed term, so a
+        range whose upper bound is wrong would drag in neighbours."""
+        assert rag.stem_expansions(["calm"]) == {}
+
+    def test_no_postings_file_yields_no_expansions(self, sandbox):
+        assert rag.stem_expansions(["callback"]) == {}
+
+    def test_duplicate_terms_are_asked_once_and_answered_once(self, stem_corpus):
+        assert rag.stem_expansions(["callback", "callback"]) == {
+            "callback": "callbacks"}
+
+
+class TestRetrieveUsesStemExpansions:
+    def test_a_singular_query_reaches_the_plural_item(self, stem_corpus):
+        """The reported symptom, in miniature: `callbacks` is indexed, the user
+        types `callback`, and before this the answer was nothing at all."""
+        hits = rag.retrieve("callback", entries=stem_corpus)
+        assert [h["entry"]["name"] for h in hits] == ["delta"]
+
+    def test_the_snippet_highlights_the_term_that_actually_matched(
+            self, stem_corpus):
+        hits = rag.retrieve("callback", entries=stem_corpus)
+        assert "callbacks" in hits[0]["snippet"].lower()
+
+    def test_a_query_whose_terms_all_exist_is_untouched(self, stem_corpus):
+        names = [h["entry"]["name"]
+                 for h in rag.retrieve("pattern", entries=stem_corpus)]
+        assert names == ["alpha"]      # not beta, which owns `patterns`
+
+    def test_a_mixed_query_keeps_the_existing_term_and_fixes_the_other(
+            self, stem_corpus):
+        names = {h["entry"]["name"]
+                 for h in rag.retrieve("pattern callback", entries=stem_corpus)}
+        assert names == {"alpha", "delta"}
+
+    def test_a_query_that_matches_nothing_at_all_still_returns_nothing(
+            self, stem_corpus):
+        assert rag.retrieve("zzzznothing", entries=stem_corpus) == []
+
+
 class TestBm25Math:
     """Pin the exact BM25 arithmetic (k1=1.2, b=0.75) so formula mutants die."""
 

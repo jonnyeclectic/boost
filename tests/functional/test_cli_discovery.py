@@ -128,6 +128,29 @@ class TestSearch:
         # integer heuristic score — assert the shape, not a magic constant.
         assert isinstance(data[0]["score"], float) and data[0]["score"] > 0
 
+    def test_a_stem_query_reaches_the_inflected_skill_and_says_so(
+            self, boost, tapped):
+        """`boost search brainstorm` used to return nothing at all while
+        `brainstorming` returned the skill, and send the user off to search the
+        whole of GitHub for something already in their catalogue."""
+        r = boost("search", "brainstorm")
+        assert "brainstorming" in r.out
+        assert "no matches" not in r.out
+        # The widening is stated, not silent — the user asked for one word and
+        # is being shown results for another.
+        assert "no exact match for 'brainstorm'" in r.out
+        assert "brainstorming" in r.out
+
+    def test_an_exact_query_is_not_annotated(self, boost, tapped):
+        r = boost("search", "brainstorming")
+        assert "brainstorming" in r.out
+        assert "no exact match" not in r.out
+
+    def test_a_query_matching_nothing_is_not_annotated_either(self, boost, tapped):
+        r = boost("search", "zzzznothing")
+        assert "no exact match" not in r.out
+        assert "no matches for 'zzzznothing'" in r.out
+
     def test_no_taps_fails_with_hint(self, boost):
         r = boost("search", "anything", expect=1)
         assert "no taps configured — nothing to search" in r.err
