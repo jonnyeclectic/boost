@@ -76,6 +76,68 @@ each `.glass`, `.cap`, `.stat`, and `.window`. The CSS reads those in a radial
 gradient. No JS → the variables stay unset → the spotlight simply never shows,
 and the hover lift still works.
 
+## Type
+
+Both stacks are system fonts, so the system fetches nothing and there is no
+flash on load.
+
+A page may justify one display face. Three things then bite, and all three fail
+silently — the page renders, it just renders wrong.
+
+| Trap | What happens | The fix |
+|------|--------------|---------|
+| Enumerated weights | `wght@400;500;600` loads those three. `font-weight: 700` is then *synthesised*: the browser smears the 600 outline. | Request the axis: `wght@400..900`. |
+| Missing italic axis | `font-style: italic` shears the roman instead of loading the italic. On a high-contrast face a true italic is a different alphabet, so the fake reads immediately. | `ital,wght@0,400..900;1,400..900`, plus `font-synthesis: none` so the fallback is visible rather than silent. |
+| Display weight on a dark ground | A high-contrast face at 500 has hairline strokes. On `--bg` they dissolve, and under `background-clip: text` they take the gradient with them. | Set display type at 700+. Specimen sheets flatter 400-500 on white; this ground is not white. |
+
+To check a face actually loaded rather than trusting the render, compare advance
+widths in the console — a real italic sets narrower than a sheared roman:
+
+```js
+const w = (style, weight) => {
+  const c = document.createElement('canvas').getContext('2d');
+  c.font = `${style} ${weight} 100px "Your Face"`;
+  return c.measureText('remembered').width;
+};
+w('normal', 700);   // 612.4
+w('italic', 800);   // 576.7  <- a real italic cut, not a slant
+```
+
+### Gradient on type
+
+`.grad-text` paints only where a glyph is, so weight is a contrast control here
+rather than a style choice. Thin strokes give the ramp no area, and the text
+fades toward whichever stop sits closest to the ground. Anything wearing it
+wants 600+; `.eyebrow` (700) and `.stat b` (800) are the reference.
+
+## Writing
+
+Prose is part of the system. `.vale/styles/boost/AIWriting.yml` enforces the
+mechanical half of this and runs in the `prose-lint` workflow over every
+contributor-facing Markdown file, including this one. All 13 scored zero hits
+before the rule landed, so it gates new drafts rather than grandfathering old
+ones.
+
+Vale reads tokens, so it catches vocabulary and nothing else. These three are
+properties of a whole passage and need a human:
+
+**Em-dash density.** One is punctuation. Nine on a screen is a signature. The
+rule is not abstinence — this repo's own docs use them well — it is noticing
+when every other sentence has grown a subordinate clause instead of a full
+stop. A draft that arrives at ~25 per page is not written, it is generated.
+
+**Rule of three.** Three-item lists and three-clause sentences are the default
+cadence of generated prose. One is fine. Three sections in a row that each
+open with three parallel clauses is a tell.
+
+**Significance closers.** A sentence whose job is to assert that the preceding
+sentence mattered. `This is the part that really matters`, `that is the whole
+point`, `it is worth noting that`. Cut them and nothing is lost, which is the
+diagnostic: they carry no information the reader did not already have.
+
+Two habits that replace all three: say what a thing does rather than what it
+represents, and prefer the shorter of two accurate sentences.
+
 ## Accessibility
 
 - **`prefers-reduced-motion`** disables the aurora drift, the breathing badge,

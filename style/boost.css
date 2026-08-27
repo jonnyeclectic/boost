@@ -68,7 +68,29 @@
   --term-bg:  #0d1024;
   --term-bar: #171a33;
 
-  /* --- type --- */
+  /* --- type ---
+     Both stacks are system fonts on purpose: the system fetches no webfont, so
+     there is no flash, no third-party request and no CSP entry to maintain.
+
+     ADDING A DISPLAY FACE (the one deviation a page may justify) has three
+     failure modes, all silent — the page renders, it just renders wrong:
+
+       1. Request the WEIGHT AXIS, not a few weights. `wght@400;500;600` loads
+          exactly those; `font-weight: 700` then gets SYNTHESISED — the browser
+          smears the 600 outline and calls it bold. Variable syntax is
+          `wght@400..900`, and one file covers the range.
+       2. Request the ITALIC AXIS separately, or `font-style: italic` is faked
+          by shearing the roman. On a high-contrast face (a didone, say) a real
+          italic is a different alphabet, not a slanted one, so the fake is
+          obvious. The axis is `ital,wght@0,400..900;1,400..900`, and
+          `font-synthesis: none` turns the silent fallback into a visible one.
+       3. High-contrast faces need WEIGHT to survive dark grounds. A didone's
+          hairlines at 500/90px on --bg vanish into the background, and under
+          background-clip:text they take the gradient with them (see .grad-text).
+          Set display type at 700+, not at the 400-500 a specimen sheet shows.
+
+     Measured while building a page on this system: 500 -> 700 was the whole
+     difference between a headline that dissolved and one that held. */
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 
@@ -221,7 +243,13 @@ body::after {
    One instance per page, on the thing the page is actually about.
 
    background-clip:text zeroes the text fill, which also zeroes the selection
-   highlight, so ::selection has to put a colour back. */
+   highlight, so ::selection has to put a colour back.
+
+   It also means the gradient is only ever visible where a GLYPH is. Weight is
+   therefore a contrast control here, not a style choice: thin strokes give the
+   ramp almost no area to paint, and the text fades toward whichever stop is
+   darkest against the ground. Anything wearing .grad-text wants 600+ — the
+   .eyebrow (700) and .stat b (800) already do, and are the reference. */
 .grad-text {
   background: var(--grad);
   -webkit-background-clip: text; background-clip: text; color: transparent;
