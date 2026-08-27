@@ -457,6 +457,56 @@ class TestPanel:
         assert "\033[1minventory\033[0m" in output.panel("x", title="inventory")
 
 
+class TestPanelFitsTerminal:
+    """`panel()` sized itself to its content and ignored the terminal, so a
+    long line produced a box wider than the pane — and a broken box is the
+    ugliest overflow there is, because the border wraps into the next row.
+    Measured: `boost count` drew 108 columns into an 80-column terminal.
+    """
+
+    def _rows(self, monkeypatch, cols, lines, **kw):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: cols)
+        return output.panel(lines, **kw).split("\n")
+
+    def test_untouched_when_it_already_fits(self, monkeypatch):
+        rows = self._rows(monkeypatch, 40, "x" * 36)
+        assert [output.visible_len(r) for r in rows] == [40, 40, 40]
+        assert "…" not in rows[1]
+
+    def test_exactly_at_the_limit_is_not_clipped(self, monkeypatch):
+        # inner 36 + "│ " + " │" == 40 == the full width: the boundary case a
+        # mutant flipping <= to < would break.
+        rows = self._rows(monkeypatch, 40, "y" * 36)
+        assert rows[1] == "│ " + "y" * 36 + " │"
+
+    def test_one_column_over_is_clipped(self, monkeypatch):
+        rows = self._rows(monkeypatch, 40, "z" * 37)
+        assert [output.visible_len(r) for r in rows] == [40, 40, 40]
+        assert rows[1].endswith("… │")
+
+    def test_every_row_is_the_same_width_after_clipping(self, monkeypatch):
+        rows = self._rows(monkeypatch, 30, ["short", "w" * 90, "mid" * 4])
+        assert len({output.visible_len(r) for r in rows}) == 1
+        assert output.visible_len(rows[0]) <= 30
+
+    def test_title_is_clipped_too(self, monkeypatch):
+        rows = self._rows(monkeypatch, 24, "a" * 50, title="t" * 40)
+        assert all(output.visible_len(r) <= 24 for r in rows)
+        assert len({output.visible_len(r) for r in rows}) == 1
+
+    def test_a_narrow_pane_still_yields_a_box(self, monkeypatch):
+        rows = self._rows(monkeypatch, 8, "content that is far too long")
+        assert len(rows) == 3
+        assert rows[0].startswith("╭") and rows[-1].endswith("╯")
+        assert all(output.visible_len(r) <= 8 for r in rows)
+
+    def test_a_zero_width_pane_does_not_crash_or_go_negative(self, monkeypatch):
+        rows = self._rows(monkeypatch, 0, "anything")
+        assert len(rows) == 3
+        assert all(output.visible_len(r) >= 0 for r in rows)
+
+
 class TestEmptyState:
     def test_message_only_plain(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")

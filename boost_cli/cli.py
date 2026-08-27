@@ -155,20 +155,50 @@ _GROUP_HUES = ("cyan", "violet", "pink", "green", "yellow")
 
 
 def print_help() -> None:
-    print(out.gradient(PRODUCT) + " — Homebrew for AI coding skills"
-          + out.c("  (%s · v%s)" % (TAGLINE, __version__), out.DIM))
+    """The command index, fitted to the pane.
+
+    Every other screen in the CLI adapts — `search` drops the tap column and
+    truncates at 60 columns — while this one emitted a fixed 105-column banner
+    at every width and wrapped mid-word for anyone not running a wide
+    terminal. Names are never clipped, because the help's whole job is to be
+    an index you can copy a command out of; summaries are.
+    """
+    cols = out.term_width()
+
+    title_line = out.gradient(PRODUCT) + " — Homebrew for AI coding skills"
+    stamp = "%s · v%s" % (TAGLINE, __version__)
+    if out.visible_len(title_line) + out.visible_len(stamp) + 4 <= cols:
+        print(title_line + out.c("  (%s)" % stamp, out.DIM))
+    else:
+        print(title_line)
+        # The tagline is the first thing to go; the version never is, because
+        # it is what a bug report needs.
+        print(out.c(stamp if out.visible_len(stamp) <= cols
+                    else "v%s" % __version__, out.DIM))
     print()
-    print(out.c("Usage:", out.BOLD) + "  boost <command> [args]   "
-          + out.c("boost help <command> for details", out.DIM))
+
+    usage = out.c("Usage:", out.BOLD) + "  boost <command> [args]"
+    detail = out.c("boost help <command> for details", out.DIM)
+    if out.visible_len(usage) + out.visible_len(detail) + 3 <= cols:
+        print(usage + "   " + detail)
+    else:
+        print(usage)
+        print("  " + detail)
+
     width = max(len(n) for n, _, _, _ in COMMANDS)
     for idx, (gkey, (_icon, title, desc)) in enumerate(GROUPS.items()):
         cmds = [(n, s) for n, g, _m, s in COMMANDS if g == gkey]
         bullet = out.aurora("●", _GROUP_HUES[idx % len(_GROUP_HUES)])
         print()
-        print(bullet + " " + out.c(title, out.BOLD)
-              + out.c("  — %s" % desc, out.DIM))
+        head = bullet + " " + out.c(title, out.BOLD)
+        room = cols - len(title) - 6  # "● " + title + "  — "
+        if room >= 8:
+            print(head + out.c("  — %s" % out.truncate(desc, room), out.DIM))
+        else:
+            print(head)
         for n, s in cmds:
-            print("  " + out.c(n.ljust(width + 2), out.CYAN) + s)
+            print("  " + out.c(n.ljust(width + 2), out.CYAN)
+                  + out.truncate(s, max(0, cols - width - 4)))
     print()
     print(out.c("%d commands · %d groups" % (len(COMMANDS), len(GROUPS)), out.DIM))
 

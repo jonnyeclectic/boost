@@ -12,8 +12,9 @@ as `core.catalog.scan_dir`, so the number is a floor (items nested deeper than
 the walk are missed) rather than a marketing figure. Rows predating that batch
 keep their research estimates except where a re-measure disagreed.
 
-Six domains are curated end to end and are the useful `--category` values for
-`boost tap --catalog`: `ai`, `architecture`, `ui`, `java`, `ecommerce`, `infra`.
+Seven domains are curated end to end and are the useful `--category` values for
+`boost tap --catalog`: `ai`, `architecture`, `ui`, `java`, `ecommerce`, `infra`,
+`marketing`.
 Their coverage floors are enforced by tests/unit/test_registry_categories.py.
 
 Run:    python3 scripts/build_registries.py            # regenerate the JSON
@@ -101,7 +102,7 @@ SKILLS = [
     ("mhattingpete/claude-skills-marketplace", "security", "Skills for forensics, metadata, git, test-fixing, review", 8, "med"),
     ("sanjay3290/ai-skills", "general", "Skills incl. deep-research, postgres, google-workspace, imagen", 8, "med"),
     ("NeoLabHQ/context-engineering-kit", "meta", "Skills: prompt-engineering, software-architecture, subagent-driven-dev", 6, "med"),
-    ("coreyhaines31/marketingskills", "writing", "Marketing and growth-focused agent skills", 10, "med"),
+    ("coreyhaines31/marketingskills", "marketing", "CRO, copywriting, cold email, SEO, analytics and growth-engineering skills", 50, "high"),
     # `efficiency`: items that exist to make an agent emit less. Filed by item
     # name, not README — both of these read like general coding advice up top.
     # Focus strings describe what the items do and deliberately omit the
@@ -372,9 +373,9 @@ SKILLS = [
     ("JasonColapietro/suede-creator-skills", "general", "67 open-source Agent Skills for Claude Code and Codex: Full Send... (67 skills)", 67, "high"),
     ("first-fluke/oh-my-agent", "general", "Portable, vendor-agnostic agent harness for project-specific skills... (33 skills, 33 workflows)", 66, "high"),
     ("wondelai/skills", "general", "Wondel.ai Agent Skills - Business, Marketing, UX & Coding Frameworks... (62 skills, 1 rules)", 63, "high"),
-    ("minhnv0807/ai-business-skills", "general", "63 bilingual AI marketing skills (31 VN + 31 Global) for Claude Code... (49 skills, 13 workflows)", 62, "high"),
+    ("minhnv0807/ai-business-skills", "marketing", "Bilingual VN/global marketing SOP packs: plans, content calendars, campaign briefs, ad copy, reporting", 169, "high"),
     ("LigphiDonk/Oh-my--paper", "general", "A Claude Code plugin that turns your terminal into an autonomous... (35 skills, 26 workflows)", 61, "high"),
-    ("AgriciDaniel/claude-ads", "general", "Claude-first paid-media operations skill for Claude Code across 12 ad... (34 skills, 25 workflows)", 59, "high"),
+    ("AgriciDaniel/claude-ads", "marketing", "Paid-media operations across 12 ad platforms: audits, budgets, creative, landing pages, attribution", 59, "high"),
     ("whawkinsiv/solo-founder-skills", "general", "Skillset optimized for solo, bootstrapped, and non-technical founders... (58 skills, 1 workflows)", 59, "high"),
     ("Aperivue/medsci-skills", "general", "Agent Skills for medical research - literature search... (58 skills)", 58, "high"),
     ("briiirussell/cybersecurity-skills", "general", "Cybersecurity skills for AI coding agents (Claude Code, Cursor, Codex) (29 skills, 29 rules)", 58, "high"),
@@ -387,7 +388,7 @@ SKILLS = [
     ("steipete/agent-scripts", "general", "Scripts for agents, shared between my repositories (53 skills)", 53, "high"),
     ("luongnv89/claude-howto", "general", "A visual, example-driven guide to Claude Code - from basic concepts to... (31 skills, 20 workflows)", 51, "high"),
     ("swyxio/skills", "general", "Agent skills for Claude Code and other AI agents (46 skills)", 46, "high"),
-    ("AgriciDaniel/claude-seo", "general", "Universal SEO skill for Claude Code. 25 sub-skills + 18 sub-agents... (25 skills, 20 workflows)", 45, "high"),
+    ("AgriciDaniel/claude-seo", "marketing", "Technical and content SEO: audits, backlinks, schema, clustering, local, international and ecommerce", 51, "high"),
     ("diegosouzapw/OmniRoute", "general", "Never stop coding. Free MIT AI gateway: one endpoint, 290+ providers... (45 skills)", 45, "high"),
     ("intellectronica/agent-skills", "general", "@intellectronica's agent skills (44 skills)", 44, "high"),
     ("davidondrej/skills", "general", "access to david ondrej's personal agent skills (42 skills)", 42, "high"),
@@ -469,6 +470,31 @@ SKILLS = [
     # cheap pull.
     ("microsoft/playwright", "devops", "Official Playwright repo - the agent skills it ships (CLI, trace, component testing) plus the test planner/generator/healer agents (7 skills, 11 workflows)", 18, "high"),
     # --- end 2026-08 batch ---
+
+# --- marketing / CRM / email / outreach (2026-08 sweep) ----------------------
+# Registries whose *items* are named `cold-email`, `email-sequence`,
+# `crm-integration`, `hubspot-setup`, `apollo-outreach`, `lead-routing`. The
+# sweep read item names, never READMEs: every repo here describes itself as
+# "skills for Claude Code / Cursor / Codex" first, which is why four of them
+# were already carried under `writing` and `general`. Counts are
+# `scripts/measure_registry.py` against a fresh clone, so a repo that renders
+# one copy per agent is credited once. Ordered by adoption within the batch;
+# the CRM rows are the least-starred and the most load-bearing, since they are
+# the only coverage the domain has for the CRM half of its own name.
+    ("zubair-trabzada/geo-seo-claude", "marketing", "GEO / AI-search optimisation: citability scoring, AI-crawler analysis, schema, brand mentions", 21, "high"),
+    ("ericosiu/ai-marketing-skills", "marketing", "Growth experiments, cold outbound, sales pipeline, content ops and revenue intelligence", 27, "high"),
+    ("nowork-studio/notfair-plugin", "marketing", "SEO, GEO and Google/Meta ads: keyword research, audits, ad copy, landing pages, analytics", 90, "high"),
+    ("aaron-he-zhu/aaron-marketing-skills", "marketing", "Marketing staff across narrative, SEO/GEO, social, email, paid, influencer and launch, with auditor gates", 128, "high"),
+    ("zubair-trabzada/ai-marketing-claude", "marketing", "Site audit through to email sequences, ad campaigns, content calendars and client-ready reports", 20, "high"),
+    ("zubair-trabzada/ai-sales-team-claude", "marketing", "Sales outreach workflow: ICP, prospecting, qualification, objection handling, follow-up", 19, "high"),
+    ("LeoYeAI/openclaw-marketing-skills", "marketing", "Cold email, email sequences, churn prevention, CRO, copywriting and paid ads", 39, "high"),
+    ("kostja94/marketing-skills", "marketing", "SEO, content, 40+ page-type generators, paid ads, channel and growth strategy", 172, "high"),
+    ("OpenClaudia/openclaudia-skills", "marketing", "SEO, content, email, ads, analytics and growth, including Apollo outreach and backlink audits", 75, "high"),
+    ("zapier/gtm-cheat-codes", "marketing", "GTM field guide: campaign planning, cross-CRM opportunity sync, customer proof, lead stewardship", 21, "high"),
+    ("Othmane-Khadri/YALC-the-GTM-operating-system", "marketing", "GTM operating system: campaign strategy, multi-touch copywriting sequences, CRM and sequencer adapters", 61, "high"),
+    ("Cold-IQ/ColdIQ-s-GTM-Skills", "marketing", "Cold email sequences, ABM messaging, buying signals, list building and deliverability", 90, "high"),
+    ("LeadMagic/gtm-skills", "marketing", "CRM setup and hygiene (Salesforce, HubSpot, Attio), enrichment, AI SDR, ABM and lifecycle", 206, "high"),
+    ("NEON-Rutger/B2B-revops-skills", "marketing", "B2B RevOps: CRM migration, lead routing, deal desk, pipeline visibility, ICP and forecasting", 38, "high"),
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------
@@ -512,6 +538,8 @@ RULES = [
 
 # --- workflows (Claude Code commands / subagents) ---------------------------
 WORKFLOWS = [
+    ("gtmagents/gtm-agents", "marketing", "GTM agents and commands for sales, marketing, customer success and revenue operations", 653, "high"),
+    ("aitytech/agentkits-marketing", "marketing", "Marketing-automation commands and agents: campaigns, ads, analytics, content ops", 399, "high"),
     ("wshobson/agents", "agents", "203 subagents, 175 skills, 109 commands from one Markdown source", 200, "high"),
     ("wshobson/commands", "commands", "57 production-ready slash commands (15 workflows, 42 tools)", 57, "high"),
     ("VoltAgent/awesome-claude-code-subagents", "agents", "100+ specialized subagents across dev, infra, quality, data, meta", 116, "high"),
