@@ -212,6 +212,24 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   a workflow is rendered per agent (TOML for Gemini, see
   `workflows.TOML_COMMAND_AGENTS`). Installing a rule therefore edits a file the
   user reads every session — treat it as more invasive than a skill, not less.
+- **A long line is either chrome or data, and only chrome may be wrapped.**
+  `out.wrap()` folds prose to the pane, and the emitters take it opt-in —
+  `warn`/`info`/`dim`/`kv` accept `wrap=True` and each pays for its own prefix,
+  so continuations align under the message rather than folding to column zero.
+  It is opt-in because always-on wrapping would fold the lines that must stay
+  long: `pulse`'s `source=` paths and `fingerprint`'s 64-character hash are the
+  information the line exists to carry, and a hash split across two lines
+  cannot be compared by eye. **A backtick span is one atomic token**, spaces
+  and all — `doctor` and `search` both interpolate `dense.fix_hint()`, whose
+  answers end in `pip install 'boost-skill-cli[rag]'`, and a wrap that splits
+  that hands the user a command which does not run. A token wider than the pane
+  overflows whole rather than breaking. Wrap *before* adding color: `out.role`
+  brackets its argument with a start code and a reset, so coloring first and
+  splitting after leaves line one unterminated and line two plain. And
+  budget the emitter's own indent — wrapping to the full `term_width()` and
+  then letting `out.info` add two spaces is what put `boost search`'s hint one
+  column past the pane it had just been fitted to.
+
 - **Sub-actions of one action repo move in lockstep.** `github/codeql-action/{init,
   analyze,upload-sarif}` and `actions/cache{,/save,/restore}` are each *one repo at
   one commit*, but Dependabot tracks one `uses:` path as one dependency and raises a

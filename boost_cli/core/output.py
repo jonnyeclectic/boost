@@ -200,20 +200,38 @@ def gradient(text: str, stream=None) -> str:
     return "".join(out)
 
 
+def _wrap_lines(msg: str, lead: int) -> list[str]:
+    """Wrap `msg` for an emitter whose own prefix costs `lead` columns.
+
+    Returns at least one line so an emitter never silently prints nothing for a
+    message it was given; the emitter decides what its prefix and continuation
+    padding look like.
+    """
+    return wrap(msg, term_width() - lead) or [msg]
+
+
 def ok(msg: str) -> None:
     """Print msg as an indented success line with a green check mark."""
     print("  " + role("✓", "success") + " " + msg)
 
 
-def warn(msg: str, stream=None) -> None:
+def warn(msg: str, stream=None, wrap: bool = False) -> None:
     """Print msg as an indented `!` warning line, all in the warn role.
 
     ``stream`` exists for the commands that also speak JSON on stdout: a notice
     about *which corpus answered* has to survive `--json`, and the old choice
     was between corrupting the JSON and suppressing the notice entirely. Passing
     ``sys.stderr`` keeps both.
+
+    ``wrap`` is opt-in per call site rather than always-on, because not every
+    long line is prose: `pulse`'s `source=` paths and `fingerprint`'s hash are
+    data, and folding those destroys the information the line exists to carry.
+    Prose hints pass it; data lines do not.
     """
-    print("  " + role("!", "warn") + " " + role(msg, "warn"), file=stream)
+    body = _wrap_lines(msg, 4) if wrap else [msg]
+    for i, line in enumerate(body):
+        lead = "  " + role("!", "warn") + " " if i == 0 else "    "
+        print(lead + role(line, "warn"), file=stream)
 
 
 def err(msg: str, hint: str | None = None) -> None:
@@ -223,11 +241,17 @@ def err(msg: str, hint: str | None = None) -> None:
         print(c("  hint: " + hint, DIM), file=sys.stderr)
 
 
-def info(msg: str = "", stream=None) -> None:
+def info(msg: str = "", stream=None, wrap: bool = False) -> None:
     """Print msg indented two spaces; a blank line when msg is empty.
 
     ``stream`` as in :func:`warn` — so a hint can accompany a stderr notice.
+    ``wrap`` as in :func:`warn`, and it never turns the empty message into no
+    output at all: a caller printing a blank spacer still gets its blank line.
     """
+    if wrap and msg:
+        for line in _wrap_lines(msg, 2):
+            print("  " + line, file=stream)
+        return
     print("  " + msg if msg else "", file=stream)
 
 
@@ -252,9 +276,14 @@ def plain(text: object) -> str:
     return _CONTROL_RE.sub("", str(text))
 
 
-def dim(msg: str) -> None:
-    """Print msg in the muted role (dim when color is on)."""
-    print(role(msg, "muted"))
+def dim(msg: str, wrap: bool = False) -> None:
+    """Print msg in the muted role (dim when color is on).
+
+    ``wrap`` as in :func:`warn`. `dim` prints flush left, so the wrapped
+    continuations are flush left too — there is no marker to align under.
+    """
+    for line in (_wrap_lines(msg, 0) if wrap else [msg]):
+        print(role(line, "muted"))
 
 
 def heading(msg: str) -> None:
@@ -308,6 +337,80 @@ _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 def visible_len(s: str) -> int:
     """Length of a string ignoring ANSI color escapes — its column width."""
     return len(_ANSI_RE.sub("", s))
+
+
+_CODE_SPAN_RE = re.compile(r"`[^`]*`")
+
+
+def _wrap_tokens(text: str) -> list[str]:
+    """Split text into wrap units, keeping each `code span` whole.
+
+    A backtick span is one token even though it contains spaces, because the
+    spans in boost's hints are shell commands the user is meant to select and
+    paste — `pip install 'boost-skill-cli[rag]'`. Everything outside a span is
+    split on whitespace, which collapses runs and newlines the way
+    :func:`truncate` does; the span itself is copied verbatim, so a command
+    that legitimately holds two spaces survives.
+
+    An unterminated backtick simply never matches, and its text wraps as
+    ordinary words. That is the right failure: a half-open span is a typo in
+    the message, not a reason to refuse to render it.
+    """
+    parts: list[str] = []
+    pos = 0
+    for m in _CODE_SPAN_RE.finditer(text):
+        parts.extend(text[pos:m.start()].split())
+        parts.append(m.group(0))
+        pos = m.end()
+    parts.extend(text[pos:].split())
+    return parts
+
+
+def wrap(text: str, width: int | None = None, indent: str = "") -> list[str]:
+    """Greedy word-wrap to `width` visible columns, never splitting a code span.
+
+    Returns one string per line: the first bare, the rest prefixed with
+    `indent`, and every one measured with :func:`visible_len` so a coloured
+    message is bounded by what the pane shows rather than by its byte count.
+    ``width`` defaults to the live terminal.
+
+    **A token wider than the line is emitted whole and overflows.** That is
+    deliberate and it is the reason this is not `textwrap.wrap(break_long_words
+    =True)`: the tokens that hit this case are the backticked commands, and a
+    command chopped at column 80 is worse than useless — the user pastes it and
+    it fails. One long line the terminal soft-wraps still yields the right text
+    on a copy.
+
+    Empty (or all-whitespace) text wraps to no lines at all, so a caller can
+    tell "nothing to say" from "one blank line".
+    """
+    width = term_width() if width is None else width
+    tokens = _wrap_tokens(text)
+    if not tokens:
+        return []
+    pad = visible_len(indent)
+    lines: list[str] = []
+    cur = ""
+    for tok in tokens:
+        # The first line spends the full width; every later one pays for the
+        # indent. No floor under the subtraction: a pane narrower than its own
+        # indent yields a limit no token can meet, and each token lands on its
+        # own line — which is the same answer a floor of 1 gives, because the
+        # fit test below is never satisfiable below 3 columns anyway.
+        limit = width if not lines else width - pad
+        if cur and visible_len(cur) + 1 + visible_len(tok) <= limit:
+            cur += " " + tok
+        else:
+            if cur:
+                lines.append(cur)
+            cur = tok
+    lines.append(cur)
+    return [lines[0]] + [indent + ln for ln in lines[1:]]
+
+
+#: Alias for callers that take a ``wrap`` keyword argument of their own, which
+#: would otherwise shadow the function inside their own body.
+wrap_text = wrap
 
 
 def panel(lines, title: str | None = None, hue: str = "cyan") -> str:
@@ -506,11 +609,23 @@ def format_search_row(name: str, desc: str, kind: str, tap: str, frac: float,
     return row.rstrip()
 
 
-def kv(key: str, value: str, width: int = 14) -> None:
-    """Print an indented key/value line: dim key padded to width, then value."""
+def kv(key: str, value: str, width: int = 14, wrap: bool = False) -> None:
+    """Print an indented key/value line: dim key padded to width, then value.
+
+    ``wrap`` as in :func:`warn`, and the continuations align under the *value*
+    rather than the key — a value folded back to column 0 reads as a new row.
+    """
     # The str() is NOT redundant despite the annotation: callers pass raw ints
     # (e.g. `boost impact` prints files_touched), which would raise TypeError.
-    print("  " + c(key.ljust(width), DIM) + str(value))  # noqa: FURB123
+    text = str(value)  # noqa: FURB123
+    if not wrap:
+        print("  " + c(key.ljust(width), DIM) + text)
+        return
+    lead = 2 + width
+    lines = wrap_text(text, term_width() - lead) or [text]
+    print("  " + c(key.ljust(width), DIM) + lines[0])
+    for line in lines[1:]:
+        print(" " * lead + line)
 
 
 def _pad(cell: str, width: int) -> str:

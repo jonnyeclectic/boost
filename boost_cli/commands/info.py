@@ -694,7 +694,7 @@ def cmd_explain(argv):
                      "extractive summary instead"
                      % ", ".join(faithfulness.ungrounded_terms(reply, text)[:4]))
     else:
-        out.warn(ai.fallback_note())
+        out.warn(ai.fallback_note(), wrap=True)
     meta, body = frontmatter.parse(text)
     desc = str(meta.get("description") or "").strip()
     if desc:

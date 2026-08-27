@@ -786,7 +786,7 @@ class TestConflict:
         assert "tdd-workflow ↔ cowboy-coding" in r.out
         assert "(declared)" in r.out
         assert "frontmatter declares conflicts: cowboy-coding" in r.out
-        assert "using the heuristic fallback" in r.out    # no AI available
+        assert "using the heuristic fallback" in " ".join(r.out.split())  # no AI
         assert re.search(r"\d+ conflict pairs? found", r.out)
 
         r = boost("conflict", "--json", expect=1)
@@ -808,7 +808,7 @@ class TestConflict:
                             lambda *a, **k: "1")
         r = boost("conflict", expect=1)
         assert "(ai-confirmed)" in r.out
-        assert "using the heuristic fallback" not in r.out
+        assert "using the heuristic fallback" not in " ".join(r.out.split())
 
 
 # ── changelog ────────────────────────────────────────────────────────────
