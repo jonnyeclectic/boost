@@ -1,0 +1,69 @@
+extends: existence
+message: "'%s' is a common LLM writing tell — rewrite it plainly."
+level: warning
+ignorecase: true
+# Vocabulary that marks generated prose, drawn from Wikipedia's
+# "Signs of AI writing" (WP:AISIGNS) and confirmed against boost's own docs:
+# all 13 files the prose-lint workflow checks scored ZERO hits on this list
+# before it was added, so it gates new drafts rather than grandfathering old
+# ones. Scope is text only — Vale never looks inside code spans or fences, so
+# this file's own examples in `backticks` and any CLI output are unaffected.
+#
+# Two classes of tell are deliberately NOT listed here, because a linter reads
+# tokens and these are properties of a whole passage:
+#   * em-dash density — one is punctuation, nine on a screen is a signature.
+#   * rule-of-three parallelism, and closing lines that assert a thing's
+#     significance instead of stating what it does.
+# style/README.md ("Writing") carries those, since they need a human read.
+tokens:
+  # puffery and promotional register
+  - boasts?
+  - nestled
+  - groundbreaking
+  - renowned
+  - cutting[- ]edge
+  - state[- ]of[- ]the[- ]art
+  - game[- ]chang(er|ing)
+  - best[- ]in[- ]class
+  - seamless(ly)?
+  - vibrant
+  - rich tapestry
+  - tapestry
+  # inflated significance
+  - testament to
+  - pivotal
+  - stands as
+  - serves as
+  - plays a (vital|key|crucial|significant) role
+  - underscor(e|es|ing)
+  - highlight(s|ing) the importance
+  - indelible mark
+  - ever[- ]evolving
+  - evolving landscape
+  # filler analysis and hedged attribution
+  - valuable insights?
+  - it('s| is) worth noting
+  - experts (argue|say|agree)
+  - industry reports?
+  - observers have
+  # LLM-favoured connectives and verbs
+  - delve
+  - delving
+  - meticulous(ly)?
+  - intricac(y|ies)
+  - myriad
+  - plethora
+  - realm of
+  - navigate the
+  - foster(ing)?
+  - resonate(s|d)? with
+  - align(s|ed)? with
+  # negative parallelism
+  - not just .{1,40} but
+  - not only .{1,40} but also
+  # essay scaffolding
+  - in conclusion
+  - overall,
+  - moreover,
+  - furthermore,
+  - additionally,

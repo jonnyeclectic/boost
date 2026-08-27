@@ -4,6 +4,7 @@ updates:
   # Actions and the dev/CI toolchain are the only dependencies boost has.
   - package-ecosystem: github-actions
     directory: /
+    rebase-strategy: disabled
     schedule:
       interval: weekly
     # A "dependency" to Dependabot is one `uses:` path, not one action repo. So
@@ -136,9 +137,11 @@ updates:
   # MANIFEST.in keeps both manifests out of the sdist.
   - package-ecosystem: npm
     directory: /
+    rebase-strategy: disabled
     schedule:
       interval: weekly
   - package-ecosystem: npm
     directory: /tests/visual
+    rebase-strategy: disabled
     schedule:
       interval: weekly
