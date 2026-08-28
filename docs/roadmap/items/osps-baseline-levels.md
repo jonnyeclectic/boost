@@ -7,7 +7,7 @@ category: Security · Posture
 complexity: M
 impact: Med
 wow: 3
-note: L1 + L2 earned · L3 blocked on a second human
+note: L1 + L2 earned · L3 blocked · audit found a merged regression
 order: 5
 owner: loop/osps-baseline-2
 pr:
@@ -39,6 +39,14 @@ nothing — while rewriting <code>main</code>, breaking 478 tags and invalidatin
 build-provenance attestation on every published release. So the gate applies going forward,
 and <code>scripts/check_dco.py</code> compares the trailer against each commit's own author.
 The test that matters is the one proving a sign-off naming somebody else is rejected.
+<b>The commit audit paid for itself.</b> Reviewing 60 commits against their messages
+turned up <code>dc6e827</code> — a Copilot autofix for a CodeQL alert, already merged, which
+replaced <code>trust add</code>'s printed key name and fingerprint with the constant
+<code>"trusted key added"</code>. That fingerprint <i>is</i> the verification: it is what a
+user compares by eye against the publisher's advertised one. It passed every gate because
+<b>no test asserted the line</b>. Output restored, suppression now carries its reason inline,
+and a functional test pins it — verified to fail without the fix. The missing test was the
+defect; the alert was only the trigger.
 <b>Level 3 is blocked, and it is the same wall as gold.</b> OSPS-QA-07.01 requires a
 non-author human approval before merging. This repo merges parallel <code>loop/*</code>
 branches with no second reviewer, which its own <a href="roadmap.html#scorecard-findings-triage">Scorecard triage</a>

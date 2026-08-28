@@ -203,7 +203,9 @@ ignore = [
 # Generated boards and the setuptools-scm version stub aren't ours to check.
 # demo-index.json is generated and holds snippets truncated mid-word, so every
 # cut word ("existin", "architec") reads as a typo. It is data, not prose.
-skip = "docs/roadmap.html,docs/design-roadmap.html,docs/commands.html,docs/demo-index.json,boost_cli/_version.py,*.tar.gz"
+# docs/commit-audit.md is the same shape: a generated table whose commit
+# subjects are truncated at 60 chars ("wit", "betwee", "withou").
+skip = "docs/roadmap.html,docs/design-roadmap.html,docs/commands.html,docs/demo-index.json,docs/commit-audit.md,boost_cli/_version.py,*.tar.gz"
 # Valid English that codespell's dictionary flags as misspellings.
 ignore-words-list = "unparseable,accreting,covert"
 
