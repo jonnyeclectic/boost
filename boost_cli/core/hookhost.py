@@ -187,7 +187,7 @@ def timeout(host: str, seconds: int) -> int:
     Claude's field is seconds, so this is the identity for it and the existing
     settings.json bytes are unchanged. Gemini's is milliseconds.
     """
-    return int(seconds) * int(_spec(host)["timeout_scale"])
+    return seconds * int(_spec(host)["timeout_scale"])
 
 
 def translate(host: str, event: str) -> str | None:

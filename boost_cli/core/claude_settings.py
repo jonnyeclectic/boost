@@ -236,6 +236,6 @@ def list_all_hooks(scope: str | None = None,
     rather than folded into it because that function's row shape is what
     callers already destructure.
     """
-    return [{"host": hs, **row}
+    return [{"host": hs} | row
             for hs in hookhost.resolve(host)
             for row in list_hooks(scope, project_dir, hs)]
