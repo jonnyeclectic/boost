@@ -339,6 +339,25 @@ for code you write:
   stale-link sweeps, coverage counts). `agents.enabled_agents()` is still right
   for rules and workflows, which materialize into `~/.gemini/` like any other
   agent's dotdir. `agents.native_store_agents()` is the complement, for reporting.
+- **Boost not linking there does not mean nothing else does**, and the warning
+  costs the user the same either way. `store.duplicate_discovery()` walks
+  `native_store_agents()` for entries that resolve back into the canonical
+  store — one skill in two of that agent's discovery tiers, whoever wrote it.
+  On a real machine 24 of the 25 entries in `~/.gemini/skills` led to
+  `~/.claude/skills` dirs boost does not manage, and exactly one resolved into
+  the store, so the test is **topology, not ownership**: a sweep of "boost's
+  stale links" would have deleted two dozen files belonging to another tool.
+  `boost doctor` counts each hit as an issue; `boost heal` names them and
+  removes nothing; `boost heal --prune-duplicates` removes them, re-checking at
+  the point of deletion that the entry is still a symlink still resolving into
+  the store. A real directory is never touched.
+- **`points_into_store` and `resolves_into_store` answer different questions.**
+  The first reads one `readlink()` because it judges *broken* links, where
+  there is nothing to resolve. The second follows the whole chain, because the
+  live shape is `~/.gemini/skills/x -> ../../.claude/skills/x -> the store` and
+  one hop lands in another agent's dir. It resolves **both sides**: a $HOME
+  under macOS's `/var/folders` resolves to `/private/var/...`, so resolving
+  only the target compares a real path against a nominal one and never matches.
 - Per-agent *formats* differ and are pure functions in `core/`: `rules.CONTEXT_FILES`
   maps an agent with no rules dir to its context file (`claude-code` → CLAUDE.md /
   CLAUDE.local.md, `gemini` → GEMINI.md for both scopes), and

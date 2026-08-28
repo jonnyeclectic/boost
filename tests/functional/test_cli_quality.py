@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -875,3 +876,89 @@ class TestHealth:
         assert "2 events" in r.out                # tap + install in journal
         assert re.search(r"fingerprint\s+[0-9a-f]{16}", r.out)
         assert "● healthy" in r.out
+
+
+class TestDuplicateSkillDiscovery:
+    """The "Skill conflict detected" line Gemini CLI prints every session.
+
+    Gemini reads ``~/.agents/skills`` natively, so boost never links into
+    ``~/.gemini/skills``. Another installer that does not know that leaves an
+    entry there for a skill boost has in the store, Gemini loads it from two
+    discovery tiers, and warns once per skill per session. Nothing in boost saw
+    this before: `heal`'s broken-link sweep walks `linking_agents` and never
+    looks in a native-store agent's dir, and the entries are not broken anyway.
+
+    The chain is the one verified on a real machine — the gemini entry is a
+    relative link to another agent's dir, and *that* is boost's store symlink —
+    so a single `readlink()` reads it as foreign and only a full resolve finds
+    the duplicate.
+    """
+
+    @staticmethod
+    def _duplicate(name="brainstorming"):
+        gem = paths.home() / ".gemini" / "skills"
+        gem.mkdir(parents=True, exist_ok=True)
+        link = gem / name
+        link.symlink_to(os.path.join("..", "..", ".claude", "skills", name))
+        return link
+
+    def test_doctor_names_the_agent_both_paths_and_one_next_action(
+            self, boost, installed):
+        self._duplicate()
+        r = boost("doctor", expect=1)
+        assert "skill brainstorming is discoverable twice by Gemini CLI" in r.out
+        assert "~/.gemini/skills/brainstorming" in r.out
+        assert "~/.agents/skills/brainstorming" in r.out
+        assert "boost heal --prune-duplicates" in r.out
+        assert "need attention" in r.out
+
+    def test_doctor_is_healthy_without_the_duplicate(self, boost, installed):
+        assert "● healthy" in boost("doctor").out
+
+    def test_doctor_ignores_an_entry_that_leads_outside_the_store(
+            self, boost, installed):
+        # The common case on a real machine: most entries in ~/.gemini/skills
+        # belong to other tools entirely and are discovered exactly once.
+        theirs = paths.home() / ".claude" / "skills" / "someone-elses"
+        theirs.mkdir(parents=True, exist_ok=True)
+        (paths.home() / ".gemini" / "skills").mkdir(parents=True, exist_ok=True)
+        (paths.home() / ".gemini" / "skills" / "someone-elses").symlink_to(
+            os.path.join("..", "..", ".claude", "skills", "someone-elses"))
+        r = boost("doctor")
+        assert "discoverable twice" not in r.out
+        assert "● healthy" in r.out
+
+    def test_heal_names_it_but_will_not_remove_it_by_default(self, boost, installed):
+        link = self._duplicate()
+        r = boost("heal")
+        assert "duplicate skill discovery" in r.out
+        assert "boost heal --prune-duplicates" in r.out
+        assert link.is_symlink()          # boost did not create it; it stays
+
+    def test_heal_dry_run_with_the_flag_touches_nothing(self, boost, installed):
+        link = self._duplicate()
+        r = boost("heal", "--prune-duplicates", "--dry-run")
+        assert "would remove duplicate skill discovery" in r.out
+        assert link.is_symlink()
+
+    def test_heal_with_the_flag_removes_it_and_leaves_the_skill(
+            self, boost, installed):
+        link = self._duplicate()
+        r = boost("heal", "--prune-duplicates")
+        assert "removed duplicate skill discovery" in r.out
+        assert not link.is_symlink()
+        # the skill is still installed, and still discoverable — once
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
+        assert "● healthy" in boost("doctor").out
+
+    def test_heal_with_the_flag_refuses_a_real_directory(self, boost, installed):
+        # Not a symlink, so not a duplicate discovery path and never removed —
+        # even though a directory of the same name sits in Gemini's dir.
+        gem = paths.home() / ".gemini" / "skills" / "brainstorming"
+        gem.mkdir(parents=True)
+        (gem / "SKILL.md").write_text("---\nname: brainstorming\n---\n",
+                                      encoding="utf-8")
+        r = boost("heal", "--prune-duplicates")
+        assert "duplicate skill discovery" not in r.out
+        assert (gem / "SKILL.md").is_file()

@@ -171,7 +171,7 @@
       <a class="cmd-link" href="#cmd-fingerprint" data-search="fingerprint deterministic hash of the skill environment  --verbose --json">fingerprint</a>
       <a class="cmd-link" href="#cmd-quarantine" data-search="quarantine isolate a problematic skill without uninstalling  --release name --list name">quarantine</a>
       <a class="cmd-link" href="#cmd-decay" data-search="decay flag skills irrelevant to your current stack  --json">decay</a>
-      <a class="cmd-link" href="#cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run">heal</a>
+      <a class="cmd-link" href="#cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates">heal</a>
       <a class="cmd-link" href="#cmd-conflict" data-search="conflict detect contradictory rules between skills  --json">conflict</a>
       <a class="cmd-link" href="#cmd-changelog" data-search="changelog show a skill&#x27;s upstream change history  -n n name">changelog</a>
       <a class="cmd-link" href="#cmd-attest" data-search="attest display/verify the install record for skills  --verify --json name">attest</a>
@@ -902,13 +902,14 @@
           <div class="arg"><code>--json</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run">
+      <section class="cmd" id="cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates">
         <h3><span class="cname">heal</span><span class="gtag">chk</span></h3>
         <p class="summary">Self-diagnose &amp; repair the boost environment</p>
-        <pre class="syn">boost heal [--dry-run]</pre>
+        <pre class="syn">boost heal [--dry-run] [--prune-duplicates]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show repairs without applying them</span></div>
+          <div class="arg"><code>--prune-duplicates</code><span>remove symlinks in a native-store agent&#x27;s skills dir that lead back into the canonical store</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-conflict" data-search="conflict detect contradictory rules between skills  --json">

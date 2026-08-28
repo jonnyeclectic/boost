@@ -305,6 +305,196 @@ class TestNativeStoreAgents:
         assert _link("gemini").is_symlink()
 
 
+class TestDuplicateDiscovery:
+    """A skill a native-store agent can reach through *two* discovery tiers.
+
+    Gemini CLI reads the canonical store directly, so ``~/.gemini/skills`` is a
+    second tier for the same skill — and when anything puts an entry there that
+    leads back into the store, Gemini logs "Skill conflict detected" once per
+    skill, every session. Boost does not create those entries: it stopped
+    linking into a native-store agent, and `TestNativeStoreAgents` pins that it
+    never starts again. But no other installer knows boost's policy, and the
+    duplicate costs the user the same warning whoever made it.
+
+    So the test is topology, not ownership: an entry in the dir of an agent
+    configured ``links_skills: false`` whose *resolved* location is inside the
+    canonical store. Ownership is unknowable and irrelevant; being reachable
+    twice is exactly what Gemini complains about.
+    """
+
+    @staticmethod
+    def _gemini() -> Path:
+        d = paths.home() / ".gemini" / "skills"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_a_chained_relative_link_into_the_store_is_reported(self, brainstorming):
+        # The verified real-world shape: a third-party installer links
+        # gemini -> claude, and claude's entry is boost's own store symlink. A
+        # single readlink() lands in ~/.claude/skills and reads as foreign —
+        # only a full resolve() walks the second hop into the store. The first
+        # hop is relative because the real ones are.
+        dup = self._gemini() / "brainstorming"
+        dup.symlink_to(os.path.join("..", "..", ".claude", "skills", "brainstorming"))
+        found = store.duplicate_discovery()
+        assert [(d.agent, d.name) for d in found] == [("gemini", "brainstorming")]
+        assert found[0].path == dup
+        assert found[0].target == (paths.store_dir() / "brainstorming").resolve()
+
+    def test_a_direct_link_into_the_store_is_reported(self, brainstorming):
+        dup = self._gemini() / "brainstorming"
+        dup.symlink_to(paths.store_dir() / "brainstorming")
+        assert [d.name for d in store.duplicate_discovery()] == ["brainstorming"]
+
+    def test_a_link_that_lands_outside_the_store_is_left_alone(self, brainstorming):
+        # The other 24 entries on the machine that prompted this: they lead to
+        # ~/.claude/skills dirs boost does not manage, so Gemini reads them
+        # once and there is no conflict to report.
+        theirs = paths.home() / ".claude" / "skills" / "not-boosts"
+        theirs.mkdir(parents=True, exist_ok=True)
+        (self._gemini() / "not-boosts").symlink_to(
+            os.path.join("..", "..", ".claude", "skills", "not-boosts"))
+        assert store.duplicate_discovery() == []
+
+    def test_a_real_directory_is_never_reported(self, brainstorming):
+        # Another tool's own copy of a skill, sitting in Gemini's dir. It does
+        # not resolve into the store, and boost has no business naming it.
+        d = self._gemini() / "brainstorming"
+        d.mkdir()
+        (d / "SKILL.md").write_text("---\nname: brainstorming\n---\n", encoding="utf-8")
+        assert store.duplicate_discovery() == []
+
+    def test_a_sibling_of_the_store_is_not_reported(self, brainstorming):
+        # ~/.agents/skills-backup starts with the store's path as a string but
+        # is a different directory. Containment is decided on path components.
+        sibling = Path(str(paths.store_dir()) + "-backup")
+        (sibling / "brainstorming").mkdir(parents=True)
+        (self._gemini() / "brainstorming").symlink_to(sibling / "brainstorming")
+        assert store.duplicate_discovery() == []
+
+    def test_the_store_dir_itself_is_not_a_duplicate_skill(self, brainstorming):
+        # A link to the store *root* is the Agent Skills alias, not a skill
+        # discovered twice — `~/.agents/skills` is what Gemini already reads.
+        (self._gemini().parent / "alias").symlink_to(paths.store_dir())
+        assert [d.path for d in store.duplicate_discovery()] == []
+
+    def test_a_missing_agent_dir_reports_nothing(self, brainstorming):
+        assert not (paths.home() / ".gemini" / "skills").exists()
+        assert store.duplicate_discovery() == []
+
+    def test_a_linking_agents_dir_is_never_scanned(self, brainstorming):
+        # Every link in ~/.claude/skills resolves into the store — that is the
+        # design. Scanning `enabled_agents` instead of `native_store_agents`
+        # would report all three of them as duplicates.
+        assert _link("claude-code").resolve() == (
+            paths.store_dir() / "brainstorming").resolve()
+        assert store.duplicate_discovery() == []
+
+    def test_results_are_sorted_by_agent_then_name(self, brainstorming):
+        rogue = paths.store_dir() / "aardvark"
+        rogue.mkdir()
+        g = self._gemini()
+        (g / "brainstorming").symlink_to(paths.store_dir() / "brainstorming")
+        (g / "aardvark").symlink_to(rogue)
+        assert [d.name for d in store.duplicate_discovery()] == [
+            "aardvark", "brainstorming"]
+
+    def test_flipping_links_skills_on_makes_the_link_legitimate(self, tap, entry):
+        # With `links_skills: true` the link is boost's own and correct; gemini
+        # leaves the native set, so nothing scans its dir.
+        cfg = config.load()
+        cfg["agents"]["gemini"]["links_skills"] = True
+        config.save(cfg)
+        store.install(entry)
+        assert _link("gemini").is_symlink()
+        assert store.duplicate_discovery() == []
+
+    def test_a_disabled_agent_is_not_scanned(self, brainstorming):
+        (self._gemini() / "brainstorming").symlink_to(
+            paths.store_dir() / "brainstorming")
+        cfg = config.load()
+        cfg["agents"]["gemini"]["enabled"] = False
+        config.save(cfg)
+        assert store.duplicate_discovery() == []
+
+
+class TestResolvesIntoStore:
+    def test_a_plain_file_is_not_in_the_store(self, brainstorming):
+        plain = paths.home() / "notalink"
+        plain.write_text("x", encoding="utf-8")
+        assert store.resolves_into_store(plain) is False
+
+    def test_a_symlink_loop_fails_closed(self, brainstorming):
+        a = paths.home() / "loop-a"
+        b = paths.home() / "loop-b"
+        a.symlink_to(b)
+        b.symlink_to(a)
+        assert store.resolves_into_store(a) is False
+
+    def test_a_store_entry_is_in_the_store(self, brainstorming):
+        assert store.resolves_into_store(paths.store_dir() / "brainstorming") is True
+
+    def test_the_comparison_survives_a_symlinked_home(self, brainstorming):
+        # macOS /tmp -> /private/tmp is the live version of this: resolving one
+        # side and not the other made every genuine hit read as foreign.
+        assert store.resolves_into_store(
+            (paths.store_dir() / "brainstorming").resolve()) is True
+
+
+class TestRemoveDuplicateDiscovery:
+    """Removal is opt-in and re-gated at the point of deletion.
+
+    Boost did not create these entries, so deleting one is deleting another
+    tool's file. The gate is not "the report said so" but the two facts that
+    make it safe, re-checked against the filesystem: it is a symlink, and it
+    resolves into the canonical store.
+    """
+
+    @staticmethod
+    def _gemini() -> Path:
+        d = paths.home() / ".gemini" / "skills"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def test_removes_a_symlink_and_leaves_the_skill_installed(self, brainstorming):
+        dup = self._gemini() / "brainstorming"
+        dup.symlink_to(os.path.join("..", "..", ".claude", "skills", "brainstorming"))
+        found = store.duplicate_discovery()
+        assert store.remove_duplicate_discovery(found[0]) is True
+        assert not dup.is_symlink()
+        # the skill itself, and the hop it went through, both survive
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        assert _link("claude-code").is_symlink()
+        assert store.duplicate_discovery() == []
+
+    def test_refuses_a_real_directory(self, brainstorming):
+        d = self._gemini() / "brainstorming"
+        d.mkdir()
+        dup = store.DuplicateDiscovery(
+            agent="gemini", name="brainstorming", path=d,
+            target=(paths.store_dir() / "brainstorming").resolve())
+        assert store.remove_duplicate_discovery(dup) is False
+        assert d.is_dir()
+
+    def test_refuses_a_link_that_leads_outside_the_store(self, brainstorming):
+        elsewhere = paths.home() / "elsewhere"
+        elsewhere.mkdir()
+        link = self._gemini() / "brainstorming"
+        link.symlink_to(elsewhere)
+        dup = store.DuplicateDiscovery(
+            agent="gemini", name="brainstorming", path=link,
+            target=(paths.store_dir() / "brainstorming").resolve())
+        assert store.remove_duplicate_discovery(dup) is False
+        assert link.is_symlink()
+
+    def test_a_second_removal_is_a_no_op(self, brainstorming):
+        dup_path = self._gemini() / "brainstorming"
+        dup_path.symlink_to(paths.store_dir() / "brainstorming")
+        dup = store.duplicate_discovery()[0]
+        assert store.remove_duplicate_discovery(dup) is True
+        assert store.remove_duplicate_discovery(dup) is False
+
+
 class TestInstallFromPath:
     def _src(self, tmp_path, fm, extras=True):
         src = tmp_path / "dir-name-skill"
