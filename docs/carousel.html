@@ -327,10 +327,12 @@
                 <div class="slide-copy reveal">
                   <span class="grp-badge"><i class="dot"></i>Configuration</span>
                   <h3><code>boost hooks</code></h3>
-                  <p class="summary">Manage Claude Code hooks (scope-aware) in settings.json</p>
-                  <p class="value">Add, list, and remove Claude Code hooks at either scope without
-                    hand-editing JSON. Every hook boost creates is tagged with a marker comment, so
-                    it only ever touches hooks it made — yours are always left alone.</p>
+                  <p class="summary">Manage agent hooks (Claude Code, Gemini CLI) in settings.json</p>
+                  <p class="value">Add, list, and remove hooks at either scope, for Claude Code or
+                    Gemini CLI, without hand-editing JSON. Event names and timeout units differ
+                    between the two; boost translates and says so. Every hook boost creates is
+                    tagged with a marker comment, so it only ever touches hooks it made — yours are
+                    always left alone.</p>
                   <div class="tags">
                     <code>config</code><code>create</code><code>policy</code><code>schedule</code>
                     <code>serve</code><code>mcp</code><code>bmad</code><code>self-update</code>
