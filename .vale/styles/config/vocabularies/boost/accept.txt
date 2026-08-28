@@ -7,6 +7,8 @@ argparse
 Arize
 ASan
 Attio
+backport
+backported
 backtick
 backticks
 Bagisto
@@ -72,6 +74,7 @@ mcp
 mergeable
 minisign
 misconfiguration
+mitigations
 MLflow
 mutmut
 mypy
@@ -112,8 +115,10 @@ Saltzer
 sandboxed
 sandboxing
 scrollbar
+sdist
 SEO
 setuptools
+SHAs
 Shopify
 Sigstore
 SonarCloud
@@ -144,6 +149,7 @@ unkilled
 unlinking
 unpatched
 unregister
+unremediated
 unstaged
 untap
 untrusted
