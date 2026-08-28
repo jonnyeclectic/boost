@@ -535,6 +535,19 @@ def cmd_doctor(argv):
                  "left alone; yours to remove or repair"
                  % (len(foreign), _s(len(foreign))))
 
+    for dup in store.duplicate_discovery():
+        # An agent that reads the canonical store natively, holding its own
+        # entry for a skill that store already carries. Boost did not put it
+        # there — it never links into a native-store agent — but the agent
+        # loads the same skill from two discovery tiers and says so on every
+        # session, so a health check that stayed quiet about it would be
+        # describing a machine the user is not looking at.
+        bad("skill %s is discoverable twice by %s — %s leads to %s, which it "
+            "already reads natively; remove the duplicate with "
+            "`boost heal --prune-duplicates`"
+            % (dup.name, agents.display_name(dup.agent), _tilde(dup.path),
+               _tilde(dup.target)), wrap=True)
+
     for adir in enabled.values():
         if adir.is_dir() and not os.access(str(adir), os.W_OK):
             bad("agent dir %s is not writable" % _tilde(adir))
@@ -854,6 +867,9 @@ def cmd_heal(argv):
         description="Self-diagnose & repair the boost environment")
     ap.add_argument("--dry-run", action="store_true",
                     help="show repairs without applying them")
+    ap.add_argument("--prune-duplicates", action="store_true",
+                    help="remove symlinks in a native-store agent's skills dir "
+                         "that lead back into the canonical store")
     args = ap.parse_args(argv)
     dry = args.dry_run
     actions: list[str] = []
@@ -902,6 +918,29 @@ def cmd_heal(argv):
         for msg in store.sync_apply(plan):
             out.ok(msg.replace(str(paths.home()), "~"))
             actions.append(msg)
+
+    # Opt-in, unlike everything above it. The rest of `heal` repairs what boost
+    # itself created; these entries boost did not create, so deleting one on a
+    # plain `boost heal` would be silently removing another tool's file. Named
+    # every run so the flag is discoverable from the command that would use it.
+    duplicates = store.duplicate_discovery()
+    for dup in duplicates:
+        label = "%s → %s (%s)" % (_tilde(dup.path), _tilde(dup.target), dup.agent)
+        if not args.prune_duplicates:
+            out.info("duplicate skill discovery %s — %s reads the store "
+                     "natively; remove it with `boost heal --prune-duplicates`"
+                     % (label, agents.display_name(dup.agent)), wrap=True)
+        elif dry:
+            out.info("would remove duplicate skill discovery %s" % label)
+            actions.append("duplicate %s" % dup.path)
+        elif store.remove_duplicate_discovery(dup):
+            out.ok("removed duplicate skill discovery %s" % label)
+            actions.append("duplicate %s" % dup.path)
+        else:
+            # Re-gated at the point of deletion, so a real directory or a link
+            # repointed since the scan lands here rather than being removed.
+            out.warn("%s is no longer a symlink into the store — left alone"
+                     % _tilde(dup.path))
 
     for tap in registry.list_taps():
         if not tap.is_cloned:

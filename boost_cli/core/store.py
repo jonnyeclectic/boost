@@ -1282,6 +1282,108 @@ def points_into_store(link: Path) -> bool:
         return False
 
 
+def resolves_into_store(path: Path) -> bool:
+    """True if ``path``'s fully resolved real location sits inside the store.
+
+    The companion to :func:`points_into_store`, and deliberately not the same
+    question. That one reads a single ``readlink()`` because it judges *broken*
+    links, where there is nothing to resolve. This one judges live ones, and
+    has to follow the whole chain: the shape that prompted it is
+    ``~/.gemini/skills/x -> ../../.claude/skills/x -> ~/.agents/skills/x``,
+    where one hop lands in another agent's dir and reads as foreign. Only the
+    second hop reaches the store.
+
+    **Both sides are resolved.** Comparing a resolved target against a nominal
+    ``store_dir()`` is the bug `_resolve_as_far_as_it_exists` documents in
+    ``commands/quality.py``: a $HOME under macOS's ``/var/folders`` resolves to
+    ``/private/var/...``, so a genuine hit never prefix-matches. Containment is
+    `commonpath`, not `startswith`, so ``~/.agents/skills-backup`` stays out.
+
+    Fails closed — a symlink loop, or anything else ``resolve()`` refuses to
+    answer, is not in the store as far as this is concerned.
+    """
+    try:
+        target_s = normalize_link_target(path.resolve(strict=True))
+        root_s = normalize_link_target(paths.store_dir().resolve())
+    except OSError:
+        return False
+    try:
+        return os.path.commonpath([target_s, root_s]) == root_s
+    except ValueError:
+        return False
+
+
+@dataclass(frozen=True)
+class DuplicateDiscovery:
+    """One skill a native-store agent can reach through two discovery tiers.
+
+    ``path`` is the entry inside the agent's own skills dir; ``target`` is
+    where it really leads, inside the canonical store the agent already reads
+    natively.
+    """
+    agent: str
+    name: str
+    path: Path
+    target: Path
+
+
+def duplicate_discovery() -> list[DuplicateDiscovery]:
+    """Entries in a native-store agent's skills dir that lead into the store.
+
+    A `links_skills: false` agent reads :func:`paths.store_dir` directly, so
+    anything in its own skills dir that resolves back into the store is the
+    same skill offered twice. Gemini CLI answers that with a "Skill conflict
+    detected" line per skill, every session — the symptom this detects.
+
+    Boost does not create these: it stopped linking into a native-store agent,
+    and `sync_plan` never asks for such a link. Another installer's copy is far
+    likelier, and the warning costs the user the same either way — so the test
+    is **topology, not ownership**. Nothing here deletes: see
+    :func:`remove_duplicate_discovery`, which is opt-in because removing
+    another tool's file on a hunch is worse than the warning.
+
+    A missing agent dir is the normal case (boost never creates one for a
+    native-store agent) and yields nothing rather than an error. The store root
+    itself is skipped: a link to ``~/.agents/skills`` is the Agent Skills
+    alias, not a skill discovered twice.
+    """
+    found: list[DuplicateDiscovery] = []
+    store_root = paths.store_dir()
+    for agent, adir in agents.native_store_agents().items():
+        if not adir.is_dir():
+            continue
+        for entry in sorted(adir.iterdir()):
+            if not resolves_into_store(entry):
+                continue
+            target = entry.resolve()
+            if target == store_root.resolve():
+                continue
+            found.append(DuplicateDiscovery(
+                agent=agent, name=entry.name, path=entry, target=target))
+    return sorted(found, key=lambda d: (d.agent, d.name))
+
+
+def remove_duplicate_discovery(dup: DuplicateDiscovery) -> bool:
+    """Delete one duplicate discovery path. True if it was removed.
+
+    Re-gated against the filesystem rather than trusting the report that
+    produced ``dup``: boost did not put this file here, so the two facts that
+    make deleting it safe — it is a symlink, and it still leads into the store —
+    are checked again at the moment of deletion. Anything else (a real
+    directory, a link that has since been repointed, an entry already gone) is
+    refused with False rather than an exception, so a caller sweeping a list
+    reports what it skipped instead of dying half way.
+    """
+    path = Path(dup.path)
+    if not path.is_symlink() or not resolves_into_store(path):
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        return False
+    return True
+
+
 def sync_plan() -> dict[str, list]:
     """Compare lock file <-> store <-> agent symlinks.
 
