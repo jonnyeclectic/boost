@@ -125,7 +125,7 @@ COMMANDS = [
     ("schedule",    "cfg", "configuration", "Manage automatic skill-sync scheduling"),
     ("serve",       "cfg", "configuration", "Browse the catalogue in a browser: search, facets and a tap graph"),
     ("mcp",         "cfg", "configuration", "Register boost as an MCP server (Claude Code, Gemini CLI)"),
-    ("hooks",       "cfg", "hooks", "Manage Claude Code hooks (scope-aware) in settings.json"),
+    ("hooks",       "cfg", "hooks", "Manage agent hooks (Claude Code, Gemini CLI) in settings.json"),
     ("bmad",        "cfg", "bmad", "BMAD Method autopilot — `bmad on` routes every task to a persona"),
     ("self-update", "cfg", "configuration", "Update boost itself to the latest version"),
     # Team & Collaboration (6)

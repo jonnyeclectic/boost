@@ -190,7 +190,7 @@
       <a class="cmd-link" href="#cmd-schedule" data-search="schedule manage automatic skill-sync scheduling  --interval {6h,12h,daily} --json {status,enable,disable}">schedule</a>
       <a class="cmd-link" href="#cmd-serve" data-search="serve browse the catalogue in a browser: search, facets and a tap graph  --port port --host host">serve</a>
       <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">mcp</a>
-      <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage claude code hooks (scope-aware) in settings.json  -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">hooks</a>
+      <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain {on,off,route,personas,install,init,startup,orient,uninstall,disable,enable,doctor,status} value">bmad</a>
       <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
     </div>
@@ -1107,10 +1107,11 @@
           <div class="arg"><code>--no-seed</code><span>register only; do not tap anything</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-hooks" data-search="hooks manage claude code hooks (scope-aware) in settings.json  -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">
+      <section class="cmd" id="cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">
         <h3><span class="cname">hooks</span><span class="gtag">cfg</span></h3>
-        <p class="summary">Manage Claude Code hooks (scope-aware) in settings.json</p>
-        <pre class="syn">boost hooks [--command COMMAND] [--name NAME] [--scope {global,project}] [--matcher MATCHER] [--timeout TIMEOUT] {add,remove,list} [event]</pre>
+        <p class="summary">Manage agent hooks (Claude Code, Gemini CLI) in settings.json</p>
+        <pre class="syn">boost hooks [--host H] [--command COMMAND] [--name NAME] [--scope {global,project}] [--matcher MATCHER] [--timeout TIMEOUT] {add,remove,list} [event]</pre>
+        <p class="desc">Manage agent hooks (scope- and host-aware) in settings.json</p>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{add,remove,list}</code><span>add | remove | list</span></div>
@@ -1118,6 +1119,7 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
+          <div class="arg"><code>--host H</code><span>agent CLI whose settings.json to manage: claude, gemini (default: claude for add/remove, all of them for list)</span></div>
           <div class="arg"><code>-c, --command COMMAND</code><span>command the hook runs (add)</span></div>
           <div class="arg"><code>-n, --name NAME</code><span>stable name used to tag &amp; find the hook</span></div>
           <div class="arg"><code>-s, --scope {global,project}</code><span>settings scope (default: project; list shows both)</span></div>

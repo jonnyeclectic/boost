@@ -403,10 +403,10 @@ as **Connected**. (Gemini only connects stdio servers in a trusted folder; run
 `gemini` once in the directory and accept the trust prompt if it shows
 `Disabled`.)
 
-## Claude Code hooks & the BMAD Method
+## Agent hooks & the BMAD Method
 
-`boost hooks` manages Claude Code hooks in `settings.json` at either scope —
-`--scope project` (`./.claude/settings.json`) or `--scope global`
+`boost hooks` manages hooks in `settings.json` at either scope — `--scope
+project` (`./.claude/settings.json`) or `--scope global`
 (`~/.claude/settings.json`). boost only ever touches hooks it created (tagged
 with a `# boost:<name>` marker in the command), never your own, and snapshots
 the prior file before each write.
@@ -416,6 +416,22 @@ boost hooks add SessionStart -c 'echo hello' -n greet --scope project
 boost hooks list
 boost hooks remove -n greet --scope project
 ```
+
+Gemini CLI has hooks too, behind `--host gemini` (`~/.gemini/settings.json`).
+The file shape is the same but two details are not, so boost handles both for
+you: its `timeout` is in milliseconds rather than seconds — `--timeout 10` is
+ten seconds on either host — and most event names differ. Pass whichever
+vocabulary you know and boost translates, saying which name it used:
+
+```bash
+boost hooks add PreToolUse --host gemini -c 'boost check' -n guard
+#   Claude's 'PreToolUse' is Gemini's 'BeforeTool' — using that
+boost hooks list          # both hosts, with a host column
+```
+
+`SubagentStop` and `SubagentStart` have no Gemini counterpart at all — it has
+no sub-agents — so boost refuses those rather than writing a hook that could
+never fire.
 
 ### BMAD autopilot
 
