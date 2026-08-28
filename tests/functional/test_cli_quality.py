@@ -934,6 +934,9 @@ class TestDuplicateSkillDiscovery:
         assert "duplicate skill discovery" in r.out
         assert "boost heal --prune-duplicates" in r.out
         assert link.is_symlink()          # boost did not create it; it stays
+        # and heal must not claim there was nothing to see: it found something
+        # it can fix and chose not to, one line above.
+        assert "nothing to heal automatically" in r.out
 
     def test_heal_dry_run_with_the_flag_touches_nothing(self, boost, installed):
         link = self._duplicate()

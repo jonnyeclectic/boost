@@ -924,6 +924,7 @@ def cmd_heal(argv):
     # plain `boost heal` would be silently removing another tool's file. Named
     # every run so the flag is discoverable from the command that would use it.
     duplicates = store.duplicate_discovery()
+    declined_duplicates = bool(duplicates) and not args.prune_duplicates
     for dup in duplicates:
         label = "%s → %s (%s)" % (_tilde(dup.path), _tilde(dup.target), dup.agent)
         if not args.prune_duplicates:
@@ -968,7 +969,11 @@ def cmd_heal(argv):
         actions.append("rotate")
 
     if not actions:
-        out.ok("nothing to heal")
+        # A duplicate this run declined to prune is something `heal` saw, can
+        # fix, and deliberately left. A bare "nothing to heal" printed under
+        # the line offering the flag contradicts it.
+        out.ok("nothing to heal automatically"
+               if declined_duplicates else "nothing to heal")
     elif not dry:
         journal.log("heal", "%d actions" % len(actions))
     return 0
