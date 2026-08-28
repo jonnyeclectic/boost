@@ -12,6 +12,7 @@ backticks
 Bagisto
 basename
 basenames
+bestpractices
 bmad
 bookended
 Camunda
@@ -78,6 +79,7 @@ nonces
 npm
 onboards
 OpenShift
+OpenSSF
 overclaiming
 Pinecone
 pipx
