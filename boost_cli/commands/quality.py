@@ -1187,9 +1187,20 @@ def cmd_trust(argv) -> int:
         key_path = paths.expand(args.key)
         key_text = (key_path.read_text(encoding="utf-8")
                     if key_path.is_file() else args.key)
-        provenance.add_trusted_key(args.name, key_text)
+        rec = provenance.add_trusted_key(args.name, key_text)
         journal.log("trust", args.name, op="add-key")
-        out.ok("trusted key added")
+        # The fingerprint is the point of this line, not incidental detail: it
+        # is how the user checks by eye that the key they just trusted is the
+        # one the publisher advertises. CodeQL's py/clear-text-logging-sensitive
+        # -data flags it because `name` is user-supplied and `fingerprint` reads
+        # like a credential, but a minisign PUBLIC key fingerprint is meant to
+        # be published — printing it is the verification, and an autofix that
+        # replaced this with a constant string (dc6e827) removed the only check
+        # `trust add` offers. Restored, suppressed with the reason, and pinned
+        # by tests/functional/test_tap_signing.py so it cannot be quietly
+        # dropped a second time.
+        out.ok("trusted key %s (%s)"  # codeql[py/clear-text-logging-sensitive-data]
+               % (rec["name"], rec["fingerprint"]))
         return 0
 
     if args.action == "remove":

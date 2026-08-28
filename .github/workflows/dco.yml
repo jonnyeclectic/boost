@@ -1,0 +1,49 @@
+name: dco
+
+# Developer Certificate of Origin — every commit a pull request adds must carry
+# a `Signed-off-by` trailer naming its own author. The certificate itself is the
+# `DCO` file at the repository root; `scripts/check_dco.py` is the enforcement,
+# and it runs identically here and locally:
+#
+#   python3 scripts/check_dco.py               # HEAD vs origin/main
+#   git commit -s                              # sign off as you go
+#   git rebase --signoff origin/main           # fix a branch after the fact
+#
+# The check compares the trailer against the commit's AUTHOR on purpose. A DCO
+# is an assertion by the contributor that they have the right to submit the
+# work, so a sign-off naming anybody else certifies nothing — accepting one
+# would turn a legal record into a checkbox.
+#
+# Scope is the pull request's own commits, never all of history. Backfilling
+# sign-offs onto existing commits would rewrite `main`, breaking every tag and
+# invalidating the SLSA build-provenance attestation on every published
+# release — and would fabricate an assertion nobody made. DCO applies going
+# forward, from the commit that introduced this workflow.
+
+on:
+  pull_request:
+  merge_group:
+
+permissions: {}
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The check walks base..HEAD, so the branch point has to be present.
+          # A shallow clone would make the range empty and pass vacuously.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: sign-off present on every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || 'origin/main' }}
+        run: python3 scripts/check_dco.py "$BASE..HEAD"

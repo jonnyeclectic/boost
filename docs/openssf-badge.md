@@ -228,16 +228,25 @@ or a repository setting, so they cannot be landed as a commit.
    `https://jonnyeclectic.github.io/boost/`. It is currently empty, which
    weakens the `description_good` and `interact` evidence for anyone reading the
    repository rather than the README.
-4. **Close out CodeQL alert 54** ("clear-text logging of sensitive
-   information", `cmd_trust` in `boost_cli/commands/quality.py`) and its
-   Copilot-Autofix issue [#562](https://github.com/jonnyeclectic/boost/issues/562).
-   Dismiss it as a false positive, with this as the recorded reason: the values
-   printed are a minisign **public** key's name and fingerprint. A public key
-   fingerprint is meant to be published, and printing it is the entire point of
-   the line — the user compares it by eye against the publisher's advertised
-   fingerprint before trusting the key. Applying the suggested "fix" of printing
-   a constant string would remove the only verification the command offers and
-   make boost *less* secure, so it must not be merged.
+4. **Dismiss CodeQL alert 54 as a false positive** ("clear-text logging of
+   sensitive information", `cmd_trust` in `boost_cli/commands/quality.py`), and
+   close its Copilot-Autofix issue
+   [#562](https://github.com/jonnyeclectic/boost/issues/562) as won't-fix.
+   Recorded reason: the values printed are a minisign **public** key's name and
+   fingerprint. A public key fingerprint is meant to be published, and printing
+   it is the entire point of the line — the user compares it by eye against the
+   publisher's advertised fingerprint before trusting the key.
+
+   An earlier version of this entry said the suggested autofix "must not be
+   merged". It had already been merged, in `dc6e827`, two seconds before this
+   document landed — which is why it is worth stating what actually went wrong.
+   The autofix replaced the whole line with the constant `"trusted key added"`,
+   deleting the only verification `trust add` offers, and it passed every gate
+   because **no test asserted the fingerprint was printed**. The output is
+   restored, the suppression now carries its reason inline, and
+   `tests/functional/test_tap_signing.py` pins it so the line cannot be dropped
+   silently a second time. The missing test was the real defect; the alert was
+   only the trigger.
 
 ## Keeping this document honest
 

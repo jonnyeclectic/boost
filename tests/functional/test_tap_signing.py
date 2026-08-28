@@ -49,6 +49,24 @@ def test_trust_add_list_remove(boost, tmp_path, signer):
     assert "acme" not in boost("trust", "--json").out
 
 
+def test_trust_add_prints_the_key_name_and_fingerprint(boost, tmp_path, signer):
+    """`trust add` must echo the fingerprint it just trusted.
+
+    This is the verification the command exists to offer: the user compares the
+    printed fingerprint by eye against the one the publisher advertises before
+    relying on the key. It had no test, which is how a CodeQL autofix (dc6e827)
+    replaced the whole line with the constant "trusted key added" and passed
+    every gate. A public key fingerprint is meant to be published; suppressing
+    the alert is correct and silently dropping the output is not.
+    """
+    pub = tmp_path / "acme.pub"
+    pub.write_text(signer.public_key_text(), encoding="utf-8")
+    out = boost("trust", "add", "acme", pub).out
+    assert "acme" in out
+    assert "1122334455667788" in out, (
+        "trust add must print the fingerprint, not a constant confirmation")
+
+
 def test_trust_add_accepts_inline_key(boost, signer):
     boost("trust", "add", "acme", signer.public_key_text())
     assert "acme" in boost("trust").out
