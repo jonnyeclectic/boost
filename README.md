@@ -7,6 +7,7 @@
 [![Mutation score](https://img.shields.io/badge/mutation_score-%E2%89%A580%25_killed-blueviolet)](https://github.com/jonnyeclectic/boost/blob/main/scripts/mutation_gate.py)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey)](https://github.com/jonnyeclectic/boost/actions/workflows/ci.yml)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/14275/badge)](https://www.bestpractices.dev/projects/14275)
+[![OpenSSF Baseline](https://www.bestpractices.dev/projects/14275/baseline)](https://www.bestpractices.dev/projects/14275/baseline-2)
 [![License](https://img.shields.io/github/license/jonnyeclectic/boost)](LICENSE)
 
 **Homebrew for AI coding skills.** boost finds, installs, and version-tracks

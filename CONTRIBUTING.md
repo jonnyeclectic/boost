@@ -128,6 +128,13 @@ published release, to record an assertion nobody actually made.
 Bot authors (Dependabot and friends) are exempt — an account cannot agree to a
 certificate.
 
+## Governance
+
+Who decides, how a decision gets made, and what happens when people disagree:
+[GOVERNANCE.md](GOVERNANCE.md). Who holds which role and which credential:
+[MAINTAINERS.md](MAINTAINERS.md). Both say plainly that this is a
+single-maintainer project today rather than implying a committee.
+
 ## Code of conduct
 
 Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md)
