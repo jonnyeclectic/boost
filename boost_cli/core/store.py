@@ -1305,7 +1305,13 @@ def resolves_into_store(path: Path) -> bool:
     try:
         target_s = normalize_link_target(path.resolve(strict=True))
         root_s = normalize_link_target(paths.store_dir().resolve())
-    except OSError:
+    except (OSError, RuntimeError):
+        # RuntimeError is not redundant: on Python 3.12 `resolve(strict=True)`
+        # raises RuntimeError("Symlink loop from ...") for a cycle, and
+        # RuntimeError is NOT an OSError subclass. 3.13+ raises OSError for the
+        # same input. Catching only OSError made "fails closed" true on the
+        # newer interpreters and false on the oldest supported one — the test
+        # passed locally on 3.14 and failed in CI on 3.12.
         return False
     try:
         return os.path.commonpath([target_s, root_s]) == root_s
