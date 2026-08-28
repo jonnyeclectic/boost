@@ -1189,7 +1189,7 @@ def cmd_trust(argv) -> int:
                     if key_path.is_file() else args.key)
         rec = provenance.add_trusted_key(args.name, key_text)
         journal.log("trust", args.name, op="add-key")
-        out.ok("trusted key %s (%s)" % (rec["name"], rec["fingerprint"]))
+        out.ok("trusted key added")
         return 0
 
     if args.action == "remove":
