@@ -59,6 +59,9 @@ bdd
 # --- security / supply chain ------------------------------------------------
 codeql-analyze
 pip-audit
+# Developer Certificate of Origin. Unfiltered (every PR) and declares
+# merge_group:, so it is requireable by the rules above.
+dco
 metadata
 scan-pr / osv-scan
 # The real-weights ONNX contract. Required because the failure it catches is silent:

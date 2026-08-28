@@ -4687,6 +4687,13 @@ threshold at which an SCA finding blocks a merge, and the rule that a suppressio
 written argument), and <code>docs/verifying-releases.md</code> (the exact
 <code>gh attestation verify</code> commands, including the <code>--signer-workflow</code>
 form that checks <i>which workflow</i> built the artifact).
+<b>Level 2's last criterion was a DCO</b>, and the interesting part was what it could
+<i>not</i> be. A <code>Signed-off-by</code> is the contributor asserting they may submit the
+work, so backfilling one onto 569 existing commits under a reviewer's name would certify
+nothing — while rewriting <code>main</code>, breaking 478 tags and invalidating the
+build-provenance attestation on every published release. So the gate applies going forward,
+and <code>scripts/check_dco.py</code> compares the trailer against each commit's own author.
+The test that matters is the one proving a sign-off naming somebody else is rejected.
 <b>Level 3 is blocked, and it is the same wall as gold.</b> OSPS-QA-07.01 requires a
 non-author human approval before merging. This repo merges parallel <code>loop/*</code>
 branches with no second reviewer, which its own <a href="roadmap.html#scorecard-findings-triage">Scorecard triage</a>
@@ -4695,7 +4702,7 @@ already refuses to lie about. Not a gap to close with a commit — it needs a se
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">L1 earned · L2 one DCO decision away · L3 blocked on a second human</span>
+          <span class="m">L1 + L2 earned · L3 blocked on a second human</span>
         </div>
       </article>
 

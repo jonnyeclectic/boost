@@ -98,6 +98,36 @@ list, and neither should be added to it.
 | `refurb boost_cli` | modernization smells the ruff families miss, zero findings |
 | `scripts/lock_toolchain.py --check` | the hash-pinned toolchain matches its `.in` declarations |
 
+## Sign your commits (DCO)
+
+Every commit needs a `Signed-off-by` trailer naming **you**, the author. It is
+your assertion, under the [Developer Certificate of Origin](DCO), that you have
+the right to submit the work. Git writes it for you:
+
+```bash
+git commit -s              # sign off as you go
+git commit --amend --signoff --no-edit    # fix the last commit
+git rebase --signoff origin/main          # fix a whole branch
+```
+
+`scripts/check_dco.py` enforces it as a required check, and you can run the
+exact same check locally:
+
+```bash
+python3 scripts/check_dco.py              # HEAD against origin/main
+```
+
+Two things it deliberately will not accept. The trailer must name the **author** of
+the commit it sits on — a sign-off from anyone else certifies nothing, so it is
+rejected rather than counted. And the check only ever looks at the commits your
+pull request adds: DCO applies from the commit that introduced it, and history
+before that is left alone. Backfilling sign-offs would mean rewriting `main`,
+breaking 478 tags and invalidating the build-provenance attestation on every
+published release, to record an assertion nobody actually made.
+
+Bot authors (Dependabot and friends) are exempt — an account cannot agree to a
+certificate.
+
 ## Code of conduct
 
 Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md)
