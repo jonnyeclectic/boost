@@ -41,6 +41,7 @@ eval
 evals
 freemium
 frontmatter
+fuzzer
 GEO
 GIF
 gitignored

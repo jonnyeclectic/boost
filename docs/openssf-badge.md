@@ -53,7 +53,7 @@ Package: [`boost-skill-cli`](https://pypi.org/project/boost-skill-cli/)
 | `sites_https` | MUST | **Met** | Every project site is HTTPS-only: `github.com/jonnyeclectic/boost`, `jonnyeclectic.github.io/boost` (GitHub Pages enforces HTTPS), `pypi.org/project/boost-skill-cli`. A link-check workflow runs over the docs. |
 | `discussion` | MUST | **Met** | [GitHub Issues](https://github.com/jonnyeclectic/boost/issues), open to anyone, archived and searchable. |
 | `english` | SHOULD | **Met** | All documentation, code, commit messages, issues and reviews are in English. A `vale` prose-lint gate runs on the English documentation. |
-| `maintained` | MUST | **Met** | Active daily development — 560+ merged pull requests, and *every* merge to `main` cuts a release. Not seeking new maintainers is not claimed; see the human-actions note on bus factor. |
+| `maintained` | MUST | **Met** | Active daily development — 560+ merged pull requests, and *every* merge to `main` cuts a release. The criterion asks only that the project be maintained; the project is not claiming to be unmaintained or seeking new maintainers. (Bus factor is a *silver*-level criterion and out of scope here — boost is a single-maintainer project today, which is worth saying out loud before anyone attempts silver.) |
 
 ## Change Control
 
