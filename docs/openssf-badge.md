@@ -62,7 +62,7 @@ Package: [`boost-skill-cli`](https://pypi.org/project/boost-skill-cli/)
 | Criterion | Cat. | Answer | Evidence |
 |---|---|---|---|
 | `repo_public` | MUST | **Met** | Public repository, full history, at the URL above. |
-| `repo_track` | MUST | **Met** | git — every change is a tracked commit with author and message; `main` is protected and takes changes only through reviewed pull requests. |
+| `repo_track` | MUST | **Met** | git — every change is a tracked commit with author and message. `main` is protected and takes changes only through a pull request that has passed the full required-check gate. Note what is *not* claimed: the ruleset deliberately does not require a human approval, because the working model is parallel `loop/*` branches that self-merge and there is no second reviewer. The criterion does not ask for review, and the [Scorecard triage card](https://jonnyeclectic.github.io/boost/docs/roadmap.html#scorecard-findings-triage) keeps that finding open rather than dismissing it, because the score is accurate. |
 | `repo_interim` | MUST | **Met** | Interim versions are on `main` continuously; the release cadence is *per merge*, so the published version is never more than one merge behind the repository. |
 | `repo_distributed` | SUGGESTED | **Met** | git. |
 
@@ -182,7 +182,7 @@ of the security-design document for the full account.
 
 | Criterion | Cat. | Answer | Evidence |
 |---|---|---|---|
-| `no_leaked_credentials` | MUST | **Met** | `gitleaks` runs in CI on every push over the repository (the allowlist in `.gitleaks.toml` covers only boost's own synthetic secret-scanner test fixtures). GitHub secret scanning is on. Structurally there is little to leak: publishing uses OIDC rather than a stored PyPI token, and the two optional dashboard secrets are absent-by-default with the jobs skipping themselves. |
+| `no_leaked_credentials` | MUST | **Met** | `gitleaks` runs in CI on every push over the repository, and fails the build on a hit (the allowlist in `.gitleaks.toml` covers only boost's own synthetic secret-scanner test fixtures). Structurally there is little to leak in the first place: publishing uses a short-lived OIDC identity rather than a stored PyPI token, and the two optional dashboard secrets are absent by default with their jobs skipping themselves. Confirm GitHub's own secret scanning and push protection are enabled in **Settings → Code security** while registering — that setting is not readable without repository-admin credentials, so it is not asserted here. |
 
 ## Analysis
 
