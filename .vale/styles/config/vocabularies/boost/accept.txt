@@ -52,6 +52,7 @@ fuzzer
 GEO
 GIF
 gitignored
+gitleaks
 GitOps
 glassmorphic
 Grafana
@@ -100,6 +101,7 @@ Quarkus
 rebased
 reimplement
 reimplemented
+reimplements
 reindex
 repo
 repo's
@@ -138,6 +140,7 @@ subprocess
 tappable
 teardown
 tempdir
+textarea
 toggleable
 Tokenization
 tokenization

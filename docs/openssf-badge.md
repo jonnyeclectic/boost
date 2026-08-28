@@ -248,6 +248,13 @@ or a repository setting, so they cannot be landed as a commit.
    silently a second time. The missing test was the real defect; the alert was
    only the trigger.
 
+## Doing this on another project
+
+[`openssf-playbook.md`](openssf-playbook.md) is the repeatable method behind
+this document: where the authoritative criteria actually live, how to audit a
+repository against them rather than assuming, the three buckets every criterion
+sorts into, and the four documents Baseline Level 2 asks for.
+
 ## Keeping this document honest
 
 Re-check it when any of these change, since each one moves an answer:
