@@ -10,22 +10,40 @@ testable and reachable by the mutation gate; the command layer does the
 
 The three ways the two grammars differ, all of them load-bearing:
 
-* **Name position.** ``claude mcp add`` takes ``<name> [options] -- <command>``;
-  its ``-e`` is variadic, so a name placed *after* ``-e`` is swallowed as
-  another env var. ``gemini mcp add`` takes ``[options] <name> <commandOrUrl>
-  [args...]`` — yargs positionals, so flags may precede the name safely.
+* **Name position.** Both CLIs advertise the same usage string —
+  ``[options] <name> <commandOrUrl> [args...]`` — so the shape is not the
+  difference; the arity of ``-e`` is. Claude's is commander's variadic
+  ``<env...>``, which keeps eating: a name placed *after* ``-e`` is swallowed
+  as another env var ("Invalid environment variable format: boost"), so the
+  name must lead. Gemini's is yargs with ``nargs: 1``, which takes exactly one
+  value, so flags may precede the name safely.
 * **The ``--`` separator.** Claude needs one to stop flag parsing before the
-  server's own command. Gemini takes the command as a positional and its
-  trailing ``[args...]`` variadic, so a ``--`` would be captured as a literal
-  argument and handed to boost.
-* **Unregister scope.** ``claude mcp remove`` finds the user-scope server
-  without being told. ``gemini mcp remove`` defaults to ``--scope project`` and
-  will report "not found in project settings" while leaving the user-scope
-  entry in place — so the scope flag is mandatory on the way out, not just in.
+  server's own command. Gemini does not: its ``add`` sets yargs
+  ``unknown-options-as-args``, so a bare ``--stdio`` already lands in
+  ``[args...]`` as a literal. boost therefore omits it because it is
+  *redundant* — not, as this note claimed until 2026-08-28, because Gemini
+  would capture it and hand it to boost. It would not, and never would have:
+  ``add`` also sets ``populate--`` and a middleware that appends ``argv["--"]``
+  to the server args, both already present in the v0.46.0 source this file
+  first cited. The argv was right; only the reason for it was wrong.
+* **Unregister scope.** ``claude mcp remove`` finds the server in whichever
+  scope holds it, without being told. ``gemini mcp remove`` defaults to
+  ``--scope project`` and returns after logging "not found in project
+  settings" — exit status 0, user-scope entry untouched — so the scope flag is
+  mandatory on the way out, not just in. This is the one difference here with a
+  silent-failure mode, which is why it is pinned twice.
 
-Both are verified against the real CLIs (Gemini CLI 0.46.0), and both are
-pinned by tests, because an argv that is merely *plausible* fails at the worst
-possible moment: silently, on someone else's machine.
+Verified against the real CLIs — Claude Code 2.1.251 and Gemini CLI 0.57.0 — on
+2026-08-28, by running every argv below against a throwaway ``HOME`` *and*
+working directory (Gemini writes ``project`` scope to ``./.gemini``, so ``HOME``
+alone does not sandbox it) and reading back the settings each one wrote, plus
+the deliberate near-misses: the swallowed name above is a real 2.1.251 message,
+not a remembered one. Gemini's yargs definitions were read from its installed
+bundle as well, to pin *why* each argv works and not merely *that* it does.
+Both are also pinned by tests, because an argv that is merely
+*plausible* fails at the worst possible moment: silently, on someone else's
+machine — and prose that is merely plausible fails the same way, one reader at
+a time, which is what the ``--`` bullet above cost.
 """
 from __future__ import annotations
 
@@ -94,8 +112,9 @@ def register_argv(host: str, launcher: str, *, scope: str = "user",
     exe = cli(host)
     flags = _env_flags(LAUNCH_ENV if env is None else env)
     if host == GEMINI:
-        # [options] <name> <commandOrUrl> [args...] — no `--`, which would be
-        # captured as a literal argument to boost.
+        # [options] <name> <commandOrUrl> [args...]. No `--`: yargs
+        # `unknown-options-as-args` already carries `--stdio` into [args...],
+        # so a separator would be redundant rather than harmful.
         return ([exe, "mcp", "add", "--scope", scope, *flags,
                  name, launcher, "mcp", "--stdio"])
     # <name> [options] -- <command>: the name MUST precede the variadic -e.

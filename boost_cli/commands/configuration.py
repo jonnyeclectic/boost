@@ -1329,9 +1329,19 @@ REGISTRY.register(
     "what this machine holds, not what exists, and a kind sitting at zero is a "
     "kind nothing here could have loaded. boost_search is what reads the "
     "registries themselves. "
-    "Read-only, instant, installs nothing — so unlike boost_search there is "
-    "no threshold worth applying: call it whenever you are about to plan "
-    "something. Planning from memory while "
+    # The cost clause names its own mechanism. Gemini CLI never delivers
+    # server `instructions` in interactive mode, so INSTRUCTIONS' "boost_list
+    # is free, call it whenever" is absent on that host and this declaration
+    # is the only place left to say it. "Instant" alone is a claim about the
+    # clock that an agent has to take on trust; "a local file read rather
+    # than a search" is the reason for it, checkable against what the tool
+    # obviously does, and it is why no threshold follows. boost_search's
+    # "10-15 seconds" stays out — that is the other tool's price, and this
+    # one does not pay it.
+    "Read-only and it installs nothing: a local file read rather than a "
+    "search, so it is instant and free. Unlike boost_search there is "
+    "therefore no threshold worth applying: call it whenever you are about "
+    "to plan something. Planning from memory while "
     "the answer already sits on disk is the one avoidable mistake here.",
     {"type": "object", "properties": {}},
     _tool_list)

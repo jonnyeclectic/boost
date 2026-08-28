@@ -730,6 +730,58 @@ class TestTheAlreadyLoadedDefeater:
         assert "boost_search" in low                  # and where the rest lives
 
 
+class TestListDescriptionCarriesItsOwnTrigger:
+    """`boost_list` has to sell itself on the host that drops INSTRUCTIONS.
+
+    Same mechanism as the defeater above: Gemini CLI never delivers server
+    `instructions` in interactive mode, so a function declaration is the only
+    boost text reliably in context at the moment an agent picks a tool.
+    INSTRUCTIONS says "boost_list is free, call it whenever"; the declaration
+    has to carry that itself, or on that host the one tool the guidance calls
+    free arrives with no stated reason to reach for it.
+
+    The cost half is deliberately NOT symmetrical with boost_search's. This
+    tool is a local file read — the lock file and the tap list, no catalog
+    scan, which `test_it_never_reads_the_catalog` holds true — so it names
+    that mechanism and stays silent about "10-15 seconds", which is the other
+    tool's price and would be an invented one here.
+    """
+
+    def test_it_says_why_it_is_free_and_not_only_that_it_is_fast(self):
+        # "instant" is a claim about the clock; "a local file read" is the
+        # reason for it, and the reason is the part an agent can check against
+        # its own model of what a call costs. Both ship, and so does the word
+        # INSTRUCTIONS uses for this tool — free.
+        low = _descriptions()["boost_list"].lower()
+        assert "local file read" in low
+        assert "free" in low
+        assert "instant" in low
+        assert "read-only" in low
+
+    def test_it_states_the_threshold_and_the_mistake(self):
+        # The trigger, in the same three beats as the guidance: no threshold,
+        # the moment it applies to, and what happens to an agent that skips it.
+        low = _descriptions()["boost_list"].lower()
+        assert "no threshold worth applying" in low
+        assert "about to plan something" in low
+        assert "sits on disk" in low
+
+    def test_it_does_not_borrow_the_price_of_the_slow_tool(self):
+        # boost_list reranks nothing and reads no catalog. Quoting the other
+        # tool's cost here would talk an agent out of the one call the whole
+        # surface wants it to make without deliberating.
+        low = _descriptions()["boost_list"].lower()
+        assert "10-15 seconds" not in low
+        assert "reranks" not in low
+
+    def test_it_stays_far_shorter_than_the_tool_that_costs_time(self):
+        # boost_search earns 2,000 characters by being the expensive call that
+        # needs justifying. A free tool that grew to match it would be spending
+        # context it never earned.
+        desc = _descriptions()
+        assert len(desc["boost_list"]) < len(desc["boost_search"]) / 2
+
+
 class TestCoverageLine:
     """`boost_list`'s footer: the exact half of the answer, and no more.
 
