@@ -69,6 +69,8 @@ to do but not dismiss it.
 <b>Needs a human, not a commit</b> — <code>CIIBestPracticesID</code> #36 is the one
 remaining actionable finding, and it cannot be fixed from a branch: it asks whether the
 project is registered for an OpenSSF Best Practices badge, which means creating a project
-entry at <code>bestpractices.dev</code> under a real account and answering its criteria. The
-prerequisites are already in place (LICENSE, SECURITY.md, CONTRIBUTING.md,
-CODE_OF_CONDUCT.md, a published CI gate); only the registration is missing.
+entry at <code>bestpractices.dev</code> under a real account and answering its criteria.
+<i>Answering</i> them turned out to be a commit after all — see
+<a href="roadmap.html#openssf-best-practices-badge">all 67 passing criteria answered</a>,
+which found two MUST criteria this card had assumed were covered. Only the registration
+itself still needs a human.
