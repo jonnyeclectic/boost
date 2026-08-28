@@ -53,6 +53,15 @@ UNDECLARED_OK = {
     # https://github.com/explodinggradients/ragas — Apache-2.0 in the repo;
     # the published wheel carries no License field or classifier.
     "ragas": "Apache-2.0 upstream; wheel metadata omits it",
+    # https://github.com/milesgranger/pyrus-cramjam — MIT in the repo. This one
+    # is a regression, not a package that never declared: 2.11.0 published
+    # `License: MIT`, 2.12.0 dropped the field, and the 2.12.1 wheel carries
+    # `License-File: LICENSE` with no `License:` and no `License-Expression:`.
+    # So there is nothing for a metadata reader to resolve — pip-licenses is
+    # right, and this is not the checker missing PEP 639. Reached through
+    # ranx -> fastparquet -> cramjam, so "drop the dependency" would mean
+    # dropping the [eval] extra.
+    "cramjam": "MIT upstream; wheel metadata omits it",
 }
 
 _UNDECLARED = re.compile(r"^\s*(unknown|none|)\s*$", re.IGNORECASE)

@@ -126,6 +126,15 @@ class TestUndeclaredLicences:
         assert mod.violations(rows(("ragas", "UNKNOWN"))) == []
         assert "ragas" in mod.UNDECLARED_OK
 
+    def test_cramjam_is_exempt(self, mod):
+        # cramjam is MIT upstream. 2.11.0 declared `License: MIT`; 2.12.0
+        # dropped it, and the wheel now ships `License-File: LICENSE` alone —
+        # nothing a metadata reader can resolve to an identifier. It arrives
+        # transitively (ranx -> fastparquet -> cramjam), so the only remedies
+        # the error offers are this entry or dropping [eval] entirely.
+        assert mod.violations(rows(("cramjam", "UNKNOWN"))) == []
+        assert "cramjam" in mod.UNDECLARED_OK
+
     def test_every_exception_names_the_upstream_licence(self, mod):
         # An allowlist entry with no reason is indistinguishable from silence.
         for pkg, reason in mod.UNDECLARED_OK.items():
