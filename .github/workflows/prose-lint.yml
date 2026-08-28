@@ -37,4 +37,4 @@ jobs:
         # Same pinned-release pattern as the gitleaks/actionlint lint steps.
         run: |
           curl -sSL https://github.com/errata-ai/vale/releases/download/v3.13.0/vale_3.13.0_Linux_64-bit.tar.gz | tar xz vale
-          ./vale README.md CONTRIBUTING.md SECURITY.md CLAUDE.md docs/DEBUGGING.md docs/rag-architecture.md docs/security-design.md docs/openssf-badge.md docs/dependencies.md docs/verifying-releases.md MAINTAINERS.md SUPPORT.md docs/architecture/*.md examples/README.md style/README.md
+          ./vale README.md CONTRIBUTING.md SECURITY.md CLAUDE.md docs/DEBUGGING.md docs/rag-architecture.md docs/security-design.md docs/openssf-badge.md docs/openssf-playbook.md docs/dependencies.md docs/verifying-releases.md MAINTAINERS.md SUPPORT.md docs/architecture/*.md examples/README.md style/README.md
