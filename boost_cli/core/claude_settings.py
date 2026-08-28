@@ -1,8 +1,16 @@
-"""Scope-aware read/merge/write of Claude Code's settings.json + hook management.
+"""Scope- and host-aware read/merge/write of a settings.json + hook management.
 
 Claude Code reads hooks from a JSON `settings.json` at two scopes:
   global  -> ~/.claude/settings.json
   project -> <project>/.claude/settings.json
+
+Gemini CLI reads the same shape from `~/.gemini/settings.json` and
+`<project>/.gemini/settings.json`. Every function here takes `host=` (default
+`"claude"`, so nothing that predates the second host changed) and gets the
+per-host facts — the dotdir, the event vocabulary, the timeout units — from
+`core/hookhost.py`, which is a pure table. The units are the trap worth naming
+twice: Claude's `timeout` is seconds and Gemini's is milliseconds, so callers
+pass **seconds** and `hookhost.hook_entry` converts.
 
 boost only ever touches hooks it created. Each managed hook's command carries a
 trailing shell comment marker `# boost:<name>` so we can find and remove exactly
@@ -25,26 +33,27 @@ import json
 from pathlib import Path
 
 from ..errors import BoostError
-from . import paths, util
+from . import hookhost, paths, util
 
 SCOPES = ("global", "project")
 MARKER = "# boost:"
 HISTORY_KEEP = 50
 
 # Known Claude Code hook events (permissive — validated by callers that care).
-KNOWN_EVENTS = (
-    "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PostToolUse",
-    "Stop", "SubagentStop", "SubagentStart", "PreCompact", "Notification",
-)
+# Kept as an alias so importers that predate the host table still work; the
+# list itself lives in hookhost alongside Gemini's.
+KNOWN_EVENTS = hookhost.CLAUDE_EVENTS
 
 
-def settings_path(scope: str, project_dir: Path | None = None) -> Path:
-    """Absolute path to the settings.json for a scope."""
+def settings_path(scope: str, project_dir: Path | None = None,
+                  host: str = hookhost.CLAUDE) -> Path:
+    """Absolute path to the settings.json for a scope, on a host."""
+    dotdir = hookhost.settings_dir(host)
     if scope == "global":
-        return paths.home() / ".claude" / "settings.json"
+        return paths.home() / dotdir / "settings.json"
     if scope == "project":
         base = Path(project_dir) if project_dir else Path.cwd()
-        return base / ".claude" / "settings.json"
+        return base / dotdir / "settings.json"
     raise BoostError("unknown scope %r" % scope,
                      hint="use 'global' or 'project'")
 
@@ -53,9 +62,10 @@ def _history_dir() -> Path:
     return paths.state_dir() / "claude-settings-history"
 
 
-def load(scope: str, project_dir: Path | None = None) -> dict:
+def load(scope: str, project_dir: Path | None = None,
+         host: str = hookhost.CLAUDE) -> dict:
     """Parse a scope's settings.json ({} if missing or corrupt)."""
-    p = settings_path(scope, project_dir)
+    p = settings_path(scope, project_dir, host)
     if not p.exists():
         return {}
     try:
@@ -65,18 +75,25 @@ def load(scope: str, project_dir: Path | None = None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def save(scope: str, data: dict, project_dir: Path | None = None) -> None:
-    """Write a scope's settings.json, snapshotting the prior version first."""
-    p = settings_path(scope, project_dir)
+def save(scope: str, data: dict, project_dir: Path | None = None,
+         host: str = hookhost.CLAUDE) -> None:
+    """Write a scope's settings.json, snapshotting the prior version first.
+
+    Snapshots are named ``<host prefix><scope>-<stamp>.json``. Claude's prefix
+    is empty, so its history filenames are exactly what they always were and a
+    Gemini write cannot land on top of one.
+    """
+    p = settings_path(scope, project_dir, host)
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():
         hist = _history_dir()
         hist.mkdir(parents=True, exist_ok=True)
         stamp = util.now_iso().replace(":", "").replace("-", "")
-        dest = hist / ("%s-%s.json" % (scope, stamp))
+        pre = hookhost.history_prefix(host)
+        dest = hist / ("%s%s-%s.json" % (pre, scope, stamp))
         n = 2
         while dest.exists():
-            dest = hist / ("%s-%s-%d.json" % (scope, stamp, n))
+            dest = hist / ("%s%s-%s-%d.json" % (pre, scope, stamp, n))
             n += 1
         dest.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
         _prune_history()
@@ -108,28 +125,34 @@ def _hook_name(command: str) -> str | None:
 
 def add_hook(scope: str, event: str, name: str, command: str,
              matcher: str | None = None, timeout: int = 10,
-             project_dir: Path | None = None) -> None:
-    """Idempotently install a boost-managed hook (replaces same-named entry)."""
-    data = load(scope, project_dir)
+             project_dir: Path | None = None,
+             host: str = hookhost.CLAUDE) -> None:
+    """Idempotently install a boost-managed hook (replaces same-named entry).
+
+    ``timeout`` is in **seconds** whatever the host; ``hookhost.hook_entry``
+    converts it to the units that host's settings.json is read in. ``event``
+    must already be spelled the way ``host`` spells it — translating is the
+    command layer's job, because a Claude event with no Gemini counterpart has
+    to be refused out loud rather than silently dropped here.
+    """
+    data = load(scope, project_dir, host)
     event_list = data.setdefault("hooks", {}).setdefault(event, [])
     # Drop any prior entry we own with this name so re-adding is idempotent.
     _strip(event_list, name)
     block: dict = {}
     if matcher:
         block["matcher"] = matcher
-    block["hooks"] = [{
-        "type": "command",
-        "command": _tag(command, name),
-        "timeout": timeout,
-    }]
+    block["hooks"] = [hookhost.hook_entry(host, _tag(command, name), timeout,
+                                          name=name)]
     event_list.append(block)
-    save(scope, data, project_dir)
+    save(scope, data, project_dir, host)
 
 
 def remove_hook(scope: str, event: str, name: str,
-                project_dir: Path | None = None) -> int:
+                project_dir: Path | None = None,
+                host: str = hookhost.CLAUDE) -> int:
     """Remove boost-managed hooks matching name; return how many were removed."""
-    data = load(scope, project_dir)
+    data = load(scope, project_dir, host)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict) or event not in hooks:
         return 0
@@ -140,7 +163,7 @@ def remove_hook(scope: str, event: str, name: str,
         del hooks[event]
     if not hooks:
         del data["hooks"]
-    save(scope, data, project_dir)
+    save(scope, data, project_dir, host)
     return removed
 
 
@@ -165,8 +188,9 @@ def _strip(event_list: list, name: str) -> int:
 
 
 def has_hook(scope: str, event: str, name: str,
-             project_dir: Path | None = None) -> bool:
-    data = load(scope, project_dir)
+             project_dir: Path | None = None,
+             host: str = hookhost.CLAUDE) -> bool:
+    data = load(scope, project_dir, host)
     for block in data.get("hooks", {}).get(event, []) or []:
         for h in (block.get("hooks") or []) if isinstance(block, dict) else []:
             if _hook_name(str(h.get("command", ""))) == name:
@@ -175,12 +199,13 @@ def has_hook(scope: str, event: str, name: str,
 
 
 def list_hooks(scope: str | None = None,
-               project_dir: Path | None = None) -> list[dict]:
-    """All boost-managed hooks: [{scope, event, name, command, matcher}]."""
+               project_dir: Path | None = None,
+               host: str = hookhost.CLAUDE) -> list[dict]:
+    """One host's boost-managed hooks: [{scope, event, name, command, matcher}]."""
     scopes = (scope,) if scope else SCOPES
     rows: list[dict] = []
     for sc in scopes:
-        data = load(sc, project_dir)
+        data = load(sc, project_dir, host)
         for event, blocks in (data.get("hooks") or {}).items():
             for block in blocks or []:
                 if not isinstance(block, dict):
@@ -198,3 +223,19 @@ def list_hooks(scope: str | None = None,
                         "matcher": block.get("matcher", ""),
                     })
     return rows
+
+
+def list_all_hooks(scope: str | None = None,
+                   project_dir: Path | None = None,
+                   host: str | None = None) -> list[dict]:
+    """:func:`list_hooks` across hosts, each row tagged with the host it is in.
+
+    ``host=None`` means every known host, which is what ``boost hooks list``
+    wants: a hook boost installed into a CLI the user has since stopped naming
+    is exactly the one they need shown. Kept separate from :func:`list_hooks`
+    rather than folded into it because that function's row shape is what
+    callers already destructure.
+    """
+    return [{"host": hs, **row}
+            for hs in hookhost.resolve(host)
+            for row in list_hooks(scope, project_dir, hs)]

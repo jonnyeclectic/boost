@@ -350,6 +350,39 @@ for code you write:
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
   by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape.
+- **`core/hookhost.py` is the same idea for hooks, and two hosts have them.**
+  `boost hooks` writes Claude Code's `~/.claude/settings.json` (the default,
+  unchanged) or, behind `--host gemini`, the `~/.gemini/settings.json` that
+  Gemini CLI reads;
+  `core/claude_settings.py` takes `host=` throughout and asks the table for the
+  differences. The `hooks` key and the `{matcher, hooks: [{type, command,
+  timeout}]}` block shape are *identical* between them, which is exactly what
+  makes the three real differences easy to ship wrong:
+  - **`timeout` units.** Claude's is **seconds**; Gemini's is **milliseconds**
+    (`DEFAULT_HOOK_TIMEOUT = 6e4`, fed straight to `setTimeout`). Callers pass
+    seconds and `hookhost.hook_entry` converts, so boost's `--timeout 10` is ten
+    seconds on both. Gemini's own `hooks migrate --from-claude` copies the number
+    verbatim, which turns a 10-second Claude hook into a 10-**millisecond**
+    Gemini one; don't copy that.
+  - **Event names.** Only `SessionStart`, `SessionEnd` and `Notification` are
+    spelled alike. `CLAUDE_TO_GEMINI` maps all ten Claude events explicitly and
+    `tests/unit/test_hookhost.py` fails if one is missing. `SubagentStop` and
+    `SubagentStart` map to **`None`** — Gemini has no sub-agents, so boost
+    refuses the hook and says why. (The upstream `EVENT_MAPPING` means to fold
+    them into `AfterAgent` but keys `SubAgentStop`, a spelling Claude never
+    emits, so `migrate` writes an event Gemini can never fire.)
+  - **The `name` field.** Gemini's hook config takes one — it is what
+    `/hooks panel` shows and `/hooks enable <name>` targets — and Claude's does
+    not. The `# boost:<name>` command marker stays the ownership mechanism for
+    both; `name` is added on top for Gemini, never instead.
+  A `matcher` is **not** translated: `boost hooks add` is not porting a config,
+  so it stays host-native — for a Gemini tool event it is a regular expression
+  over *Gemini* tool names like `run_shell_command`, and for a lifecycle event
+  it is an exact string. All of this was established against Gemini CLI
+  0.57.0's own bundle — the `docs/hooks/` it ships, the `HookEventName` list and
+  `EVENT_MAPPING` in the bundled JS, and an observed `migrate` run — and those
+  sources are named at the top of `hookhost.py` so the next person can re-check
+  them against a newer release.
 
 `core/catalog.scan_dir` walks a tap's clone and classifies each file into one
 of the three item kinds (see Non-obvious rules above); `core/store.py` owns
