@@ -48,9 +48,9 @@ boost bmad on
 ```
 
 It writes seven BMAD persona subagents into `~/.claude/agents/` and installs two
-hooks. A `SessionStart` hook briefs the session on the roster. A
-`UserPromptSubmit` hook classifies each incoming prompt and prefixes it with a
-short routing banner:
+hooks on every host it finds. A `SessionStart` hook briefs the session on the
+roster. A `UserPromptSubmit` hook classifies each incoming prompt and prefixes
+it with a short routing banner:
 
 ```text
 [BMAD autopilot] track: build
@@ -91,6 +91,33 @@ Every persona file carries an ownership stamp containing a digest of its own
 contents, so the moment you edit one it stops being boost's. `boost bmad on`
 reports it as kept rather than overwriting it, and `boost bmad off` leaves it
 alone. Delete the file if you want the stock version back.
+
+### Which hosts get the hooks
+
+`boost bmad on` writes its two hooks into every host it has evidence you use,
+and re-running it changes nothing that is already correct.
+
+- **Claude always.** It is boost's primary host, and the check deliberately is
+  not "is the `claude` binary on `PATH`" — `bmad on` only writes a
+  settings.json, so someone running inside Claude Code whose launcher is not on
+  boost's `PATH` would otherwise silently get no hooks. (`boost mcp register`
+  does gate on the binary, because it shells out to `claude mcp add` and
+  genuinely cannot work without it.)
+- **Any other host on evidence of use** — its CLI on `PATH`, or its dotdir
+  already there. Writing into `~/.gemini/settings.json` for someone who has
+  never run Gemini is litter in a file boost does not own. Install that agent
+  later and the next `boost bmad on` picks it up.
+
+boost translates on the way in. `UserPromptSubmit` is written as Gemini's
+`BeforeAgent`, and `--timeout 10` means ten seconds on both hosts even though
+Gemini's field is milliseconds. Matchers are **not** translated — they pass
+through host-native — so Claude's `startup|resume|clear` source matcher is
+applied only on Claude, where that vocabulary exists.
+
+**The personas stay Claude-only.** A subagent definition is a Claude Code
+contract, and Gemini's `agents/` slot validates its input, so a Claude-dialect
+persona would be rejected. What a second host gets is prompt shaping: the
+routing banner arrives and names a lead persona, but Gemini cannot spawn it.
 
 ## The full BMAD method
 

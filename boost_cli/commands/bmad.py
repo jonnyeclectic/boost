@@ -38,11 +38,25 @@ stage the installer in a temp dir and copy only the `bmad-*` skills into
 ~/.claude/skills, so $HOME never gets a stray `_bmad/`; the runtime is
 per-project by design.
 
-Both surfaces are **Claude Code only**, and deliberately so: subagent
-definitions and `SessionStart`/`UserPromptSubmit` hooks are Claude Code
-contracts with no equivalent in the other three agents boost targets, and BMAD's
-own installer likewise takes `--tools claude-code`. This is the one part of
-boost that does not fan out over `agents.enabled_agents()`.
+The **hooks fan out; the personas do not**, and the split is not arbitrary.
+
+A subagent definition is a Claude Code contract, and BMAD's own installer takes
+`--tools claude-code`, so personas stay in `~/.claude/agents/`. Copying them
+into Gemini's `agents/` slot would also ship files its schema rejects — that
+slot validates, and a Claude-dialect persona fails it.
+
+The hooks are a different case, and an earlier version of this docstring got it
+wrong by lumping them together: it claimed `SessionStart` and
+`UserPromptSubmit` had "no equivalent in the other three agents", which stopped
+being true when `core/hookhost.py` learned Gemini's vocabulary. They map to
+`SessionStart` and `BeforeAgent`, so `bmad on` now installs them on every host
+with evidence of use, translating the event names and the timeout units on the
+way. Matchers are *not* translated — `hookhost` passes them through
+host-native — so Claude's `startup|resume|clear` source matcher is applied only
+on Claude.
+
+What that buys on a second host is prompt shaping, not full parity: the routing
+banner names personas Gemini cannot spawn.
 """
 from __future__ import annotations
 
@@ -61,7 +75,7 @@ from pathlib import Path
 from .. import cliparse
 from ..core import bmad as core
 from ..core import claude_settings as cs
-from ..core import journal, paths, util
+from ..core import hookhost, journal, paths, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -148,6 +162,74 @@ def _never_fails(command: str) -> str:
     return command + " || true"
 
 
+def _hook_hosts(scope: str) -> list[str]:
+    """Hosts to write hooks into: Claude always, others on evidence of use.
+
+    Claude is unconditional. It is boost's primary host and the behaviour every
+    release before this one had, and the check cannot be `shutil.which` the way
+    `boost mcp register`'s is: that command *shells out* to `claude mcp add` and
+    genuinely cannot work without the binary, while this one only writes a
+    settings.json. A user running inside Claude Code whose launcher is not on
+    boost's PATH would otherwise silently get no hooks at all.
+
+    A second host earns its hooks by evidence that it is actually in use —
+    its CLI on PATH, or its dotdir already present. Writing into
+    `~/.gemini/settings.json` for someone who has never run Gemini is litter in
+    a file boost does not own. A host that appears later is picked up by the
+    next `boost bmad on`, which is idempotent.
+    """
+    chosen = [hookhost.CLAUDE]
+    for host in hookhost.hosts():
+        if host == hookhost.CLAUDE:
+            continue
+        dotdir = cs.settings_path(scope, host=host).parent
+        if shutil.which(hookhost.cli(host)) or dotdir.is_dir():
+            chosen.append(host)
+    return chosen
+
+
+#: (Claude event, hook name, matcher). The matcher is Claude's own
+#: `SessionStart` source vocabulary, and `hookhost` deliberately does not
+#: translate matchers — they pass through host-native — so it is applied only
+#: on the host it was written for. Omitting it elsewhere means "every start",
+#: which is what a session briefing wants anyway.
+_ORIENT_HOOK = ("SessionStart", HOOK_NAME, HOOK_MATCHER)
+_ROUTE_HOOK = ("UserPromptSubmit", ROUTE_HOOK_NAME, None)
+
+
+def _add_hook_everywhere(scope: str, spec: tuple, command: str) -> list[str]:
+    """Install one hook on every installed host. Returns the hosts written."""
+    event, name, matcher = spec
+    written = []
+    for host in _hook_hosts(scope):
+        target = hookhost.translate(host, event)
+        if target is None:
+            # Refused out loud rather than dropped: a hook the user asked for
+            # and silently never got is worse than one that cannot exist.
+            out.warn("%s has no counterpart for %s — skipped"
+                     % (hookhost.label(host), event))
+            continue
+        cs.add_hook(scope, target, name, command,
+                    matcher=matcher if host == hookhost.CLAUDE else None,
+                    host=host)
+        written.append(host)
+    return written
+
+
+def _remove_hook_everywhere(scope: str, *specs: tuple) -> None:
+    """Remove hooks from every host, installed or not.
+
+    Unlike install this does not filter on `shutil.which`: someone who removed
+    an agent CLI still wants boost's hooks gone from its settings.json, and
+    `remove_hook` against a file that was never written is a no-op.
+    """
+    for host in hookhost.hosts():
+        for event, name, _matcher in specs:
+            target = hookhost.translate(host, event)
+            if target is not None:
+                cs.remove_hook(scope, target, name, host=host)
+
+
 def _autopilot_on(scope) -> int:
     """The one command. Personas + orientation + router, in one idempotent pass.
 
@@ -160,11 +242,11 @@ def _autopilot_on(scope) -> int:
     slugs, skipped = core.write_personas(agents)
 
     launcher = shlex.quote(str(paths.launcher()))
-    cs.add_hook(scope, "SessionStart", HOOK_NAME,
-                _never_fails("%s bmad orient --scope %s" % (launcher, scope)),
-                matcher=HOOK_MATCHER)
-    cs.add_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME,
-                _never_fails("%s bmad route" % launcher))
+    hosts = _add_hook_everywhere(
+        scope, _ORIENT_HOOK,
+        _never_fails("%s bmad orient --scope %s" % (launcher, scope)))
+    _add_hook_everywhere(scope, _ROUTE_HOOK,
+                         _never_fails("%s bmad route" % launcher))
     _set_scope_state(scope, autopilot=True, startup=True, personas=len(slugs),
                      enabled_at=util.now_iso())
     journal.log("bmad-autopilot", "on", scope=scope, personas=len(slugs))
@@ -176,8 +258,11 @@ def _autopilot_on(scope) -> int:
                  % (len(skipped), ", ".join(skipped)))
         out.dim("  delete the file to let `boost bmad on` restore the stock version")
     out.dim("  personas → %s" % paths.tilde(agents))
-    out.dim("  hooks    → %s (SessionStart + UserPromptSubmit)"
-            % paths.tilde(cs.settings_path(scope)))
+    for host in hosts:
+        out.dim("  hooks    → %s (%s + %s)"
+                % (paths.tilde(cs.settings_path(scope, host=host)),
+                   hookhost.translate(host, "SessionStart"),
+                   hookhost.translate(host, "UserPromptSubmit")))
     out.dim("  every substantive prompt now names its lead persona and its "
             "definition of done; trivial asks are left alone")
     # Claude Code only watches an agents dir that existed when the session
@@ -189,8 +274,7 @@ def _autopilot_on(scope) -> int:
 
 def _autopilot_off(scope) -> int:
     scope = scope or "global"
-    cs.remove_hook(scope, "SessionStart", HOOK_NAME)
-    cs.remove_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
+    _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK)
     removed = core.remove_personas(_agents_dir(scope))
     _set_scope_state(scope, autopilot=False, startup=False, personas=0)
     journal.log("bmad-autopilot", "off", scope=scope, personas=len(removed))
@@ -374,14 +458,15 @@ def _startup(value, scope) -> int:
     if value == "on":
         cmd = "%s bmad orient --scope %s" % (
             shlex.quote(str(paths.launcher())), scope)
-        cs.add_hook(scope, "SessionStart", HOOK_NAME, cmd, matcher=HOOK_MATCHER)
+        started = _add_hook_everywhere(scope, _ORIENT_HOOK, cmd)
         _set_scope_state(scope, startup=True)
         journal.log("bmad-startup", "on", scope=scope)
         out.ok("BMAD startup ON (%s) — new sessions get orientation" % scope)
-        out.dim("  hook → %s" % cs.settings_path(scope))
+        for host in started:
+            out.dim("  hook → %s" % cs.settings_path(scope, host=host))
         return 0
     if value == "off":
-        cs.remove_hook(scope, "SessionStart", HOOK_NAME)
+        _remove_hook_everywhere(scope, _ORIENT_HOOK)
         _set_scope_state(scope, startup=False)
         journal.log("bmad-startup", "off", scope=scope)
         out.ok("BMAD startup OFF (%s) — skills stay installed" % scope)
@@ -419,8 +504,7 @@ def _uninstall(scope, yes) -> int:
                 scope, " + _bmad/, _bmad-output/" if scope == "project" else ""))):
         out.info("aborted")
         return 0
-    cs.remove_hook(scope, "SessionStart", HOOK_NAME)
-    cs.remove_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
+    _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK)
     removed = _rm_skills(_skills_dir(scope))
     removed += len(core.remove_personas(_agents_dir(scope)))
     if scope == "project":
@@ -438,7 +522,7 @@ def _uninstall(scope, yes) -> int:
 def _disable(scope) -> int:
     """Quarantine: turn startup off and move skills aside (recoverable)."""
     scope = scope or "project"
-    cs.remove_hook(scope, "SessionStart", HOOK_NAME)
+    _remove_hook_everywhere(scope, _ORIENT_HOOK)
     qdir = _quarantine_dir(scope)
     qdir.mkdir(parents=True, exist_ok=True)
     moved = 0
