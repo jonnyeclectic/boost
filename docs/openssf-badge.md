@@ -213,13 +213,22 @@ of the security-design document for the full account.
 
 ## Gold
 
-Gold is 21 criteria on top of silver. Fourteen are Met, two are N/A, and
-**five are Unmet** — three of which no pull request can close, because they are
-about how many people work on boost rather than about the code.
+Gold is **23** criteria on top of silver. Sixteen are Met, two are N/A and
+five are Unmet. Three of the five are about how many people work on boost
+rather than about the code, so no pull request can close them.
 
-Read this section as the honest ceiling. Sixteen of twenty-one is where boost
-stops; of the five that remain, two are engineering (a reproducible sdist, a
-host that sets response headers) and three are a recruiting problem.
+That count is worth a note, because an earlier version of this section said 21
+and listed 21. The two it dropped were `require_2FA` and `secure_2FA` — the
+only gold criteria whose names contain a capital letter, and the parser that
+read them out of `criteria.yml` matched `[a-z_0-9]+`. It found 21, which looked
+like a plausible total, so nothing flagged it; the gap only appeared on the
+submission form, where 23 rows were waiting. A count that looks reasonable is
+not a checked count.
+
+Read this section as the honest ceiling. Eighteen of twenty-three is where
+boost stops on its own: of the five that remain, two are engineering (a
+reproducible sdist, a host that sets response headers) and three are a
+recruiting problem.
 
 ### Prerequisites and project oversight
 
@@ -237,6 +246,13 @@ host that sets response headers) and three are a recruiting problem.
 | `license_per_file` | MUST | **Met** | The next line of every one of those files is `# SPDX-License-Identifier: GPL-3.0-only`. `-only` rather than `-or-later` because nothing in the repository grants "or any later version"; a test asserts that LICENSE still contains no such grant, so the expression cannot quietly become wrong. |
 | `repo_distributed` | MUST | **Met** | git. |
 | `small_tasks` | SHOULD | **Met** | [CONTRIBUTING.md § Good first tasks](https://github.com/jonnyeclectic/boost/blob/main/CONTRIBUTING.md#good-first-tasks) names five standing starter tasks, each with the exact file to edit — adding a registry row, adding a retrieval golden-set query, teaching the prose linter a word, sharpening a command summary, covering an untested branch. They are standing tasks on purpose: a newcomer can start without waiting for an issue to be triaged. Specific one-off tasks carry the `good first issue` label. |
+
+### Two-factor authentication
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `require_2FA` | MUST | **Met** | GitHub has required two-factor authentication for accounts that contribute code since March 2023, and the repository, its Actions secrets and the Pages site all sit behind that account. `MAINTAINERS.md` records the credential as "GitHub account with 2FA". |
+| `secure_2FA` | SHOULD | **Met** | The maintainer's second factor is a **passkey** — FIDO2/WebAuthn, so the authenticator signs a challenge bound to the origin and there is no shared secret to phish, replay or intercept. That is the strongest of the mechanisms the criterion accepts, and unlike SMS it is not a plaintext channel. Worth noting how this answer was reached: nothing in the repository can establish a fact about a personal account, so it was left unanswered and asked rather than inferred from the fact that GitHub mandates 2FA — which it satisfies with SMS too. |
 
 ### Coding standards
 

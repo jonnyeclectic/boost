@@ -7,7 +7,7 @@ category: Security · Posture
 complexity: M
 impact: Med
 wow: 3
-note: 26% → 16 of 21; the last five are two builds and three people
+note: 26% → 61% live; the parser that said "21 criteria" had missed two
 order: 8
 owner: loop/openssf-gold
 pr:
@@ -15,7 +15,7 @@ title: OpenSSF gold — how far it goes without a second human
 ---
 Gold sat at <b>26%</b> with eleven criteria unanswered, and the standing assumption was that
 gold needs a second person so none of it was worth doing. Half of that was true. Answering the
-eleven rather than assuming took gold to <b>16 of 21</b>, and every flip was evidence that
+eleven rather than assuming took gold from 26% to <b>61%</b> live, and every flip was evidence that
 already existed or a measurement nobody had taken.
 <b>Two were already true and unmeasured.</b> <code>test_statement_coverage90</code> and
 <code>test_branch_coverage80</code> read like months of work against a gate that floors
@@ -46,3 +46,10 @@ and pypi.org send the full set. The last three — <code>bus_factor</code>,
 <code>contributors_unassociated</code>, <code>two_person_review</code> — are a recruiting
 problem, and simulating them with a second account would be the one dishonest answer in the
 whole exercise.
+<b>The count itself was wrong.</b> This card and the badge document both said gold was
+<b>21 criteria</b>. It is 23. The parser reading them out of <code>criteria.yml</code> matched
+<code>[a-z_0-9]+</code>, so it silently dropped <code>require_2FA</code> and
+<code>secure_2FA</code> — the only two gold criterion names containing a capital letter. 21 is
+a plausible-looking total, so nothing flagged it; the gap appeared only on the submission form,
+where 23 rows were waiting. Same shape as the <a href="roadmap.html#openssf-best-practices-badge">
+fingerprint no test asserted</a>: the check ran, returned a believable answer, and was wrong.
