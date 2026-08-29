@@ -1,0 +1,63 @@
+name: up-to-date
+
+# A pull request must contain the current tip of `main` before it can merge.
+#
+# GitHub can enforce this natively, and this repository asks it to twice — which
+# is exactly how it went unenforced. Classic branch protection sets
+# `strict: true` but also `enforce_admins: false`, so it does not apply to the
+# account that does the merging; the active ruleset, which has no bypass actors
+# and therefore does apply, had `strict_required_status_checks_policy: false`.
+# Two mechanisms disagreeing, and the binding one had the safety off.
+#
+# On 2026-08-29 that let two pull requests — each green against the `main` it
+# was tested on — merge into a broken combination. Their source files did not
+# conflict; the generated `docs/roadmap.html` did, and a squash merge takes one
+# side of a generated file without ever reporting a conflict. `main` went red on
+# a counter that was right on both branches and wrong for their union, and
+# because `ci` was red the release guard never armed, so two merged pull
+# requests sat unreleased.
+#
+# The ruleset setting is fixed. This check exists because that setting is
+# invisible config that drifted once already and can drift again, while a
+# required check is config as code: it is in the diff, it is in
+# `.github/required-checks.txt`, and a regression shows up in review.
+
+on:
+  pull_request:
+  # The merge queue evaluates required checks against a gh-readonly-queue/* ref,
+  # so a required check that never reports there deadlocks every pull request
+  # (scripts/check_required_checks.py fails the build for exactly this). The
+  # check stays meaningful on that ref rather than being stubbed out: a queue
+  # ref is built from main plus the queued pull requests, so it contains main's
+  # tip by construction and passes for the right reason.
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  branch-current:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: harden runner (egress audit)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The script compares HEAD against the base tip, so it needs both.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: fetch the base branch
+        env:
+          # `pull_request.base.ref` is absent on merge_group; the queue always
+          # builds off the default branch, so fall back to it.
+          BASE: ${{ github.event.pull_request.base.ref || 'main' }}
+        run: git fetch --no-tags origin "$BASE"
+      - name: branch contains the base tip
+        env:
+          BASE: ${{ github.event.pull_request.base.ref || 'main' }}
+        run: python3 scripts/check_branch_current.py --base "origin/$BASE"
