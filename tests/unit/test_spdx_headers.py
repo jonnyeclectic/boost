@@ -77,3 +77,24 @@ def test_expression_matches_the_declared_licence() -> None:
     # If an "or any later version" grant is ever added, `-only` becomes wrong.
     # This is the tripwire for that day.
     assert "at your option) any later version" not in licence.split("Preamble")[0]
+
+
+def test_no_two_package_files_are_byte_identical() -> None:
+    """Two identical files in the wheel are a `check-wheel-contents` W002.
+
+    Adding the header made `boost_cli/commands/__init__.py` and
+    `boost_cli/core/__init__.py` byte-identical -- both had been empty, and
+    empty files are exempt from that check. Each now carries a one-line
+    docstring saying what the package is, which is the fix and the
+    documentation at once.
+    """
+    import hashlib
+    from collections import defaultdict
+
+    by_digest: dict[str, list[str]] = defaultdict(list)
+    for path in sorted((ROOT / "boost_cli").rglob("*.py")):
+        by_digest[hashlib.sha256(path.read_bytes()).hexdigest()].append(
+            _SPDX.relative(path)
+        )
+    dupes = {d: f for d, f in by_digest.items() if len(f) > 1}
+    assert not dupes, f"identical files ship twice in the wheel: {dupes}"
