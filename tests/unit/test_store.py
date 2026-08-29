@@ -231,6 +231,39 @@ class TestInstall:
         assert ei.value.hint == "run `boost update fixture-tap`"
 
 
+class TestSourceDirFor:
+    """A tap `boost catalog --import` registered but never cloned.
+
+    `import_bundle` writes a real `config["taps"]` entry (name + url) plus a
+    catalogue cache file, but performs no clone — the whole point is to defer
+    that cost until `install` actually needs one skill. `source_dir_for` is
+    the single choke point every install path, `sha256_dir` and `boost info`
+    read a tap's real files through, so it is the one place that has to
+    clone lazily for the "clones just the one registry it needs" promise in
+    `boost catalog --import`'s own hint to hold.
+    """
+
+    def test_clones_lazily_when_registered_but_not_cloned(self, tap, entry):
+        shutil.rmtree(tap.path)
+        assert not tap.is_cloned
+
+        src = store.source_dir_for(entry)
+
+        assert tap.is_cloned
+        assert (src / "SKILL.md").is_file()
+
+    def test_does_not_reclone_an_already_cloned_tap(self, tap, entry,
+                                                     monkeypatch):
+        calls = []
+        monkeypatch.setattr(store.gitutil, "clone_shallow",
+                            lambda *a, **k: calls.append(a))
+        assert tap.is_cloned
+
+        store.source_dir_for(entry)
+
+        assert calls == []
+
+
 class TestUnlinkAgents:
     def test_removes_only_symlinks(self, brainstorming):
         cursor_link = _link("cursor")

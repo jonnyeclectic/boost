@@ -108,3 +108,38 @@ class TestOwnedLink:
         plain = tmp_path / "file"
         plain.write_text("x", encoding="utf-8")
         assert not quality._owned_link(plain)     # readlink raises; no crash
+
+
+class TestResolveAsFarAsItExists:
+    def test_a_real_ancestor_resolves_normally(self, tmp_path):
+        real = tmp_path / "real"
+        real.mkdir()
+        missing = real / "gone" / "deeper"
+        got = quality._resolve_as_far_as_it_exists(missing)
+        assert got == (real.resolve() / "gone" / "deeper")
+
+    def test_a_runtime_error_from_a_symlink_loop_is_swallowed_not_raised(
+            self, tmp_path, monkeypatch):
+        # Path.resolve() raises RuntimeError (not OSError) for a symlink
+        # loop reached while resolving strict=False on Python 3.12 — the
+        # exact split boost_cli/core/store.py's resolves_into_store already
+        # documents and guards against with `except (OSError, RuntimeError)`.
+        # This helper's `suppress(OSError)` alone fails open on that
+        # interpreter: it lets the RuntimeError escape instead of falling
+        # back to the deepest real ancestor the way a real symlink loop
+        # (which IS reachable in a broken-link sweep) needs it to.
+        real = tmp_path / "real"
+        real.mkdir()
+        missing = real / "gone"
+
+        from pathlib import Path as _Path
+        real_resolve = _Path.resolve
+
+        def loop_then_real(self, *a, **k):
+            if self == real:
+                raise RuntimeError("Symlink loop from %r" % str(self))
+            return real_resolve(self, *a, **k)
+
+        monkeypatch.setattr(_Path, "resolve", loop_then_real)
+        got = quality._resolve_as_far_as_it_exists(missing)
+        assert got == real / "gone"   # fell back to the unresolved ancestor

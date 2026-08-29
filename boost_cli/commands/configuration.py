@@ -570,6 +570,26 @@ def _write_onboard_file(dest: Path, content: str, force: bool) -> bool:
     return True
 
 
+def _telemetry_created(dest: Path) -> str:
+    """The existing file's ``created`` timestamp, or now for a fresh write.
+
+    ``_write_onboard_file`` treats a byte-identical re-run as a no-op — but
+    stamping a fresh ``util.now_iso()`` into telemetry.json on every
+    invocation meant the comparison could only match by wall-clock luck (two
+    invocations landing in the same second), defeating the "re-running
+    onboard regenerates the workflow byte-for-byte" guarantee documented
+    above for the one file whose content is otherwise fully deterministic.
+    """
+    try:
+        data = json.loads(dest.read_text(encoding="utf-8"))
+        created = data.get("created")
+        if isinstance(created, str) and created:
+            return created
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        pass
+    return util.now_iso()
+
+
 def cmd_onboard(argv) -> int:
     """boost onboard [--repo DIR] [--pr] [--dry-run] [--force]"""
     p = cliparse.parser(
@@ -593,7 +613,7 @@ def cmd_onboard(argv) -> int:
     telemetry = json.dumps({
         "enabled": True,
         "share_pulse": True,
-        "created": util.now_iso(),
+        "created": _telemetry_created(repo / _TELEMETRY_REL),
         "by": util.user(),
     }, indent=2) + "\n"
     files = [(_TELEMETRY_REL, telemetry), (_WORKFLOW_REL, _WORKFLOW_YML)]

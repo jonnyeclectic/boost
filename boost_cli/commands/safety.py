@@ -268,7 +268,13 @@ def _trust_audit(as_json: bool) -> int:
     """`boost audit --skills` — one trust-health answer for the installed set."""
     installed = dict(_iter_installed())
     peers: dict = {}
-    for name, peer in trustaudit.conflict_pairs(list(installed),
+    # Quarantine removes a skill's active links on purpose — pairing it as a
+    # conflict source or target would report a finding `boost quarantine`
+    # (its own documented remedy) can never clear. Non-quarantined skills are
+    # still checked against a quarantined peer's *declared* conflicts via
+    # `_installed_conflicts`, so only the pairing set is trimmed here.
+    active_names = [n for n, lk in installed.items() if not lk.get("quarantined")]
+    for name, peer in trustaudit.conflict_pairs(active_names,
                                                 _installed_conflicts(installed)):
         peers.setdefault(name, []).append(peer)
 
