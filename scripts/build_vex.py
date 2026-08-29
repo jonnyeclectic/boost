@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Render ``docs/vex/openvex.json`` — boost's OpenVEX 0.2.0 feed — from a
 human-edited source of truth.
 

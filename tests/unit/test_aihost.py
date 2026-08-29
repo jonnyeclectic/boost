@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """The AI bridge must reach whichever assistant CLI the user actually has.
 
 `core/ai.py` knew one backend: the `claude` CLI, or ANTHROPIC_API_KEY. Every

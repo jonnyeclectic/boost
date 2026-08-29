@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """`boost bmad on` installs its hooks on every installed host, idempotently.
 
 The autopilot's two hooks were written to Claude's settings.json and nowhere
