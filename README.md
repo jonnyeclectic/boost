@@ -558,7 +558,7 @@ Four layers, all enforced (`make check` runs the full set; CI runs the same thin
 
 | Layer | What it does | Gate |
 |---|---|---|
-| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 80 commands in-process against sandboxed homes) | **≥80% line coverage** of `boost_cli` (`fail_under` in pyproject.toml) |
+| `make test` | pytest across `tests/unit/` (every core module) and `tests/functional/` (drives all 80 commands in-process against sandboxed homes) | **≥90% coverage** of `boost_cli`, statements and branches (`fail_under` in pyproject.toml) |
 | `make smoke` | `tests/smoke.sh` — 175 checks run through the actual `./boost` shim (`--online` also hits real registries) | all pass |
 | `make mutation` | [mutmut] mutates `boost_cli/core` (~9,900 mutants) and reruns the unit suite against each one | **≥80% killed** (`scripts/mutation_gate.py`) |
 | `make evals` | scores the search ranker on a graded golden set — recall@5/@10, MRR, nDCG@5/@10 | **metric floors + no statistically significant regression** (`scripts/eval_gate.py`) |

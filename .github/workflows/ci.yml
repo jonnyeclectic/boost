@@ -368,7 +368,7 @@ jobs:
           # unlocked and best-effort: it is an optional runtime extra, not part
           # of the toolchain, and some matrix legs have no wheel for it.
           "$VENV_BIN/pip" -q install sqlite-vec || true
-      - name: unit + functional (80% coverage gate)
+      - name: unit + functional (90% coverage gate)
         # Every failing test is re-emitted as a `::error::` workflow command so
         # it lands as a check-run annotation. The step conclusion already says
         # WHICH STEP broke; the annotation is what says WHICH TEST. Without it

@@ -1,4 +1,4 @@
-# OpenSSF Best Practices badge — passing-level answers
+# OpenSSF Best Practices badge — worked answers
 
 This is boost's worked answer to all 67 **passing**-level criteria of the
 [OpenSSF Best Practices badge](https://www.bestpractices.dev/). It exists so the
@@ -11,9 +11,14 @@ Criteria text is from the
 `MUST` must be Met (or N/A where the criterion permits it). `SHOULD` may be
 Unmet **with a justification**. `SUGGESTED` need only be answered.
 
-**Status: 66 Met or N/A, 1 SHOULD deliberately Unmet with justification
-(`crypto_call`).** That clears the passing bar. What remains is registration —
-see [Human actions](#human-actions) at the end.
+**Passing: 66 Met or N/A, 1 SHOULD deliberately Unmet with justification
+(`crypto_call`).** That clears the passing bar. Silver was earned on top of it.
+[Gold](#gold) is answered further down and cannot be completed from this
+repository — three of its criteria need a second person, not a commit.
+
+boost holds four badges: **passing**, **silver**, **Baseline Level 1** and
+**Baseline Level 2**. What remains is listed under [Human
+actions](#human-actions) at the end.
 
 Repository: <https://github.com/jonnyeclectic/boost> · Licence: GPL-3.0 ·
 Package: [`boost-skill-cli`](https://pypi.org/project/boost-skill-cli/)
@@ -117,7 +122,7 @@ Package: [`boost-skill-cli`](https://pypi.org/project/boost-skill-cli/)
 |---|---|---|---|
 | `test` | MUST | **Met** | Four tiers: `tests/unit`, `tests/functional` (drive the real CLI in-process), `tests/smoke.sh` (170 end-to-end checks through the `./boost` shim) and a Gherkin BDD suite (11 features, 47 scenarios). |
 | `test_invocation` | SHOULD | **Met** | `make test` — or `nox`, which reproduces the exact CI gate in isolated venvs across every supported interpreter. |
-| `test_most` | SUGGESTED | **Met** | An **80% line-coverage** gate (`fail_under = 80`), an **80% changed-line** gate on pull requests, and an **80% mutation** gate over `boost_cli/core` — the last of which means coverage cannot be satisfied by tests that merely execute the code without asserting on it. |
+| `test_most` | SUGGESTED | **Met** | A **90% coverage** gate over statements and branches (`fail_under = 90`), an **80% changed-line** gate on pull requests, and an **80% mutation** gate over `boost_cli/core` — the last of which means coverage cannot be satisfied by tests that merely execute the code without asserting on it. |
 | `test_continuous_integration` | SUGGESTED | **Met** | GitHub Actions runs the full gate on every push and every pull request. |
 
 ### New functionality testing
@@ -205,6 +210,87 @@ of the security-design document for the full account.
 | `dynamic_analysis_fixed` | MUST | **Met** | No medium-or-higher exploitable vulnerability has been found by dynamic analysis. A crashing input found by the fuzzer is uploaded as a workflow artifact and fixed; none is outstanding. |
 
 ---
+
+## Gold
+
+Gold is 21 criteria on top of silver. Fourteen are Met, two are N/A, and
+**five are Unmet** — three of which no pull request can close, because they are
+about how many people work on boost rather than about the code.
+
+Read this section as the honest ceiling. Sixteen of twenty-one is where boost
+stops; of the five that remain, two are engineering (a reproducible sdist, a
+host that sets response headers) and three are a recruiting problem.
+
+### Prerequisites and project oversight
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `achieve_silver` | MUST | **Met** | Silver is at 100%. |
+| `bus_factor` | MUST | **Unmet** | boost has one maintainer. [MAINTAINERS.md](https://github.com/jonnyeclectic/boost/blob/main/MAINTAINERS.md) says so in those words rather than implying a committee, and names what would be lost. Losing that person would stall the project; nothing in the repository changes that. |
+| `contributors_unassociated` | MUST | **Unmet** | The same fact from the other direction: significant contributions come from one person, so there are not two contributors from unassociated employers. |
+
+### Copyright, licence and starter tasks
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `copyright_per_file` | MUST | **Met** | Every source file opens with `# Copyright the boost contributors.` — 314 files across `boost_cli/`, `boost_langchain/`, `evals/`, `scripts/`, `tests/` and the two root files. [`scripts/add_spdx_headers.py`](https://github.com/jonnyeclectic/boost/blob/main/scripts/add_spdx_headers.py) stamps them idempotently and `tests/unit/test_spdx_headers.py` fails the build if a new file arrives without one. |
+| `license_per_file` | MUST | **Met** | The next line of every one of those files is `# SPDX-License-Identifier: GPL-3.0-only`. `-only` rather than `-or-later` because nothing in the repository grants "or any later version"; a test asserts that LICENSE still contains no such grant, so the expression cannot quietly become wrong. |
+| `repo_distributed` | MUST | **Met** | git. |
+| `small_tasks` | SHOULD | **Met** | [CONTRIBUTING.md § Good first tasks](https://github.com/jonnyeclectic/boost/blob/main/CONTRIBUTING.md#good-first-tasks) names five standing starter tasks, each with the exact file to edit — adding a registry row, adding a retrieval golden-set query, teaching the prose linter a word, sharpening a command summary, covering an untested branch. They are standing tasks on purpose: a newcomer can start without waiting for an issue to be triaged. Specific one-off tasks carry the `good first issue` label. |
+
+### Coding standards
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `code_review_standards` | MUST | **Met** | [docs/code-review.md](https://github.com/jonnyeclectic/boost/blob/main/docs/code-review.md) — how a review is conducted, the checklist of what must be checked, and the six conditions that make a change acceptable. It opens by stating the single-maintainer shape rather than describing a review process the project does not have. |
+| `two_person_review` | MUST | **Unmet** | Most changes on `main` are the maintainer's own and are not reviewed by a second human. Pull requests from anyone else are reviewed by the maintainer, but they are the minority. Same root cause as `bus_factor`. |
+
+### Reproducible build
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `build_reproducible` | MUST | **Unmet** | Measured, not assumed: with `SOURCE_DATE_EPOCH` set, two builds of one commit produce a **bit-identical wheel** and a **differing sdist**. `setuptools` writes each tar member's real mtime plus the builder's `uid`/`gid`/user name into the sdist, so 54 members differ between builds two seconds apart. Two things are missing — the release workflow installs its build tooling unpinned, and the sdist's timestamps and ownership need normalising. The full measurement and the commands to reproduce it are in [docs/verifying-releases.md](https://github.com/jonnyeclectic/boost/blob/main/docs/verifying-releases.md#can-you-rebuild-it-yourself-partly--the-measurement). N/A would be wrong: boost ships wheels. |
+
+### Test invocation and coverage
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `test_invocation` | MUST | **Met** | `make test`. Alternatively `nox`, which reproduces the exact CI environment. |
+| `test_continuous_integration` | MUST | **Met** | GitHub Actions runs the full gate on every push and every pull request. |
+| `test_statement_coverage90` | MUST | **Met** | **95.2%** statement coverage over `boost_cli`, measured on the unit and functional suites alone — no smoke, no BDD, so the real figure is higher. `fail_under` in `pyproject.toml` is now 90, up from 80, so the claim is enforced rather than asserted. |
+| `test_branch_coverage80` | MUST | **Met** | **90.8%** branch coverage, from the same run. `branch = true` is now on in `[tool.coverage.run]`, which is what makes the number exist at all — before this it was never measured. |
+
+### Cryptography and delivery
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `crypto_used_network` | MUST | **N/A** | boost implements no network protocol of its own; it shells out to `git` and to the agent CLIs. |
+| `crypto_tls12` | MUST | **N/A** | boost neither implements nor configures TLS. |
+| `hardened_site` | MUST | **Unmet** | Measured on all three sites. `github.com` sends HSTS, CSP, `X-Frame-Options: deny` and `X-Content-Type-Options: nosniff`; `pypi.org` sends HSTS, `X-Frame-Options`, `X-Content-Type-Options` and a restrictive `Permissions-Policy`. The project website, `jonnyeclectic.github.io/boost`, sends **none of them** — GitHub Pages does not expose response-header configuration, and `<meta http-equiv>` can carry CSP but not `X-Content-Type-Options` or HSTS. Closing this means moving the site to a host that permits headers. |
+
+### Security review and hardening
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `security_review` | MUST | **Met** | [docs/security-design.md § Security review record](https://github.com/jonnyeclectic/boost/blob/main/docs/security-design.md#security-review-record) — dated 2026-08-28, scope stated, four findings recorded with their outcomes, residual risk named. Two of the findings are the kind static analysis does not produce: a verification step that had lost the value it verifies while every gate stayed green, and a safety guard that failed open on the oldest supported Python because `RuntimeError` is not an `OSError`. |
+| `hardening` | MUST | **Met** | Hardening mechanisms appropriate to a Python CLI. |
+
+### Dynamic analysis at gold
+
+| Criterion | Cat. | Answer | Evidence |
+|---|---|---|---|
+| `dynamic_analysis` | MUST | **Met** | `atheris` fuzzing over the parsers, in CI. |
+| `dynamic_analysis_enable_assertions` | SHOULD | **Met** | The suites are assertion-driven and run with assertions enabled. |
+
+### What gold would take
+
+- `bus_factor`, `contributors_unassociated`, `two_person_review` — **a second
+  person**, sustained. Not a document, not a check, and not something to
+  simulate with a second account.
+- `build_reproducible` — pin the release build toolchain, then normalise the
+  sdist tarball.
+- `hardened_site` — host the documentation somewhere that lets you set
+  response headers.
 
 ## Human actions
 

@@ -31,7 +31,8 @@ unit:
 functional:
 	$(PYTEST) tests/functional -q
 
-# pytest suites with the 80% line-coverage gate (fail_under in pyproject.toml)
+# pytest suites with the 90% coverage gate (fail_under in pyproject.toml,
+# measured over statements AND branches)
 test:
 	$(PYTEST) tests/unit tests/functional --cov=boost_cli --cov-report=term-missing -q
 

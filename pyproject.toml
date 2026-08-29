@@ -258,9 +258,17 @@ markers = [
 [tool.coverage.run]
 source = ["boost_cli"]
 parallel = false
+# Branch coverage, not just statements. OpenSSF Best Practices gold floors
+# statement coverage at 90% and branch coverage at 80%; measured on the unit +
+# functional suites alone (no smoke, no bdd) this repo sits at 95.2% and 90.8%.
+# Turning branch measurement on is what keeps those two answers falsifiable --
+# an unmeasured number is a claim, and today's other finding was a line no test
+# asserted. `fail_under` below now gates coverage.py's blended statement+branch
+# figure, which was 94.0% when this was raised from 80.
+branch = true
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 90
 precision = 1
 show_missing = true
 skip_covered = true
