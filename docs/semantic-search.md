@@ -25,8 +25,9 @@ other. `boost search` prints `hybrid RRF` when that is what happened.
 ## Turn it on
 
 ```bash
-pip install "boost-skill-cli[rag]"   # vector store + a local embedding model
-boost reindex --dense                # embed everything you have tapped
+pipx inject boost-skill-cli "boost-skill-cli[rag]"   # if you installed with pipx
+# pip install "boost-skill-cli[rag]"                 # if you installed with pip
+boost reindex --dense                                # embed everything you have tapped
 ```
 
 The first run downloads `BAAI/bge-small-en-v1.5`, about 133 MB. It is pinned by

@@ -159,6 +159,10 @@
   .hero h1 .grad { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
   .hero p.lede { max-width: 660px; margin-top: 30px; font-size: 19px; color: var(--text-2); }
   .hero p.lede b { color: var(--text); font-weight: 650; }
+  /* The prerequisites line is a caveat, not a second pitch — sized down so it
+     reads under the lede rather than competing with it. */
+  .hero p.prereq-note { margin-top: 18px; font-size: 16px; }
+  .hero p.prereq-note code { font-size: .92em; }
   .cta-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 38px; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
@@ -564,6 +568,11 @@
       them into <b>Claude Code, Windsurf, Cursor and Gemini CLI</b> at once. One command
       replaces the copy-paste-and-pray dance of setting up AI agent skills by hand.
     </p>
+    <p class="lede prereq-note">
+      <b>Before you install:</b> boost needs <b>Python 3.12+</b>, <b>git</b> and
+      <b>pipx</b>. macOS ships <code>python3</code> 3.9 and no <code>pipx</code>, so a brand
+      new Mac needs one Homebrew line first — <a href="#start">run the prerequisites check</a>.
+    </p>
     <div class="cta-row">
       <a class="btn btn-grad" href="#workflow">See how it works →</a>
       <a class="btn btn-ghost" href="#commands">Explore all 80 commands</a>
@@ -937,27 +946,59 @@ facilitate structured divergent thinking:
     <div class="wrap">
       <span class="eyebrow">Get Started</span>
       <h2 class="sec-title">One pip install, zero setup</h2>
-      <p class="sec-sub">Install from PyPI with <code>pipx</code> (or <code>pip</code>) — one command,
-        Python 3.12+, no manual setup.</p>
+      <p class="sec-sub">Install from PyPI with <code>pipx</code>. boost needs Python 3.12+,
+        <code>git</code> and <code>pipx</code> — macOS ships a 3.9 <code>python3</code> and no
+        <code>pipx</code>, so check first, then install.</p>
 
       <div class="window install-box reveal">
         <div class="bar">
-          <div class="label">install from PyPI</div>
-          <button class="copy-btn" id="copy-install" type="button">Copy</button>
+          <div class="label">step 1 &mdash; check prerequisites</div>
+          <button class="copy-btn" data-copy="prereq-code" type="button">Copy</button>
         </div>
-        <pre id="install-code"><span class="cm"># install from PyPI (pipx keeps it isolated), verify</span>
-pipx install boost-skill-cli        <span class="cm"># or: pip install boost-skill-cli</span>
+        <pre id="prereq-code" tabindex="0" aria-label="Prerequisite check commands"><span class="cm"># each line prints ok, or what is missing</span>
+python3 -c <span class="yv">'import sys; v=sys.version.split()[0]; print("python ok", v) if sys.version_info &gt;= (3,12) else print("python TOO OLD", v)'</span>
+command -v git  &gt;/dev/null &amp;&amp; echo <span class="yv">"git ok"</span>  || echo <span class="yv">"git MISSING"</span>
+command -v pipx &gt;/dev/null &amp;&amp; echo <span class="yv">"pipx ok"</span> || echo <span class="yv">"pipx MISSING"</span></pre>
+      </div>
+
+      <p class="sec-sub">Install only what the check flagged. On macOS one Homebrew line covers all three
+        &mdash; on Debian/Ubuntu it is <code>sudo apt install python3.13 git pipx</code>.
+        <code>pipx ensurepath</code> puts <code>~/.local/bin</code> on your PATH, and the new
+        shell is what makes that take effect. If it answers that the directories are
+        <em>already</em> appended and suggests <code>--force</code>, your PATH is fine
+        &mdash; that is success, not an error.</p>
+
+      <div class="window install-box reveal">
+        <div class="bar">
+          <div class="label">step 2 &mdash; install only what is missing, macOS</div>
+          <button class="copy-btn" data-copy="prereq-fix" type="button">Copy</button>
+        </div>
+        <pre id="prereq-fix">brew install python@3.13     <span class="cm"># only if the check said python TOO OLD</span>
+brew install git             <span class="cm"># only if it said git MISSING</span>
+brew install pipx            <span class="cm"># only if it said pipx MISSING</span>
+pipx ensurepath
+<span class="cm"># reopen the shell so PATH picks up ~/.local/bin</span>
+exec $SHELL -l</pre>
+      </div>
+
+      <div class="window install-box reveal">
+        <div class="bar">
+          <div class="label">step 3 &mdash; install boost from PyPI</div>
+          <button class="copy-btn" id="copy-install" data-copy="install-code" type="button">Copy</button>
+        </div>
+        <pre id="install-code"><span class="cm"># install boost, then verify</span>
+pipx install boost-skill-cli
 <span class="tv">boost</span> --version
 
-<span class="cm"># add the 7 starter registries and go (or just run `boost mcp`)</span>
+<span class="cm"># add the 7 starter registries and go</span>
 <span class="tv">boost</span> <span class="tc">tap</span> --defaults
 <span class="tv">boost</span> <span class="tc">search</span> brainstorming
 
 <span class="cm"># optional: local semantic search over your skills</span>
-pip install <span class="yv">"boost-skill-cli[rag]"</span>
+pipx inject boost-skill-cli <span class="yv">"boost-skill-cli[rag]"</span>
 
-<span class="cm"># upgrade later — `pipx install --upgrade` silently no-ops on a bare name</span>
-pipx upgrade boost-skill-cli        <span class="cm"># or: pip install --upgrade boost-skill-cli</span></pre>
+<span class="cm"># upgrade later &mdash; works for pipx, pip, uv or a git checkout</span>
+<span class="tv">boost</span> <span class="tc">self-update</span></pre>
       </div>
 
       <div class="mini reveal">
@@ -1200,8 +1241,11 @@ document.querySelectorAll("[data-count]").forEach((el) => {
 });
 
 // ---------- copy button ----------
-document.getElementById("copy-install").addEventListener("click", async function () {
-  const text = document.getElementById("install-code").innerText;
+// Every .copy-btn names its <pre> with data-copy, so the Get Started section can
+// carry more than one block without a handler per button.
+document.querySelectorAll(".copy-btn[data-copy]").forEach((btn) => {
+btn.addEventListener("click", async function () {
+  const text = document.getElementById(this.dataset.copy).innerText;
   let done = false;
   try { await navigator.clipboard.writeText(text); done = true; } catch (e) { /* fall through */ }
   if (!done) {
@@ -1212,6 +1256,7 @@ document.getElementById("copy-install").addEventListener("click", async function
   }
   this.textContent = done ? "Copied ✓" : "Select & copy";
   setTimeout(() => { this.textContent = "Copy"; }, 1800);
+});
 });
 
 // Scroll reveal lives in style/boost.js, loaded below — this page carried a

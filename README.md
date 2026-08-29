@@ -21,6 +21,9 @@ boost search tdd              # full-content BM25 over every skill
 boost install tdd-workflow    # → every agent, version-pinned, one lock file
 ```
 
+(No `pipx` yet? macOS ships neither it nor a new enough Python — run the
+[prerequisites check](#prerequisites) first.)
+
 No more copying `SKILL.md` into four agent folders and forgetting which one is
 stale. The default install is pure stdlib, with no build step and no
 dependencies.
@@ -42,21 +45,75 @@ The tedious part is everything around that file: finding good skills, wiring
 each one into every agent you use, keeping versions in sync, and handing them
 to teammates. That is what boost takes over.
 
-## Install
+## Prerequisites
 
-Needs Python 3.12+ and `git`.
+boost needs **Python 3.12+**, **git** and **pipx**. macOS ships `git`, but its
+`python3` is 3.9 and it has no `pipx` — which is why `pipx install
+boost-skill-cli` fails with `command not found` on a new machine.
+
+Check before you install — each line prints `ok`, or what is missing:
 
 ```bash
-pipx install boost-skill-cli        # or: pip install boost-skill-cli
-boost --version
-boost tap --defaults                # pull in the 7 starter registries
+python3 -c 'import sys; v=sys.version.split()[0]; print("python ok", v) if sys.version_info >= (3,12) else print("python TOO OLD", v)'
+command -v git  >/dev/null && echo "git ok"  || echo "git MISSING"
+command -v pipx >/dev/null && echo "pipx ok" || echo "pipx MISSING"
 ```
 
-Upgrading later is `upgrade`, not `install --upgrade`: with a bare package name
-the latter matches the spec you already satisfy and silently does nothing.
+Install only what the check flagged — on macOS:
 
 ```bash
-pipx upgrade boost-skill-cli        # or: pip install --upgrade boost-skill-cli
+brew install python@3.13     # only if the check said python TOO OLD
+brew install git             # only if it said git MISSING
+brew install pipx            # only if it said pipx MISSING
+pipx ensurepath
+exec $SHELL -l
+```
+
+On Debian/Ubuntu: `sudo apt install python3.13 git pipx`, then the same
+`pipx ensurepath` and new shell. If `ensurepath` answers `All pipx binary
+directories have been appended to PATH ... try again with the '--force' flag`,
+that is it reporting the PATH is already set up — you are done, and `--force`
+is not what you want. `ensurepath` puts `~/.local/bin` on your PATH
+and the fresh shell is what makes that take effect — skipping it is the other
+way to end up at `boost: command not found`.
+
+## Install
+
+```bash
+pipx install boost-skill-cli
+boost --version
+boost tap --defaults
+```
+
+`pipx` keeps boost in its own isolated environment, which is why it is the recommended
+route. Without pipx, use an explicit interpreter — a bare `pip` is often absent
+or points at the wrong Python:
+
+```bash
+python3.13 -m pip install --user boost-skill-cli
+```
+
+If `boost: command not found` after a successful install, the install directory
+is not on your PATH: run `pipx ensurepath` — or, for a `--user` pip install, add
+the `bin` under `python3.13 -m site --user-base` — and reopen the shell.
+
+Upgrading later is one command, whichever way you installed:
+
+```bash
+boost self-update             # detects pipx / pip / uv / a git checkout and drives it
+boost self-update --dry-run   # print the command it would run, change nothing
+```
+
+It reads evidence on disk — `.git`, then `pipx_metadata.json` or `uv-receipt.toml`,
+then installed package metadata — and for a pip install runs `sys.executable -m pip`
+rather than a bare `pip`, which can belong to a different interpreter and would
+upgrade a different copy while reporting success.
+
+By hand it is `upgrade`, not `install --upgrade`: with a bare package name the
+latter matches the spec you already satisfy and silently does nothing.
+
+```bash
+pipx upgrade boost-skill-cli        # or: python3.13 -m pip install --user --upgrade boost-skill-cli
 ```
 
 Or run it from a checkout. The runtime is stdlib-only, so there is nothing to
@@ -77,7 +134,7 @@ skill you want. Semantic search fixes that, needs no API key, and takes two
 commands:
 
 ```bash
-pip install "boost-skill-cli[rag]"
+pipx inject boost-skill-cli "boost-skill-cli[rag]"   # pip install "boost-skill-cli[rag]" if you used pip
 boost reindex --dense
 ```
 
