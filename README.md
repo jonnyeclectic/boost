@@ -97,8 +97,20 @@ If `boost: command not found` after a successful install, the install directory
 is not on your PATH: run `pipx ensurepath` — or, for a `--user` pip install, add
 the `bin` under `python3.13 -m site --user-base` — and reopen the shell.
 
-Upgrading later is `upgrade`, not `install --upgrade`: with a bare package name
-the latter matches the spec you already satisfy and silently does nothing.
+Upgrading later is one command, whichever way you installed:
+
+```bash
+boost self-update             # detects pipx / pip / uv / a git checkout and drives it
+boost self-update --dry-run   # print the command it would run, change nothing
+```
+
+It reads evidence on disk — `.git`, then `pipx_metadata.json` or `uv-receipt.toml`,
+then installed package metadata — and for a pip install runs `sys.executable -m pip`
+rather than a bare `pip`, which can belong to a different interpreter and would
+upgrade a different copy while reporting success.
+
+By hand it is `upgrade`, not `install --upgrade`: with a bare package name the
+latter matches the spec you already satisfy and silently does nothing.
 
 ```bash
 pipx upgrade boost-skill-cli        # or: python3.13 -m pip install --user --upgrade boost-skill-cli
