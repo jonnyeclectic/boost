@@ -77,6 +77,15 @@ PGP key for boost, they did not come from this project.
 | Git tag | Points at the commit the release was built from | `git verify-tag` is *not* applicable — tags are unsigned; the provenance attestation is the authority |
 | Release notes | Assembled from the merged pull requests in that release | [Releases page](https://github.com/jonnyeclectic/boost/releases) |
 
+## VEX: findings that do not affect boost
+
+The SBOM says what is in a release; a separate, continuously-updated
+[OpenVEX](https://openvex.dev/) document says which known findings against
+those components don't actually affect boost, with the reasoning attached.
+It is not published per release — it is always current at
+[`docs/vex/openvex.json`](vex/openvex.json). See
+[security-design.md](security-design.md#vex-accounting-for-findings-that-dont-affect-boost).
+
 ## Can you rebuild it yourself? Yes — the measurement
 
 A reproducible build lets a third party rebuild the artifact from source and

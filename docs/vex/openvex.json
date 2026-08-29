@@ -1,0 +1,61 @@
+{
+  "@context": "https://openvex.dev/ns/v0.2.0",
+  "@id": "https://jonnyeclectic.github.io/boost/vex/openvex.json",
+  "author": "the boost project (https://github.com/jonnyeclectic/boost)",
+  "timestamp": "2026-08-28T00:00:00Z",
+  "version": 1,
+  "statements": [
+    {
+      "vulnerability": {
+        "name": "gitleaks:leaked-secret-detection"
+      },
+      "products": [
+        {
+          "@id": "pkg:pypi/boost-skill-cli"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "`tests/unit/test_secretscan.py` exists to prove `boost_cli/core/secretscan.py`\nflags private keys and API tokens, so it ships synthetic examples of both by\ndesign — strings shaped exactly like the credentials gitleaks' own ruleset\nlooks for. gitleaks correctly matches the shape; none of the matched strings\nis a real, working credential, was ever live, or grants access to anything.\n`.gitleaks.toml` allowlists only this one file, by exact path, and the\nallowlist's own comment states why: nothing else in the repository is\nexcluded from the scan."
+    },
+    {
+      "vulnerability": {
+        "name": "codeql:py/clear-text-logging-sensitive-data"
+      },
+      "products": [
+        {
+          "@id": "pkg:pypi/boost-skill-cli"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "vulnerable_code_not_present",
+      "impact_statement": "CodeQL's `py/clear-text-logging-sensitive-data` query flags\n`boost trust add`'s success line, which prints the trusted key's name and\nminisign fingerprint, because the argument is user-supplied and `fingerprint`\nreads like a credential name. It is not one: the value is a minisign\n**public** key fingerprint, which is meant to be published, and printing it is\nthe entire point of the command — it is how a user checks by eye that the key\nthey just trusted matches the one the publisher advertises. The class of data\nthe query exists to catch (a secret, token, or password) is not present in\nwhat is logged, so the pattern the rule looks for does not apply here. An\nearlier automated fix that replaced this line with a constant string removed\nthe only verification `trust add` offers; the line was restored, the\nsuppression carries this reasoning inline\n(`# codeql[py/clear-text-logging-sensitive-data]`), and\n`tests/functional/test_tap_signing.py` pins the output so it cannot be quietly\ndropped a second time."
+    },
+    {
+      "vulnerability": {
+        "name": "zizmor:adhoc-packages"
+      },
+      "products": [
+        {
+          "@id": "pkg:pypi/boost-skill-cli"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "inline_mitigations_already_exist",
+      "impact_statement": "zizmor's `adhoc-packages` rule flags installing packages without a lockfile,\nbecause an unpinned install can resolve to a tampered or unexpectedly newer\npackage. Two workflows do this on purpose: `theme-lint.yml` installs\nmajor-pinned linters with `--no-save` into an empty checkout — boost ships no\n`package.json`, so a lockfile would exist solely for this one step — and\n`visual.yml` installs a pinned `puppeteer-core` from\n`tests/visual/package.json`, also `--no-save`. Both run on an ephemeral\nrunner, hold only `contents: read`, and their output gates nothing but\nthemselves — a compromised lint or screenshot tool in either job cannot reach\na secret or influence a later, privileged job."
+    },
+    {
+      "vulnerability": {
+        "name": "zizmor:dangerous-triggers"
+      },
+      "products": [
+        {
+          "@id": "pkg:pypi/boost-skill-cli"
+        }
+      ],
+      "status": "not_affected",
+      "justification": "inline_mitigations_already_exist",
+      "impact_statement": "zizmor's `dangerous-triggers` rule flags `workflow_run`, because the classic\nfailure mode is a privileged run executing pull-request-controlled code. Four\nworkflows use it — `ci-failure-issue.yml`, `publish.yml`, `post-deploy.yml`,\n`sbom.yml` — and each carries the mitigation that makes the pattern safe in\nits specific case, recorded inline in `.github/zizmor.yml`: none of them\nchecks out the triggering run's head SHA (each explicitly checks out `main`,\na release tag, or nothing at all), so no code a fork's pull request could\ninfluence ever runs in the privileged context. `publish.yml`, the one job that\nholds write credentials (PyPI Trusted Publisher OIDC), is additionally scoped\nto `push` events from this repository only — a fork PR opened from a branch\nnamed `main` cannot satisfy that filter. `sbom.yml` is gated on\n`head_repository == this repository` for the same reason. The remaining two\nhold only `contents: read` and no secrets."
+    }
+  ]
+}
