@@ -213,10 +213,9 @@ of the security-design document for the full account.
 
 ## Gold
 
-Gold is **23** criteria on top of silver. Fifteen are Met, two are N/A, five
-are Unmet, and one is a question only the maintainer can answer. Three of the
-five Unmet are about how many people work on boost rather than about the code,
-so no pull request can close them.
+Gold is **23** criteria on top of silver. Sixteen are Met, two are N/A and
+five are Unmet. Three of the five are about how many people work on boost
+rather than about the code, so no pull request can close them.
 
 That count is worth a note, because an earlier version of this section said 21
 and listed 21. The two it dropped were `require_2FA` and `secure_2FA` — the
@@ -226,10 +225,10 @@ like a plausible total, so nothing flagged it; the gap only appeared on the
 submission form, where 23 rows were waiting. A count that looks reasonable is
 not a checked count.
 
-Read this section as the honest ceiling. Seventeen of twenty-three is where
-boost stops on its own: of the six that remain, two are engineering (a
-reproducible sdist, a host that sets response headers), three are a recruiting
-problem, and one is `secure_2FA`.
+Read this section as the honest ceiling. Eighteen of twenty-three is where
+boost stops on its own: of the five that remain, two are engineering (a
+reproducible sdist, a host that sets response headers) and three are a
+recruiting problem.
 
 ### Prerequisites and project oversight
 
@@ -253,7 +252,7 @@ problem, and one is `secure_2FA`.
 | Criterion | Cat. | Answer | Evidence |
 |---|---|---|---|
 | `require_2FA` | MUST | **Met** | GitHub has required two-factor authentication for accounts that contribute code since March 2023, and the repository, its Actions secrets and the Pages site all sit behind that account. `MAINTAINERS.md` records the credential as "GitHub account with 2FA". |
-| `secure_2FA` | SHOULD | **Unanswered** | Whether the maintainer's second factor is cryptographic (a security key, a passkey, or a time-based one-time password) rather than SMS is a fact about a personal account, not about this repository — nothing here can establish it, and guessing would be exactly the kind of plausible-sounding answer this document exists to avoid. It stays unanswered until the maintainer answers it. It is a SHOULD, so it does not block the level. |
+| `secure_2FA` | SHOULD | **Met** | The maintainer's second factor is a **passkey** — FIDO2/WebAuthn, so the authenticator signs a challenge bound to the origin and there is no shared secret to phish, replay or intercept. That is the strongest of the mechanisms the criterion accepts, and unlike SMS it is not a plaintext channel. Worth noting how this answer was reached: nothing in the repository can establish a fact about a personal account, so it was left unanswered and asked rather than inferred from the fact that GitHub mandates 2FA — which it satisfies with SMS too. |
 
 ### Coding standards
 
