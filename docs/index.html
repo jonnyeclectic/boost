@@ -964,7 +964,9 @@ command -v pipx &gt;/dev/null &amp;&amp; echo <span class="yv">"pipx ok"</span> 
       <p class="sec-sub">Install only what the check flagged. On macOS one Homebrew line covers all three
         &mdash; on Debian/Ubuntu it is <code>sudo apt install python3.13 git pipx</code>.
         <code>pipx ensurepath</code> puts <code>~/.local/bin</code> on your PATH, and the new
-        shell is what makes that take effect.</p>
+        shell is what makes that take effect. If it answers that the directories are
+        <em>already</em> appended and suggests <code>--force</code>, your PATH is fine
+        &mdash; that is success, not an error.</p>
 
       <div class="window install-box reveal">
         <div class="bar">

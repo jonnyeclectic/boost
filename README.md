@@ -68,7 +68,10 @@ exec $SHELL -l
 ```
 
 On Debian/Ubuntu: `sudo apt install python3.13 git pipx`, then the same
-`pipx ensurepath` and new shell. `ensurepath` puts `~/.local/bin` on your PATH
+`pipx ensurepath` and new shell. If `ensurepath` answers `All pipx binary
+directories have been appended to PATH ... try again with the '--force' flag`,
+that is it reporting the PATH is already set up — you are done, and `--force`
+is not what you want. `ensurepath` puts `~/.local/bin` on your PATH
 and the fresh shell is what makes that take effect — skipping it is the other
 way to end up at `boost: command not found`.
 
