@@ -166,8 +166,24 @@ jobs:
         env:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.release.outputs.resolved_version }}
         run: |
-          python -m pip -q install build twine
+          # Hash-pinned (requirements/release-tools.txt, generated from the .in
+          # by scripts/lock_toolchain.py) — the same file package-metadata.yml
+          # and pip-audit.yml already install from. An unpinned `pip install
+          # build twine` meant the toolchain that produced last month's wheel
+          # was not recoverable from the repository.
+          python -m pip -q install -r requirements/release-tools.txt
+          # SOURCE_DATE_EPOCH pinned to the released commit, not the wall clock
+          # `python -m build` runs at — this is what makes the wheel's zip
+          # entries reproducible (setuptools honours it) and what
+          # normalize_sdist.py below clamps the sdist to.
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           python -m build
+          # setuptools has no equivalent knob for the sdist (pypa/setuptools
+          # #2133, open since 2020): it writes each member's real build-time
+          # mtime and the builder's uid/gid/user name regardless of
+          # SOURCE_DATE_EPOCH. Normalise it before it is checked or attested —
+          # see scripts/normalize_sdist.py and docs/verifying-releases.md.
+          python scripts/normalize_sdist.py dist/*.tar.gz
           twine check dist/*
 
       - name: attest build provenance (SLSA)
