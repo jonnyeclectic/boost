@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Curation guarantees for the bundled registry catalog's focus domains.
 
 ``boost tap --catalog --category <slug>`` is only worth offering if every

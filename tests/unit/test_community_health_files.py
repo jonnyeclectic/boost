@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit test: the GitHub community-health files exist and are wired up.
 
 A malformed issue form does not error anywhere a human will see — GitHub just

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Scan installed skill content for embedded secrets & credentials (stdlib).
 
 A third-party skill can ship a hard-coded credential — an AWS key, a GitHub

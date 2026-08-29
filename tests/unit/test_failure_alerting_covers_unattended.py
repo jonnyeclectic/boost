@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: every unattended workflow is watched by the failure alerting.
 
 ``ci-failure-issue.yml`` opens a tracking issue when a watched workflow fails on

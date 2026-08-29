@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/normalize_sdist.py — the sdist reproducibility fix.
 
 setuptools writes each tar member's real mtime, plus the builder's uid/gid/user

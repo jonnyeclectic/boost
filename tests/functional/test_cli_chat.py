@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Functional tests: `boost chat`, in-process.
 
 The engine is covered in tests/unit/test_chat.py. This pins the CLI contract —

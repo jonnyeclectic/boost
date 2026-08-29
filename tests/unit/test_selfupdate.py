@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: boost_cli/core/selfupdate.py — install-method detection.
 
 Getting this wrong is worse than the bug it replaces: pointing pip at a pipx

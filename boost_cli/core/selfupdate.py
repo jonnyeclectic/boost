@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """How this boost was installed, and the command that upgrades it in place.
 
 `boost self-update` assumed a git checkout and told everyone else to abandon

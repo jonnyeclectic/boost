@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: the hash-pinned dev/CI toolchain (requirements/*.txt).
 
 These assert the lock's *invariants* rather than its contents — a version bump

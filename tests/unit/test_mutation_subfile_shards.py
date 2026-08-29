@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: splitting one file's mutants across shards.
 
 Sharding took the mutation gate from ~28 minutes to ~12, but it could not go

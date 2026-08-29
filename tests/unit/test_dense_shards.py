@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Per-registry vector shards: export one tap's vectors, import them elsewhere.
 
 Measured on this machine: embedding 743 entries (3,740 chunks) with the shipped

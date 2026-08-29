@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for scripts/perf_gate.py — the scaling-ratio decision logic."""
 from __future__ import annotations
 

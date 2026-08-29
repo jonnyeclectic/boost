@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """`dense.status()` must not read the vector store to answer a search.
 
 Every `boost search` that BM25 answers alone ends in `_hint_semantic_search`,

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Kind-conformance sweep: every command treats all three item kinds alike.
 
 The lock file has three sections — skills, rules, workflows — and for a long

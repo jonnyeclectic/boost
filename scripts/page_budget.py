@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Bound how large the generated docs pages are allowed to get.
 
 WHY THIS EXISTS. `docs/roadmap.html` scored 0.810, 0.840 and 0.850 across the

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Fail a pull request that does not contain the base branch's tip.
 
 Every merge to `main` cuts a PyPI release, and two pull requests that are each

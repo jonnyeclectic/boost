@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: `boost clean` never deletes boost's own derived cache files.
 
 ``clean`` sweeps ``~/.boost/cache/*.json`` whose stem is not a configured tap

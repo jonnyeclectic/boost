@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Ed25519 signature *verification*, pure standard library.
 
 boost's runtime is dependency-free, so it cannot lean on ``cryptography`` or a

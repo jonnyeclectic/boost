@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: core/browse.py — the logic behind `boost browse`.
 
 The TUI's drawing lives in the command layer, but everything that can be

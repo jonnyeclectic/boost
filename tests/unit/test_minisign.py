@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: core/minisign.py — parse & verify minisign keys/signatures.
 
 Two layers of oracle: FROZEN blobs (minted once, embedded as literals) that a

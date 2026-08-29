@@ -5,7 +5,7 @@ name: licenses
 # pip-audit gates known CVEs; nothing gated licence *terms*. boost ships a
 # stdlib-only runtime, so the whole exposure is the opt-in extras — `[eval]`
 # alone resolves to 94 packages including the pinned langchain stack — and none
-# of them had ever been checked against the project's own GPL-3.0.
+# of them had ever been checked against the project's own licence.
 #
 # Path-filtered on purpose, and therefore NOT requireable (see
 # .github/required-checks.txt for why a path-filtered check must stay out of
@@ -80,7 +80,7 @@ jobs:
           /tmp/licenv/bin/pip -q install "$INSTALL"
           /tmp/licenv/bin/pip -q install -r requirements/release-tools.txt
           /tmp/licenv/bin/pip-licenses --format=json > /tmp/licenses.json
-      - name: check compatibility with GPL-3.0
+      - name: check compatibility with Apache-2.0
         run: python3 scripts/check_licenses.py /tmp/licenses.json
       - name: job summary
         if: always()

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: boost_cli/core/staleness.py — the single-source staleness/drift
 decision that cmd_update, cmd_outdated and _drift_status now render.
 

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: boost_cli/core/bootstrap.py — the one-command setup seam.
 
 `boost mcp` is the only command a new user is told to run. Before this module

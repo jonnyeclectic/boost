@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Property-based tests (Hypothesis) for the parsers.
 
 These complement the example-based unit suite: mutmut proves the unit tests are

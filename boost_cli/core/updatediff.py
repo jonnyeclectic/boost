@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Content-diff gate for ``boost update``.
 
 An in-place update silently overwrites an installed skill with whatever the tap

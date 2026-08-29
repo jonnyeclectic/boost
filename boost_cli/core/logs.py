@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Diagnostic logging & crash reporting — boost's black box recorder.
 
 This is separate from two neighbouring concerns:

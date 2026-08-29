@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Stamp the copyright + SPDX header onto every source file, idempotently.
 
 Why per-file, when LICENSE is right there at the root: a file that travels out
@@ -10,12 +10,18 @@ reader never has to guess which project it came from or what they may do with
 it. OpenSSF Best Practices gold asks for exactly this (``copyright_per_file``,
 ``license_per_file``).
 
-The expression is ``GPL-3.0-only`` because that is what the repository actually
-says. ``LICENSE`` is the plain GPLv3 text, and nothing anywhere --
-``pyproject.toml``, ``README.md``, any source file -- grants "or any later
-version". SPDX renders a stated GPLv3 with no later-version clause as
-``-only``. Whether to add that grant is the copyright holder's decision, not a
-lint fix: change ``SPDX_ID`` below, re-run this script, and the sweep follows.
+The expression is ``Apache-2.0``. boost moved off GPL-3.0 deliberately: the
+copyleft protected nothing where boost is actually used -- running the CLI is
+not distribution and an installed skill is not a derivative work -- while
+costing everything on ``boost_langchain``, which exists to be imported into
+other people's applications and whose licence therefore decided theirs. Every
+comparable tool is permissive (pip, poetry, uv, pipx, ruff, mypy are MIT;
+Homebrew, which boost names itself after, is BSD-2-Clause). Apache-2.0 adds an
+explicit patent grant on top of that.
+
+Changing it again is one edit: set ``SPDX_ID`` below and re-run. The sweep
+*migrates* a header carrying a different expression rather than only adding a
+missing one, so the constant stays the single source of truth.
 
 Usage::
 
@@ -24,13 +30,14 @@ Usage::
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 COPYRIGHT = "Copyright the boost contributors."
-SPDX_ID = "GPL-3.0-only"
+SPDX_ID = "Apache-2.0"
 SPDX_LINE = f"SPDX-License-Identifier: {SPDX_ID}"
 HEADER = f"# {COPYRIGHT}\n# {SPDX_LINE}\n"
 
@@ -67,9 +74,27 @@ def source_files() -> list[Path]:
     return found
 
 
+_SPDX_ANY = re.compile(r"^(\s*#\s*)SPDX-License-Identifier:\s*(\S+)\s*$", re.M)
+
+
 def needs_header(text: str) -> bool:
     head = "\n".join(text.splitlines()[:10])
     return COPYRIGHT not in head or SPDX_LINE not in head
+
+
+def stale_expression(text: str) -> str | None:
+    """The wrong SPDX id already in the header, if there is one.
+
+    A file that carries `SPDX-License-Identifier: <something else>` must be
+    rewritten, not stamped a second time -- otherwise a relicence would leave
+    every file declaring two licences at once, which is worse than declaring
+    none.
+    """
+    head = "\n".join(text.splitlines()[:10])
+    found = _SPDX_ANY.search(head)
+    if found and found.group(2) != SPDX_ID:
+        return found.group(2)
+    return None
 
 
 def stamp(text: str) -> str:
@@ -79,6 +104,9 @@ def stamp(text: str) -> str:
     shebang, and the kernel refuses to run the script. Everything else takes
     the header at the very top, above the module docstring.
     """
+    stale = stale_expression(text)
+    if stale is not None:
+        return _SPDX_ANY.sub(lambda m: f"{m.group(1)}{SPDX_LINE}", text, count=1)
     if text.startswith("#!"):
         shebang, _, rest = text.partition("\n")
         return f"{shebang}\n{HEADER}{rest}"
@@ -87,7 +115,9 @@ def stamp(text: str) -> str:
 
 def main(argv: list[str]) -> int:
     check = "--check" in argv
-    changed = [p for p in source_files() if needs_header(p.read_text(encoding="utf-8"))]
+    changed = [p for p in source_files()
+               if needs_header(p.read_text(encoding="utf-8"))
+               or stale_expression(p.read_text(encoding="utf-8")) is not None]
     if not check:
         for path in changed:
             path.write_text(stamp(path.read_text(encoding="utf-8")), encoding="utf-8")

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/build_scale_corpus.py — the Tier 1b scale corpus list.
 
 WHY IT EXISTS. The required gate measures 10,152 entries; a real install carries

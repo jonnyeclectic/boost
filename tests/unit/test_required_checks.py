@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/check_required_checks.py — the required-check drift gate.
 
 The gate's whole job is to fail when the required-status-check list stops

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Which agent CLIs can boost install *hooks* into, and how they differ.
 
 ``boost hooks`` used to speak Claude Code and nothing else. Gemini CLI grew a

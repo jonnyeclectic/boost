@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Tap provenance: is this clone signed by a key we trust?
 
 A tap records the ``commit`` it is pinned at, which binds *content* (git is a

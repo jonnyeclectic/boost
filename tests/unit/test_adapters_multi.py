@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for core.adapters multi-agent path — subagent detection and the
 CrewAI Crew / LangGraph StateGraph renderers.
 

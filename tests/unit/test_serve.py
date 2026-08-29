@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: boost_cli/core/serve.py — the `boost serve` HTTP catalog server.
 
 `route` is the pure request→response core (no socket), so every endpoint and

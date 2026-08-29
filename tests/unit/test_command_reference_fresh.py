@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Committed command reference stays in lockstep with the CLI.
 
 ``docs/commands.html`` is generated from ``boost_cli.cli.COMMANDS`` and each

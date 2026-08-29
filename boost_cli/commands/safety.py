@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Installed-skill safety & integrity commands — audit, verify, attest, quarantine.
 
 Lifted out of ``quality.py`` (which had grown to fifteen commands): these four

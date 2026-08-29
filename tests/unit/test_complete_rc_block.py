@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: the managed block `boost completions --install` writes to an rc file.
 
 An rc file is the user's own hand-written config, so it is the worst file boost

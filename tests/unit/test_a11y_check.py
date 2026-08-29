@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/a11y_check.py — the WCAG 2.1 AA gate for the docs pages.
 
 The gate itself only reports what it finds, so these pin that it *finds* the

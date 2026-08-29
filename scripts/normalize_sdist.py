@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Rewrite a built sdist so two builds of the same commit are byte-identical.
 
     SOURCE_DATE_EPOCH=$(git log -1 --format=%ct) \\

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Functional tests: `boost run` — adapt + wire tools + (optionally) execute.
 
 Execution needs the OpenAI Agents SDK (not installed in CI) and a key, so these

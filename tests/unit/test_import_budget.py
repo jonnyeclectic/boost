@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/import_budget.py — the startup lazy-import guard.
 
 The pure parsing/denylist logic is tested directly; a single integration test

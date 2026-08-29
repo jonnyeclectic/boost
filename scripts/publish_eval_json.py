@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Reduce an eval run to the small public JSON the docs site and the portfolio read.
 
     python3 scripts/publish_eval_json.py                    # from evals/baseline.json

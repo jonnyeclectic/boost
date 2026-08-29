@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: core.workflows — pure workflow-materialization logic.
 
 workflows.py has no side effects: it decides which slot a workflow belongs in

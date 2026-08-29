@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """boost hooks — scope- and host-aware management of agent hooks in settings.json.
 
     boost hooks add SessionStart --command 'boost bmad orient' --name bmad \

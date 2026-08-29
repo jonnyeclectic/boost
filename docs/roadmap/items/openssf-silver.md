@@ -28,7 +28,7 @@ freshness check.
 <code>MAINTAINERS.md</code> did not cover — it lists roles, not how a decision gets made or
 what happens when people disagree. <code>GOVERNANCE.md</code> now says it plainly: a
 benevolent-dictator model, the gates decide what they can, a "no" is recorded rather than
-dropped, and the real backstop on a single maintainer is the GPL and a public history —
+dropped, and the real backstop on a single maintainer is the licence and a public history —
 anyone who thinks it is run badly can fork and prove it. <code>documentation_achievements</code>
 wanted the badges hyperlinked from the front page.
 <b>What stays honestly Unmet</b>, all SHOULD or SUGGESTED, so the badge still passes:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Golden-set recommendation eval for boost's AI pick stage (Tier 2b).
 
 Tier 1 (eval_retrieval.py) grades *retrieval* — does the right skill come back

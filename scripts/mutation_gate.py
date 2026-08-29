@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Mutation-strength gate: fail unless >= MIN_SCORE% of mutants are killed.
 
 Usage:  python3 scripts/mutation_gate.py [--run] [--min 80]

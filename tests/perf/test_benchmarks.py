@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """pytest-benchmark suite for perf-sensitive core paths + a few CLI commands
 end-to-end. Opt-in (`make bench`) — not part of `make check`. Deliberately
 small fixtures (the shared fixture-tap, 5 items) so the suite stays cheap.

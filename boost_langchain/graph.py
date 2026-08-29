@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """A LangGraph node that pulls the right skill into a run, mid-run.
 
 The alternative this exists to avoid is stuffing every procedure into the

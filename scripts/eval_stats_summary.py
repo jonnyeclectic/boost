@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Render the `--stats --json` significance payload as a Markdown summary.
 
 Turns the ranx paired t-test output from ``eval_retrieval.py --stats --json``

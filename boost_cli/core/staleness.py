@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Single source of truth for "is an installed skill stale vs its tap?".
 
 ``cmd_update`` (pkg.py), ``cmd_outdated`` (taps.py) and ``_drift_status``

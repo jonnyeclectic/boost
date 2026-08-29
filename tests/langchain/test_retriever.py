@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end: BoostRetriever against a real tapped + indexed corpus.
 
 Every test drives ``invoke()`` — the public Runnable API a chain actually

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: core.installscan — the shared install-time content scan.
 
 This is the module both front ends call, so the behaviour pinned here is what

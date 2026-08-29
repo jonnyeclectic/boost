@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit test: .github/dependabot.yml — what actually gets bump PRs.
 
 Dependabot only scans manifests under an entry's declared ``directory``, so

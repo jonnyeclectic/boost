@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """What MCP servers does a skill need, and how do we wire them?
 
 Mining boost's catalog surfaces a recurring shape: skills that only work paired

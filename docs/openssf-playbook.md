@@ -176,7 +176,8 @@ Three specific honesty traps worth naming, all of which caught this project:
   triage keeps that finding open rather than dismissing it, because the score is
   accurate. The badge form nearly contradicted the repo's own honesty.
 - **Re-verify anything you inherited.** A note said the licence was MIT. It is
-  GPL-3.0. That single check changed three answers.
+  GPL-3.0 at the time, and is Apache-2.0 now. That single check changed
+  three answers.
 
 ## Step 6 — filling the forms
 

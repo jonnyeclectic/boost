@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Generate ``docs/commands.html`` — the browsable command reference.
 
 Every command is rendered from the CLI's *own* definitions —
@@ -347,7 +347,7 @@ _PAGE = """<!DOCTYPE html>
     <a href="https://github.com/jonnyeclectic/boost">GitHub</a> &middot;
     <a href="https://pypi.org/project/boost-skill-cli/">PyPI</a> &middot;
     <a href="https://jonnyeclectic.github.io/portfolio/">Portfolio</a> &middot;
-    Released under the GPL-3.0 license
+    Released under the Apache-2.0 license
   </p>
 </footer>
 <script>

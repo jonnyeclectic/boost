@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: boost_cli/core/embed.py — the optional embeddings bridge.
 
 Every network call is monkeypatched; provider selection, the exact request

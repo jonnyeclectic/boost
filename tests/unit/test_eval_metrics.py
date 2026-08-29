@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Exact-arithmetic tests for the eval harness metrics (evals/metrics.py).
 
 The eval harness is a measuring instrument, so its own arithmetic has to be

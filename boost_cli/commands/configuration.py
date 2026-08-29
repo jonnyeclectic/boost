@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Configuration commands: config, clean, create, policy, onboard,
 completions, schedule, serve, mcp, self-update."""
 from __future__ import annotations

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: the link-ownership helpers behind `boost heal`.
 
 `heal` deletes what it decides it owns, so the decision is worth pinning
