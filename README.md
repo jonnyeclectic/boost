@@ -62,7 +62,9 @@ command -v pipx >/dev/null && echo "pipx ok" || echo "pipx MISSING"
 Install only what the check flagged — on macOS:
 
 ```bash
-brew install python@3.13 git pipx   # drop whatever already said ok
+brew install python@3.13     # only if the check said python TOO OLD
+brew install git             # only if it said git MISSING
+brew install pipx            # only if it said pipx MISSING
 pipx ensurepath
 exec $SHELL -l
 ```

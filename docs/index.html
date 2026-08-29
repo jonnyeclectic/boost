@@ -970,10 +970,12 @@ command -v pipx &gt;/dev/null &amp;&amp; echo <span class="yv">"pipx ok"</span> 
 
       <div class="window install-box reveal">
         <div class="bar">
-          <div class="label">step 2 &mdash; install what is missing, macOS</div>
+          <div class="label">step 2 &mdash; install only what is missing, macOS</div>
           <button class="copy-btn" data-copy="prereq-fix" type="button">Copy</button>
         </div>
-        <pre id="prereq-fix">brew install python@3.13 git pipx <span class="cm"># drop whatever already said ok</span>
+        <pre id="prereq-fix">brew install python@3.13     <span class="cm"># only if the check said python TOO OLD</span>
+brew install git             <span class="cm"># only if it said git MISSING</span>
+brew install pipx            <span class="cm"># only if it said pipx MISSING</span>
 pipx ensurepath
 <span class="cm"># reopen the shell so PATH picks up ~/.local/bin</span>
 exec $SHELL -l</pre>
