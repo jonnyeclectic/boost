@@ -423,6 +423,61 @@ class TestVisibleLen:
         assert output.visible_len("\033[38;2;34;211;238m●\033[0m") == 1
 
 
+class TestVisibleLenWideChars:
+    """CJK and emoji render two terminal columns wide; len() counts one
+    codepoint. A width function that disagrees with the terminal is what
+    misaligns a table the moment a cell holds either."""
+
+    def test_cjk_counts_two_columns_per_character(self):
+        assert output.visible_len("名") == 2
+        assert output.visible_len("名称") == 4
+
+    def test_emoji_counts_two_columns(self):
+        assert output.visible_len("🎉") == 2
+
+    def test_mixed_ascii_and_wide(self):
+        assert output.visible_len("cjk-名称") == len("cjk-") + 4
+
+    def test_ascii_is_unchanged(self):
+        assert output.visible_len("hello world") == 11
+
+
+class TestClipVisibleWideChars:
+    def test_never_splits_a_wide_character(self):
+        # "名称测试" is 8 display columns; clipping to 5 must not cut a
+        # character in half — the ellipsis absorbs the remainder instead.
+        clipped = output._clip_visible("名称测试", 5)
+        assert output.visible_len(clipped) <= 5
+        # every character in the result (ellipsis aside) is a whole char from
+        # the source, never a truncated multi-byte sequence.
+        assert set(clipped) - {"…"} <= set("名称测试")
+
+    def test_clipped_width_never_exceeds_target_for_wide_text(self):
+        for w in range(1, 12):
+            assert output.visible_len(
+                output._clip_visible("名称测试abcdef", w)) <= w
+
+
+class TestTableWideCharAlignment:
+    """End-to-end: the bug as a user would see it — a table column with an
+    emoji or CJK cell must still align with its plain-ASCII neighbors."""
+
+    def test_wide_cell_column_aligns_with_plain_rows(self, capsys,
+                                                       monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        output.table([
+            ("normal", "1"),
+            ("emoji 🎉", "22"),
+            ("名称测试", "333"),
+        ])
+        lines = capsys.readouterr().out.rstrip("\n").split("\n")
+        # Every row is name-column (fixed, left-padded) + sep + right-aligned
+        # number: with widths measured correctly every row renders to the
+        # same total column count, which is only true when the padding math
+        # accounts for the wide characters' real display width.
+        assert len({output.visible_len(ln) for ln in lines}) == 1
+
+
 class TestPanel:
     def test_single_line_plain(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")
@@ -531,6 +586,58 @@ class TestEmptyState:
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
         assert output.empty_state("x", hint="y") == (
             "  \033[2m○ x\033[0m\n  \033[2m→ y\033[0m")
+
+
+class TestEmptyStateWrap:
+    """empty_state's opt-in ``wrap``, matching warn/info/dim/kv's pattern.
+
+    cohort/replay/pulse/who all print a one-line "nothing here" message via
+    plain out.info() with no width awareness, and cohort's hint embeds a
+    backtick-quoted command — both overflow a narrow pane. empty_state()
+    already exists as the codebase's own standard affordance for these
+    screens; it just never learned to wrap.
+    """
+
+    LONG = " ".join(["word"] * 12)
+
+    def test_default_wrap_false_is_unchanged(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        assert output.empty_state(self.LONG) == "  ○ " + self.LONG
+
+    def test_message_wraps_to_the_pane(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: 40)
+        rendered = output.empty_state(self.LONG, wrap=True)
+        lines = rendered.split("\n")
+        assert len(lines) > 1
+        assert all(output.visible_len(ln) <= 40 for ln in lines)
+        assert all(ln.startswith("  ") for ln in lines)
+
+    def test_hint_wraps_independently_and_keeps_its_marker(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: 40)
+        rendered = output.empty_state("short", hint=self.LONG, wrap=True)
+        lines = rendered.split("\n")
+        assert lines[0] == "  ○ short"
+        assert lines[1].startswith("  → ")
+        assert all(output.visible_len(ln) <= 40 for ln in lines)
+
+    def test_backtick_command_in_hint_stays_atomic(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: 60)
+        hint = ("create one: `boost cohort create pilot "
+               "--skills tdd-workflow --percent 50`")
+        rendered = output.empty_state("no cohorts defined", hint=hint,
+                                      wrap=True)
+        cmd = "`boost cohort create pilot --skills tdd-workflow --percent 50`"
+        assert any(cmd in ln for ln in rendered.split("\n"))
+
+    def test_narrow_pane_does_not_wrap_by_default(self, monkeypatch):
+        # wrap=False (the default) must still be safe at any width — no crash,
+        # single line, same as before this feature existed.
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "term_width", lambda: 10)
+        assert output.empty_state(self.LONG).count("\n") == 0
 
 
 class TestTitlebar:

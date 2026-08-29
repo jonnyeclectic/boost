@@ -266,6 +266,27 @@ class TestInfo:
         r = boost("info", "definitely-nope", expect=1)
         assert "no skill named 'definitely-nope' in any tap" in r.err
 
+    def test_description_wraps_to_a_narrow_pane(self, boost, installed,
+                                                 monkeypatch):
+        # "Structured ideation & divergent-thinking facilitation" ran the kv
+        # row to 69+ columns via a hardcoded textwrap width=62 that ignored
+        # the real terminal — it neither shrank for a narrow pane nor grew
+        # for a wide one.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("info", "brainstorming")
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
+        assert "Structured ideation" in r.out
+        assert "divergent-thinking" in r.out
+        assert "facilitation" in r.out
+
+    def test_description_does_not_wrap_needlessly_at_full_width(
+            self, boost, installed, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "200")
+        r = boost("info", "brainstorming")
+        assert ("Structured ideation & divergent-thinking facilitation"
+               in r.out)
+
 
 class TestInfoQualifiedName:
     """`boost info owner/repo:skill` — the form the ambiguity error tells the
@@ -412,6 +433,28 @@ class TestPreview:
         assert "Rules" in r.out
         assert "diverge -> cluster -> converge" in r.out   # fence content
         assert " • Never critique during the diverge phase." in r.out
+
+    def test_prose_wraps_to_a_narrow_pane(self, boost, installed, monkeypatch):
+        # "When the user wants to explore ideas, facilitate structured
+        # divergent thinking:" (82 cols with its 2-space indent) printed
+        # verbatim regardless of terminal width — preview's whole job is to
+        # *render* the markdown, not dump it.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("preview", "brainstorming")
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
+        # the sentence must still be there, just folded across lines — check
+        # each half separately since the wrap point falls between them
+        assert "When the user wants to explore ideas" in r.out
+        assert "divergent thinking" in r.out
+
+    def test_fence_content_is_exempt_from_wrapping(self, boost, installed,
+                                                    monkeypatch):
+        # code inside a ``` fence is data, not prose — it must never be
+        # reflowed even when it would overflow a narrow pane.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("preview", "brainstorming")
+        assert "diverge -> cluster -> converge" in r.out
 
 
 # ── explain (no AI) ──────────────────────────────────────────────────────

@@ -266,3 +266,24 @@ class TestMainDispatch:
         assert cli.main(["taps"]) == 3
         assert "command taps is not implemented yet" in (
             capsys.readouterr().err)
+
+
+class TestPrintHelpColorRole:
+    """The command-name column is the same semantic role ("accent") as every
+    other command name in the CLI — search results, `boost info`'s badges,
+    etc. — all of which resolve through out.role("accent") to Aurora
+    truecolor cyan. print_help painted it with a raw 16-color ANSI CYAN
+    instead, so on a truecolor terminal the top-level help screen's command
+    names are a visibly different cyan than everywhere else."""
+
+    def test_command_names_use_the_accent_role_not_raw_cyan(
+            self, capsys, monkeypatch):
+        from boost_cli.core import output as out
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        cli.print_help()
+        rendered = capsys.readouterr().out
+        accent_code = out.rgb(*out.TOKENS["cyan"])
+        assert accent_code in rendered
+        # the raw 16-color escape must not appear standing in for it
+        assert out.CYAN not in rendered

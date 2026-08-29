@@ -128,7 +128,7 @@ def cmd_cohort(argv) -> int:
             raise BoostError("no cohort named %s" % args.name,
                             hint="list cohorts with `boost cohort list`")
         if not targets:
-            out.info("no cohorts defined")
+            print(out.empty_state("no cohorts defined"))
             return 0
         applied = skipped = 0
         for cname in targets:
@@ -174,8 +174,11 @@ def cmd_cohort(argv) -> int:
         print(json.dumps(data, indent=2))
         return 0
     if not rows:
-        out.info("no cohorts defined")
-        out.info(out.role("create one: `boost cohort create pilot --skills tdd-workflow --percent 50`", "muted"))
+        print(out.empty_state(
+            "no cohorts defined",
+            hint="create one: `boost cohort create pilot --skills "
+                 "tdd-workflow --percent 50`",
+            wrap=True))
         return 0
     out.table(rows, headers=("COHORT", "SKILLS", "ROLLOUT", "YOU"))
     print()
@@ -518,7 +521,9 @@ def cmd_pulse(argv) -> int:
         print(json.dumps(events, indent=2))
         return 0
     if not events:
-        out.info("no activity yet — events appear as you install and manage skills")
+        print(out.empty_state(
+            "no activity yet — events appear as you install and manage skills",
+            wrap=True))
         return 0
     for e in events:
         action = e.get("action", "?")
@@ -557,7 +562,9 @@ def cmd_replay(argv) -> int:
             print(json.dumps(history, indent=2))
             return 0
         if not history:
-            out.info("no lock history yet — every install/uninstall snapshots the lock file")
+            print(out.empty_state(
+                "no lock history yet — every install/uninstall snapshots "
+                "the lock file", wrap=True))
             return 0
         rows = []
         prev_items = None
@@ -693,8 +700,9 @@ def cmd_who(argv) -> int:
 
     events = journal.events(subject=args.skill) if args.skill else journal.events()
     if not events:
-        out.info("no journal activity yet — expertise builds as people install, "
-                 "edit, and evolve skills")
+        print(out.empty_state(
+            "no journal activity yet — expertise builds as people install, "
+            "edit, and evolve skills", wrap=True))
         return 0
 
     if args.skill:

@@ -772,8 +772,10 @@ _CONTEXT_DEFAULT = {"enabled": False, "rules": []}
 def cmd_context(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost context", description="Branch-aware skill activation")
-    sub = ap.add_subparsers(dest="action",
-                            metavar="status|enable|disable|map|unmap|apply")
+    # metavar="ACTION": the full "status|enable|disable|map|unmap|apply"
+    # spelling is one unbreakable token that overflowed the usage line at 60
+    # columns. Each subcommand still lists its own help= below.
+    sub = ap.add_subparsers(dest="action", metavar="ACTION")
     sp = sub.add_parser("status", help="show rules, enabled flag & branch")
     sp.add_argument("--json", action="store_true")
     sub.add_parser("enable", help="turn on branch-aware activation (runs apply)")
@@ -873,7 +875,8 @@ def _context_status(state: dict, as_json: bool) -> int:
     out.kv("branch", branch or "(not in a git repository)")
     rules = state.get("rules", [])
     if not rules:
-        out.info("no rules — add one with `boost context map 'feature/*' skill1,skill2`")
+        out.info("no rules — add one with `boost context map 'feature/*' "
+                "skill1,skill2`", wrap=True)
         return 0
     rows = [(r.get("pattern", "?"), ", ".join(r.get("skills", [])),
              "*" if branch and fnmatch.fnmatch(branch, r.get("pattern", "")) else "")
