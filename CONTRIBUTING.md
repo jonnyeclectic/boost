@@ -257,6 +257,17 @@ branch ruleset (**Settings → Rules → Rulesets**):
   gate before it can merge, so an incompatible pair can't both land — the second
   PR must include the first and re-run CI.
 
+> **Set it in the ruleset, and verify it from the API.** This repository asks
+> for that rule in two places, and for a while neither one enforced it. Classic
+> branch protection had `strict: true` *and* `enforce_admins: false`, so it
+> skipped the only account that merges; the active ruleset — no bypass actors,
+> so it does apply — had `strict_required_status_checks_policy: false`. Two
+> mechanisms, and the binding one had the safety off. Two PRs then merged into
+> a red `main`, which stopped the release guard arming and left two merged PRs
+> unreleased. Check the real state with
+> `gh api repos/jonnyeclectic/boost/rulesets/<id>`, never the settings page,
+> and note that the `branch-current` required check now backstops it.
+>
 > Check names must be **unique across workflows** — GitHub matches a required
 > check by name alone. Three names collided before this was written (`lint` in
 > ci/markdownlint/theme-lint, `audit` in lighthouse/pip-audit, `analyze` in

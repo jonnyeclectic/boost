@@ -87,3 +87,12 @@ onnx-inference
 # `sonar-analyze` (sonarcloud.yml) IS unfiltered and would be safe to require;
 # it is left out deliberately so an outage of a third-party service cannot
 # block a merge.
+
+# A pull request must contain main's tip before it can merge. GitHub can
+# enforce this natively and this repo asks it to twice, which is how it went
+# unenforced: classic protection has enforce_admins:false so it skips the one
+# account that merges, and the active ruleset had
+# strict_required_status_checks_policy:false. Two PRs each green against
+# different tips then merged into a red main. The ruleset is fixed; this check
+# is here because that setting is invisible config that already drifted once.
+branch-current
