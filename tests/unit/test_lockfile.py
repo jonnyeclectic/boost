@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/lockfile.py — v3 lock file + history snapshots."""
 from __future__ import annotations
 

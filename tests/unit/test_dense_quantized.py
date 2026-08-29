@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Binary quantization: the same answers, 27x less work.
 
 `vec0` has no ANN index, so a float32 `MATCH` computes a distance against every

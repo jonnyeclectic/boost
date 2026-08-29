@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the fuzz harnesses in tests/fuzz/ stay wired to the code.
 
 A fuzz target that stops importing, or whose invariants stop matching the

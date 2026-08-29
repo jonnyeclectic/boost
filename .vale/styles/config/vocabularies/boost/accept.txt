@@ -38,6 +38,7 @@ deserialization
 Dev
 DigitalOcean
 docsite
+docstring
 dotdir
 dotdirs
 dotfiles
@@ -57,12 +58,14 @@ GitOps
 glassmorphic
 Grafana
 GTM
+gzip
 gzipped
 hardcode
 Helm
 hotspots
 Huashu
 HubSpot
+idempotently
 JetBrains
 jonnyeclectic
 jonnyeclectic's
@@ -75,12 +78,15 @@ libsodium
 lookups
 lowercasing
 Magento
+maintainer's
 mcp
 mergeable
 minisign
 misconfiguration
 mitigations
 MLflow
+mtime
+mtimes
 mutmut
 mypy
 nonces
@@ -127,6 +133,7 @@ setuptools
 SHAs
 Shopify
 Sigstore
+Snyk
 SonarCloud
 stderr
 Stdlib

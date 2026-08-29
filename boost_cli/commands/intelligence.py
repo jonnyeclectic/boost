@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Intelligence commands: distill, simulate, infer, absorb, evolve,
 context, focus, impact.
 

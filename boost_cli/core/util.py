@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Small shared utilities: time, hashing, versions, skill quality scoring."""
 from __future__ import annotations
 

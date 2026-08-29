@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: `boost sync` repairs a skill whose SKILL.md is gone, not just a missing dir.
 
 Two commands tell the user that `boost sync` is the repair for a missing

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The [langchain] extra's packaging contract.
 
 boost_langchain ships INSIDE the boost-skill-cli wheel — a second top-level

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Retrieval-quality gate: fail on a floor breach or a significant regression.
 
 Usage:  python3 scripts/eval_gate.py [--run] [--results evals/results.json]

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests for workspace scope — `boost install --local`.
 
 The invariant under test everywhere here: a project install materializes REAL

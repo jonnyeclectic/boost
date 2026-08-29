@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 # Wall-clock benchmark of the real `boost` binary via hyperfine — the actual
 # fork+exec CLI, not the in-process pytest-benchmark suite (tests/perf).
 # Opt-in (`make bench-cli`); not part of `make check`. Degrades cleanly if

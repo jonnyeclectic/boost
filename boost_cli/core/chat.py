@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Conversational search over the tapped catalogue.
 
 ``boost chat`` sits on top of machinery that already exists — ``rag.retrieve_any``

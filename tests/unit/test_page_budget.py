@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: scripts/page_budget.py — bounding how large the docs pages get.
 
 WHY THIS FILE EXISTS. `docs/roadmap.html` scored 0.810, 0.840 and 0.850 across

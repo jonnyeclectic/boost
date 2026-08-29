@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: Intelligence commands, in-process.
 
 distill / simulate / infer / absorb / evolve / context / focus / impact.

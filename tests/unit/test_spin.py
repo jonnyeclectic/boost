@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/spin.Spinner — the TTY-guarded braille spinner."""
 from __future__ import annotations
 

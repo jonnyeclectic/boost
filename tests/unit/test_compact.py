@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: `boost compact` narrows existing clones to the Markdown cone.
 
 Taps clone sparse from now on, but a machine that has been tapping for a while

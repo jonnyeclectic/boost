@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Quality & Health commands — doctor, lint, drift, test, fingerprint, decay,
 heal, conflict, changelog, health, trust.
 

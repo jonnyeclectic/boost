@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Committed roadmap HTML stays in lockstep with its item source files.
 
 The roadmap boards are generated from ``docs/roadmap/items/*.md`` by

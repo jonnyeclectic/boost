@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Optional dense vector backend for RAG Phase 2 (the ``[rag]`` extra).
 
 Embeds every chunk (via :mod:`embed`) into a ``sqlite-vec`` virtual table and

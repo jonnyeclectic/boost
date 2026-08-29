@@ -77,6 +77,51 @@ PGP key for boost, they did not come from this project.
 | Git tag | Points at the commit the release was built from | `git verify-tag` is *not* applicable — tags are unsigned; the provenance attestation is the authority |
 | Release notes | Assembled from the merged pull requests in that release | [Releases page](https://github.com/jonnyeclectic/boost/releases) |
 
+## Can you rebuild it yourself? Partly — the measurement
+
+A reproducible build lets a third party rebuild the artifact from source and
+get the same bytes, which is a stronger guarantee than provenance alone:
+provenance says *this workflow produced these bytes*, reproducibility says
+*and here is how you check that without trusting the workflow*.
+
+boost is **not** fully reproducible today, and this is the measurement rather
+than an opinion. Two builds of the same commit, on the same machine and
+toolchain, seconds apart:
+
+```bash
+export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+python -m build --outdir dist-a .
+python -m build --outdir dist-b .
+shasum -a 256 dist-a/* dist-b/*
+```
+
+| Artifact | With `SOURCE_DATE_EPOCH` set | Without |
+|---|---|---|
+| Wheel (`.whl`) | **identical** | differs |
+| Source distribution (`.tar.gz`) | differs | differs |
+
+The wheel is reproducible once `SOURCE_DATE_EPOCH` is set, because
+`setuptools` honours it when stamping the zip entries. The sdist is not, and it
+is not a setting this project holds: `setuptools` writes each tar member's
+real mtime, and the builder's `uid`, `gid` and user name, into the sdist. Two
+builds two seconds apart therefore differ in 54 members — every directory, plus
+the files generated during the build (`PKG-INFO`, the `.egg-info` set) — and a
+build on another machine would differ in the ownership fields as well. The gzip
+header carries its own timestamp on top of that.
+
+Two things are still missing before boost could claim this, and both are
+recorded rather than hidden:
+
+1. `publish.yml` installs its build tooling unpinned (`pip install build
+   twine`), so the toolchain that produced last month's wheel is not
+   recoverable from the repository.
+2. The sdist needs the mtimes and ownership normalised, which means
+   post-processing the tarball or a `setuptools` release that clamps them.
+
+Until both are done, `build_reproducible` is answered **Unmet** in
+[openssf-badge.md](openssf-badge.md). Use the provenance attestation above,
+which is the guarantee boost does offer.
+
 ## Why the ordering in `publish.yml` matters
 
 The workflow attests **after** `twine check` and **before** the PyPI upload, so

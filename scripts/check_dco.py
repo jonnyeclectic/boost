@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Fail when a commit in the range lacks a Signed-off-by matching its author.
 
 The Developer Certificate of Origin (see the ``DCO`` file at the repository

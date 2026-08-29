@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Render a boost skill into another agent framework's native source.
 
 boost installs skills as files for editor-style agents (Claude Code, Cursor,

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Materialise the Tier 1 eval corpus at the exact commits it was measured on.
 
 WHY THIS EXISTS. `tests/eval/taps.txt` used to pin repository NAMES. Tapping is

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 # Tap the pinned Tier 1 eval corpus (tests/eval/taps.txt) into $BOOST_HOME so
 # scripts/eval_retrieval.py has the repos its golden set grades against. Used by
 # CI's lint job and by `make eval`.

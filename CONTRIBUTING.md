@@ -3,6 +3,40 @@
 Thanks for taking an interest! boost is deliberately small and dependency-free,
 so contributing is mostly about keeping the quality gates green.
 
+## Good first tasks
+
+Small, self-contained, and genuinely wanted. Each one is a real standing task
+with an exact file to edit, so you can start without asking anyone first — no
+waiting for an issue to be triaged. None of them require understanding the
+whole codebase.
+
+1. **Add a registry to the catalog.** Edit the `SKILLS` / `RULES` / `WORKFLOWS`
+   tuples in [`scripts/build_registries.py`](scripts/build_registries.py), run
+   it to regenerate `boost_cli/data/registries.json`, and run
+   `python3 scripts/build_scale_corpus.py`. Verify the repo exists first, and
+   measure `est_items` with `scripts/measure_registry.py` rather than guessing
+   — the file itself explains why a raw file count is wrong.
+2. **Add a query to the retrieval golden set.** One JSON line in
+   [`tests/eval/golden.jsonl`](tests/eval/golden.jsonl): a question a real user
+   would type, and the catalog items that should come back. This directly
+   improves the `eval` gate, and a query that the ranker gets *wrong* is more
+   valuable than one it already gets right.
+3. **Teach the prose linter a word.** A new product or tool name turns the
+   `vale` check red on its first use. Add it, sorted case-insensitively, to
+   [`.vale/styles/config/vocabularies/boost/accept.txt`](.vale/styles/config/vocabularies/boost/accept.txt).
+4. **Sharpen a command summary.** The one-line summaries in `COMMANDS`
+   ([`boost_cli/cli.py`](boost_cli/cli.py)) are what `boost --help` prints and
+   what `docs/commands.html` is generated from. Several are terser than they
+   need to be. Edit the row, run `python3 scripts/build_command_reference.py`.
+5. **Cover a branch nothing tests.** `make test` prints the misses; pick one in
+   `boost_cli/core/` and write the test that kills the mutant. `make mutation`
+   tells you whether it did.
+
+Something bigger in mind? Open an issue first so we can agree on the shape
+before you write it. Specific starter tasks, when there are any beyond this
+list, carry the **`good first issue`** label —
+[browse them here](https://github.com/jonnyeclectic/boost/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22).
+
 ## Dev setup
 
 ```bash
@@ -84,7 +118,7 @@ list, and neither should be added to it.
 
 | Command | Gate |
 |---|---|
-| `make test` | unit + functional suites, **≥80% line coverage** |
+| `make test` | unit + functional suites, **≥90% coverage** (statements + branches) |
 | `make patch-coverage` | changed-line coverage vs `main`, **≥80% of the diff** (PRs) |
 | `bash tests/smoke.sh` | 170 end-to-end checks through the real `./boost` shim |
 | `make bdd` | the Gherkin suite — 11 features, 47 scenarios (needs the `[bdd]` extra) |
@@ -155,6 +189,12 @@ form linked there, never a public issue.
   `boost_cli.cli.main` (see `tests/conftest.py` for the fixtures).
 - Anything under `boost_cli/core/` is mutation-tested; expect to add unit
   tests that actually kill your mutants.
+- **Every source file opens with a two-line header** —
+  `# Copyright the boost contributors.` then
+  `# SPDX-License-Identifier: GPL-3.0-only`, below any shebang.
+  `python3 scripts/add_spdx_headers.py` stamps whatever is missing and is safe
+  to re-run; `tests/unit/test_spdx_headers.py` fails the build for a new file
+  without one.
 
 ## Generated files — never hand-edit
 
@@ -190,6 +230,11 @@ also keeps line-adjacent conflicts rare.
 
 Branch from `main`, keep PRs focused, and write the PR description in the
 commit message (it becomes the release notes via release-drafter).
+
+What happens to it next — who reviews, what they check, and what makes a change
+acceptable — is written down in [docs/code-review.md](docs/code-review.md),
+including the part most projects leave implied: boost has one maintainer, so a
+pull request they wrote themselves does not get a second human.
 
 [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)
 pre-fills the checklist — chiefly `make check` and the generated-file

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Tier 2: Ragas-methodology faithfulness for `boost explain` and `boost distill`.
 
 Both commands generate prose from a SKILL.md. Their shared failure mode is

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Generate and validate evals/golden_set.json — the graded relevance judgments.
 
 The judgments themselves are human work; what this script automates is keeping

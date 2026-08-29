@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """A truncated HTTP response must degrade, not crash.
 
 ``embed._post`` guards with ``except (urllib.error.URLError, OSError, ValueError)``.

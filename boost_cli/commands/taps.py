@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Registry (taps) commands: tap, untap, taps, outdated."""
 from __future__ import annotations
 

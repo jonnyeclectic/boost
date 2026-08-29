@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the Chrome flags the two headless sweeps launch with.
 
 `tests/visual/` holds two puppeteer harnesses that drive the same binary on the

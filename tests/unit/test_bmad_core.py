@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests for :mod:`boost_cli.core.bmad` — the autopilot's brain.
 
 Three things are worth pinning here, because all three are load-bearing for

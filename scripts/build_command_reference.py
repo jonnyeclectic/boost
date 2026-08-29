@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Generate ``docs/commands.html`` — the browsable command reference.
 
 Every command is rendered from the CLI's *own* definitions —

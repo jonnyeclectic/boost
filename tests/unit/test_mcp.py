@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/mcp.py — the extensible MCP tool registry.
 
 The registry is the Phase-3 "MCP as a hub" seam: tools self-register a spec +

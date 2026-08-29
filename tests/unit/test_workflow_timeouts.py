@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: every CI job declares a timeout-minutes.
 
 Without one a hung step — a stalled tap clone, a wedged smoke-test subprocess —

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Steps for `boost index` / `boost discover` — the GitHub Code Search-backed
 discovery cache. `gh` is always mocked (shutil.which + subprocess.run), never
 shelled out to for real, mirroring tests/functional/test_cli_discovery.py.

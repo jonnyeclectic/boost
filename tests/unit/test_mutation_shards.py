@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Tests for the sharded mutation gate (scripts/mutation_shards.py).
 
 Two properties matter and both are load-bearing for CI correctness:

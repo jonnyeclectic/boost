@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Governance policies: ~/.boost/state/policy.json
 
 Consulted by store.install() (when config policy_enforce is true) and by

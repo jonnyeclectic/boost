@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: package-management commands — install, uninstall, sync,
 update, reinstall, pin/unpin, bundle, import, snapshot, export."""
 from __future__ import annotations

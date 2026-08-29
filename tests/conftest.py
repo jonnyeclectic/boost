@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Shared fixtures for the boost test suite.
 
 Every test runs against a throwaway $HOME so nothing can touch the real

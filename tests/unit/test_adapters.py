@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests for core.adapters — the framework export renderers.
 
 These are mutation-gated: assertions pin exact emitted structure and prove the

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Startup import-time budget — the lazy-import guard.
 
 For a CLI, cold-start latency *is* the UX: every command pays it before it does

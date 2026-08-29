@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: quality & health commands — doctor, lint, audit, verify,
 drift, test, fingerprint, quarantine, decay, heal, conflict, changelog,
 attest, health."""

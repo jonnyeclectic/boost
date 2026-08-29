@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: scripts/release_guard.py — the decision to publish or skip.
 
 The guard sits in front of a step that uploads to PyPI under Trusted

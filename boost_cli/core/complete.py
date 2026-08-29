@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """What a shell offers at TAB, decided in Python rather than in shell.
 
 WHY THIS EXISTS. `boost completions` used to emit a static list of command names

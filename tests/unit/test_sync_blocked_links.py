@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """`boost sync` must not report success for a link it could not create.
 
 Observed on a real machine, as a closed loop:

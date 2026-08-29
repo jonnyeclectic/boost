@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Full-content retrieval over tapped skills/rules/workflows (RAG — Phase 1).
 
 Pure stdlib. Where `catalog.search` scores only an item's name + one-line

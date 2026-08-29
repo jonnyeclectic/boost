@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the eval gate's baseline bookkeeping and metric floors.
 
 Two defects motivate this file, both observed by running the shipped harness:

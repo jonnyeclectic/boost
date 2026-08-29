@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/registry.py — tap specs, config, clone lifecycle."""
 from __future__ import annotations
 

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: Team & Collaboration commands, in-process.
 
 cohort / profile / protocol / pulse / replay / who — deterministic rollout

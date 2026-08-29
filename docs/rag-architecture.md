@@ -195,7 +195,7 @@ counts. The search path also lazily triggers a refresh when it detects a tap com
 - `tests/functional/test_cli_configuration.py` — extend `TestMcp` so `boost_search` still returns the
   MCP content shape, with and without the index present.
 - `tests/functional/test_cli_discovery.py` — cover `boost reindex`.
-- Keep line coverage ≥80%; no new runtime import means ruff/mypy(py312)/smoke are unaffected.
+- Keep coverage ≥90%; no new runtime import means ruff/mypy(py312)/smoke are unaffected.
 
 ---
 

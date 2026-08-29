@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Minimal YAML-frontmatter parser for SKILL.md files (stdlib only).
 
 Supports the subset actually used by skill files:

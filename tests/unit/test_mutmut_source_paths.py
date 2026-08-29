@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the conftest hook that lets functional tests run under mutmut.
 
 mutmut resolves its configured ``source_paths`` *relative to the cwd*, from

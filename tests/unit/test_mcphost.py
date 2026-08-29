@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: core.mcphost — per-host MCP registration argv (mutation-gated).
 
 mcphost.py is a pure table: it never runs a command, it only decides what argv

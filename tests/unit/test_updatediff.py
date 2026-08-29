@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/updatediff.py — the update content-diff gate."""
 from __future__ import annotations
 

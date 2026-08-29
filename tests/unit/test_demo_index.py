@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The browser demo's index must stay a faithful projection of the real one.
 
 `docs/demo.html` claims to run "the same BM25 ranking `boost search` runs". That

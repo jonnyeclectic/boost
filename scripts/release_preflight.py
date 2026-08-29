@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Refuse to release a commit whose sibling release gates are not green.
 
 ``publish.yml`` triggers on ``workflow_run: [ci]``, so the only verdict it can

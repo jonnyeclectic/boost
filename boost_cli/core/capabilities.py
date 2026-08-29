@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """What a skill can do — declared, detected, and gated by policy.
 
 boost already blocks installs by name/tap/quality (:mod:`policy`). This is the

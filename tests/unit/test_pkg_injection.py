@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: pkg._warn_injection — the install-time content-scan wiring."""
 from __future__ import annotations
 

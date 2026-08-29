@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: core.rules — pure rule-materialization logic (mutation-gated).
 
 rules.py has no side effects: it decides where a rule lands per agent and

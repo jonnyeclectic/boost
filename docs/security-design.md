@@ -169,9 +169,48 @@ Every one of these gates blocks a merge to `main`.
 | `osv-scanner`, `pip-audit`, Dependabot | known-vulnerable dependency detection |
 | `atheris` fuzzing | dynamic analysis over the parsers |
 | mutation testing (≥80% killed) | proves the tests would notice if a check stopped working |
-| ≥80% line and patch coverage | new code arrives tested |
+| ≥90% coverage (statements + branches), ≥80% of the diff | new code arrives tested |
 | `import-linter` | the layering that keeps `core/` free of CLI concerns |
 | SLSA provenance + PyPI Trusted Publishing | a released artifact traces to the commit and workflow that built it |
+
+## Security review record
+
+OpenSSF Best Practices `security_review` asks for a review performed within the
+last five years that considers the security requirements and the security
+boundary, by people or by tools with human judgement on top. This is the log of
+those reviews. It is deliberately a log and not a claim: a review with no date
+and no findings is indistinguishable from no review.
+
+### 2026-08-28 — full design and code review
+
+**Scope.** The whole of this document, re-derived rather than re-read: the
+trust boundaries in [Trust boundaries](#trust-boundaries), the design
+principles as concrete claims about code, the CWE table, and the cryptographic
+surface (`core/ed25519.py`, `core/minisign.py`, `core/provenance.py`). Plus the
+supply-chain path — `publish.yml`, Trusted Publishing, SLSA attestation — and
+the open CodeQL and Scorecard findings.
+
+**Conducted by.** The maintainer, assisted by an AI agent, with static analysis
+(CodeQL, `ruff` `S`, Snyk, `zizmor`, `gitleaks`) as input rather than as the
+review. Tooling does not find the two classes below; that is why the criterion
+requires a human.
+
+**Findings, and what happened to them.**
+
+| Finding | Class | Outcome |
+|---|---|---|
+| `boost trust add` had silently lost the key fingerprint from its output — the value a user compares against the publisher's. A merged automated fix removed it, and every gate stayed green because no test asserted the line. | Verification that reports success without verifying | Fixed, and pinned by a test. |
+| `resolves_into_store()` caught only `OSError` to fail closed on a symlink cycle. On Python 3.12 — the oldest supported interpreter — `Path.resolve(strict=True)` raises `RuntimeError`, which is not an `OSError`, so the guard failed *open* there. | A safety property true on the developer's interpreter and false on a supported one | Fixed; regression test runs on 3.12. |
+| Two claims in this document overstated what had been verified: `repo_track` said changes were reviewed, when the ruleset requires passing checks and not approval; `no_leaked_credentials` asserted secret scanning was enabled, which is not readable without administrative credentials. | Documentation asserting more assurance than exists | Both rewritten to what is actually enforced. |
+| `publish.yml`'s `workflow_run` trigger filtered on branch name only. A fork pull request from a branch named `main` produced a `ci` run satisfying that filter, which would have fired the release job with `contents: write` and PyPI OIDC. | Trigger reachable from outside the trust boundary | Closed before this review, by requiring the triggering run to be a `push` from this repository. Re-verified. |
+
+**Residual risk.** Unchanged and listed under [Known limits](#known-limits)
+below. The largest is not technical: boost has one maintainer, so no change
+this project ships has been read by a second person. See
+[docs/code-review.md](code-review.md).
+
+**Next review.** On any change to the trust boundaries, the cryptographic
+surface or the release pipeline, and otherwise annually.
 
 ## Known limits
 

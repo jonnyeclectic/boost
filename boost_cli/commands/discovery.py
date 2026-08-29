@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Discovery & Search commands: search, discover, recommend, browse,
 index, trending, stats, count.
 

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Build a local fixture tap (a git repo of sample skills) for offline testing.
 
 Usage:  python3 tests/make_fixture.py [dest_dir]

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the keyless local embedding provider.
 
 Dense semantic search was reachable only with a Voyage or OpenAI key, so every

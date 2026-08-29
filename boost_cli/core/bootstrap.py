@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Seed an empty machine's catalog, so one command is the whole setup.
 
 `boost mcp` is the only command a new user is told to run after installing.

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Import-time compatibility checks, importable without langchain installed.
 
 Deliberately dependency-free: the package __init__ needs this BEFORE it can

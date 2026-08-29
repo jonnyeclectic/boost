@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: skill-information commands — list, info, cat, edit,
 preview, explain, log, home, deps, tag."""
 from __future__ import annotations

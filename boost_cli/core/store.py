@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The canonical store (~/.agents/skills) and agent symlinks.
 
 install():  copy skill dir from a tap clone -> store, symlink into every

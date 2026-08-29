@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The per-project lock file: ``<repo>/.boost/skill-lock.json``.
 
 Project-scoped skills deliberately do **not** share the user lock. Two reasons,

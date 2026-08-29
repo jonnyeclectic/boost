@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests for core/claude_settings.py — the settings.json / hook primitive."""
 from __future__ import annotations
 

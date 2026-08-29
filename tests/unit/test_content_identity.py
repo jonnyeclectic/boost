@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Content identity: the digest a catalog entry carries, and who trusts it.
 
 The whole design rests on one invariant — a catalog entry's ``content`` is the

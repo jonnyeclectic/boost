@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Package Management commands (11): install, uninstall, sync, update,
 reinstall, bundle, import, pin, unpin, snapshot, export."""
 from __future__ import annotations

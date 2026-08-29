@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: how the retrieval eval decides a hit is a hit.
 
 Grading was by *name*, and names in this catalogue are not identifying —

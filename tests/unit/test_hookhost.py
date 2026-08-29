@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests for core/hookhost.py — the per-host hook table.
 
 Every claim here was established against Gemini CLI 0.57.0's own bundle

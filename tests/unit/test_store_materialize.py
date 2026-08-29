@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: a sparse tap materializes a skill's files before they are copied.
 
 Taps check out Markdown only (see ``test_gitutil_sparse``), so a skill that

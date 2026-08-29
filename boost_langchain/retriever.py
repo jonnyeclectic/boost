@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """A LangChain retriever over boost's tapped skill/rule/workflow catalog."""
 from __future__ import annotations
 

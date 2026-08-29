@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Fork-safe HTTP requests over ``urllib``.
 
 The stdlib **default opener** resolves proxies with ``getproxies()``. On macOS,

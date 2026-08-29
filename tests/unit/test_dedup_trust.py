@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Which copy survives dedup, when every copy is byte-identical.
 
 Content-hash dedup collapses a cluster to one result. Because the bodies are

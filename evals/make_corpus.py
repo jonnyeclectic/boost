@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Build the hermetic eval corpus: a local git tap the harness grades against.
 
 `make eval` (the other retrieval gate) taps real GitHub repos, so it needs the

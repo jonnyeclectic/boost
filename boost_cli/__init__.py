@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """boost — Homebrew for AI coding skills."""
 from contextlib import suppress
 

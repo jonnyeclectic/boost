@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Duplicate chunk text is embedded once, not once per copy.
 
 Registries mirror each other, so the same chunk text arrives many times in one

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """dense.ready() must stat before it imports.
 
 On a machine with no vector store — the common BM25-only install — ready()

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/cliparse.BoostArgumentParser — branded errors."""
 from __future__ import annotations
 

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the CodeQL job id is half of a code-scanning analysis key.
 
 GitHub identifies a code-scanning configuration by ``<workflow path>:<job id>``.

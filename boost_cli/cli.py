@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """boost CLI dispatcher — 80 commands across 8 groups.
 
 Each command lives in boost_cli/commands/<module>.py as

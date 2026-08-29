@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The keyless local embedding backend: ONNX Runtime over a pinned BGE model.
 
 ``core.embed`` owns the provider chain; this owns the one thing that chain was

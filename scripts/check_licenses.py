@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Fail when a resolved dependency's licence is incompatible with GPL-3.0.
 
 `pip-audit` gates known CVEs; nothing gated licence *terms*. boost's shipped

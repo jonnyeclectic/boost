@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """What an install just wrote, scanned once and rendered for any front end.
 
 boost installs Markdown that an agent then executes, so every install is scanned

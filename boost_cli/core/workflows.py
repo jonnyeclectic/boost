@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Workflow materialization: drop a command/subagent into each agent's dir.
 
 Workflows are the easy cousin of rules. A rule has no universal home (Claude

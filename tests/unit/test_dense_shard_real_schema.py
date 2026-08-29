@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: export a shard from the schema production actually writes.
 
 Every other shard test builds its fixture by hand, and every one of them makes

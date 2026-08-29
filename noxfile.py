@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """One command, every env: run boost's quality gate in isolated venvs.
 
 `nox` runs the default gate (lint + tests); `nox -s <session>` runs one; and

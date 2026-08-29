@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Configuration: ~/.boost/config.json with deep-merged defaults."""
 from __future__ import annotations
 

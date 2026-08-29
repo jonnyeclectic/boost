@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: reciprocal rank fusion in ``rag.retrieve_any``.
 
 ``retrieve_any`` used to *choose* an engine — dense whenever it was ready and

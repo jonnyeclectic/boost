@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """A portable catalogue bundle: everything `boost tap` produces, minus the clone.
 
 WHY THIS EXISTS. `boost tap --defaults` is the slowest thing a new install does,

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Render the roadmap dashboards from per-item source files.
 
 The roadmap boards used to be hand-edited HTML: every loop appended

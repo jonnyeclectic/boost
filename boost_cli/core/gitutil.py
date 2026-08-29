@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Thin git wrapper (stdlib subprocess only)."""
 from __future__ import annotations
 

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Install scope: ``user`` (your machine) vs ``project`` (this repo).
 
 boost was user-global by construction — one canonical store at

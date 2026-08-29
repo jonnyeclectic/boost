@@ -12,7 +12,7 @@ make venv                                      # .venv from the hash-pinned requ
 .venv/bin/pytest tests/unit/test_catalog.py::test_scan_dir -q     # one test
 .venv/bin/pytest tests/functional -q -k install                   # functional tests matching "install"
 make lint                                      # the whole static tier — read the recipe, it is long
-make test                                      # unit + functional with 80% coverage gate
+make test                                      # unit + functional with 90% coverage gate
 make check                                     # the full required gate — see table below
 
 # run boost itself against a disposable HOME (never your real ~/.boost):
@@ -48,7 +48,7 @@ It is five gates and **all must pass**:
 |------------|------------------------------------------------|-----------|
 | `lint`     | `ruff check boost_cli tests` + `mypy`          | zero errors |
 | `eval`     | `ensure_eval_corpus.sh` + `eval_retrieval.py --build -k 10` with four floors | BM25 recall@k **≥ 0.78**, hit@1 ≥ 0.40, MRR ≥ 0.52, nDCG@k ≥ 0.58 |
-| `test`     | `pytest tests/unit tests/functional --cov`     | **80%** coverage (`fail_under = 80`) |
+| `test`     | `pytest tests/unit tests/functional --cov`     | **90%** coverage (`fail_under = 90`, `branch = true`) |
 | `smoke`    | `bash tests/smoke.sh`                           | 0 failed |
 | `mutation` | `python3 scripts/mutation_gate.py --run --min 80` | **80%** of `boost_cli/core` mutants killed |
 
@@ -229,6 +229,17 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   budget the emitter's own indent — wrapping to the full `term_width()` and
   then letting `out.info` add two spaces is what put `boost search`'s hint one
   column past the pane it had just been fitted to.
+
+- **A new source file needs the licence header, and a new prose file needs
+  adding to the vale list.** Every `.py`/`.sh` under `boost_cli`,
+  `boost_langchain`, `evals`, `scripts`, `tests` plus `./boost` and
+  `noxfile.py` opens with `# Copyright the boost contributors.` and
+  `# SPDX-License-Identifier: GPL-3.0-only`. Run
+  `python3 scripts/add_spdx_headers.py` (idempotent) — the file list and the
+  expression live there, so changing `-only` to `-or-later` is one edit rather
+  than 314. Separately, `prose-lint.yml` names the Markdown files vale checks
+  **explicitly**: a new doc that is not added to that list is never linted, and
+  `make lint` will not tell you.
 
 - **Sub-actions of one action repo move in lockstep.** `github/codeql-action/{init,
   analyze,upload-sarif}` and `actions/cache{,/save,/restore}` are each *one repo at

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: digest enforcement & commit pinning through the CLI.
 
 The invariant: the recorded digest is advisory until you opt in, and binding

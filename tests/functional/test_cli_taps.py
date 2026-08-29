@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: tap / untap / taps / outdated (registry commands)."""
 from __future__ import annotations
 

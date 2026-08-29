@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Terminal output helpers — colors, symbols, tables.
 
 Conventions used across all commands:

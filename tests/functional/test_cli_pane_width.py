@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Every prose hint fits the pane it is printed into.
 
 A blanket "no line exceeds `term_width()`" sweep would be the wrong gate: some

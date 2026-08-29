@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: a workflow that pushes has credentials to push with.
 
 ``actions/checkout`` with ``persist-credentials: false`` leaves no auth in the

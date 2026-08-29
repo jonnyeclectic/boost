@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Diagnostic logging & crash reporting."""
 from __future__ import annotations
 

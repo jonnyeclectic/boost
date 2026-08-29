@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Optional AI bridge for the Intelligence commands and --smart ranking.
 
 Strategy: prefer the `claude` CLI if on PATH, else the Anthropic API via

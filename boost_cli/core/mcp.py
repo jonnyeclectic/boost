@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Extensible MCP tool registry — the Phase-3 "MCP as a hub" seam.
 
 An MCP tool is a *handler* — ``fn(args: dict) -> (text, is_error)`` — paired with
