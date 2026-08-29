@@ -213,8 +213,8 @@ of the security-design document for the full account.
 
 ## Gold
 
-Gold is **23** criteria on top of silver. Sixteen are Met, two are N/A and
-five are Unmet. Three of the five are about how many people work on boost
+Gold is **23** criteria on top of silver. Seventeen are Met, two are N/A and
+four are Unmet. Three of the four are about how many people work on boost
 rather than about the code, so no pull request can close them.
 
 That count is worth a note, because an earlier version of this section said 21
@@ -225,10 +225,9 @@ like a plausible total, so nothing flagged it; the gap only appeared on the
 submission form, where 23 rows were waiting. A count that looks reasonable is
 not a checked count.
 
-Read this section as the honest ceiling. Eighteen of twenty-three is where
-boost stops on its own: of the five that remain, two are engineering (a
-reproducible sdist, a host that sets response headers) and three are a
-recruiting problem.
+Read this section as the honest ceiling. Nineteen of twenty-three is where
+boost stops on its own: of the four that remain, one is engineering (a host
+that sets response headers) and three are a recruiting problem.
 
 ### Prerequisites and project oversight
 
@@ -265,7 +264,7 @@ recruiting problem.
 
 | Criterion | Cat. | Answer | Evidence |
 |---|---|---|---|
-| `build_reproducible` | MUST | **Unmet** | Measured, not assumed: with `SOURCE_DATE_EPOCH` set, two builds of one commit produce a **bit-identical wheel** and a **differing sdist**. `setuptools` writes each tar member's real mtime plus the builder's `uid`/`gid`/user name into the sdist, so 54 members differ between builds two seconds apart. Two things are missing — the release workflow installs its build tooling unpinned, and the sdist's timestamps and ownership need normalising. The full measurement and the commands to reproduce it are in [docs/verifying-releases.md](https://github.com/jonnyeclectic/boost/blob/main/docs/verifying-releases.md#can-you-rebuild-it-yourself-partly--the-measurement). N/A would be wrong: boost ships wheels. |
+| `build_reproducible` | MUST | **Met** | Measured, not assumed: `scripts/check_reproducible.py` builds the project twice with `SOURCE_DATE_EPOCH` pinned to the same value both times and diffs the results — both the **wheel and the sdist are now bit-identical**. They were not: `setuptools` writes each sdist tar member's real mtime plus the builder's `uid`/`gid`/user name with no override, so 54 members differed between builds two seconds apart ([pypa/setuptools#2133](https://github.com/pypa/setuptools/issues/2133), open since 2020). `scripts/normalize_sdist.py` now clamps that in `publish.yml`, between the build and `twine check`, and the release toolchain that produces the artifacts is hash-pinned (`requirements/release-tools.txt`) with `pyproject.toml`'s `[build-system].requires` exact-pinned rather than left as a floor. The full measurement and the commands to reproduce it are in [docs/verifying-releases.md](https://github.com/jonnyeclectic/boost/blob/main/docs/verifying-releases.md#can-you-rebuild-it-yourself-yes--the-measurement). N/A would be wrong: boost ships wheels. |
 
 ### Test invocation and coverage
 
@@ -303,8 +302,6 @@ recruiting problem.
 - `bus_factor`, `contributors_unassociated`, `two_person_review` — **a second
   person**, sustained. Not a document, not a check, and not something to
   simulate with a second account.
-- `build_reproducible` — pin the release build toolchain, then normalise the
-  sdist tarball.
 - `hardened_site` — host the documentation somewhere that lets you set
   response headers.
 

@@ -1,5 +1,17 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8"]
+# Exact-pinned, not a floor: `python -m build` resolves this list inside an
+# isolated build environment, so an unpinned ">=" lets PyPI hand a rebuild
+# whatever setuptools shipped that day — the one thing that actually
+# determines the release artifacts' bytes, floating outside every hash-pinned
+# requirements/*.txt file. PEP 508's requirement-string syntax (all this list
+# may contain) has no hash field, so exact-pinning is the strongest promise
+# available here; requirements/release-tools.txt hash-pins the *outer*
+# `build`/`twine` toolchain, and its own `setuptools==83.0.0` pin (arriving
+# transitively via pyroma, not declared for this purpose) happens to already
+# match — a coincidence worth knowing about, not a guarantee: bump both
+# together on purpose. See docs/verifying-releases.md for the reproducibility
+# measurement this pin exists for.
+requires = ["setuptools==83.0.0", "setuptools-scm==10.2.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
