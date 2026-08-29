@@ -13,7 +13,16 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from boost_cli.core import ai, catalog, frontmatter, gitutil, journal, store, util
+from boost_cli.core import (
+    ai,
+    aihost,
+    catalog,
+    frontmatter,
+    gitutil,
+    journal,
+    store,
+    util,
+)
 from boost_cli.core import output as out
 from boost_cli.errors import BoostError
 
@@ -82,9 +91,23 @@ class TestExactStrings:
     """Kills string-literal mutants in user-facing messages."""
 
     def test_ai_fallback_note_verbatim(self):
+        # The note names every CLI that would work, built from `aihost`'s
+        # table rather than hardcoded: telling a Gemini user to install Claude
+        # is a worse answer than saying boost could not find either. Still
+        # asserted verbatim, because the point of this class is to kill
+        # string-literal mutants in what the user actually reads.
         assert ai.fallback_note() == (
-            "AI features need the `claude` CLI on PATH or ANTHROPIC_API_KEY "
-            "set — using the heuristic fallback")
+            "AI features need one of `claude` or `gemini` on PATH, or "
+            "ANTHROPIC_API_KEY set — using the heuristic fallback")
+
+    def test_fallback_note_names_every_backend(self):
+        """A backend added to the table must appear in the note, not silently.
+
+        The verbatim assertion above would still pass if the note were
+        hardcoded; this one fails if the sentence stops being derived.
+        """
+        for name in aihost.backends():
+            assert "`%s`" % aihost.cli(name) in ai.fallback_note(), name
 
     def test_missing_git_hint_verbatim(self, monkeypatch):
         monkeypatch.setattr(gitutil.shutil, "which", lambda _: None)

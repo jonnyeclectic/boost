@@ -2,9 +2,21 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """Optional AI bridge for the Intelligence commands and --smart ranking.
 
-Strategy: prefer the `claude` CLI if on PATH, else the Anthropic API via
-urllib when ANTHROPIC_API_KEY is set, else return None so every caller
-degrades to its non-AI fallback.
+Strategy: use the first assistant CLI on PATH that `core/aihost.py` knows —
+Claude first, then Gemini — else the Anthropic API via urllib when
+ANTHROPIC_API_KEY is set, else return None so every caller degrades to its
+non-AI fallback.
+
+The second CLI is why `aihost` exists. Before it, a user running Gemini got the
+heuristic fallback from every AI-assisted command even with a perfectly good
+assistant installed, because this module only ever spelled "claude". The
+per-backend differences that would otherwise be bugs — Gemini has no
+`--append-system-prompt`, and `ai.model` holds a Claude id that `gemini -m`
+would reject — are handled there, as data.
+
+The direct-API path stays Anthropic-only. Someone using Gemini CLI has the
+binary by definition, so the CLI route is the one that matters; a second HTTP
+client is a separate change with its own wire format and error taxonomy.
 """
 from __future__ import annotations
 
@@ -15,7 +27,7 @@ import subprocess
 import urllib.error
 import urllib.request
 
-from . import config, logs, nethttp
+from . import aihost, config, logs, nethttp
 
 API_URL = "https://api.anthropic.com/v1/messages"
 
@@ -30,22 +42,33 @@ def enabled() -> bool:
 
 
 def available() -> bool:
-    """Return True when AI is enabled and a backend exists: the `claude`
-
-    CLI on PATH or ANTHROPIC_API_KEY set.
-    """
+    """Return True when AI is enabled and some backend exists."""
     return enabled() and (has_cli() or bool(os.environ.get("ANTHROPIC_API_KEY")))
 
 
+def cli_backend() -> str | None:
+    """The first assistant CLI on PATH, in `aihost` preference order."""
+    for name in aihost.backends():
+        if shutil.which(aihost.cli(name)):
+            return name
+    return None
+
+
 def has_cli() -> bool:
-    """Return True when the `claude` CLI is on PATH."""
-    return shutil.which("claude") is not None
+    """Return True when any assistant CLI `aihost` knows is on PATH."""
+    return cli_backend() is not None
 
 
 def fallback_note() -> str:
-    """Return the one-line hint shown when a command degrades to heuristics."""
-    return ("AI features need the `claude` CLI on PATH or ANTHROPIC_API_KEY set "
-            "— using the heuristic fallback")
+    """Return the one-line hint shown when a command degrades to heuristics.
+
+    Names every CLI that would work, not just Claude's — telling a Gemini user
+    to install Claude is a worse answer than telling them boost could not find
+    either.
+    """
+    clis = " or ".join("`%s`" % aihost.cli(n) for n in aihost.backends())
+    return ("AI features need one of %s on PATH, or ANTHROPIC_API_KEY set "
+            "— using the heuristic fallback" % clis)
 
 
 def ask(prompt: str, system: str | None = None, model: str | None = None,
@@ -54,8 +77,9 @@ def ask(prompt: str, system: str | None = None, model: str | None = None,
     if not enabled():
         return None
     model = model or str(config.get("ai.model"))
-    if has_cli():
-        text = _ask_cli(prompt, system, model, timeout)
+    backend = cli_backend()
+    if backend:
+        text = _ask_cli(backend, prompt, system, model, timeout)
         if text:
             return text
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -88,26 +112,27 @@ def _stderr_excerpt(text: str | None) -> str:
     return (s[:STDERR_LOG_CHARS] + "...") if len(s) > STDERR_LOG_CHARS else s
 
 
-def _ask_cli(prompt: str, system: str | None, model: str,
+def _ask_cli(backend: str, prompt: str, system: str | None, model: str,
              timeout: int) -> str | None:
-    cmd = ["claude", "-p", "--model", model, "--output-format", "text"]
-    if system:
-        cmd += ["--append-system-prompt", system]
+    cmd = aihost.argv(backend, model, system)
+    # A backend with no system flag takes the text folded into the prompt.
+    body = aihost.fold_system(backend, system, prompt)
+    who = "%s CLI" % aihost.cli(backend)
     try:
-        proc = subprocess.run(cmd, input=prompt, capture_output=True,
+        proc = subprocess.run(cmd, input=body, capture_output=True,
                               text=True, timeout=timeout)
     except (subprocess.TimeoutExpired, OSError) as e:
         # The exception TYPE only, never str(e): TimeoutExpired stringifies the
-        # whole argv, which carries the --append-system-prompt text with it.
-        _log_failure("claude CLI", type(e).__name__)
+        # whole argv, which carries the system-prompt text with it.
+        _log_failure(who, type(e).__name__)
         return None
     if proc.returncode != 0:
-        _log_failure("claude CLI", "exit %d: %s"
+        _log_failure(who, "exit %d: %s"
                      % (proc.returncode, _stderr_excerpt(proc.stderr)))
         return None
     out = proc.stdout.strip()
     if not out:
-        _log_failure("claude CLI", "empty reply")
+        _log_failure(who, "empty reply")
         return None
     return out
 
