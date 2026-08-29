@@ -88,6 +88,7 @@ lint:
 	$(PY) scripts/build_registries.py --check
 	$(PY) scripts/build_roadmap.py --check
 	$(PY) scripts/build_command_reference.py --check
+	$(PY) scripts/build_vex.py --check
 	$(PY) scripts/lock_toolchain.py --check
 	$(PY) scripts/a11y_check.py
 	$(PY) scripts/page_budget.py
@@ -237,6 +238,7 @@ generate:
 	$(PY) scripts/build_registries.py
 	$(PY) scripts/build_roadmap.py
 	$(PY) scripts/build_command_reference.py
+	$(PY) scripts/build_vex.py
 
 # regenerate docs/demo.gif (brew install vhs)
 demo:

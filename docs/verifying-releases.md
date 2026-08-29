@@ -77,7 +77,20 @@ PGP key for boost, they did not come from this project.
 | Git tag | Points at the commit the release was built from | `git verify-tag` is *not* applicable — tags are unsigned; the provenance attestation is the authority |
 | Release notes | Assembled from the merged pull requests in that release | [Releases page](https://github.com/jonnyeclectic/boost/releases) |
 
+<<<<<<< HEAD
 ## Can you rebuild it yourself? Yes — the measurement
+||||||| parent of e6c424c9 (feat(security): publish an OpenVEX feed for OSPS-VM-04.02)
+## Can you rebuild it yourself? Partly — the measurement
+=======
+The SBOM says what is in a release; a separate, continuously-updated
+[OpenVEX](https://openvex.dev/) document says which known findings against
+those components don't actually affect boost, with the reasoning attached —
+not published per release, but always current at
+[`docs/vex/openvex.json`](vex/openvex.json). See
+[security-design.md](security-design.md#vex-accounting-for-findings-that-dont-affect-boost).
+
+## Can you rebuild it yourself? Partly — the measurement
+>>>>>>> e6c424c9 (feat(security): publish an OpenVEX feed for OSPS-VM-04.02)
 
 A reproducible build lets a third party rebuild the artifact from source and
 get the same bytes, which is a stronger guarantee than provenance alone:
