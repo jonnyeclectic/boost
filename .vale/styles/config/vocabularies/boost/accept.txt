@@ -103,6 +103,8 @@ PrestaShop
 Pulumi
 pytest
 Qdrant
+quantized
+Quantizing
 Quarkus
 rebased
 reimplement
