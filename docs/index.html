@@ -961,7 +961,7 @@ command -v git  &gt;/dev/null &amp;&amp; echo <span class="yv">"git ok"</span>  
 command -v pipx &gt;/dev/null &amp;&amp; echo <span class="yv">"pipx ok"</span> || echo <span class="yv">"pipx MISSING"</span></pre>
       </div>
 
-      <p class="sec-sub">Anything missing? On macOS one Homebrew line fixes all three
+      <p class="sec-sub">Install only what the check flagged. On macOS one Homebrew line covers all three
         &mdash; on Debian/Ubuntu it is <code>sudo apt install python3.13 git pipx</code>.
         <code>pipx ensurepath</code> puts <code>~/.local/bin</code> on your PATH, and the new
         shell is what makes that take effect.</p>
@@ -971,7 +971,7 @@ command -v pipx &gt;/dev/null &amp;&amp; echo <span class="yv">"pipx ok"</span> 
           <div class="label">step 2 &mdash; install what is missing, macOS</div>
           <button class="copy-btn" data-copy="prereq-fix" type="button">Copy</button>
         </div>
-        <pre id="prereq-fix">brew install python@3.13 git pipx
+        <pre id="prereq-fix">brew install python@3.13 git pipx <span class="cm"># drop whatever already said ok</span>
 pipx ensurepath
 <span class="cm"># reopen the shell so PATH picks up ~/.local/bin</span>
 exec $SHELL -l</pre>

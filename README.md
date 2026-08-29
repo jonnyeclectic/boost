@@ -59,10 +59,10 @@ command -v git  >/dev/null && echo "git ok"  || echo "git MISSING"
 command -v pipx >/dev/null && echo "pipx ok" || echo "pipx MISSING"
 ```
 
-Anything missing, on macOS:
+Install only what the check flagged — on macOS:
 
 ```bash
-brew install python@3.13 git pipx
+brew install python@3.13 git pipx   # drop whatever already said ok
 pipx ensurepath
 exec $SHELL -l
 ```
