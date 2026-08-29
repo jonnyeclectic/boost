@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Generate the Tier 1b *scale* corpus list: the required corpus plus distractors.
 
 WHY A SECOND CORPUS. The required `eval` gate measures 10,152 entries. A real

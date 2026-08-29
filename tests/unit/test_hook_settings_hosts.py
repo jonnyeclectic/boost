@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests for the host-aware side of core/claude_settings.py.
 
 `tests/unit/test_claude_settings.py` pins the Claude behaviour and must keep

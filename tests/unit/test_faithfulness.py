@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: core/faithfulness.py — the runtime grounding check for explain."""
 from __future__ import annotations
 

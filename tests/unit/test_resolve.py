@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests for core.resolve — the skill dependency resolver.
 
 Mutation-gated: assertions pin install order (deps-first), the requested-root

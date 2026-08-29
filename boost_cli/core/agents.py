@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """AI agent targets: where installed skills get symlinked."""
 from __future__ import annotations
 

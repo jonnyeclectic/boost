@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/frontmatter.py — the SKILL.md YAML-subset parser."""
 from __future__ import annotations
 

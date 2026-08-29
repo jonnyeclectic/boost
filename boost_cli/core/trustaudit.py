@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Single source of truth for "is the set of skills I actually run healthy?".
 
 boost already computes every individual trust signal, each in its own command:

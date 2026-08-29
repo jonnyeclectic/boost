@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: scripts/serve_docs.py — serving docs the way Pages serves them.
 
 WHY THIS FILE EXISTS. The `lighthouse` job scored `roadmap.html` 0.79 three

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/dense.py — the opt-in sqlite-vec backend.
 
 The embeddings API is replaced with a deterministic 3-D toy embedder, so these

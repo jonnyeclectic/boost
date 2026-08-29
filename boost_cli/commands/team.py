@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Team & Collaboration commands: cohort, profile, protocol, pulse, replay, who."""
 from __future__ import annotations
 

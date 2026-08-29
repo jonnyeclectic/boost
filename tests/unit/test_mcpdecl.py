@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/mcpdecl.py — MCP-server declarations on a skill.
 
 Every function is pure, so each branch, each tolerated-garbage path and each

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Steps for the `boost mcp` scenarios — never shell out to a real agent CLI;
 shutil.which/subprocess.run are patched exactly as
 tests/functional/test_cli_configuration.py::TestMcp does.

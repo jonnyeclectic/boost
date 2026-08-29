@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: core/adapters.render_runner — the `boost run` runner script.
 
 The runner is generated text that must ``compile()`` and carry the adapted

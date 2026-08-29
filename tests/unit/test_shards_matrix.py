@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the `shards` matrix is one job per repository, and nothing else.
 
 ``tests/eval/taps.txt`` rows are ``owner/repo <40-char sha> <entry count>``.

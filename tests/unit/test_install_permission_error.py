@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """An unwritable store must fail with an explanation, not a traceback.
 
 Two of the three crash reports on a real machine were the same thing: a

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """`boost chat` — grounded conversational search.
 
 The engine is thin; the interesting part is what it *refuses* to say. boost is a

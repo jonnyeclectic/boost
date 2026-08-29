@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: scripts/post_deploy_smoke.py — the deployed-site health check.
 
 The checker's whole job is to notice breakage, so these pin that it *does*: a

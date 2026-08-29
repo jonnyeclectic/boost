@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the `boost-first` consent flow in commands/configuration.py.
 
 `_offer_boost_first` proposes the most invasive thing boost ships — standing

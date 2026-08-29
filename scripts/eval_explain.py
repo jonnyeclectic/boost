@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Tier 2c: explain-faithfulness eval (opt-in, LLM-judged via ragas).
 
 `boost explain` generates a plain-English summary of a skill from its SKILL.md.

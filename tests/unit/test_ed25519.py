@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: core/ed25519.py — verify against the RFC 8032 vectors.
 
 The known-good vectors are the real guard: they are signed by keys we do not

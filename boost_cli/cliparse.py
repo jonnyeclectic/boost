@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """A branded ArgumentParser.
 
 Argparse's default failure output is a raw, unstyled ``usage:`` block with a

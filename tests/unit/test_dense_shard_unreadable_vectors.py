@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: exporting a shard must not report "no vectors" when there are.
 
 ``vec_chunks`` is a **vec0 virtual table**. A plain :mod:`sqlite3` connection has

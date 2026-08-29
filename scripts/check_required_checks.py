@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Gate: the required-status-check list must match the jobs that actually run.
 
 Branch protection is configured in the GitHub UI, so the list of required checks

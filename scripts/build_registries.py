@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Assemble the curated registry catalog shipped at boost_cli/data/registries.json.
 
 Source data is the researched skill/rule/workflow registries. Each entry is

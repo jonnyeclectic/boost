@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Make the lock file's recorded digest binding, not advisory.
 
 Every installed skill carries a ``sha256`` of its content and the ``commit`` it

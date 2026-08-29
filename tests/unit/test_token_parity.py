@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Web ↔ CLI palette lockstep (BOOST-D20).
 
 Enforces that the CLI's single source of truth, ``output.TOKENS``, stays in

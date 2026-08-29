@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The docsite stays in lockstep with the CLI and with its own design system.
 
 Four drift classes this locks down, each of which had actually shipped:

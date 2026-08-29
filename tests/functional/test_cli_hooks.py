@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests for `boost hooks` (in-process CLI)."""
 from __future__ import annotations
 

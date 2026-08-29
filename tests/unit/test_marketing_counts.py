@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the hard numbers in README.md and the landing page are true.
 
 These are marketing claims a reader checks against reality in ten seconds, and

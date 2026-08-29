@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The pulse journal: append-only feed of skill-management events.
 
 Powers `boost pulse`, `boost trending`, `boost stats`, and `boost who`.

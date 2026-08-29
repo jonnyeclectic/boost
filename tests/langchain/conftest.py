@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Fixtures for the LangChain integration suite.
 
 No mocks of boost internals: every test runs against a throwaway $HOME, taps a

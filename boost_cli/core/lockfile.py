@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The v3 lock file: ~/.agents/skills/.skill-lock.json
 
 Every write snapshots the previous version into ~/.boost/state/lock-history/

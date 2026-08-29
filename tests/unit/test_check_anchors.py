@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests for scripts/check_anchors.py — the local link/anchor checker."""
 from __future__ import annotations
 

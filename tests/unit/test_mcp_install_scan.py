@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: the MCP `boost_install` tool scans what it installed.
 
 The CLI has warned about prompt-injection and embedded secrets at install time

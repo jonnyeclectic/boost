@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Rule materialization: turn a catalog rule into each agent's native format.
 
 Skills copy into a canonical store and symlink into every enabled agent dir.

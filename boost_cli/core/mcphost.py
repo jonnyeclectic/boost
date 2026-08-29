@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Which agent CLIs can boost register itself with, and how.
 
 ``boost mcp register`` used to build one hardcoded ``claude mcp add …`` argv.

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: the everyday loop from the visual guide, in-process.
 
 tap → search → install → doctor → uninstall, asserting the user-visible

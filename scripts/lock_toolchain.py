@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Compile the dev/CI toolchain into hash-pinned requirements files.
 
     python3 scripts/lock_toolchain.py            # regenerate requirements/*.txt

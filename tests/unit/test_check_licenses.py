@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: scripts/check_licenses.py — the SPDX compatibility gate.
 
 Driven against the licence strings dependencies *actually* publish, not against

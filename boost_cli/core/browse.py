@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Pure logic behind `boost browse` — everything the curses layer draws.
 
 The TUI's drawing lives in ``commands/discovery.py``; every decision it makes

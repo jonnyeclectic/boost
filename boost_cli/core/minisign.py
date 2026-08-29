@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Parse and verify minisign public keys and signatures (pure stdlib).
 
 `minisign <https://jedisct1.github.io/minisign/>`_ is the small, widely-adopted

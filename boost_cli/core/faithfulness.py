@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """A runtime faithfulness check for AI-generated skill explanations.
 
 ``boost explain`` asks the model for a plain-English summary of a ``SKILL.md``.

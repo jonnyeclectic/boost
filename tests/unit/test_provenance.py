@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: core/provenance.py — trusted-key store & tap verification."""
 from __future__ import annotations
 

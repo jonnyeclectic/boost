@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Skill Information commands — list, info, cat, edit, preview, explain,
 log, home, deps, tag.
 

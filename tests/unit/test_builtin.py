@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/builtin.py — boost's own tap and rule.
 
 `boost-first` is the most invasive thing boost ships: standing text in a file

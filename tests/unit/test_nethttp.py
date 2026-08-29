@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Tests for the fork-safe HTTP opener (``core/nethttp``).
 
 The whole point of the module is to keep proxy resolution on the pure-env

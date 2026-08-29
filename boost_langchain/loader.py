@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Load one skill's SKILL.md as a LangChain ``Document``."""
 from __future__ import annotations
 

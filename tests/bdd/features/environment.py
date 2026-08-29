@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """behave hooks — mirrors tests/conftest.py's sandboxing for BDD scenarios.
 
 Every scenario runs against a throwaway $HOME (never the real one) and shares

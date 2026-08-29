@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: a portable catalogue bundle, so a fresh install skips the tap.
 
 `boost tap --defaults` is the slowest thing a new user does, and almost none of

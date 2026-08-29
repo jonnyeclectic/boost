@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: Configuration commands, in-process.
 
 config / clean / create / policy / onboard / completions / schedule /

@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """A braille spinner for indeterminate waits (network calls, AI reranking…).
 
 Deliberately silent — no thread, no output — whenever the stream isn't an

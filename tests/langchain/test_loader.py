@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """End-to-end: SkillMarkdownLoader round-trips real SKILL.md files."""
 from __future__ import annotations
 

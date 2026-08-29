@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """End-to-end: skill_context_node against a real tapped + indexed corpus.
 
 The node is exercised the way langgraph would use it — called with a state

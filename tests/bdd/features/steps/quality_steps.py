@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Steps for `boost doctor` scenarios needing on-disk fixture state."""
 from __future__ import annotations
 

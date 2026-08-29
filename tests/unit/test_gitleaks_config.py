@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit test: .gitleaks.toml — the secret-scanning gate's configuration.
 
 Validates the config is well-formed and does what the CI gate relies on:

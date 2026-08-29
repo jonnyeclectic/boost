@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """`boost run` — adapt a skill, wire default tools, and run it as a live agent.
 
 The last mile of `boost adapt`: adapt gives an agent a brain (instructions +

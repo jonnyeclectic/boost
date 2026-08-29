@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Retrieval metrics and paired-bootstrap significance testing. Pure stdlib.
 
 Every function here is a pure function of a ranked list of item ids and a

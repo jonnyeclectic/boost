@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: core/capabilities.py — declared/detected capability classifying."""
 from __future__ import annotations
 

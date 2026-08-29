@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """The ``entries=None`` fast path of ``rag.retrieve``.
 
 A cold ``boost search`` used to call ``catalog.all_entries()`` — parsing every

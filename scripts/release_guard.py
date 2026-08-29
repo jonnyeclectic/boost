@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Refuse to publish a commit that PyPI already has.
 
 ``publish.yml`` checks out ``ref: main`` on purpose: a release ships the tip of

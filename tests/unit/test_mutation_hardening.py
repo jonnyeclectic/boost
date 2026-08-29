@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Precision tests written against surviving mutmut mutants.
 
 Each test here exists to kill a specific class of survivor: exact boundary

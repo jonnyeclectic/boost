@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Emit a compact BM25 index for the browser demo on the docs site.
 
 WHY A SEPARATE ARTEFACT. The live index is 4.65 MB across a JSON file and a

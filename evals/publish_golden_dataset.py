@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Publish boost's golden retrieval set as a LangSmith dataset.
 
 The offline Tier-1 gate floors recall@k / hit@1 / MRR / nDCG@k over

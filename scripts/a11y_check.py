@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Accessibility gate for the docs pages — WCAG 2.1 AA, no browser required.
 
     python3 scripts/a11y_check.py           # audit docs/*.html

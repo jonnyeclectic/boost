@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Shared Given/When/Then step library — drives boost_cli.cli.main in-process.
 
 Mirrors tests/conftest.py's `boost()` fixture, but there's no capsys in

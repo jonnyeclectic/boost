@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Optional dense-embedding bridge for RAG Phase 2.
 
 Strategy mirrors ``core.ai``: prefer Voyage AI when ``VOYAGE_API_KEY`` is set,

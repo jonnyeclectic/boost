@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests for `boost bmad` — npx/subprocess are stubbed out.
 
 Two surfaces live here. `install`/`init` delegate provisioning to

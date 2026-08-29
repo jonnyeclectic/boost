@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: every zizmor ignore still points at the line it was written for.
 
 ``.github/zizmor.yml`` suppresses accepted findings by ``file:LINE``. A line

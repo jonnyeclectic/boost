@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests: tap signing & provenance, end to end.
 
 The contract: a tap can carry a minisign signature over ``.boost/tap.manifest``;

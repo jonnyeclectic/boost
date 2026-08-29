@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Tests for the Ragas-methodology faithfulness scorer (evals/faithfulness.py).
 
 The scorer's real inputs are LLM replies, which are neither available nor

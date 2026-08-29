@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Functional tests for `boost hooks --host gemini` (in-process CLI).
 
 `tests/functional/test_cli_hooks.py` pins the Claude wording and must keep

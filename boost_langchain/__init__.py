@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """LangChain bindings for boost's skill catalog.
 
 Three seams, all thin on purpose: :class:`BoostRetriever` puts the tapped

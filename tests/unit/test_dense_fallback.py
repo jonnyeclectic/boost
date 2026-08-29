@@ -1,3 +1,5 @@
+# Copyright the boost contributors.
+# SPDX-License-Identifier: GPL-3.0-only
 """Unit tests: boost_cli/core/dense.py WITHOUT the sqlite-vec extension.
 
 ``test_dense.py`` exercises the real vector store, but its whole module is
