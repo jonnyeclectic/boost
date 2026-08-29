@@ -955,7 +955,7 @@ facilitate structured divergent thinking:
           <div class="label">step 1 &mdash; check prerequisites</div>
           <button class="copy-btn" data-copy="prereq-code" type="button">Copy</button>
         </div>
-        <pre id="prereq-code" tabindex="0" role="region" aria-label="Prerequisite check commands"><span class="cm"># each line prints ok, or what is missing</span>
+        <pre id="prereq-code" tabindex="0" aria-label="Prerequisite check commands"><span class="cm"># each line prints ok, or what is missing</span>
 python3 -c <span class="yv">'import sys; v=sys.version.split()[0]; print("python ok", v) if sys.version_info &gt;= (3,12) else print("python TOO OLD", v)'</span>
 command -v git  &gt;/dev/null &amp;&amp; echo <span class="yv">"git ok"</span>  || echo <span class="yv">"git MISSING"</span>
 command -v pipx &gt;/dev/null &amp;&amp; echo <span class="yv">"pipx ok"</span> || echo <span class="yv">"pipx MISSING"</span></pre>
