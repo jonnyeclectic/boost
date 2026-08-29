@@ -130,10 +130,10 @@
   <section class="block reveal">
     <div class="stats">
       <!-- ROADMAP:stats -->
-      <div class="stat"><b>18</b><span>Shipped</span></div>
+      <div class="stat"><b>19</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>7</b><span>Planned</span></div>
-      <div class="stat"><b>281</b><span>Loop finds</span></div>
+      <div class="stat"><b>282</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -462,6 +462,45 @@ had quietly stopped being true; it says what is actually so now.</p></details>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">the autopilot wrote hooks to Claude and nowhere else, long after boost knew a second host</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="ai-backend-fanout">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Agents · Parity</span></div>
+        <h3>A Gemini user got the heuristic fallback from every AI command</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p>Skills, MCP, rules, workflows and hooks all fan out across agents. <code>core/ai.py</code>
+did not: it knew the <code>claude</code> CLI, or <code>ANTHROPIC_API_KEY</code>, and nothing
+else. So <code>explain</code>, <code>search --smart</code>, <code>distill</code>,
+<code>infer</code>, <code>absorb</code>, <code>evolve</code> and <code>simulate</code> all
+degraded to their heuristic fallbacks for a user running Gemini CLI — with a perfectly good
+assistant installed. <b>This was the last Claude-only surface, and the one a user actually
+sees</b>, because the difference between the two paths is the difference between synthesised
+prose and a structural summary.
+<code>core/aihost.py</code> is the table, built like <code>hookhost</code>: per-backend facts
+as data, testable without spending a token or running a subprocess. Three of those facts are
+differences that would otherwise be bugs. <b>Gemini has no
+<code>--append-system-prompt</code></b>, so the system text is folded into the prompt body —
+passing an unknown flag would make every call fail with a usage error rather than degrade,
+which is the one outcome worse than having no AI at all. <b><code>ai.model</code> holds a
+Claude id</b>, and <code>gemini -m claude-sonnet-4-5</code> is an error, not a fallback. And
+<b>Claude stays first</b>, which is behaviour rather than taste: anyone with both CLIs had
+Claude answering before this existed, and reordering would silently change every result.
+<b>An existing test caught a real regression.</b> The first model rule asked "does this backend
+own the id", which quietly dropped an explicit <code>--model m-x</code> override on Claude.
+<code>test_cli_explicit_model_and_timeout</code> went red and was right to. The corrected rule
+is <b>"not another vendor's"</b>, not "one of mine": an id no backend claims — a custom alias, a
+pinned snapshot — goes through untouched, and only an id another backend plainly owns is
+withheld.
+<b>Scoped honestly.</b> The direct-API path stays Anthropic-only; someone using Gemini CLI has
+the binary by definition, and a second HTTP client is a separate change with its own wire
+format and error taxonomy. The eval floors were measured against Claude, and the README now
+says so rather than implying the numbers describe every backend.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">the last surface that only spoke Claude — and the one a user can see</span>
         </div>
       </article>
 

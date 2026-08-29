@@ -282,9 +282,14 @@ the C4 diagrams in [`docs/architecture/`](docs/architecture/README.md).
 | Team & Collaboration | cohort · profile · protocol · pulse · replay · who |
 
 The AI-assisted commands (`search --smart`, `explain`, `distill`, `infer`,
-`absorb`, `evolve`, `simulate`) call the `claude` CLI when it is on your PATH,
-or use `ANTHROPIC_API_KEY`, and fall back to plain heuristics when neither is
-available.
+`absorb`, `evolve`, `simulate`) use whichever assistant CLI you already have —
+`claude` first, then `gemini` — or `ANTHROPIC_API_KEY`, and fall back to plain
+heuristics when none is available. boost handles the differences: Gemini takes
+no separate system prompt, so it is folded into the message, and a model id
+belonging to another vendor is never passed through.
+
+The retrieval and faithfulness evals were measured against Claude, so treat
+those floors as Claude-measured rather than a claim about every backend.
 
 ## boost as an MCP server
 
