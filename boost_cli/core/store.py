@@ -80,7 +80,16 @@ def installed() -> dict:
 def source_dir_for(entry: dict) -> Path:
     """Absolute path of a catalog entry's skill dir inside its tap clone.
 
-    Materializes the directory first. Taps check out Markdown only, so a skill
+    Clones the tap first if it is only *registered* and not yet cloned — the
+    state `boost catalog --import` deliberately leaves a tap in (a bundle
+    ships the catalogue, not the repo, precisely so the receiver can search
+    before paying for any clone). `catalog --import`'s own hint promises
+    "`boost install` clones just the one registry it needs"; without this, a
+    tap that was imported rather than tapped raised "source vanished from
+    tap" — a message that implies the source *used to* exist, when really it
+    was never fetched.
+
+    Materializes the directory next. Taps check out Markdown only, so a skill
     that ships `scripts/` or `assets/` has them in the index and not on disk;
     `_copy_skill` is a copytree, and handed a partial directory it copies what
     is there and reports success. Every consumer of a tap's real files — both
@@ -88,6 +97,8 @@ def source_dir_for(entry: dict) -> Path:
     the one place that has to get it right.
     """
     tap = registry.get(entry["tap"])
+    if not tap.is_cloned:
+        gitutil.clone_shallow(tap.url, tap.path)
     src = tap.path if entry["rel_dir"] == "." else tap.path / entry["rel_dir"]
     gitutil.materialize(tap.path, entry["rel_dir"])
     if not (src / "SKILL.md").exists():

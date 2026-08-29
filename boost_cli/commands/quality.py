@@ -94,7 +94,12 @@ def _resolve_as_far_as_it_exists(path: Path) -> Path:
     while cur != cur.parent and not cur.exists():
         tail.append(cur.name)
         cur = cur.parent
-    with suppress(OSError):
+    # RuntimeError is not redundant with OSError here: Python 3.12's
+    # `Path.resolve()` raises RuntimeError("Symlink loop from ...") for a
+    # cycle even in non-strict mode, and RuntimeError is NOT an OSError
+    # subclass — 3.13+ raises OSError for the same input. See
+    # store.resolves_into_store for the identical split, caught the same way.
+    with suppress(OSError, RuntimeError):
         cur = cur.resolve()
     return cur.joinpath(*reversed(tail))
 
@@ -907,10 +912,18 @@ def cmd_heal(argv):
 
     plan = store.sync_plan()
     if dry:
+        # `ours` above is exactly what a real run unlinks before computing
+        # this plan, so `sync_plan`'s stale-link sweep never sees those paths
+        # on a real run — only here, where nothing was unlinked yet. Skip
+        # them so a preview doesn't report the same path twice under two
+        # different actions.
+        already_reported = {str(link) for link in ours}
         for name, agent in plan["missing_links"]:
             out.info("would link %s → %s" % (name, agent))
             actions.append("link %s" % name)
         for p in plan["stale_links"]:
+            if p in already_reported:
+                continue
             out.info("would remove stale link %s" % _tilde(p))
             actions.append("stale %s" % p)
         for name in plan["missing_store"]:
@@ -988,7 +1001,12 @@ def cmd_conflict(argv):
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
-    installed = _iter_installed()
+    # Quarantine removes a skill's active links/materialization on purpose
+    # (see _drift_status_materialized's docstring) — a quarantined skill has
+    # nothing live to be contradicted by, so it is excluded from both sides
+    # of conflict detection rather than surfacing a conflict finding no
+    # `boost quarantine` can ever clear.
+    installed = [(n, e) for n, e in _iter_installed() if not e.get("quarantined")]
     rules: list[tuple[str, str, str, set]] = []   # skill, line, polarity, stems
     declared: list[tuple[str, str]] = []           # skill, conflicting skill
     installed_names = {n for n, _e in installed}

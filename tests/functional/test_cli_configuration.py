@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import getpass
 import io
+import itertools
 import json
 import socket
 import subprocess
@@ -398,6 +399,31 @@ class TestOnboardOverwrite:
         lock = json.loads((repo / self.LOCK).read_text(encoding="utf-8"))
         assert "brainstorming" in lock["skills"]
         assert "updated" in r.out
+
+    def test_rerun_with_no_changes_reports_telemetry_unchanged(
+            self, boost, installed, tmp_path, monkeypatch):
+        # telemetry.json's own "created" field must not defeat the
+        # byte-for-byte unchanged check documented on _write_onboard_file:
+        # a second run with nothing else different should never say
+        # "updated" for a file whose content didn't actually change. Force
+        # two distinct wall-clock instants so this can't pass by luck (two
+        # fast invocations landing in the same second, as a real run can).
+        counter = itertools.count()
+        monkeypatch.setattr(
+            "boost_cli.commands.configuration.util.now_iso",
+            lambda: "2026-01-01T00:00:%02dZ" % next(counter))
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        boost("onboard", "--repo", repo)
+        before = (repo / self.TELEMETRY).read_text(encoding="utf-8")
+
+        r = boost("onboard", "--repo", repo, "--force")
+        after = (repo / self.TELEMETRY).read_text(encoding="utf-8")
+
+        assert after == before, "telemetry.json changed on a no-op re-run"
+        telemetry_line = next(l for l in r.out.splitlines()
+                              if l.strip().endswith(self.TELEMETRY))
+        assert telemetry_line.strip().startswith("unchanged")
 
     def test_an_existing_file_boost_cannot_read_is_still_protected(
             self, boost, installed, tmp_path, monkeypatch):

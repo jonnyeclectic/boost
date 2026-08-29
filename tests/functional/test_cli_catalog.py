@@ -15,8 +15,9 @@ neither is exercised by a test of the core module.
 from __future__ import annotations
 
 import json
+import shutil
 
-from boost_cli.core import config, paths
+from boost_cli.core import config, paths, registry
 
 
 def _cache(name: str, entries: int = 2) -> None:
@@ -147,6 +148,28 @@ class TestImport:
         boost("catalog", "--export", str(dest))
         r = boost("catalog", "--import", str(dest))
         assert "install" in r.out and "clone" in r.out
+
+    def test_install_after_import_clones_lazily_no_manual_update(
+            self, boost, fixture_tap_src, tmp_path):
+        # The promise this command makes (see the "clones just the one
+        # registry it needs" hint below): after an import, `boost install`
+        # must work on its own — no `boost update <tap>` in between. Real
+        # tap (not the fabricated cache above) so a genuine clone happens.
+        boost("tap", fixture_tap_src)
+        dest = tmp_path / "c.tgz"
+        boost("catalog", "--export", str(dest))
+
+        # Simulate the receiving machine: registered + cached, never cloned.
+        tap = registry.get("fixture-tap")
+        shutil.rmtree(tap.path)
+        assert not tap.is_cloned
+
+        boost("catalog", "--import", str(dest))
+        assert not tap.is_cloned          # import itself must not clone
+
+        r = boost("install", "brainstorming")
+        assert "installed" in r.out.lower() or "brainstorming" in r.out
+        assert (paths.store_dir() / "brainstorming" / "SKILL.md").exists()
 
     def test_importing_a_missing_file_fails_cleanly(self, boost, sandbox,
                                                     tmp_path):

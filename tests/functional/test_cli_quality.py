@@ -338,6 +338,18 @@ class TestAudit:
         # beta never declared anything, so it gets no conflict finding
         assert "conflict" not in [f["label"] for f in data["findings"]["beta"]]
 
+    def test_skills_conflict_cleared_by_quarantine(self, boost, tmp_path):
+        _import_skill(boost, tmp_path, "alpha", "# Alpha\n",
+                      extra_fm="conflicts: beta\n")
+        _import_skill(boost, tmp_path, "beta", "# Beta\n")
+        boost("audit", "--skills", expect=1)   # sanity: MED before quarantine
+
+        boost("quarantine", "alpha")
+        data = json.loads(boost("audit", "--skills", "--json").out)
+        assert data["counts"]["MED"] == 0
+        assert "conflict" not in [f["label"] for f in
+                                  data["findings"].get("beta", [])]
+
     def test_skills_conflict_against_uninstalled_peer_is_silent(self, boost, tmp_path):
         _import_skill(boost, tmp_path, "alpha", "# Alpha\n",
                       extra_fm="conflicts: never-installed\n")
@@ -756,6 +768,24 @@ class TestHeal:
         assert "removed broken link ~/.claude/skills/relghost" in r.out
         assert not rel.is_symlink()
 
+    def test_dry_run_does_not_double_report_the_same_broken_link(
+            self, boost, installed):
+        # A skill's entire store dir gone breaks its symlinks in every linking
+        # agent. The real run unlinks them (`ours`) before computing
+        # `store.sync_plan()`, so `sync_plan`'s own stale-link sweep never
+        # sees them; `--dry-run` never unlinks, so the same paths were
+        # reported twice — once as "would remove broken link", again as
+        # "would remove stale link" — overstating what a real run does.
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+        link = paths.home() / ".claude" / "skills" / "brainstorming"
+        assert link.is_symlink() and not link.exists()
+
+        r = boost("heal", "--dry-run")
+        mentions = [l for l in r.out.splitlines()
+                   if "~/.claude/skills/brainstorming" in l]
+        assert len(mentions) == 1, mentions
+        assert mentions[0].strip().startswith("would remove broken link")
+
     def test_restores_missing_store_from_tap(self, boost, installed):
         shutil.rmtree(paths.store_dir() / "brainstorming")
         r = boost("heal")
@@ -801,6 +831,19 @@ class TestConflict:
 
         boost("uninstall", "cowboy-coding")
         r = boost("conflict")
+        assert "no contradictory rules across 1 skill" in r.out
+
+    def test_quarantine_clears_a_declared_conflict(self, boost, tapped):
+        # Quarantine removes a skill's active links/materialization on purpose
+        # (see quality.py's doctor/drift comments) — a MED conflict finding
+        # against a skill with no active presence is a false alarm.
+        boost("install", "tdd-workflow", "cowboy-coding")
+        boost("conflict", expect=1)   # sanity: the pair is flagged before quarantine
+
+        boost("quarantine", "cowboy-coding")
+        r = boost("conflict")
+        assert r.rc == 0
+        assert "cowboy-coding" not in r.out
         assert "no contradictory rules across 1 skill" in r.out
 
     def test_ai_confirms_heuristic_pair(self, boost, tapped, monkeypatch):
