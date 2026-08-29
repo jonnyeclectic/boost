@@ -154,6 +154,15 @@ Two things closed this gap:
    `[build-system].requires`). `publish.yml` runs it between `python -m build`
    and `twine check dist/*`, so nothing is ever attested un-normalised.
 
+**This applies to releases cut after this fix landed, not to every release
+already on PyPI.** Every artifact published before it predates
+`SOURCE_DATE_EPOCH` being set in `publish.yml` at all and predates
+`scripts/normalize_sdist.py` existing — rebuilding one of those tags with the
+recipe below will not reproduce it, because the published bytes were never
+built this way to begin with. Check the release date against when this
+section last changed (`git log -p -- docs/verifying-releases.md`) before
+relying on a match, or before reporting a mismatch as a compromise.
+
 **Rebuilding from the sdist alone**, without cloning the repository, needs one
 more value this page can supply but the sdist itself cannot: the sdist carries
 no `.git` history, so `git log -1 --format=%ct` — what `publish.yml` uses to
@@ -163,23 +172,23 @@ release's git tag instead (`git checkout <tag>`, matching what
 compute it the same way `publish.yml` does:
 
 ```bash
-git checkout v1.2.30   # the tag this release's attestation names
+git checkout <tag>   # the tag this release's attestation names
 export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
-export SETUPTOOLS_SCM_PRETEND_VERSION=1.2.30   # sdist has no .git either way
+export SETUPTOOLS_SCM_PRETEND_VERSION=<version>   # sdist has no .git either way
 python -m build
 python3 scripts/normalize_sdist.py dist/*.tar.gz
 shasum -a 256 dist/*
 ```
 
 Compare the reported hashes against the ones on PyPI (`pip download
-boost-skill-cli --no-deps -d . && shasum -a 256 *`). A mismatch here is not
-automatically a compromise — a different OS or Python patch version can still
-shift bytes in ways this project has not chased down — but on the same
-platform and toolchain the two should agree.
+boost-skill-cli --no-deps -d . && shasum -a 256 *`). A mismatch on a release
+built after this fix landed is not automatically a compromise — a different OS
+or Python patch version can still shift bytes in ways this project has not
+chased down — but on the same platform and toolchain the two should agree.
 
-Until both are done, `build_reproducible` is answered **Unmet** in
-[openssf-badge.md](openssf-badge.md). Use the provenance attestation above,
-which is the guarantee boost does offer.
+`build_reproducible` is answered **Met** in
+[openssf-badge.md](openssf-badge.md) on that basis: falsifiable per-commit via
+`scripts/check_reproducible.py`, going forward from this change.
 
 ## Why the ordering in `publish.yml` matters
 

@@ -176,7 +176,8 @@ jobs:
           # `python -m build` runs at — this is what makes the wheel's zip
           # entries reproducible (setuptools honours it) and what
           # normalize_sdist.py below clamps the sdist to.
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
           python -m build
           # setuptools has no equivalent knob for the sdist (pypa/setuptools
           # #2133, open since 2020): it writes each member's real build-time
