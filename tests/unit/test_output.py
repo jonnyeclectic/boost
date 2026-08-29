@@ -441,6 +441,12 @@ class TestVisibleLenWideChars:
     def test_ascii_is_unchanged(self):
         assert output.visible_len("hello world") == 11
 
+    def test_combining_mark_costs_zero_columns(self):
+        # "e" + COMBINING ACUTE ACCENT (U+0301) renders as one glyph "é" on
+        # one terminal column, not two codepoints' worth.
+        assert output.visible_len("e\u0301") == 1
+        assert output._char_width("\u0301") == 0
+
 
 class TestClipVisibleWideChars:
     def test_never_splits_a_wide_character(self):

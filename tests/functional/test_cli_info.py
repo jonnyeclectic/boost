@@ -456,6 +456,28 @@ class TestPreview:
         r = boost("preview", "brainstorming")
         assert "diverge -> cluster -> converge" in r.out
 
+    def test_list_item_wraps_and_continuation_aligns_under_the_bullet(
+            self, boost, installed, monkeypatch):
+        # "• Always produce at least 12 raw ideas before clustering." (58
+        # cols) fits under 60 — none of this audit's real-command scans at
+        # 60/80/100/120 forced this branch to actually wrap, so it shipped
+        # untested. At 40 columns it must wrap. Scoped to the "Rules"
+        # section onward: the titlebar line above it (out.titlebar()) is a
+        # separate, pre-existing, never-wrapped decorative element this fix
+        # did not touch and is not claimed to be narrow-pane-safe.
+        monkeypatch.setenv("COLUMNS", "40")
+        r = boost("preview", "brainstorming")
+        lines = r.out.split("\n")
+        rules_from = next(i for i, ln in enumerate(lines) if ln == "Rules")
+        for ln in lines[rules_from:]:
+            assert len(ln) <= 40, ln
+        idx = next(i for i, ln in enumerate(lines)
+                  if ln.startswith(" • Always produce"))
+        # the continuation line must be indented to align under the bullet
+        # text (prefix = " • ", 3 columns), not flush to column 0
+        assert lines[idx + 1].startswith("  ")
+        assert "clustering." in lines[idx + 1]
+
 
 # ── explain (no AI) ──────────────────────────────────────────────────────
 
@@ -470,6 +492,26 @@ class TestExplain:
         assert "• Never critique during the diverge phase." in r.out
         assert ("• Always produce at least 12 raw ideas before clustering."
                 in r.out)
+
+    def test_description_wraps_via_print_wrapped_at_a_narrow_pane(
+            self, boost, installed, monkeypatch):
+        # _print_wrapped (shared by explain's AI-reply and no-AI description
+        # paths) used a hardcoded textwrap width=76 that ignored COLUMNS
+        # entirely — at 40 columns "Structured ideation & divergent-thinking
+        # facilitation" (55 cols) must now fold. Scoped to the description
+        # block only (the lines before "Outline:"): the separate "Key
+        # rules:" bullet list a few lines further down is a different,
+        # pre-existing out.info() call this fix did not touch and is not
+        # claimed to be narrow-pane-safe.
+        monkeypatch.setenv("COLUMNS", "40")
+        r = boost("explain", "brainstorming")
+        lines = r.out.split("\n")
+        desc_block = lines[:lines.index("")] if "" in lines else lines
+        for ln in desc_block:
+            assert len(ln) <= 40, ln
+        assert len(desc_block) > 1, "description did not actually wrap"
+        assert "Structured ideation" in r.out
+        assert "facilitation" in r.out
 
     def test_faithful_ai_reply_is_shown(self, boost, installed, monkeypatch):
         from boost_cli.core import ai
