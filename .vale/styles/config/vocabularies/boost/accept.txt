@@ -79,6 +79,8 @@ lookups
 lowercasing
 Magento
 maintainer's
+Matchers
+matchers
 mcp
 mergeable
 minisign
