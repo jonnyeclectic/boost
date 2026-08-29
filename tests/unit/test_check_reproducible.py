@@ -73,8 +73,13 @@ class TestCompareDirs:
 
 
 class TestBuildAvailable:
-    def test_true_when_build_is_importable(self):
-        # `build` is a real dependency of this dev environment (release-tools).
+    def test_true_when_build_is_importable(self, monkeypatch):
+        # Stubbed, not ambient. Asserting the real environment has `build`
+        # installed tests the runner rather than the function: it passed on a
+        # dev venv carrying release-tools and failed on every CI leg, which do
+        # not install it. The contract is "True iff find_spec resolves", and
+        # that is what is pinned here.
+        monkeypatch.setattr(mod.importlib.util, "find_spec", lambda name: object())
         assert mod.build_available() is True
 
     def test_false_when_build_is_not_importable(self, monkeypatch):
