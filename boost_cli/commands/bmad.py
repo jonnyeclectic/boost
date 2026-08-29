@@ -78,7 +78,11 @@ def cmd_bmad(argv) -> int:
     p = cliparse.parser(
         prog="boost bmad",
         description="BMAD Method autopilot: personas, prompt routing, workflows")
-    p.add_argument("action", choices=_ACTIONS, help=" | ".join(_ACTIONS))
+    # metavar="ACTION": the auto-generated {on,off,...,status} metavar (13
+    # entries) is one unbreakable token and overflowed the usage line up to
+    # 100 columns wide. The full list still shows in `help=` below.
+    p.add_argument("action", choices=_ACTIONS, metavar="ACTION",
+                   help=" | ".join(_ACTIONS))
     p.add_argument("value", nargs="?",
                    help="startup: on | off | status · route: the prompt to classify")
     p.add_argument("-s", "--scope", choices=("project", "global"), default=None,

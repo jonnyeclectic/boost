@@ -165,6 +165,25 @@ class TestCohort:
         r = boost("cohort", "apply")
         assert "no cohorts defined" in r.out
 
+    def test_empty_listing_hint_wraps_and_keeps_the_command_atomic(
+            self, boost, tapped, monkeypatch):
+        # The hint's backtick-quoted command is 62 columns by itself — wider
+        # than a 60-column pane even alone, so it is the one line allowed to
+        # overflow whole (out.wrap's documented law: an atomic token wider
+        # than the line is emitted whole rather than split). What must be
+        # true is: the message no longer runs 76 columns unwrapped, "no
+        # cohorts defined" still wraps onto its own short line, and the
+        # command is intact on one physical line rather than split in half.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("cohort", "list")
+        lines = r.out.split("\n")
+        assert any(ln.strip() == "○ no cohorts defined" for ln in lines)
+        cmd = "`boost cohort create pilot --skills tdd-workflow --percent 50`"
+        assert any(cmd in ln for ln in lines)
+        # every OTHER line — i.e. not the one carrying the unbreakable
+        # command — still fits the pane
+        assert all(len(ln) <= 60 for ln in lines if cmd not in ln)
+
 
 # ---------------------------------------------------------------- profile
 
@@ -404,6 +423,13 @@ class TestPulse:
         assert ("no activity yet — events appear as you install and manage "
                 "skills") in r.out
 
+    def test_empty_journal_fits_a_narrow_pane(self, boost, sandbox,
+                                              monkeypatch):
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("pulse")
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
+
     def test_feed_newest_first_with_user(self, boost, installed):
         r = boost("pulse")
         rows = [l for l in r.out.splitlines() if USER in l]
@@ -524,6 +550,13 @@ class TestReplay:
         r = boost("replay", "list")
         assert "no lock history yet" in r.out
 
+    def test_empty_history_fits_a_narrow_pane(self, boost, sandbox,
+                                              monkeypatch):
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("replay", "list")
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
+
     def test_diffs_cover_rules_with_kind_labels(self, boost, tapped,
                                                 tick_clock):
         # Snapshots hold all three lock sections; a rule that appeared since
@@ -610,3 +643,11 @@ class TestWho:
     def test_empty_journal(self, boost, sandbox):
         r = boost("who")
         assert "no journal activity yet" in r.out
+
+    def test_empty_journal_fits_a_narrow_pane(self, boost, sandbox,
+                                              monkeypatch):
+        # 89 columns unwrapped — the widest of this audit's empty-state finds.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("who")
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln

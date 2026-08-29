@@ -13,7 +13,6 @@ import re
 import shlex
 import subprocess
 import sys
-import textwrap
 import webbrowser
 from itertools import chain
 from pathlib import Path
@@ -197,9 +196,12 @@ def _mark(installed: bool) -> str:
 
 
 def _print_wrapped(text: str) -> None:
+    """Wrap prose to the *real* pane via out.wrap(), not a hardcoded width —
+    a fixed textwrap width=76 neither shrank for a narrow terminal nor grew
+    for a wide one, and did not know a backtick span must stay whole."""
     paras = [p for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
     for i, para in enumerate(paras):
-        for line in textwrap.wrap(" ".join(para.split()), width=76):
+        for line in out.wrap(" ".join(para.split()), out.term_width() - 2):
             out.info(line)
         if i < len(paras) - 1:
             print()
@@ -471,10 +473,11 @@ def cmd_info(argv):
     if badges:
         out.info(" ".join(badges))
     if desc:
-        lines = textwrap.wrap(desc, width=62)
-        out.kv("description", lines[0])
-        for ln in lines[1:]:
-            print(" " * 16 + ln)
+        # kv's own wrap=True already folds to the real terminal width and
+        # aligns continuations under the value — the hand-rolled version this
+        # replaced hardcoded width=62 (a hand copy of kv's default 16-column
+        # lead against a fixed 78-column pane) and ignored COLUMNS entirely.
+        out.kv("description", desc, wrap=True)
     if lock:
         inst_v = str(lock.get("version", "?"))
         out.kv("version", inst_v)
@@ -630,9 +633,19 @@ def _render_markdown(body: str) -> None:
             continue
         m = re.match(r"^(\s*)[-*]\s+(.*)$", line)
         if m:
-            print("%s • %s" % (m.group(1), _inline(m.group(2))))
+            prefix = "%s • " % m.group(1)
+            # Wrap the raw markdown first, THEN colorize each wrapped chunk —
+            # coloring before wrapping (the old behavior for the plain-prose
+            # branch below) would either split an inline `code` span or leave
+            # line 1's color code unterminated. A backtick span is one atomic
+            # token either way, via out.wrap().
+            wrapped = out.wrap(m.group(2), out.term_width() - len(prefix)) or [""]
+            for i, chunk in enumerate(wrapped):
+                lead = prefix if i == 0 else " " * len(prefix)
+                print(lead + _inline(chunk))
             continue
-        print(_inline(line))
+        for chunk in out.wrap(line, out.term_width()) or [""]:
+            print(_inline(chunk))
 
 
 def cmd_preview(argv):

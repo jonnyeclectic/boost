@@ -199,7 +199,12 @@ def print_help() -> None:
         else:
             print(head)
         for n, s in cmds:
-            print("  " + out.c(n.ljust(width + 2), out.CYAN)
+            # accent, not a raw 16-color CYAN: every other command-name
+            # surface (search rows, info badges) resolves through this same
+            # semantic role, which is Aurora truecolor cyan with the correct
+            # 16-color/plain degradation — a raw CYAN here painted a visibly
+            # different cyan on any truecolor terminal.
+            print("  " + out.role(n.ljust(width + 2), "accent")
                   + out.truncate(s, max(0, cols - width - 4)))
     print()
     print(out.c("%d commands · %d groups" % (len(COMMANDS), len(GROUPS)), out.DIM))

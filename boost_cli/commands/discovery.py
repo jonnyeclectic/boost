@@ -1630,7 +1630,7 @@ def cmd_stats(argv):
         else:
             out.kv("latest", "%s %s" % (latest, out.role("(up to date)", "muted")))
     if upstream:
-        out.kv("upstream", upstream)
+        out.kv("upstream", upstream, wrap=True)
     return 0
 
 

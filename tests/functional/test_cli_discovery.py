@@ -1365,6 +1365,16 @@ class TestStats:
         assert "1.4.0 (up to date)" in lines["latest"]
         assert "fixture skills" in lines["upstream"]  # fixture commit subject
 
+    def test_upstream_wraps_to_a_narrow_pane(self, boost, installed,
+                                             monkeypatch):
+        # "b2b9486  2026-08-28  Boost Fixture  fixture skills" (50 cols) plus
+        # the 16-column kv lead ran to 66 — over a 60-column pane.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("stats", "brainstorming")
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
+        assert "fixture" in r.out and "skills" in r.out
+
     def test_update_available(self, boost, installed):
         p = paths.lockfile_path()
         lock = json.loads(p.read_text(encoding="utf-8"))

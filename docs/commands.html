@@ -156,7 +156,7 @@
       <a class="cmd-link" href="#cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install">infer</a>
       <a class="cmd-link" href="#cmd-absorb" data-search="absorb turn recurring chat-history patterns into a skill  --history path --limit n --install">absorb</a>
       <a class="cmd-link" href="#cmd-evolve" data-search="evolve iteratively improve a skill from feedback  --feedback text --apply name">evolve</a>
-      <a class="cmd-link" href="#cmd-context" data-search="context branch-aware skill activation  status|enable|disable|map|unmap|apply">context</a>
+      <a class="cmd-link" href="#cmd-context" data-search="context branch-aware skill activation  action">context</a>
       <a class="cmd-link" href="#cmd-focus" data-search="focus temporarily prioritize skills for a work session  --clear --status --json skill">focus</a>
       <a class="cmd-link" href="#cmd-impact" data-search="impact measure a skill&#x27;s influence on code quality  --json name">impact</a>
     </div>
@@ -191,7 +191,7 @@
       <a class="cmd-link" href="#cmd-serve" data-search="serve browse the catalogue in a browser: search, facets and a tap graph  --port port --host host">serve</a>
       <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">mcp</a>
       <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">hooks</a>
-      <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain {on,off,route,personas,install,init,startup,orient,uninstall,disable,enable,doctor,status} value">bmad</a>
+      <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain action value">bmad</a>
       <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
     </div>
     <div class="group" data-group="team">
@@ -766,13 +766,13 @@
           <div class="arg"><code>--apply</code><span>write the revision to the installed skill</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-context" data-search="context branch-aware skill activation  status|enable|disable|map|unmap|apply">
+      <section class="cmd" id="cmd-context" data-search="context branch-aware skill activation  action">
         <h3><span class="cname">context</span><span class="gtag">ai</span></h3>
         <p class="summary">Branch-aware skill activation</p>
-        <pre class="syn">boost context status|enable|disable|map|unmap|apply</pre>
+        <pre class="syn">boost context ACTION</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>status|enable|disable|map|unmap|apply</code><span></span></div>
+          <div class="arg"><code>ACTION</code><span></span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-focus" data-search="focus temporarily prioritize skills for a work session  --clear --status --json skill">
@@ -1127,14 +1127,14 @@
           <div class="arg"><code>--timeout TIMEOUT</code><span>hook timeout in seconds (default: 10)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain {on,off,route,personas,install,init,startup,orient,uninstall,disable,enable,doctor,status} value">
+      <section class="cmd" id="cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain action value">
         <h3><span class="cname">bmad</span><span class="gtag">cfg</span></h3>
         <p class="summary">BMAD Method autopilot — `bmad on` routes every task to a persona</p>
-        <pre class="syn">boost bmad [--scope {project,global}] [--modules MODULES] [--yes] [--startup] [--plain] {on,off,route,personas,install,init,startup,orient,uninstall,disable,enable,doctor,status} [value]</pre>
+        <pre class="syn">boost bmad [--scope {project,global}] [--modules MODULES] [--yes] [--startup] [--plain] ACTION [value]</pre>
         <p class="desc">BMAD Method autopilot: personas, prompt routing, workflows</p>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>{on,off,route,personas,install,init,startup,orient,uninstall,disable,enable,doctor,status}</code><span>on | off | route | personas | install | init | startup | orient | uninstall | disable | enable | doctor | status</span></div>
+          <div class="arg"><code>ACTION</code><span>on | off | route | personas | install | init | startup | orient | uninstall | disable | enable | doctor | status</span></div>
           <div class="arg"><code>value</code><span>startup: on | off | status · route: the prompt to classify</span></div>
         </div>
         <div class="args-h">Options</div>

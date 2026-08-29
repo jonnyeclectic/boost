@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import sys
+import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -336,9 +337,30 @@ def badge(label: str, hue: str = "cyan") -> str:
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 
+def _char_width(ch: str) -> int:
+    """Terminal display width of one character: 2 for wide/fullwidth CJK and
+    most emoji, 0 for a combining mark, 1 otherwise.
+
+    A pure-stdlib approximation of wcwidth via ``unicodedata`` — no dependency
+    to earn just for column math, and the two classes it distinguishes
+    (``unicodedata.east_asian_width`` returning "W"/"F") are exactly the ones
+    that render two columns wide in every terminal this CLI targets.
+    """
+    if unicodedata.combining(ch):
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
 def visible_len(s: str) -> int:
-    """Length of a string ignoring ANSI color escapes — its column width."""
-    return len(_ANSI_RE.sub("", s))
+    """Column width of a string: ANSI escapes cost nothing, a wide character
+    (CJK, most emoji) costs 2, everything else costs 1.
+
+    ``len()`` alone undercounts any string holding a double-width character,
+    which is what silently misaligned a table the moment a cell held an emoji
+    or CJK text — the column budget was measured a codepoint short of what
+    the terminal actually draws.
+    """
+    return sum(_char_width(ch) for ch in _ANSI_RE.sub("", s))
 
 
 _CODE_SPAN_RE = re.compile(r"`[^`]*`")
@@ -457,13 +479,26 @@ _TRAFFIC = ((0xff, 0x5f, 0x57, RED), (0xfe, 0xbc, 0x2e, YELLOW),
             (0x28, 0xc8, 0x40, GREEN))
 
 
-def empty_state(message: str, hint: str | None = None) -> str:
+def empty_state(message: str, hint: str | None = None, wrap: bool = False) -> str:
     """A standardized empty-state: a muted ○ bullet + message, with an optional
     dim → hint on the next line. One affordance so 'nothing here' always reads
-    the same across commands."""
-    out_lines = ["  " + c("○ " + message, DIM)]
+    the same across commands.
+
+    ``wrap`` as in :func:`warn`: opt-in, folding each block to the pane rather
+    than always-on, so a call site with an atomic backtick-quoted command
+    (e.g. cohort's create hint) still gets that command whole rather than
+    split across lines. Both markers ("○ " / "→ ") are two visible columns,
+    matching the module's other 4-column-lead emitters (2-space indent + a
+    2-wide marker), so message and hint wrap to the same budget.
+    """
+    def _block(marker: str, text: str) -> list[str]:
+        body = _wrap_lines(text, 4) if wrap else [text]
+        return (["  " + c(marker + body[0], DIM)]
+                + ["    " + c(ln, DIM) for ln in body[1:]])
+
+    out_lines = _block("○ ", message)
     if hint:
-        out_lines.append("  " + c("→ " + hint, DIM))
+        out_lines += _block("→ ", hint)
     return "\n".join(out_lines)
 
 
@@ -676,8 +711,11 @@ def _clip_visible(s: str, width: int, ellipsis: str = "…") -> str:
             had_escape = True
             i = m.end()
             continue
+        w = _char_width(s[i])
+        if vis + w > keep:
+            break  # a wide character never gets cut in half for the ellipsis
         out_chars.append(s[i])
-        vis += 1
+        vis += w
         i += 1
     result = "".join(out_chars) + ellipsis
     if had_escape and not result.endswith(RESET):

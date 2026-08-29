@@ -419,6 +419,27 @@ class TestContext:
         r = boost("context", "map", "feature/*", " , ", expect=1)
         assert "no skills given" in r.err
 
+    def test_status_empty_hint_fits_a_narrow_pane(self, boost, sandbox,
+                                                   monkeypatch):
+        # "no rules — add one with `boost context map 'feature/*'
+        # skill1,skill2`" ran 71 columns unwrapped; 60 is well inside the
+        # narrow-terminal range this CLI is audited at.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("context", "status")
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
+        assert "`boost context map 'feature/*' skill1,skill2`" in r.out
+
+    def test_help_has_no_line_over_60_columns(self, boost, sandbox,
+                                              monkeypatch):
+        # the hand-written subparsers metavar
+        # "status|enable|disable|map|unmap|apply" overflowed a 60-column pane.
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("context", "--help")
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
+        assert "enable" in r.out and "unmap" in r.out
+
     def test_enable_without_rules_warns(self, boost, sandbox):
         r = boost("context", "enable")
         assert "branch-aware activation enabled" in r.out
