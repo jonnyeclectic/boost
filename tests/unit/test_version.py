@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: boost_cli._detect_version — the release-critical version chain.
 
 The version is resolved lazily from (in order) the setuptools-scm file, the

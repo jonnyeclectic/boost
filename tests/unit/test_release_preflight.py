@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/release_preflight.py — the pre-PyPI release gate.
 
 The script's whole reason to exist is that a release must not go out when a

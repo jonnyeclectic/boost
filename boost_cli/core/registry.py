@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Tap registries: GitHub repos (or local paths) full of SKILL.md files."""
 from __future__ import annotations
 

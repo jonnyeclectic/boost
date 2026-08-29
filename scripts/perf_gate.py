@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Performance-regression gate: complexity scaling, not wall-clock baselines.
 
 A saved-baseline benchmark compare flakes on shared CI runners — machine speed

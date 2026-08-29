@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Committed registries.json stays in lockstep with its generator.
 
 ``boost_cli/data/registries.json`` is a generated artifact (source of truth is

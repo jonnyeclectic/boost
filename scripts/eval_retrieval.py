@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Golden-set retrieval eval for boost's RAG engines.
 
 Tier 1 (deterministic given a pinned corpus): grades the always-on retrieval

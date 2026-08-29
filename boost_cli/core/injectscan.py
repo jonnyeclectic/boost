@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Scan skill Markdown for prompt-injection & risky-content patterns (stdlib).
 
 boost installs Markdown that an agent then *executes* as instructions, so the

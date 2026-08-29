@@ -30,4 +30,4 @@ So every criterion sorts into three buckets: documentation you can write, a repo
 setting you cannot do from a branch, and <b>structurally blocked — say so and move on</b>.
 Also records the three honesty traps this project walked into and had to back out of:
 claiming a setting that needs credentials to read, restating a claim the repo's own
-Scorecard triage refuses to make, and inheriting "the licence is MIT" when it is GPL-3.0.
+Scorecard triage refuses to make, and inheriting "the licence is MIT" when it was GPL-3.0.

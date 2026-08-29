@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Post-deploy smoke check for the published docs site.
 
     python3 scripts/post_deploy_smoke.py

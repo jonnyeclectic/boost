@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: the LangSmith golden-set publisher, which had none.
 
 ``evals/publish_golden_dataset.py`` is the "observe" leg of boost's LangChain

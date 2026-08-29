@@ -85,7 +85,7 @@ is no separate credential left behind to revoke.
 
 If the lead maintainer becomes unavailable:
 
-- **The code is safe regardless.** It is GPL-3.0, the full history is public,
+- **The code is safe regardless.** It is Apache-2.0, the full history is public,
   and every release is reproducible from a public tag. Anyone may fork.
 - **The published artifacts stay published.** PyPI releases and GitHub releases
   remain available; nothing expires if no one logs in.

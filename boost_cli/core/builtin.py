@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """The one tap boost ships itself, and the rule inside it.
 
 boost's whole product is asking a user to accept standing text written by

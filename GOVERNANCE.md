@@ -59,7 +59,7 @@ issue.
 
 **When you cannot reach agreement.** With a single maintainer there is no appeal
 body, and pretending otherwise would be dishonest. The real backstop is the
-licence: boost is GPL-3.0 with full public history, so anyone who thinks the
+licence: boost is Apache-2.0 with full public history, so anyone who thinks the
 project is being run badly can fork it and prove it. That is a genuine check on
 the maintainer, not a consolation prize.
 

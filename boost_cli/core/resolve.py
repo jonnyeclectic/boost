@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Skill dependency resolution — turn a set of requested skills into the full,
 correctly-ordered install list by following each skill's ``requires:`` closure.
 

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """`dense.status()` — why semantic search is (or isn't) running.
 
 Every one of the three things dense retrieval needs (the `[rag]` extra, an

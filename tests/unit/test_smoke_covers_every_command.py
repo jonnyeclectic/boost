@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: the smoke suite's `--help` sweep covers every command.
 
 ``tests/smoke.sh`` ends with a loop asserting that every command answers

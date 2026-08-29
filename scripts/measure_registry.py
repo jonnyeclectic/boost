@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Measure a registry repo's item count the way `est_items` is defined.
 
 `scripts/build_registries.py` documents `est_items` as *measured*, not

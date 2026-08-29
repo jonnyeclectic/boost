@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
-"""Fail when a resolved dependency's licence is incompatible with GPL-3.0.
+# SPDX-License-Identifier: Apache-2.0
+"""Fail when a resolved dependency's licence is incompatible with Apache-2.0.
 
 `pip-audit` gates known CVEs; nothing gated licence *terms*. boost's shipped
 runtime is stdlib-only, so the exposure is entirely in the opt-in extras —
 `[eval]` alone resolves to 94 packages, including the pinned langchain stack —
-and none of them had ever been checked against the project's own GPL-3.0.
+and none of them had ever been checked against the project's own licence.
 
 Reads ``pip-licenses --format=json`` (stdin, or a path) rather than shelling out,
 so the check is a pure function of its input and can be unit-tested without a
@@ -35,15 +35,27 @@ from pathlib import Path
 
 # (pattern, why). Matched case-insensitively against the whole declared licence
 # string. Deliberately short: the aim is high-confidence incompatibility, not a
-# taxonomy. LGPL, MPL and EPL are all fine to *consume* from a GPL-3.0 project
-# and are not listed.
+# taxonomy.
+#
+# The direction of this test inverted when boost moved from GPL-3.0 to
+# Apache-2.0, and it is worth being explicit about why rather than editing the
+# strings. GPL compatibility is one-way: Apache-2.0 code may be taken into a
+# GPL work, but GPL code may not be taken into an Apache-2.0 one without the
+# combination becoming GPL. So the family this check used to *permit* is now
+# the family it denies, and the AGPL/GPLv2-only special cases that mattered
+# under GPL-3.0 are subsumed by the general rule.
+#
+# LGPL, MPL and EPL stay allowed: their copyleft is per-file or per-library and
+# does not reach a work that merely depends on them, which is all boost's
+# opt-in extras do.
 DENIED: tuple[tuple[str, str], ...] = (
     (r"affero|\bagpl\b",
-     "AGPL adds network-use copyleft that GPL-3.0 does not carry"),
-    # GPLv2-*only* cannot be combined with GPL-3.0. "v2 or later" / "GPLv2+"
-    # can (it permits taking v3), so both spellings are excluded explicitly.
-    (r"gplv2(?!\+)|gpl-2\.0(?!-or-later)|general public license v2 \(",
-     "GPLv2-only is incompatible with GPL-3.0"),
+     "AGPL copyleft cannot be redistributed inside an Apache-2.0 work"),
+    # Ordered after AGPL so an "AGPL" string reports the sharper reason. The
+    # negative lookaheads keep LGPL out: "lesser general public license" and
+    # "lgpl" both contain "gpl" and are deliberately permitted above.
+    (r"(?<!l)\bgplv[23]|(?<!l)\bgpl-[23]\.0|(?<!lesser )general public license v[23] \(",
+     "GPL copyleft cannot be redistributed inside an Apache-2.0 work"),
     (r"proprietary|all rights reserved|\bsspl\b|commons clause|\bbusl\b",
      "not an open-source licence"),
 )

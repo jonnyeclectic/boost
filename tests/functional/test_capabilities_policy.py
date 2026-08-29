@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Functional tests: capability manifest & least-privilege policy end to end.
 
 The contract: a skill declares the capabilities it expects, and the user's

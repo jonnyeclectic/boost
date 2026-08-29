@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """A pull request that does not contain main's tip cannot merge.
 
 This is the check that would have stopped the red `main` of 2026-08-29. Two

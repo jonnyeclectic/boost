@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Verify every local link and #fragment in the docs site resolves.
 
 lychee (the links workflow) checks external URLs and that local files exist,

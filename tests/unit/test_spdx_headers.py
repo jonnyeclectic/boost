@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Every source file carries a copyright line and an SPDX licence identifier.
 
 The sweep that puts them there is `scripts/add_spdx_headers.py`, which also
@@ -67,16 +67,23 @@ def test_stamp_keeps_a_shebang_on_line_one() -> None:
 
 
 def test_expression_matches_the_declared_licence() -> None:
-    """`GPL-3.0-only` is a claim about LICENSE; keep the two in step."""
+    """The stamped expression is a claim about LICENSE; keep the two in step.
+
+    The header says `Apache-2.0`, so LICENSE must be the Apache License 2.0 and
+    must not still be the GPL text. That second assertion is the one with
+    history: a relicence that updates 319 headers and forgets the licence file
+    leaves every source file pointing at terms the repository does not ship.
+    """
     path = ROOT / "LICENSE"
     if not path.is_file():
         pytest.skip("LICENSE not reachable from this tree")
     licence = path.read_text(encoding="utf-8")
-    assert "GNU GENERAL PUBLIC LICENSE" in licence
-    assert "Version 3" in licence
-    # If an "or any later version" grant is ever added, `-only` becomes wrong.
-    # This is the tripwire for that day.
-    assert "at your option) any later version" not in licence.split("Preamble")[0]
+    assert "Apache License" in licence
+    assert "Version 2.0, January 2004" in licence
+    assert "GNU GENERAL PUBLIC LICENSE" not in licence
+    # Apache-2.0's whole point over MIT is the patent grant; if LICENSE were
+    # ever swapped for a text lacking it, the expression would be wrong.
+    assert "Grant of Patent License" in licence
 
 
 def test_no_two_package_files_are_byte_identical() -> None:

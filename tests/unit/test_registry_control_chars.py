@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: a tap spec carrying control characters is rejected at the door.
 
 `parse_spec` used to accept them. Given the ten bytes ``/\\0\\0\\0\\0\\0\\0\\0\\0A`` it

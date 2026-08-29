@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """A crash report is the one file users are invited to paste into a bug report.
 
 `_env_snapshot` captured every ``BOOST_*`` variable verbatim, and boost's own

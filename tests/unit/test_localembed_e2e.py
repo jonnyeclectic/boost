@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end: the real ONNX runtime against the real pinned BGE weights.
 
 Scope, stated precisely, because the obvious justification for this file is

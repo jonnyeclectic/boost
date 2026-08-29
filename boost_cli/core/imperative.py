@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Shared extractor for imperative ("normative") rules in skill Markdown.
 
 Skill bodies encode rules as *Always / Never / Must (not) / Do not* lines, and

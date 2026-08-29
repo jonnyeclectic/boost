@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """The LLM rerank cache: repeat searches must not pay the LLM again.
 
 The MCP `boost_search` path passes ``smart=True`` on every call and measured

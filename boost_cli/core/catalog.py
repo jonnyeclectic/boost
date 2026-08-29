@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Skill catalogs: scan tap repos for skill/rule/workflow files -> JSON caches.
 
 A catalog entry (plain dict) has:

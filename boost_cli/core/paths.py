@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """All filesystem locations boost touches.
 
 Everything derives from $HOME (or explicit env overrides) at call time so

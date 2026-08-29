@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/check_dco.py — the Developer Certificate of Origin gate.
 
 The gate exists to enforce an *assertion by the contributor*, so the test that

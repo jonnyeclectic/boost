@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: core/integrity.py — the binding-digest / commit-pin logic.
 
 These drive integrity directly (no CLI) so the mutation gate, which runs only

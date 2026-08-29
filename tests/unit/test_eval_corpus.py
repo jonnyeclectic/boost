@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/eval_corpus.py — the corpus the required gate measures.
 
 WHY THIS FILE EXISTS. `tests/eval/taps.txt` pinned repo NAMES, not commits, so

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """`dense.fix_hint()` — the one next action, shared by every surface that reports it.
 
 This table used to be a private dict inside `boost_cli/commands/quality.py`, read

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Run boost's retrieval evaluation over the hermetic golden set.
 
 Grades the shipped ranker (`boost search`'s BM25 engine, core/rag.py) against

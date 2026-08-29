@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Every shipped ``docs/*.html`` page is reachable from the main page.
 
 The Visual Guide (``docs/index.html``) is the front door to the docs site. A new

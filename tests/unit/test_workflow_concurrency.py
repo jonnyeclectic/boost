@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: superseded PR runs are cancelled, releases never are.
 
 Measured over six consecutive successful ``ci`` runs, **31%** of all job time

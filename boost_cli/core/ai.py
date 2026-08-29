@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Optional AI bridge for the Intelligence commands and --smart ranking.
 
 Strategy: use the first assistant CLI on PATH that `core/aihost.py` knows —

@@ -34,9 +34,10 @@ work <i>was</i>; it is now a dated record with its four findings and their outco
 which no static analyser produces.
 <b>One was a sweep.</b> <code>copyright_per_file</code> and <code>license_per_file</code> put
 <code>Copyright the boost contributors.</code> and
-<code>SPDX-License-Identifier: GPL-3.0-only</code> on <b>314 files</b>. <code>-only</code>
-because nothing in the repository grants "or any later version", and a test now fails if
-LICENSE ever gains one.
+<code>SPDX-License-Identifier</code> on <b>314 files</b> — <code>GPL-3.0-only</code> at the
+time, <code>Apache-2.0</code> since. Either way the expression is one constant in
+<code>scripts/add_spdx_headers.py</code>, and a test fails if it ever stops matching what
+<code>LICENSE</code> actually says.
 <b>What is left, and why.</b> <code>build_reproducible</code> is Unmet on measurement, not
 opinion: with <code>SOURCE_DATE_EPOCH</code> the wheel is bit-identical across builds and the
 sdist is not, because setuptools stamps real mtimes and the builder's uid/gid into the tarball

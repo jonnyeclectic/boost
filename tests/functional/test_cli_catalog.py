@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Functional tests: `boost catalog` end to end, through the real CLI.
 
 ``tests/unit/test_catalogbundle.py`` covers the engine — what goes in a bundle,

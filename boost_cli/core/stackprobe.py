@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Tech-stack probing: read a project tree and name its languages/frameworks.
 
 ``detect_stack`` used to live in ``commands/discovery.py`` even though the

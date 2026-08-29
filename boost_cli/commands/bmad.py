@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """boost bmad — the BMAD Method as a one-command, global autopilot.
 
 There are two surfaces here, and the split is the whole design.

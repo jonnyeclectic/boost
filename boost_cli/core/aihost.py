@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Per-assistant-CLI facts for the AI bridge — a pure table, like `hookhost`.
 
 `core/ai.py` knew exactly one backend: the `claude` CLI, or the Anthropic API

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """`(tap, name)` is not a unique key, and both engines used it as one.
 
 Measured on the pinned 6-tap eval corpus: 743 entries collapse to 694 distinct

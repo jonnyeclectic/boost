@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: taps never download Git LFS payloads.
 
 A tap is indexed for its Markdown; boost never reads an LFS payload. Without

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: taps check out only the files the scanner reads.
 
 A tap is indexed for its Markdown, but a clone brings the whole working tree —

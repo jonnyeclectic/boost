@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/check_licenses.py — the SPDX compatibility gate.
 
 Driven against the licence strings dependencies *actually* publish, not against
@@ -50,21 +50,33 @@ class TestPermissiveLicencesPass:
         assert mod.violations(rows(("pkg", licence))) == []
 
     def test_lgpl_and_mpl_are_fine_to_consume(self, mod):
-        # Weak copyleft is not a problem for a GPL-3.0 project, and banning it
-        # would fail builds for no reason.
+        # Weak copyleft reaches the library, not a work that merely depends on
+        # it, so it stays consumable from an Apache-2.0 project. This also
+        # guards the regex: "lgpl" and "lesser general public license" both
+        # contain "gpl", and the deny pattern's negative lookaheads are the
+        # only thing keeping them out.
         assert mod.violations(rows(
             ("a", "GNU Lesser General Public License v3 (LGPLv3)"),
             ("b", "GNU Lesser General Public License v2 or later (LGPLv2+)"),
             ("c", "Mozilla Public License 2.0 (MPL 2.0)"),
             ("d", "Eclipse Public License 2.0"))) == []
 
-    def test_gplv3_and_gplv2_or_later_pass(self, mod):
-        # GPL-3.0 is the project's own licence; "v2 or later" permits taking
-        # v3, so both combine cleanly. Only v2-*only* does not.
-        assert mod.violations(rows(
+    def test_strong_copyleft_no_longer_passes(self, mod):
+        """The direction of this check inverted with the move to Apache-2.0.
+
+        GPL compatibility is one-way: Apache-2.0 code may be taken into a GPL
+        work, but GPL code may not be redistributed inside an Apache-2.0 one
+        without the combination becoming GPL. Under the old GPL-3.0 licence
+        these three were explicitly fine; every one of them is now a finding,
+        and "v2 or later" no longer rescues anything because the destination
+        is not GPL at all.
+        """
+        problems = mod.violations(rows(
             ("a", "GNU General Public License v3 (GPLv3)"),
             ("b", "GNU General Public License v2 or later (GPLv2+)"),
-            ("c", "GPL-2.0-or-later"))) == []
+            ("c", "GPL-2.0-or-later")))
+        assert len(problems) == 3
+        assert all("Apache-2.0" in p for p in problems)
 
 
 class TestIncompatibleLicencesFail:
@@ -74,15 +86,17 @@ class TestIncompatibleLicencesFail:
     ])
     def test_agpl(self, mod, licence):
         [problem] = mod.violations(rows(("pkg", licence)))
-        assert "network-use copyleft" in problem
+        assert "AGPL copyleft" in problem
         assert problem.startswith("pkg: ")
 
     @pytest.mark.parametrize("licence", [
         "GNU General Public License v2 (GPLv2)", "GPL-2.0", "GPL-2.0-only",
+        "GNU General Public License v3 (GPLv3)", "GPL-3.0-only",
+        "GPL-3.0-or-later", "gplv3",
     ])
-    def test_gplv2_only(self, mod, licence):
+    def test_strong_copyleft(self, mod, licence):
         [problem] = mod.violations(rows(("pkg", licence)))
-        assert "GPLv2-only" in problem
+        assert "GPL copyleft" in problem
 
     @pytest.mark.parametrize("licence", [
         "Other/Proprietary License", "Proprietary", "All Rights Reserved",

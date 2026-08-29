@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: scripts/eval_gate.py — the pass/fail decision itself.
 
 The harness's arithmetic is pinned in test_eval_metrics.py. This file pins the

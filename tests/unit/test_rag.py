@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests for core.rag — full-content BM25 retrieval (Phase 1).
 
 Covers tokenizing, chunking, body extraction, index build (incl. commit-keyed

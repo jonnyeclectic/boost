@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Split the mutation gate across parallel CI shards, and merge the results back.
 
 The gate runs ~10.5k mutants over ``boost_cli/core`` and is the single longest

@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """``docs/vex/openvex.json`` — boost's OpenVEX 0.2.0 feed — round-trips and
 stays fresh.
 

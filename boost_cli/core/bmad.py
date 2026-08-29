@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """The BMAD autopilot: persona subagents, prompt routing, and a done-contract.
 
 `boost bmad on` is a one-time, global switch. After it, every prompt the agent

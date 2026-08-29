@@ -20,7 +20,7 @@ boost holds four badges: **passing**, **silver**, **Baseline Level 1** and
 **Baseline Level 2**. What remains is listed under [Human
 actions](#human-actions) at the end.
 
-Repository: <https://github.com/jonnyeclectic/boost> · Licence: GPL-3.0 ·
+Repository: <https://github.com/jonnyeclectic/boost> · Licence: Apache-2.0 ·
 Package: [`boost-skill-cli`](https://pypi.org/project/boost-skill-cli/)
 
 ---
@@ -40,8 +40,8 @@ Package: [`boost-skill-cli`](https://pypi.org/project/boost-skill-cli/)
 
 | Criterion | Cat. | Answer | Evidence |
 |---|---|---|---|
-| `floss_license` | MUST | **Met** | GPL-3.0. |
-| `floss_license_osi` | SUGGESTED | **Met** | GPL-3.0 is [OSI-approved](https://opensource.org/license/gpl-3-0). |
+| `floss_license` | MUST | **Met** | Apache-2.0. |
+| `floss_license_osi` | SUGGESTED | **Met** | Apache-2.0 is [OSI-approved](https://opensource.org/license/apache-2-0). |
 | `license_location` | MUST | **Met** | <https://github.com/jonnyeclectic/boost/blob/main/LICENSE>, at the repository root, and declared in `pyproject.toml`. |
 
 ### Documentation
@@ -161,7 +161,7 @@ of the security-design document for the full account.
 |---|---|---|---|
 | `crypto_published` | MUST | **Met** | Ed25519 (RFC 8032), SHA-512 (FIPS 180-4), SHA-256 (FIPS 180-4) and BLAKE2b-512 (RFC 7693). All publicly published and expert-reviewed; no private or proprietary algorithm anywhere. |
 | `crypto_call` | SHOULD | **Unmet — justified** | `boost_cli/core/ed25519.py` is a pure-standard-library implementation of Ed25519 rather than a call into `cryptography` or libsodium. It is a deliberate trade the stdlib-only runtime rule forces: CPython ships no Ed25519 primitive, so signature verification without a runtime dependency means implementing RFC 8032's verify half. The exposure is bounded — **verification only**, over public keys and public signatures, with no secret that a timing side channel could leak — and correctness is pinned to the published RFC 8032 §7.1 test vectors in the unit suite. Hashing is *not* reimplemented; it goes through `hashlib`. |
-| `crypto_floss` | MUST | **Met** | Everything cryptographic is `hashlib` (Python standard library) plus boost's own GPL-3.0 code. No proprietary component, and every function is implementable with FLOSS. |
+| `crypto_floss` | MUST | **Met** | Everything cryptographic is `hashlib` (Python standard library) plus boost's own Apache-2.0 code. No proprietary component, and every function is implementable with FLOSS. |
 | `crypto_keylength` | MUST | **Met** | Ed25519 is a 255-bit curve — above the criterion's 224-bit elliptic-curve minimum — and the digests are 256- and 512-bit, above the 224-bit hash minimum. No shorter length is configurable, so there is nothing to disable. |
 | `crypto_working` | MUST | **Met** | No MD4, MD5, SHA-1, single DES, RC4, Dual_EC_DRBG or ECB mode appears anywhere in the codebase; `ruff`'s `S` family fails the build on weak-hash use, so a regression is caught mechanically. |
 | `crypto_weaknesses` | SHOULD | **Met** | Same evidence. Ed25519, SHA-2 and BLAKE2 have no known serious weakness. |

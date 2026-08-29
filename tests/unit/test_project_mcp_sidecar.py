@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """Unit tests: a project-scoped install records its MCP servers in the repo.
 
 ``boost install <skill> --scope project`` is a promise about blast radius: the

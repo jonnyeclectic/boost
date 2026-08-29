@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """The rule behind `est_items`: one item, however many agents it renders for.
 
 `scripts/measure_registry.py` exists because `len(catalog.scan_dir(repo))` stopped
