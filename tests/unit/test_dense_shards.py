@@ -50,7 +50,7 @@ def _store(provider="local", model="bge", dim=8, rows=(("a", "acme/skills"),),
     try:
         con.execute("CREATE TABLE IF NOT EXISTS chunks ("
                     "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, tap TEXT,"
-                    " path TEXT, kind TEXT, cix INTEGER, snip TEXT)")
+                    " path TEXT, kind TEXT, cix INTEGER, snip TEXT, digest TEXT)")
         con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
         # The quantized layout, as ordinary tables. Production makes
         # `vec_chunks_bin` a vec0 virtual table, but nothing here queries it —

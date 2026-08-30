@@ -442,3 +442,71 @@ class TestReuseDoesNotPayForTheWholeStore:
         finally:
             con.close()
         assert (fresh, kept) == ([], [])
+
+
+class TestTheStandInSchemaMatchesTheReal:
+    """`test_dense_fallback` replaces `_ensure_schema` with a hand-written one.
+
+    It does that for a good reason — the real one creates a `vec0` virtual
+    table, which needs an extension those tests deliberately run without. But
+    the `chunks` shape in the stand-in is a COPY, and a copy drifts: adding
+    `digest` to the real schema left the stand-in building the previous version
+    while its `meta` still claimed to be the current one, so `build()` skipped
+    the wipe and every insert failed with "table chunks has no column named
+    digest". Eight tests, on every platform.
+
+    Pinning the column set here is what makes the next column addition fail in
+    one obvious place instead of eight confusing ones — the same trick
+    `test_gitutil_sparse.py` uses to hold `gitutil`'s patterns against
+    `catalog`'s.
+    """
+
+    @staticmethod
+    def _columns(sql_runner) -> set:
+        import sqlite3
+        con = sqlite3.connect(":memory:")
+        try:
+            sql_runner(con)
+            return {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+        finally:
+            con.close()
+
+    def test_the_fallback_stand_in_has_the_real_columns(self):
+        import inspect
+        import re
+
+        from tests.unit import test_dense_fallback as fb
+
+        # The stand-in is a closure inside a test; read its source rather than
+        # exporting it, so the fixture stays where it is used.
+        src = inspect.getsource(fb)
+        m = re.search(r'CREATE TABLE IF NOT EXISTS chunks \((.*?)\)"\)',
+                      src, re.S)
+        assert m, "the stand-in schema moved — re-point this test"
+        stand_in = {p.strip().split()[0].strip('" ')
+                    for p in m.group(1).replace('"', " ").split(",")}
+        stand_in = {c for c in stand_in if c and c.isidentifier()}
+
+        real = self._columns(lambda con: con.execute(
+            "CREATE TABLE chunks (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " name TEXT, tap TEXT, path TEXT, kind TEXT, cix INTEGER,"
+            " snip TEXT, digest TEXT)"))
+        missing = real - stand_in
+        assert not missing, (
+            "the hand-written schema in test_dense_fallback is missing %s — "
+            "it will claim to be the current INDEX_VERSION while building the "
+            "previous one" % sorted(missing))
+
+    def test_the_real_schema_is_what_this_test_pins(self, sandbox):
+        # The other half: if `_ensure_schema` gains a column, the literal above
+        # goes stale too. Compare against the real thing where it can run.
+        con = dense._connect()
+        if con is None:
+            pytest.skip("sqlite-vec backend unavailable")
+        try:
+            dense._ensure_schema(con, 8)
+            cols = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+        finally:
+            con.close()
+        assert {"id", "name", "tap", "path", "kind", "cix", "snip",
+                "digest"} <= cols
