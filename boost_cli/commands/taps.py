@@ -240,7 +240,7 @@ def cmd_taps(argv) -> int:
     # that `boost update` deliberately skips should say why on the line the
     # user is already reading.
     rows = [(t["name"], str(t["skills"]),
-             "@%s" % t["pin"][:7] if t["pin"] else t["updated"],
+             "@%s" % str(t["pin"])[:7] if t["pin"] else t["updated"],
              "★" if t["curated"] else "", out.role(_tilde(t["url"]), "muted"))
             for t in taps]
     out.table(rows, headers=("NAME", "SKILLS", "UPDATED", "", "URL"))
