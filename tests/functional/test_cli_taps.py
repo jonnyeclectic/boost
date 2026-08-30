@@ -53,6 +53,39 @@ class TestTap:
         assert cfg["taps"][0]["name"] == "fixture-tap"
         assert cfg["taps"][0]["curated"] is False
 
+    def test_several_specs_tap_in_one_invocation(self, boost,
+                                                  fixture_tap_src, tmp_path):
+        # Not only a convenience. `xargs boost_cli tap < list` hands every
+        # line to ONE invocation, and rejecting the extras is how the shards
+        # workflow tapped nothing: argparse errored, `|| true` swallowed it,
+        # and the job died three steps later on "no taps configured" — 17 of
+        # 60 matrix jobs, every multi-registry chunk.
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        r = boost("tap", fixture_tap_src, str(second))
+        assert "tapped fixture-tap (5 items)" in r.out
+        assert "tapped second-tap (5 items)" in r.out
+        cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert [t["name"] for t in cfg["taps"]] == ["fixture-tap",
+                                                    "second-tap"]
+        # Plain multi-spec taps are not curated — that stays opt-in.
+        assert all(t["curated"] is False for t in cfg["taps"])
+
+    def test_one_bad_spec_does_not_cost_the_others(self, boost,
+                                                   fixture_tap_src):
+        r = boost("tap", fixture_tap_src, "@@@garbage@@@", expect=1)
+        assert "tapped fixture-tap (5 items)" in r.out
+        assert "could not tap" in r.out + r.err
+        cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert [t["name"] for t in cfg["taps"]] == ["fixture-tap"]
+
+    def test_at_with_several_specs_is_a_usage_error(self, boost,
+                                                    fixture_tap_src, tmp_path):
+        # A pin names one commit, which cannot describe two repositories.
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        r = boost("tap", fixture_tap_src, str(second), "--at", "a" * 40,
+                  expect=2)
+        assert "exactly one SPEC" in r.err
+
     def test_duplicate_rc1_with_hint(self, boost, tapped):
         r = boost("tap", tapped, expect=1)
         assert "tap fixture-tap is already configured" in r.err

@@ -51,7 +51,8 @@ def _tap_catalog(args) -> int:
 
 def _tap_all(urls: list[str], jobs: int | None,
              focus: dict[str, str] | None = None,
-             pins: dict[str, str] | None = None) -> int:
+             pins: dict[str, str] | None = None,
+             curated: bool = True) -> int:
     """Clone many registries at once, then scan each one that arrived.
 
     The split is the whole optimisation. Cloning is network latency — 1.6 s per
@@ -60,7 +61,7 @@ def _tap_all(urls: list[str], jobs: int | None,
     its output can be printed in order and its errors belong to one tap.
     """
     focus = focus or {}
-    results = registry.add_many(urls, curated=True, pins=pins, jobs=jobs)
+    results = registry.add_many(urls, curated=curated, pins=pins, jobs=jobs)
     rc = 0
     for res in results:
         name = res["name"]
@@ -106,8 +107,9 @@ def cmd_tap(argv) -> int:
     p = cliparse.parser(
         prog="boost tap",
         description="Add a GitHub repo as a skill registry")
-    p.add_argument("spec", nargs="?",
-                   help="owner/repo, a git URL, or a local directory")
+    p.add_argument("spec", nargs="*",
+                   help="owner/repo, a git URL, or a local directory — several "
+                        "at once clone in parallel")
     p.add_argument("--defaults", action="store_true",
                    help="tap the recommended public registries")
     p.add_argument("--catalog", action="store_true",
@@ -131,8 +133,8 @@ def cmd_tap(argv) -> int:
                         "%d)" % (registry.DEFAULT_TAP_JOBS,
                                  registry.MAX_TAP_JOBS))
     args = p.parse_args(argv)
-    if args.at and not args.spec:
-        p.error("--at pins one registry, so it needs a SPEC")
+    if args.at and len(args.spec) != 1:
+        p.error("--at pins one registry, so it needs exactly one SPEC")
     if not args.spec and not args.defaults and not args.catalog:
         p.error("provide a SPEC, --defaults, or --catalog")
 
@@ -147,13 +149,21 @@ def cmd_tap(argv) -> int:
                        jobs=args.jobs,
                        focus={str(d["name"]): str(d.get("focus", ""))
                               for d in config.DEFAULT_TAPS})
-    if args.spec:
-        with spin.Spinner("cloning %s" % args.spec):
-            tap = registry.add(args.spec, curated=args.curated, at=args.at)
+    if len(args.spec) == 1:
+        with spin.Spinner("cloning %s" % args.spec[0]):
+            tap = registry.add(args.spec[0], curated=args.curated, at=args.at)
             entries = catalog.rebuild_tap(tap)
         journal.log("tap", tap.name)
         pin = " @ %s" % args.at[:7] if args.at else ""
         out.ok("Tapped %s (%d items)%s" % (tap.name, len(entries), pin))
+    elif args.spec:
+        # Several specs clone through the same pool as --defaults/--catalog.
+        # This is not only a convenience: `xargs boost_cli tap < list` hands
+        # every line to ONE invocation, and rejecting the extras is how the
+        # shards workflow tapped nothing — argparse errored, `|| true`
+        # swallowed it, and the job died three steps later on "no taps
+        # configured". A multi-spec surface makes the natural script correct.
+        rc |= _tap_all(list(args.spec), jobs=args.jobs, curated=args.curated)
     # Refresh the TAB-completion name cache so `boost install <TAB>` sees
     # whatever this call just tapped instead of the pre-tap snapshot.
     complete.refresh_names()
