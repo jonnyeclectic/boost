@@ -266,6 +266,62 @@ def hit_line(entry: dict, *, installed: bool = False) -> str:
                                entry.get("tap", "?"))
 
 
+# `boost_read`'s budget, and it is a measured number rather than a round one.
+# An MCP reply lands directly in an agent's context and a SKILL.md is not
+# bounded above, so a tool that returns one whole is how a single lookup costs
+# a session. Measured over the 63,053 items in a real 467-tap install: median
+# 6,063 bytes, p90 16,225, p99 35,275, **max 567,484** — three orders of
+# magnitude between the middle and the tail, which is the shape that makes an
+# unbounded read a real hazard rather than a theoretical one.
+#
+# 12,000 is the knee. It delivers 80.3% of the catalogue whole against 62.8%
+# at 8,000 — two thirds of the remaining truncations bought for 50% more bytes
+# — and caps the worst case near 3,000 tokens. Raising it to 16,000 buys 9.3
+# points for another third again, which is the wrong side of the trade for a
+# tool an agent may call several times in one turn.
+#
+# The cap counts CHARACTERS, deliberately: boost cannot know the caller's
+# tokenizer, and a character count is one an agent can check against the reply
+# it is already holding. Truncation is never the failure mode this guards
+# against, because it is announced — see :func:`read_reply`.
+READ_LIMIT = 12000
+
+
+def read_reply(name: str, text: str, *, kind: str = "skill",
+               installed: bool = False, limit: int = READ_LIMIT) -> str:
+    """`boost_read`'s reply: a header, then the item's own content.
+
+    The header exists because the body alone does not say what the agent is
+    holding. A tap-qualified name resolves to one item out of several that
+    share a bare name, and whether it is already installed decides whether the
+    next call is `boost_install` or nothing at all — both are one line here and
+    neither is recoverable from Markdown.
+
+    **Truncation is announced, in the reply, at the point it happens.** A body
+    cut silently reads as a complete document that simply ends — which for a
+    procedure is worse than no body at all, because the agent acts on the half
+    it can see and never learns there was a second half. The notice names the
+    command that returns the rest, so the reply carries its own recovery path
+    the way ``tool-design`` asks agent-facing errors to.
+
+    Truncation cuts at a LINE boundary within the budget rather than mid-line.
+    A Markdown body cut mid-fence or mid-sentence is text an agent has to
+    guess about; a whole-line cut is unambiguously "the document continues".
+    A body whose first line already exceeds the budget has no such boundary,
+    so it falls back to a hard character cut — announced the same way.
+    """
+    head = ["name: %s" % name]
+    if kind != "skill":
+        head.append("kind: %s" % kind)
+    head.append("installed: %s" % ("yes" if installed else "no"))
+    body = text.strip("\n")
+    if len(body) > limit:
+        cut = body[:limit].rpartition("\n")[0] or body[:limit]
+        body = ("%s\n\n[truncated at %d of %d characters — read the rest with "
+                "`boost cat %s`]" % (cut, len(cut), len(text), name))
+    return "\n".join(head) + "\n\n" + body
+
+
 # The lock sections, in the order every boost surface names them. Fixed here
 # rather than read off the caller's dict, so the footer's column order cannot
 # drift between a machine that has rules and one that does not.

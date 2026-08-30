@@ -1169,6 +1169,47 @@ def _tool_info(args: dict):
     return "\n".join(lines), False
 
 
+def _tool_read(args: dict):
+    """`boost_read` — the item's own text, so an agent can look before it acts.
+
+    The gap this closes: ``boost_info`` returns the same one-line description
+    ``boost_search`` already returned, so an agent deciding whether a procedure
+    is worth adopting had one sentence written by whoever published it, and its
+    only route to the actual steps was to install into the user's real
+    ``~/.agents/skills`` and read it off disk. That inverts the surface's own
+    pitch — ``boost_search`` spends 10-15 s of rerank so the top result is worth
+    acting on, and then nothing let the agent look at it.
+
+    The body is also the only thing separating a written skill from a generated
+    stub, and the catalogue holds both: two ranked hits share the description
+    "To optimize **Skill**, we enforce the following foundational rules:" — an
+    unfilled template — and ``superpowers-lab`` is an 868-byte SKILL.md whose
+    Instructions section is its own name echoed back. Both index, rank and
+    render exactly like real results. The eval gate cannot catch it either:
+    ``golden.jsonl`` grades by *name*, and a stub matches its own name
+    perfectly.
+
+    Read-only, and that is the whole point rather than a side note — this is
+    the tool that exists so an agent does *not* have to install to look, so it
+    must never become a second install path. It reuses ``boost cat``'s
+    resolution (``info._resolve_text``): the installed copy when there is one,
+    the tap source otherwise, with the same integrity and quarantine rules. A
+    second resolver would be a second opinion about what "this item" means,
+    disagreeing with the tool it is advising about.
+
+    ``cat`` rather than ``explain``: cat is offline, deterministic and free,
+    while ``explain`` goes through ``core/ai.py`` and costs seconds plus a key.
+    The cheap answer must not sit behind the expensive one's latency — the same
+    reason ``boost_list`` never reads the catalog.
+    """
+    from . import info
+    name = str(args.get("name", ""))
+    if not name.strip():
+        return "boost_read needs a name — pass one as boost_search returned it", True
+    text, kind, lock, _cat = info._resolve_text(name)
+    return mcp.read_reply(name, text, kind=kind, installed=lock is not None), False
+
+
 def _tool_install(args: dict):
     entry = catalog.resolve_one(str(args.get("name", "")))
     res = store.install(entry)
@@ -1369,19 +1410,54 @@ REGISTRY.register(
     _tool_list)
 REGISTRY.register(
     "boost_info",
-    "The whole picture of one skill, rule or workflow by name — what it does, "
-    "its kind, the tap it came "
-    "from, its version, and whether it is already installed — so you can "
-    "commit or move on without guessing. Reach for it when a name arrives from "
-    "somewhere else: a teammate, a README, a repo you are reading. You do not "
-    "need this between a search and an install — boost_search already returns "
-    "each match's kind and description.",
+    # This used to promise "the whole picture" and return five fields, one of
+    # which — description — is byte-identical to the one-liner boost_search
+    # already returned. So the tool added `installed: no`, which the search
+    # reply already marks, to an agent that had been told to expect what the
+    # item does. An overstated description costs a wasted call and teaches an
+    # agent to discount the rest of the surface, which is the expensive half.
+    # It now says what it returns (status and provenance) and names the tool
+    # that returns the body.
+    "Where one skill, rule or workflow came from and whether it is already "
+    "here — its kind, tap, version, install state, and which agents it "
+    "reached. It is the STATUS of an item, not its contents: the description "
+    "it echoes is the same one-liner boost_search returned, so to read what "
+    "the item actually says, call boost_read. Reach for boost_info when a "
+    "name arrives from somewhere else — a teammate, a README, a repo you are "
+    "reading — and you need to know whether this machine already has it. You "
+    "do not need it between a search and an install: boost_search already "
+    "returns each match's kind, description and installed marker.",
     {"type": "object",
      "properties": {"name": {"type": "string",
                              "description": "the item's name, as boost_search "
                              "or boost_list returned it"}},
      "required": ["name"]},
     _tool_info)
+REGISTRY.register(
+    "boost_read",
+    "Read the actual procedure before you commit to it — the item's own text, "
+    "not its one-line description. This is the tool that makes looking cheaper "
+    "than installing: without it the only way to see what a skill actually "
+    "says is to install it into the user's machine and read it off disk, which "
+    "is a change to their setup made in order to answer a question. Reach for "
+    "it on the top hit from boost_search before boost_install, and whenever a "
+    "one-liner is doing more selling than describing. What you are checking "
+    "for is specific: the catalogue is indexed rather than reviewed, so it "
+    "holds unfilled templates and stubs that echo their own name back, and "
+    "those rank and render exactly like a procedure someone debugged. The body "
+    "is the only thing that tells them apart. Read-only and offline — it "
+    "installs nothing, changes nothing, and unlike boost_search costs no "
+    "rerank, so it is fast. Long items are truncated at a stated character "
+    "count and the reply says so and names the command that returns the rest; "
+    "a body that arrives whole is whole.",
+    {"type": "object",
+     "properties": {"name": {"type": "string",
+                             "description": "the item's name, as boost_search "
+                             "or boost_list returned it; qualify with the tap "
+                             "(\"owner/repo:name\") when the same name exists "
+                             "in more than one"}},
+     "required": ["name"]},
+    _tool_read)
 REGISTRY.register(
     "boost_install",
     "Turn a skill you found with boost_search into permanent capability: copied "
