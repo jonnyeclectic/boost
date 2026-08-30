@@ -6,6 +6,7 @@ from __future__ import annotations
 import difflib
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -240,14 +241,12 @@ def _discard(tap: Tap) -> None:
     hook chmods a missing file and raises `FileNotFoundError` out of the worker
     thread, turning "this one registry 404'd" into a crashed catalog tap.
     """
-    try:
+    # Cleanup is best-effort: the caller's real error is the one worth
+    # reporting, and a leftover directory is a smaller problem than losing it
+    # behind a cleanup failure.
+    with suppress(OSError):
         if tap.path.exists():
             util.rmtree(tap.path)
-    except OSError:
-        # Cleanup is best-effort: the caller's real error is the one worth
-        # reporting, and a leftover directory is a smaller problem than losing
-        # it behind a cleanup failure.
-        pass
 
 
 def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
