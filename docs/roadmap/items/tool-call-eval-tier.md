@@ -2,12 +2,13 @@
 id: tool-call-eval-tier
 board: code
 section: planned
-status: planned
+status: inflight
 category: Quality · Eval
 complexity: L
 impact: High
 wow: 4
 note: boost floors four retrieval metrics and measures whether an agent ever calls the tools zero times
+owner: feat/tool-call-eval
 order: 96
 title: a Tier 3 eval for tool-call behaviour, floored in <b>both</b> directions
 ---

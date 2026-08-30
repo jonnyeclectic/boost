@@ -10,7 +10,7 @@ PYTEST    := $(VENV)/bin/pytest
 # pinned taps out of the developer's real ~/.boost.
 EVAL_HOME := $(CURDIR)/.eval-home
 
-.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-ai eval-rec eval-stats eval-explain evals evals-baseline evals-golden evals-online audit dist-check bdd bench bench-cli fuzz post-deploy
+.PHONY: venv test unit functional smoke coverage patch-coverage mutation lint check demo carousel clean-test eval eval-ai eval-rec eval-stats eval-explain eval-tools evals evals-baseline evals-golden evals-online audit dist-check bdd bench bench-cli fuzz post-deploy
 
 # Every tool comes from a hash-pinned requirements/*.txt — the same files CI
 # installs (see scripts/lock_toolchain.py). pip enforces the hashes, so a dev
@@ -164,6 +164,17 @@ eval-stats:
 eval-explain:
 	PYTHON=$(PY) BOOST_HOME=$(EVAL_HOME) bash scripts/ensure_eval_corpus.sh
 	BOOST_HOME=$(EVAL_HOME) $(PY) scripts/eval_explain.py --fail-under 0.80
+
+# Tier 3: tool-call BEHAVIOUR — does an agent call boost's tools when it
+# should, and stay away when it should not. Tiers 1 and 2 grade what boost
+# returns once it is asked; this grades whether it is asked, which is the step
+# everything downstream depends on. Two numbers, never one: a floor on the
+# should-call half AND a ceiling on the should-not-call half, because scoring
+# call rate alone rewards an assertive surface — the capture core/mcp.py is
+# written to avoid. Drives a real host and spends real tokens, so it is opt-in
+# and OUT of `check`; degrades cleanly when no host is on PATH.
+eval-tools:
+	$(PY) scripts/eval_tools.py --runs 3
 
 # Retrieval-quality gate over the HERMETIC golden set: recall@5/@10, MRR, and
 # nDCG@5/@10 with graded (3/2/1) relevance, plus a paired-bootstrap regression
