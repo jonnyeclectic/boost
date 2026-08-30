@@ -388,8 +388,8 @@ def cmd_reindex(argv):
         # holds — count, stats, trending, plain search. See the import-budget
         # gate (scripts/import_budget.py).
         from ..core import embed
-        with spin.Spinner("embedding chunks into the dense store"):
-            dense_stats = _reindex_dense(args.force)
+        with spin.Spinner("embedding chunks into the dense store") as sp:
+            dense_stats = _reindex_dense(args.force, spinner=sp)
     if args.as_json:
         print(json.dumps({"bm25": stats, "dense": dense_stats}
                          if args.dense else stats))
@@ -434,7 +434,44 @@ def cmd_reindex(argv):
     return 0
 
 
-def _reindex_dense(force):
+def _embed_progress(spinner):
+    """A callback that rewrites the spinner's label with real numbers.
+
+    Embedding is the longest thing boost does — tens of thousands of distinct
+    chunks at roughly a second each for a full catalogue — and it ran under a
+    fixed label for hours. "embedding chunks into the dense store" is
+    indistinguishable from a hang, which is exactly how it was reported.
+
+    The rate comes from this run rather than a constant, because the two
+    backends differ by an order of magnitude and a local model's throughput
+    depends on the machine. Until a batch has finished there is nothing to
+    estimate from, so it says the total and nothing else rather than guessing.
+    """
+    started = time.monotonic()
+
+    def report(done: int, total: int) -> None:
+        if spinner is None or not total:
+            return
+        pct = 100.0 * done / total
+        # The bar first, because it is the part that answers the question the
+        # user actually has — "is this moving?" — at a glance, before any of
+        # the digits are read. `spin.bar` is the same determinate bar the rest
+        # of the CLI draws, so this looks like boost rather than like a
+        # second progress convention.
+        label = "embedding %s %d%% · %s/%s chunks" % (
+            spin.bar(done, total, width=16), int(pct),
+            format(done, ","), format(total, ","))
+        elapsed = time.monotonic() - started
+        if done and elapsed > 1:
+            remaining = (total - done) * (elapsed / done)
+            if remaining >= 1:
+                label += " · ~%s left" % util.human_duration(remaining)
+        spinner.label = label
+
+    return report
+
+
+def _reindex_dense(force, spinner=None):
     """Build the dense vector store; returns stats or None when unavailable."""
     # Local import: the dense/embedding engines are opt-in (`search --dense`),
     # so they stay out of startup for every other command in this module.
@@ -447,7 +484,7 @@ def _reindex_dense(force):
     # only what changed. Doing it after would quantize, then write float32 rows
     # into a store that no longer has a float32 table.
     migrated = dense.quantize()
-    stats = dense.build(force=force)
+    stats = dense.build(force=force, on_progress=_embed_progress(spinner))
     if migrated and isinstance(stats, dict):
         stats = stats | {"quantized": migrated["chunks"]}
     return stats

@@ -168,6 +168,23 @@ def rel_time(iso: str) -> str:
     return then.strftime("%Y-%m-%d")
 
 
+def human_duration(seconds: float) -> str:
+    """A short, honest duration: ``'45s'``, ``'12m'``, ``'2h 5m'``.
+
+    Coarse on purpose. This labels an estimate that is extrapolated from a
+    partial run, so seconds of precision on a two-hour figure would claim an
+    accuracy the number does not have.
+    """
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return "%ds" % seconds
+    minutes = seconds // 60
+    if minutes < 60:
+        return "%dm" % minutes
+    hours, minutes = divmod(minutes, 60)
+    return "%dh %dm" % (hours, minutes) if minutes else "%dh" % hours
+
+
 def human_size(n: int) -> str:
     """Format a byte count for humans: ``1536`` -> ``'1.5KB'``.
 
