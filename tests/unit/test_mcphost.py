@@ -151,10 +151,15 @@ class TestRegisterArgvAgy:
 
 
 class TestRegisterArgvOptions:
-    def test_scope_is_threaded_through_both_hosts(self):
+    def test_scope_is_threaded_through_every_scoped_host(self):
+        # agy is excluded by has_scope: it keeps one global file, so there is
+        # no --scope to thread and passing one would be an error.
         for host in mcphost.hosts():
             argv = mcphost.register_argv(host, SHIM, scope="project")
-            assert argv[argv.index("--scope") + 1] == "project"
+            if mcphost.has_scope(host):
+                assert argv[argv.index("--scope") + 1] == "project"
+            else:
+                assert "--scope" not in argv
 
     def test_custom_name_replaces_the_default(self):
         argv = mcphost.register_argv(mcphost.GEMINI, SHIM, name="boost-dev")

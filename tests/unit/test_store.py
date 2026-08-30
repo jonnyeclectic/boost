@@ -221,10 +221,11 @@ class TestInstall:
 
         res = store.install(entry)
         assert res.conflicts == [str(blocker)]
-        assert res.linked == ["windsurf", "cursor"]
+        assert res.linked == ["windsurf", "cursor", "antigravity"]
         assert not blocker.is_symlink()
         assert (blocker / "precious.txt").read_text(encoding="utf-8") == "mine"
-        assert lockfile.get_skill("brainstorming")["agents"] == ["windsurf", "cursor"]
+        assert lockfile.get_skill("brainstorming")["agents"] == [
+            "windsurf", "cursor", "antigravity"]
 
     def test_source_vanished_raises(self, tap, entry):
         shutil.rmtree(tap.path / "skills" / "brainstorming")
@@ -274,7 +275,7 @@ class TestUnlinkAgents:
         cursor_link.unlink()
         cursor_link.mkdir()
         removed = store.unlink_agents("brainstorming")
-        assert removed == ["claude-code", "windsurf"]
+        assert removed == ["claude-code", "windsurf", "antigravity"]
         assert cursor_link.is_dir()
         assert not _link("claude-code").exists()
         assert not _link("windsurf").exists()
