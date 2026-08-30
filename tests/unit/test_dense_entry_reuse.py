@@ -66,10 +66,22 @@ def _e(name, body, *, tap=TAP, digest=None):
     return entry
 
 
+class _Recorder(list):
+    """The recorded embed calls, plus a handle on the tap's current commit.
+
+    A plain ``list`` cannot carry an attribute (no ``__dict__``), so the
+    fixture needs a real type — and the tests treat the value as a list
+    (``clear()``, iteration through ``_flat``), so a subclass keeps every call
+    site unchanged.
+    """
+
+    commit: dict
+
+
 @pytest.fixture()
 def counting_env(sandbox, monkeypatch):
     """dense wired to a toy embedder that records every text it is asked for."""
-    asked: list[list[str]] = []
+    asked = _Recorder()
     commit = {"v": "c1"}
 
     def recording(texts, input_type=None, timeout=60):
@@ -86,7 +98,7 @@ def counting_env(sandbox, monkeypatch):
                         lambda: {TAP.replace("/", "__"): commit["v"]})
     monkeypatch.setattr(dense, "read_body",
                         lambda e, tp=None: e.get("_body", ""))
-    asked.commit = commit          # type: ignore[attr-defined]
+    asked.commit = commit
     return asked
 
 
