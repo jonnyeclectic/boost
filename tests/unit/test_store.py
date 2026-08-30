@@ -29,13 +29,17 @@ ISO = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
 # Keep insertion order in step with config.DEFAULTS["agents"] — several tests
 # assert the linked list exactly, and that list follows enabled_agents() order.
 AGENT_DIRS = {"claude-code": ".claude", "windsurf": ".windsurf",
-              "cursor": ".cursor", "gemini": ".gemini"}
+              "cursor": ".cursor", "gemini": ".gemini",
+              "antigravity": ".gemini/antigravity-cli"}
 # The agents a *user-scope skill* is symlinked into. gemini is deliberately
 # absent: it reads ~/.agents/skills (the canonical store) natively, so
 # links_skills is False and link_agents never touches ~/.gemini/skills. It is
 # still a full agent everywhere else — rules, workflows and project-scope
 # copies all materialize into ~/.gemini, so those assertions DO include it.
-LINKED_AGENTS = ["claude-code", "windsurf", "cursor"]
+# antigravity IS here: it shares gemini's tree but reads neither the canonical
+# store nor the shared ~/.gemini/skills, so it takes a real link into its own
+# CLI tier.
+LINKED_AGENTS = ["claude-code", "windsurf", "cursor", "antigravity"]
 
 
 def _link(agent):

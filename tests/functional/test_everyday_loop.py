@@ -25,7 +25,7 @@ def test_tap_search_install_doctor_uninstall(boost, fixture_tap_src):
     # jira-integration otherwise pulls in its `requires: commit-messages`.
     r = boost("install", "jira-integration", "--no-deps")
     assert "copied to" in r.out
-    assert "linked → claude-code · windsurf · cursor" in r.out
+    assert "linked → claude-code · windsurf · cursor · antigravity" in r.out
     assert "lock updated (.skill-lock.json)" in r.out
     assert "quality score" in r.out
 
