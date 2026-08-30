@@ -56,7 +56,7 @@ def _store_with_unreadable_vectors(rows=(("a", "acme/skills"),), dim=3):
     try:
         con.execute("CREATE TABLE IF NOT EXISTS chunks ("
                     "id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, tap TEXT,"
-                    " path TEXT, kind TEXT, cix INTEGER, snip TEXT)")
+                    " path TEXT, kind TEXT, cix INTEGER, snip TEXT, digest TEXT)")
         con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
         for name, tap in rows:
             con.execute(

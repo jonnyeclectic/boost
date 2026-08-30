@@ -2,14 +2,14 @@
 id: dense-reindex-reuses-whole-taps
 board: code
 section: internals
-status: next
+status: shipped
 category: Search · Performance
 complexity: M
 impact: High
 wow: 3
 note: one changed file re-embeds 29 min for 1.9 s of new text
 order: 126
-owner:
+owner: feat/dense-entry-digest-reuse
 pr:
 title: "Dense reuse is per <em>tap</em>, so one changed file re-embeds the whole registry"
 ---
@@ -91,3 +91,34 @@ today's incremental cost, and <code>davila7</code> changed nothing boost indexes
 <b>Shards do not cover this case.</b> Of the 19 moved taps exactly one appears in the published
 manifest, and its shard is pinned at the commit the tap just left, so <code>import_shard</code>
 refuses it. Net importable for this reindex: <b>0 of 112,081 chunks</b>.
+
+<b>Shipped.</b> <code>chunks</code> gained a <code>digest</code> column and
+<code>_split_by_digest</code> partitions a moved tap's entries on it, so only entries whose content
+really differs are deleted and re-embedded. The card's own conclusion held: no new identity
+machinery was needed &mdash; <code>catalog._content_digest</code> already hashes exactly what
+<code>rag.read_body</code> assembles, and <code>test_content_identity.py</code> pins that parity.
+
+<b>Three things would each have been a silent regression, and each has a test.</b> An entry deleted
+upstream has to stop answering &mdash; whole-tap deletion swept it for free, and reuse is precisely
+what stops that, so <code>_prune_stale_entries</code> sweeps it explicitly. An entry is reused only
+when <b>every</b> stored chunk carries the current digest, never any: a half-written entry would
+otherwise be reused as a mixture of two versions' vectors, which is worse than re-embedding because
+nothing later notices. And a <b>missing digest is never a match</b> &mdash; two absences are two
+unknowns, which is CLAUDE.md's rule and this is where it bites.
+
+<b>A fourth check exists because entry-level deletion is a shape the store had never seen.</b>
+Removing <em>some</em> of a tap's rows can leave a vector whose chunk is gone &mdash; an orphan
+<code>retrieve</code> still ranks, invisible to any chunk total because the chunk side is correct
+&mdash; or a chunk with no vector, which the KNN can never return. Verified on a real store: after a
+change and after a delete, the id sets of <code>chunks</code> and <code>vec_raw</code> match in both
+directions.
+
+<b>The digest travels in a shard too.</b> Without that, an imported shard's entries carry none and
+the next <code>reindex --dense</code> re-embeds them &mdash; spending in CPU exactly what
+downloading the shard existed to save. A shard published before this has no digest, and
+<code>None</code> is the honest value: that tap re-embeds once. Never a placeholder, which would
+suppress a real re-embed forever.
+
+<code>INDEX_VERSION</code> 2&nbsp;&rarr;&nbsp;3 <b>is</b> the migration &mdash;
+<code>_ensure_schema</code> is <code>CREATE TABLE IF NOT EXISTS</code> and cannot add a column to an
+existing table, and <code>build</code> already wipes on a version change. One full re-embed, once.

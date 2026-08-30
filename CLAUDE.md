@@ -584,6 +584,26 @@ Consequences for code you write here:
   real install are repeats and are embedded once — so a progress total taken
   from row count would over-report the work.
 
+- **Dense reuse is decided at TWO levels, and the second one is why `chunks`
+  carries a `digest`.** A tap whose git commit is unchanged is skipped whole.
+  A tap whose commit *moved* is not therefore changed: `_split_by_digest`
+  compares each entry's `content` digest against the one stored beside its
+  chunks, and only the entries that really differ are deleted and re-embedded.
+  Measured on a real 464-tap install: 19 taps drifted in 6.85 h and re-embedded
+  112,081 chunks for 659 chunks of actual change (**170x**), and **10 of the
+  19 changed nothing boost indexes at all** — badge `.json`, star-history
+  `.svg`, CI `.yml` — for 40.0% of the bill. Three rules make it safe, and
+  each was a real bug waiting: an entry is reused only when **every** stored
+  chunk carries the current digest, because a half-written entry must not be
+  served as a mixture of two versions' vectors; `_prune_stale_entries` drops
+  rows for entries the catalog dropped, which whole-tap deletion used to sweep
+  for free; and a **missing digest is never a match**, because two absences
+  are two unknowns. The digest travels in a shard too — without it an imported
+  shard re-embeds on the next build, spending the CPU the download existed to
+  save. The lookup is scoped by tap through the `chunks_tap` index: reading
+  the whole table instead measured 3.75 s cold on a 657,587-chunk store, and
+  ran even on the build where nothing had changed.
+
 - **Nothing on the search path may count `chunks`.** `SELECT COUNT(*)` scans the
   `chunks_tap` covering index — 8,419 pages / 34.5 MB, measured 1.94 s — and
   both `ready()` and `status()` did it on every search, the latter only to word
