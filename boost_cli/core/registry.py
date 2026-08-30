@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import difflib
+import os
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -204,6 +207,149 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         {"name": name, "url": url, "curated": curated})
     config.save(cfg)
     return tap
+
+
+#: Default concurrency for :func:`add_many`. Tapping is network-latency bound,
+#: not bandwidth or CPU bound: a clone of a catalog registry measures ~1.6 s
+#: whether one runs or twelve do, so the wall time of `boost tap --catalog` was
+#: 463 x 1.6 s ~= 13 minutes of mostly waiting. Measured on the real catalog,
+#: 40 registries went from 58 s serial to 6.4 s at 12 workers with the per-repo
+#: median unchanged (1.55 s -> 1.46 s), which is what says the concurrency is
+#: not being paid for somewhere else.
+DEFAULT_TAP_JOBS = 8
+
+#: Politeness ceiling. Nothing in the measurements argues for more, and this is
+#: someone else's server: past this the risk of being throttled outweighs a
+#: wall-time gain that is already asymptotic.
+MAX_TAP_JOBS = 16
+
+
+def tap_jobs(requested: int | None = None) -> int:
+    """How many clones to run at once, clamped to something defensible."""
+    if requested is None:
+        env = os.environ.get("BOOST_TAP_JOBS")
+        requested = int(env) if env and env.isdigit() else DEFAULT_TAP_JOBS
+    return max(1, min(int(requested), MAX_TAP_JOBS))
+
+
+def _discard(tap: Tap) -> None:
+    """Remove a rejected clone, tolerating one that was never created.
+
+    `add` only ever deleted a directory it had just cloned successfully, so it
+    could call `rmtree` unguarded. Here the failure may be the clone itself —
+    at which point the path does not exist, and `util.rmtree`'s read-only retry
+    hook chmods a missing file and raises `FileNotFoundError` out of the worker
+    thread, turning "this one registry 404'd" into a crashed catalog tap.
+    """
+    # Cleanup is best-effort: the caller's real error is the one worth
+    # reporting, and a leftover directory is a smaller problem than losing it
+    # behind a cleanup failure.
+    with suppress(OSError):
+        if tap.path.exists():
+            util.rmtree(tap.path)
+
+
+def _clone_one(spec: str, curated: bool, at: str | None) -> dict:
+    """Clone one tap without touching config. Never raises.
+
+    Config is deliberately left alone: `config.load()` -> mutate -> `save()` is
+    read-modify-write on a single JSON file, so running it from N threads loses
+    taps at random. :func:`add_many` writes once, on one thread, after every
+    clone has finished.
+    """
+    try:
+        name, url = parse_spec(spec)
+    except BoostError as exc:
+        return {"spec": spec, "name": spec, "ok": False, "error": exc.message}
+    tap = Tap(name=name, url=url, curated=curated)
+    try:
+        if tap.path.exists():
+            util.rmtree(tap.path)
+        gitutil.clone_shallow(url, tap.path)
+        if at:
+            gitutil.checkout_commit(tap.path, at)
+        problems = policy.check_tap_signing(tap.path)
+        if problems:
+            _discard(tap)
+            return {"spec": spec, "name": name, "ok": False,
+                    "error": "failed provenance policy: %s" % "; ".join(problems)}
+    except BoostError as exc:
+        # Leave no half-added tap behind, exactly as `add` does: a clone that
+        # failed its pin or its policy check is not a tap, and a directory that
+        # looks like one would be indexed on the next scan.
+        _discard(tap)
+        return {"spec": spec, "name": name, "ok": False, "error": exc.message}
+    return {"spec": spec, "name": name, "url": url, "ok": True, "tap": tap}
+
+
+def add_many(specs: list[str], curated: bool = False,
+             pins: dict[str, str] | None = None, jobs: int | None = None,
+             on_done=None) -> list[dict]:
+    """Clone many taps at once and register them in a single config write.
+
+    Returns one result dict per spec, in the order given, each with ``ok`` and
+    either ``tap`` or ``error``. One registry's failure never costs another its
+    clone — a catalog tap of 463 repos that aborted on the first 404 would be
+    worse than useless.
+
+    `pins` maps a tap name to the commit to check out, for published vector
+    shards (see ``core.shards``).
+    """
+    if not specs:
+        return []
+    paths.ensure_dirs()
+    pins = pins or {}
+    existing = {t.name for t in list_taps()}
+    results: list[dict] = []
+    todo: list[str] = []
+    for spec in specs:
+        try:
+            name, _url = parse_spec(spec)
+        except BoostError as exc:
+            results.append({"spec": spec, "name": spec, "ok": False,
+                            "error": exc.message})
+            continue
+        if name in existing:
+            results.append({"spec": spec, "name": name, "ok": False,
+                            "skipped": True, "error": "already tapped"})
+            continue
+        # Guard against the same registry appearing twice in one selection:
+        # two threads cloning into one directory is a corrupt clone, not a race
+        # anyone would enjoy debugging.
+        existing.add(name)
+        todo.append(spec)
+
+    def work(spec: str) -> dict:
+        name, _url = parse_spec(spec)
+        return _clone_one(spec, curated, pins.get(name))
+
+    with ThreadPoolExecutor(max_workers=tap_jobs(jobs)) as pool:
+        for res in pool.map(work, todo):
+            results.append(res)
+            if on_done is not None:
+                on_done(res)
+
+    # One read-modify-write, after every clone: N threads doing this each would
+    # lose taps, and 463 sequential rewrites of the same file is its own cost.
+    fresh = [r for r in results if r.get("ok")]
+    if fresh:
+        cfg = config.load()
+        rows = cfg.setdefault("taps", [])
+        for r in fresh:
+            rows.append({"name": r["name"], "url": r["url"],
+                         "curated": curated})
+        config.save(cfg)
+    # First occurrence, not last: a dict comprehension over `specs` keeps the
+    # LAST index for a repeated spec, which pushed the duplicate — and so its
+    # whole position — to the end and reordered everything in between.
+    order: dict[str, int] = {}
+    for i, spec in enumerate(specs):
+        order.setdefault(spec, i)
+    # Ties are the repeats themselves; report the clone before the "already
+    # tapped" note about it.
+    results.sort(key=lambda r: (order.get(r["spec"], len(order)),
+                                bool(r.get("skipped"))))
+    return results
 
 
 def remove(name: str) -> Tap:

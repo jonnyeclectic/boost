@@ -70,6 +70,76 @@ class TestQuickstartWithoutTheExtra:
         assert "would tap" in res.out
 
 
+class TestQuickstartTapping:
+    """The real tap path, with the network replaced rather than the command."""
+
+    @pytest.fixture()
+    def fake_taps(self, monkeypatch):
+        """`add_many` answers with one of each outcome, in order."""
+        from boost_cli.core import catalog, config, registry
+
+        class FakeTap:
+            def __init__(self, name):
+                self.name = name
+                self.safe_name = name.replace("/", "__")
+
+        names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+        calls = {}
+
+        def add_many(urls, curated=False, pins=None, jobs=None, on_done=None):
+            calls["pins"] = pins
+            calls["urls"] = list(urls)
+            out = []
+            for i, name in enumerate(names):
+                if i == 0:
+                    out.append({"spec": name, "name": name, "ok": False,
+                                "skipped": True, "error": "already tapped"})
+                elif i == 1:
+                    out.append({"spec": name, "name": name, "ok": False,
+                                "error": "repository not found"})
+                else:
+                    out.append({"spec": name, "name": name, "ok": True,
+                                "tap": FakeTap(name)})
+            return out
+
+        monkeypatch.setattr(registry, "add_many", add_many)
+        monkeypatch.setattr(catalog, "rebuild_tap", lambda tap: [{"name": "x"}])
+        monkeypatch.setattr("boost_cli.core.rag.build",
+                            lambda *a, **k: {"entries": 3})
+        return calls
+
+    def test_it_reports_each_outcome_and_survives_a_bad_registry(
+            self, boost, fake_taps):
+        res = boost("quickstart", "--no-vectors")
+        both = res.out + res.err
+        assert "already tapped" in both
+        # One registry failing must not stop the other six.
+        assert "repository not found" in both
+        assert both.count("tapped ") >= 2
+        assert "ready" in both
+
+    def test_shard_commits_are_passed_as_pins(self, boost, fake_taps,
+                                              manifest, monkeypatch):
+        from boost_cli.core import dense, embed, shards
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(embed, "dimension", lambda: 384)
+        monkeypatch.setattr(shards, "sync",
+                            lambda *a, **k: [])
+        boost("quickstart")
+        # The manifest names a/b, which is not a default tap, so no pin applies
+        # — but the pins dict must still have been threaded through rather than
+        # dropped, or a pinned registry would be tapped at HEAD.
+        assert fake_taps["pins"] == {}
+
+    def test_the_urls_tapped_are_the_default_registries(self, boost,
+                                                        fake_taps):
+        from boost_cli.core import config
+        boost("quickstart", "--no-vectors")
+        assert fake_taps["urls"] == [str(d["url"]) for d in config.DEFAULT_TAPS]
+
+
 class TestFetchShards:
     def test_no_taps_is_a_clear_error_not_a_fetch(self, boost, manifest):
         res = boost("reindex", "--fetch-shards", expect=1)

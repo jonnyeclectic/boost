@@ -40,27 +40,39 @@ def _tap_defaults(pins: dict[str, dict], dry_run: bool) -> list[str]:
     ordering that produces a commit mismatch on every registry that moved since
     the last shard run.
     """
-    existing = {t.name for t in registry.list_taps()}
-    names = []
-    for default in config.DEFAULT_TAPS:
-        name = str(default["name"])
-        names.append(name)
-        if name in existing:
+    names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+    commits = {name: str(pins[name].get("commit")) for name in names
+               if name in pins}
+    if dry_run:
+        existing = {t.name for t in registry.list_taps()}
+        for name in names:
+            if name in existing:
+                out.info(out.role("%s already tapped" % name, "muted"))
+                continue
+            at = commits.get(name)
+            out.info("would tap %s%s" % (name, " @ %s" % at[:7] if at else ""))
+        return names
+    # One pool, one config write: seven sequential clones is ~11 s of waiting
+    # for work that takes ~2 s done together, and the first thing a new user
+    # sees should not be a progress bar.
+    with spin.Spinner("tapping %d registries" % len(names)):
+        results = registry.add_many([str(d["url"]) for d in config.DEFAULT_TAPS],
+                                    curated=True, pins=commits)
+    for res in results:
+        name = res["name"]
+        if res.get("skipped"):
             out.info(out.role("%s already tapped" % name, "muted"))
             continue
-        row = pins.get(name)
-        at = str(row.get("commit")) if row else None
-        if dry_run:
-            out.info("would tap %s%s" % (name, " @ %s" % at[:7] if at else ""))
+        if not res.get("ok"):
+            out.warn("could not tap %s: %s" % (name, res.get("error", "")))
             continue
         try:
-            with spin.Spinner("tapping %s" % name):
-                tap = registry.add(str(default["url"]), curated=True, at=at)
-                entries = catalog.rebuild_tap(tap)
+            entries = catalog.rebuild_tap(res["tap"])
         except BoostError as exc:
-            out.warn("could not tap %s: %s" % (name, exc.message))
+            out.warn("could not index %s: %s" % (name, exc.message))
             continue
-        journal.log("tap", tap.name)
+        journal.log("tap", name)
+        at = commits.get(name)
         out.ok("tapped %s (%d items)%s"
                % (name, len(entries), " @ %s" % at[:7] if at else ""))
     return names

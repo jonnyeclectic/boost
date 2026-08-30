@@ -158,6 +158,22 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   93 MB), and must `update-index --refresh` first, because git silently declines
   to remove a path whose stat data looks dirty and otherwise reports success
   having changed nothing.
+- **Tapping many registries goes through `registry.add_many`, and the reason is
+  the config file.** `add` ends in `config.load()` -> append -> `config.save()`,
+  which is read-modify-write on one JSON file: run it from N threads and taps
+  vanish at random. `add_many` clones in a `ThreadPoolExecutor` and writes the
+  config **once**, on one thread, after every clone has finished
+  (`tests/unit/test_registry_parallel.py` asserts the single write and the
+  concurrency separately). It is worth it because a clone is *latency*, not
+  bandwidth or CPU: ~1.6 s whether one runs or twelve, so `boost tap --catalog`
+  was 463 x 1.6 s = 13 minutes of waiting and is now **2 min 10 s** for the same
+  463 registries. Scanning stays serial on the caller's thread — it is 3 ms per
+  registry and writes a per-tap cache file, so parallelising it buys nothing and
+  scrambles output order. Cleanup after a failed clone must tolerate a
+  directory that was never created: `util.rmtree`'s read-only retry hook calls
+  `chmod` on the missing path and raises `FileNotFoundError`, which out of a worker thread
+  turns one 404 into a crashed catalog tap.
+
 - **`~/.boost/cache/` holds boost's own indexes, not just tap catalogs.**
   `paths.INTERNAL_CACHE_FILES` names them. `boost clean` sweeps `cache/*.json`
   whose stem is not a configured tap, which described `rag_index.json` and

@@ -142,7 +142,7 @@
     </div>
     <div class="group" data-group="tap">
       <div class="group-h">Taps &amp; registries</div>
-      <a class="cmd-link" href="#cmd-tap" data-search="tap add a github repo as a skill registry  --defaults --catalog --type {skill,rule,workflow} --category category --limit n --include-lists --dry-run --curated --at sha spec">tap</a>
+      <a class="cmd-link" href="#cmd-tap" data-search="tap add a github repo as a skill registry  --defaults --catalog --type {skill,rule,workflow} --category category --limit n --include-lists --dry-run --curated --at sha --jobs n spec">tap</a>
       <a class="cmd-link" href="#cmd-untap" data-search="untap remove a registry tap  -f, --force name">untap</a>
       <a class="cmd-link" href="#cmd-taps" data-search="taps list all configured registry taps  --json">taps</a>
       <a class="cmd-link" href="#cmd-outdated" data-search="outdated show skills with available updates  --json">outdated</a>
@@ -624,10 +624,10 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-tap">Taps &amp; registries</h2>
-      <section class="cmd" id="cmd-tap" data-search="tap add a github repo as a skill registry  --defaults --catalog --type {skill,rule,workflow} --category category --limit n --include-lists --dry-run --curated --at sha spec">
+      <section class="cmd" id="cmd-tap" data-search="tap add a github repo as a skill registry  --defaults --catalog --type {skill,rule,workflow} --category category --limit n --include-lists --dry-run --curated --at sha --jobs n spec">
         <h3><span class="cname">tap</span><span class="gtag">tap</span></h3>
         <p class="summary">Add a GitHub repo as a skill registry</p>
-        <pre class="syn">boost tap [--defaults] [--catalog] [--type {skill,rule,workflow}] [--category CATEGORY] [--limit N] [--include-lists] [--dry-run] [--curated] [--at SHA] [spec]</pre>
+        <pre class="syn">boost tap [--defaults] [--catalog] [--type {skill,rule,workflow}] [--category CATEGORY] [--limit N] [--include-lists] [--dry-run] [--curated] [--at SHA] [--jobs N] [spec]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>spec</code><span>owner/repo, a git URL, or a local directory</span></div>
@@ -643,6 +643,7 @@
           <div class="arg"><code>--dry-run</code><span>with --catalog: print what would be tapped, tap nothing</span></div>
           <div class="arg"><code>--curated</code><span>mark the tap as curated (★ in listings)</span></div>
           <div class="arg"><code>--at SHA</code><span>pin the clone to one 40-character commit, as a published vector shard requires</span></div>
+          <div class="arg"><code>--jobs N</code><span>clone this many registries at once (default 8, max 16)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-untap" data-search="untap remove a registry tap  -f, --force name">
