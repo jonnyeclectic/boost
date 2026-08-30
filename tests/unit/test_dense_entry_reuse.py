@@ -310,3 +310,58 @@ class TestTheReplySaysWhatThisRunActuallyDid:
         assert "added" in src.split("the dense store holds")[0][-400:], (
             "the success line reports the store total as if it were this "
             "run's work")
+
+
+class TestVectorsAndChunksStayInStep:
+    """The failure reuse could introduce that no count would reveal.
+
+    Entry-level deletion removes *some* rows from a tap rather than all of
+    them, which is a shape `_drop_vectors` never saw before. If it missed one,
+    the store would carry a vector whose chunk is gone — an orphan that
+    `retrieve` still ranks, and which no chunk total would show, because the
+    chunk side is correct. The reverse is worse: a chunk with no vector is a
+    row the KNN can never return, so the entry silently stops being findable.
+    """
+
+    def _rows(self, con):
+        chunks = {r[0] for r in con.execute("SELECT id FROM chunks")}
+        raw = {r[0] for r in con.execute("SELECT id FROM vec_raw")}
+        return chunks, raw
+
+    def test_a_changed_entry_leaves_no_orphan_vector(self, counting_env):
+        entries = [_e("alpha", "one"), _e("beta", "two")]
+        _build(entries)
+        _move_commit(counting_env, "c2")
+        _build([entries[0], _e("beta", "two REWRITTEN")])
+        con = dense._connect()
+        chunks, raw = self._rows(con)
+        con.close()
+        assert raw - chunks == set(), "a vector outlived its chunk"
+        assert chunks - raw == set(), "a chunk has no vector and can never rank"
+
+    def test_a_deleted_entry_leaves_no_orphan_vector(self, counting_env):
+        entries = [_e("alpha", "one"), _e("beta", "two"), _e("gamma", "three")]
+        _build(entries)
+        _move_commit(counting_env, "c2")
+        _build([entries[0], entries[2]])
+        con = dense._connect()
+        chunks, raw = self._rows(con)
+        con.close()
+        assert raw == chunks
+
+    def test_a_replaced_entry_does_not_inherit_the_old_rowid(self, counting_env):
+        # `chunks.id` is AUTOINCREMENT, which never reuses a rowid. If it ever
+        # became a plain INTEGER PRIMARY KEY, a re-inserted chunk could land on
+        # a freed rowid and join a stale vector — right-looking, and wrong.
+        entries = [_e("alpha", "one"), _e("beta", "two")]
+        _build(entries)
+        con = dense._connect()
+        before = dict(con.execute("SELECT name, id FROM chunks"))
+        con.close()
+        _move_commit(counting_env, "c2")
+        _build([entries[0], _e("beta", "two REWRITTEN")])
+        con = dense._connect()
+        after = dict(con.execute("SELECT name, id FROM chunks"))
+        con.close()
+        assert after["alpha"] == before["alpha"], "an untouched entry moved"
+        assert after["beta"] != before["beta"], "a freed rowid was reused"
