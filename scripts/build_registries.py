@@ -69,6 +69,25 @@ RETIRED = {
         "fails the scheduled eval-scale gate on its pinned corpus",
 }
 
+# Repos that ship their own installer and cannot be installed by copying
+# Markdown. boost's install is "copy the item's directory into the canonical
+# store and symlink it out"; for these the item is a thin entry point over a
+# build step boost does not run — `garrytan/gstack`'s `./setup` renders a
+# per-host variant from ten TypeScript configs and its `/browse` and `/qa`
+# skills drive a real Chromium behind Bun. Copying the Markdown alone produces
+# a skill that *looks* installed and cannot run, which is the failure mode
+# `store.source_dir_for` and `gitutil.materialize` exist to prevent and that
+# materializing cannot fix here: the missing step is `bun install`, not a
+# fetch. So the catalogue carries the repo (it is real, and worth searching)
+# and the value is the upstream command to run instead. boost does not own
+# bun, Chromium, or someone else's upgrade channel.
+SELF_INSTALLING = {
+    "garrytan/gstack":
+        "git clone --single-branch --depth 1 "
+        "https://github.com/garrytan/gstack.git ~/.claude/skills/gstack "
+        "&& cd ~/.claude/skills/gstack && ./setup",
+}
+
 # --- skills (SKILL.md registries) -------------------------------------------
 SKILLS = [
     ("travisvn/awesome-claude-skills", "meta", "Curated awesome-list of Claude Skills, tools, and resources", 60, "high"),
@@ -497,6 +516,7 @@ SKILLS = [
     ("Cold-IQ/ColdIQ-s-GTM-Skills", "marketing", "Cold email sequences, ABM messaging, buying signals, list building and deliverability", 90, "high"),
     ("LeadMagic/gtm-skills", "marketing", "CRM setup and hygiene (Salesforce, HubSpot, Attio), enrichment, AI SDR, ABM and lifecycle", 206, "high"),
     ("NEON-Rutger/B2B-revops-skills", "marketing", "B2B RevOps: CRM migration, lead routing, deal desk, pipeline visibility, ICP and forecasting", 38, "high"),
+    ("garrytan/gstack", "workflow", "Sprint-workflow slash commands — /ship, /qa, /review, /plan-*, /retro, /office-hours — self-installing across ten coding agents", 61, "high"),
 ]
 
 # --- rules (Cursor .mdc / .cursorrules / Windsurf) --------------------------
@@ -649,6 +669,10 @@ def rows(pairs, typ):
             "confidence": conf,
             "list_only": name in LIST_ONLY,
             "curated": True,
+            # Only where set: adding a null to every row would rewrite the
+            # whole generated file to say nothing about 460 registries.
+            **({"self_installing": SELF_INSTALLING[name]}
+               if name in SELF_INSTALLING else {}),
         }
 
 

@@ -2,22 +2,24 @@
 id: gstack-tap-first-then-coexistence
 board: code
 section: compat
-status: planned
+status: shipped
 category: Interop · Registry
 complexity: M
 impact: Med
 wow: 3
 note: 130k stars of SKILL.md that boost can index today, and a second installer writing into the same dotdirs
 order: 106
-owner:
+owner: feat/gstack-registry
 pr:
 title: <code>garrytan/gstack</code> &mdash; tap it first, then learn to coexist with it
 ---
 <a href="https://github.com/garrytan/gstack">garrytan/gstack</a> is the largest thing in
 boost's domain that boost has never heard of: <b>130,344 stars, 19,602 forks</b>, MIT, created
-2026-03-11 and pushed the same day this was written. It ships roughly 35 slash-command skills
+2026-03-11 and pushed the same day this was written. It ships <b>61 measured items</b> &mdash; the repo
+<em>description</em> advertises 23 and its README lists ~35, and
+<code>scripts/measure_registry.py</code> over a sparse clone of <code>07b59e39</code> counts 61
 &mdash; <code>/review</code>, <code>/ship</code>, <code>/qa</code>, <code>/cso</code>,
-<code>/autoplan</code>, <code>/office-hours</code> &mdash; each as a
+<code>/autoplan</code>, <code>/office-hours</code> among them, each as a
 <code>&lt;name&gt;/SKILL.md</code> directory at the repo root, which is <em>exactly</em> the
 layout <code>catalog.scan_dir</code> already indexes. Nothing needs building for boost to
 catalogue it.
@@ -53,12 +55,16 @@ Boost should not own bun, Chromium, or someone else's upgrade channel.
 into the same places boost does, and at 130k stars it is now the likeliest other tenant on a
 user's machine:
 
-<b>The canonical store.</b> Repo-local gstack installs land at
-<code>.agents/skills/gstack</code> &mdash; the same path boost treats as its single source of
-truth. <code>store.duplicate_discovery()</code> is already <em>topology, not ownership</em>, for
-exactly this reason, and <code>heal --prune-duplicates</code> must keep proving it: gstack's
-directories are real directories and its per-host copies are its own, so neither may ever be
-swept as "boost's stale links".
+<b>The canonical store.</b> <b>Corrected on implementation:</b> this card claimed repo-local
+gstack installs land at <code>.agents/skills/gstack</code>. They do not &mdash; gstack's README
+installs to <code>~/.claude/skills/gstack</code>, a <em>real directory</em> inside a linking
+agent's skills dir, and the team install bootstraps <code>.claude/</code> rather than
+<code>.agents/</code>. The hazard is real either way and lands one path over:
+<code>store.duplicate_discovery()</code> is already <em>topology, not ownership</em>, and
+<code>sync_plan</code>'s stale-link sweep asks <code>is_symlink()</code> before anything else, so
+gstack's real directories are never candidates. Neither had a test saying so, and the cost of
+being wrong is an 8&nbsp;MB working install of someone else's program deleted as "boost's stale
+links".
 
 <b>Host dotdirs boost does not target.</b> gstack installs to
 <code>~/.codex/skills/gstack-*</code>, <code>~/.config/opencode/skills/gstack-*</code>,

@@ -131,6 +131,31 @@ def load_registry_catalog() -> list:
     return data.get("registries", [])
 
 
+def self_installing_command(tap: str) -> str | None:
+    """The repo's own install command, when boost must not copy its items.
+
+    Some registries are real catalogues of Markdown and some are programs that
+    happen to ship Markdown entry points. For the second kind boost's install —
+    copy the item's directory into the canonical store, symlink it out — yields
+    a skill that *looks* installed and cannot run, because the step that makes
+    it work is the repo's own build, not a fetch. Returns the upstream command
+    so the caller can name it instead of pretending; None for every other tap.
+
+    The tap may be addressed by full ``owner/repo`` or by the bare repo name a
+    clone directory carries, so both resolve.
+    """
+    if not tap:
+        return None
+    for row in load_registry_catalog():
+        cmd = row.get("self_installing")
+        if not cmd:
+            continue
+        name = row.get("name") or ""
+        if tap in (name, name.split("/")[-1]):
+            return cmd
+    return None
+
+
 def _merge(base: dict, override: dict) -> dict:
     out = deepcopy(base)
     # `or {}`: the only caller feeds this json.loads() of config.json, so a file
