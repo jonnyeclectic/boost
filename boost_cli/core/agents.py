@@ -8,7 +8,8 @@ from pathlib import Path
 from . import config, paths
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
-           "cursor": "Cursor", "gemini": "Gemini CLI"}
+           "cursor": "Cursor", "gemini": "Gemini CLI",
+           "antigravity": "Antigravity CLI"}
 
 
 def known_agents() -> dict[str, dict]:

@@ -28,6 +28,22 @@ DEFAULTS = {
         # symlink if that alias is ever narrowed.
         "gemini": {"dir": "~/.gemini/skills", "enabled": True,
                    "links_skills": False},
+        # Antigravity CLI (`agy`) is Gemini CLI's successor and shares its
+        # `~/.gemini` tree, but it does **not** implement the Agent Skills
+        # standard: it reads neither `~/.agents/skills` nor, for CLI scope,
+        # anything outside `~/.gemini/antigravity-cli/`. So unlike gemini it
+        # needs real symlinks — `links_skills` defaults true and stays true.
+        #
+        # Why the CLI-scoped dir and not the shared `~/.gemini/skills`: that
+        # shared dir is one of *Gemini CLI's* user-tier discovery paths, and
+        # Gemini already reads the same skills through the `~/.agents/skills`
+        # alias. Linking there would put one skill in two of Gemini's tiers and
+        # cost a "Skill conflict detected" line per skill per session — the
+        # exact failure `links_skills: false` exists to avoid. Linking into
+        # `antigravity-cli/skills` is invisible to Gemini and is the tier the
+        # CLI itself reads.
+        "antigravity": {"dir": "~/.gemini/antigravity-cli/skills",
+                        "enabled": True},
     },
     "taps": [],  # [{"name": "owner/repo", "url": "...", "curated": bool}]
     "ai": {

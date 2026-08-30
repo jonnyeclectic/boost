@@ -201,6 +201,25 @@ class TestInstall:
         assert not (home / ".gemini" / "skills" / "brainstorming").exists()
         assert _lock()["brainstorming"]["agents"] == ["claude-code"]
 
+    def test_antigravity_gets_a_real_symlink(self, boost, tapped):
+        # Antigravity CLI shares Gemini's ~/.gemini tree but does not read the
+        # canonical store, so unlike Gemini it needs the link — into its own
+        # CLI tier, never the shared ~/.gemini/skills that Gemini also reads.
+        boost("install", "brainstorming")
+        home = paths.home()
+        link = home / ".gemini" / "antigravity-cli" / "skills" / "brainstorming"
+        assert link.is_symlink()
+        assert link.resolve() == (paths.store_dir() / "brainstorming").resolve()
+        assert not (home / ".gemini" / "skills" / "brainstorming").exists()
+
+    def test_agent_flag_can_target_antigravity_alone(self, boost, tapped):
+        r = boost("install", "brainstorming", "--agent", "antigravity")
+        assert "linked → antigravity" in r.out
+        home = paths.home()
+        assert (home / ".gemini" / "antigravity-cli" / "skills"
+                / "brainstorming").is_symlink()
+        assert not (home / ".claude" / "skills" / "brainstorming").exists()
+
     def test_unknown_agent_rc1(self, boost, tapped):
         r = boost("install", "brainstorming", "--agent", "emacs", expect=1)
         assert "unknown agent: emacs" in r.err

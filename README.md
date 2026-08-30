@@ -12,7 +12,7 @@
 
 **Homebrew for AI coding skills.** boost finds, installs, and version-tracks skills
 from GitHub-hosted registries, and wires each one into Claude Code, Windsurf,
-Cursor and Gemini CLI in a single pass.
+Cursor, Gemini CLI and Antigravity CLI in a single pass.
 
 ```bash
 pipx install boost-skill-cli
@@ -24,7 +24,7 @@ boost install tdd-workflow    # → every agent, version-pinned, one lock file
 (No `pipx` yet? macOS ships neither it nor a new enough Python — run the
 [prerequisites check](#prerequisites) first.)
 
-No more copying `SKILL.md` into four agent folders and forgetting which one is
+No more copying `SKILL.md` into five agent folders and forgetting which one is
 stale. The default install is pure stdlib, with no build step and no
 dependencies.
 

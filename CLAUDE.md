@@ -354,7 +354,7 @@ work in tests and the dev loop:
 ~/.gemini/                       rules (GEMINI.md) + workflows only — see below
 ```
 
-**Four agent targets, but only three get symlinks.** Gemini CLI implements the
+**Five agent targets, and only Gemini CLI skips symlinks.** Gemini CLI implements the
 Agent Skills standard and discovers `~/.agents/skills` — the canonical store —
 *directly*, so it is configured with `links_skills: false`. Linking into
 `~/.gemini/skills` too would put one skill in two of its discovery tiers, where
@@ -385,6 +385,19 @@ for code you write:
   one hop lands in another agent's dir. It resolves **both sides**: on macOS a
   `$HOME` under `/var/folders` resolves to `/private/var/...`, so resolving
   only the target compares a real path against a nominal one and never matches.
+- **Antigravity CLI (`agy`) is Gemini's successor and is NOT a native-store
+  agent.** It shares the `~/.gemini` tree but reads neither `~/.agents/skills`
+  nor — for CLI scope — the shared `~/.gemini/skills`, so it takes real
+  symlinks, into `~/.gemini/antigravity-cli/skills`. Linking into the *shared*
+  dir instead would be the mistake: Gemini CLI reads that path too and already
+  sees the same skills through the `~/.agents/skills` alias, so every skill
+  would cost a "Skill conflict detected" line per session — the exact failure
+  `links_skills: false` exists to prevent. Its rules arrive through the
+  `gemini` agent, which already writes the `~/.gemini/GEMINI.md` Antigravity
+  reads; its workflow and MCP surfaces are **not** wired up, because their
+  formats have not been verified against the real CLI, and this file does not
+  record guesses (see `hookhost.py` for the standard: name the sources).
+
 - Per-agent *formats* differ and are pure functions in `core/`: `rules.CONTEXT_FILES`
   maps an agent with no rules dir to its context file (`claude-code` → CLAUDE.md /
   CLAUDE.local.md, `gemini` → GEMINI.md for both scopes), and

@@ -9,11 +9,14 @@ from boost_cli.core import agents, config
 class TestKnownAgents:
     def test_default_dirs_derive_from_sandbox_home(self, sandbox):
         known = agents.known_agents()
-        assert list(known) == ["claude-code", "windsurf", "cursor", "gemini"]
+        assert list(known) == ["claude-code", "windsurf", "cursor", "gemini",
+                               "antigravity"]
         assert known["claude-code"]["dir"] == sandbox / ".claude" / "skills"
         assert known["windsurf"]["dir"] == sandbox / ".windsurf" / "skills"
         assert known["cursor"]["dir"] == sandbox / ".cursor" / "skills"
         assert known["gemini"]["dir"] == sandbox / ".gemini" / "skills"
+        assert (known["antigravity"]["dir"]
+                == sandbox / ".gemini" / "antigravity-cli" / "skills")
         assert all(spec["enabled"] is True for spec in known.values())
 
     def test_enabled_flag_honored_from_config(self, sandbox):
@@ -40,6 +43,7 @@ class TestEnabledAgents:
             "windsurf": sandbox / ".windsurf" / "skills",
             "cursor": sandbox / ".cursor" / "skills",
             "gemini": sandbox / ".gemini" / "skills",
+            "antigravity": sandbox / ".gemini" / "antigravity-cli" / "skills",
         }
 
     def test_disabled_agent_filtered_out(self, sandbox):
@@ -50,6 +54,7 @@ class TestEnabledAgents:
             "claude-code": sandbox / ".claude" / "skills",
             "windsurf": sandbox / ".windsurf" / "skills",
             "gemini": sandbox / ".gemini" / "skills",
+            "antigravity": sandbox / ".gemini" / "antigravity-cli" / "skills",
         }
 
 
@@ -69,7 +74,21 @@ class TestLinkingAgents:
             "claude-code": sandbox / ".claude" / "skills",
             "windsurf": sandbox / ".windsurf" / "skills",
             "cursor": sandbox / ".cursor" / "skills",
+            "antigravity": sandbox / ".gemini" / "antigravity-cli" / "skills",
         }
+
+    def test_antigravity_links_even_though_it_shares_geminis_tree(self,
+                                                                  sandbox):
+        # Antigravity CLI succeeds Gemini CLI and lives under ~/.gemini, but it
+        # does not implement the Agent Skills standard: it reads neither
+        # ~/.agents/skills nor the shared ~/.gemini/skills for CLI scope. So it
+        # is a LINKING agent, unlike its predecessor — and the link goes into
+        # its own tier, not the shared one, or Gemini would see the same skill
+        # twice and log a conflict per skill per session.
+        assert "antigravity" in agents.linking_agents()
+        assert "antigravity" not in agents.native_store_agents()
+        target = agents.linking_agents()["antigravity"]
+        assert target != sandbox / ".gemini" / "skills"
 
     def test_native_store_agents_is_the_complement(self, sandbox):
         assert agents.native_store_agents() == {
