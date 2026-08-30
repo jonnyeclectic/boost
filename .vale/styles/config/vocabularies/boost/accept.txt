@@ -1,9 +1,12 @@
 ABM
 agentic
+agy
 Algolia
 allowlist
 allowlisted
 argparse
+args
+argv
 Arize
 ASan
 Attio
@@ -172,6 +175,8 @@ unremediated
 unstaged
 untap
 untrusted
+upsert
+upserts
 uv
 Vaadin
 Valgrind

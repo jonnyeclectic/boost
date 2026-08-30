@@ -47,7 +47,7 @@ Feature: boost mcp
     When I run "boost mcp register --host bogus"
     Then the exit code should be 1
     And the output should contain "unknown MCP host 'bogus'"
-    And the output should contain "known hosts: claude, gemini"
+    And the output should contain "known hosts: claude, gemini, agy"
 
   Scenario: a claude mcp add failure surfaces the error
     Given the "claude" CLI is on PATH but fails with "no auth"
