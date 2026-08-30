@@ -813,12 +813,16 @@ def _delete_matching(con: sqlite3.Connection, where: str,
     ``where`` is a literal from this module, never caller data; the parameters
     are bound.
     """
-    sql = "SELECT id FROM chunks WHERE " + where     # noqa: S608  literal clause
-    ids = [r[0] for r in con.execute(sql, params)]
+    # `%` rather than `+`, to match every other interpolated statement in this
+    # module: those are the shapes ruff's S608 is known to flag here, so the
+    # suppression is one ruff actually consumes rather than an unused `noqa`
+    # that RUF100 would then reject.
+    ids = [r[0] for r in con.execute(
+        "SELECT id FROM chunks WHERE %s" % where, params)]  # noqa: S608  literal clause
     if not ids:
         return 0
     _drop_vectors(con, ids)
-    con.execute("DELETE FROM chunks WHERE " + where, params)  # noqa: S608  same literal
+    con.execute("DELETE FROM chunks WHERE %s" % where, params)  # noqa: S608  same literal
     return len(ids)
 
 
