@@ -274,3 +274,39 @@ class TestTheStoreFormatMovedWithIt:
         assert shard["chunks"], "nothing exported"
         assert all("digest" in c for c in shard["chunks"])
         assert any(c["digest"] for c in shard["chunks"])
+
+
+class TestTheReplySaysWhatThisRunActuallyDid:
+    """`chunks` is the store total, not this run's work.
+
+    "embedded 657,587 passages" on an incremental run described an afternoon of
+    CPU that did not happen — the number is every vector in the store, and an
+    incremental run may have embedded none of them. The fix is to report
+    `added`, and to name the entry-level saving that the tap-level `reused`
+    line structurally cannot: a tap appears in `reindexed` the moment its
+    commit moves, so a run that reused every entry inside three moved taps
+    otherwise reads as three taps fully re-embedded.
+    """
+
+    def test_added_counts_this_run_not_the_store(self, counting_env):
+        entries = [_e("alpha", "one"), _e("beta", "two")]
+        first = _build(entries)
+        assert first["added"] == 2
+        _move_commit(counting_env, "c2")
+        again = _build(entries)
+        assert again["added"] == 0, "reported work that did not happen"
+        assert again["chunks"] == 2, "the store total is still the total"
+
+    def test_the_command_reports_added_rather_than_the_total(self):
+        # Pinned as source because the emitter needs a TTY and a spinner to
+        # exercise; what must not come back is `chunks` in the success line.
+        import inspect
+
+        from boost_cli.commands import discovery
+        src = inspect.getsource(discovery.cmd_reindex)
+        line = [ln for ln in src.splitlines()
+                if "into the dense vector store" in ln or "the dense store holds" in ln]
+        assert line, "the dense success line moved — re-point this test"
+        assert "added" in src.split("the dense store holds")[0][-400:], (
+            "the success line reports the store total as if it were this "
+            "run's work")

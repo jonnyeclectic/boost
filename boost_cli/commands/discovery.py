@@ -423,8 +423,29 @@ def cmd_reindex(argv):
                          "`boost reindex --dense --force`."
                          % len(dense_stats["reused"]))
             else:
-                out.ok("embedded %d passages (%s) into the dense vector store"
-                       % (dense_stats["chunks"], dense_stats["provider"]))
+                # `chunks` is the store TOTAL, not this run's work, so on an
+                # incremental run "embedded 657,587 passages" described an
+                # afternoon of CPU that did not happen. `added` is what this
+                # run actually paid for.
+                added = dense_stats.get("added", dense_stats["chunks"])
+                out.ok("embedded %d passage%s (%s) — the dense store holds %d"
+                       % (added, "" if added == 1 else "s",
+                          dense_stats["provider"], dense_stats["chunks"]))
+                # The saving the tap-level line cannot show: a tap appears in
+                # `reindexed` the moment its commit moves, so a run that reused
+                # every entry inside three moved taps otherwise reads as three
+                # taps fully re-embedded.
+                kept = dense_stats.get("reused_entries") or 0
+                if kept:
+                    out.info(out.role(
+                        "reused %d unchanged item%s inside %d moved tap%s — "
+                        "only %d item%s changed"
+                        % (kept, "" if kept == 1 else "s",
+                           len(dense_stats["reindexed"]),
+                           "" if len(dense_stats["reindexed"]) == 1 else "s",
+                           dense_stats.get("embedded_entries") or 0,
+                           "" if dense_stats.get("embedded_entries") == 1
+                           else "s"), "muted"))
             if dense_stats.get("quantized"):
                 out.ok("quantized %d existing vectors — dense search no longer "
                        "scans the whole store on every query"
