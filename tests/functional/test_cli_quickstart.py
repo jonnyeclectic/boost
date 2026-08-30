@@ -56,6 +56,38 @@ class TestQuickstartDryRun:
             assert str(default["name"]) in res.out
 
 
+class TestQuickstartCatalog:
+    """`--catalog` is the "search everything" entry point."""
+
+    def test_it_plans_every_catalogued_registry(self, boost):
+        from boost_cli.core import config
+        catalogued = [e for e in config.load_registry_catalog()
+                      if not e.get("list_only")]
+        res = boost("quickstart", "--catalog", "--dry-run")
+        # Past a handful the dry run reports the shape: 463 lines of "would
+        # tap" is a wall of text, not a preview.
+        assert "would tap %d registries" % len(catalogued) in res.out
+
+    def test_the_default_scope_is_still_the_seven_starters(self, boost):
+        from boost_cli.core import config
+        res = boost("quickstart", "--dry-run")
+        for default in config.DEFAULT_TAPS:
+            assert str(default["name"]) in res.out
+
+    def test_catalog_scope_excludes_index_repos(self, boost):
+        from boost_cli.core import config
+        lists = [e for e in config.load_registry_catalog()
+                 if e.get("list_only")]
+        if not lists:
+            pytest.skip("no list-only repos in the bundled catalogue")
+        res = boost("quickstart", "--catalog", "--dry-run")
+        total = len([e for e in config.load_registry_catalog()
+                     if not e.get("list_only")])
+        # An awesome-list repo indexes other repos and ships nothing of its
+        # own, so tapping it for vectors buys nothing.
+        assert "would tap %d registries" % total in res.out
+
+
 class TestQuickstartWithoutTheExtra:
     """The default install: no `rag` extra, so no vectors and no fetch."""
 

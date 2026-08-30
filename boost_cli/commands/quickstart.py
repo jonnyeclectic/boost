@@ -32,19 +32,43 @@ from ..core import output as out
 from ..errors import BoostError
 
 
-def _tap_defaults(pins: dict[str, dict], dry_run: bool) -> list[str]:
-    """Tap the default registries, pinned to a shard's commit when one exists.
+def _selection(catalog_scope: bool) -> list[dict]:
+    """The registries quickstart will tap: the seven defaults, or all of them.
+
+    `--catalog` exists because "search everything" is a real ask and the two
+    costs that used to make it unreasonable are gone: tapping 463 registries is
+    2 min 10 s now that clones run in parallel, and their vectors are a
+    download rather than an hour of CPU.
+    """
+    if not catalog_scope:
+        return [d.copy() for d in config.DEFAULT_TAPS]
+    return [{"name": e["name"], "url": e["url"]}
+            for e in config.load_registry_catalog()
+            if not e.get("list_only") and e.get("name") and e.get("url")]
+
+
+def _tap_defaults(selection: list[dict], pins: dict[str, dict],
+                  dry_run: bool) -> list[str]:
+    """Tap the selected registries, pinned to a shard's commit when one exists.
 
     Returns the tap names that are configured afterwards, tapped here or not.
     Pinning is the whole point: tapping HEAD and then fetching a shard is the
     ordering that produces a commit mismatch on every registry that moved since
     the last shard run.
     """
-    names = [str(d["name"]) for d in config.DEFAULT_TAPS]
+    names = [str(d["name"]) for d in selection]
     commits = {name: str(pins[name].get("commit")) for name in names
                if name in pins}
     if dry_run:
         existing = {t.name for t in registry.list_taps()}
+        pending = [n for n in names if n not in existing]
+        # Over 463 registries a line each is a wall of text, so past a handful
+        # the dry run reports the shape instead of the list.
+        if len(pending) > 12:
+            out.info("would tap %d registries (%d pinned to a published "
+                     "shard's commit)"
+                     % (len(pending), sum(1 for n in pending if n in commits)))
+            return names
         for name in names:
             if name in existing:
                 out.info(out.role("%s already tapped" % name, "muted"))
@@ -56,7 +80,7 @@ def _tap_defaults(pins: dict[str, dict], dry_run: bool) -> list[str]:
     # for work that takes ~2 s done together, and the first thing a new user
     # sees should not be a progress bar.
     with spin.Spinner("tapping %d registries" % len(names)):
-        results = registry.add_many([str(d["url"]) for d in config.DEFAULT_TAPS],
+        results = registry.add_many([str(d["url"]) for d in selection],
                                     curated=True, pins=commits)
     for res in results:
         name = res["name"]
@@ -104,10 +128,13 @@ def _report(results: list[dict]) -> None:
 
 
 def cmd_quickstart(argv) -> int:
-    """boost quickstart [--no-vectors] [--dry-run]"""
+    """boost quickstart [--catalog] [--no-vectors] [--dry-run]"""
     p = cliparse.parser(
         prog="boost quickstart",
         description="Tap the starter registries and load prebuilt vectors")
+    p.add_argument("--catalog", action="store_true",
+                   help="tap every catalogued registry, not just the 7 "
+                        "starters, and fetch vectors for all of them")
     p.add_argument("--no-vectors", action="store_true",
                    help="set up taps and keyword search only, skip shards")
     p.add_argument("--dry-run", action="store_true",
@@ -129,7 +156,8 @@ def cmd_quickstart(argv) -> int:
             out.warn("no published shards: %s" % exc.message)
             manifest = None
 
-    names = _tap_defaults(pins, args.dry_run)
+    selection = _selection(args.catalog)
+    names = _tap_defaults(selection, pins, args.dry_run)
     if args.dry_run:
         planned = [n for n in names if n in pins] if manifest else []
         out.info("would build the keyword index, then import %d shard(s)"
