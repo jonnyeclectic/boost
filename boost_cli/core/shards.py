@@ -257,7 +257,10 @@ def sync(taps: list[str], commits: dict[str, str],
                 for t in taps]
     index = rows(manifest)
     cache_dir = cache_dir or (paths.cache_dir() / "shards")
-    results = []
+    # Annotated because the rows are not uniform: only an imported shard
+    # carries `chunks`, and inference from the first append would fix the value
+    # type as `str`.
+    results: list[dict] = []
     for tap in taps:
         row = index.get(tap)
         if row is None:
