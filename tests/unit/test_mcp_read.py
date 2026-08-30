@@ -298,25 +298,31 @@ class TestTheKindLabelIsTrueBeforeInstall:
                             lambda n: (path, None, {"tap": "t"}))
         assert info._resolve_text("thing")[1] == "skill"
 
-    def test_labelling_never_turns_a_good_read_into_an_error(self, sandbox,
-                                                             tmp_path,
-                                                             monkeypatch):
-        # The kind is a label. If the catalog cannot resolve the name, the read
-        # that already succeeded must still be returned.
+    def test_the_catalog_entry_is_always_there_when_the_lock_is_not(
+            self, sandbox, tmp_path, monkeypatch):
+        """The invariant this labelling relies on, pinned rather than guarded.
+
+        `_resolve_skill_md` returns a catalog entry on exactly the branch where
+        `lock` is None: it returns `(path, lock, None)` only inside `if lock:`,
+        and otherwise falls through to `catalog.resolve_one`. So a
+        `cat is None` fallback here would guard a state that function cannot
+        produce — an earlier draft of this fix carried one, and it was
+        unreachable code with an unreachable test.
+        """
         from boost_cli.commands import info
-        from boost_cli.errors import BoostError
+        seen = {}
+        real = info.catalog.resolve_one
 
-        def boom(_name):
-            raise BoostError("nope")
+        def spy(name):
+            entry = real(name)
+            seen["kind"] = entry.get("kind")
+            return entry
 
-        path = self._body_file(tmp_path)
-        monkeypatch.setattr(info.lockfile, "find_any", lambda n: None)
-        monkeypatch.setattr(info, "_resolve_skill_md",
-                            lambda n: (path, None, None))
-        monkeypatch.setattr(info.catalog, "resolve_one", boom)
-        text, kind, _lock, _cat = info._resolve_text("thing")
-        assert text == "real body"
-        assert kind == "skill"
+        monkeypatch.setattr(info.catalog, "resolve_one", spy)
+        _text, kind, lock, cat = info._resolve_text("brainstorming")
+        assert lock is None          # nothing is installed in the sandbox
+        assert cat is not None       # ...so the catalog entry is present
+        assert kind == (seen["kind"] or "skill")
 
     def test_an_installed_items_kind_still_comes_from_the_lock(
             self, sandbox, tmp_path, monkeypatch):
