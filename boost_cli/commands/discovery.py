@@ -141,6 +141,9 @@ def cmd_search(argv):
             "no matches for %r" % query,
             "try `boost discover %s` to search all of GitHub" % query))
         _hint_semantic_search(engine)
+        # Especially here: "no matches" is exactly the answer an out-of-date
+        # tap set produces, and the user has no other way to suspect it.
+        _hint_stale_taps()
         return 0
     # The CLI's long-standing wording for the BM25 engine differs from the label
     # rag/eval use ("BM25 full-content"), and both are load-bearing: the latter
@@ -180,6 +183,7 @@ def cmd_search(argv):
     if use_rag:
         _note_stem_expansions(query)
     _hint_semantic_search(engine)
+    _hint_stale_taps()
     return 0
 
 
@@ -198,6 +202,28 @@ def _note_stem_expansions(query: str) -> None:
     out.info(out.role(out.truncate(
         "no exact match for %s — showing %s" % (said, shown),
         max(0, out.term_width() - 2)), "muted"))
+
+
+def _hint_stale_taps() -> None:
+    """Mention old tap clones. One `stat`, and never a network call.
+
+    Search deliberately does not refresh the taps themselves. A refresh is a
+    `git fetch` per tap — ~1.6 s each, minutes across a real install — so doing
+    it inline would turn a sub-second command into a wait, and doing it in the
+    background would mean unannounced network egress plus writes to the very
+    caches the search is reading. Worse, a tap's commit is load-bearing for
+    dense vectors, so a silent update would strand imported shards as stale.
+
+    So: say it, do not do it. The marker's mtime answers "how long ago" for the
+    price of one stat, and a machine that has never refreshed says nothing at
+    all rather than inventing an age.
+    """
+    age = registry.refresh_age_days()
+    if age is None or age < registry.STALE_TAPS_DAYS:
+        return
+    out.info(out.role(
+        "taps last refreshed %d days ago — `boost update --taps-only`"
+        % int(age), "muted"))
 
 
 def _hint_semantic_search(engine: str) -> None:

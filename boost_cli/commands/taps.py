@@ -226,7 +226,8 @@ def cmd_taps(argv) -> int:
         skills = catalog.load_tap(tap)
         total += len(skills)
         taps.append({"name": tap.name, "url": tap.url, "curated": tap.curated,
-                     "skills": len(skills), "updated": _tap_updated(tap)})
+                     "skills": len(skills), "updated": _tap_updated(tap),
+                     "pin": tap.pin})
     if args.json:
         print(json.dumps(taps, indent=2))
         return 0
@@ -234,7 +235,12 @@ def cmd_taps(argv) -> int:
         out.info("no taps configured")
         out.info(out.role("add the recommended registries with `boost tap --defaults`", "muted"))
         return 0
-    rows = [(t["name"], str(t["skills"]), t["updated"],
+    # A pinned tap reads as its commit rather than its date: the date of a
+    # clone held still is not what the user needs to know about it, and a tap
+    # that `boost update` deliberately skips should say why on the line the
+    # user is already reading.
+    rows = [(t["name"], str(t["skills"]),
+             "@%s" % str(t["pin"])[:7] if t["pin"] else t["updated"],
              "★" if t["curated"] else "", out.role(_tilde(t["url"]), "muted"))
             for t in taps]
     out.table(rows, headers=("NAME", "SKILLS", "UPDATED", "", "URL"))

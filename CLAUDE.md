@@ -435,13 +435,29 @@ of the three item kinds (see Non-obvious rules above); `core/store.py` owns
 install, uninstall and sync — copying into the canonical store, symlinking into
 each agent's skills dir, and updating the lock file.
 
+- **A tap pin lives in `config.json`, and `boost update` is what makes it real.**
+  `boost tap --at <sha>` used to check a commit out and record nothing, so the
+  next `boost update` reset the clone to the default branch — measured on a
+  two-commit fixture: tapped at `fb61736`, updated, `6206d22`. That silently
+  invalidates any shard imported for the old commit (stale vectors, still
+  present, no error), which is also the reason **search must never refresh taps
+  in the background**: `_hint_stale_taps` reads one mtime
+  (`paths.tap_refresh_marker`, stamped by `registry.update`) and prints one
+  line rather than fetching. `registry.update` skips a pinned tap; `--force`
+  moves it *and* drops the pin, because deciding to move a tap is deciding to
+  stop holding it still. After any tap actually moves, `pkg._resync_vectors`
+  asks the manifest whether a shard exists for the new commit — importing it
+  costs a download instead of an hour of CPU — and says plainly when one does
+  not.
+
 - **The shard matrix is packed, not sliced, and 256 is a hard ceiling.**
   GitHub runs at most 256 matrix jobs per workflow, so `shards.yml` cannot take
   one job per registry once the scope is the 463-registry catalogue — the run
   fails before a job starts. `scripts/shard_plan.py` bin-packs by the measured
   `est_items` (longest-processing-time-first), which matters because cost is
-  uneven: the largest catalogued registry is 880 items against a median of 30, so slicing puts several giants in one job while others idle, against
-  a 6-hour per-job ceiling. Packing is deterministic on purpose — a rerun that
+  uneven: the largest catalogued registry is 880 items against a median of 30,
+  so slicing puts several giants in one job while others idle, against a
+  6-hour per-job ceiling. Packing is deterministic on purpose — a rerun that
   repacked differently would re-embed registries whose shards were already
   published. A matrix entry is a **space-separated list**, split in Python
   inside the job, never by shell word-splitting.

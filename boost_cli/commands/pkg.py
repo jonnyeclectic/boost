@@ -31,6 +31,7 @@ from ..core import (
     lockfile,
     paths,
     projectlock,
+    rag,
     registry,
     resolve,
     scopes,
@@ -835,6 +836,48 @@ def _update_materialized(kind: str, installed: dict[str, dict], results) -> int:
     return n
 
 
+def _resync_vectors(moved: list[str]) -> None:
+    """Keep prebuilt vectors honest after the taps underneath them move.
+
+    A tap's commit is load-bearing for dense search: `dense.build` marks a tap
+    "reused" per commit and `import_shard` refuses a shard built for another
+    one. So an update that moves a tap leaves its vectors stale *but present* —
+    the failure mode that looks like nothing at all, and the reason auto-
+    updating taps in the background would quietly undo a shard import.
+
+    Two outcomes are worth the network: a newer shard exists for the commit the
+    tap just moved to, in which case importing it costs a download instead of
+    an hour of CPU; or one does not, in which case the honest thing is to say
+    the vectors are now stale and name the command that rebuilds them.
+    """
+    if not moved:
+        return
+    from ..core import dense, shards
+    if not dense.ready():
+        return                      # nothing embedded here to invalidate
+    try:
+        manifest = shards.fetch_manifest()
+    except BoostError:
+        # Offline, or no manifest published. The vectors are still stale, and
+        # saying so without the remedy we could not check for is enough.
+        out.info(out.role("prebuilt vectors for %d refreshed tap(s) are now "
+                          "stale — `boost reindex --dense` rebuilds them"
+                          % len(moved), "muted"))
+        return
+    commits = rag._tap_commits()
+    by_name = {t.name: commits.get(t.safe_name, "")
+               for t in registry.list_taps() if t.name in moved}
+    got = [r for r in shards.sync(list(by_name), by_name, manifest=manifest)
+           if r["status"] == "imported"]
+    if got:
+        out.ok("re-imported prebuilt vectors for %d tap(s)" % len(got))
+    left = len(moved) - len(got)
+    if left:
+        out.info(out.role("%d refreshed tap(s) have no matching shard yet — "
+                          "their vectors are stale until "
+                          "`boost reindex --dense`" % left, "muted"))
+
+
 def cmd_update(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost update",
                                  description="Sync taps or update installed skills")
@@ -849,14 +892,23 @@ def cmd_update(argv: list[str]) -> int:
     # sys.argv, so this makes the printed advice true rather than adding a path.
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the confirmation prompt")
+    ap.add_argument("--force", action="store_true",
+                    help="move pinned taps too, clearing their pin")
     args = ap.parse_args(argv)
-    results, failures = registry.update(args.tap or None)
+    results, failures = registry.update(args.tap or None, force=args.force)
     if not results and not failures:
         out.info("no taps configured — start with `boost tap --defaults`")
         return 0
+    moved = []
     for tname, summary in results.items():
-        catalog.rebuild_tap(registry.get(tname))
+        if "skipped" not in summary:
+            catalog.rebuild_tap(registry.get(tname))
+        # "abc1234 → def5678" is a tap whose tree changed; "already up to date"
+        # and "pinned at ..." are not. Only the first invalidates vectors.
+        if "→" in summary:
+            moved.append(tname)
         out.ok("%s: %s" % (tname, summary))
+    _resync_vectors(moved)
     # Report the dead ones by name, after the successes, so a broken upstream
     # reads as one line of bad news rather than as the whole command failing.
     for tname, err in failures.items():

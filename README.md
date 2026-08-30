@@ -150,6 +150,15 @@ for every one that has a published shard.
 
 Already tapped? `boost reindex --fetch-shards` does the download half alone,
 and `boost reindex --dense` embeds locally whatever has no published shard.
+
+Because vectors are keyed to a registry's commit, `quickstart` **pins** each tap
+it fetches vectors for, and `boost update` skips a pinned tap rather than moving
+it out from under them (`--force` moves it anyway and drops the pin). When a tap
+does move, boost checks whether a newer shard exists for the new commit and
+imports it; if none does, it says so instead of leaving stale vectors looking
+fresh. `boost search` never refreshes taps behind your back — it prints one line
+when they are more than two weeks old and leaves the fetching to
+`boost update --taps-only`.
 Every download is checked against the sha256 in the manifest and refused on a
 mismatch, and shards for a registry that has moved since publication are
 refused rather than merged — stale vectors would otherwise look fresh forever.
