@@ -513,6 +513,18 @@ Consequences for code you write here:
   the measured trade is **3.40 GB → 3.87 GB (+14%), in 1360 s**, peaking at
   ~2× while both copies coexist. Don't describe it as size-neutral — an earlier
   draft of this section did, from prediction rather than measurement.
+- **Embedding reports progress and commits as it goes.** `dense.build` takes
+  `on_progress(done, total)` and `_embed_and_store` commits every
+  `_COMMIT_EVERY` rows. Both are bug fixes, not polish: a full catalogue is
+  tens of thousands of distinct chunks under one fixed spinner label, which a
+  user reported as a hang after hours; and every row used to land in a single
+  transaction that committed after the last one, so an interrupt threw away the
+  whole build. Periodic commits are safe because `build` deletes each changed
+  tap's rows *before* re-inserting, so a partial store is replaced rather than
+  doubled. The total counts **distinct** texts, not rows — 42.9% of chunks on a
+  real install are repeats and are embedded once — so a progress total taken
+  from row count would over-report the work.
+
 - **Nothing on the search path may count `chunks`.** `SELECT COUNT(*)` scans the
   `chunks_tap` covering index — 8,419 pages / 34.5 MB, measured 1.94 s — and
   both `ready()` and `status()` did it on every search, the latter only to word
