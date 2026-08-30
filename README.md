@@ -406,8 +406,10 @@ purely local operation, for CI images and air-gapped machines.
 | Claude Code | `claude` | `claude mcp add` → its user-scope MCP config |
 | Gemini CLI | `gemini` | `gemini mcp add -s user` → `~/.gemini/settings.json` |
 
-Six tools are exposed: `boost_search`, `boost_list`, `boost_info`,
-`boost_install`, `boost_doctor` and `boost_discover_github`.
+Seven tools are exposed: `boost_search`, `boost_list`, `boost_info`,
+`boost_read`, `boost_install`, `boost_doctor` and
+`boost_discover_github`. `boost_read` is the one that returns an item's
+actual text — without it, installing was the only way to read a skill.
 
 The server also returns MCP `instructions`, telling the agent when boost is
 relevant. The two hosts place those differently, and it matters. Claude Code

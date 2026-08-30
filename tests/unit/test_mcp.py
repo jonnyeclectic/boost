@@ -498,7 +498,7 @@ class TestInstructionsBoundIsATestNotAFeeling:
         # on every host, which is why the trigger, the cost and now the
         # already-loaded defeater are all repeated into them. A clause that
         # moved from INSTRUCTIONS into a description must not shed the rule
-        # INSTRUCTIONS was held to on the way. All six are clean today; this
+        # INSTRUCTIONS was held to on the way. All seven are clean today; this
         # keeps them that way.
         from boost_cli.commands import configuration
         for spec in configuration.REGISTRY.specs():

@@ -329,7 +329,7 @@
         (like GitHub) probe for their dependency and <b>degrade to a message instead of crashing</b>.</p>
 
       <div class="diagram reveal">
-        <svg viewBox="0 0 920 500" role="img" aria-label="Architecture: an MCP client speaks JSON-RPC over stdio to the boost server, which routes tools/list and tools/call through the core/mcp Registry to six self-registering handlers; the boost_discover_github handler reaches out to the gh CLI and degrades gracefully.">
+        <svg viewBox="0 0 920 500" role="img" aria-label="Architecture: an MCP client speaks JSON-RPC over stdio to the boost server, which routes tools/list and tools/call through the core/mcp Registry to seven self-registering handlers; the boost_discover_github handler reaches out to the gh CLI and degrades gracefully.">
           <defs>
             <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0 0L10 5L0 10z" fill="#7dd3fc"/>
@@ -375,16 +375,18 @@
             <text x="672" y="119" class="lbl-s">boost_list</text>
             <rect x="660" y="134" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
             <text x="672" y="151" class="lbl-s">boost_info</text>
-            <rect x="660" y="166" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
-            <text x="672" y="183" class="lbl-s">boost_install</text>
+            <rect x="660" y="166" width="220" height="26" rx="6" fill="rgba(125,211,252,.10)" stroke="#7dd3fc" stroke-width="1.2"/>
+            <text x="672" y="183" class="lbl-s" fill="#bae6fd">boost_read  ✦ new</text>
             <rect x="660" y="198" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
-            <text x="672" y="215" class="lbl-s">boost_doctor</text>
-            <rect x="660" y="230" width="220" height="26" rx="6" fill="rgba(245,143,215,.10)" stroke="#f58fd7" stroke-width="1.2"/>
-            <text x="672" y="247" class="lbl-s" fill="#f9a8d4">boost_discover_github  ✦ new</text>
+            <text x="672" y="215" class="lbl-s">boost_install</text>
+            <rect x="660" y="230" width="220" height="26" rx="6" fill="rgba(255,255,255,.04)" stroke="var(--line-hi)"/>
+            <text x="672" y="247" class="lbl-s">boost_doctor</text>
+            <rect x="660" y="262" width="220" height="26" rx="6" fill="rgba(245,143,215,.10)" stroke="#f58fd7" stroke-width="1.2"/>
+            <text x="672" y="279" class="lbl-s" fill="#f9a8d4">boost_discover_github</text>
           </g>
           <!-- registry to handlers -->
           <line x1="610" y1="180" x2="660" y2="150" stroke="#7dd3fc" stroke-width="1.2" marker-end="url(#ah)"/>
-          <line x1="610" y1="205" x2="660" y2="243" stroke="#f58fd7" stroke-width="1.2" marker-end="url(#ahp)"/>
+          <line x1="610" y1="205" x2="660" y2="275" stroke="#f58fd7" stroke-width="1.2" marker-end="url(#ahp)"/>
 
           <!-- reach-out -->
           <rect x="620" y="330" width="260" height="72" rx="12" fill="rgba(245,143,215,.06)" stroke="#f58fd7" stroke-width="1.2"/>

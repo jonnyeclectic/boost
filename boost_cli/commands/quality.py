@@ -395,7 +395,14 @@ def cmd_doctor(argv):
     if taps and tap_ok == len(taps):
         out.ok("%d tap%s cloned & cached" % (len(taps), _s(len(taps))))
     elif not taps:
-        out.info("no taps configured — add one with `boost tap owner/repo`")
+        # `boost tap --defaults` leads, and it is the same command in the same
+        # order that `boost search`'s error, `mcp.no_results` and the MCP
+        # `boost_doctor` tool all name. A user who hits two of these surfaces
+        # in one session must not see the recommendation flip and read it as
+        # two different fixes — which is exactly what happened here: search
+        # said `--defaults`, doctor said `owner/repo`.
+        out.info("no registries tapped — nothing is searchable yet; add the "
+                 "recommended ones with `boost tap --defaults`", wrap=True)
 
     lock_ok = True
     lp = paths.lockfile_path()
@@ -598,10 +605,22 @@ def cmd_doctor(argv):
     else:
         out.warn("lock file integrity or log rotation needs attention")
 
-    out.verdict(issues == 0,
-                "healthy" if not issues else
-                "%d issue%s need attention — see the suggestions above"
-                % (issues, _s(issues)))
+    # A machine with no taps has nothing to disagree about, so every check
+    # above passes and the verdict read "healthy" — directly under the line
+    # saying no registries are tapped. That is the one state where a clean bill
+    # of health actively misleads: boost cannot answer anything yet, which is a
+    # setup step rather than a fault. Reported, never fatal — the exit code
+    # still turns only on real issues, so scripts and CI are unaffected. The
+    # MCP `boost_doctor` tool already refused to say "healthy" here; this is
+    # the CLI half of the same rule.
+    if issues == 0 and not taps:
+        out.verdict(True, "ready to set up — tap a registry to make boost "
+                          "searchable")
+    else:
+        out.verdict(issues == 0,
+                    "healthy" if not issues else
+                    "%d issue%s need attention — see the suggestions above"
+                    % (issues, _s(issues)))
     return 1 if issues else 0
 
 

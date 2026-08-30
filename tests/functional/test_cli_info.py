@@ -379,6 +379,46 @@ class TestCat:
         assert "local edit" not in boost("cat", "rival-tap:brainstorming").out
 
 
+class TestMcpReadHonoursTheQualifier:
+    """`boost_read`'s `installed:` line answers about the item that was NAMED.
+
+    `_for_tap` returns None when a `tap:` qualifier names a different tap than
+    the installed record — its docstring is explicit that reporting tap A's
+    lock entry for a `tap-b:` question "would describe another tap's install as
+    this one's". `boost_read` derives `installed` from that same value, so it
+    inherits the precision.
+
+    Worth pinning because it is deliberately STRICTER than `mcp.hit_line`'s
+    `[installed]` marker, which is name-keyed and documents its own
+    false-positive rate. The two answer different questions — a search hit is
+    one of ten lines, a read is about one named item — and someone reconciling
+    them later should have to delete this test on purpose.
+    """
+
+    def test_the_named_taps_copy_decides_the_installed_line(self, boost,
+                                                            rival_tap):
+        from boost_cli.commands import configuration
+        boost("install", "fixture-tap:brainstorming")
+
+        installed, _ = configuration._tool_read(
+            {"name": "fixture-tap:brainstorming"})
+        other, _ = configuration._tool_read({"name": "rival-tap:brainstorming"})
+
+        assert "installed: yes" in installed.split("\n\n")[0]
+        assert "installed: no" in other.split("\n\n")[0]
+
+    def test_the_uninstalled_copy_still_returns_its_own_body(self, boost,
+                                                             rival_tap):
+        # Saying "not installed" must not mean "no content": the whole point is
+        # to read a thing before installing it.
+        from boost_cli.commands import configuration
+        boost("install", "fixture-tap:brainstorming")
+        other, is_err = configuration._tool_read(
+            {"name": "rival-tap:brainstorming"})
+        assert is_err is False
+        assert "The other tap's copy." in other
+
+
 # ── edit ─────────────────────────────────────────────────────────────────
 
 class TestEdit:

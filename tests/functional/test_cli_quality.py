@@ -74,6 +74,40 @@ class TestDoctor:
         assert "lock file integrity OK · log rotation healthy" in r.out
         assert "● healthy" in r.out               # dashboard verdict
 
+    def test_an_untapped_machine_is_not_called_healthy(self, boost):
+        """The one state where a clean bill of health actively misleads.
+
+        A machine with no taps has nothing to disagree about, so every check
+        passes and the verdict read "healthy" — directly under the line saying
+        no registries are tapped. boost cannot answer anything yet: that is a
+        setup step, not health. The MCP `boost_doctor` tool already refused to
+        say it here; this is the CLI half of the same rule.
+        """
+        r = boost("doctor")
+        assert "● healthy" not in r.out
+        assert "ready to set up" in r.out
+
+    def test_an_untapped_machine_is_still_rc0(self, boost):
+        # Reported, never fatal. The exit code turns on real issues only, so
+        # scripts and CI on a fresh machine are unaffected — which is what
+        # makes saying the true thing safe.
+        boost("doctor")            # the fixture asserts rc == 0
+
+    def test_the_setup_hint_names_the_same_command_search_does(self, boost):
+        """doctor said `boost tap owner/repo`; search says `boost tap
+        --defaults`. A user who hits both in one session read one problem as
+        two, and `--defaults` is the precise one — it is what `mcp.no_results`
+        and the MCP `boost_doctor` tool already name, in that order.
+        """
+        out = boost("doctor").out
+        assert "boost tap --defaults" in out
+        assert "boost tap owner/repo" not in out
+
+    def test_a_tapped_machine_is_still_healthy(self, boost, tapped):
+        # The regression that would matter: the new branch must fire only on
+        # an untapped machine.
+        assert "● healthy" in boost("doctor").out
+
     def test_broken_symlink_rc1(self, boost, installed):
         ghost = paths.home() / ".claude" / "skills" / "ghost"
         ghost.symlink_to(paths.store_dir() / "nowhere")
@@ -123,7 +157,12 @@ class TestDoctor:
 
     def test_empty_env_rc0(self, boost, sandbox):
         r = boost("doctor")
-        assert "no taps configured — add one with `boost tap owner/repo`" in r.out
+        # `boost tap --defaults`, not `boost tap owner/repo`: the same command
+        # `boost search`'s error and the MCP `boost_doctor` tool already name,
+        # so a user hitting two of these surfaces reads one problem rather than
+        # two. Pinned by TestDoctor's setup-hint test just above.
+        assert "no registries tapped" in r.out
+        assert "boost tap --defaults" in r.out
         assert "0 skills installed · 0 taps synced · 0 broken links" in r.out
 
     def test_tampered_content_rc1(self, boost, installed):

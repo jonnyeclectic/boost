@@ -10088,8 +10088,9 @@ rediscover them as new.</p>
       </article>
 
       <article class="cap rcard" id="mcp-cannot-read-a-skill-before-installing">
-        <div class="head"><span class="pill next">Next</span><span class="cat">MCP · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">MCP · UX</span></div>
         <h3>MCP has no way to read a skill before installing it</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost_info</code>'s MCP description promises &ldquo;<em>the whole picture of one skill, rule or
 workflow by name &mdash; what it does, its kind, the tap it came from, its version, and whether it is
 already installed</em>&rdquo;. Called on a real hit it returns five fields:
@@ -10141,12 +10142,34 @@ to look; it must not become a second install path.
 
 <b>And fix the description either way.</b> If <code>boost_info</code> keeps returning five fields, it
 should stop claiming the whole picture &mdash; an overstated tool description costs an agent a wasted
-call and teaches it to distrust the rest of the surface.</p>
+call and teaches it to distrust the rest of the surface.
+
+<b>Shipped as <code>boost_read</code>.</b> It returns the item's own text with a two-line header
+&mdash; name, kind where it is not a skill, install state, all decisions the Markdown cannot answer
+&mdash; and reuses <code>boost cat</code>'s resolution through <code>info._resolve_text</code>, so
+installed copies, tap fallback, tap-qualified names, integrity enforcement and quarantine behave
+identically. All three of the card's requirements landed: <code>cat</code> over <code>explain</code>
+(offline, deterministic, free); a stated cap; read-only, with a test that fails if the handler ever
+reaches <code>store.install</code>.
+
+<b>The cap is measured rather than round.</b> Over the 63,053 items in a real 467-tap install the
+distribution is median <b>6,063</b> bytes, p90 <b>16,225</b>, p99 <b>35,275</b>, max <b>567,484</b>
+&mdash; three orders of magnitude between the middle and the tail, which is what makes an unbounded
+read a hazard rather than a theory. <code>READ_LIMIT = 12000</code> delivers <b>80.3%</b> of the
+catalogue whole against 62.8% at 8,000, and caps the worst case near 3,000 tokens; 16,000 would buy
+9.3 points for another third again. Truncation is announced where it happens, cuts on a line
+boundary, reports both the cut and the true size, and names the command that returns the rest.
+
+<b>And the stub case was confirmed against the live catalogue, not predicted.</b>
+<code>j4flmao/agent-skills:rag-patterns</code> opens <code>#&nbsp;Skill</code> /
+&ldquo;<em>To optimize **Skill**, we enforce the following foundational rules:</em>&rdquo; &mdash; a
+template whose placeholder was never filled, 8,934 bytes of it, indexed and ranked like any written
+procedure. Its one-liner gives no sign. That is the gap the body closes.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
-          <span class="m">boost_info returns the same one line boost_search already gave</span>
+          <span class="m">shipped — boost_read returns the body; boost_info now says what it returns</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
