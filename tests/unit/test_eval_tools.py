@@ -22,6 +22,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -144,8 +145,9 @@ class TestTheIntervalRefusesToClaimCertainty:
 
 
 class TestBothDirectionsAreScored:
-    ROWS = [_row("c1", "call"), _row("c2", "call"),
-            _row("n1", "no-call"), _row("n2", "no-call")]
+    ROWS: ClassVar[list[dict]] = [
+        _row("c1", "call"), _row("c2", "call"),
+        _row("n1", "no-call"), _row("n2", "no-call")]
 
     def test_a_perfect_host_passes(self):
         obs = {"c1": [True], "c2": [True], "n1": [False], "n2": [False]}
@@ -188,7 +190,7 @@ class TestBothDirectionsAreScored:
 
 
 class TestTheVerdictJudgesTheInterval:
-    ROWS = [_row("c1", "call"), _row("n1", "no-call")]
+    ROWS: ClassVar[list[dict]] = [_row("c1", "call"), _row("n1", "no-call")]
 
     def test_a_lucky_single_run_does_not_clear_the_floor(self):
         # 1/1 is a point estimate of 1.00 and a lower bound of ~0.21. Gating on
