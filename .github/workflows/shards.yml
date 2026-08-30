@@ -164,7 +164,10 @@ jobs:
               rm -f "$safe.shard.json"
             fi
           done
-          python3 - *.shard.json <<'PY'
+          # `./*.shard.json`, not `*.shard.json`: a bare glob can expand to a
+          # name starting with `-`, which python3 would read as its own flag
+          # (shellcheck SC2035).
+          python3 - ./*.shard.json <<'PY'
           import json, sys
           # Fail here rather than publish an unusable artifact: a shard without
           # provenance cannot be validated on import and would be refused by
