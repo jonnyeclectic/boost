@@ -1450,30 +1450,46 @@ def _mcp_tool(tool: str, args: dict):
     return REGISTRY.call(tool, args)
 
 
-def _run_mcp_host(host: str, action: str, cmd) -> bool:
-    """Run one host's register/unregister argv. True if it actually ran.
+#: Substrings an agent CLI uses to say "this server is already registered".
+#: Registering twice is not a failure — it is the state the user asked for —
+#: and treating it as one is what made `--host auto` abort on host one and
+#: never reach host two on any machine where boost was already in Claude.
+_ALREADY = ("already exists", "already registered", "already configured")
 
-    A host whose CLI is not installed is *not* an error — most machines have
-    one agent CLI, not all of them — so the argv is printed for the user to run
-    later and the caller moves on to the next host. A CLI that is present and
-    fails is a real error and raises.
+
+def _run_mcp_host(host: str, action: str, cmd) -> tuple[str, str]:
+    """Run one host's register/unregister argv.
+
+    Returns ``(status, detail)`` where status is:
+
+    * ``"ran"``      — the CLI ran and succeeded;
+    * ``"already"``  — it reported the server is already in the state asked
+      for, which is success with a different wording;
+    * ``"missing"``  — the CLI is not installed. Not an error: most machines
+      have one agent CLI, not all of them;
+    * ``"failed"``   — it is installed and something else went wrong.
+
+    It **returns** rather than raises so one host cannot end the sweep. That
+    was the bug: a present CLI exiting non-zero raised straight out of the
+    loop, so with boost already registered in Claude, `--host auto` died on
+    "already exists" and never reached the second agent.
     """
     exe = mcphost.cli(host)
     if not shutil.which(exe):
-        return False
+        return "missing", ""
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise BoostError("%s mcp %s failed: %s" % (exe, action, e),
-                        hint="run it yourself: " + " ".join(cmd)) from e
+        return "failed", str(e)
     for ln in (proc.stdout or "").strip().splitlines():
         out.info(ln)
-    if proc.returncode != 0:
-        tail = (proc.stderr or "").strip().splitlines()
-        raise BoostError("%s mcp %s failed: %s"
-                        % (exe, action, tail[-1] if tail else "unknown error"),
-                        hint="run it yourself: " + " ".join(cmd))
-    return True
+    if proc.returncode == 0:
+        return "ran", ""
+    blob = ((proc.stderr or "") + (proc.stdout or "")).lower()
+    if action == "register" and any(k in blob for k in _ALREADY):
+        return "already", ""
+    tail = (proc.stderr or "").strip().splitlines()
+    return "failed", tail[-1] if tail else "unknown error"
 
 
 def _seed_catalog_for_mcp(force: bool) -> None:
@@ -1627,11 +1643,18 @@ def cmd_mcp(argv) -> int:
     # `all`) always reports it, so a user setting up a machine can see the argv
     # for an agent CLI they have not installed yet.
     explicit = args.host not in (None, "", "auto")
-    done, missing = [], []
+    done, already, missing, failed = [], [], [], {}
     for host in targets:
         cmd = mcphost.argv(host, args.action, shim)
-        if _run_mcp_host(host, args.action, cmd):
+        status, detail = _run_mcp_host(host, args.action, cmd)
+        if status == "ran":
             done.append(host)
+        elif status == "already":
+            already.append(host)
+        elif status == "failed":
+            # Collected, not raised: the next host is a different agent on a
+            # different config file and has nothing to do with this failure.
+            failed[host] = detail
         else:
             missing.append(host)
             if explicit:
@@ -1643,7 +1666,23 @@ def cmd_mcp(argv) -> int:
     for host in done:
         out.ok("%sed boost as an MCP server for %s (scope: user)"
                % (verb, mcphost.label(host)))
-    if not done:
+    for host in already:
+        out.ok("already registered with %s — nothing to do"
+               % mcphost.label(host))
+    for host, detail in failed.items():
+        out.warn("%s: %s mcp %s failed — %s"
+                 % (mcphost.label(host), mcphost.cli(host), args.action,
+                    detail))
+        out.info(out.role("run it yourself: %s"
+                          % " ".join(mcphost.argv(host, args.action, shim)),
+                          "muted"))
+    settled = done + already
+    if not settled:
+        if failed:
+            # Every installed CLI failed. That is a real error — but only after
+            # each one has been tried and named.
+            journal.log("mcp", args.action, hosts="")
+            return 1
         # Nothing ran. Under `auto` nothing has been printed yet, so say which
         # CLIs were looked for rather than exiting silently on success.
         if not explicit:
@@ -1654,8 +1693,10 @@ def cmd_mcp(argv) -> int:
         journal.log("mcp", args.action, hosts="")
         return 0
     if args.action == "register":
-        _offer_boost_first(done)
-    journal.log("mcp", args.action, hosts=",".join(done))
+        _offer_boost_first(settled)
+    journal.log("mcp", args.action, hosts=",".join(settled))
+    # Same rule as `boost update` across taps: a partial sweep is a success
+    # with a warning, because the hosts that worked really did work.
     return 0
 
 
