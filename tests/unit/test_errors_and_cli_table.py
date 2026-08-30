@@ -37,7 +37,7 @@ EXPECTED_GROUP_SIZES = {"pkg": 13, "find": 9, "info": 10, "tap": 5,
 
 class TestCommandTable:
     def test_exactly_80_commands(self):
-        assert len(cli.COMMANDS) == 80
+        assert len(cli.COMMANDS) == 81
 
     def test_exactly_8_groups(self):
         assert len(cli.GROUPS) == 8
@@ -51,7 +51,7 @@ class TestCommandTable:
         names = [n for n, _g, _m, _s in cli.COMMANDS]
         dupes = [n for n, k in Counter(names).items() if k > 1]
         assert dupes == []
-        assert len(cli._BY_NAME) == 80
+        assert len(cli._BY_NAME) == 81
 
     def test_every_command_group_exists(self):
         for name, group, _module, _summary in cli.COMMANDS:

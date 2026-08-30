@@ -101,7 +101,12 @@ def cmd_tap(argv) -> int:
                    help="with --catalog: print what would be tapped, tap nothing")
     p.add_argument("--curated", action="store_true",
                    help="mark the tap as curated (★ in listings)")
+    p.add_argument("--at", metavar="SHA",
+                   help="pin the clone to one 40-character commit, as a "
+                        "published vector shard requires")
     args = p.parse_args(argv)
+    if args.at and not args.spec:
+        p.error("--at pins one registry, so it needs a SPEC")
     if not args.spec and not args.defaults and not args.catalog:
         p.error("provide a SPEC, --defaults, or --catalog")
 
@@ -129,10 +134,11 @@ def cmd_tap(argv) -> int:
                    % (tap.name, len(entries), default.get("focus", "")))
     if args.spec:
         with spin.Spinner("cloning %s" % args.spec):
-            tap = registry.add(args.spec, curated=args.curated)
+            tap = registry.add(args.spec, curated=args.curated, at=args.at)
             entries = catalog.rebuild_tap(tap)
         journal.log("tap", tap.name)
-        out.ok("Tapped %s (%d items)" % (tap.name, len(entries)))
+        pin = " @ %s" % args.at[:7] if args.at else ""
+        out.ok("Tapped %s (%d items)%s" % (tap.name, len(entries), pin))
     # Refresh the TAB-completion name cache so `boost install <TAB>` sees
     # whatever this call just tapped instead of the pre-tap snapshot.
     complete.refresh_names()

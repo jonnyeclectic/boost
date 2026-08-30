@@ -161,8 +161,14 @@ def get(name: str) -> Tap:
                     else "list taps with `boost taps`")
 
 
-def add(spec: str, curated: bool = False) -> Tap:
+def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     """Parse `spec`, shallow-clone it, and record the tap in config.
+
+    ``at`` pins the clone to one commit. It exists for published vector shards:
+    a shard is only importable while the tap sits at the commit it was built
+    from (see ``core.shards``), so "tap this registry as the shard expects it"
+    has to be one operation — tapping HEAD and then moving would re-scan the
+    catalog for a tree the vectors do not describe.
 
     Raises BoostError if a tap with that name is already configured.
     """
@@ -176,6 +182,16 @@ def add(spec: str, curated: bool = False) -> Tap:
     if tap.path.exists():
         util.rmtree(tap.path)
     gitutil.clone_shallow(url, tap.path)
+    if at:
+        try:
+            gitutil.checkout_commit(tap.path, at)
+        except BoostError:
+            # A pin that cannot be honoured must not leave a tap silently on
+            # HEAD: the caller asked for one tree and would get another, and
+            # every shard keyed to the pin would then be refused for a commit
+            # mismatch whose cause is three steps back.
+            util.rmtree(tap.path)
+            raise
     problems = policy.check_tap_signing(tap.path)
     if problems:
         util.rmtree(tap.path)  # leave no half-added tap behind

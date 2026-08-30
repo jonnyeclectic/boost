@@ -575,11 +575,11 @@
     </p>
     <div class="cta-row">
       <a class="btn btn-grad" href="#workflow">See how it works →</a>
-      <a class="btn btn-ghost" href="#commands">Explore all 80 commands</a>
+      <a class="btn btn-ghost" href="#commands">Explore all 81 commands</a>
     </div>
     <div class="stats">
       <div class="stat reveal"><b>70,000+</b><span>Discoverable assets</span></div>
-      <div class="stat reveal"><b>80</b><span>Commands · 8 groups</span></div>
+      <div class="stat reveal"><b>81</b><span>Commands · 8 groups</span></div>
       <div class="stat reveal"><b>7</b><span>Pre-tapped registries</span></div>
       <div class="stat reveal"><b>4</b><span>AI agents supported</span></div>
     </div>
@@ -766,7 +766,7 @@ facilitate structured divergent thinking:
   <section id="commands">
     <div class="wrap">
       <span class="eyebrow">What It Can Do</span>
-      <h2 class="sec-title">80 commands, 8 groups</h2>
+      <h2 class="sec-title">81 commands, 8 groups</h2>
       <p class="sec-sub">From basic install/update to AI-powered authoring, governance,
         and team rollouts. Filter live to find what you need.</p>
 
@@ -990,11 +990,11 @@ exec $SHELL -l</pre>
 pipx install boost-skill-cli
 <span class="tv">boost</span> --version
 
-<span class="cm"># add the 7 starter registries and go</span>
-<span class="tv">boost</span> <span class="tc">tap</span> --defaults
+<span class="cm"># taps the 7 starter registries and loads prebuilt vectors</span>
+<span class="tv">boost</span> <span class="tc">quickstart</span>
 <span class="tv">boost</span> <span class="tc">search</span> brainstorming
 
-<span class="cm"># optional: local semantic search over your skills</span>
+<span class="cm"># semantic search: add the extra first, then quickstart again</span>
 pipx inject boost-skill-cli <span class="yv">"boost-skill-cli[rag]"</span>
 
 <span class="cm"># upgrade later &mdash; works for pipx, pip, uv or a git checkout</span>

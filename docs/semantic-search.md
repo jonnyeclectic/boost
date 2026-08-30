@@ -27,8 +27,16 @@ other. `boost search` prints `hybrid RRF` when that is what happened.
 ```bash
 pipx inject boost-skill-cli "boost-skill-cli[rag]"   # if you installed with pipx
 # pip install "boost-skill-cli[rag]"                 # if you installed with pip
-boost reindex --dense                                # embed everything you have tapped
+boost quickstart                                     # taps + downloads prebuilt vectors
 ```
+
+`boost quickstart` downloads vectors that were already computed, rather than
+computing them here. On a machine that has never tapped anything it is the only
+command you need; run it again after adding the extra and it fills in the
+vectors it skipped the first time.
+
+To embed locally instead — for taps nobody has published, or to use your own
+API key — that is `boost reindex --dense`.
 
 The first run downloads `BAAI/bge-small-en-v1.5`, about 133 MB. It is pinned by
 sha256, cached under `~/.boost/cache/models`, and runs on your CPU. No text
@@ -37,6 +45,65 @@ leaves the machine, then or later.
 How long `reindex --dense` takes depends on how much you have tapped. The
 starter set from `boost tap --defaults` is minutes. A machine with hundreds of
 registries is a coffee break, and the command tells you where it is.
+
+## Prebuilt vectors, and why they are worth it
+
+Embedding is the expensive half. Measured on CI's CPU with the shipped ONNX
+model: **~1.2 s per chunk**, which is 4,431 s for a 743-entry registry.
+Importing the same rows takes **0.12 s**. That gap is why the keyless tier was
+available in principle and unreachable in practice before shards existed.
+
+A *shard* is one registry's vectors plus the provenance needed to check them:
+the embedding space they were built in (provider, model, dimensions) and the
+registry commit they describe. boost publishes them to a rolling
+`shards-latest` prerelease on its own repo, indexed by a `manifest.json`, and
+two commands consume them:
+
+```bash
+boost quickstart                 # tap the starter registries + import their vectors
+boost reindex --fetch-shards     # already tapped: import whatever is published
+```
+
+Three rules keep a downloaded vector honest, and each of them refuses rather
+than degrades — the failures they prevent are silent ones:
+
+- **Space must match.** A vector only means anything against others from the
+  same model. A 384-d keyless shard cannot be mixed into a 1024-d Voyage store,
+  and boost checks that against the manifest *before* downloading anything.
+- **Commit must match.** A shard describes one tree. If the registry has moved
+  since it was built, importing would let boost mark that tap "reused" and
+  never re-embed it — stale vectors that look fresh forever. This is why
+  `quickstart` taps with `boost tap --at <sha>`, pinning each registry to the
+  commit its shard was built from.
+- **Digest must match.** Every download is checked against the sha256 in the
+  manifest and deleted on mismatch. A corrupt shard does not crash a search; it
+  returns quietly wrong rankings.
+
+A tap with no published shard is named and left alone. `quickstart` never
+starts a multi-hour embed on your behalf.
+
+### Publishing your own
+
+The registries boost publishes are the pinned eval corpus. To serve others —
+a fork, a company mirror, registries boost does not carry — export from a
+machine that has already embedded them:
+
+```bash
+python3 scripts/publish_shards.py export --out /tmp/shards
+python3 scripts/publish_shards.py manifest --shard-dir /tmp/shards \
+    --repo you/your-fork --out /tmp/shards/manifest.json
+gh release upload shards-latest /tmp/shards/*.json --repo you/your-fork --clobber
+```
+
+Point boost at it with `BOOST_SHARD_MANIFEST=https://…/manifest.json`. Shard
+URLs must sit on the manifest's own host — a manifest names what boost
+downloads, so it is not allowed to redirect that anywhere else.
+
+**Publish keyless vectors.** A shard exported from a machine holding
+`VOYAGE_API_KEY` is 1024-d `voyage-4`, and only someone else holding a Voyage
+key can import *or query* against it. `scripts/publish_shards.py manifest`
+refuses to mix two spaces in one manifest and prints which one it found, so
+this is a loud mistake rather than a quiet one.
 
 ## Check that it worked
 

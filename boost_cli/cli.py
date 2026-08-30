@@ -1,6 +1,6 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
-"""boost CLI dispatcher — 80 commands across 8 groups.
+"""boost CLI dispatcher — 81 commands across 8 groups.
 
 Each command lives in boost_cli/commands/<module>.py as
     def cmd_<name_with_underscores>(argv: list[str]) -> int
@@ -117,6 +117,7 @@ COMMANDS = [
     ("health",      "chk", "quality", "Dashboard of skill-environment health"),
     ("trust",       "chk", "quality", "Manage signing keys & verify tap provenance"),
     # Configuration (13)
+    ("quickstart",  "cfg", "quickstart", "Tap the starter registries and load prebuilt vectors"),
     ("config",      "cfg", "configuration", "Display or modify boost configuration"),
     ("clean",       "cfg", "configuration", "Clear stale caches & broken symlinks"),
     ("compact",     "cfg", "configuration", "Shrink tap clones to the files boost indexes"),

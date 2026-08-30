@@ -16,8 +16,8 @@ Cursor and Gemini CLI in a single pass.
 
 ```bash
 pipx install boost-skill-cli
-boost tap --defaults          # 7 curated registries: skills, rules, workflows
-boost search tdd              # full-content BM25 over every skill
+boost quickstart              # taps the 7 starter registries, loads prebuilt vectors
+boost search tdd              # keyword + semantic, fused
 boost install tdd-workflow    # → every agent, version-pinned, one lock file
 ```
 
@@ -130,13 +130,25 @@ ln -s ~/.boost-src/boost ~/bin/boost        # anywhere on PATH works
 itself on your first search, so there is nothing to set up.
 
 BM25 matches words, which fails when your query shares no vocabulary with the
-skill you want. Semantic search fixes that, needs no API key, and takes two
-commands:
+skill you want. Semantic search fixes that and needs no API key — only the
+extra:
 
 ```bash
 pipx inject boost-skill-cli "boost-skill-cli[rag]"   # pip install "boost-skill-cli[rag]" if you used pip
-boost reindex --dense
+boost quickstart                                     # downloads prebuilt vectors
 ```
+
+`boost quickstart` is the fast path: it taps the starter registries **pinned to
+the commits the published vectors were built from**, then downloads and imports
+those vectors. Embedding is ~1.2 s/chunk on CPU — hours for a real corpus —
+and importing the same rows takes 0.12 s, so the difference between the two is
+the difference between semantic search being available and being reachable.
+
+Already tapped? `boost reindex --fetch-shards` does the download half alone,
+and `boost reindex --dense` embeds locally whatever has no published shard.
+Every download is checked against the sha256 in the manifest and refused on a
+mismatch, and shards for a registry that has moved since publication are
+refused rather than merged — stale vectors would otherwise look fresh forever.
 
 When both indexes exist boost fuses the rankings rather than choosing between
 them. See [docs/semantic-search.md](docs/semantic-search.md) for the whole
@@ -320,7 +332,7 @@ at least 95% alike, fold into one badged `×5`, with `^D` to show them again.
 Identity is the description and never the name: `code-reviewer` appears 75 times
 with 42 different descriptions, and those are 42 real skills.
 
-## 80 commands, organized into 8 groups
+## 81 commands, organized into 8 groups
 
 `boost --help` prints the full grouped list. For every flag of every command see
 [`docs/commands.html`](docs/commands.html); for a visual tour,
