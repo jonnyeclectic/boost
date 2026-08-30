@@ -157,7 +157,12 @@ class TestDoctor:
 
     def test_empty_env_rc0(self, boost, sandbox):
         r = boost("doctor")
-        assert "no taps configured — add one with `boost tap owner/repo`" in r.out
+        # `boost tap --defaults`, not `boost tap owner/repo`: the same command
+        # `boost search`'s error and the MCP `boost_doctor` tool already name,
+        # so a user hitting two of these surfaces reads one problem rather than
+        # two. Pinned by TestDoctor's setup-hint test just above.
+        assert "no registries tapped" in r.out
+        assert "boost tap --defaults" in r.out
         assert "0 skills installed · 0 taps synced · 0 broken links" in r.out
 
     def test_tampered_content_rc1(self, boost, installed):

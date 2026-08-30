@@ -1418,14 +1418,14 @@ REGISTRY.register(
     # agent to discount the rest of the surface, which is the expensive half.
     # It now says what it returns (status and provenance) and names the tool
     # that returns the body.
-    "Where one skill, rule or workflow came from and whether it is already "
-    "here — its kind, tap, version, install state, and which agents it "
-    "reached. It is the STATUS of an item, not its contents: the description "
+    "Where one skill, rule or workflow came from, by name, and whether it is "
+    "already here — its kind, tap, version, install state, and which agents "
+    "it reached. It is the STATUS of an item, not its contents: the description "
     "it echoes is the same one-liner boost_search returned, so to read what "
     "the item actually says, call boost_read. Reach for boost_info when a "
     "name arrives from somewhere else — a teammate, a README, a repo you are "
     "reading — and you need to know whether this machine already has it. You "
-    "do not need it between a search and an install: boost_search already "
+    "do not need this between a search and an install: boost_search already "
     "returns each match's kind, description and installed marker.",
     {"type": "object",
      "properties": {"name": {"type": "string",
