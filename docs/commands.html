@@ -180,7 +180,7 @@
     </div>
     <div class="group" data-group="cfg">
       <div class="group-h">Config &amp; setup</div>
-      <a class="cmd-link" href="#cmd-quickstart" data-search="quickstart tap the starter registries and load prebuilt vectors  --no-vectors --dry-run">quickstart</a>
+      <a class="cmd-link" href="#cmd-quickstart" data-search="quickstart tap the starter registries and load prebuilt vectors  --catalog --no-vectors --dry-run">quickstart</a>
       <a class="cmd-link" href="#cmd-config" data-search="config display or modify boost configuration  --json {list,get,set,unset} key value">config</a>
       <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep">clean</a>
       <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone tap">compact</a>
@@ -973,12 +973,13 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-cfg">Config &amp; setup</h2>
-      <section class="cmd" id="cmd-quickstart" data-search="quickstart tap the starter registries and load prebuilt vectors  --no-vectors --dry-run">
+      <section class="cmd" id="cmd-quickstart" data-search="quickstart tap the starter registries and load prebuilt vectors  --catalog --no-vectors --dry-run">
         <h3><span class="cname">quickstart</span><span class="gtag">cfg</span></h3>
         <p class="summary">Tap the starter registries and load prebuilt vectors</p>
-        <pre class="syn">boost quickstart [--no-vectors] [--dry-run]</pre>
+        <pre class="syn">boost quickstart [--catalog] [--no-vectors] [--dry-run]</pre>
         <div class="args-h">Options</div>
         <div class="args">
+          <div class="arg"><code>--catalog</code><span>tap every catalogued registry, not just the 7 starters, and fetch vectors for all of them</span></div>
           <div class="arg"><code>--no-vectors</code><span>set up taps and keyword search only, skip shards</span></div>
           <div class="arg"><code>--dry-run</code><span>print what would happen, change nothing</span></div>
         </div>

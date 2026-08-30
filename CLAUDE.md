@@ -435,6 +435,17 @@ of the three item kinds (see Non-obvious rules above); `core/store.py` owns
 install, uninstall and sync — copying into the canonical store, symlinking into
 each agent's skills dir, and updating the lock file.
 
+- **The shard matrix is packed, not sliced, and 256 is a hard ceiling.**
+  GitHub runs at most 256 matrix jobs per workflow, so `shards.yml` cannot take
+  one job per registry once the scope is the 463-registry catalogue — the run
+  fails before a job starts. `scripts/shard_plan.py` bin-packs by the measured
+  `est_items` (longest-processing-time-first), which matters because cost is
+  uneven: the largest catalogued registry is 880 items against a median of 30, so slicing puts several giants in one job while others idle, against
+  a 6-hour per-job ceiling. Packing is deterministic on purpose — a rerun that
+  repacked differently would re-embed registries whose shards were already
+  published. A matrix entry is a **space-separated list**, split in Python
+  inside the job, never by shell word-splitting.
+
 - **A published shard is only importable while three things match, and every
   mismatch is silent if waved through.** `core/shards.py` fetches
   `manifest.json` from a rolling `shards-latest` **prerelease** on this repo —
