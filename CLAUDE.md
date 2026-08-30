@@ -497,7 +497,7 @@ each agent's skills dir, and updating the lock file.
   Every weekly run used to embed the whole catalogue (~9 job-hours) on
   ephemeral runners with no memory of last week, although registries move
   slowly. `shards.unchanged(manifest, commits)` returns the rows whose pinned
-  commit is the tap's commit *now*; the build job untaps those before
+  commit is the tap's commit *now*; the build job removes those taps before
   `reindex --dense`, and the publish job fetches last week's manifest from the
   release and carries their rows forward verbatim (`publish_shards.py manifest
   --carry-forward`). Carry forward, not import-and-re-export: the assets are

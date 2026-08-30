@@ -237,7 +237,7 @@ class TestManifestCarryForward:
         assert m["provider"] == SPACE["provider"] and m["dim"] == SPACE["dim"]
 
     def test_nothing_at_all_is_still_an_error(self, tmp_path):
-        rc, m = self._run(tmp_path, fresh=[], previous_rows=[],
+        rc, _ = self._run(tmp_path, fresh=[], previous_rows=[],
                           unchanged_lines=[])
         assert rc == 1
 
