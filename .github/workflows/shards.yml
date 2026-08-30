@@ -139,6 +139,8 @@ jobs:
           # registry. Split in Python, never by shell word-splitting — see the
           # plan job's history for what that costs.
           REGISTRIES: ${{ matrix.registry }}    # via env, not interpolation
+          REPO: ${{ github.repository }}
+          JOB: ${{ strategy.job-index }}
         run: |
           python3 -c 'import os,sys; print("\n".join(os.environ["REGISTRIES"].split()))' > registries.txt
           echo "this job carries $(wc -l < registries.txt) registries"
@@ -146,18 +148,45 @@ jobs:
           # latency, so tapping them together is ~6x faster than one at a time
           # (measured: 24 registries, 62.9 s serial vs 11.0 s at the default 8).
           xargs .venv/bin/python -m boost_cli tap < registries.txt || true
-          # One embed pass for everything this job tapped. `reindex --dense`
-          # is per-tap incremental, so a chunk costs what its registries cost.
-          .venv/bin/python -m boost_cli reindex --dense
+          # Ask before embedding. The manifest pins the commit each published
+          # shard was built from, so a registry whose HEAD is that commit keeps
+          # last week's row instead of buying the same vectors again — every
+          # run used to re-embed the whole catalogue, ~9 job-hours, although
+          # registries move slowly and most of it was redundant. Unknown is not
+          # equal: a tap whose commit could not be read is embedded, never
+          # skipped. A first run, an unreachable release, or a manifest in
+          # another embedding space all list nothing, so everything embeds.
+          .venv/bin/python scripts/publish_shards.py unchanged \
+            --manifest-url "https://github.com/$REPO/releases/download/shards-latest/manifest.json" \
+            --out "unchanged-$JOB.txt"
+          while read -r reg _; do
+            .venv/bin/python -m boost_cli untap --force "$reg"
+          done < "unchanged-$JOB.txt"
+          # One embed pass for everything still tapped. `reindex --dense` is
+          # per-tap incremental, so a chunk costs what its registries cost —
+          # and a chunk with nothing left to embed skips the pass rather than
+          # failing on "no taps configured".
+          if [ "$(.venv/bin/python -m boost_cli taps --json)" != "[]" ]; then
+            .venv/bin/python -m boost_cli reindex --dense
+          else
+            echo "every registry in this chunk is already published at its current commit"
+          fi
       - name: export the shards
         env:
           BOOST_HOME: ${{ runner.temp }}/boost-home
           REGISTRIES: ${{ matrix.registry }}
+          JOB: ${{ strategy.job-index }}
         run: |
+          shopt -s nullglob
           # A registry that failed to tap has no vectors and no shard; that is
           # this job's other registries' problem only if we let it be, so the
-          # loop reports and carries on.
+          # loop reports and carries on. One reported unchanged has no shard
+          # here either — its row is carried forward by the publish job.
           for reg in $(python3 -c 'import os; print(" ".join(os.environ["REGISTRIES"].split()))'); do
+            if awk -v r="$reg" '$1 == r { found = 1 } END { exit !found }' "unchanged-$JOB.txt"; then
+              echo "reusing the published shard for $reg"
+              continue
+            fi
             safe=$(printf '%s' "$reg" | tr '/' '__')
             if ! .venv/bin/python -m boost_cli reindex --export-shard "$reg" > "$safe.shard.json"; then
               echo "::warning::no shard for $reg"
@@ -167,13 +196,14 @@ jobs:
           # `./*.shard.json`, not `*.shard.json`: a bare glob can expand to a
           # name starting with `-`, which python3 would read as its own flag
           # (shellcheck SC2035).
-          python3 - ./*.shard.json <<'PY'
+          python3 - "unchanged-$JOB.txt" ./*.shard.json <<'PY'
           import json, sys
           # Fail here rather than publish an unusable artifact: a shard without
           # provenance cannot be validated on import and would be refused by
           # every consumer, silently, forever.
+          unchanged = [l for l in open(sys.argv[1]).read().splitlines() if l.strip()]
           ok = 0
-          for path in sys.argv[1:]:
+          for path in sys.argv[2:]:
               shard = json.load(open(path))
               missing = [k for k in ("provider", "model", "dim", "commit")
                          if not shard.get(k)]
@@ -182,7 +212,8 @@ jobs:
               print("shard ok: %d chunks, %s @ %s"
                     % (len(shard["chunks"]), shard["model"], shard["commit"][:8]))
               ok += 1
-          assert ok, "this job produced no shards at all"
+          assert ok or unchanged, "this job produced no shards and reused none"
+          print("%d fresh shard(s), %d carried forward" % (ok, len(unchanged)))
           PY
       - name: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -194,7 +225,9 @@ jobs:
           # downloading one needs a GitHub token and it expires at 90 days,
           # which is why the release exists.
           name: shard-${{ strategy.job-index }}
-          path: "*.shard.json"
+          path: |
+            *.shard.json
+            unchanged-*.txt
           if-no-files-found: error
           retention-days: 90
 
@@ -235,10 +268,23 @@ jobs:
         env:
           REPO: ${{ github.repository }}
         run: |
+          shopt -s nullglob
           ls -l shards/ || { echo "no shards were produced"; exit 1; }
+          # Last week's manifest, from the release itself: the rows for every
+          # registry the build jobs reported unchanged are carried forward from
+          # it, because their assets are still on the release byte for byte.
+          # Missing on the first run — the one week nothing can be reused.
+          carry=()
+          if curl -fsSL --max-time 60 -o previous-manifest.json \
+               "https://github.com/$REPO/releases/download/shards-latest/manifest.json"; then
+            carry=(--carry-forward previous-manifest.json)
+          else
+            echo "no previous manifest — first run, nothing to carry forward"
+          fi
           python3 scripts/publish_shards.py manifest \
             --shard-dir shards --repo "$REPO" --tag shards-latest \
-            --out shards/manifest.json
+            --out shards/manifest.json "${carry[@]}" \
+            --unchanged shards/unchanged-*.txt
           cat shards/manifest.json
       - name: publish to the rolling release
         env:
@@ -252,6 +298,9 @@ jobs:
               --notes "Prebuilt keyless embeddings for tapped registries. Consumed by \`boost quickstart\` and \`boost reindex --fetch-shards\` via manifest.json; not a boost release."
           fi
           # --clobber: this release is a mutable index of the current shards,
-          # so a re-run replaces an asset rather than failing on it.
+          # so a re-run replaces an asset rather than failing on it — and never
+          # deletes one, which is what lets a carried-forward row keep pointing
+          # at last week's file. A quiet week uploads only the manifest.
+          shopt -s nullglob
           gh release upload shards-latest --repo "$REPO" --clobber \
             shards/*.shard.json shards/manifest.json
