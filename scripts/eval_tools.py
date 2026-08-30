@@ -155,11 +155,14 @@ def score_host(rows: list[dict], observed: dict[str, list[bool]]) -> dict:
     declined to call.
     """
     call_rows, no_call_rows = halves(rows)
-    got = lambda rs: [o for r in rs for o in observed.get(r["id"], [])]
+
+    def seen(rs: list[dict]) -> list[bool]:
+        return [o for r in rs for o in observed.get(r["id"], [])]
+
     skipped = sorted(r["id"] for r in rows if not observed.get(r["id"]))
     return {
-        "call_rate": rate(got(call_rows)),
-        "false_call_rate": rate(got(no_call_rows)),
+        "call_rate": rate(seen(call_rows)),
+        "false_call_rate": rate(seen(no_call_rows)),
         "skipped": skipped,
         "per_row": {r["id"]: rate(observed.get(r["id"], [])) for r in rows},
     }
@@ -237,7 +240,7 @@ def _print_context() -> None:
     try:
         from boost_cli.core import lockfile
         rules = sorted((lockfile.all_installed().get("rule") or {}))
-    except Exception:      # noqa: BLE001  a context note must never fail a run
+    except Exception:      # a context note must never fail the run it annotates
         print("context: could not read the lock file")
         return
     print("context: %d rule(s) installed and in scope for every prompt%s"
