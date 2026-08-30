@@ -1,0 +1,32 @@
+# Tier 3 tool-call behaviour set. One JSON object per line; `#` comments allowed.
+#
+# TWO HALVES, and the second is what makes the first honest. A tier that scores
+# call rate alone rewards making boost maximally assertive — the exact capture
+# `core/mcp.py`'s INSTRUCTIONS are written to avoid, and the same hole boost
+# already found one tier down when it floored recall without hit@1.
+#
+#   expect: "call"     the request carries a signal boost's own text names --
+#                      more than one file, or something outliving the session
+#   expect: "no-call"  drawn from the SHIPPED skip list: "a question, a
+#                      one-line edit, or a command you were just handed"
+#
+# `signals` records WHICH shipped trigger the row is exercising, so a failing
+# row names the sentence to argue with rather than just a number. Keep every
+# prompt free of the word "boost" and of any tool name: naming the tool tests
+# obedience, not judgement, and would score a surface that never persuades.
+{"id": "call-new-subsystem", "expect": "call", "signals": ["new subsystem", "outlives the session"], "prompt": "I'm adding a background job queue to this Python service. Set up the worker, the retry policy and the dead-letter handling."}
+{"id": "call-ci-job", "expect": "call", "signals": ["a CI job", "outlives the session"], "prompt": "Add a GitHub Actions workflow that runs our tests on every pull request and blocks merge when they fail."}
+{"id": "call-convention", "expect": "call", "signals": ["a convention", "outlives the session"], "prompt": "We want conventional commit messages enforced across the team from now on. Set that up."}
+{"id": "call-code-review", "expect": "call", "signals": ["nameable task"], "prompt": "Set up a code review process for this repo."}
+{"id": "call-dependency-choice", "expect": "call", "signals": ["a dependency", "architecture decision"], "prompt": "Pick an ORM for this new FastAPI service and wire up the first model and migration."}
+{"id": "call-flaky-tests", "expect": "call", "signals": ["nameable task", "more than one file"], "prompt": "Our test suite fails maybe one run in five, different tests each time. Track it down and fix it."}
+{"id": "call-linter-config", "expect": "call", "signals": ["environment and tooling config", "outlives the session"], "prompt": "Configure linting and formatting for this TypeScript monorepo so everyone gets the same result."}
+{"id": "call-migration", "expect": "call", "signals": ["nameable task", "more than one file"], "prompt": "Write a database migration that splits the users table into users and profiles, with a backfill."}
+{"id": "no-call-question", "expect": "no-call", "signals": ["a question"], "prompt": "What is the difference between a Python list and a tuple?"}
+{"id": "no-call-one-line", "expect": "no-call", "signals": ["a one-line edit"], "prompt": "In README.md, change the word 'reciept' to 'receipt'."}
+{"id": "no-call-handed-command", "expect": "no-call", "signals": ["a command you were just handed"], "prompt": "Run `git status` and tell me what branch I'm on."}
+{"id": "no-call-explain-code", "expect": "no-call", "signals": ["a question"], "prompt": "Explain what this regex does: ^(?=.*[A-Z])(?=.*\\d).{8,}$"}
+{"id": "no-call-arithmetic", "expect": "no-call", "signals": ["a question"], "prompt": "If a request takes 240 ms and we make 12 of them in parallel across 4 workers, roughly how long does the batch take?"}
+{"id": "no-call-rename-var", "expect": "no-call", "signals": ["a one-line edit"], "prompt": "Rename the variable `tmp` to `buffer` on line 42 of parser.py."}
+{"id": "no-call-read-file", "expect": "no-call", "signals": ["a command you were just handed"], "prompt": "Show me the first 20 lines of pyproject.toml."}
+{"id": "no-call-typo-commit", "expect": "no-call", "signals": ["a one-line edit"], "prompt": "Fix the typo in the docstring of `parse_args` — it says 'arguemnts'."}

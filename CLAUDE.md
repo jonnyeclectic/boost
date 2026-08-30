@@ -105,6 +105,20 @@ opt-in evals stay out of `check` and all degrade cleanly:
   the `[eval]` extra **and** a judge key (`OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`
   with `langchain-anthropic`) plus boost AI to generate the explanations.
 
+- `make eval-tools` — Tier 3 tool-call **behaviour**. Every tier above grades
+  what boost returns *once it is asked*; this grades whether it is asked, which
+  is the step they all depend on — a gate flooring recall@k at 0.78 reports
+  nothing when retrieval was never invoked. It scores **two** numbers and
+  gating on one would be the same hole `eval` had before hit@1: a floor on a
+  should-call prompt set, and a **ceiling on a should-not-call set** drawn from
+  the shipped skip list, because call rate alone rewards making the tool
+  descriptions maximally assertive — the capture `core/mcp.py` is written to
+  avoid. Rates carry a Wilson interval over N runs and floors are judged
+  against the bound, not the point estimate: at 3/3 the normal approximation
+  claims [1.00, 1.00] and would let a wording regression hide behind one lucky
+  run. Drives a real host, so it is opt-in, out of `check`, and degrades
+  cleanly when `claude` is not on `PATH`.
+
 The `[eval]` extra (`pip install -e '.[eval]'`) carries `ranx` + `ragas`; nothing
 in it is ever imported by the CLI or the required gate. It pins the langchain 0.3
 stack because ragas 0.2.x breaks against langchain ≥1.0 — an isolated cost of the
