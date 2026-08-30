@@ -125,8 +125,7 @@ class TestTheHandlerReadsRatherThanInstalls:
     look. It must never become a second install path."""
 
     def test_it_returns_the_resolved_text(self, sandbox, monkeypatch):
-        from boost_cli.commands import configuration
-        from boost_cli.commands import info
+        from boost_cli.commands import configuration, info
         monkeypatch.setattr(info, "_resolve_text",
                             lambda name: ("# Real Body", "skill", None, None))
         text, is_err = configuration._tool_read({"name": "thing"})
@@ -135,8 +134,7 @@ class TestTheHandlerReadsRatherThanInstalls:
         assert "installed: no" in text
 
     def test_an_installed_item_is_reported_as_installed(self, sandbox, monkeypatch):
-        from boost_cli.commands import configuration
-        from boost_cli.commands import info
+        from boost_cli.commands import configuration, info
         monkeypatch.setattr(info, "_resolve_text",
                             lambda name: ("body", "rule", {"version": "1"}, None))
         text, _ = configuration._tool_read({"name": "thing"})
@@ -144,8 +142,7 @@ class TestTheHandlerReadsRatherThanInstalls:
         assert "kind: rule" in text
 
     def test_it_never_installs(self, sandbox, monkeypatch):
-        from boost_cli.commands import configuration
-        from boost_cli.commands import info
+        from boost_cli.commands import configuration, info
         monkeypatch.setattr(info, "_resolve_text",
                             lambda name: ("body", "skill", None, None))
 
@@ -159,8 +156,7 @@ class TestTheHandlerReadsRatherThanInstalls:
         # A second resolver would be a second opinion about what "this item"
         # means — disagreeing with `boost cat`, the very command the truncation
         # notice tells the agent to run for the rest.
-        from boost_cli.commands import configuration
-        from boost_cli.commands import info
+        from boost_cli.commands import configuration, info
         seen = {}
 
         def spy(name):
