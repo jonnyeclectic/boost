@@ -96,7 +96,7 @@ class TestInstall:
     def test_exact_report_lines(self, boost, tapped):
         r = boost("install", "brainstorming")
         assert "copied to ~/.agents/skills/brainstorming" in r.out
-        assert "linked → claude-code · windsurf · cursor" in r.out
+        assert "linked → claude-code · windsurf · cursor · antigravity" in r.out
         # gemini reads the canonical store directly: no symlink, but the report
         # must still say the skill reached it
         assert "available to Gemini CLI (reads the store directly)" in r.out
@@ -109,7 +109,8 @@ class TestInstall:
         assert entry["version"] == "1.4.0"
         assert entry["tap"] == "fixture-tap"
         # the lock records real symlinks only — gemini needs none
-        assert entry["agents"] == ["claude-code", "windsurf", "cursor"]
+        assert entry["agents"] == ["claude-code", "windsurf", "cursor",
+                                   "antigravity"]
         assert entry["pinned"] is False and entry["quarantined"] is False
         assert not (paths.home() / ".gemini" / "skills").exists()
 
@@ -200,6 +201,25 @@ class TestInstall:
         assert not (home / ".cursor" / "skills" / "brainstorming").exists()
         assert not (home / ".gemini" / "skills" / "brainstorming").exists()
         assert _lock()["brainstorming"]["agents"] == ["claude-code"]
+
+    def test_antigravity_gets_a_real_symlink(self, boost, tapped):
+        # Antigravity CLI shares Gemini's ~/.gemini tree but does not read the
+        # canonical store, so unlike Gemini it needs the link — into its own
+        # CLI tier, never the shared ~/.gemini/skills that Gemini also reads.
+        boost("install", "brainstorming")
+        home = paths.home()
+        link = home / ".gemini" / "antigravity-cli" / "skills" / "brainstorming"
+        assert link.is_symlink()
+        assert link.resolve() == (paths.store_dir() / "brainstorming").resolve()
+        assert not (home / ".gemini" / "skills" / "brainstorming").exists()
+
+    def test_agent_flag_can_target_antigravity_alone(self, boost, tapped):
+        r = boost("install", "brainstorming", "--agent", "antigravity")
+        assert "linked → antigravity" in r.out
+        home = paths.home()
+        assert (home / ".gemini" / "antigravity-cli" / "skills"
+                / "brainstorming").is_symlink()
+        assert not (home / ".claude" / "skills" / "brainstorming").exists()
 
     def test_unknown_agent_rc1(self, boost, tapped):
         r = boost("install", "brainstorming", "--agent", "emacs", expect=1)
@@ -1122,9 +1142,10 @@ class TestInstallEdges:
         r = boost("install", "brainstorming")
         assert ("not linked: ~/.claude/skills/brainstorming exists and is "
                 "not managed by boost") in r.out
-        assert "linked → windsurf · cursor" in r.out
+        assert "linked → windsurf · cursor · antigravity" in r.out
         assert "available to Gemini CLI (reads the store directly)" in r.out
-        assert _lock()["brainstorming"]["agents"] == ["windsurf", "cursor"]
+        assert _lock()["brainstorming"]["agents"] == ["windsurf", "cursor",
+                                                      "antigravity"]
         assert blocker.is_dir() and not blocker.is_symlink()
 
     def test_path_picks_between_two_same_named_skills(self, boost, tapped):
@@ -1161,7 +1182,7 @@ class TestInstallEdges:
         cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
         cfg["agents"] = {a: {"enabled": False}
                          for a in ("claude-code", "windsurf", "cursor",
-                                   "gemini")}
+                                   "gemini", "antigravity")}
         paths.config_path().write_text(json.dumps(cfg), encoding="utf-8")
         r = boost("install", "brainstorming")
         assert "no agent links created (no enabled agents?)" in r.out
@@ -1201,7 +1222,9 @@ class TestSyncJson:
         JSON round-trips the (skill, agent) tuples as lists.
         """
         boost("install", "brainstorming", "--force", "--agent", "cursor")
-        stray = [["brainstorming", "claude-code"], ["brainstorming", "windsurf"]]
+        stray = [["brainstorming", "antigravity"],
+                 ["brainstorming", "claude-code"],
+                 ["brainstorming", "windsurf"]]
 
         plan = json.loads(boost("sync", "--diff", "--json").out)
         assert sorted(plan["out_of_scope_links"]) == stray

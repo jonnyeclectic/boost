@@ -31,19 +31,31 @@ SHIM = "/usr/local/bin/boost"
 
 class TestHostTable:
     def test_known_hosts_in_order(self):
-        assert mcphost.hosts() == ["claude", "gemini"]
+        # Appended, never reordered: the order is what hosts are tried and
+        # reported in, and an existing user's output should not shuffle.
+        assert mcphost.hosts() == ["claude", "gemini", "agy"]
 
     def test_hosts_returns_a_copy_callers_cannot_corrupt(self):
         mcphost.hosts().append("bogus")
-        assert mcphost.hosts() == ["claude", "gemini"]
+        assert mcphost.hosts() == ["claude", "gemini", "agy"]
 
     def test_cli_names(self):
         assert mcphost.cli(mcphost.CLAUDE) == "claude"
         assert mcphost.cli(mcphost.GEMINI) == "gemini"
+        assert mcphost.cli(mcphost.AGY) == "agy"
 
     def test_labels(self):
         assert mcphost.label(mcphost.CLAUDE) == "Claude Code"
         assert mcphost.label(mcphost.GEMINI) == "Gemini CLI"
+        assert mcphost.label(mcphost.AGY) == "Antigravity CLI"
+
+    def test_only_agy_is_scopeless(self):
+        # Claude and Gemini keep local/user/project settings; agy keeps one
+        # global file, so reporting "(scope: user)" for it would describe a
+        # distinction its CLI does not have.
+        assert mcphost.has_scope(mcphost.CLAUDE)
+        assert mcphost.has_scope(mcphost.GEMINI)
+        assert not mcphost.has_scope(mcphost.AGY)
 
     def test_unknown_host_raises(self):
         with pytest.raises(KeyError):
@@ -101,11 +113,53 @@ class TestRegisterArgvGemini:
         assert argv[-3:] == [SHIM, "mcp", "--stdio"]
 
 
+class TestRegisterArgvAgy:
+    """`agy mcp add [flags] <name> <commandOrUrl> [args...]`.
+
+    Both of agy's own rules bite here, and each one fails quietly if broken:
+    a flag placed after the name is rejected outright, and without `--` before
+    the command, `--stdio` is eaten as an agy flag — boost would be registered
+    with a command it never receives its own argument for.
+
+    There is also no scope: agy keeps one global file at
+    `~/.gemini/config/mcp_config.json` (inherited from Gemini CLI — there is no
+    `~/.antigravity`), so passing `--scope` would be an error rather than a
+    harmless extra.
+    """
+
+    def test_flags_come_before_the_name(self):
+        argv = mcphost.register_argv(mcphost.AGY, SHIM)
+        assert argv[:3] == ["agy", "mcp", "add"]
+        name_at = argv.index(mcphost.SERVER_NAME)
+        assert all(argv[i] != mcphost.SERVER_NAME for i in range(3, name_at))
+        # every -e pair sits ahead of the name
+        assert all(i < name_at for i, tok in enumerate(argv) if tok == "-e")
+
+    def test_the_separator_precedes_the_command(self):
+        argv = mcphost.register_argv(mcphost.AGY, SHIM)
+        sep = argv.index("--")
+        assert argv[sep - 1] == mcphost.SERVER_NAME
+        assert argv[sep + 1:] == [SHIM, "mcp", "--stdio"]
+
+    def test_no_scope_flag_is_passed(self):
+        assert "--scope" not in mcphost.register_argv(mcphost.AGY, SHIM)
+        assert "--scope" not in mcphost.unregister_argv(mcphost.AGY)
+
+    def test_the_whole_argv(self):
+        assert mcphost.register_argv(mcphost.AGY, SHIM, env={}) == [
+            "agy", "mcp", "add", "boost", "--", SHIM, "mcp", "--stdio"]
+
+
 class TestRegisterArgvOptions:
-    def test_scope_is_threaded_through_both_hosts(self):
+    def test_scope_is_threaded_through_every_scoped_host(self):
+        # agy is excluded by has_scope: it keeps one global file, so there is
+        # no --scope to thread and passing one would be an error.
         for host in mcphost.hosts():
             argv = mcphost.register_argv(host, SHIM, scope="project")
-            assert argv[argv.index("--scope") + 1] == "project"
+            if mcphost.has_scope(host):
+                assert argv[argv.index("--scope") + 1] == "project"
+            else:
+                assert "--scope" not in argv
 
     def test_custom_name_replaces_the_default(self):
         argv = mcphost.register_argv(mcphost.GEMINI, SHIM, name="boost-dev")

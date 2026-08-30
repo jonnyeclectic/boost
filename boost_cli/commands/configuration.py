@@ -1664,8 +1664,11 @@ def cmd_mcp(argv) -> int:
 
     verb = "register" if args.action == "register" else "unregister"
     for host in done:
-        out.ok("%sed boost as an MCP server for %s (scope: user)"
-               % (verb, mcphost.label(host)))
+        # agy has no scopes — one global file — so claiming "(scope: user)"
+        # would describe a distinction its CLI does not have.
+        scope_note = " (scope: user)" if mcphost.has_scope(host) else ""
+        out.ok("%sed boost as an MCP server for %s%s"
+               % (verb, mcphost.label(host), scope_note))
     for host in already:
         out.ok("already registered with %s — nothing to do"
                % mcphost.label(host))

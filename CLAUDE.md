@@ -363,7 +363,7 @@ work in tests and the dev loop:
 ~/.gemini/                       rules (GEMINI.md) + workflows only — see below
 ```
 
-**Four agent targets, but only three get symlinks.** Gemini CLI implements the
+**Five agent targets, and only Gemini CLI skips symlinks.** Gemini CLI implements the
 Agent Skills standard and discovers `~/.agents/skills` — the canonical store —
 *directly*, so it is configured with `links_skills: false`. Linking into
 `~/.gemini/skills` too would put one skill in two of its discovery tiers, where
@@ -394,6 +394,19 @@ for code you write:
   one hop lands in another agent's dir. It resolves **both sides**: on macOS a
   `$HOME` under `/var/folders` resolves to `/private/var/...`, so resolving
   only the target compares a real path against a nominal one and never matches.
+- **Antigravity CLI (`agy`) is Gemini's successor and is NOT a native-store
+  agent.** It shares the `~/.gemini` tree but reads neither `~/.agents/skills`
+  nor — for CLI scope — the shared `~/.gemini/skills`, so it takes real
+  symlinks, into `~/.gemini/antigravity-cli/skills`. Linking into the *shared*
+  dir instead would be the mistake: Gemini CLI reads that path too and already
+  sees the same skills through the `~/.agents/skills` alias, so every skill
+  would cost a "Skill conflict detected" line per session — the exact failure
+  `links_skills: false` exists to prevent. Its rules arrive through the
+  `gemini` agent, which already writes the `~/.gemini/GEMINI.md` Antigravity
+  reads; its workflow and MCP surfaces are **not** wired up, because their
+  formats have not been verified against the real CLI, and this file does not
+  record guesses (see `hookhost.py` for the standard: name the sources).
+
 - Per-agent *formats* differ and are pure functions in `core/`: `rules.CONTEXT_FILES`
   maps an agent with no rules dir to its context file (`claude-code` → CLAUDE.md /
   CLAUDE.local.md, `gemini` → GEMINI.md for both scopes), and
@@ -401,7 +414,16 @@ for code you write:
   Gemini's `commands/` slot is `.toml` (`workflows.render_gemini_command`); its
   `agents/` slot stays verbatim Markdown. Getting that backwards produces a file
   the agent silently never loads.
-- `core/mcphost.py` holds the per-host `mcp add`/`remove` grammar. Claude and
+- `core/mcphost.py` holds the per-host `mcp add`/`remove` grammar.
+  **Antigravity CLI (`agy`) is the third host**, and its two argv rules both bite: flags must
+  come *before* `<name>` (a flag after it is rejected) and `--` must precede a
+  command whose args start with `-`, or `--stdio` is eaten as an agy flag. It
+  has **no scope** — one global file at `~/.gemini/config/mcp_config.json`,
+  inherited from Gemini CLI, so there is no `~/.antigravity` — which is why
+  `has_scope()` exists and the success line drops "(scope: user)" for it. Its
+  `add` **upserts** where Claude's errors on a duplicate name; that asymmetry
+  is what made `--host auto` abort on a machine already registered with
+  Claude. Claude and
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
   by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape.

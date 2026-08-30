@@ -328,7 +328,7 @@ class TestProtocol:
     def test_open_installs(self, boost, tapped):
         r = boost("protocol", "open", "boost://install/brainstorming")
         assert "copied to" in r.out
-        assert "linked → claude-code · windsurf · cursor" in r.out
+        assert "linked → claude-code · windsurf · cursor · antigravity" in r.out
         assert "lock updated (.skill-lock.json)" in r.out
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
 

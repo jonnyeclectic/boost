@@ -34,10 +34,10 @@ class TestLoadDefaults:
         assert cfg["telemetry"] is False
         assert cfg["taps"] == []
         # Order is load-bearing: agents are iterated (and linked/reported) in
-        # declaration order, and gemini was appended last so an existing
+        # declaration order, and each new agent is appended so an existing
         # config.json's key order keeps matching the defaults' prefix.
         assert list(cfg["agents"]) == ["claude-code", "windsurf", "cursor",
-                                       "gemini"]
+                                       "gemini", "antigravity"]
         assert cfg["agents"]["cursor"] == {"dir": "~/.cursor/skills",
                                            "enabled": True}
         # links_skills False is the whole point of the gemini entry: it reads
@@ -46,6 +46,13 @@ class TestLoadDefaults:
         assert cfg["agents"]["gemini"] == {"dir": "~/.gemini/skills",
                                            "enabled": True,
                                            "links_skills": False}
+        # Antigravity CLI is the opposite case in the same tree: it reads
+        # neither ~/.agents/skills nor the shared ~/.gemini/skills, so it takes
+        # a real link — into its own CLI tier, where Gemini cannot see it and
+        # log a conflict.
+        assert cfg["agents"]["antigravity"] == {
+            "dir": "~/.gemini/antigravity-cli/skills", "enabled": True,
+            "project_scope": False, "skills_only": True}
 
 
 class TestDeepMerge:

@@ -8,7 +8,8 @@ from pathlib import Path
 from . import config, paths
 
 DISPLAY = {"claude-code": "Claude Code", "windsurf": "Windsurf",
-           "cursor": "Cursor", "gemini": "Gemini CLI"}
+           "cursor": "Cursor", "gemini": "Gemini CLI",
+           "antigravity": "Antigravity CLI"}
 
 
 def known_agents() -> dict[str, dict]:
@@ -22,6 +23,15 @@ def known_agents() -> dict[str, dict]:
             # implements the Agent Skills standard's `~/.agents/skills` path,
             # which most do not, so the symlink is the safe assumption.
             "links_skills": bool(spec.get("links_skills", True)),
+            # Defaults True: nearly every agent reads a repo-local copy of its
+            # own dotdir, so a project install lands in `<repo>/.claude/skills`
+            # and its siblings. False marks an agent whose project layout boost
+            # does not know — see :func:`project_agents`.
+            "project_scope": bool(spec.get("project_scope", True)),
+            # Defaults False: most agents take all three kinds. True marks an
+            # agent where only the skills surface is known — see
+            # :func:`materializing_agents`.
+            "skills_only": bool(spec.get("skills_only", False)),
         }
     return out
 
@@ -50,6 +60,45 @@ def linking_agents() -> dict[str, Path]:
     """
     return {n: s["dir"] for n, s in known_agents().items()
             if s["enabled"] and s["links_skills"]}
+
+
+def project_agents() -> dict[str, Path]:
+    """Enabled agents whose *project* layout boost actually knows.
+
+    Project scope is derived from the agent's own dotdir
+    (``scopes.agent_root``: ``<repo>/.claude/skills/…``), which holds for every
+    agent whose skills dir is one level under a dotdir. Antigravity CLI's is
+    two — ``~/.gemini/antigravity-cli/skills`` — so the derivation would create
+    a dotless ``<repo>/antigravity-cli/`` that nothing reads, and boost would
+    report a coverage it does not have. Its documented project location is
+    inside ``~/.gemini/config/projects/``, which is not a repo-local directory
+    at all; until that is verified against the CLI, the honest answer is to
+    leave it out of project scope rather than invent a path for it.
+    """
+    return {n: s["dir"] for n, s in known_agents().items()
+            if s["enabled"] and s["project_scope"]}
+
+
+def agents_for_scope(base) -> dict[str, Path]:
+    """Enabled agents for user scope (``base is None``) or project scope."""
+    return enabled_agents() if base is None else project_agents()
+
+
+def materializing_agents(base=None) -> dict[str, Path]:
+    """Agents a *rule* or *workflow* may be written into.
+
+    A skill is a directory boost symlinks; a rule and a workflow are files
+    boost writes in a format the agent has to already read — a context file at
+    a known path, or a slash command in a known dir and syntax. So this set is
+    narrower than :func:`agents_for_scope`: an agent whose rule and workflow
+    formats have not been verified is skills-only, and writing a plausible file
+    into its config tree would claim a coverage that does not exist.
+
+    Antigravity CLI is the current case. Its rules arrive anyway, through the
+    ``gemini`` agent, which already writes the ``~/.gemini/GEMINI.md`` it reads.
+    """
+    return {n: d for n, d in agents_for_scope(base).items()
+            if not known_agents()[n]["skills_only"]}
 
 
 def native_store_agents() -> dict[str, Path]:

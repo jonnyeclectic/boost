@@ -89,7 +89,8 @@ class TestList:
         assert e["tap"] == "fixture-tap"
         # the lock records real symlinks only, so gemini (which reads the
         # canonical store directly) is absent by design
-        assert e["agents"] == ["claude-code", "windsurf", "cursor"]
+        assert e["agents"] == ["claude-code", "windsurf", "cursor",
+                               "antigravity"]
         assert e["pinned"] is False
 
     def test_tag_filter(self, boost, tapped):

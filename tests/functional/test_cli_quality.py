@@ -97,9 +97,10 @@ class TestDoctor:
         shutil.rmtree(paths.store_dir() / "brainstorming")
         r = boost("doctor", expect=1)
         assert "skill brainstorming missing from store — run `boost heal`" in r.out
-        # the three symlinked agents now dangle too (gemini never had a link)
-        assert "3 broken symlinks in agent dirs" in r.out
-        assert "1 skill installed · 1 tap synced · 3 broken links" in r.out
+        # every symlinked agent now dangles (gemini never had a link; it reads
+        # the canonical store natively)
+        assert "4 broken symlinks in agent dirs" in r.out
+        assert "1 skill installed · 1 tap synced · 4 broken links" in r.out
 
     def test_links_outside_the_declared_scope_rc1(self, boost, installed):
         # doctor must agree with `boost sync`, which reports this. A "healthy"
@@ -109,7 +110,8 @@ class TestDoctor:
         boost("install", "brainstorming", "--force", "--agent", "cursor")
         r = boost("doctor", expect=1)
         assert ("skill brainstorming is linked for claude-code, windsurf, "
-                "outside its declared scope (cursor) — run `boost sync --prune`"
+                "antigravity, outside its declared scope (cursor) — run "
+                "`boost sync --prune`"
                 in r.out)
         assert "need attention" in r.out
 
@@ -507,12 +509,13 @@ class TestQuarantine:
 
         r = boost("quarantine", "--release", "brainstorming")
         assert ("released brainstorming "
-                "(linked: claude-code, windsurf, cursor)") in r.out
+                "(linked: claude-code, windsurf, cursor, antigravity)") in r.out
         link = paths.home() / ".claude" / "skills" / "brainstorming"
         assert link.is_symlink() and link.exists()
         entry = _lock()["brainstorming"]
         assert entry["quarantined"] is False
-        assert entry["agents"] == ["claude-code", "windsurf", "cursor"]
+        assert entry["agents"] == ["claude-code", "windsurf", "cursor",
+                                   "antigravity"]
 
     def test_edge_cases(self, boost, installed):
         boost("quarantine", "brainstorming")
