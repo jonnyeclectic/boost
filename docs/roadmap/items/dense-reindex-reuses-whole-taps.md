@@ -70,8 +70,9 @@ than 123,471 chunks. Deletion stays tap-scoped underneath, so the constraint tha
 chunk's text, look it up before embedding, skip on a hit &mdash; sounds like it should erase the
 corpus's 39.6% duplicate rate. It does not, because <code>_embed_and_store</code> already dedupes
 <code>order</code> <em>within the fresh set</em>: on a cold build every duplicate is already collapsed,
-so content keying saves <b>0</b>. Only text shared with the <em>unchanged</em> taps is recoverable, worth
-<b>~7.2%</b> on a realistic weekly update &mdash; against ~60&ndash;120 lines in <code>dense.py</code>
+so content keying saves <b>0</b>. Only text shared with the <em>unchanged</em> taps is recoverable:
+measured on the real moved set, <b>11,501 of 81,580 distinct texts = 14.1%</b>, worth <b>9.6 min of
+the 68</b> &mdash; against ~60&ndash;120 lines in <code>dense.py</code>
 plus a schema change, an <code>INDEX_VERSION</code> bump and a wrong-vector failure mode that is silent.
 Recorded so the measurement is not re-litigated; per-entry granularity is where the win is.
 
@@ -81,6 +82,12 @@ already honours them &mdash; <em>&ldquo;A pinned tap is skipped unless <code>for
 clears the pin&rdquo;</em> &mdash; but the only way to set one is <code>boost tap --at &lt;SHA&gt;</code> at
 creation, and <code>add()</code> raises <code>"tap %s is already configured"</code>.
 <code>boost pin</code>/<code>unpin</code> are in the <code>pkg</code> group and pin <em>skills</em>, not
-taps. So freezing the ten registries responsible for half the re-embed cost is impossible on an
+taps. So freezing the registries responsible for most of the re-embed cost is impossible on an
 existing install without untapping. Exposing the pin that already works is the cheapest lever here and
-worth landing first.
+worth landing first &mdash; measured, pinning just <code>jeremylongshore/claude-code-plugins-plus-skills</code>
+and <code>davila7/claude-code-templates</code> removes <b>75,227 of 112,081 moved chunks = 67.1%</b> of
+today's incremental cost, and <code>davila7</code> changed nothing boost indexes.
+
+<b>Shards do not cover this case.</b> Of the 19 moved taps exactly one appears in the published
+manifest, and its shard is pinned at the commit the tap just left, so <code>import_shard</code>
+refuses it. Net importable for this reindex: <b>0 of 112,081 chunks</b>.
