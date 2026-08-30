@@ -41,7 +41,7 @@ def _selection(catalog_scope: bool) -> list[dict]:
     download rather than an hour of CPU.
     """
     if not catalog_scope:
-        return [dict(d) for d in config.DEFAULT_TAPS]
+        return [d.copy() for d in config.DEFAULT_TAPS]
     return [{"name": e["name"], "url": e["url"]}
             for e in config.load_registry_catalog()
             if not e.get("list_only") and e.get("name") and e.get("url")]
