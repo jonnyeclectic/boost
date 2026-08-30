@@ -21,8 +21,16 @@ def _detect_version() -> str:
         import subprocess
         from pathlib import Path
         root = Path(__file__).resolve().parent.parent
+        # `--match v[0-9]*`, exactly as pyproject's git_describe_command:
+        # the repo carries a deliberate non-version tag (`shards-latest`, the
+        # rolling release hosting the vector shards), and without the match
+        # this fallback served `shards-latest-3-g…` as the version — which
+        # parses as no version at all, so `self-update` compared nothing and
+        # answered "already up to date" while a newer release existed.
+        # `--always` still yields a bare SHA when no version tag is reachable.
         proc = subprocess.run(
-            ["git", "-C", str(root), "describe", "--tags", "--always", "--dirty"],
+            ["git", "-C", str(root), "describe", "--tags", "--always",
+             "--dirty", "--match", "v[0-9]*"],
             capture_output=True, text=True, timeout=3)
         described = proc.stdout.strip()
         if proc.returncode == 0 and described:

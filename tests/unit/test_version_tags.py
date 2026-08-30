@@ -26,17 +26,12 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
+import tomllib
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:                                             # pragma: no cover - <3.11
-    tomllib = pytest.importorskip("tomli")
 
 
 def _scm() -> dict:
@@ -68,6 +63,33 @@ class TestDescribeCommand:
             pytest.skip("no matching tag in this checkout (shallow clone)")
         assert proc.stdout.startswith("v")
         assert "shards" not in proc.stdout
+
+
+class TestRuntimeFallback:
+    """The third resolver in `boost_cli.__init__` runs its own `git describe`.
+
+    That fallback is what actually serves `__version__` wherever the package
+    is imported straight from a checkout — CI's test jobs included, since
+    `_version.py` is gitignored and no dist is installed there. Fixing
+    pyproject alone therefore fixed the wheel and left the running code wrong:
+    CI still reported `vshards-latest-3-g…`, and `self-update` still compared
+    a version that parses as none.
+    """
+
+    def test_the_fallback_describe_is_pinned_to_version_tags(self):
+        import inspect
+
+        import boost_cli
+        src = inspect.getsource(boost_cli._detect_version)
+        assert '"--match"' in src and '"v[0-9]*"' in src, (
+            "the git-describe fallback must exclude non-version tags exactly "
+            "as pyproject's git_describe_command does")
+
+    @pytest.mark.skipif(not (ROOT / ".git").exists(),
+                        reason="not a git checkout")
+    def test_a_checkout_import_never_serves_the_shards_tag(self):
+        import boost_cli
+        assert "shards" not in boost_cli.__version__
 
 
 class TestTagRegex:
