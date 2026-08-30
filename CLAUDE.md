@@ -507,6 +507,22 @@ each agent's skills dir, and updating the lock file.
   published. A matrix entry is a **space-separated list**, split in Python
   inside the job, never by shell word-splitting.
 
+- **A shard run reuses what it already published, and the manifest is how.**
+  Every weekly run used to embed the whole catalogue (~9 job-hours) on
+  ephemeral runners with no memory of last week, although registries move
+  slowly. `shards.unchanged(manifest, commits)` returns the rows whose pinned
+  commit is the tap's commit *now*; the build job removes those taps before
+  `reindex --dense`, and the publish job fetches last week's manifest from the
+  release and carries their rows forward verbatim (`publish_shards.py manifest
+  --carry-forward`). Carry forward, not import-and-re-export: the assets are
+  still on the release byte for byte (`gh release upload --clobber` replaces,
+  never deletes), so re-exporting would re-upload ~300 MB of identical vectors
+  a week. Three refusals keep it honest — an empty local commit is a failed
+  clone, not a match; a manifest in another embedding space reuses nothing;
+  and a row is carried only when the job's commit and the manifest's agree. A
+  registry that is neither fresh nor unchanged drops out of the manifest rather
+  than accumulating forever. Its asset stays; its row returns when it does.
+
 - **A published shard is only importable while three things match, and every
   mismatch is silent if waved through.** `core/shards.py` fetches
   `manifest.json` from a rolling `shards-latest` **prerelease** on this repo —
