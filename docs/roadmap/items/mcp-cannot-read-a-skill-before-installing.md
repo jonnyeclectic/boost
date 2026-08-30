@@ -11,6 +11,7 @@ note: boost_info returns the same one line boost_search already gave
 order: 127
 owner:
 pr:
+title: MCP has no way to read a skill before installing it
 ---
 <code>boost_info</code>'s MCP description promises &ldquo;<em>the whole picture of one skill, rule or
 workflow by name &mdash; what it does, its kind, the tap it came from, its version, and whether it is
