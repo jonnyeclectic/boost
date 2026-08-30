@@ -137,6 +137,19 @@ def _materialized_text(name: str, kind: str, entry: dict):
     return None
 
 
+def _catalog_kind_entry(name: str):
+    """The catalog entry for ``name``, or None — used only to label a kind.
+
+    Never raises: an unresolvable name has already produced the real error on
+    the path that matters, and a *label* must not be the thing that turns a
+    successful read into a failure.
+    """
+    try:
+        return catalog.resolve_one(name)
+    except BoostError:
+        return None
+
+
 def _resolve_text(name: str):
     """Content for a named item of any kind -> (text, kind, lock, cat).
 
@@ -149,7 +162,21 @@ def _resolve_text(name: str):
     found = lockfile.find_any(bare)
     if found is None or found[0] == "skill":
         path, lock, cat = _resolve_skill_md(name)
-        return _read(path), "skill", lock, cat
+        # The lock file is the authority for an INSTALLED item, and for one
+        # that is not installed it has no opinion at all — so a rule or
+        # workflow that is only in a tap arrived here and was reported as a
+        # skill, contradicting this function's own "any kind" contract. The
+        # catalog entry knows; ask it when the lock file cannot say.
+        #
+        # Every caller before `boost_read` discarded this value (`_kind`), so
+        # the wrong answer was invisible: the resolution and the text were
+        # always right, only the label was not.
+        kind = "skill"
+        if lock is None:
+            entry = cat if cat is not None else _catalog_kind_entry(name)
+            if entry:
+                kind = entry.get("kind") or "skill"
+        return _read(path), kind, lock, cat
     kind, entry = found
     lock = _for_tap(entry, qualifier)
     if lock is not None:

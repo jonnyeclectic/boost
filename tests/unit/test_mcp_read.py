@@ -237,3 +237,97 @@ class TestTheToolIsOnTheSurface:
         spec = next(s for s in configuration.REGISTRY.specs()
                     if s["name"] == "boost_info")
         assert "boost_read" in spec["description"]
+
+
+class TestTheKindLabelIsTrueBeforeInstall:
+    """`_resolve_text` reported every uninstalled item as a skill.
+
+    Its contract says "content for a named item of any kind", and for an
+    INSTALLED item the lock file answers correctly. For one that is only in a
+    tap the lock file has no opinion at all, and the branch returned the
+    literal `"skill"` — so an uninstalled rule or workflow was labelled a
+    skill, which is precisely the case `boost_read` exists to serve.
+
+    It was invisible until now because every earlier caller discarded the
+    value (`_kind`): the resolution and the text were always right, only the
+    label was wrong. `boost_read` is the first consumer, and the label decides
+    whether the agent knows that installing this edits the file it reads every
+    session — the difference `boost_install`'s own description calls "the more
+    invasive change".
+    """
+
+    @staticmethod
+    def _body_file(tmp_path, text="real body"):
+        # A real file, because `info._read` calls `Path(p)` on what it is
+        # handed — a stand-in object that only implements `read_text` passes
+        # a type check that does not exist and fails at the one that does.
+        p = tmp_path / "SKILL.md"
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def _kind_of(self, tmp_path, monkeypatch, kind):
+        from boost_cli.commands import info
+        path = self._body_file(tmp_path)
+        monkeypatch.setattr(info.lockfile, "find_any", lambda n: None)
+        monkeypatch.setattr(
+            info, "_resolve_skill_md",
+            lambda n: (path, None, {"kind": kind, "tap": "t"}))
+        return info._resolve_text("thing")[1]
+
+    def test_an_uninstalled_rule_is_labelled_a_rule(self, sandbox, tmp_path,
+                                                    monkeypatch):
+        assert self._kind_of(tmp_path, monkeypatch, "rule") == "rule"
+
+    def test_an_uninstalled_workflow_is_labelled_a_workflow(self, sandbox,
+                                                            tmp_path,
+                                                            monkeypatch):
+        assert self._kind_of(tmp_path, monkeypatch, "workflow") == "workflow"
+
+    def test_an_uninstalled_skill_is_still_a_skill(self, sandbox, tmp_path,
+                                                   monkeypatch):
+        assert self._kind_of(tmp_path, monkeypatch, "skill") == "skill"
+
+    def test_an_entry_with_no_kind_falls_back_to_skill(self, sandbox, tmp_path,
+                                                       monkeypatch):
+        # Thin scanner output must never surface `None` to an agent — the same
+        # rule `mcp.hit_line` follows.
+        from boost_cli.commands import info
+        path = self._body_file(tmp_path)
+        monkeypatch.setattr(info.lockfile, "find_any", lambda n: None)
+        monkeypatch.setattr(info, "_resolve_skill_md",
+                            lambda n: (path, None, {"tap": "t"}))
+        assert info._resolve_text("thing")[1] == "skill"
+
+    def test_labelling_never_turns_a_good_read_into_an_error(self, sandbox,
+                                                             tmp_path,
+                                                             monkeypatch):
+        # The kind is a label. If the catalog cannot resolve the name, the read
+        # that already succeeded must still be returned.
+        from boost_cli.commands import info
+        from boost_cli.errors import BoostError
+
+        def boom(_name):
+            raise BoostError("nope")
+
+        path = self._body_file(tmp_path)
+        monkeypatch.setattr(info.lockfile, "find_any", lambda n: None)
+        monkeypatch.setattr(info, "_resolve_skill_md",
+                            lambda n: (path, None, None))
+        monkeypatch.setattr(info.catalog, "resolve_one", boom)
+        text, kind, _lock, _cat = info._resolve_text("thing")
+        assert text == "real body"
+        assert kind == "skill"
+
+    def test_an_installed_items_kind_still_comes_from_the_lock(
+            self, sandbox, tmp_path, monkeypatch):
+        # The lock file stays the authority where it has one — this branch
+        # must only fill the gap, never override it.
+        from boost_cli.commands import info
+        path = self._body_file(tmp_path)
+        monkeypatch.setattr(info.lockfile, "find_any",
+                            lambda n: ("skill", {"tap": "t"}))
+        monkeypatch.setattr(
+            info, "_resolve_skill_md",
+            lambda n: (path, {"tap": "t"}, {"kind": "rule", "tap": "t"}))
+        # Installed as a skill, catalog says rule: the lock wins.
+        assert info._resolve_text("thing")[1] == "skill"
