@@ -185,7 +185,16 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   `HOME`/`BOOST_HOME`; tests point them at a tempdir. In zsh, one-line chains
   like `export A=$(...) B=$A/x` leave `B` broken — use separate `export`
   statements.
-- **Versioning is setuptools-scm from git tags.** There is no `__version__`
+- **Versioning is setuptools-scm from git tags.** **Only `vX.Y.Z` tags count**, and
+  two settings say so: `git_describe_command`'s `--match v[0-9]*` decides which
+  tag is *found* and `tag_regex` decides how it is *parsed*. Both are load-
+  bearing since the repo gained a deliberate non-version tag — `shards-latest`,
+  the rolling release hosting the vector shards. At defaults, `git describe`
+  returned `shards-latest-1-g82c3e6a`, the build called itself
+  `vshards-latest-…`, and `boost self-update` then reported "already up to
+  date" against a newer PyPI release, because it compares version tuples and
+  that string parses as none. A silent wrong answer in the command whose job is
+  to detect being behind. There is no `__version__`
   constant and `boost_cli/_version.py` is generated + gitignored. Don't hardcode
   or assert exact versions; version tests are shape-only (`^boost \S+$`). The
   publish workflow filename must stay `publish.yml` (PyPI Trusted Publisher
