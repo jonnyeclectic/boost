@@ -298,31 +298,39 @@ class TestTheKindLabelIsTrueBeforeInstall:
                             lambda n: (path, None, {"tap": "t"}))
         assert info._resolve_text("thing")[1] == "skill"
 
-    def test_the_catalog_entry_is_always_there_when_the_lock_is_not(
+    def test_resolve_skill_md_always_returns_a_catalog_entry_when_lock_is_none(
             self, sandbox, tmp_path, monkeypatch):
         """The invariant this labelling relies on, pinned rather than guarded.
 
-        `_resolve_skill_md` returns a catalog entry on exactly the branch where
-        `lock` is None: it returns `(path, lock, None)` only inside `if lock:`,
-        and otherwise falls through to `catalog.resolve_one`. So a
-        `cat is None` fallback here would guard a state that function cannot
-        produce — an earlier draft of this fix carried one, and it was
-        unreachable code with an unreachable test.
+        `_resolve_skill_md` returns `(path, lock, None)` only from inside
+        `if lock:`; every other path falls through to `catalog.resolve_one`.
+        So `cat is None` implies `lock` is truthy, and a `cat is None` fallback
+        guarded by `lock is None` can never run. An earlier draft of this fix
+        carried one — unreachable code whose test reached it only by faking a
+        return shape the real function cannot produce.
+
+        This drives the REAL `_resolve_skill_md`, with the lock file empty
+        (nothing installed) and the catalog answering — the exact branch the
+        invariant is about.
         """
+        import types
+
         from boost_cli.commands import info
-        seen = {}
-        real = info.catalog.resolve_one
+        (tmp_path / "s").mkdir()
+        (tmp_path / "s" / "SKILL.md").write_text("body", encoding="utf-8")
+        entry = {"name": "x", "tap": "t", "skill_md": "s/SKILL.md",
+                 "kind": "rule"}
+        monkeypatch.setattr(info.lockfile, "get_skill", lambda n: None)
+        monkeypatch.setattr(info.catalog, "resolve_one", lambda n: entry)
+        monkeypatch.setattr(info.registry, "get",
+                            lambda tap: types.SimpleNamespace(path=tmp_path))
 
-        def spy(name):
-            entry = real(name)
-            seen["kind"] = entry.get("kind")
-            return entry
-
-        monkeypatch.setattr(info.catalog, "resolve_one", spy)
-        _text, kind, lock, cat = info._resolve_text("brainstorming")
-        assert lock is None          # nothing is installed in the sandbox
-        assert cat is not None       # ...so the catalog entry is present
-        assert kind == (seen["kind"] or "skill")
+        path, lock, cat = info._resolve_skill_md("x")
+        assert lock is None
+        assert cat is entry, "the catalog entry is missing on the lock-is-None branch"
+        assert path.read_text(encoding="utf-8") == "body"
+        # ...and the label that reads it therefore gets the true kind.
+        assert info._resolve_text("x")[1] == "rule"
 
     def test_an_installed_items_kind_still_comes_from_the_lock(
             self, sandbox, tmp_path, monkeypatch):
