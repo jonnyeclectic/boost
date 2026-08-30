@@ -398,12 +398,19 @@ class TestBuildWithoutExtension:
         dbfile = tmp_path / "vec.sqlite"
 
         def _plain_schema(con, dim):
+            # Stands in for `_ensure_schema` only to avoid the vec0 virtual
+            # table, which needs the extension. The `chunks` shape must stay
+            # identical to the real one — `TestTheStandInSchemaMatchesTheReal`
+            # fails if it drifts, which is how this fixture silently claimed to
+            # be the current version while building the previous one.
             con.execute(
                 "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY"
                 " AUTOINCREMENT, name TEXT, tap TEXT, path TEXT, kind TEXT,"
-                " cix INTEGER, snip TEXT)")
+                " cix INTEGER, snip TEXT, digest TEXT)")
             con.execute(
                 "CREATE INDEX IF NOT EXISTS chunks_tap ON chunks(tap)")
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS chunks_entry ON chunks(tap, path)")
             con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY,"
                         " v TEXT)")
             con.execute("CREATE TABLE IF NOT EXISTS vec_chunks (rowid INTEGER"
