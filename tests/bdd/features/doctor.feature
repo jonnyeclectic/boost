@@ -4,11 +4,13 @@ Feature: boost doctor
   Background:
     Given a fresh boost environment
 
-  Scenario: an empty environment is healthy
+  Scenario: an empty environment is set up, not healthy
     When I run "boost doctor"
     Then the exit code should be 0
     And the output should contain "boost doctor"
-    And the output should contain "no taps configured — add one with `boost tap owner/repo`"
+    And the output should contain "no registries tapped"
+    And the output should contain "boost tap --defaults"
+    And the output should contain "ready to set up"
     And the output should contain "0 skills installed · 0 taps synced · 0 broken links"
 
   Scenario: a healthy environment with installed skills
