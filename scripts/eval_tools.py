@@ -239,7 +239,7 @@ def _print_context() -> None:
     """
     try:
         from boost_cli.core import lockfile
-        rules = sorted((lockfile.all_installed().get("rule") or {}))
+        rules = sorted(lockfile.all_installed().get("rule") or {})
     except Exception:      # a context note must never fail the run it annotates
         print("context: could not read the lock file")
         return
