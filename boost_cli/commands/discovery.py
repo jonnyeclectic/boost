@@ -218,12 +218,45 @@ def _hint_stale_taps() -> None:
     price of one stat, and a machine that has never refreshed says nothing at
     all rather than inventing an age.
     """
+    if _hint_stale_shards():
+        return
     age = registry.refresh_age_days()
     if age is None or age < registry.STALE_TAPS_DAYS:
         return
     out.info(out.role(
         "taps last refreshed %d days ago — `boost update --taps-only`"
         % int(age), "muted"))
+
+
+def _hint_stale_shards() -> bool:
+    """Mention un-ingested published vectors. One `stat`, and never a network call.
+
+    The published manifest is ~170 KB, so checking it inline would be cheap —
+    and cheapness is not the argument. Acting on the answer means moving taps
+    and downloading hundreds of megabytes, which cannot happen inside a
+    sub-second search, so the most an inline check could ever produce is this
+    one line: the same line, for the price of a network round trip on every
+    query and unannounced egress at that. The marker's mtime answers it for
+    free, and a machine that has never ingested a shard says nothing rather
+    than inventing an age.
+
+    Returns True when it printed, so the tap-age hint stays quiet. The remedy
+    named here moves the taps as well, and two staleness lines under one set of
+    results is how a hint turns into noise.
+    """
+    from ..core import shards
+    age = shards.sync_age_days()
+    if age is None or age < shards.STALE_SHARDS_DAYS:
+        return False
+    from ..core import dense
+    if not dense.status().get("ready"):
+        # Vectors that are not serving queries cannot be stale in a way the
+        # user can act on; `_hint_semantic_search` owns that conversation.
+        return False
+    out.info(out.role(
+        "prebuilt vectors last refreshed %d days ago — `boost update --shards`"
+        % int(age), "muted"))
+    return True
 
 
 def _hint_semantic_search(engine: str) -> None:
@@ -315,8 +348,12 @@ def _fetch_shards(args) -> int:
                         hint=dense.fix_hint(dense.status().get("reason", "")))
     commits = rag._tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "") for t in registry.list_taps()}
-    results = shards.sync(list(by_name), by_name, manifest=manifest,
-                          on_event=_shard_event)
+    results = shards.sync(
+        list(by_name), by_name, manifest=manifest,
+        # Progress goes to stdout, and so does the JSON: emitting both left
+        # `--json` printing "fetching ..." lines ahead of the document, which
+        # no parser can read past.
+        on_event=None if args.as_json else _shard_event)
     if args.as_json:
         print(json.dumps({"shards": results}, indent=2))
         return 0
@@ -335,6 +372,12 @@ def _fetch_shards(args) -> int:
         out.info(out.role("%d tap(s) without usable vectors: %s"
                           % (len(missing), ", ".join(missing[:5])
                              + (" …" if len(missing) > 5 else "")), "muted"))
+        if any(r["status"] == "refused" for r in results):
+            # A refusal here is almost always "the tap has moved past the
+            # commit these vectors describe", which local embedding is the
+            # expensive answer to and `--shards` is the cheap one: it moves the
+            # tap back onto a published commit instead.
+            out.info("taps that moved past their vectors: `boost update --shards`")
         out.info("embed those locally with `boost reindex --dense`")
     return 0
 

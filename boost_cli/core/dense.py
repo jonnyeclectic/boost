@@ -289,6 +289,25 @@ def _recorded_meta(*, count: bool = False) -> dict:
         con.close()
 
 
+def tap_commits() -> dict[str, str]:
+    """Which registry commit this store holds vectors for, per tap safe-name.
+
+    The store already records this — ``build`` writes it and ``import_shard``
+    updates it — but only as a private meta field, so every caller that wanted
+    to ask "are these vectors for the commit I have?" had to re-open the
+    database. That question is the whole basis of skipping work: a weekly shard
+    refresh is a no-op exactly when the answer is yes, and without an accessor
+    the refresh would download and re-import a store's own rows every week.
+
+    Read without sqlite-vec (see :func:`_recorded_meta`) so a machine that lost
+    the extra still gets a truthful answer rather than an empty one.
+    """
+    commits = _recorded_meta().get("commits")
+    if not isinstance(commits, dict):
+        return {}
+    return {str(k): str(v) for k, v in commits.items() if v}
+
+
 # Why dense retrieval isn't serving, keyed by the `reason` status() returns.
 # Each names the ONE next action; the reason order in status() guarantees only
 # the first missing link is ever reported, so these never chain.

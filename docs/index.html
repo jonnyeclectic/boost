@@ -998,7 +998,10 @@ pipx install boost-skill-cli
 pipx inject boost-skill-cli <span class="yv">"boost-skill-cli[rag]"</span>
 
 <span class="cm"># upgrade later &mdash; works for pipx, pip, uv or a git checkout</span>
-<span class="tv">boost</span> <span class="tc">self-update</span></pre>
+<span class="tv">boost</span> <span class="tc">self-update</span>
+
+<span class="cm"># vectors are republished weekly; this ingests them (safe to cron)</span>
+<span class="tv">boost</span> <span class="tc">update</span> --shards</pre>
       </div>
 
       <div class="mini reveal">

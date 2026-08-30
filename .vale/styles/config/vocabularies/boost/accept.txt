@@ -34,6 +34,8 @@ config
 configs
 CPython
 CRM
+cron
+crontab
 cyclomatic
 Dependabot
 deps

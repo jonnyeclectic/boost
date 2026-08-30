@@ -419,6 +419,27 @@ def unpin(name: str) -> Tap:
     return tap
 
 
+def retarget(name: str, commit: str) -> Tap:
+    """Move an existing tap's clone to `commit` and pin it there.
+
+    The operation a published-vector refresh needs and no other entry point
+    offers. :func:`add` refuses a registry that is already tapped — deliberately
+    — so its ``at=`` pin only ever serves a first tap; :func:`update` moves a tap
+    to its branch HEAD and ``--force`` moves it and drops the pin. None of the
+    three can land on the commit a manifest names, and the chance that HEAD
+    happens to be that commit falls with every push upstream, which is why a
+    week-old install could see its vectors go stale with no way to act on it
+    but re-embedding locally.
+
+    Checkout first, pin second, and never the reverse: a pin recorded for a
+    tree that was not checked out is a lie :func:`update` would then honour by
+    skipping the tap forever.
+    """
+    tap = get(name)
+    gitutil.checkout_commit(tap.path, commit)
+    return pin(name, commit)
+
+
 def remove(name: str) -> Tap:
     """Deregister a tap and delete its clone and cache file.
 
