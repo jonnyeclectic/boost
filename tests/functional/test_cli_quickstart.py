@@ -101,6 +101,33 @@ class TestQuickstartWithoutTheExtra:
         res = boost("quickstart", "--dry-run")
         assert "would tap" in res.out
 
+    def test_zero_shards_says_why_it_is_zero(self, boost, monkeypatch):
+        """"import 0 shard(s)" reads as "none are published".
+
+        The cause here is local — no `rag` extra — and `--dry-run` is exactly
+        what a cautious new user runs first, so the preview was the one surface
+        that reported the symptom and withheld the reason. The live path
+        already explains both cases.
+        """
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "have_backend", lambda: False)
+        res = boost("quickstart", "--dry-run")
+        assert "import 0 shard(s)" in res.out
+        assert "boost-skill-cli[rag]" in res.out
+        # Named as the working default, not as a downgrade — BM25 is what
+        # ships and what the required eval gate floors.
+        assert "keyword search works" in res.out
+
+    def test_no_vectors_is_reported_as_a_choice_not_a_gap(self, boost,
+                                                          monkeypatch):
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        res = boost("quickstart", "--dry-run", "--no-vectors")
+        assert "import 0 shard(s)" in res.out
+        assert "--no-vectors" in res.out
+        # It must not blame the missing extra for a flag the user passed.
+        assert "boost-skill-cli[rag]" not in res.out
+
 
 class TestQuickstartTapping:
     """The real tap path, with the network replaced rather than the command."""

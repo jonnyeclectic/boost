@@ -162,6 +162,26 @@ def cmd_quickstart(argv) -> int:
         planned = [n for n in names if n in pins] if manifest else []
         out.info("would build the keyword index, then import %d shard(s)"
                  % len(planned))
+        # "0 shard(s)" reads as "none are published" when the real cause is
+        # local, and --dry-run is exactly what a cautious new user runs first.
+        # The live path already explains both cases; without this the preview
+        # is the one surface that reports the symptom and withholds the reason.
+        if not planned:
+            if args.no_vectors:
+                out.info(out.role("(0 because --no-vectors was asked for)",
+                                  "muted"))
+            elif not dense.have_backend():
+                out.info("0 because semantic search needs the extra: "
+                         "`pipx inject boost-skill-cli "
+                         "\"boost-skill-cli[rag]\"` — keyword search works "
+                         "without it", wrap=True)
+            elif manifest is None:
+                out.info(out.role("(0 because the shard manifest could not be "
+                                  "read — keyword search is unaffected)",
+                                  "muted"), wrap=True)
+            else:
+                out.info(out.role("(0 because none of these registries have a "
+                                  "published shard yet)", "muted"), wrap=True)
         return 0
 
     with spin.Spinner("building the keyword index"):
