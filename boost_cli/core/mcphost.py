@@ -10,7 +10,22 @@ and I/O-free (like :mod:`boost_cli.core.mcpdecl`) so every branch is unit
 testable and reachable by the mutation gate; the command layer does the
 ``shutil.which`` probing and the ``subprocess.run``.
 
-The three ways the two grammars differ, all of them load-bearing:
+Antigravity CLI (``agy``) is the third host, and it is Gemini CLI's successor
+rather than a variant of it: Gemini is being deprecated in its favour. Its
+``add`` **upserts** where Claude's errors on a duplicate name, it has **no
+scope** (one global file at ``~/.gemini/config/mcp_config.json`` — it inherited
+Gemini's directory, so there is no ``~/.antigravity``), its off-switch is
+``enable``/``disable`` rather than removal, and it has no per-server ``get``.
+Its two argv rules come from its own help and both bite: **flags must precede
+the name**, and **``--`` must precede a command whose args start with ``-``**,
+or ``--stdio`` is eaten as an agy flag.
+
+That upsert-vs-error asymmetry is also why `boost mcp register --host auto`
+used to abort: Claude rejects the duplicate, and the sweep gave up before
+reaching the next agent. Against agy alone it would never have surfaced.
+
+The three ways the Claude and Gemini grammars differ, all of them
+load-bearing:
 
 * **Name position.** Both CLIs advertise the same usage string —
   ``[options] <name> <commandOrUrl> [args...]`` — so the shape is not the
@@ -68,12 +83,15 @@ LAUNCH_ENV = {
 
 CLAUDE = "claude"
 GEMINI = "gemini"
+AGY = "agy"
 
 # name -> {"cli": executable, "label": display name}. Order is the order hosts
-# are tried and reported in.
+# are tried and reported in; new hosts are appended so the existing order is
+# untouched.
 HOSTS: dict[str, dict] = {
     CLAUDE: {"cli": "claude", "label": "Claude Code"},
     GEMINI: {"cli": "gemini", "label": "Gemini CLI"},
+    AGY: {"cli": "agy", "label": "Antigravity CLI"},
 }
 
 
@@ -90,6 +108,17 @@ def cli(host: str) -> str:
 def label(host: str) -> str:
     """Display name for ``host`` (``gemini`` -> "Gemini CLI")."""
     return str(HOSTS[host]["label"])
+
+
+def has_scope(host: str) -> bool:
+    """True when this host's registrations are scoped at all.
+
+    Claude and Gemini keep local/user/project settings; agy keeps one global
+    file. Reporting "(scope: user)" for agy would describe a distinction its
+    CLI does not have — and would send anyone looking for a project-scoped
+    entry after something that cannot exist.
+    """
+    return host != AGY
 
 
 def _env_flags(env: dict[str, str] | None) -> list[str]:
@@ -113,6 +142,17 @@ def register_argv(host: str, launcher: str, *, scope: str = "user",
     """
     exe = cli(host)
     flags = _env_flags(LAUNCH_ENV if env is None else env)
+    if host == AGY:
+        # [flags] <name> <commandOrUrl> [args...], and both of its rules bite
+        # here. Flags must come BEFORE the name — a flag after it is rejected —
+        # and `--` must precede a command whose own args start with `-`, or
+        # `--stdio` is eaten as an agy flag rather than passed to boost. There
+        # is no scope: agy keeps one global file
+        # (~/.gemini/config/mcp_config.json, inherited from Gemini CLI — there
+        # is no ~/.antigravity), so passing `--scope` would be an error rather
+        # than a no-op.
+        return [exe, "mcp", "add", *flags, name,
+                "--", launcher, "mcp", "--stdio"]
     if host == GEMINI:
         # [options] <name> <commandOrUrl> [args...]. No `--`: yargs
         # `unknown-options-as-args` already carries `--stdio` into [args...],
@@ -135,6 +175,14 @@ def unregister_argv(host: str, *, scope: str = "user",
     exe = cli(host)
     if host == GEMINI:
         return [exe, "mcp", "remove", "--scope", scope, name]
+    if host == AGY:
+        # No scope flag: one global file. NOTE — `add`, `enable` and `disable`
+        # are the subcommands verified from agy's own help; `remove` mirrors
+        # Claude's and is the only shape that matches this command's meaning.
+        # If a release turns out not to have it, the failure is loud and names
+        # the argv, and `agy mcp disable boost` is the documented off-switch
+        # that keeps the entry.
+        return [exe, "mcp", "remove", name]
     return [exe, "mcp", "remove", name]
 
 

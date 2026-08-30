@@ -405,7 +405,16 @@ for code you write:
   Gemini's `commands/` slot is `.toml` (`workflows.render_gemini_command`); its
   `agents/` slot stays verbatim Markdown. Getting that backwards produces a file
   the agent silently never loads.
-- `core/mcphost.py` holds the per-host `mcp add`/`remove` grammar. Claude and
+- `core/mcphost.py` holds the per-host `mcp add`/`remove` grammar.
+  **Antigravity CLI (`agy`) is the third host**, and its two argv rules both bite: flags must
+  come *before* `<name>` (a flag after it is rejected) and `--` must precede a
+  command whose args start with `-`, or `--stdio` is eaten as an agy flag. It
+  has **no scope** — one global file at `~/.gemini/config/mcp_config.json`,
+  inherited from Gemini CLI, so there is no `~/.antigravity` — which is why
+  `has_scope()` exists and the success line drops "(scope: user)" for it. Its
+  `add` **upserts** where Claude's errors on a duplicate name; that asymmetry
+  is what made `--host auto` abort on a machine already registered with
+  Claude. Claude and
   Gemini disagree on name position, the `--` separator, and whether unregister
   needs an explicit scope — all three verified against the real CLIs and pinned
   by `tests/unit/test_mcphost.py`. Don't "simplify" them into one shape.

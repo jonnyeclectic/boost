@@ -14,6 +14,10 @@
 from GitHub-hosted registries, and wires each one into Claude Code, Windsurf,
 Cursor, Gemini CLI and Antigravity CLI in a single pass.
 
+Antigravity CLI (`agy`) is wired up the same way: skills link into
+`~/.gemini/antigravity-cli/skills`, and `boost mcp register` reaches it through
+`agy mcp add` alongside Claude Code.
+
 ```bash
 pipx install boost-skill-cli
 boost quickstart              # taps the 7 starter registries, loads prebuilt vectors
