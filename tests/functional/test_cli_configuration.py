@@ -1714,11 +1714,15 @@ class TestMcp:
                             lambda c: "/usr/local/bin/" + c)
         monkeypatch.setattr("boost_cli.commands.configuration.subprocess.run",
                             lambda cmd, **kw: _proc(cmd, 1, err="no auth"))
+        # Every installed host failing is the one case that is still an error;
+        # the failure is now reported per host on stdout, with the argv, rather
+        # than raised out of the loop and killing the sweep.
         r = boost("mcp", "register", expect=1)
-        assert "claude mcp register failed: no auth" in r.err
+        assert "claude mcp register failed — no auth" in r.out
+        assert "run it yourself" in r.out
         # the failing host names itself — not a generic "an agent CLI failed"
         r = boost("mcp", "register", "--host", "gemini", expect=1)
-        assert "gemini mcp register failed: no auth" in r.err
+        assert "gemini mcp register failed — no auth" in r.out
 
 
 # ---------------------------------------------------------------- self-update
