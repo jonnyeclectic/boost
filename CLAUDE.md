@@ -185,7 +185,16 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   `HOME`/`BOOST_HOME`; tests point them at a tempdir. In zsh, one-line chains
   like `export A=$(...) B=$A/x` leave `B` broken — use separate `export`
   statements.
-- **Versioning is setuptools-scm from git tags.** There is no `__version__`
+- **Versioning is setuptools-scm from git tags.** **Only `vX.Y.Z` tags count**, and
+  two settings say so: `git_describe_command`'s `--match v[0-9]*` decides which
+  tag is *found* and `tag_regex` decides how it is *parsed*. Both are load-
+  bearing since the repo gained a deliberate non-version tag — `shards-latest`,
+  the rolling release hosting the vector shards. At defaults, `git describe`
+  returned `shards-latest-1-g82c3e6a`, the build called itself
+  `vshards-latest-…`, and `boost self-update` then reported "already up to
+  date" against a newer PyPI release, because it compares version tuples and
+  that string parses as none. A silent wrong answer in the command whose job is
+  to detect being behind. There is no `__version__`
   constant and `boost_cli/_version.py` is generated + gitignored. Don't hardcode
   or assert exact versions; version tests are shape-only (`^boost \S+$`). The
   publish workflow filename must stay `publish.yml` (PyPI Trusted Publisher
@@ -547,6 +556,18 @@ Consequences for code you write here:
   the measured trade is **3.40 GB → 3.87 GB (+14%), in 1360 s**, peaking at
   ~2× while both copies coexist. Don't describe it as size-neutral — an earlier
   draft of this section did, from prediction rather than measurement.
+- **Embedding reports progress and commits as it goes.** `dense.build` takes
+  `on_progress(done, total)` and `_embed_and_store` commits every
+  `_COMMIT_EVERY` rows. Both are bug fixes, not polish: a full catalogue is
+  tens of thousands of distinct chunks under one fixed spinner label, which a
+  user reported as a hang after hours; and every row used to land in a single
+  transaction that committed after the last one, so an interrupt threw away the
+  whole build. Periodic commits are safe because `build` deletes each changed
+  tap's rows *before* re-inserting, so a partial store is replaced rather than
+  doubled. The total counts **distinct** texts, not rows — 42.9% of chunks on a
+  real install are repeats and are embedded once — so a progress total taken
+  from row count would over-report the work.
+
 - **Nothing on the search path may count `chunks`.** `SELECT COUNT(*)` scans the
   `chunks_tap` covering index — 8,419 pages / 34.5 MB, measured 1.94 s — and
   both `ready()` and `status()` did it on every search, the latter only to word

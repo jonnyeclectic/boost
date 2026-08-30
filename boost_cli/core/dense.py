@@ -25,6 +25,11 @@ from .rag import Hit, chunk, entry_key, read_body
 
 INDEX_VERSION = 2
 _BATCH = 128            # texts per embedding request
+
+#: Rows between commits while storing vectors. Small enough that an interrupted
+#: build keeps almost everything it embedded, large enough that the commits are
+#: not the cost — on a 750k-chunk store this is ~150 commits.
+_COMMIT_EVERY = 5000
 _POOL = 8              # chunk over-fetch factor for KNN before per-entry reduce
 
 
@@ -462,12 +467,20 @@ def ready() -> bool:
         con.close()
 
 
-def build(entries: list[dict] | None = None,
-          force: bool = False) -> dict | None:
+def build(entries: list[dict] | None = None, force: bool = False,
+          on_progress=None) -> dict | None:
     """(Re)embed and store chunk vectors, reusing unchanged taps.
 
     Returns stats, or ``None`` if the backend or an embeddings provider is
     unavailable (nothing is written in that case).
+
+    ``on_progress(done, total)`` is called before the first batch and after
+    each one. It exists because this is the longest-running thing boost does —
+    a full catalogue is tens of thousands of distinct chunks at roughly a
+    second each — and it used to run under a bare spinner that said "embedding
+    chunks into the dense store" for hours without a number. A user cannot
+    tell that apart from a hang, and the honest fix is to say how many there
+    are and how far in we got.
     """
     from .rag import _tap_commits, _tap_paths
     if not have_backend() or not embed.available():
@@ -517,7 +530,8 @@ def build(entries: list[dict] | None = None,
         removed_taps = sorted(_indexed_taps(con) - {e["tap"] for e in entries})
         _delete_taps(con, changed_taps + removed_taps)
 
-        added, failed_taps = _embed_and_store(con, fresh, tap_paths)
+        added, failed_taps = _embed_and_store(con, fresh, tap_paths,
+                                             on_progress=on_progress)
         # Only record a commit for a tap whose chunks actually landed. Recording
         # one for a tap that stored nothing makes every later non-forced run
         # treat it as already built and skip it — one transient rate limit would
@@ -743,8 +757,8 @@ def _delete_taps(con: sqlite3.Connection, taps: list[str]) -> None:
 
 
 def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
-                     tap_paths: dict[str, Path] | None
-                     ) -> tuple[int, set]:
+                     tap_paths: dict[str, Path] | None,
+                     on_progress=None) -> tuple[int, set]:
     """Embed every chunk of ``entries``; returns ``(added, failed_taps)``.
 
     A batch the provider rejects (rate limit, quota, oversized input) yields no
@@ -778,15 +792,31 @@ def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
             order.append(text)
 
     vec_of: dict[str, object] = {}
+    if on_progress is not None:
+        # Reported before the first request, so the size of the job is known
+        # up front rather than inferred from how long it has already taken.
+        on_progress(0, len(order))
     for start in range(0, len(order), _BATCH):
         batch = order[start:start + _BATCH]
         vecs = embed.embed(batch, input_type="document")
-        if not vecs or len(vecs) != len(batch):
-            continue     # taps are attributed per row below, not per batch
-        vec_of.update(zip(batch, vecs, strict=True))
+        if vecs and len(vecs) == len(batch):
+            vec_of.update(zip(batch, vecs, strict=True))
+        # else: taps are attributed per row below, not per batch — but the
+        # progress count still advances, or a run with a few rejected batches
+        # would appear to stall.
+        if on_progress is not None:
+            on_progress(min(start + _BATCH, len(order)), len(order))
 
     added = 0
     failed_taps: set = set()
+    # Durability, not speed. Every row used to land in one transaction that
+    # committed only after the last one, so interrupting a three-hour build —
+    # or losing the machine to a sleep or an OOM — threw away every vector it
+    # had paid for. Committing as the rows accumulate keeps the work, and
+    # re-running is still correct because `_delete_taps` has already removed
+    # each changed tap's old rows, so a partial store is replaced rather than
+    # doubled.
+    since_commit = 0
     for e, ci, text in rows:
         vec = vec_of.get(text)
         if vec is None:
@@ -801,6 +831,11 @@ def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
              e.get("kind", "skill"), ci, text[:200].strip()))
         _store_vector(con, cur.lastrowid, mod.serialize_float32(vec))
         added += 1
+        since_commit += 1
+        if since_commit >= _COMMIT_EVERY:
+            con.commit()
+            since_commit = 0
+    con.commit()
     return added, failed_taps
 
 
