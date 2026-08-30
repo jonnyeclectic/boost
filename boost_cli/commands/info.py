@@ -149,7 +149,21 @@ def _resolve_text(name: str):
     found = lockfile.find_any(bare)
     if found is None or found[0] == "skill":
         path, lock, cat = _resolve_skill_md(name)
-        return _read(path), "skill", lock, cat
+        # The lock file is the authority for an INSTALLED item, and for one
+        # that is not installed it has no opinion at all — so a rule or
+        # workflow that is only in a tap arrived here and was reported as a
+        # skill, contradicting this function's own "any kind" contract. The
+        # catalog entry knows, and `_resolve_skill_md` has already resolved it:
+        # it returns a catalog entry on exactly the branch where `lock` is
+        # None, so no second lookup is needed (and a fallback for `cat is None`
+        # here would guard a state that function cannot produce).
+        #
+        # Every caller before `boost_read` discarded this value (`_kind`), so
+        # the wrong answer was invisible: the resolution and the text were
+        # always right, only the label was not.
+        kind = ((cat.get("kind") or "skill")
+                if lock is None and cat else "skill")
+        return _read(path), kind, lock, cat
     kind, entry = found
     lock = _for_tap(entry, qualifier)
     if lock is not None:
