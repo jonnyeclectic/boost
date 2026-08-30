@@ -423,8 +423,8 @@ each agent's skills dir, and updating the lock file.
   mismatch is silent if waved through.** `core/shards.py` fetches
   `manifest.json` from a rolling `shards-latest` **prerelease** on this repo —
   prerelease and `--latest=false` deliberately, so release-drafter (which
-  resolves the next version from published non-prereleases), the README's
-  shields badge and setuptools-scm's `--match *[0-9]*` all keep ignoring it.
+  resolves the next version from published non-prereleases), the shields badge
+  in the README and setuptools-scm's `--match *[0-9]*` all keep ignoring it.
   The manifest carries the embedding *space* once at the top, so
   `shards.incompatible()` can refuse before downloading 129 MB; each row pins
   the registry *commit*, checked in `shards.sync` and again in

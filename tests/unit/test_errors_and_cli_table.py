@@ -32,11 +32,11 @@ class TestBoostError:
 
 
 EXPECTED_GROUP_SIZES = {"pkg": 13, "find": 9, "info": 10, "tap": 5,
-                        "ai": 9, "chk": 15, "cfg": 13, "team": 6}
+                        "ai": 9, "chk": 15, "cfg": 14, "team": 6}
 
 
 class TestCommandTable:
-    def test_exactly_80_commands(self):
+    def test_exactly_81_commands(self):
         assert len(cli.COMMANDS) == 81
 
     def test_exactly_8_groups(self):
@@ -70,7 +70,7 @@ class TestCommandTable:
         modules = {m for _n, _g, m, _s in cli.COMMANDS}
         assert modules == {"pkg", "run", "discovery", "info", "taps", "intelligence",
                            "quality", "safety", "configuration", "team",
-                           "hooks", "bmad"}
+                           "hooks", "bmad", "quickstart"}
 
     @pytest.mark.parametrize(
         "name,group,module",
@@ -128,7 +128,7 @@ class TestMainDispatch:
     def test_no_args_prints_help(self, sandbox, capsys):
         assert cli.main([]) == 0
         out = capsys.readouterr().out
-        assert "80 commands · 8 groups" in out
+        assert "81 commands · 8 groups" in out
         assert "Homebrew for AI coding skills" in out
 
     def test_help_flag_lists_every_command(self, sandbox, capsys):
@@ -162,7 +162,7 @@ class TestMainDispatch:
         out = capsys.readouterr().out
         assert "Homebrew for AI coding skills" in out
         assert cli.__version__ in out
-        assert "80 commands · 8 groups" in out
+        assert "81 commands · 8 groups" in out
 
     def test_help_still_names_every_command_when_narrow(self, sandbox, capsys,
                                                         monkeypatch):
@@ -177,7 +177,7 @@ class TestMainDispatch:
 
     def test_help_word(self, sandbox, capsys):
         assert cli.main(["help"]) == 0
-        assert "80 commands · 8 groups" in capsys.readouterr().out
+        assert "81 commands · 8 groups" in capsys.readouterr().out
 
     def test_help_for_command(self, sandbox, capsys):
         rc = run_main(["help", "install"])

@@ -168,6 +168,7 @@ echo "== every command answers --help"
 while read -r c; do
   run "help: $c" 0 ./boost "$c" --help
 done <<'CMDS'
+quickstart
 install
 uninstall
 sync

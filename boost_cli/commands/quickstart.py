@@ -119,8 +119,9 @@ def cmd_quickstart(argv) -> int:
 
     names = _tap_defaults(pins, args.dry_run)
     if args.dry_run:
+        planned = [n for n in names if n in pins] if manifest else []
         out.info("would build the keyword index, then import %d shard(s)"
-                 % len(([n for n in names if n in pins] if manifest else [])))
+                 % len(planned))
         return 0
 
     with spin.Spinner("building the keyword index"):

@@ -165,7 +165,7 @@ class TestDownload:
     """Verification, origin pinning, and leaving nothing behind on refusal."""
 
     def test_a_verified_shard_lands_at_dest(self, tmp_path):
-        src, row = _shard_file(tmp_path, "a/b", "1" * 40)
+        _, row = _shard_file(tmp_path, "a/b", "1" * 40)
         mpath = _manifest(tmp_path, [row])
         manifest = shards.fetch_manifest(mpath.as_uri())
         dest = tmp_path / "out" / "a__b.shard.json"
@@ -173,7 +173,7 @@ class TestDownload:
         assert json.loads(dest.read_text())["tap"] == "a/b"
 
     def test_a_bad_digest_is_refused_and_deleted(self, tmp_path):
-        src, row = _shard_file(tmp_path, "a/b", "1" * 40)
+        _, row = _shard_file(tmp_path, "a/b", "1" * 40)
         manifest = shards.fetch_manifest(_manifest(tmp_path, [row]).as_uri())
         row = {**row, "sha256": "0" * 64}
         dest = tmp_path / "out" / "a__b.shard.json"

@@ -39,8 +39,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from boost_cli.core import dense, registry  # noqa: E402
-from boost_cli.errors import BoostError  # noqa: E402
+from boost_cli.core import dense, registry
+from boost_cli.errors import BoostError
 
 DEFAULT_TAG = "shards-latest"
 
