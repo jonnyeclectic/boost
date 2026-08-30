@@ -171,6 +171,33 @@ def rows(manifest: dict) -> dict[str, dict]:
     return out
 
 
+def unchanged(manifest: dict, commits: dict[str, str]) -> dict[str, dict]:
+    """Manifest rows that already describe the commit each tap is at now.
+
+    This is what lets a weekly shard run skip most of its own work. Every run
+    used to embed every registry from scratch — ~9 job-hours for the catalogue
+    — on ephemeral runners with no memory of last week, and registries move
+    slowly, so most of that bought the same vectors again. The manifest pins
+    the commit each shard was built from, so "has this one moved?" is one
+    comparison, and a registry that has not keeps last week's row.
+
+    Same rule that makes a shard importable at all: reuse only for the EXACT
+    commit the row describes. An empty local commit is a tap whose clone
+    failed, not a match — that registry is embedded, never skipped. The
+    embedding-space check is the caller's (:func:`incompatible`), because a
+    manifest from another space reuses nothing however fresh its commits.
+    """
+    index = rows(manifest)
+    out: dict[str, dict] = {}
+    for tap, commit in commits.items():
+        row = index.get(tap)
+        if row is None or not commit:
+            continue
+        if str(row.get("commit")) == commit:
+            out[tap] = row
+    return out
+
+
 def _same_origin(a: str, b: str) -> bool:
     """True when two URLs share scheme+host+port.
 

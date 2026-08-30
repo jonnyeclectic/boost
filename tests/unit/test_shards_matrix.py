@@ -195,8 +195,11 @@ class TestTapAcceptsTheArityTheWorkflowUses:
                          if not ln.lstrip().startswith("#"))
 
     def test_the_build_step_hands_over_every_spec_at_once(self):
+        # `tap` the subcommand, not any command that starts with those
+        # letters: the same step now asks `boost_cli taps --json` whether
+        # anything is left to embed, and a substring match counted it.
         tap_lines = [ln for ln in self._build_step().splitlines()
-                     if "boost_cli tap" in ln]
+                     if re.search(r"boost_cli tap\b", ln)]
         assert len(tap_lines) == 1, tap_lines
         line = tap_lines[0]
         # `xargs` with no -n batches the whole file into one invocation. If this
