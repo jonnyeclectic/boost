@@ -112,6 +112,23 @@ jobs:
         # is quiet on a month where no upstream repository moved.
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
+          # DCO + signing. Two separate problems, one place to fix both.
+          #
+          # `author` defaults to `${{ github.actor }}` — the human whose push
+          # triggered the run — so a commit this action generated arrived
+          # authored by them, without their sign-off, and `scripts/check_dco.py`
+          # failed the PR it had just opened (#617). Nobody can fix that by
+          # signing off: the trailer must name the commit's own author, and the
+          # human never wrote this content. Naming the bot is both truthful and
+          # what check_dco already exempts — an account that cannot agree to a
+          # certificate must not be asked for one.
+          #
+          # `sign-commits` then has GitHub create the commit through its API and
+          # sign it with its own key, so these land "Verified" like any other
+          # bot commit rather than unsigned. It needs the `contents: write` this
+          # job already declares.
+          author: 'github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>'
+          sign-commits: true
           add-paths: tests/eval/taps-scale.txt
           branch: bot/eval-scale-pins
           delete-branch: true
