@@ -148,6 +148,10 @@ those vectors. Embedding is ~1.2 s/chunk on CPU — hours for a real corpus —
 and importing the same rows takes 0.12 s, so the difference between the two is
 the difference between semantic search being available and being reachable.
 
+Want everything? `boost quickstart --catalog` taps all 463 catalogued
+registries — 2 min 10 s now that clones run in parallel — and fetches vectors
+for every one that has a published shard.
+
 Already tapped? `boost reindex --fetch-shards` does the download half alone,
 and `boost reindex --dense` embeds locally whatever has no published shard.
 

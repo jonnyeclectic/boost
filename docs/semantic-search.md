@@ -61,8 +61,15 @@ two commands consume them:
 
 ```bash
 boost quickstart                 # tap the starter registries + import their vectors
+boost quickstart --catalog       # …or all 463 catalogued registries
 boost reindex --fetch-shards     # already tapped: import whatever is published
 ```
+
+The published set is the whole catalogue, refreshed weekly. CI packs the 463
+registries into ~60 matrix jobs rather than one per registry, because GitHub
+caps a matrix at 256 jobs and embedding cost is uneven enough that slicing
+would leave one job carrying several of the largest registries
+(`scripts/shard_plan.py`).
 
 Three rules keep a downloaded vector honest, and each of them refuses rather
 than degrades — the failures they prevent are silent ones:
