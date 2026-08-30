@@ -118,6 +118,21 @@ boost = "boost_cli.cli:main"
 # are the single source of truth — no constant to bump, no drift. Writes the
 # resolved version to boost_cli/_version.py (git-ignored).
 version_file = "boost_cli/_version.py"
+# ONLY vX.Y.Z tags are versions, and both settings are needed to say so: the
+# describe command decides which tag is *found*, `tag_regex` decides how it is
+# *parsed*. Without them, the rolling `shards-latest` tag that hosts the
+# prebuilt vector shards was picked up as this project's version — a CI
+# checkout resolved `vshards-latest-4-g1c1398c`, which then broke
+# `boost self-update`'s "am I behind PyPI?" comparison, because that compares
+# version tuples and this parses as none.
+#
+# The repository now carries a non-version tag on purpose (a GitHub release
+# needs one), so this is not a hypothetical: any future non-version tag is
+# covered too.
+git_describe_command = [
+    "git", "describe", "--dirty", "--tags", "--long", "--match", "v[0-9]*",
+]
+tag_regex = "^v(?P<version>[0-9]+[^+]*)$"
 
 [tool.setuptools.packages.find]
 # Two top-level packages, one wheel: boost_cli (the zero-dependency CLI) and
