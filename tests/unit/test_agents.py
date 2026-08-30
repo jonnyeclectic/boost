@@ -90,6 +90,26 @@ class TestLinkingAgents:
         target = agents.linking_agents()["antigravity"]
         assert target != sandbox / ".gemini" / "skills"
 
+    def test_project_scope_excludes_antigravity(self, sandbox):
+        # Project scope derives `<repo>/.claude/skills` from the agent's own
+        # dotdir, which holds only when the skills dir sits one level under it.
+        # Antigravity's sits two (~/.gemini/antigravity-cli/skills), so the
+        # derivation would make a dotless `<repo>/antigravity-cli/` nothing
+        # reads — and boost would report a coverage it does not have.
+        assert list(agents.project_agents()) == ["claude-code", "windsurf",
+                                                 "cursor", "gemini"]
+        assert agents.agents_for_scope(None) == agents.enabled_agents()
+        assert agents.agents_for_scope("/repo") == agents.project_agents()
+
+    def test_rules_and_workflows_skip_a_skills_only_agent(self, sandbox):
+        # A skill is a directory boost symlinks; a rule and a workflow are
+        # files in a format the agent must already read. Antigravity's are
+        # unverified, so writing a plausible one would claim coverage that does
+        # not exist — its rules arrive through the gemini entry anyway, which
+        # writes the ~/.gemini/GEMINI.md it reads.
+        assert "antigravity" not in agents.materializing_agents()
+        assert "antigravity" in agents.enabled_agents()
+
     def test_native_store_agents_is_the_complement(self, sandbox):
         assert agents.native_store_agents() == {
             "gemini": sandbox / ".gemini" / "skills"}

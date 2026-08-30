@@ -31,6 +31,12 @@ ISO = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z"
 AGENT_DIRS = {"claude-code": ".claude", "windsurf": ".windsurf",
               "cursor": ".cursor", "gemini": ".gemini",
               "antigravity": ".gemini/antigravity-cli"}
+# Project scope derives a repo-local dotdir from the agent's own, which holds
+# only for an agent whose skills dir sits one level under it. Antigravity's
+# sits two, so it is excluded rather than given a dotless
+# `<repo>/antigravity-cli/` that nothing reads.
+PROJECT_AGENT_DIRS = {k: v for k, v in AGENT_DIRS.items()
+                      if k != "antigravity"}
 # The agents a *user-scope skill* is symlinked into. gemini is deliberately
 # absent: it reads ~/.agents/skills (the canonical store) natively, so
 # links_skills is False and link_agents never touches ~/.gemini/skills. It is
@@ -1470,7 +1476,7 @@ class TestProjectSkills:
     def test_materializes_real_dirs_under_the_repo(self, entry, tmp_path):
         repo, res = self._install(entry, tmp_path)
         assert res.scope == "project" and res.kind == "skill"
-        for agent, dotdir in AGENT_DIRS.items():
+        for agent, dotdir in PROJECT_AGENT_DIRS.items():
             d = repo / dotdir / "skills" / "brainstorming"
             assert (d / "SKILL.md").is_file()
             # A symlink into ~/.agents/skills dangles on a teammate's machine.
@@ -2233,7 +2239,7 @@ class TestAgentsRecordsWhatIsLinked:
         _link("windsurf").unlink()
         store.install(entry, force=True, only_agents=["cursor"])
         assert lockfile.get_skill("brainstorming")["agents"] == [
-            "claude-code", "cursor"]
+            "claude-code", "cursor", "antigravity"]
 
     def test_import_from_path_records_disk_too(self, sandbox, tmp_path):
         # The second entry point to the same lock entry, with the same bug.

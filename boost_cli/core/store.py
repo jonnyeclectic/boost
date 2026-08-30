@@ -604,8 +604,12 @@ def _install_project_skill(entry: dict, force: bool = False,
     src = source_dir_for(entry)
     _enforce_capability_policy(name, src / "SKILL.md")
     only_agents = preserved_agent_scope(only_agents, existing)
+    # agents_for_scope, not enabled_agents: project scope derives a repo-local
+    # dotdir from the agent's own, which holds for every agent whose skills dir
+    # sits one level under it. Antigravity's sits two, so it is excluded rather
+    # than given an invented `<repo>/antigravity-cli/`.
     targets = [(agent, scopes.skill_target(skills_dir, name, base=resolved_base))
-               for agent, skills_dir in agents.enabled_agents().items()
+               for agent, skills_dir in agents.agents_for_scope(resolved_base).items()
                if not only_agents or agent in only_agents]
 
     # Refuse to write through a symlink that leaves the repo. An agent dir like
@@ -836,7 +840,7 @@ def _install_rule(entry: dict, force: bool = False,
     paths.ensure_dirs()
     materializations: list[dict] = []
     linked: list[str] = []
-    for agent, skills_dir in agents.enabled_agents().items():
+    for agent, skills_dir in agents.materializing_agents(resolved_base).items():
         if only_agents and agent not in only_agents:
             continue
         mode, path = rules.rule_target(agent, skills_dir, name, base=resolved_base)
@@ -1070,7 +1074,7 @@ def _install_workflow(entry: dict, force: bool = False,
     paths.ensure_dirs()
     materializations: list[dict] = []
     linked: list[str] = []
-    for agent, skills_dir in agents.enabled_agents().items():
+    for agent, skills_dir in agents.materializing_agents(resolved_base).items():
         if only_agents and agent not in only_agents:
             continue
         path = workflows.workflow_target(skills_dir, slot, name,

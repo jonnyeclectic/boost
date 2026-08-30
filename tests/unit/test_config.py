@@ -51,7 +51,8 @@ class TestLoadDefaults:
         # a real link — into its own CLI tier, where Gemini cannot see it and
         # log a conflict.
         assert cfg["agents"]["antigravity"] == {
-            "dir": "~/.gemini/antigravity-cli/skills", "enabled": True}
+            "dir": "~/.gemini/antigravity-cli/skills", "enabled": True,
+            "project_scope": False, "skills_only": True}
 
 
 class TestDeepMerge:

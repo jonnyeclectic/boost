@@ -42,8 +42,15 @@ DEFAULTS = {
         # exact failure `links_skills: false` exists to avoid. Linking into
         # `antigravity-cli/skills` is invisible to Gemini and is the tier the
         # CLI itself reads.
+        # `project_scope: false` — its skills dir is two levels under the
+        # dotdir, so the repo-local derivation would make a dotless
+        # `<repo>/antigravity-cli/` nothing reads. See agents.project_agents.
+        # `skills_only`: its rule and workflow formats are unverified, and a
+        # rule reaches it anyway through the `gemini` entry above, which writes
+        # the ~/.gemini/GEMINI.md Antigravity reads.
         "antigravity": {"dir": "~/.gemini/antigravity-cli/skills",
-                        "enabled": True},
+                        "enabled": True, "project_scope": False,
+                        "skills_only": True},
     },
     "taps": [],  # [{"name": "owner/repo", "url": "...", "curated": bool}]
     "ai": {
