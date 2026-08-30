@@ -2,7 +2,7 @@
 id: dense-reindex-has-no-progress-or-durability
 board: code
 section: internals
-status: next
+status: shipped
 category: Observability · UX
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 3
 note: 5 h 33 m of silence, 18.26 GB RSS, nothing on disk
 order: 125
 owner:
-pr:
+pr: 603
 title: "<code>reindex --dense</code> runs for hours behind a bare spinner, and a cancel discards all of it"
 ---
 A keyless <code>boost reindex --dense</code> on a 465-tap / <b>63,003-entry</b> install ran
@@ -73,3 +73,21 @@ rather than the whole run.
 still a bad deal. Note (c) has to keep the current failure semantics &mdash; a tap whose batch the
 provider rejected must still not get a recorded commit, or one transient failure leaves that tap
 permanently marked built and empty.
+
+<b>(a) and (c) shipped in <code>#603</code>.</b> <code>dense.build</code> now takes
+<code>on_progress(done, total)</code>, called once before the first request so the size of the job is
+known up front and again after every batch &mdash; including a rejected one, or a run with a few
+provider errors would appear to stall. <code>discovery.py</code> feeds it into the existing spinner via
+<code>_embed_progress</code>. And <code>_embed_and_store</code> now commits every
+<code>_COMMIT_EVERY = 5000</code> rows instead of once at the end, so an interrupt costs one batch
+rather than the whole run. That is safe precisely because <code>build</code> deletes each changed
+tap's rows <em>before</em> re-inserting, so a partial store is replaced rather than doubled.
+
+<b>One detail worth keeping.</b> The progress total counts <b>distinct</b> texts, not rows. On this
+corpus 657,587 chunks reduce to 396,812 distinct (39.66% repeats, embedded once), so a total taken
+from the row count would over-report the work by two thirds and make the bar crawl.
+
+<b>Still open: (b).</b> <code>dense.py</code> constructs no logger, so <code>--debug</code>,
+<code>BOOST_DEBUG=1</code> and <code>BOOST_LOG_LEVEL=DEBUG</code> still produce no per-batch trail &mdash;
+fine interactively now that the spinner counts, but a piped or CI run still has nothing to attach to a
+bug report, and <code>spin.progress</code> is deliberately silent off a TTY.

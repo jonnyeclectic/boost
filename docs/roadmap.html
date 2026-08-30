@@ -4652,8 +4652,9 @@ search and re-litigate the same call.</p>
       </article>
 
       <article class="cap rcard" id="dense-reindex-has-no-progress-or-durability">
-        <div class="head"><span class="pill next">Next</span><span class="cat">Observability · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Observability · UX</span></div>
         <h3><code>reindex --dense</code> runs for hours behind a bare spinner, and a cancel discards all of it</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>A keyless <code>boost reindex --dense</code> on a 465-tap / <b>63,003-entry</b> install ran
 <b>5&nbsp;h&nbsp;33&nbsp;m</b> and emitted exactly one thing the whole time:
 <code>⠏ embedding chunks into the dense store</code>. Nothing on the machine could answer
@@ -4713,7 +4714,25 @@ rather than the whole run.
 <b>(c) is what makes (a) worth trusting</b>: a progress bar over work that evaporates on Ctrl-C is
 still a bad deal. Note (c) has to keep the current failure semantics &mdash; a tap whose batch the
 provider rejected must still not get a recorded commit, or one transient failure leaves that tap
-permanently marked built and empty.</p>
+permanently marked built and empty.
+
+<b>(a) and (c) shipped in <code>#603</code>.</b> <code>dense.build</code> now takes
+<code>on_progress(done, total)</code>, called once before the first request so the size of the job is
+known up front and again after every batch &mdash; including a rejected one, or a run with a few
+provider errors would appear to stall. <code>discovery.py</code> feeds it into the existing spinner via
+<code>_embed_progress</code>. And <code>_embed_and_store</code> now commits every
+<code>_COMMIT_EVERY = 5000</code> rows instead of once at the end, so an interrupt costs one batch
+rather than the whole run. That is safe precisely because <code>build</code> deletes each changed
+tap's rows <em>before</em> re-inserting, so a partial store is replaced rather than doubled.
+
+<b>One detail worth keeping.</b> The progress total counts <b>distinct</b> texts, not rows. On this
+corpus 657,587 chunks reduce to 396,812 distinct (39.66% repeats, embedded once), so a total taken
+from the row count would over-report the work by two thirds and make the bar crawl.
+
+<b>Still open: (b).</b> <code>dense.py</code> constructs no logger, so <code>--debug</code>,
+<code>BOOST_DEBUG=1</code> and <code>BOOST_LOG_LEVEL=DEBUG</code> still produce no per-batch trail &mdash;
+fine interactively now that the spinner counts, but a piped or CI run still has nothing to attach to a
+bug report, and <code>spin.progress</code> is deliberately silent off a TTY.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
