@@ -453,8 +453,14 @@ def _embed_progress(spinner):
         if spinner is None or not total:
             return
         pct = 100.0 * done / total
-        label = "embedding %s/%s chunks · %d%%" % (
-            format(done, ","), format(total, ","), int(pct))
+        # The bar first, because it is the part that answers the question the
+        # user actually has — "is this moving?" — at a glance, before any of
+        # the digits are read. `spin.bar` is the same determinate bar the rest
+        # of the CLI draws, so this looks like boost rather than like a
+        # second progress convention.
+        label = "embedding %s %d%% · %s/%s chunks" % (
+            spin.bar(done, total, width=16), int(pct),
+            format(done, ","), format(total, ","))
         elapsed = time.monotonic() - started
         if done and elapsed > 1:
             remaining = (total - done) * (elapsed / done)

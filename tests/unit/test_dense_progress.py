@@ -163,6 +163,19 @@ class TestProgressLabel:
         assert "12,480/62,331 chunks" in sp.label
         assert "20%" in sp.label
 
+    def test_it_draws_a_determinate_bar(self):
+        # The bar answers "is this moving?" before any digit is read, which is
+        # the question a fixed spinner left unanswerable for hours.
+        from boost_cli.commands import discovery
+        sp = self._Spin()
+        report = discovery._embed_progress(sp)
+        report(0, 100)
+        assert "░" in sp.label and "▓" not in sp.label
+        report(50, 100)
+        assert sp.label.count("▓") == 8      # half of a 16-wide bar
+        report(100, 100)
+        assert "░" not in sp.label
+
     def test_no_estimate_before_there_is_anything_to_estimate_from(self):
         # Until a batch has finished there is no rate; inventing one would be
         # a guess dressed as a measurement.
