@@ -162,3 +162,62 @@ class TestTheWorkflowUsesTheParser:
         # Code only — the comment above it names the old command on purpose.
         step = self._plan_step(code_only=True)
         assert "taps.txt" not in step, step
+
+
+class TestTapAcceptsTheArityTheWorkflowUses:
+    """The matrix can be right, the parse can be right, and every job still tap nothing.
+
+    Packing the catalogue turned a matrix entry into a *list* of registries and
+    the build step hands the whole list to one ``boost tap`` call. While
+    ``cmd_tap`` declared ``spec`` as ``nargs="?"`` the first registry bound and
+    argparse rejected the rest with exit 2 — before any clone. ``|| true``
+    swallowed that, the job ended with zero taps, and ``reindex --dense`` failed
+    it three steps later with "no taps configured", an error naming the wrong
+    command. Run #7 lost **51 of 60 jobs** that way, each in under a second; the
+    9 that passed were the single-registry chunks packing had left alone, which
+    is why it read as intermittent rather than total.
+
+    Both halves were individually correct: the planner emitted the right chunks
+    and ``cmd_tap`` parsed its own arguments exactly as declared. Only the
+    *agreement between them* was wrong, and nothing owned it. So this pins the
+    seam from both ends — what the workflow hands over, and what the CLI takes.
+    That is this file's whole premise: a matrix is only inspectable after it has
+    already spent runner time.
+    """
+
+    @staticmethod
+    def _build_step() -> str:
+        text = SHARDS.read_text(encoding="utf-8")
+        start = text.index("- name: tap and embed")
+        end = text.index("- name: export the shards", start)
+        # Code only — the comments here deliberately narrate the old failure.
+        return "\n".join(ln for ln in text[start:end].splitlines()
+                         if not ln.lstrip().startswith("#"))
+
+    def test_the_build_step_hands_over_every_spec_at_once(self):
+        tap_lines = [ln for ln in self._build_step().splitlines()
+                     if "boost_cli tap" in ln]
+        assert len(tap_lines) == 1, tap_lines
+        line = tap_lines[0]
+        # `xargs` with no -n batches the whole file into one invocation. If this
+        # ever grows `-n1`, the CLI-side assertion below stops being required —
+        # change them together or the pair stops describing anything.
+        assert "xargs" in line and " -n1 " not in line, line
+
+    def test_tap_accepts_several_specs(self, sandbox, monkeypatch):
+        from boost_cli.commands import taps
+        seen: dict = {}
+
+        def fake_tap_all(urls, **kwargs):
+            seen["n"] = len(urls)
+            return 0
+
+        monkeypatch.setattr(taps, "_tap_all", fake_tap_all)
+        try:
+            taps.cmd_tap(["owner/one", "owner/two", "owner/three"])
+        except SystemExit as exc:      # argparse rejected the arity
+            pytest.fail(
+                "boost tap rejected 3 specs (exit %s), but the shards build "
+                "step passes a whole chunk to one invocation — that mismatch "
+                "cost 51 of 60 jobs" % exc.code)
+        assert seen.get("n") == 3, seen
