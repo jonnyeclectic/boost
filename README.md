@@ -168,6 +168,11 @@ boost tap --catalog --category java           # Spring Boot / Kotlin / JVM packs
 boost tap --catalog --category security       # filter by category
 ```
 
+Taps clone in parallel — eight at once by default, `--jobs N` (or
+`BOOST_TAP_JOBS`) to change it, capped at 16 because it is someone else's
+server. A clone is network latency rather than bandwidth, so the whole catalog
+measures **2 min 10 s for 463 registries** where one-at-a-time took 13 minutes.
+
 Every `est_items` is measured from the repository's file tree rather than
 estimated, so `--limit` ranks by real size. Items are counted once however many
 agents a repository renders them for, so a pack shipping a copy in `.claude/`,
