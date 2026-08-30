@@ -21,8 +21,6 @@ own name perfectly.
 """
 from __future__ import annotations
 
-import pytest
-
 from boost_cli.core import mcp
 
 

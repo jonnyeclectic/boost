@@ -111,22 +111,69 @@ class TestQuickstartWithoutTheExtra:
         """
         from boost_cli.core import dense
         monkeypatch.setattr(dense, "have_backend", lambda: False)
-        res = boost("quickstart", "--dry-run")
-        assert "import 0 shard(s)" in res.out
-        assert "boost-skill-cli[rag]" in res.out
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "import 0 shard(s)" in out
+        assert "boost-skill-cli[rag]" in out
         # Named as the working default, not as a downgrade — BM25 is what
         # ships and what the required eval gate floors.
-        assert "keyword search works" in res.out
+        assert "keyword search works without it" in out
 
     def test_no_vectors_is_reported_as_a_choice_not_a_gap(self, boost,
                                                           monkeypatch):
         from boost_cli.core import dense
         monkeypatch.setattr(dense, "have_backend", lambda: True)
-        res = boost("quickstart", "--dry-run", "--no-vectors")
-        assert "import 0 shard(s)" in res.out
-        assert "--no-vectors" in res.out
+        out = _flat(boost("quickstart", "--dry-run", "--no-vectors").out)
+        assert "import 0 shard(s)" in out
+        assert "--no-vectors was asked for" in out
         # It must not blame the missing extra for a flag the user passed.
-        assert "boost-skill-cli[rag]" not in res.out
+        assert "boost-skill-cli[rag]" not in out
+
+
+def _flat(text: str) -> str:
+    """Output with its wrapping collapsed.
+
+    These lines go through ``out.info(..., wrap=True)``, which folds prose to
+    the pane — so "keyword search is unaffected" arrives split across two lines
+    and a naive substring assertion fails on formatting rather than on
+    behaviour. Collapsing whitespace asserts the sentence, not the column it
+    happened to break at.
+    """
+    return " ".join(text.split())
+
+
+class TestEveryZeroShardReasonNamesItself:
+    """All four branches, because a preview that reports a symptom without its
+    reason is the defect — and three-quarters covered is three-quarters of the
+    defect still shipped."""
+
+    def test_an_unreadable_manifest_says_keyword_search_is_unaffected(
+            self, boost, monkeypatch):
+        from boost_cli.core import dense, shards
+        from boost_cli.errors import BoostError
+
+        def boom(*_a, **_k):
+            raise BoostError("manifest unreachable")
+
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(shards, "fetch_manifest", boom)
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "import 0 shard(s)" in out
+        assert "the shard manifest could not be read" in out
+        # The reassurance is the point: the tapping half still worked.
+        assert "keyword search is unaffected" in out
+
+    def test_a_manifest_with_no_matching_shard_says_so(self, boost,
+                                                       monkeypatch):
+        # The one branch where zero really does mean "none published for
+        # these" — and it must not be worded like a local misconfiguration.
+        from boost_cli.core import dense, shards
+        monkeypatch.setattr(dense, "have_backend", lambda: True)
+        monkeypatch.setattr(shards, "fetch_manifest", lambda *a, **k: {})
+        monkeypatch.setattr(shards, "rows", lambda _m: {})
+        out = _flat(boost("quickstart", "--dry-run").out)
+        assert "import 0 shard(s)" in out
+        assert "none of these registries have a published shard yet" in out
+        assert "boost-skill-cli[rag]" not in out
 
 
 class TestQuickstartTapping:
