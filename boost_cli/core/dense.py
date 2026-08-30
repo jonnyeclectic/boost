@@ -799,6 +799,29 @@ def _indexed_taps(con: sqlite3.Connection) -> set:
         return set()          # no chunks table yet — nothing indexed, nothing stale
 
 
+def _delete_matching(con: sqlite3.Connection, where: str,
+                     params: tuple) -> int:
+    """Drop the chunk rows matching ``where``, and their vectors. Rows hit.
+
+    Deleting a chunk is two statements that must not drift apart: the vectors
+    go through :func:`_drop_vectors` (which knows both store layouts) and only
+    then does the row go. Tap-level and entry-level deletion had that pair
+    written out twice, which is one copy too many for a rule this easy to half-
+    apply — an orphan vector outlives every later deletion, because those are
+    all scoped through ``chunks``.
+
+    ``where`` is a literal from this module, never caller data; the parameters
+    are bound.
+    """
+    sql = "SELECT id FROM chunks WHERE " + where     # noqa: S608  literal clause
+    ids = [r[0] for r in con.execute(sql, params)]
+    if not ids:
+        return 0
+    _drop_vectors(con, ids)
+    con.execute("DELETE FROM chunks WHERE " + where, params)  # noqa: S608  same literal
+    return len(ids)
+
+
 def _delete_entries(con: sqlite3.Connection,
                     keys: list[tuple[str, str]]) -> int:
     """Drop every chunk row for these ``(tap, path)`` entries. Returns rows hit.
@@ -807,16 +830,8 @@ def _delete_entries(con: sqlite3.Connection,
     row-scoped rather than content-scoped: two taps can ship a byte-identical
     file, so deleting by digest would take another tap's rows with it.
     """
-    total = 0
-    for tap, path in keys:
-        ids = [r[0] for r in con.execute(
-            "SELECT id FROM chunks WHERE tap = ? AND path = ?", (tap, path))]
-        if not ids:
-            continue
-        _drop_vectors(con, ids)
-        con.execute("DELETE FROM chunks WHERE tap = ? AND path = ?", (tap, path))
-        total += len(ids)
-    return total
+    return sum(_delete_matching(con, "tap = ? AND path = ?", (tap, path))
+               for tap, path in keys)
 
 
 def _prune_stale_entries(con: sqlite3.Connection, taps: list[str],
@@ -880,11 +895,9 @@ def _split_by_digest(con: sqlite3.Connection,
 
 
 def _delete_taps(con: sqlite3.Connection, taps: list[str]) -> None:
+    """Drop every chunk row belonging to these taps, and their vectors."""
     for tap in taps:
-        ids = [r[0] for r in
-               con.execute("SELECT id FROM chunks WHERE tap = ?", (tap,))]
-        _drop_vectors(con, ids)
-        con.execute("DELETE FROM chunks WHERE tap = ?", (tap,))
+        _delete_matching(con, "tap = ?", (tap,))
 
 
 def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
