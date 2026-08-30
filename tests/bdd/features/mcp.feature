@@ -53,7 +53,8 @@ Feature: boost mcp
     Given the "claude" CLI is on PATH but fails with "no auth"
     When I run "boost mcp register"
     Then the exit code should be 1
-    And the output should contain "claude mcp register failed: no auth"
+    And the output should contain "claude mcp register failed — no auth"
+    And the output should contain "run it yourself"
 
   Scenario: unregistering with no agent CLI prints both manual commands
     Given no agent CLI is on PATH
