@@ -145,7 +145,7 @@ def cmd_tap(argv) -> int:
         # README promised three kinds. `_tap_all` says items.
         rc |= _tap_all([str(d["url"]) for d in config.DEFAULT_TAPS],
                        jobs=args.jobs,
-                       focus={str(d["name"]): d.get("focus", "")
+                       focus={str(d["name"]): str(d.get("focus", ""))
                               for d in config.DEFAULT_TAPS})
     if args.spec:
         with spin.Spinner("cloning %s" % args.spec):

@@ -170,8 +170,8 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   463 registries. Scanning stays serial on the caller's thread — it is 3 ms per
   registry and writes a per-tap cache file, so parallelising it buys nothing and
   scrambles output order. Cleanup after a failed clone must tolerate a
-  directory that was never created: `util.rmtree`'s read-only retry hook chmods
-  the missing path and raises `FileNotFoundError`, which out of a worker thread
+  directory that was never created: `util.rmtree`'s read-only retry hook calls
+  `chmod` on the missing path and raises `FileNotFoundError`, which out of a worker thread
   turns one 404 into a crashed catalog tap.
 
 - **`~/.boost/cache/` holds boost's own indexes, not just tap catalogs.**

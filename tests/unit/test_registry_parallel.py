@@ -162,6 +162,54 @@ class TestAddMany:
         assert [t.name for t in registry.list_taps()] == ["o/a"]
 
 
+class TestAddManyEdges:
+    """The branches a happy path never reaches."""
+
+    def test_an_unparseable_spec_is_reported_not_raised(self, sandbox,
+                                                        fake_clone):
+        # One bad row in a catalog selection must not abort the other 462, and
+        # the spec never reaches a worker: `parse_spec` rejects it up front.
+        res = registry.add_many(["not a repo!!", "o/b"], jobs=2)
+        assert res[0]["ok"] is False
+        assert "cannot parse" in res[0]["error"]
+        assert res[1]["ok"] is True
+
+    def test_an_existing_directory_is_replaced_before_cloning(self, sandbox,
+                                                              fake_clone):
+        stale = registry.Tap(name="o/a", url="u").path
+        stale.mkdir(parents=True, exist_ok=True)
+        (stale / "leftover.md").write_text("old", encoding="utf-8")
+        registry.add_many(["o/a"], jobs=1)
+        assert not (stale / "leftover.md").exists()
+
+    def test_a_tap_failing_policy_is_removed_and_reported(self, sandbox,
+                                                          fake_clone,
+                                                          monkeypatch):
+        monkeypatch.setattr(policy, "check_tap_signing",
+                            lambda path: ["unsigned commits"])
+        res = registry.add_many(["o/a"], jobs=1)
+        assert res[0]["ok"] is False
+        assert "provenance policy" in res[0]["error"]
+        assert not registry.Tap(name="o/a", url="u").path.exists()
+        assert registry.list_taps() == []
+
+    def test_cleanup_failure_does_not_mask_the_real_error(self, sandbox,
+                                                          fake_clone,
+                                                          monkeypatch):
+        def explode(path):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr(registry.util, "rmtree", explode)
+        res = registry.add_many(["o/boom"], jobs=1)
+        # The clone's own error is the one worth reporting.
+        assert "no such repo" in res[0]["error"]
+
+    def test_on_done_fires_once_per_cloned_tap(self, sandbox, fake_clone):
+        seen = []
+        registry.add_many(["o/a", "o/b"], jobs=2, on_done=lambda r: seen.append(r["name"]))
+        assert sorted(seen) == ["o/a", "o/b"]
+
+
 class TestTapJobs:
     """Concurrency is clamped: this is someone else's server."""
 
