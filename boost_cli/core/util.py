@@ -178,7 +178,7 @@ def human_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     if seconds < 60:
         return "%ds" % seconds
-    minutes, sec = divmod(seconds, 60)
+    minutes = seconds // 60
     if minutes < 60:
         return "%dm" % minutes
     hours, minutes = divmod(minutes, 60)
