@@ -270,6 +270,59 @@ def _shard_io(args) -> int:
     return 0
 
 
+def _fetch_shards(args) -> int:
+    """`--fetch-shards`: the published half of the keyless tier, on demand.
+
+    Separate from `boost quickstart` because the two answer different
+    questions. Quickstart sets a machine up; this refreshes vectors on one that
+    is already tapped, including taps quickstart never touches.
+    """
+    from ..core import dense, shards
+    if not registry.list_taps():
+        raise BoostError("no taps configured — nothing to fetch",
+                        hint="`boost quickstart` taps the defaults and fetches "
+                             "their vectors in one pass")
+    manifest = shards.fetch_manifest()
+    why = shards.incompatible(manifest)
+    if why:
+        raise BoostError("published shards cannot serve this machine — %s" % why,
+                        hint=dense.fix_hint(dense.status().get("reason", "")))
+    commits = rag._tap_commits()
+    by_name = {t.name: commits.get(t.safe_name, "") for t in registry.list_taps()}
+    results = shards.sync(list(by_name), by_name, manifest=manifest,
+                          on_event=_shard_event)
+    if args.as_json:
+        print(json.dumps({"shards": results}, indent=2))
+        return 0
+    got = [r for r in results if r["status"] == "imported"]
+    total = sum(int(r.get("chunks") or 0) for r in got)
+    if got:
+        out.ok("imported %d shard(s), %s chunks — no embedding needed"
+               % (len(got), format(total, ",")))
+    else:
+        # Not a success line. Nothing landed, and saying "imported 0" with a
+        # tick reads as a job well done to the one user who most needs to know
+        # their vectors are still missing.
+        out.warn("no published vectors matched your taps")
+    missing = [r["tap"] for r in results if r["status"] != "imported"]
+    if missing:
+        out.info(out.role("%d tap(s) without usable vectors: %s"
+                          % (len(missing), ", ".join(missing[:5])
+                             + (" …" if len(missing) > 5 else "")), "muted"))
+        out.info("embed those locally with `boost reindex --dense`")
+    return 0
+
+
+def _shard_event(tap: str, status: str, detail: str) -> None:
+    """Progress for one shard, quiet enough to run over forty taps."""
+    if status == "downloading":
+        out.info(out.role("fetching %s %s" % (tap, detail), "muted"))
+    elif status in ("failed", "refused"):
+        out.info(out.role("%s: %s%s" % (tap, status,
+                                        " (%s)" % detail if detail else ""),
+                          "muted"))
+
+
 def cmd_reindex(argv):
     """Build/refresh the full-content (RAG) search index over tapped items."""
     p = cliparse.parser(
@@ -287,11 +340,16 @@ def cmd_reindex(argv):
                    help="merge a prebuilt vector shard, skipping the embed "
                         "cost; refused unless it matches this store's backend "
                         "and the tap's current commit")
+    p.add_argument("--fetch-shards", action="store_true",
+                   help="download and import published vectors for every tap "
+                        "that has them, instead of embedding locally")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
     if args.export_shard or args.import_shard:
         return _shard_io(args)
+    if args.fetch_shards:
+        return _fetch_shards(args)
     if not registry.list_taps():
         raise BoostError("no taps configured — nothing to index",
                         hint="add the recommended registries with `boost tap --defaults`")

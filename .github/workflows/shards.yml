@@ -154,11 +154,71 @@ jobs:
       - name: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # Artifacts, not Release assets: shards are keyed on a REGISTRY commit
-          # and refresh on their own cadence, so attaching them to a boost
-          # release would tie two unrelated lifecycles together and re-publish
-          # unchanged vectors on every version bump.
+          # Still artifacts at this stage: one job per registry cannot write a
+          # manifest that describes all of them, so the matrix hands its output
+          # to the `publish` job below, which assembles the manifest once and
+          # puts both on a release. An artifact is not a distribution channel —
+          # downloading one needs a GitHub token and it expires at 90 days,
+          # which is why the release exists.
           name: shard-${{ strategy.job-index }}
           path: "*.shard.json"
           if-no-files-found: error
           retention-days: 90
+
+  publish:
+    # Assemble every shard the matrix produced into one downloadable set.
+    #
+    # WHY A ROLLING PRERELEASE. The assets need a stable, anonymous URL, which
+    # a release asset has and an artifact does not. `shards-latest` is a fixed
+    # tag so the manifest URL compiled into boost never moves, and the release
+    # is marked prerelease + not-latest so it stays invisible to everything
+    # that reads "the latest release": release-drafter resolves the next
+    # version from published non-prereleases (publish.yml), and the README's
+    # shields badge excludes prereleases too. The tag carries no digit, so
+    # setuptools-scm's `--match *[0-9]*` never sees it as a version either.
+    #
+    # `fail-fast: false` above means some registries can fail while others
+    # succeed; publishing the ones that worked is the point, so this job runs
+    # on `success() || failure()` and simply publishes whatever arrived.
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write        # create/update the rolling release + its assets
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: shard-*
+          merge-multiple: true
+          path: shards
+      - name: build the manifest
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          ls -l shards/ || { echo "no shards were produced"; exit 1; }
+          python3 scripts/publish_shards.py manifest \
+            --shard-dir shards --repo "$REPO" --tag shards-latest \
+            --out shards/manifest.json
+          cat shards/manifest.json
+      - name: publish to the rolling release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          if ! gh release view shards-latest --repo "$REPO" >/dev/null 2>&1; then
+            gh release create shards-latest --repo "$REPO" \
+              --prerelease --latest=false \
+              --title "dense vector shards" \
+              --notes "Prebuilt keyless embeddings for tapped registries. Consumed by \`boost quickstart\` and \`boost reindex --fetch-shards\` via manifest.json; not a boost release."
+          fi
+          # --clobber: this release is a mutable index of the current shards,
+          # so a re-run replaces an asset rather than failing on it.
+          gh release upload shards-latest --repo "$REPO" --clobber \
+            shards/*.shard.json shards/manifest.json

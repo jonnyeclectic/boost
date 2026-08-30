@@ -306,7 +306,7 @@ for both — edit items, run `build_roadmap.py`, never touch the HTML by hand.
 ## Architecture
 
 **CLI dispatch.** `boost_cli/cli.py` holds `COMMANDS`, the single
-source-of-truth list of `(name, group, module, summary)` for all 80 commands.
+source-of-truth list of `(name, group, module, summary)` for all 81 commands.
 Each command is implemented as `def cmd_<name_with_underscores>(argv) -> int`
 inside `boost_cli/commands/<module>.py`, and `_dispatch` imports that module
 lazily on invocation — so `boost --help` stays instant and command modules are
@@ -418,6 +418,26 @@ for code you write:
 of the three item kinds (see Non-obvious rules above); `core/store.py` owns
 install, uninstall and sync — copying into the canonical store, symlinking into
 each agent's skills dir, and updating the lock file.
+
+- **A published shard is only importable while three things match, and every
+  mismatch is silent if waved through.** `core/shards.py` fetches
+  `manifest.json` from a rolling `shards-latest` **prerelease** on this repo —
+  prerelease and `--latest=false` deliberately, so release-drafter (which
+  resolves the next version from published non-prereleases), the shields badge
+  in the README and setuptools-scm's `--match *[0-9]*` all keep ignoring it.
+  The manifest carries the embedding *space* once at the top, so
+  `shards.incompatible()` can refuse before downloading 129 MB; each row pins
+  the registry *commit*, checked in `shards.sync` and again in
+  `dense.import_shard`, because a stale shard makes `dense.build` mark that tap
+  "reused" forever; and each row's *sha256* is verified over the bytes written.
+  A shard URL off the manifest's own host is refused — a manifest names what
+  boost downloads, so it must not widen where the download goes. `boost tap
+  --at <sha>` exists for the commit rule: `boost quickstart` pins each registry
+  to the commit its vectors describe rather than tapping HEAD and hoping.
+  **Publish keyless vectors only** — a shard exported from a machine holding
+  `VOYAGE_API_KEY` is 1024-d `voyage-4` and can only be imported *or queried*
+  by another key-holder; `scripts/publish_shards.py manifest` refuses to
+  describe two spaces in one file.
 
 **Search has two engines**, both in `core/`: `rag.py` is the always-on,
 zero-dependency BM25 engine (full-content index, auto-builds on first

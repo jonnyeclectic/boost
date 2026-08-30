@@ -284,6 +284,44 @@ def head_commit(repo: Path) -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
+def checkout_commit(repo: Path, sha: str) -> None:
+    """Detach `repo` at `sha`, fetching that commit first if it is absent.
+
+    A tap is cloned `--depth 1`, so the commit a published shard was built from
+    is usually *not* in the clone: the fetch is the normal path, not the
+    fallback. GitHub serves a fetch by full SHA for a reachable commit, which
+    is what makes pinning possible without un-shallowing a repo that exists to
+    stay small.
+
+    The fetch keeps `--depth 1` and the blobless filter for the same reason the
+    clone does — pinning a tap must not cost the history and blobs the sparse
+    clone was built to avoid (458 taps held 12 GB before that work).
+    """
+    if not _is_sha(sha):
+        raise BoostError("%r is not a full commit SHA" % sha,
+                         hint="pin with the 40-character hash a manifest names")
+    have = run(["-C", str(repo), "cat-file", "-e", sha + "^{commit}"],
+               check=False)
+    if have.returncode != 0:
+        run(["-C", str(repo), "fetch", "--quiet", "--depth", "1",
+             "--filter=blob:none", "origin", sha])
+    run(["-C", str(repo), "checkout", "--quiet", "--detach", sha])
+    # A detached checkout leaves the sparse cone as it was, but re-applying is
+    # cheap and keeps a pinned clone byte-identical to a freshly cloned one.
+    run(["-C", str(repo), "sparse-checkout", "reapply"], check=False)
+
+
+def _is_sha(value: str) -> bool:
+    """True for a full 40-character hex commit hash.
+
+    Deliberately strict. An abbreviated hash is ambiguous across a fetch, and a
+    branch or tag name is not a pin at all — both would silently give a
+    different tree than the shard was built against, which `import_shard` would
+    then refuse with a confusing commit mismatch.
+    """
+    return len(value) == 40 and all(c in "0123456789abcdef" for c in value.lower())
+
+
 def remote_url(repo: Path) -> str:
     """Return the URL of `repo`'s `origin` remote, or "" if it has none."""
     proc = run(["-C", str(repo), "remote", "get-url", "origin"], check=False)
