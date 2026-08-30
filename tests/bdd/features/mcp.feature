@@ -1,18 +1,19 @@
 Feature: boost mcp
   Register boost as an MCP server with every agent CLI that speaks MCP —
-  Claude Code and Gemini CLI. Never shells out to a real CLI in these
-  scenarios: shutil.which/subprocess.run are mocked.
+  Claude Code, Gemini CLI and Antigravity CLI. Never shells out to a real CLI
+  in these scenarios: shutil.which/subprocess.run are mocked.
 
   Background:
     Given a fresh boost environment
 
-  Scenario: registering with no agent CLI installed prints both manual commands
+  Scenario: registering with no agent CLI installed prints every manual command
     Given no agent CLI is on PATH
     When I run "boost mcp register"
     Then the exit code should be 0
-    And the output should contain "no agent CLI found (looked for: claude, gemini)"
+    And the output should contain "no agent CLI found (looked for: claude, gemini, agy)"
     And the output should contain "claude mcp add boost --scope user"
     And the output should contain "gemini mcp add --scope user"
+    And the output should contain "agy mcp add"
 
   Scenario: registering with only the claude CLI present succeeds
     Given the "claude" CLI is on PATH and succeeds

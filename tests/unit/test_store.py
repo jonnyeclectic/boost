@@ -835,7 +835,8 @@ class TestSyncPlan:
         assert not (paths.home() / ".gemini" / "skills").exists()
         plan = store.sync_plan()
         assert plan == {**self.EMPTY, "missing_links": [
-            ("brainstorming", "windsurf"), ("brainstorming", "cursor")]}
+            ("brainstorming", "windsurf"), ("brainstorming", "cursor"),
+            ("brainstorming", "antigravity")]}
 
     def test_missing_store(self, brainstorming):
         shutil.rmtree(paths.store_dir() / "brainstorming")
@@ -917,7 +918,7 @@ class TestSyncApply:
     def test_missing_store_reinstalled_from_tap(self, brainstorming):
         shutil.rmtree(paths.store_dir() / "brainstorming")
         actions = store.sync_apply(store.sync_plan())
-        assert len(actions) == 4                     # 3 stale links + reinstall
+        assert len(actions) == 5                     # 4 stale links + reinstall
         assert actions[-1] == "reinstalled missing brainstorming from fixture-tap"
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
         assert lockfile.get_skill("brainstorming") is not None
@@ -1576,10 +1577,30 @@ class TestProjectSkills:
             store.install(entry, scope="galaxy")
         assert "unknown scope" in err.value.message
 
-    def test_no_enabled_agents_is_an_error_not_a_silent_noop(self, entry, tmp_path,
-                                                             monkeypatch):
-        from boost_cli.core import agents as agents_mod
-        monkeypatch.setattr(agents_mod, "enabled_agents", dict)
+    def test_no_enabled_agents_is_an_error_not_a_silent_noop(self, entry, tmp_path):
+        # Disabled through config, not by monkeypatching enabled_agents:
+        # project targets come from agents_for_scope(base) → project_agents(),
+        # which reads known_agents() directly, so a patched enabled_agents
+        # never reaches this path.
+        cfg = config.load()
+        for spec in cfg["agents"].values():
+            spec["enabled"] = False
+        config.save(cfg)
+        with pytest.raises(BoostError) as err:
+            store.install(entry, scope="project", base=str(tmp_path / "p"))
+        assert "no enabled agents" in err.value.message
+
+    def test_an_agent_outside_project_scope_does_not_avert_the_error(
+            self, entry, tmp_path):
+        # antigravity keeps the *enabled* set non-empty while the *project*
+        # target set is empty (project_scope: False — its skills dir sits two
+        # levels under the dotdir, see agents.project_agents). The guard keys
+        # on the scoped target set, so this must still error rather than
+        # silently write nothing.
+        cfg = config.load()
+        for name in ("claude-code", "windsurf", "cursor", "gemini"):
+            cfg["agents"][name]["enabled"] = False
+        config.save(cfg)
         with pytest.raises(BoostError) as err:
             store.install(entry, scope="project", base=str(tmp_path / "p"))
         assert "no enabled agents" in err.value.message
@@ -2141,8 +2162,8 @@ class TestSyncRespectsDeclaredScope:
         for agent in LINKED_AGENTS:
             _link(agent).unlink()
         assert sorted(store.sync_plan()["missing_links"]) == [
-            ("brainstorming", "claude-code"), ("brainstorming", "cursor"),
-            ("brainstorming", "windsurf")]
+            ("brainstorming", "antigravity"), ("brainstorming", "claude-code"),
+            ("brainstorming", "cursor"), ("brainstorming", "windsurf")]
 
     def test_the_declaration_is_written_to_the_lock(self, tap, entry):
         store.install(entry, only_agents=["claude-code"])
@@ -2351,7 +2372,8 @@ class TestSyncSeesLinksOutsideTheDeclaredScope:
     def test_a_narrowing_reinstall_is_reported(self, tap, entry):
         self._narrowed(entry)
         assert sorted(store.sync_plan()["out_of_scope_links"]) == [
-            ("brainstorming", "claude-code"), ("brainstorming", "windsurf")]
+            ("brainstorming", "antigravity"), ("brainstorming", "claude-code"),
+            ("brainstorming", "windsurf")]
 
     def test_an_unnarrowed_skill_reports_nothing(self, brainstorming):
         # scoped_agents fails open, so every agent is in scope by definition.
@@ -2366,6 +2388,7 @@ class TestSyncSeesLinksOutsideTheDeclaredScope:
         self._narrowed(entry)
         _link("claude-code").unlink()
         _link("windsurf").unlink()
+        _link("antigravity").unlink()
         assert store.sync_plan()["out_of_scope_links"] == []
 
     def test_sync_apply_leaves_them_alone(self, tap, entry):
@@ -2386,10 +2409,11 @@ class TestSyncSeesLinksOutsideTheDeclaredScope:
 
     def test_prune_removes_them(self, tap, entry):
         self._narrowed(entry)
-        assert len(store.prune_out_of_scope_links(store.sync_plan())) == 2
+        assert len(store.prune_out_of_scope_links(store.sync_plan())) == 3
         assert _link("cursor").is_symlink()
         assert not _link("claude-code").exists()
         assert not _link("windsurf").exists()
+        assert not _link("antigravity").exists()
 
     def test_prune_corrects_the_lock_as_well_as_the_disk(self, tap, entry):
         # Leaving `agents` naming a link it just deleted would recreate the

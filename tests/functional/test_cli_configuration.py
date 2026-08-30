@@ -1344,12 +1344,14 @@ class TestMcp:
         assert "GitHub code search failed" in text
 
     # ── mcp register / unregister ────────────────────────────────────────
-    # boost registers itself with every agent CLI that speaks MCP, and the two
+    # boost registers itself with every agent CLI that speaks MCP, and the
     # grammars disagree on almost every detail: Claude wants
     # `add <name> [options] -- <command>` (its `-e` is variadic, so a name
     # placed after it is swallowed as another env var); Gemini wants
     # `add [options] <name> <commandOrUrl> [args...]` with no `--` (which its
-    # trailing variadic would capture and hand to boost as a literal argument).
+    # trailing variadic would capture and hand to boost as a literal argument);
+    # agy wants flags before the name, a `--` before the command, and has no
+    # scope flag at all (one global file).
     # Every test below captures the argv the fake CLI receives — an argv that
     # is merely plausible fails silently, on someone else's machine.
 
@@ -1388,6 +1390,15 @@ class TestMcp:
                 "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
                 "-e", "no_proxy=*",
                 "boost", self._shim(), "mcp", "--stdio"]
+
+    def _agy_add(self):
+        # agy wants `add [flags] <name> [args...]`: flags must precede the
+        # name, and `--` must precede a command whose own args start with `-`,
+        # or `--stdio` is eaten as an agy flag. No scope flag — one global file.
+        return ["agy", "mcp", "add",
+                "-e", "OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES",
+                "-e", "no_proxy=*",
+                "boost", "--", self._shim(), "mcp", "--stdio"]
 
     def test_register_seeds_the_catalog_on_an_empty_machine(
             self, boost, sandbox, monkeypatch):
@@ -1549,14 +1560,16 @@ class TestMcp:
         calls = self._fake_clis(monkeypatch)          # no agent CLI on PATH
         r = boost("mcp", "register")
         assert calls == []                            # nothing was run
-        assert "no agent CLI found (looked for: claude, gemini)" in r.out
+        assert "no agent CLI found (looked for: claude, gemini, agy)" in r.out
         assert " ".join(self._claude_add()) in r.out
         assert " ".join(self._gemini_add()) in r.out
+        assert " ".join(self._agy_add()) in r.out
         assert journal.events(action="mcp")[0]["hosts"] == ""
 
         r = boost("mcp", "unregister")
         assert "claude mcp remove boost" in r.out
         assert "gemini mcp remove --scope user boost" in r.out
+        assert "agy mcp remove boost" in r.out
         assert journal.events(action="mcp")[0]["subject"] == "unregister"
 
     def test_explicit_host_registers_only_that_host(self, boost, sandbox,
@@ -1592,12 +1605,14 @@ class TestMcp:
                 "(scope: user)") in r.out
         assert "`gemini` CLI not found — run this yourself:" in r.out
         assert " ".join(self._gemini_add()) in r.out
+        assert "`agy` CLI not found — run this yourself:" in r.out
+        assert " ".join(self._agy_add()) in r.out
 
     def test_unknown_host_rc1(self, boost, sandbox, monkeypatch):
         self._fake_clis(monkeypatch, "claude", "gemini")
         r = boost("mcp", "register", "--host", "bogus", expect=1)
         assert "unknown MCP host 'bogus'" in r.err
-        assert "known hosts: claude, gemini" in r.err
+        assert "known hosts: claude, gemini, agy" in r.err
 
     def test_unregister_uses_each_hosts_grammar(self, boost, sandbox,
                                                 monkeypatch):
