@@ -365,3 +365,68 @@ class TestVectorsAndChunksStayInStep:
         con.close()
         assert after["alpha"] == before["alpha"], "an untouched entry moved"
         assert after["beta"] != before["beta"], "a freed rowid was reused"
+
+
+class TestReuseDoesNotPayForTheWholeStore:
+    """The lookup has to scale with the drift, not with the store.
+
+    The first draft read `SELECT tap, path, digest FROM chunks` — every row —
+    to answer a question about a handful of taps. On a real 657,587-chunk store
+    that measured 3.75 s cold (0.17 s warm) against 0.08 s for the nineteen
+    largest taps scoped through the `chunks_tap` index. Worse, it ran on the
+    build where nothing had changed at all: `candidates` is empty there, so the
+    whole store was scanned to answer a question nobody asked, and that is the
+    most common build there is.
+    """
+
+    def test_an_unchanged_build_hands_the_digest_pass_nothing(
+            self, counting_env, monkeypatch):
+        """Where the whole-table read hurt most: the build with no work in it.
+
+        Tap-level reuse already skips every tap, so `candidates` is empty. The
+        old query still read all 657,587 rows to answer a question nobody had
+        asked — on the most common build there is.
+        """
+        entries = [_e("alpha", "one"), _e("beta", "two")]
+        _build(entries)
+        from boost_cli.core import dense as d
+
+        real = d._split_by_digest
+        seen = {}
+
+        def spy(con, ents):
+            seen["n"] = len(ents)
+            return real(con, ents)
+
+        monkeypatch.setattr(d, "_split_by_digest", spy)
+        res = _build(entries)          # same commit -> tap-level reuse
+        assert res["reused"], "expected tap-level reuse to have fired"
+        assert seen["n"] == 0, "the digest pass was handed work to do"
+
+    def test_the_digest_lookup_is_scoped_by_tap(self):
+        """Pinned as query SHAPE, deliberately.
+
+        A row-count assertion would depend on the fixture's size and pass for
+        the wrong reason as soon as that changed; the defect here was the query
+        reading the whole table, so the query is the thing to pin.
+        """
+        import inspect
+
+        src = inspect.getsource(dense._split_by_digest)
+        assert "FROM chunks WHERE tap = ?" in src, (
+            "the digest lookup must go through the chunks_tap index")
+        assert "SELECT tap, path, digest FROM chunks" not in src, (
+            "the whole-table read is back — it grows with the store while the "
+            "work grows with the drift")
+
+    def test_an_empty_candidate_list_returns_two_empty_lists(self, sandbox):
+        # The early return is behaviour, not an optimisation detail: callers
+        # unpack two lists and `kept` feeds `reused_entries`.
+        con = dense._connect()
+        if con is None:
+            pytest.skip("sqlite-vec backend unavailable")
+        try:
+            fresh, kept = dense._split_by_digest(con, [])
+        finally:
+            con.close()
+        assert (fresh, kept) == ([], [])

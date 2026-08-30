@@ -853,10 +853,21 @@ def _split_by_digest(con: sqlite3.Connection,
     is absent and **must never treat two absences as a match**. Two entries
     with no digest are not the same entry; they are two unknowns.
     """
+    # Nothing to decide, and the early return is the common case rather than a
+    # guard: on a build where no tap moved, `candidates` is empty, and without
+    # this the store gets scanned end to end to answer a question nobody asked.
+    if not entries:
+        return [], []
+    # Scoped to the taps actually in play, via the `chunks_tap` index. Reading
+    # the whole table instead measured 3.75 s cold (0.17 s warm) against 0.08 s
+    # for the nineteen largest taps and under 0.01 s for nineteen typical ones,
+    # on a real 657,587-chunk store. The full read was also the wrong shape: it
+    # grows with the store while the work grows with the drift.
     stored: dict[tuple[str, str], set] = {}
-    for tap, path, digest in con.execute(
-            "SELECT tap, path, digest FROM chunks"):
-        stored.setdefault((tap, path), set()).add(digest)
+    for tap in sorted({e["tap"] for e in entries}):
+        for path, digest in con.execute(
+                "SELECT path, digest FROM chunks WHERE tap = ?", (tap,)):
+            stored.setdefault((tap, path), set()).add(digest)
     to_embed, kept = [], []
     for e in entries:
         digest = e.get("content")
