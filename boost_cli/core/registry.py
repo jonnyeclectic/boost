@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import difflib
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from dataclasses import dataclass
@@ -20,6 +21,12 @@ class Tap:
     name: str          # "anthropics/skills" or a short alias
     url: str           # https URL or local path
     curated: bool = False
+    #: A 40-character commit this tap is held at, or "" for "track the default
+    #: branch". A pin is durable *because it is recorded here*: `tap --at`
+    #: checked a commit out and nothing remembered, so the next `boost update`
+    #: moved the clone to HEAD — silently invalidating any prebuilt vectors
+    #: imported for that commit, which is the whole reason the pin exists.
+    pin: str = ""
 
     @property
     def safe_name(self) -> str:
@@ -131,7 +138,8 @@ def list_taps() -> list[Tap]:
     taps = config.get("taps", []) or []
     if not isinstance(taps, list):
         return []
-    return [Tap(name=t["name"], url=t.get("url", ""), curated=bool(t.get("curated")))
+    return [Tap(name=t["name"], url=t.get("url", ""),
+                curated=bool(t.get("curated")), pin=str(t.get("pin") or ""))
             for t in taps if isinstance(t, dict) and t.get("name")]
 
 
@@ -203,9 +211,12 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
             hint="add its key with `boost trust add <name> <key>`, "
                  "or relax `boost policy set require_signed_taps false`")
     cfg = config.load()
-    cfg.setdefault("taps", []).append(
-        {"name": name, "url": url, "curated": curated})
+    row = {"name": name, "url": url, "curated": curated}
+    if at:
+        row["pin"] = at
+    cfg.setdefault("taps", []).append(row)
     config.save(cfg)
+    tap.pin = at or ""
     return tap
 
 
@@ -336,8 +347,12 @@ def add_many(specs: list[str], curated: bool = False,
         cfg = config.load()
         rows = cfg.setdefault("taps", [])
         for r in fresh:
-            rows.append({"name": r["name"], "url": r["url"],
-                         "curated": curated})
+            row = {"name": r["name"], "url": r["url"], "curated": curated}
+            pin = pins.get(r["name"])
+            if pin:
+                row["pin"] = pin
+                r["tap"].pin = pin
+            rows.append(row)
         config.save(cfg)
     # First occurrence, not last: a dict comprehension over `specs` keeps the
     # LAST index for a repeated spec, which pushed the duplicate — and so its
@@ -350,6 +365,58 @@ def add_many(specs: list[str], curated: bool = False,
     results.sort(key=lambda r: (order.get(r["spec"], len(order)),
                                 bool(r.get("skipped"))))
     return results
+
+
+#: How long a tap set may go unrefreshed before `boost search` mentions it.
+#: Two weeks rather than days: registries move slowly, and a hint that fires
+#: every other search is one users learn to read past.
+STALE_TAPS_DAYS = 14
+
+
+def mark_refreshed() -> None:
+    """Stamp "the taps were refreshed just now"; never fails a refresh."""
+    with suppress(OSError):
+        paths.ensure_dirs()
+        paths.tap_refresh_marker().write_text("", encoding="utf-8")
+
+
+def refresh_age_days() -> float | None:
+    """Days since the last tap refresh, or None when nothing has recorded one.
+
+    None is not zero and not infinity: on a machine that has never run
+    `boost update` there is nothing to report, and inventing an age would make
+    every fresh install nag about staleness on its first search.
+    """
+    marker = paths.tap_refresh_marker()
+    try:
+        age = time.time() - marker.stat().st_mtime
+    except OSError:
+        return None
+    return max(0.0, age / 86400.0)
+
+
+def pin(name: str, commit: str) -> Tap:
+    """Record `commit` as the tap's pin, so `update` leaves it alone."""
+    tap = get(name)
+    cfg = config.load()
+    for row in cfg.get("taps", []) or []:
+        if isinstance(row, dict) and row.get("name") == tap.name:
+            row["pin"] = commit
+    config.save(cfg)
+    tap.pin = commit
+    return tap
+
+
+def unpin(name: str) -> Tap:
+    """Drop a tap's pin so it tracks its default branch again."""
+    tap = get(name)
+    cfg = config.load()
+    for row in cfg.get("taps", []) or []:
+        if isinstance(row, dict) and row.get("name") == tap.name:
+            row.pop("pin", None)
+    config.save(cfg)
+    tap.pin = ""
+    return tap
 
 
 def remove(name: str) -> Tap:
@@ -374,8 +441,13 @@ def remove(name: str) -> Tap:
 WHEEL_SCHEME = "builtin:"
 
 
-def update(name: str | None = None) -> tuple[dict, dict]:
+def update(name: str | None = None,
+           force: bool = False) -> tuple[dict, dict]:
     """git-pull one tap (or all). Returns ``({name: summary}, {name: error})``.
+
+    **A pinned tap is skipped** unless ``force``, which also clears the pin —
+    an update that silently moved a pinned clone is what made `tap --at` a
+    suggestion rather than a guarantee.
 
     **A named tap still raises.** ``boost update sometap`` is a request about
     that one tap, so its failure is the answer to the question asked.
@@ -395,6 +467,14 @@ def update(name: str | None = None) -> tuple[dict, dict]:
     results: dict = {}
     failures: dict = {}
     for tap in targets:
+        if tap.pin and not force:
+            # A pinned tap is held at one commit on purpose: prebuilt vectors
+            # are keyed to it, and moving the clone would make them stale while
+            # still present — the failure that looks like nothing at all. Not
+            # an error, because "update everything" over 400 taps should not
+            # fail because three are pinned.
+            results[tap.name] = "pinned at %s (skipped)" % tap.pin[:7]
+            continue
         try:
             if tap.url.startswith(WHEEL_SCHEME):
                 # boost's own tap arrives with the wheel, so there is no remote
@@ -414,6 +494,11 @@ def update(name: str | None = None) -> tuple[dict, dict]:
                 results[tap.name] = "cloned"
             else:
                 results[tap.name] = gitutil.pull(tap.path)
+                if tap.pin:
+                    # `--force` is a decision to stop holding this tap still,
+                    # so the pin goes with the move rather than silently
+                    # re-applying on the next run.
+                    unpin(tap.name)
         except BoostError as err:
             if name:
                 raise
@@ -421,4 +506,9 @@ def update(name: str | None = None) -> tuple[dict, dict]:
             # says; git's own first line already carries the URL or path. See
             # gitutil._git_error for why that line is now the one we show.
             failures[tap.name] = err.message
+    if results:
+        # Stamped on any successful sweep, including one where every tap was
+        # already current: "refreshed" is about having asked, not about having
+        # found something.
+        mark_refreshed()
     return results, failures
