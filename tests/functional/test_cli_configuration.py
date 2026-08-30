@@ -971,8 +971,8 @@ class TestMcp:
         assert isinstance(server_info["version"], str) and server_info["version"]
         tools = by_id[2]["result"]["tools"]
         assert [t["name"] for t in tools] == [
-            "boost_search", "boost_list", "boost_info", "boost_install",
-            "boost_doctor", "boost_discover_github"]
+            "boost_search", "boost_list", "boost_info", "boost_read",
+            "boost_install", "boost_doctor", "boost_discover_github"]
         assert all(t["inputSchema"]["type"] == "object" for t in tools)
 
         def text(id_):
