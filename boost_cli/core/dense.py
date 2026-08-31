@@ -15,6 +15,7 @@ are the expensive step, so an unchanged tap is never re-embedded.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -83,6 +84,27 @@ def _connect() -> sqlite3.Connection | None:
 # 1.000 against a full float32 scan, for 0.35 s of rescore. 4096 costs 0.57 s
 # and returns the same 60 rows, so the extra candidates are pure overhead.
 RESCORE_POOL = 2048
+
+#: How many result entries may share one byte-identical embedding.
+#:
+#: Registries paste boilerplate. On a real 657,587-chunk store the largest
+#: cluster of byte-identical vectors is **1,464 copies spanning 1,464 distinct
+#: skills across 2 taps** — one Composio/Rube tool-calling paragraph, vendored
+#: into every skill in two registries. Identical vectors score an identical
+#: distance, so `retrieve`'s tie-break (the displayed name) decided the page:
+#: a query landing near that paragraph returned the alphabetically-first 60 of
+#: the 1,464, measured **60 of 60 slots**, and every one of them matched on
+#: text its skill did not write.
+#:
+#: `rag.dedupe_by_content` cannot reach this. It keys on the *entry* body
+#: digest, and these are 1,464 genuinely different entries — correctly kept
+#: apart. The repetition is one chunk *inside* each of them, which is a
+#: different axis and the one `near-duplicate-items-eat-the-result-slots`
+#: leaves open.
+#:
+#: Not 1, because two skills can legitimately share a paragraph that really is
+#: the best answer; a handful shows that without letting it own the page.
+MAX_PER_VECTOR = 3
 
 
 def _quantizable(dim: int) -> bool:
@@ -1079,8 +1101,11 @@ def quantize() -> dict | None:
 
 
 def _knn(con: sqlite3.Connection, qblob: bytes,
-         pool: int) -> list[tuple[int, float]]:
-    """``(chunk_id, cosine_distance)`` for the ``pool`` nearest chunks.
+         pool: int) -> list[tuple[int, float, bytes]]:
+    """``(chunk_id, cosine_distance, vector_key)`` for the nearest chunks.
+
+    ``vector_key`` identifies the *embedding*, not the row: byte-identical
+    vectors share one key, which is what :data:`MAX_PER_VECTOR` caps on.
 
     Two-stage on a quantized store, one stage on a legacy one, and the answer
     is the same either way — which is the whole point. `vec0` has no ANN index,
@@ -1110,14 +1135,43 @@ def _knn(con: sqlite3.Connection, qblob: bytes,
         # Exact cosine over the candidates only. `vec_raw` is an ordinary
         # rowid-keyed table precisely so this `IN` is an index lookup; the same
         # clause against a vec0 table plans as a full scan (see _ensure_schema).
-        return con.execute(
-            "SELECT id, vec_distance_cosine(embedding, ?) AS d FROM vec_raw "  # noqa: S608  interpolates only `?` placeholders
-            "WHERE id IN (%s) ORDER BY d LIMIT ?"
-            % ",".join("?" * len(cand)), (qblob, *cand, pool)).fetchall()
-    return con.execute(
+        #
+        # The embedding comes back too, and it is not waste: hashing it is what
+        # lets `retrieve` tell "60 entries that each matched something" from
+        # "60 copies of one paragraph". The bytes were already read to compute
+        # the distance, so the only new cost is one sha256 per candidate.
+        # No LIMIT, and that is the point: sqlite computes a distance for all
+        # `cand` rows either way — a LIMIT only truncates what it hands back.
+        # Truncating here is what let one cluster own the pool. The largest on
+        # a real store is 1,464 copies of one pasted paragraph, so a 480-row
+        # cut was 480 copies of it and the page had nothing else to rank.
+        rows = con.execute(
+            "SELECT id, vec_distance_cosine(embedding, ?) AS d, embedding "  # noqa: S608  interpolates only `?` placeholders
+            "FROM vec_raw WHERE id IN (%s) ORDER BY d"
+            % ",".join("?" * len(cand)), (qblob, *cand)).fetchall()
+        # Thin to `pool` while letting no single embedding take more than
+        # MAX_PER_VECTOR of it. Rows arrive sorted, so the copies that survive
+        # are the nearest ones and the slots freed go to the next *distinct*
+        # vector rather than to the next copy of this one.
+        out: list[tuple[int, float, bytes]] = []
+        per: dict[bytes, int] = {}
+        for rid, dist, blob in rows:
+            if len(out) >= pool:
+                break
+            vkey = hashlib.sha256(blob).digest()[:16]
+            if per.get(vkey, 0) >= MAX_PER_VECTOR:
+                continue
+            per[vkey] = per.get(vkey, 0) + 1
+            out.append((rid, dist, vkey))
+        return out
+    # Legacy float32 layout: one row per chunk with no separate blob table, so
+    # there is nothing cheap to hash. Each row becomes its own group, which
+    # makes the cap a no-op — correct rather than clever, because this path
+    # exists for widths `bit[N]` cannot take and no real store is on it.
+    return [(rid, dist, b"%d" % rid) for rid, dist in con.execute(
         "SELECT rowid, distance FROM vec_chunks "
         "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-        (qblob, pool)).fetchall()
+        (qblob, pool)).fetchall()]
 
 
 def retrieve(query: str, k: int = 60, kind: str | None = None,
@@ -1147,14 +1201,18 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
             return []
         by_id = {r[0]: (r[1], r[2], r[3], r[4]) for r in con.execute(
             "SELECT id, tap, path, kind, snip FROM chunks WHERE id IN (%s)"  # noqa: S608  interpolates only `?` placeholders; ids are bound params
-            % ",".join("?" * len(knn)), [rid for rid, _d in knn])}
+            % ",".join("?" * len(knn)), [rid for rid, _d, _v in knn])}
     finally:
         con.close()
 
     entries = catalog.all_entries() if entries is None else entries
     live = {entry_key(e): e for e in entries}
     best: dict[tuple[str, str], tuple[float, str]] = {}
-    for rid, dist in knn:
+    # Which embedding won each entry its score. An entry that also matched on
+    # a chunk of its own keeps *that* pairing, because `best` only records the
+    # winner — so capping below never costs an entry a hit it earned itself.
+    won_by: dict[tuple[str, str], bytes] = {}
+    for rid, dist, vkey in knn:
         meta = by_id.get(rid)
         if meta is None:
             continue
@@ -1168,11 +1226,26 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
         prev = best.get(key)
         if prev is None or score > prev[0]:
             best[key] = (score, snip)
+            won_by[key] = vkey
     # Tie-break on the displayed name (see rag.retrieve for why).
     ranked = sorted(best.items(),
                     key=lambda kv: (-kv[1][0], live[kv[0]]["name"], kv[0]))
-    hits: list[Hit] = [
-        {"entry": live[key], "score": score,
-         "snippet": snip}  # type: ignore[typeddict-item]
-        for key, (score, snip) in ranked[:k]]
+    hits: list[Hit] = []
+    seen_vec: dict[bytes, int] = {}
+    for key, (score, snip) in ranked:
+        if len(hits) >= k:
+            break
+        # The cap, and the reason the sort above is not enough on its own:
+        # byte-identical vectors produce a byte-identical distance, so every
+        # entry sharing one arrives with the *same* score and the tie-break
+        # decides the page alphabetically. Measured on a real store, one
+        # 1,464-copy cluster took 60 of 60 slots that way. Skipping past the
+        # cap rather than truncating keeps the page full: the freed slots go
+        # to the next entries that matched on something else.
+        vkey = won_by[key]
+        if seen_vec.get(vkey, 0) >= MAX_PER_VECTOR:
+            continue
+        seen_vec[vkey] = seen_vec.get(vkey, 0) + 1
+        hits.append({"entry": live[key], "score": score,
+                     "snippet": snip})  # type: ignore[typeddict-item]
     return hits
