@@ -1365,13 +1365,30 @@ def deduplicate() -> dict | None:
         tbl, key = ("vec_raw", "id") if quantized(con) else ("vec_chunks", "rowid")
         if not _has_table(con, tbl):
             return None
+        # Everything already hashed is already distinct — `vectors.hash` is
+        # UNIQUE, so two hashed rows cannot hold the same bytes. Duplicates
+        # therefore live only among the rows `_adopt_vectors` left unhashed,
+        # and this probe is what keeps the pass from re-reading 1.3 GB of
+        # blobs on every `boost reindex --dense` to discover it has nothing to
+        # do. It is a b-tree descent, not a heuristic.
+        pending = {int(r[0]) for r in con.execute(
+            "SELECT vid FROM vectors WHERE hash IS NULL")}
+        if not pending:
+            return None
         _gc_orphan_vectors(con)
         before = int(con.execute("SELECT COUNT(*) FROM %s" % tbl).fetchone()[0])  # noqa: S608  name from a literal pair
-        canonical: dict[bytes, int] = {}
+        # Seeded with what is already known, so an unhashed row can collapse
+        # onto a vector a later build had already stored under its hash.
+        canonical: dict[bytes, int] = {
+            bytes(h): int(vid) for vid, h in con.execute(
+                "SELECT vid, hash FROM vectors WHERE hash IS NOT NULL")}
         dupes: list[tuple[int, int]] = []
         for vid, blob in con.execute(
                 "SELECT %s, embedding FROM %s ORDER BY %s"  # noqa: S608  names from a literal pair
                 % (key, tbl, key)):
+            if vid not in pending:
+                continue
+            pending.discard(vid)
             h = hashlib.sha256(bytes(blob)).digest()
             keep = canonical.get(h)
             if keep is None:
@@ -1383,6 +1400,11 @@ def deduplicate() -> dict | None:
                             (h, vid))
             else:
                 dupes.append((vid, keep))
+        # An identity row the scan never reached names no vector at all. Left
+        # alone it would keep the probe above answering "there is work to do"
+        # forever, so a full pass would run on every reindex; the `dangling`
+        # check below still refuses if a chunk was relying on it.
+        _drop_vectors(con, sorted(pending))
         for vid, keep in dupes:
             con.execute("UPDATE chunks SET vid = ? WHERE vid = ?", (keep, vid))
         _drop_vectors(con, [vid for vid, _keep in dupes])
@@ -1403,15 +1425,18 @@ def deduplicate() -> dict | None:
         con.close()
     # Outside the transaction: VACUUM cannot run inside one, and without it the
     # pages the duplicates held stay allocated to the file — which is the whole
-    # point of this pass.
-    con2 = _connect()
-    if con2 is not None:
-        try:
-            con2.execute("VACUUM")
-        except sqlite3.DatabaseError:
-            pass            # a bigger file is a cosmetic loss, not a failure
-        finally:
-            con2.close()
+    # point of this pass. Only when something was actually freed: a VACUUM
+    # rewrites the entire database, which on the 1.6 GB store this exists for
+    # is minutes of I/O to reclaim nothing.
+    if before > after:
+        con2 = _connect()
+        if con2 is not None:
+            try:
+                con2.execute("VACUUM")
+            except sqlite3.DatabaseError:
+                pass        # a bigger file is a cosmetic loss, not a failure
+            finally:
+                con2.close()
     return {"vectors": after, "freed": before - after,
             "bytes": db_path().stat().st_size}
 

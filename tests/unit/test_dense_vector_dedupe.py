@@ -369,6 +369,16 @@ class TestDeletionCountsReferentsAfterTheRowsAreGone:
         finally:
             con.close()
 
+    def test_the_orphan_sweep_is_a_noop_with_no_vector_relation(self, store):
+        """Nothing built is the ordinary empty case, not the corrupt one."""
+        con = _open()
+        try:
+            _plain_schema(con, 8)
+            con.execute("DROP TABLE vec_chunks")
+            assert dense._gc_orphan_vectors(con) == 0
+        finally:
+            con.close()
+
     def test_the_orphan_sweep_keeps_everything_referenced(self, store):
         dense.build(entries=[_e("a", "alpha"), _e("b", "beta")], force=True)
         con = _open()
@@ -517,6 +527,19 @@ class TestVidColNamesTheRightColumn:
             assert dense._has_column(con, "chunks", "vid") is False
         finally:
             con.close()
+
+    def test_an_unusable_connection_reads_as_a_missing_column(self):
+        """`_vid_col` runs on the search path, where raising is the worst answer.
+
+        A store that cannot answer a PRAGMA is a store dense cannot serve;
+        reporting "no such column" routes the caller down the pre-migration
+        query, which is wrong but harmless, where an exception out of `_knn`
+        takes the whole `boost search` down with it.
+        """
+        con = sqlite3.connect(":memory:")
+        con.close()
+        assert dense._has_column(con, "chunks", "vid") is False
+        assert dense._vid_col(con) == "id"
 
     def test_it_reads_id_before_the_relation_and_vid_after(self):
         con = sqlite3.connect(":memory:")
@@ -719,13 +742,75 @@ class TestDeduplicateCollapsesWhatIsAlreadyOnDisk:
         finally:
             con.close()
 
-    def test_running_it_again_frees_nothing(self, store):
+    def test_running_it_again_reads_nothing(self, store):
+        """`reindex --dense` calls this every time, so "done" has to be cheap.
+
+        `vectors.hash` is UNIQUE, so two hashed rows cannot hold the same
+        bytes: once nothing is unhashed there is provably nothing to collapse,
+        and the probe that says so is a b-tree descent. Re-hashing instead
+        would re-read 1.3 GB of blobs on every reindex to reach the same
+        answer.
+        """
         _legacy_store(dense.db_path(), [("a", "same"), ("b", "same")])
-        dense.deduplicate()
-        again = dense.deduplicate()
-        assert again is not None
-        assert again["freed"] == 0
-        assert again["vectors"] == 1
+        assert dense.deduplicate() is not None
+        assert dense.deduplicate() is None
+        con = _open()
+        try:
+            assert _counts(con) == {"chunks": 2, "vectors": 1, "blobs": 1}
+        finally:
+            con.close()
+
+    def test_a_store_this_release_built_needs_no_pass_at_all(self, store):
+        dense.build(entries=[_e("a", "same"), _e("b", "same")], force=True)
+        assert dense.deduplicate() is None
+
+    def test_an_identity_row_naming_no_vector_is_swept(self, store):
+        """Otherwise the probe answers "work to do" on every reindex, forever."""
+        _legacy_store(dense.db_path(), [("a", "alpha")])
+        con = _open()
+        try:
+            _plain_schema(con, 8)
+            con.execute("INSERT INTO vectors (vid, hash) VALUES (99, NULL)")
+            con.commit()
+        finally:
+            con.close()
+        assert dense.deduplicate() is not None
+        assert dense.deduplicate() is None
+        con = _open()
+        try:
+            assert con.execute("SELECT 1 FROM vectors WHERE vid = 99"
+                               ).fetchone() is None
+        finally:
+            con.close()
+
+    def test_an_unhashed_row_collapses_onto_a_hashed_one(self, store):
+        """The seeded map, which a scan of only the unhashed rows still needs.
+
+        A store adopted and then built has both kinds, and a NULL-hash row can
+        be a duplicate of one the newer build already stored under its hash.
+        """
+        _legacy_store(dense.db_path(), [("a", "same")])
+        con = _open()
+        try:
+            _plain_schema(con, 8)
+            blob = _FakeVec.serialize_float32(_toy_embed(["same"])[0])
+            vid = dense._vector_id(con, blob)     # hashed, stored beside it
+            con.execute(
+                "INSERT INTO chunks (name, tap, path, kind, cix, vid) VALUES "
+                "('b', 'acme/skills', 'skills/b/SKILL.md', 'skill', 0, ?)",
+                (vid,))
+            con.commit()
+            assert _counts(con) == {"chunks": 2, "vectors": 2, "blobs": 2}
+        finally:
+            con.close()
+        res = dense.deduplicate()
+        assert res is not None and res["freed"] == 1
+        con = _open()
+        try:
+            assert _counts(con) == {"chunks": 2, "vectors": 1, "blobs": 1}
+            assert _unresolved(con) == 0
+        finally:
+            con.close()
 
     def test_it_sweeps_an_orphan_before_counting(self, store):
         """An untidy store must migrate, not be refused by its own arithmetic."""
@@ -989,8 +1074,7 @@ class TestQuantizedAndDeduplicated:
 
     def test_a_fresh_build_has_nothing_left_to_collapse(self, real):
         dense.build(entries=[_e("a", "pasted"), _e("b", "pasted")], force=True)
-        res = dense.deduplicate()
-        assert res is not None and res["freed"] == 0
+        assert dense.deduplicate() is None
 
     def test_the_migration_collapses_both_vector_relations(self, real):
         """The fourth corner: quantized *and* not yet deduplicated.
