@@ -8,7 +8,7 @@ category: Search · Ranking
 complexity: M
 impact: High
 wow: 4
-note: 10 of 10 slots on a real 466-tap install, all past byte-identical dedup
+note: collapse implemented and wired in (PR); the real-corpus safety bound is still unmeasured
 order: 131
 title: Near-identical copies survive content-hash dedup and take the whole result page
 ---
@@ -68,3 +68,32 @@ install from.
 <b>Not to be confused with <code>#629</code></b>, which deduplicated vector <em>storage</em> (one
 row per distinct embedding, 39.7% repeats reclaimed). That is a disk-size fix beneath the index and
 changes no ranking; this is about which rows reach the user's screen.
+
+<b>2026-08-31, in flight.</b> <code>dense.collapse_near_duplicates</code> implements the clustering:
+it compares each surviving hit's chunk-0 embedding &mdash; the vector already on disk for
+<code>name + description + opening of body</code>, per the &ldquo;vectors are already on disk&rdquo;
+point above &mdash; against a conservative <code>NEAR_DUP_THRESHOLD = 0.96</code>, and applies the
+same <code>source_rank</code> preference the byte-identical pass uses to choose which copy survives.
+It is wired at the seams the card names: inside <code>rag.retrieve</code> (both the fast index path
+and the explicit-entries path) and inside <code>rag.retrieve_any</code>'s fused and dense-only
+branches, always over an over-fetched pool before <code>k</code> is taken, never on the raw
+<code>k</code>-sized page. It degrades to a no-op whenever the dense store is not ready, is not
+quantized, or carries no vector for an entry &mdash; two unknowns are never treated as a match, same
+rule the byte-identical pass follows for a missing content digest. Unit tests cover the clustering
+logic directly against a hand-built store (no <code>sqlite-vec</code> extension required, since
+<code>vec_raw</code> is an ordinary table) plus the wiring at every seam; an end-to-end test against a
+real <code>dense.build()</code> store is included but ran only in CI, not in this sandbox.
+
+<b>What is still open, and why this stays <code>inflight</code> rather than <code>shipped</code>.</b>
+The card's own hard part &mdash; &ldquo;establish the equivalent bound first&rdquo;, i.e. counting how
+many near-duplicate clusters span more than one <em>name</em> at the chosen threshold, over a real
+corpus &mdash; has not been run. <code>scripts/measure_near_duplicate_bound.py</code> now exists to
+compute exactly that count against any already-built dense store, but the session that wrote it had
+no dense store to point it at: taps and PyPI package installs were both unavailable from that sandbox
+(no <code>[rag]</code> extra, so no local build to measure against). Running it against the pinned
+eval corpus, and ideally a real multi-hundred-tap install, is the remaining step before
+<code>NEAR_DUP_THRESHOLD</code> can be trusted rather than merely asserted conservative. The PR also
+could not run <code>make check</code> locally for the same reason (no PyPI access in that sandbox);
+it relies on CI, which does install the <code>[rag]</code> extra for the dense-covering tests
+(<code>ci.yml</code>'s own comment: &ldquo;sqlite-vec so dense.py's mutants are covered by the dense
+tests&rdquo;), to be the real verification.

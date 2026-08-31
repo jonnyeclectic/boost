@@ -836,6 +836,14 @@ def _retrieve_from_index(docs: list[dict], scores: dict[int, float],
     # does: a curated duplicate at rank 3,000 legally replaces the displayed
     # source of survivor #1, so the promotion scan cannot be truncated.
     survivors = dedupe_by_content(hits, len(hits))
+    # Bounded to the same over-fetch window `retrieve_any` uses, not the
+    # whole survivor list: a near-dup lookup is a SQL round trip per batch of
+    # entries, unlike the dict-keyed byte-identical pass just above, which
+    # stays cheap over an unbounded list. The loop below never looks past the
+    # first `k` anyway, so a window past that only exists to give collapsed
+    # duplicates room to be backfilled by the next-best survivor.
+    from . import dense
+    survivors = dense.collapse_near_duplicates(survivors[:max(k, RRF_K)])
     loaded: dict[str, dict[tuple[str, str], dict]] = {}
     out: list[Hit] = []
     for hit in survivors:
@@ -906,7 +914,15 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
         {"entry": live[key], "score": score, "content": digest,
          "snippet": snip}  # type: ignore[typeddict-item]
         for key, (score, snip, digest) in ranked]
-    return _windowed(dedupe_by_content(hits, k), terms)
+    # Same over-fetch-then-collapse shape as the byte-identical pass just
+    # above: a near-duplicate has to be removed from the pool before `k` is
+    # taken, or it still consumes the slot it was collapsed out of. Bounded to
+    # `max(k, RRF_K)`, the same window `retrieve_any` over-fetches to, rather
+    # than the full (possibly corpus-wide) ranked list the byte-identical
+    # pass can afford to scan on its own.
+    from . import dense
+    deduped = dedupe_by_content(hits, max(k, RRF_K))
+    return _windowed(dense.collapse_near_duplicates(deduped)[:k], terms)
 
 
 def rerank_cache_path() -> Path:
@@ -1124,13 +1140,18 @@ def retrieve_any(query: str, k: int = 60, kind: str | None = None,
     # Dedupe at this seam as well as inside `retrieve`, because dense hits carry
     # no hash of their own and fusion can reintroduce a duplicate that BM25
     # already dropped — the copies are distinct `(tap, path)` keys, so RRF has
-    # no reason to treat them as one.
+    # no reason to treat them as one. Near-duplicate collapse runs here too,
+    # over the FULL pool before `k` is taken, for the same reason: fusion can
+    # reintroduce a near-identical copy either engine's own dedupe pass
+    # already collapsed on its side.
     if dense_hits and bm25_hits:
         fused = rrf_fuse([bm25_hits, dense_hits], limit=max(k, RRF_K))
-        return (dedupe_by_content(_with_content(fused), k),
+        deduped = dedupe_by_content(_with_content(fused), len(fused))
+        return (dense.collapse_near_duplicates(deduped)[:k],
                 "hybrid RRF (BM25 + dense)")
     if dense_hits:
-        return dedupe_by_content(_with_content(dense_hits), k), "dense vectors"
+        deduped = dedupe_by_content(_with_content(dense_hits), len(dense_hits))
+        return dense.collapse_near_duplicates(deduped)[:k], "dense vectors"
     if bm25_hits is not None:
         return bm25_hits[:k], "BM25 full-content"     # already deduped
     return None, ""

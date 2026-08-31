@@ -411,6 +411,24 @@ class TestBuildAndRetrieve:
         rag.build(entries=entries, force=True)
         assert len(rag.retrieve("testing", k=1, entries=entries)) == 1
 
+    def test_near_duplicate_collapse_sees_the_pool_before_k_is_taken(
+            self, corpus, monkeypatch):
+        # Same shape as the byte-identical pass just above it in `retrieve`:
+        # collapsing a near-duplicate after `k` is already taken would leave
+        # the slot it was removed from empty instead of backfilled.
+        _root, entries = corpus
+        rag.build(entries=entries, force=True)
+        from boost_cli.core import dense
+        seen = []
+
+        def spy(hits, threshold=dense.NEAR_DUP_THRESHOLD):
+            seen.append(len(hits))
+            return hits
+
+        monkeypatch.setattr(dense, "collapse_near_duplicates", spy)
+        rag.retrieve("testing", k=1, entries=entries)
+        assert seen == [2], seen  # both entries, not just the one k keeps
+
     def test_snippet_centers_on_match_past_the_head(
             self, tmp_path, monkeypatch, sandbox):
         # the matched terms sit well past the chunk's first 200 chars: the old

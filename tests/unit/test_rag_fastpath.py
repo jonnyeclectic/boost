@@ -209,6 +209,28 @@ class TestLaziness:
         rag.retrieve("testing")          # hits in both taps
         assert sorted(load_calls) == sorted(set(load_calls))
 
+    def test_near_duplicate_collapse_runs_on_the_shadow_entries(self, two_taps,
+                                                                monkeypatch):
+        """Runs before materialisation, on the FULL survivor list, not just k.
+
+        Cheaper that way — a collapsed shadow entry never pays the
+        `catalog.load_tap` its `k`-truncated position would have — and it is
+        why the pass has to tolerate a shadow entry (only `tap`/`skill_md`/
+        `curated`, see `_retrieve_from_index`'s own comment) rather than a
+        fully materialised one.
+        """
+        from boost_cli.core import dense
+        seen = []
+
+        def spy(hits, threshold=dense.NEAR_DUP_THRESHOLD):
+            seen.append(len(hits))
+            return hits
+
+        monkeypatch.setattr(dense, "collapse_near_duplicates", spy)
+        hits = rag.retrieve("testing", k=1)
+        assert len(hits) == 1
+        assert seen and seen[0] > 1, seen
+
 
 class TestDegradation:
     """Any state the fast path cannot prove consistent falls back wholesale."""

@@ -14,15 +14,18 @@ are the expensive step, so an unchanged tap is never re-embedded.
 """
 from __future__ import annotations
 
+import array
 import base64
 import hashlib
 import json
+import math
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 from ..errors import BoostError
 from . import catalog, embed, paths
-from .rag import Hit, chunk, entry_key, read_body
+from .rag import Hit, chunk, entry_key, read_body, source_rank
 
 # 3 -- `chunks.digest` carries each row's entry content digest, which is what
 #      lets reuse be decided per ENTRY rather than per tap. Bumping this is the
@@ -43,6 +46,11 @@ _POOL = 8              # chunk over-fetch factor for KNN before per-entry reduce
 #: (999 bound parameters) rather than the current one, because the only caller
 #: that gets near it is a migration, where raising is the worst outcome.
 _DELETE_BATCH = 500
+
+#: Keys per `(tap = ? AND path = ?) OR ...` batch in `_opening_vectors`. Half
+#: `_DELETE_BATCH` because each key costs two bound params, not one — the
+#: same 999-param ceiling, reached at half the row count.
+_PAIR_BATCH = 400
 
 
 def _load():
@@ -1636,3 +1644,134 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
         hits.append({"entry": live[key], "score": score,
                      "snippet": snip})  # type: ignore[typeddict-item]
     return hits
+
+
+# --------------------------------------------------------- near-duplicates
+
+#: Cosine similarity at/above which two DISTINCT chunk embeddings are treated
+#: as the same skill in another phrasing or language, not two skills that
+#: happen to share boilerplate. `rag.dedupe_by_content`'s byte-identical bound
+#: was adoptable because one count settled it (zero clusters spanning more
+#: than one name); no such free proof exists here, so this is deliberately
+#: conservative rather than tuned for recall. See
+#: `scripts/measure_near_duplicate_bound.py`, which computes that same count
+#: at a given threshold over a real store, for validating (or tightening)
+#: this value against a production install.
+NEAR_DUP_THRESHOLD = 0.96
+
+
+def _cosine(a: array.array, b: array.array) -> float:
+    """Cosine similarity between two equal-length float32 vectors."""
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+def _opening_vectors(con: sqlite3.Connection, keys: list[tuple[str, str]],
+                     ) -> dict[tuple[str, str], array.array]:
+    """Each entry's chunk-0 embedding, for the entries in ``keys`` that have one.
+
+    Chunk 0 is where `rag.chunk` lands everything `rag.read_body` prepends
+    (name + description) before splitting the body on paragraphs, so it is
+    the cheapest chunk that still carries the signal a translation or a
+    rephrasing changes — one lookup per *entry* rather than per chunk, and no
+    re-embedding: the vector is already on disk from the ordinary index build,
+    which is what makes this affordable at query time.
+
+    Only answers on a quantized store, where `vec_raw` holds the exact float32
+    bytes a cosine comparison needs; a legacy float32-only store returns {}
+    and the caller degrades to "unchanged", same as every other unknown here.
+
+    Batched in both directions, the same rule `_DELETE_BATCH` follows: each
+    key costs two bound params in the ``tap = ? AND path = ?`` clause, so
+    ``_PAIR_BATCH`` keeps a batch under SQLite's oldest still-shipping
+    999-param ceiling even though ``collapse_near_duplicates`` bounds its own
+    callers well below it — a lookup helper should not silently break the
+    moment a future caller passes it a larger pool.
+    """
+    if not keys or not quantized(con):
+        return {}
+    col = _vid_col(con)
+    vid_of: dict[tuple[str, str], int] = {}
+    for start in range(0, len(keys), _PAIR_BATCH):
+        batch = keys[start:start + _PAIR_BATCH]
+        clauses = " OR ".join(["(tap = ? AND path = ?)"] * len(batch))
+        params = [v for pair in batch for v in pair]
+        rows = con.execute(
+            "SELECT tap, path, %s FROM chunks WHERE cix = 0 AND (%s)"  # noqa: S608  column name from _vid_col; values are bound params
+            % (col, clauses), params).fetchall()
+        vid_of.update({(tap, path): vid for tap, path, vid in rows})
+    vids = sorted({v for v in vid_of.values() if v is not None})
+    if not vids:
+        return {}
+    blobs: dict[int, bytes] = {}
+    for start in range(0, len(vids), _DELETE_BATCH):
+        vid_batch = vids[start:start + _DELETE_BATCH]
+        holes = ",".join("?" * len(vid_batch))
+        blobs.update(con.execute(
+            "SELECT id, embedding FROM vec_raw WHERE id IN (%s)"  # noqa: S608  interpolates only `?` placeholders; ids are bound
+            % holes, vid_batch))
+    return {key: array.array("f", blobs[vid])
+            for key, vid in vid_of.items() if vid in blobs}
+
+
+def collapse_near_duplicates(hits: list[Hit],
+                             threshold: float = NEAR_DUP_THRESHOLD) -> list[Hit]:
+    """Collapse hits that are the same skill in a different phrasing or language.
+
+    Runs *after* `rag.dedupe_by_content`, at the seam where every hit here
+    already has a distinct content digest — so this only catches what that
+    pass structurally cannot: a translation or a rephrasing whose body hashes
+    differently but is, semantically, one skill. Measured on a real 466-tap
+    install, a single widely-mirrored skill filled all ten result slots for
+    one query with Japanese, Chinese and five English phrasings of itself,
+    every one past byte-identical dedup correctly.
+
+    Greedy, not full clustering: hits arrive best-first, and each is compared
+    against the vectors already kept rather than every other hit, so a chain
+    of near-identical copies collapses onto its first (best-ranked) member.
+    Within a collapsed pair the surviving *entry* — never the rank or score —
+    can still change, using the exact same `source_rank` preference
+    `dedupe_by_content` applies to byte-identical copies: a curated tap beats
+    a better-ranked uncurated one, because choosing among near-identical
+    copies is the same question as choosing among identical ones.
+
+    Degrades to a no-op — hits returned unchanged, in order — whenever the
+    dense store is not ready, is not quantized, or carries no stored vector
+    for a given entry. A hit with no vector is never compared against
+    anything: two unknowns must not collapse into each other any more than
+    two unknown content hashes may, or a query landing where the dense index
+    has gaps would silently start hiding real, distinct results.
+    """
+    if not hits or not ready():
+        return hits
+    con = _connect()
+    if con is None:
+        return hits
+    try:
+        keys = [entry_key(h["entry"]) for h in hits]
+        vecs = _opening_vectors(con, keys)
+    finally:
+        con.close()
+    if not vecs:
+        return hits
+    out: list[Hit] = []
+    kept: list[tuple[int, array.array]] = []
+    for hit, key in zip(hits, keys, strict=True):
+        vec = vecs.get(key)
+        if vec is None:
+            out.append(hit)
+            continue
+        match = next((idx for idx, kv in kept if _cosine(vec, kv) >= threshold),
+                     None)
+        if match is None:
+            kept.append((len(out), vec))
+            out.append(hit)
+            continue
+        current = out[match]
+        if source_rank(hit["entry"]) < source_rank(current["entry"]):
+            out[match] = cast(Hit, {**current, "entry": hit["entry"]})
+    return out

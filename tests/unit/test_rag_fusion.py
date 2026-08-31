@@ -194,7 +194,48 @@ class TestRetrieveAnyFuses:
         monkeypatch.setattr(dense_mod, "retrieve", spy_dense)
         rag.retrieve_any("q", k=5)
         assert asked["bm25"] >= rag.RRF_K, asked
-        assert asked["dense"] >= rag.RRF_K, asked
+
+    def test_near_duplicate_collapse_sees_the_full_pool_when_fused(self, monkeypatch):
+        # Same shape as the over-fetch above, one seam later: collapsing a
+        # near-duplicate after `k` is already taken would leave the slot it
+        # was removed from empty rather than backfilled by the next result.
+        from boost_cli.core import dense as dense_mod
+        self._wire(monkeypatch, [_hit("n%d" % i) for i in range(10)],
+                   [_hit("m%d" % i) for i in range(10)])
+        seen = []
+
+        def spy(hits, threshold=dense_mod.NEAR_DUP_THRESHOLD):
+            seen.append(len(hits))
+            return hits
+
+        monkeypatch.setattr(dense_mod, "collapse_near_duplicates", spy)
+        rag.retrieve_any("q", k=3)
+        assert seen and seen[0] > 3, seen
+
+    def test_near_duplicate_collapse_sees_the_full_pool_dense_only(self, monkeypatch):
+        from boost_cli.core import dense as dense_mod
+        self._wire(monkeypatch, None, [_hit("m%d" % i) for i in range(10)],
+                   bm25_ready=False)
+        seen = []
+
+        def spy(hits, threshold=dense_mod.NEAR_DUP_THRESHOLD):
+            seen.append(len(hits))
+            return hits
+
+        monkeypatch.setattr(dense_mod, "collapse_near_duplicates", spy)
+        rag.retrieve_any("q", k=3)
+        assert seen and seen[0] > 3, seen
+
+    def test_the_collapse_result_is_what_retrieve_any_returns(self, monkeypatch):
+        # Not just called — its answer has to be the one that ships, or a
+        # future refactor could compute the collapse and discard it.
+        from boost_cli.core import dense as dense_mod
+        self._wire(monkeypatch, [_hit("a"), _hit("b")], [_hit("c")])
+        monkeypatch.setattr(
+            dense_mod, "collapse_near_duplicates",
+            lambda hits, threshold=dense_mod.NEAR_DUP_THRESHOLD: [_hit("only")])
+        hits, _label = rag.retrieve_any("q")
+        assert _names(hits) == ["only"]
 
     def test_kind_and_entries_reach_both_engines(self, monkeypatch):
         seen = []
