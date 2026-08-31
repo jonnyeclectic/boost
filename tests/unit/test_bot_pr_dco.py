@@ -27,6 +27,7 @@ satisfy.
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -108,6 +109,59 @@ class TestEveryBotPullRequestPassesTheDcoGate:
         # the gate, and an unsigned bot commit would still pass it.
         assert With.get("sign-commits") is True, (
             "%s does not set `sign-commits: true`" % workflow)
+
+
+class TestTheirPullRequestsCanActuallyRunChecks:
+    """A PR the default token opened cannot start the checks it is gated on.
+
+    GitHub suppresses workflow triggers for anything done with the repository's
+    own `GITHUB_TOKEN`, to stop a workflow re-triggering itself forever. So a
+    pull request these workflows open with it gets **no** `on: pull_request`
+    run: `ci.yml`'s twenty required checks never start, and branch protection
+    refuses the merge with "20 of 20 required status checks are expected".
+
+    That is not theoretical. #617 and #631 both sat unmergeable in exactly that
+    state, and #617's recording never reached main — the workflow had been
+    faithfully opening pull requests nobody could land.
+
+    Passing a token that belongs to an account rather than to the workflow is
+    the fix the action's own docs name as standard. The fallback to
+    `github.token` matters as much as the token: without it a fork, or this
+    repo before the secret exists, would fail the step outright rather than
+    degrade to the old behaviour.
+    """
+
+    @pytest.mark.parametrize("workflow,With", _pr_steps(),
+                             ids=[w for w, _ in _pr_steps()])
+    def test_the_step_passes_an_explicit_token(self, workflow, With):
+        assert "token" in With, (
+            "%s opens a PR with the default GITHUB_TOKEN, so none of ci.yml's "
+            "required checks will run on it and branch protection can never "
+            "be satisfied" % workflow)
+
+    @pytest.mark.parametrize("workflow,With", _pr_steps(),
+                             ids=[w for w, _ in _pr_steps()])
+    def test_that_token_is_not_just_the_default_again(self, workflow, With):
+        # `token: ${{ github.token }}` would satisfy the test above and change
+        # nothing at all.
+        tok = str(With.get("token", ""))
+        assert "secrets." in tok, tok
+
+    @pytest.mark.parametrize("workflow,With", _pr_steps(),
+                             ids=[w for w, _ in _pr_steps()])
+    def test_it_still_works_where_the_secret_does_not_exist(self, workflow,
+                                                            With):
+        # A fork has no secrets. Without a fallback the step fails there, which
+        # trades an unmergeable PR for a red workflow — strictly worse.
+        tok = str(With.get("token", ""))
+        assert "||" in tok and "github.token" in tok, tok
+
+    def test_every_pr_opening_workflow_uses_the_same_secret(self):
+        # One name, so creating the secret fixes all five at once and a typo in
+        # one cannot leave a single workflow silently on the old behaviour.
+        names = {re.search(r"secrets\.([A-Z_0-9]+)", str(w.get("token", ""))).group(1)
+                 for _n, w in _pr_steps() if "secrets." in str(w.get("token", ""))}
+        assert len(names) == 1, names
 
 
 class TestTheDefaultIsRecordedAsTheBug:

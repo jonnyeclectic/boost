@@ -157,6 +157,29 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
+          # The token, and why it is not the default one.
+          #
+          # A pull request opened with the repository's `GITHUB_TOKEN` cannot
+          # trigger other workflows — GitHub suppresses it deliberately, to stop
+          # a workflow re-triggering itself forever. The consequence here is not
+          # a missing convenience: `ci.yml` runs `on: pull_request`, so none of
+          # its twenty required checks ever start, and branch protection then
+          # refuses the merge with "20 of 20 required status checks are
+          # expected". Every PR these five workflows open was unmergeable —
+          # #617 and #631 both sat that way, and #617's recording never landed.
+          #
+          # A token belonging to an account rather than to the workflow does
+          # trigger them; the action's own docs call this the standard fix and
+          # GitHub's docs recommend it. `|| github.token` keeps the workflow
+          # working where the secret does not exist — a fork, or this repo
+          # before the secret is created — in which case the PR is opened as
+          # before and simply needs a human to close-and-reopen it to start the
+          # checks. Degrading to today's behaviour is the point.
+          #
+          # Prefer a dedicated machine account or a GitHub App installation over
+          # a personal PAT: an App's token is scoped per repository and expires,
+          # and the PAT owner cannot review the pull requests it opens.
+          token: ${{ secrets.BOT_PR_TOKEN || github.token }}
           # DCO + signing. Two separate problems, one place to fix both.
           #
           # `author` defaults to `${{ github.actor }}` — the human whose push
