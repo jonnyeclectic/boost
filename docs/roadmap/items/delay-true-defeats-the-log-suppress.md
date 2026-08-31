@@ -2,12 +2,14 @@
 id: delay-true-defeats-the-log-suppress
 board: code
 section: planned
-status: planned
+status: shipped
+owner: loop/log-suppress-delay-true
 category: Health · Robustness
 complexity: S
 impact: Medium
 wow: 2
-note: the suppress guards construction; delay=True moves the failure to emit
+note: handleError overridden on the file handler, scoped to emit; CI's make check (incl. mutation) green on #637
+pr: 637
 order: 130
 title: A best-effort log handler prints a traceback over every command's output
 ---
