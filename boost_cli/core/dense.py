@@ -302,7 +302,17 @@ def tap_commits() -> dict[str, str]:
     Read without sqlite-vec (see :func:`_recorded_meta`) so a machine that lost
     the extra still gets a truthful answer rather than an empty one.
     """
-    commits = _recorded_meta().get("commits")
+    meta = _recorded_meta()
+    if meta.get("version") != INDEX_VERSION:
+        # A store from an older boost is about to be discarded — `build` wipes
+        # it and so does `import_shard` — so it holds no vectors anyone can
+        # reuse, and saying otherwise is worse than saying nothing. The caller
+        # asking this question is deciding which taps to SKIP: answering with a
+        # stale store's commits let `ingest` skip 417 taps as "already current"
+        # and then wipe their vectors on the first import, leaving a store that
+        # was silently missing them while the output said they were fine.
+        return {}
+    commits = meta.get("commits")
     if not isinstance(commits, dict):
         return {}
     return {str(k): str(v) for k, v in commits.items() if v}

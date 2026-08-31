@@ -475,3 +475,39 @@ class TestStaleVersionStore:
 
 class _Stop(Exception):
     """Ends an import once the assertion's decision point has been reached."""
+
+
+class TestReusableCommits:
+    """What `dense.tap_commits` reports decides which taps `ingest` SKIPS.
+
+    That makes a stale-version store's recorded commits actively dangerous:
+    the store is about to be discarded — `build` wipes it and so does
+    `import_shard` — so its rows are not vectors anyone can reuse. Reported as
+    reusable, they let `ingest` skip 417 taps as "already current" and then
+    wipe them on the first import, leaving a store silently missing them while
+    the run reported success. Observed on a real 466-tap machine.
+    """
+
+    def _store(self, version):
+        from boost_cli.core import dense
+        dense.db_path().parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(dense.db_path()))
+        con.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
+        con.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY, tap TEXT)")
+        con.execute("INSERT INTO meta (k, v) VALUES ('version', ?)",
+                    (str(version),))
+        con.execute("INSERT INTO meta (k, v) VALUES ('commits', ?)",
+                    ('{"a__b": "%s"}' % ("1" * 40),))
+        con.commit()
+        con.close()
+
+    def test_a_current_store_reports_what_it_holds(self, sandbox):
+        from boost_cli.core import dense
+        self._store(dense.INDEX_VERSION)
+        assert dense.tap_commits() == {"a__b": "1" * 40}
+
+    def test_a_stale_version_store_reports_nothing_reusable(self, sandbox):
+        """Not the commits it recorded: those vectors are about to be wiped."""
+        from boost_cli.core import dense
+        self._store(dense.INDEX_VERSION - 1)
+        assert dense.tap_commits() == {}
