@@ -18,6 +18,7 @@ import base64
 import hashlib
 import json
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 from ..errors import BoostError
@@ -110,6 +111,19 @@ RESCORE_POOL = 2048
 #: Not 1, because two skills can legitimately share a paragraph that really is
 #: the best answer; a handful shows that without letting it own the page.
 MAX_PER_VECTOR = 3
+
+#: Cosine similarity floor for :func:`near_duplicate_clusters`.
+#:
+#: Chosen conservatively rather than at the observed near-duplicate scores
+#: directly, because the risk this guards against is a false merge: two
+#: genuinely different skills whose first chunk (name + description, see
+#: `rag.chunk`) happens to share enough boilerplate wording to read as
+#: similar. 0.97 sits well above ordinary topical similarity between unrelated
+#: skills and still well below 1.0, so a translation or light rewrite of the
+#: same skill -- whose embedding is close but not byte-identical -- still
+#: clears it. See ``near-identical-copies-still-eat-the-slots`` for the corpus
+#: measurement this was calibrated against.
+NEAR_DUP_THRESHOLD = 0.97
 
 
 def _quantizable(dim: int) -> bool:
@@ -1559,6 +1573,74 @@ def _knn(con: sqlite3.Connection, qblob: bytes,
             "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
             (qblob, pool)).fetchall()]
     return _expand(con, ranked, pool)
+
+
+def near_duplicate_clusters(keys: Sequence[tuple[str, str]],
+                            threshold: float = NEAR_DUP_THRESHOLD,
+                            ) -> dict[tuple[str, str], int]:
+    """Cluster ``keys`` (``rag.entry_key`` pairs) whose first chunk reads alike.
+
+    "First chunk" is chunk 0 from :func:`rag.chunk` -- name + description plus
+    however much body fits after it -- which is what a translation or a light
+    rewrite of the same skill still carries close together in embedding space.
+    One vector per entry is enough; there is no need to pool every chunk.
+
+    Pairwise, via ``vec_distance_cosine`` in one self-join. ``keys`` is meant
+    to be a bounded candidate window (a search result page, not a whole
+    store) -- see ``rag._collapse_near_duplicates`` -- so the O(n^2) join
+    stays cheap at that size. A caller wanting whole-store dedup wants
+    :func:`deduplicate`, not this.
+
+    Returns a map from each key that has a first-chunk vector to a cluster id
+    (its lowest ``vid`` member). A key with no such vector -- no dense store,
+    or an entry whose body produced no chunks -- is simply absent, so an
+    absence is never a match, the same rule ``rag.dedupe_by_content`` applies
+    to a missing content digest.
+    """
+    if len(keys) < 2 or not ready():
+        return {}
+    con = _connect()
+    if con is None:
+        return {}
+    try:
+        table = "vec_raw" if quantized(con) else "vec_chunks"
+        id_col = "id" if quantized(con) else "rowid"
+        if not _has_table(con, table):
+            return {}
+        holes = " OR ".join(["(tap = ? AND path = ?)"] * len(keys))
+        params = [v for key in keys for v in key]
+        rows = con.execute(
+            "SELECT tap, path, vid FROM chunks WHERE cix = 0 AND (%s)"  # noqa: S608  literal placeholders only; values are bound
+            % holes, params).fetchall()
+        vid_of: dict[tuple[str, str], int] = {(t, p): v for t, p, v in rows}
+        ids = sorted(set(vid_of.values()))
+        if len(ids) < 2:
+            return {}
+        holes2 = ",".join("?" * len(ids))
+        pairs = con.execute(
+            "SELECT a.%s, b.%s, vec_distance_cosine(a.embedding, b.embedding) "  # noqa: S608  table/column names are literals from this module; values are bound
+            "FROM %s a JOIN %s b ON a.%s < b.%s "
+            "WHERE a.%s IN (%s) AND b.%s IN (%s)"
+            % (id_col, id_col, table, table, id_col, id_col,
+               id_col, holes2, id_col, holes2),
+            [*ids, *ids]).fetchall()
+    finally:
+        con.close()
+    parent = {v: v for v in ids}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b, dist in pairs:
+        if dist is None or (1.0 - dist) < threshold:
+            continue
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+    return {key: find(vid) for key, vid in vid_of.items()}
 
 
 def retrieve(query: str, k: int = 60, kind: str | None = None,

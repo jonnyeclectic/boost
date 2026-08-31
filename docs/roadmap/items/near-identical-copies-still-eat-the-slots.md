@@ -2,12 +2,13 @@
 id: near-identical-copies-still-eat-the-slots
 board: code
 section: planned
-status: planned
+status: inflight
 category: Search · Ranking
 complexity: M
 impact: High
 wow: 4
-note: 10 of 10 slots on a real 466-tap install, all past byte-identical dedup
+note: dense.near_duplicate_clusters + rag.dedupe_hits implemented and PR'd; mutation/coverage gates unverified locally (sandboxed run, no PyPI egress) -- CI must confirm before this ships
+owner: loop/near-identical-copies
 order: 131
 title: Near-identical copies survive content-hash dedup and take the whole result page
 ---

@@ -773,6 +773,87 @@ def dedupe_by_content(hits: list[Hit], limit: int) -> list[Hit]:
     return out[:limit]
 
 
+#: How many byte-deduped survivors :func:`_collapse_near_duplicates` considers,
+#: as a multiple of the caller's ``limit``. Near-identical clustering costs one
+#: SQL self-join over the candidates it is handed (see
+#: ``dense.near_duplicate_clusters``), so unlike :func:`dedupe_by_content` --
+#: an O(1)-per-hit hash lookup that scans every candidate regardless of
+#: ``limit`` -- it is bounded to a window generous enough to catch a
+#: mirrored skill owning the whole visible page (the case this exists for)
+#: without paying an O(n^2) join over a broad query's full candidate list.
+NEAR_DUP_POOL_FACTOR = 4
+
+
+def _collapse_near_duplicates(hits: list[Hit], limit: int) -> list[Hit]:
+    """Collapse near-identical copies within the top ``limit * NEAR_DUP_POOL_FACTOR``.
+
+    Near-identical here means "same body-adjacent meaning, different bytes" --
+    a translation or a light rewrite of the same skill mirrored across
+    registries -- which :func:`dedupe_by_content` cannot reach because it
+    clusters on the exact body digest. See
+    ``near-identical-copies-still-eat-the-slots``: on a real 466-tap install a
+    single mirrored skill, translated into several languages, filled all ten
+    slots of one query's result page even though every copy passed
+    byte-identical dedup correctly.
+
+    A no-op whenever the dense store is not ready -- BM25-only installs see no
+    behavior change at all, which is the point: this never runs on the
+    required, dependency-free search path.
+
+    Survivor choice mirrors :func:`dedupe_by_content` exactly: the first
+    member of a cluster keeps its rank slot, but a later member wins the
+    displayed *source* when :func:`source_rank` prefers it -- the same
+    question ("where would the user rather install this from"), asked among
+    near-identical copies instead of byte-identical ones.
+
+    Keys are read with ``.get``, not :func:`entry_key` -- deliberately
+    looser than that function's own contract. A hit assembled by a caller
+    that never promised a full catalog entry (a handful of tests stub
+    ``dense.retrieve`` with a bare ``{"name": ..., "tap": ...}``) must
+    degrade to "no key to cluster on" rather than crash a search that
+    :func:`dedupe_by_content` would have served fine two lines up.
+    """
+    from . import dense
+    if not dense.ready():
+        return hits
+    pool_size = max(limit * NEAR_DUP_POOL_FACTOR, limit)
+    pool, rest = hits[:pool_size], hits[pool_size:]
+    keys = [(h["entry"].get("tap", ""), h["entry"].get("skill_md", ""))
+            for h in pool]
+    clusters = dense.near_duplicate_clusters(keys)
+    if not clusters:
+        return hits
+    slot_of_cluster: dict[int, int] = {}
+    out: list[Hit] = []
+    for hit, key in zip(pool, keys, strict=True):
+        cluster = clusters.get(key)
+        if cluster is None:
+            out.append(hit)
+            continue
+        slot = slot_of_cluster.get(cluster)
+        if slot is None:
+            slot_of_cluster[cluster] = len(out)
+            out.append(hit)
+            continue
+        kept = out[slot]
+        if source_rank(hit["entry"]) < source_rank(kept["entry"]):
+            out[slot] = cast(Hit, {**kept, "entry": hit["entry"]})
+    return out + rest
+
+
+def dedupe_hits(hits: list[Hit], limit: int) -> list[Hit]:
+    """Collapse duplicate copies -- byte-identical, then near-identical -- and take ``limit``.
+
+    The combined dedup step every retrieval seam calls before truncating to a
+    result page. Byte-identical dedup runs first and over the full candidate
+    list (see :func:`dedupe_by_content`); near-identical clustering runs
+    second, over a bounded window, and degrades to a no-op without the
+    ``[rag]`` extra built (see :func:`_collapse_near_duplicates`).
+    """
+    survivors = dedupe_by_content(hits, len(hits))
+    return _collapse_near_duplicates(survivors, limit)[:limit]
+
+
 def _windowed(hits: list[Hit], terms: Sequence[str]) -> list[Hit]:
     """Window each hit's raw stored snip onto the query terms.
 
@@ -832,10 +913,15 @@ def _retrieve_from_index(docs: list[dict], scores: dict[int, float],
          "score": score, "content": digest,
          "snippet": snip}  # type: ignore[typeddict-item]
         for key, (score, snip, digest, _name) in ranked]
-    # The FULL ranked list flows through dedupe, exactly as the slow path's
-    # does: a curated duplicate at rank 3,000 legally replaces the displayed
-    # source of survivor #1, so the promotion scan cannot be truncated.
-    survivors = dedupe_by_content(hits, len(hits))
+    # The FULL ranked list flows through byte-identical dedupe, exactly as the
+    # slow path's does: a curated duplicate at rank 3,000 legally replaces the
+    # displayed source of survivor #1, so the promotion scan cannot be
+    # truncated. `dedupe_hits` also collapses near-identical copies (over a
+    # bounded window -- see `_collapse_near_duplicates`) and truncates to `k`;
+    # that costs nothing extra here, since the materialize loop below already
+    # bails to the slow path on any failure rather than drawing from a longer
+    # tail.
+    survivors = dedupe_hits(hits, k)
     loaded: dict[str, dict[tuple[str, str], dict]] = {}
     out: list[Hit] = []
     for hit in survivors:
@@ -906,7 +992,7 @@ def retrieve(query: str, k: int = 60, kind: str | None = None,
         {"entry": live[key], "score": score, "content": digest,
          "snippet": snip}  # type: ignore[typeddict-item]
         for key, (score, snip, digest) in ranked]
-    return _windowed(dedupe_by_content(hits, k), terms)
+    return _windowed(dedupe_hits(hits, k), terms)
 
 
 def rerank_cache_path() -> Path:
@@ -1127,10 +1213,10 @@ def retrieve_any(query: str, k: int = 60, kind: str | None = None,
     # no reason to treat them as one.
     if dense_hits and bm25_hits:
         fused = rrf_fuse([bm25_hits, dense_hits], limit=max(k, RRF_K))
-        return (dedupe_by_content(_with_content(fused), k),
+        return (dedupe_hits(_with_content(fused), k),
                 "hybrid RRF (BM25 + dense)")
     if dense_hits:
-        return dedupe_by_content(_with_content(dense_hits), k), "dense vectors"
+        return dedupe_hits(_with_content(dense_hits), k), "dense vectors"
     if bm25_hits is not None:
         return bm25_hits[:k], "BM25 full-content"     # already deduped
     return None, ""
