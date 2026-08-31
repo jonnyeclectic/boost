@@ -7,8 +7,9 @@ category: Search · Ranking
 complexity: M
 impact: High
 wow: 4
-note: dense.near_duplicate_clusters + rag.dedupe_hits implemented and PR'd; mutation/coverage gates unverified locally (sandboxed run, no PyPI egress) -- CI must confirm before this ships
+note: dense.near_duplicate_clusters + rag.dedupe_hits implemented in PR #642; mutation/coverage gates unverified locally (sandboxed run, no PyPI egress) -- CI must confirm before this ships
 owner: loop/near-identical-copies
+pr: 642
 order: 131
 title: Near-identical copies survive content-hash dedup and take the whole result page
 ---
