@@ -597,8 +597,19 @@ def cmd_doctor(argv):
         # invocation print a PermissionError traceback from the logging module
         # while this check happily reported a ✓ for the same file. Diagnostics
         # are the first thing consulted when something else breaks, so a log
-        # that silently accepts nothing has to read as a fault.
-        if os.access(str(lp), os.W_OK):
+        # that silently accepts nothing has to read as a fault. Mode bits
+        # (os.access) are not the same question as "can this process actually
+        # open it" — an ACL, an immutable flag, or a sandboxing layer can say
+        # no where the bits say yes — so ask the real question: attempt the
+        # same append-mode open the handler itself performs.
+        try:
+            with lp.open("a", encoding="utf-8"):
+                pass
+        except OSError:
+            writable = False
+        else:
+            writable = True
+        if writable:
             out.ok("diagnostic log at %s" % _tilde(lp))
         else:
             bad("diagnostic log %s is not writable — every invocation is "
