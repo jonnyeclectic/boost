@@ -20,6 +20,7 @@ import hashlib
 import json
 import math
 import sqlite3
+from itertools import chain
 from pathlib import Path
 from typing import cast
 
@@ -1665,7 +1666,7 @@ def _cosine(a: array.array, b: array.array) -> float:
     dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
-    if na == 0.0 or nb == 0.0:
+    if 0.0 in (na, nb):
         return 0.0
     return dot / (na * nb)
 
@@ -1699,7 +1700,7 @@ def _opening_vectors(con: sqlite3.Connection, keys: list[tuple[str, str]],
     for start in range(0, len(keys), _PAIR_BATCH):
         batch = keys[start:start + _PAIR_BATCH]
         clauses = " OR ".join(["(tap = ? AND path = ?)"] * len(batch))
-        params = [v for pair in batch for v in pair]
+        params = list(chain.from_iterable(batch))
         rows = con.execute(
             "SELECT tap, path, %s FROM chunks WHERE cix = 0 AND (%s)"  # noqa: S608  column name from _vid_col; values are bound params
             % (col, clauses), params).fetchall()
