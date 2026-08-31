@@ -2,7 +2,8 @@
 id: near-identical-copies-still-eat-the-slots
 board: code
 section: planned
-status: planned
+status: inflight
+owner: loop/near-duplicate-collapse
 category: Search · Ranking
 complexity: M
 impact: High
