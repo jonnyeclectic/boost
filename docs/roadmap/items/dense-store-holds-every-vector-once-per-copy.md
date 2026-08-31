@@ -10,7 +10,7 @@ wow: 3
 note: 39.7% of vector rows are byte-identical repeats; 1.43x whole-store, no re-embedding &mdash; landed, but <code>make check</code> could not be run in the loop sandbox
 order: 128
 owner: loop/dense-store-dedup
-pr:
+pr: 629
 title: The dense store keeps one vector per <em>copy</em>, not one per distinct text
 ---
 <code>_embed_and_store</code> already buys each distinct text <b>once</b> &mdash; <code>seen</code>
