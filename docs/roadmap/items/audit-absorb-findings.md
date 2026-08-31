@@ -2,7 +2,7 @@
 id: audit-absorb-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Consistency
 complexity: S
 impact: Low

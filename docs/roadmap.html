@@ -12639,8 +12639,9 @@ fixes touches a COMMANDS row, so <code>docs/commands.html</code> is unaffected.
       </article>
 
       <article class="cap rcard" id="audit-absorb-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Consistency</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Consistency</span></div>
         <h3>boost absorb: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>cmd_absorb</code> never calls <code>journal.log</code>.</b> After two
 <code>absorb --install</code> runs, <code>boost log</code> lists <em>&ldquo;infer
 project-conventions&rdquo;</em>, <em>&ldquo;distill brainstorming-distilled&rdquo;</em> and an
@@ -12660,7 +12661,7 @@ report would misreport a local re-import as a fresh tap install. Fix is the jour
 both branches of <code>cmd_absorb</code> (<code>intelligence.py:528-580</code>), mirroring distill's
 placement. No doc changes.
 
-<br><br>Found by the 2026-08 CLI audit (cluster <code>absorb-parity</code>); repro in the audit log.</p>
+<br><br>Found by the 2026-08 CLI audit (cluster <code>absorb-parity</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
