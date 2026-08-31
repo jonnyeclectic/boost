@@ -191,15 +191,76 @@ def verdict(metrics: dict, floor_call: float, ceiling_false: float) -> list[str]
 
 # ----------------------------------------------------------------- probe
 
+def iter_events(events: str):
+    """Yield the parsed NDJSON objects in a host's stream, skipping junk.
+
+    A stream carries non-JSON lines (warnings, a truncated tail on timeout), and
+    a context note must never fail the run it annotates, so bad lines are
+    skipped rather than raised.
+    """
+    for line in (events or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            yield json.loads(line)
+        except ValueError:
+            continue
+
+
+def tool_calls(events: str) -> list[str]:
+    """Every tool this run actually invoked, in order.
+
+    A *call* is a `tool_use` block inside an `assistant` event. Nothing else
+    counts, and that distinction is the whole measurement.
+    """
+    names = []
+    for ev in iter_events(events):
+        if ev.get("type") != "assistant":
+            continue
+        content = (ev.get("message") or {}).get("content") or []
+        names.extend(b.get("name") or "" for b in content
+                     if isinstance(b, dict) and b.get("type") == "tool_use")
+    return names
+
+
 def called_boost(events: str) -> bool:
-    """Did this run's event stream contain a boost CONSULT tool call?
+    """Did this run actually invoke a boost CONSULT tool?
 
     Reads the host's own stream rather than the model's prose: an agent that
     says "let me check boost" and does not is a miss, and one that calls
-    without narrating is a hit. Substring matching on the bare tool name covers
-    every host's namespacing (`mcp__boost__boost_search`, `mcp_boost_…`).
+    without narrating is a hit.
+
+    **It must not substring-match the raw stream, and the first version did.**
+    `claude -p --output-format stream-json --verbose` opens with a
+    `system`/`init` event enumerating every tool available to the session — on
+    a machine where boost is registered that list contains
+    `mcp__boost__boost_search` and the other three CONSULT names, in every run,
+    including runs with no tool call at all. So the old check returned True
+    unconditionally: `Say OK and nothing else.` scored as a boost consult, and
+    the no-call ceiling could never be met on any machine boost was installed
+    on. `make eval-tools` was guaranteed red, and the one finding this tier had
+    produced was an artifact of its own probe.
+
+    A tool being *offered* is not a tool being *called*, so the parse looks for
+    the call. Matching stays on the bare suffix, which covers every host's
+    namespacing (`mcp__boost__boost_search`, `mcp_boost_…`, `boost/…`).
     """
-    return any(name in events for name in CONSULT_TOOLS)
+    return any(any(t in name for t in CONSULT_TOOLS)
+               for name in tool_calls(events))
+
+
+def session_surface(events: str) -> tuple[int, int]:
+    """`(tools, mcp_servers)` the host offered this run, from its init event.
+
+    The confound the old probe hid rather than reported: call rate depends far
+    more on how crowded the tool surface is than on any wording edit, and the
+    init event has carried both counts all along.
+    """
+    for ev in iter_events(events):
+        if ev.get("type") == "system" and ev.get("subtype") == "init":
+            return len(ev.get("tools") or []), len(ev.get("mcp_servers") or [])
+    return 0, 0
 
 
 def claude_available() -> bool:
@@ -248,6 +309,20 @@ def _print_context() -> None:
     if rules:
         print("         these are standing instructions; the rates below are "
               "for rule + descriptions, not descriptions alone.")
+
+
+def _report_surface(tools: int, servers: int) -> None:
+    """How crowded the tool surface was — the other half of the context.
+
+    A call rate depends far more on how many tools competed for the slot than
+    on any wording edit, and the host's init event has carried both counts all
+    along. Printed, never subtracted: the honest move is to say what was in
+    scope, the same rule `_print_context` follows for rules.
+    """
+    if tools:
+        print("         host offered %d tool(s) across %d MCP server(s) this "
+              "run; a rate is for that surface, not for boost alone."
+              % (tools, servers))
 
 
 def _report(host: str, rows: list[dict], metrics: dict,
@@ -318,12 +393,17 @@ def main(argv: list[str] | None = None) -> int:
         _print_context()
 
     observed: dict[str, list[bool]] = {}
+    surface = (0, 0)
     for r in rows:
         for _ in range(max(1, args.runs)):
             events = run_claude(r["prompt"], args.timeout)
             if events is None:
                 continue
+            if surface == (0, 0):
+                surface = session_surface(events)
             observed.setdefault(r["id"], []).append(called_boost(events))
+    if args.report_context:
+        _report_surface(*surface)
 
     metrics = score_host(rows, observed)
     reasons = verdict(metrics, args.floor_call, args.ceiling_false_call)

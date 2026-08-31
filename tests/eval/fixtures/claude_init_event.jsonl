@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "tools": ["mcp__boost__boost_discover_github", "mcp__boost__boost_doctor", "mcp__boost__boost_info", "mcp__boost__boost_install", "mcp__boost__boost_list", "mcp__boost__boost_read", "mcp__boost__boost_search", "Read", "Bash", "Edit"], "mcp_servers": [{"name": "plugin:context7:context7", "status": "connected"}, {"name": "plugin:playwright:playwright", "status": "failed"}, {"name": "plugin:exa:exa", "status": "connected"}]}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "OK"}]}}
