@@ -281,3 +281,10 @@ node_modules/
 # config). Written into the repo root by the language-server tooling, not by
 # boost, and specific to one developer's machine.
 .serena/
+
+# A SQLite artifact from a tool that passed ":memory:" as a path rather than as
+# the in-memory sentinel. Junk either way, and on Windows it is worse than junk:
+# a colon cannot appear in a filename there, so committing it makes `git
+# checkout` fail with exit 128 and every Windows CI job dies before it runs a
+# single test.
+:memory:*

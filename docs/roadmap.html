@@ -865,22 +865,44 @@ N runs per prompt with an interval rather than a single pass/fail, the way
 <code>golden-set-statistical-power</code> established for retrieval — a one-shot replay cannot tell
 a wording regression from a sampling wobble.
 
-<b>Where this stands (2026-08-30).</b> The Claude Code arm shipped in #616:
+<b>Where this stands (2026-08-31), and a correction.</b> The Claude Code arm shipped in #616:
 <code>scripts/eval_tools.py</code>, a 16-prompt set halved into should-call and should-NOT-call,
-Wilson intervals over N runs, and a verdict that floors call rate <em>and</em> ceilings false
-calls. Its first real run measured <b>3/3 false calls</b> &mdash; boost's tools fired on "What is
-the difference between a Python list and a tuple?", which the shipped skip list excuses by name.
-Call rate alone would have scored that a perfect 1.00, which is the whole argument for flooring
-both directions, now with a number behind it.
+Wilson intervals over N runs, and a verdict that floors call rate <em>and</em> ceilings false calls.
 
-<b>The card stays open because "per host, never averaged" is the binding requirement and only one
-host has been driven.</b> Gemini CLI is not installed on the machine this was built on, and its
-successor Antigravity CLI (<code>agy</code>, which boost already supports as its fifth agent
-target and which has boost registered) cannot be driven from a sandbox: it starts a local
-language server and dies on <code>listen tcp 127.0.0.1:0: bind: operation not permitted</code>.
-Shipping an arm for a host nobody drove would put a number next to a measurement that never
-happened &mdash; the exact unfalsifiable claim this tier exists to retire. The <code>owner</code>
-is cleared rather than left on a merged branch, so the second arm is claimable.
+<b>Its probe was broken, and the finding this card recorded was an artifact of it.</b> An earlier
+revision of this card reported &ldquo;3/3 false calls &mdash; boost's tools fired on <em>What is the
+difference between a Python list and a tuple?</em>&rdquo;. They did not fire. <code>called_boost()</code>
+substring-scanned the raw event stream, and <code>claude -p --output-format stream-json --verbose</code>
+opens with a <code>system</code>/<code>init</code> event enumerating <em>every tool available to the
+session</em> &mdash; which on any machine where boost is registered contains
+<code>mcp__boost__boost_search</code> and the other three CONSULT names. So the check returned
+<code>true</code> on every run, including runs with no tool call at all. Measured directly:
+<code>Say OK and nothing else.</code> produced zero <code>tool_use</code> blocks and scored as a
+boost consult.
+
+Two consequences shipped with it. <code>make eval-tools</code> could never pass &mdash; eight
+no-call rows &times; three runs is 24 forced trues, so the false-call rate's lower bound sat at
+1.00 against a 0.20 ceiling, red on every machine forever. And the tier built to retire
+unfalsifiable claims had produced one. <b>The lesson is the tier's own:</b> the existing tests
+passed because they fed hand-written one-line fragments with no <code>init</code> event &mdash; a
+fixture the author invented could not catch the author's wrong model of the input. The probe now
+parses the NDJSON and counts only <code>tool_use</code> blocks inside <code>assistant</code>
+events, and the regression test drives a <b>captured real stream</b>.
+
+<b>The second host arm is still unwritten, and should stay that way until the fixed probe is
+re-run.</b> Building arm two on a probe that cannot tell an offer from a call would produce two
+hosts scoring an identical, meaningless 1.00. When it is built, the candidate is <b>Gemini CLI
+proper</b>, not Antigravity CLI: the delivery claim below is about Gemini's Node bundle, and
+<code>agy</code> is a third mode again &mdash; it receives boost's <code>instructions</code> and
+writes them to <code>~/.gemini/antigravity-cli/mcp/boost/instructions.md</code>, pointing the agent
+at the file rather than inlining it. Substituting it would measure a different mechanism than the
+one this card argues about.
+
+<b>Cost, now measured.</b> Two trivial runs on a real host reported <code>$0.657</code> and
+<code>$0.682</code> of <code>total_cost_usd</code>, so 16 prompts &times; 3 runs is roughly
+<b>$30&ndash;50 per host per invocation</b> on a machine with a crowded tool surface.
+<code>--strict-mcp-config</code> with a boost-only config cuts that sharply and controls the
+surface confound in the same move.
 
 <b>What it unlocks.</b> The first honest answer to "did that description edit help", a baseline the
 next surface change can regress against, and a way to retire claims that survive only because
@@ -889,7 +911,7 @@ nobody can check them.</p>
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">Claude Code arm shipped in</span>
+          <span class="m">the Claude Code probe was broken and its finding was an artifact; fixed, second host still unwritten</span>
         </div>
       </article>
 
