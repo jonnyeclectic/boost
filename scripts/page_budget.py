@@ -94,11 +94,16 @@ class Budget(NamedTuple):
 #: and the roadmap board is no more nested than the smallest page on the site.
 BUDGETS: dict[str, Budget] = {
     "roadmap.html": Budget(
-        kbytes=1_200, elements=16_000, depth=20,
+        kbytes=1_500, elements=21_000, depth=20,
         why="the code board — already 5x Lighthouse's DOM-size failure "
             "threshold, so this bounds a step change, not ordinary growth; "
             "raised deliberately 2026-08-03 from 720/10,000, which gated at "
-            "8,000 and was reached by ordinary card growth in a day"),
+            "8,000 and was reached by ordinary card growth in a day; raised "
+            "again 2026-08-31 from 1,200/16,000 for the 107-card CLI-audit "
+            "landing (measured 1,234 kB / 17,837 elements), leaving ~20% for "
+            "ordinary growth — and with an hourly routine now adding cards, "
+            "the NEXT time this gates the answer should be pagination or "
+            "collapsing settled sections, not another raise"),
     "commands.html": Budget(
         kbytes=180, elements=3_000, depth=20,
         why="generated from COMMANDS, so it grows a block per new command"),
