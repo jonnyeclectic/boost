@@ -2,7 +2,7 @@
 id: smart-rerank-pays-per-novel-query
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Performance · MCP
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 3
 note: MCP boost_search measured 11.7-17 s per call — every call, even a repeat of the last one
 order: 123
 owner: loop/search-perf
-pr:
+pr: 543
 title: The smart rerank pays the LLM again for a search it already answered
 ---
 The MCP <code>boost_search</code> path passes <code>smart=True</code> on every

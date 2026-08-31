@@ -2,7 +2,7 @@
 id: taps-check-out-freight-they-never-index
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Storage · Footprint
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: 458 taps held 12 GB to index 1.9 GB of Markdown
 order: 112
 owner: loop/sparse-tap-clones
-pr:
+pr: 520
 title: Taps download and check out the 84% of a repo that boost never opens
 ---
 <b>Measured on a real install, not estimated.</b> <code>~/.boost</code> had grown to

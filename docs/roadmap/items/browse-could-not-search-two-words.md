@@ -2,7 +2,7 @@
 id: browse-could-not-search-two-words
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Bug · UX
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: space was bound to select, so two words could never be searched for
 order: 115
 owner: feat/browse-tui
-pr:
+pr: 525
 title: <code>browse</code> could not search for two words, and the fix reshaped the whole browser
 ---
 <b>The bug was two lines.</b> <code>space</code> toggled multi-select, and the

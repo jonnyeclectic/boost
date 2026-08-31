@@ -2,7 +2,7 @@
 id: marketing-crm-domain-had-no-category
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Catalog · Curation
 complexity: M
 impact: High
@@ -10,6 +10,7 @@ wow: 3
 note: the four marketing registries already carried were filed under writing and general, so the category returned nothing
 order: 124
 owner: loop/marketing-crm-registries
+pr: 551
 pr: 551
 title: <code>--category marketing</code> matched nothing, while four marketing registries sat in the catalog under other names
 ---

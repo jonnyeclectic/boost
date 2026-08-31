@@ -2,7 +2,7 @@
 id: sweep-died-at-launch-not-at-a-page
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: CI · Bug
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: a comment in the sibling file predicted this exact failure
 order: 114
 owner: fix/visual-sweep-single-process
-pr:
+pr: 524
 title: The <code>sweep</code> gate died at browser launch, not at a page
 ---
 Every <code>sweep</code> run failed from 2026-08-15 onward — on <code>main</code>

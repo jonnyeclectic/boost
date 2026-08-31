@@ -2,7 +2,7 @@
 id: osps-baseline-levels
 board: code
 section: health
-status: inflight
+status: shipped
 category: Security · Posture
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: L1 + L2 earned · L3 blocked · audit found a merged regression
 order: 5
 owner: loop/osps-baseline-2
-pr:
+pr: 565
 title: OSPS Baseline — three levels, audited rather than assumed
 ---
 The <a href="roadmap.html#openssf-best-practices-badge">passing badge</a> is one of

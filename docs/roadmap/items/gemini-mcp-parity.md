@@ -2,7 +2,7 @@
 id: gemini-mcp-parity
 board: code
 section: compat
-status: inflight
+status: shipped
 category: Compat
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: audited what Gemini actually receives — two of three findings were our own wrong claims
 order: 8
 owner: loop/gemini-mcp-audit
-pr:
+pr: 569
 title: What Gemini actually receives from boost, audited
 ---
 "Do Gemini hooks invoke boost's MCP the same way Claude does?" turned out to be two questions
