@@ -4910,7 +4910,7 @@ existing table, and <code>build</code> already wipes on a version change. One fu
       </article>
 
       <article class="cap rcard" id="dense-store-holds-every-vector-once-per-copy">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Storage</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Storage</span></div>
         <h3>The dense store keeps one vector per <em>copy</em>, not one per distinct text</h3>
         <p><code>_embed_and_store</code> already buys each distinct text <b>once</b> &mdash; <code>seen</code>
 de-duplicates before the provider call, which is why <code>build</code>'s progress total counts
