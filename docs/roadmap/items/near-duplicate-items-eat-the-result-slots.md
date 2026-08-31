@@ -208,3 +208,12 @@ bodies cannot merge two genuinely different skills, which name-clustering would 
 vendors its own skills produced an unanswerable disambiguation prompt. Tracked separately in
 <code>resolve-vendored-duplicate-copies</code>.
 
+<b>The remainder now has its own card, and it is not a rounding error.</b> This card's last open
+item &mdash; near-identical rather than byte-identical clustering &mdash; was left as a footnote
+under a <code>shipped</code> status, described by the 0.60 residual duplicate slots per query. On a
+real 466-tap install a single query (<code>exa search</code>) puts the same skill in <b>10 of 10
+slots</b>, in Japanese, Chinese and five English phrasings, every copy passing content-hash dedup
+correctly because the bodies genuinely differ. The averaged residual hid a per-query maximum an
+order of magnitude larger. See
+<a href="#near-identical-copies-still-eat-the-slots">near-identical copies still eat the slots</a>.
+
