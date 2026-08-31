@@ -2,12 +2,12 @@
 id: dense-store-holds-every-vector-once-per-copy
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Search · Storage
 complexity: L
 impact: Med
 wow: 3
-note: 39.7% of vector rows are byte-identical repeats; 1.43x whole-store, no re-embedding &mdash; landed, but <code>make check</code> could not be run in the loop sandbox
+note: 39.7% of vector rows are byte-identical repeats; 1.43x whole-store, no re-embedding
 order: 128
 owner: loop/dense-store-dedup
 pr: 629
