@@ -8,7 +8,8 @@ category: Health · Robustness
 complexity: S
 impact: Medium
 wow: 2
-note: the suppress guards construction; delay=True moves the failure to emit
+note: PR #637 open — handleError overridden on the file handler; make check unverified locally (sandbox has no PyPI access), pending CI
+pr: 637
 order: 130
 title: A best-effort log handler prints a traceback over every command's output
 ---
