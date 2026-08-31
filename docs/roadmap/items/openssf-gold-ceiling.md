@@ -2,7 +2,7 @@
 id: openssf-gold-ceiling
 board: code
 section: health
-status: inflight
+status: shipped
 category: Security · Posture
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: 26% → 61% live; the parser that said "21 criteria" had missed two
 order: 8
 owner: loop/openssf-gold
-pr:
+pr: 575
 title: OpenSSF gold — how far it goes without a second human
 ---
 Gold sat at <b>26%</b> with eleven criteria unanswered, and the standing assumption was that

@@ -2,7 +2,7 @@
 id: readme-prune-and-search-guide
 board: code
 section: health
-status: inflight
+status: shipped
 category: Docs · Onboarding
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note: 609 → 399 lines; 75 em dashes → 2; a real semantic-search guide
 order: 9
 owner: loop/docs-voice
-pr:
+pr: 579
 title: The README read like a machine wrote it — measurably
 ---
 The README had grown to <b>609 lines and 3,687 words of prose</b>, and it was carrying

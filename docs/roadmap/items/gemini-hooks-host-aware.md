@@ -2,7 +2,7 @@
 id: gemini-hooks-host-aware
 board: code
 section: compat
-status: inflight
+status: shipped
 category: Compat
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 4
 note: two upstream Gemini bugs found while establishing the schema
 order: 9
 owner: loop/gemini-hooks-support
-pr:
+pr: 570
 title: boost hooks learns a second host — and finds two bugs upstream
 ---
 <code>boost hooks</code> managed Claude Code's <code>settings.json</code> and nothing else,

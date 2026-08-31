@@ -2,7 +2,7 @@
 id: discover-searches-github-not-a-stale-sample
 board: code
 section: dx
-status: inflight
+status: shipped
 category: DX · Feature
 complexity: M
 impact: High
@@ -10,6 +10,7 @@ wow: 4
 note: an adversarial review of the first draft confirmed 21 defects, two of which would have reddened CI
 order: 106
 owner: loop/discover-live-github-search
+pr: 490
 pr: 490
 title: <code>boost discover &lt;query&gt;</code> asks GitHub, instead of filtering whatever <code>boost index</code> happened to sample
 ---

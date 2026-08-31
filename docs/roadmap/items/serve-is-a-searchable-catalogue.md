@@ -2,13 +2,14 @@
 id: serve-is-a-searchable-catalogue
 board: code
 section: dx
-status: inflight
+status: shipped
 category: DX · Feature
 complexity: L
 impact: High
 wow: 5
 order: 108
 owner: loop/serve-searchable-catalogue
+pr: 492
 pr: 492
 note: the old page listed only what was installed — 147 rows out of 71,695 — with no search, no tags and no way to see what a tap actually is
 title: <code>boost serve</code> becomes a searchable, faceted catalogue with a graph of the taps

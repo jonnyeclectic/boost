@@ -2,7 +2,7 @@
 id: bm25-has-no-stemming
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: Search · Retrieval
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: a term with no postings is now replaced by the commonest term it prefixes; a term that has postings is never touched, which is what keeps the eval floors still
 order: 127
 owner: loop/bm25-stem-fallback
-pr:
+pr: 554
 title: <code>boost search brainstorm</code> finds nothing, and <code>brainstorming</code> finds it
 ---
 <b>The symptom, in two commands against the same five-skill tap.</b>

@@ -2,7 +2,7 @@
 id: branch-current-gate
 board: code
 section: health
-status: inflight
+status: shipped
 category: CI · Release safety
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: two protection mechanisms disagreed; the binding one had the safety off
 order: 10
 owner: loop/generated-freshness
-pr:
+pr: 586
 title: main went red because "require branches up to date" was never actually on
 ---
 Two pull requests, each green against the <code>main</code> it was tested on, merged into a

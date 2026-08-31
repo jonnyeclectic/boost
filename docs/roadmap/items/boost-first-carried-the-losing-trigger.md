@@ -2,7 +2,7 @@
 id: boost-first-carried-the-losing-trigger
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Interop · Adoption
 complexity: M
 impact: High
@@ -10,6 +10,7 @@ wow: 4
 note: the rule shipped the one trigger boost had already measured as losing, and no revision of it could ever reach a machine that had installed it
 order: 107
 owner: loop/boost-first-observable-trigger
+pr: 491
 pr: 491
 title: <code>boost-first</code> carried the trigger that had already fired and lost — and could never be updated
 ---
