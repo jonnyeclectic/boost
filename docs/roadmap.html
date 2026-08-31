@@ -814,7 +814,7 @@ an oversight.</p></details>
       </article>
 
       <article class="cap rcard" id="tool-call-eval-tier">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Eval</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Eval</span></div>
         <h3>a Tier 3 eval for tool-call behaviour, floored in <b>both</b> directions</h3>
         <p>boost's required gate floors <b>four</b> retrieval metrics — recall@k &ge; 0.78, hit@1 &ge; 0.40,
 MRR &ge; 0.52, nDCG@k &ge; 0.58 — over a 91-query golden set and a 10,152-entry corpus, every
@@ -904,6 +904,27 @@ one this card argues about.
 <code>--strict-mcp-config</code> with a boost-only config cuts that sharply and controls the
 surface confound in the same move.
 
+<b>2026-08-31: <code>--strict-mcp-config</code> shipped.</b> <code>eval_tools.py</code> now takes
+a <code>--strict-mcp-config</code> flag: it writes a boost-only <code>mcpServers</code> config
+(the same <code>&lt;launcher&gt; mcp --stdio</code> invocation and fork-safety <code>env</code>
+<code>core.mcphost.register_argv</code> uses for a real registration — confirmed against an actual
+<code>claude mcp add-json</code> write, not guessed at the schema) to a temp file and passes
+<code>--strict-mcp-config --mcp-config &lt;path&gt;</code> to every <code>claude -p</code> call,
+cleaning the file up afterward. This session's sandbox had no network path to PyPI, so the pinned
+toolchain (<code>pytest</code>, <code>ruff</code>, <code>mypy</code>, …) could not be installed and
+<code>make check</code> could not be run here; the change was verified by hand instead — direct
+<code>python3.12</code> import of the module, the new unit tests executed by eye against the
+interpreter, <code>py_compile</code>, a manual line-length check against ruff's 88-column default,
+and an end-to-end dry run with <code>subprocess.run</code> mocked that confirms the flags land on
+the argv and the temp file is created and removed. CI runs the real gate on the PR.
+
+<b>Still unwritten: the second host arm (Gemini CLI).</b> No <code>gemini</code> CLI was reachable
+in this sandbox to capture a real stream from, and building that arm on an invented model of
+Gemini's non-interactive output format is the exact mistake this card's own probe fix (2026-08-30)
+already paid for once — "a fixture the author invented cannot catch the author's wrong model of the
+input." That arm stays a placeholder until it can be built against a captured real stream, on a
+machine with the <code>gemini</code> CLI installed.
+
 <b>What it unlocks.</b> The first honest answer to "did that description edit help", a baseline the
 next surface change can regress against, and a way to retire claims that survive only because
 nobody can check them.</p>
@@ -911,7 +932,7 @@ nobody can check them.</p>
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">the Claude Code probe was broken and its finding was an artifact; fixed, second host still unwritten</span>
+          <span class="m">probe fixed; --strict-mcp-config shipped for the surface confound; second host (Gemini CLI) still unwritten</span>
         </div>
       </article>
 

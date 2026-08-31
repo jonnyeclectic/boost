@@ -314,3 +314,65 @@ class TestTheRateIsNeverReadWithoutItsContext:
         monkeypatch.setattr(lockfile, "all_installed", boom)
         MOD._print_context()
         assert "could not read" in capsys.readouterr().out
+
+
+class TestStrictMcpConfigControlsTheSurfaceConfound:
+    """`--strict-mcp-config` is the card's own fix for the confound
+    `_report_surface` can only report: a crowded machine's other MCP servers
+    move the call rate far more than any wording edit under test.
+    """
+
+    def test_the_config_names_only_boost(self):
+        from boost_cli.core import mcphost
+        cfg = MOD.strict_mcp_config("/usr/local/bin/boost")
+        assert set(cfg["mcpServers"]) == {mcphost.SERVER_NAME}
+
+    def test_the_entry_launches_boost_as_an_mcp_stdio_server(self):
+        # Mirrors core.mcphost.register_argv's own invocation of boost, so a
+        # config built here starts the exact same server a real registration
+        # would — confirmed against a real `claude mcp add-json` write, not
+        # guessed at.
+        cfg = MOD.strict_mcp_config("/usr/local/bin/boost")
+        entry = cfg["mcpServers"]["boost"]
+        assert entry["command"] == "/usr/local/bin/boost"
+        assert entry["args"] == ["mcp", "--stdio"]
+
+    def test_the_entry_carries_the_fork_safety_env(self):
+        # Without LAUNCH_ENV a real host can SIGABRT the boost subprocess
+        # post-fork on macOS — the same failure core.mcphost.LAUNCH_ENV exists
+        # to prevent for every other registration path.
+        from boost_cli.core import mcphost
+        cfg = MOD.strict_mcp_config("/usr/local/bin/boost")
+        assert cfg["mcpServers"]["boost"]["env"] == mcphost.LAUNCH_ENV
+
+    def test_run_claude_adds_no_flags_without_a_config(self, monkeypatch):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            class P:
+                stdout = ""
+            return P()
+
+        monkeypatch.setattr(MOD.subprocess, "run", fake_run)
+        MOD.run_claude("hi", 5)
+        assert "--strict-mcp-config" not in captured["cmd"]
+        assert "--mcp-config" not in captured["cmd"]
+
+    def test_run_claude_adds_both_flags_with_a_config(self, monkeypatch, tmp_path):
+        captured = {}
+
+        def fake_run(cmd, **kw):
+            captured["cmd"] = cmd
+            class P:
+                stdout = ""
+            return P()
+
+        monkeypatch.setattr(MOD.subprocess, "run", fake_run)
+        cfg_path = tmp_path / "mcp.json"
+        cfg_path.write_text("{}", encoding="utf-8")
+        MOD.run_claude("hi", 5, cfg_path)
+        cmd = captured["cmd"]
+        assert "--strict-mcp-config" in cmd
+        i = cmd.index("--mcp-config")
+        assert cmd[i + 1] == str(cfg_path)
