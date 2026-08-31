@@ -8686,6 +8686,18 @@ from the transcript, so every message the user typed would vanish until they fou
 The guard has to sit outside any version of boost, so the installed command ends
 <code>|| true</code>.
 
+<b>First production tuning: evidence has to scale with prompt length.</b> Within an hour of
+release, the first real-world false positive arrived — a user pasted their own terminal session
+back into the chat (~90 words of <code>boost self-update</code> output) and got a full delegation
+banner, because <code>\bupdate\b</code> matches inside &ldquo;self-<b>update</b>&rdquo;. One weak
+hit in a wall of text. Every existing trivial gate keys on <em>shape</em> &mdash; a question, a
+slash command, too few words &mdash; and a pasted log is none of those, so none of them could
+fire. The missing signal was density: in a short prompt every word is deliberate, so one keyword
+is strong evidence; in a long one it is easily incidental, while a genuine long request names its
+work more than once (&ldquo;refactor &hellip; and update &hellip;&rdquo;). Past
+<code>LONG_PROMPT_WORDS</code> (60) the router now needs two distinct keyword hits. Verified
+against the real paste and against 80- and 69-word genuine requests, which still route.
+
 <b>Two keyword-table defects, found by routing real prompts rather than by reading.</b>
 <code>\bfix\w*\b</code> matches &ldquo;fixture&rdquo; and <code>\bchange\w*\b</code> matches
 &ldquo;changelog&rdquo; — the exact words the quality and docs tables claim — so &ldquo;add
