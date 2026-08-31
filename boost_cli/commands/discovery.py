@@ -493,6 +493,11 @@ def cmd_reindex(argv):
                 out.ok("quantized %d existing vectors — dense search no longer "
                        "scans the whole store on every query"
                        % dense_stats["quantized"])
+            if dense_stats.get("deduplicated"):
+                out.ok("reclaimed %d duplicate vector%s — registries paste the "
+                       "same text, and the store now holds one copy of each"
+                       % (dense_stats["deduplicated"],
+                          "" if dense_stats["deduplicated"] == 1 else "s"))
     journal.log("reindex", "%d passages" % stats["docs"],
                 entries=stats["entries"])
     return 0
@@ -548,9 +553,18 @@ def _reindex_dense(force, spinner=None):
     # only what changed. Doing it after would quantize, then write float32 rows
     # into a store that no longer has a float32 table.
     migrated = dense.quantize()
+    # Then collapse the byte-identical copies, in that order and not the other:
+    # `quantize` moves vectors out of `vec_chunks` one rowid at a time and
+    # would refuse a store whose vector rows no longer match its chunk rows,
+    # which is exactly what deduplicating first produces. Both are offline and
+    # free — they re-encode and re-key what is already on disk — so a user gets
+    # the disk back without having to know either word.
+    collapsed = dense.deduplicate()
     stats = dense.build(force=force, on_progress=_embed_progress(spinner))
     if migrated and isinstance(stats, dict):
         stats = stats | {"quantized": migrated["chunks"]}
+    if collapsed and isinstance(stats, dict) and collapsed["freed"]:
+        stats = stats | {"deduplicated": collapsed["freed"]}
     return stats
 
 

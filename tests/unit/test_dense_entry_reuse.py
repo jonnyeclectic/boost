@@ -333,12 +333,26 @@ class TestVectorsAndChunksStayInStep:
     `retrieve` still ranks, and which no chunk total would show, because the
     chunk side is correct. The reverse is worse: a chunk with no vector is a
     row the KNN can never return, so the entry silently stops being findable.
+
+    This used to be a two-way ``chunks.id`` <-> ``vec_raw.id`` bijection, and
+    that is the wrong shape now: one vector may back many chunks by design, so
+    half of it would fail on every store that saves anything. It is REWRITTEN
+    rather than relaxed, because the invariant it protected is still real —
+    only its arithmetic changed. Both directions survive as counts of zero:
+
+    * every ``chunks.vid`` resolves to a vector that exists, and
+    * every stored vector has at least one chunk naming it.
     """
 
-    def _rows(self, con):
-        chunks = {r[0] for r in con.execute("SELECT id FROM chunks")}
-        raw = {r[0] for r in con.execute("SELECT id FROM vec_raw")}
-        return chunks, raw
+    def _unresolved(self, con) -> int:
+        return con.execute(
+            "SELECT COUNT(*) FROM chunks c WHERE NOT EXISTS "
+            "(SELECT 1 FROM vec_raw v WHERE v.id = c.vid)").fetchone()[0]
+
+    def _orphans(self, con) -> int:
+        return con.execute(
+            "SELECT COUNT(*) FROM vec_raw v WHERE NOT EXISTS "
+            "(SELECT 1 FROM chunks c WHERE c.vid = v.id)").fetchone()[0]
 
     def test_a_changed_entry_leaves_no_orphan_vector(self, counting_env):
         entries = [_e("alpha", "one"), _e("beta", "two")]
@@ -346,10 +360,12 @@ class TestVectorsAndChunksStayInStep:
         _move_commit(counting_env, "c2")
         _build([entries[0], _e("beta", "two REWRITTEN")])
         con = dense._connect()
-        chunks, raw = self._rows(con)
-        con.close()
-        assert raw - chunks == set(), "a vector outlived its chunk"
-        assert chunks - raw == set(), "a chunk has no vector and can never rank"
+        try:
+            assert self._orphans(con) == 0, "a vector outlived every chunk"
+            assert self._unresolved(con) == 0, \
+                "a chunk has no vector and can never rank"
+        finally:
+            con.close()
 
     def test_a_deleted_entry_leaves_no_orphan_vector(self, counting_env):
         entries = [_e("alpha", "one"), _e("beta", "two"), _e("gamma", "three")]
@@ -357,9 +373,54 @@ class TestVectorsAndChunksStayInStep:
         _move_commit(counting_env, "c2")
         _build([entries[0], entries[2]])
         con = dense._connect()
-        chunks, raw = self._rows(con)
-        con.close()
-        assert raw == chunks
+        try:
+            assert self._orphans(con) == 0
+            assert self._unresolved(con) == 0
+        finally:
+            con.close()
+
+    def test_a_shared_vector_survives_losing_one_of_its_chunks(self,
+                                                              counting_env):
+        """The half of the bijection dedup breaks, asserted from the other side.
+
+        Two entries with the same body share one vector row. Deleting one must
+        leave the row standing — the refcount is derived from `chunks`, so a
+        sweep that dropped it would take the surviving entry's vector with it
+        and that entry would stop being findable with nothing reporting why.
+        """
+        entries = [_e("alpha", "shared"), _e("beta", "shared")]
+        _build(entries)
+        con = dense._connect()
+        try:
+            assert con.execute(
+                "SELECT COUNT(*) FROM vec_raw").fetchone()[0] == 1
+        finally:
+            con.close()
+        _move_commit(counting_env, "c2")
+        _build([entries[0]])
+        con = dense._connect()
+        try:
+            assert con.execute(
+                "SELECT COUNT(*) FROM vec_raw").fetchone()[0] == 1
+            assert self._unresolved(con) == 0
+            assert self._orphans(con) == 0
+        finally:
+            con.close()
+
+    def test_the_last_referent_going_takes_the_vector_with_it(self,
+                                                              counting_env):
+        entries = [_e("alpha", "shared"), _e("beta", "shared")]
+        _build(entries)
+        _move_commit(counting_env, "c2")
+        _build([])
+        con = dense._connect()
+        try:
+            assert con.execute(
+                "SELECT COUNT(*) FROM vec_raw").fetchone()[0] == 0
+            assert con.execute(
+                "SELECT COUNT(*) FROM vectors").fetchone()[0] == 0
+        finally:
+            con.close()
 
     def test_a_replaced_entry_does_not_inherit_the_old_rowid(self, counting_env):
         # `chunks.id` is AUTOINCREMENT, which never reuses a rowid. If it ever
@@ -471,14 +532,21 @@ class TestTheStandInSchemaMatchesTheReal:
         finally:
             con.close()
 
-    def test_the_fallback_stand_in_has_the_real_columns(self):
+    # Every module holding a hand-written `chunks` schema. Parametrised rather
+    # than hard-coded to one, because the second stand-in
+    # (`test_dense_vector_dedupe`) drifts exactly as easily as the first did
+    # and would fail eight tests away from its cause.
+    @pytest.mark.parametrize("module", ["test_dense_fallback",
+                                        "test_dense_vector_dedupe"])
+    def test_the_stand_in_schemas_have_the_real_columns(self, module):
+        import importlib
         import inspect
         import re
 
-        from tests.unit import test_dense_fallback as fb
+        fb = importlib.import_module("tests.unit.%s" % module)
 
-        # The stand-in is a closure inside a test; read its source rather than
-        # exporting it, so the fixture stays where it is used.
+        # The stand-in may be a closure inside a test; read its source rather
+        # than exporting it, so the fixture stays where it is used.
         src = inspect.getsource(fb)
         m = re.search(r'CREATE TABLE IF NOT EXISTS chunks \((.*?)\)"\)',
                       src, re.S)
@@ -490,12 +558,12 @@ class TestTheStandInSchemaMatchesTheReal:
         real = self._columns(lambda con: con.execute(
             "CREATE TABLE chunks (id INTEGER PRIMARY KEY AUTOINCREMENT,"
             " name TEXT, tap TEXT, path TEXT, kind TEXT, cix INTEGER,"
-            " snip TEXT, digest TEXT)"))
+            " snip TEXT, digest TEXT, vid INTEGER)"))
         missing = real - stand_in
         assert not missing, (
-            "the hand-written schema in test_dense_fallback is missing %s — "
-            "it will claim to be the current INDEX_VERSION while building the "
-            "previous one" % sorted(missing))
+            "the hand-written schema in %s is missing %s — it will claim to be "
+            "the current INDEX_VERSION while building the previous one"
+            % (module, sorted(missing)))
 
     def test_the_real_schema_is_what_this_test_pins(self, sandbox):
         # The other half: if `_ensure_schema` gains a column, the literal above
@@ -506,7 +574,11 @@ class TestTheStandInSchemaMatchesTheReal:
         try:
             dense._ensure_schema(con, 8)
             cols = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+            vec = {r[1] for r in con.execute("PRAGMA table_info(vectors)")}
         finally:
             con.close()
         assert {"id", "name", "tap", "path", "kind", "cix", "snip",
-                "digest"} <= cols
+                "digest", "vid"} <= cols
+        # `vid` without the relation it points into is a dangling column, so
+        # the second table is part of the same pin.
+        assert {"vid", "hash"} <= vec

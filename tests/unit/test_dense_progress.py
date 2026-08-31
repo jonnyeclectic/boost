@@ -19,6 +19,7 @@ safe rather than a duplication bug.
 """
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 
 import pytest
@@ -49,7 +50,18 @@ needs_vec = pytest.mark.skipif(
 
 
 def _toy_embed(texts, input_type="document"):
-    return [[float(len(t) % 7), 1.0, 0.0, 0.5] for t in texts]
+    """A distinct vector per distinct text, which is now load-bearing.
+
+    The store keeps one vector row per DISTINCT embedding, so an embedder
+    keying on `len(text) % 7` — every fixture name is four characters — would
+    make a 200-entry build store a single vector and call `_store_vector`
+    once. `TestDurability` counts those calls to interrupt part-way through.
+    """
+    out = []
+    for t in texts:
+        h = hashlib.sha256(t.encode()).digest()
+        out.append([float(h[0]), 1.0, float(h[1]), 0.5])
+    return out
 
 
 def _entries(n):

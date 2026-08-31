@@ -653,6 +653,55 @@ Consequences for code you write here:
   the whole table instead measured 3.75 s cold on a 657,587-chunk store, and
   ran even on the build where nothing had changed.
 
+- **The store holds one vector per distinct embedding, and `chunks.vid` is the
+  indirection.** Every chunk row used to own its own `vec_raw` blob and its own
+  `vec_chunks_bin` row, so a paragraph vendored into 1,464 skills was stored
+  1,464 times. Measured on a real 657,587-chunk / 384-d store: the vector rows
+  collapse to **396,638 distinct** (39.7% repeats), vectors are 81.6% of the
+  1,634 MB file, and sharing them is **1,634 → ~1,140 MB, 1.43x whole-store**.
+  `chunks` still gets one row per copy — tap deletion is scoped through
+  `chunks.tap`, so collapsing rows would strand a tap's vectors — and names its
+  vector through `vid`; `vectors(vid, hash)` is the relation, and `vec_raw` /
+  `vec_chunks_bin` / `vec_chunks` are keyed by `vid`. Four rules:
+  - **The key is `sha256(embedding)`, never the text.** `export_shard` ships
+    `snip` (`text[:200]`), so the full chunk text is in neither the store nor
+    the shard and `import_shard` has nothing to hash — a `text_hash` column
+    could never be filled in on the import path. The blob is equivalent by
+    construction (a provider is deterministic) and answers the same question
+    for a local build, an imported shard *and* the migration.
+  - **Deletion collects the freed vectors after the row delete, never
+    before.** `_delete_matching` used to drop vectors then rows, which was
+    right while they were one-to-one. Asking first counts references that the
+    very next statement removes, so every shared vector reads as live and
+    survives for good — nothing later revisits it, because every sweep here is
+    scoped through `chunks`. The answer is derived (`_gc_vectors`, one indexed
+    probe per candidate through `chunks_vid`) rather than stored in a counter,
+    so it cannot drift out of step with the rows it describes.
+  - **Migration is in place, not an `INDEX_VERSION` bump**, following
+    `quantize()`'s precedent — v3's bump was meant to be the last re-embed and
+    reclaiming disk is not a reason to break that. `_adopt_vectors` runs inside
+    `_ensure_schema` and is *structural only*: `vid = id` is the identity those
+    numbers already had, so it reads no blobs. `deduplicate()` is the expensive
+    half — `boost reindex --dense` runs it **after** `quantize()`, because
+    quantize moves vectors one `rowid` at a time and refuses a store whose
+    vector rows no longer match its chunk rows. The survivor of a cluster is
+    its lowest id, so nothing is rewritten: the copies are deleted and
+    `chunks.vid` redirected.
+  - **A NULL `hash` is never a match.** Adopted rows carry no hash because
+    nothing hashed them, and `vectors.hash` is UNIQUE *and* accepts NULL, so
+    SQLite holds those unknowns apart. A build stores its own copy rather than
+    claiming a vector it never compared — a missed saving `deduplicate()`
+    reclaims, against a wrong answer nothing would notice. That UNIQUE index is
+    also what makes "already done" cheap: two hashed rows provably cannot hold
+    the same bytes, so one `hash IS NULL` probe decides whether the pass has
+    anything to do.
+  Reuse is now cross-build and cross-tap: `_embed_and_store`'s `seen` dict only
+  ever collapsed copies inside one run, so a newly tapped mirror registry cost
+  a full set of vectors for content already on disk. The invariant to assert is
+  **not** a `chunks.id` ↔ `vec_raw.id` bijection (sharing breaks one direction
+  by design) but the pair `tests/unit/test_dense_vector_dedupe.py` pins: every
+  `chunks.vid` resolves, and every vector has at least one referent.
+
 - **Nothing on the search path may count `chunks`.** `SELECT COUNT(*)` scans the
   `chunks_tap` covering index — 8,419 pages / 34.5 MB, measured 1.94 s — and
   both `ready()` and `status()` did it on every search, the latter only to word

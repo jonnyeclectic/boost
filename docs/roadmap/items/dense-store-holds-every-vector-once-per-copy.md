@@ -2,15 +2,15 @@
 id: dense-store-holds-every-vector-once-per-copy
 board: code
 section: internals
-status: planned
+status: shipped
 category: Search · Storage
 complexity: L
 impact: Med
 wow: 3
 note: 39.7% of vector rows are byte-identical repeats; 1.43x whole-store, no re-embedding
 order: 128
-owner:
-pr:
+owner: loop/dense-store-dedup
+pr: 629
 title: The dense store keeps one vector per <em>copy</em>, not one per distinct text
 ---
 <code>_embed_and_store</code> already buys each distinct text <b>once</b> &mdash; <code>seen</code>
