@@ -1,8 +1,8 @@
 {
   "generated_note": "Curated skill/rule/workflow registries for boost. est_items are research estimates; verify by tapping. list_only repos are index/awesome lists that link out.",
-  "count": 486,
-  "est_items_total": 34840,
-  "est_items_scannable": 30419,
+  "count": 487,
+  "est_items_total": 34901,
+  "est_items_scannable": 30480,
   "registries": [
     {
       "name": "Aaronontheweb/dotnet-cursor-rules",
@@ -1620,6 +1620,18 @@
       "confidence": "high",
       "list_only": false,
       "curated": true
+    },
+    {
+      "name": "garrytan/gstack",
+      "url": "https://github.com/garrytan/gstack",
+      "type": "skill",
+      "category": "workflow",
+      "focus": "Sprint-workflow slash commands \u2014 /ship, /qa, /review, /plan-*, /retro, /office-hours \u2014 self-installing across ten coding agents",
+      "est_items": 61,
+      "confidence": "high",
+      "list_only": false,
+      "curated": true,
+      "self_installing": "git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup"
     },
     {
       "name": "GDvega/super-android-kotlin-firebase-skill",

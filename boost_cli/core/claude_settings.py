@@ -200,6 +200,42 @@ def has_hook(scope: str, event: str, name: str,
     return False
 
 
+def foreign_hooks(scope: str | None = None,
+                  project_dir: Path | None = None,
+                  host: str = hookhost.CLAUDE) -> list[dict]:
+    """Hooks in this host's settings that boost does not own.
+
+    The complement of :func:`list_hooks`, which skips every entry without the
+    `# boost:` marker — so boost could write this file for years and never be
+    able to say who else was writing it. That matters now that a settings.json
+    routinely has more than one writer: `garrytan/gstack`'s `./setup` registers
+    its own Stop hooks here and prunes "dead gstack entries" on every run, and
+    boost prunes its own by marker. The two namespaces are disjoint and
+    `tests/unit/test_gstack_coexistence.py` pins that they stay that way.
+
+    This exists so `boost doctor` can *report* the other tenant rather than
+    discover it by deleting something. Nothing here writes: a foreign hook is
+    not a boost problem to fix, it is context for a user reading a health
+    check — which is why doctor counts it with `out.info` rather than raising
+    the issue count.
+    """
+    scopes = (scope,) if scope else SCOPES
+    rows: list[dict] = []
+    for sc in scopes:
+        data = load(sc, project_dir, host)
+        for event, blocks in (data.get("hooks") or {}).items():
+            for block in blocks or []:
+                if not isinstance(block, dict):
+                    continue
+                for h in block.get("hooks") or []:
+                    raw = str(h.get("command", ""))
+                    if _hook_name(raw) is not None:
+                        continue        # ours
+                    rows.append({"scope": sc, "event": event, "command": raw,
+                                 "matcher": block.get("matcher", "")})
+    return rows
+
+
 def list_hooks(scope: str | None = None,
                project_dir: Path | None = None,
                host: str = hookhost.CLAUDE) -> list[dict]:

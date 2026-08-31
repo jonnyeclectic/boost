@@ -2,13 +2,13 @@
 id: tool-call-eval-tier
 board: code
 section: planned
-status: inflight
+status: planned
 category: Quality · Eval
 complexity: L
 impact: High
 wow: 4
-note: boost floors four retrieval metrics and measures whether an agent ever calls the tools zero times
-owner: feat/tool-call-eval
+note: Claude Code arm shipped in #616; the second host arm is unwritten and the card stays open for it
+owner:
 order: 96
 title: a Tier 3 eval for tool-call behaviour, floored in <b>both</b> directions
 ---
@@ -60,6 +60,23 @@ same degrade-cleanly contract as the other Tier 2 evals. Because the outcome is 
 N runs per prompt with an interval rather than a single pass/fail, the way
 <code>golden-set-statistical-power</code> established for retrieval — a one-shot replay cannot tell
 a wording regression from a sampling wobble.
+
+<b>Where this stands (2026-08-30).</b> The Claude Code arm shipped in #616:
+<code>scripts/eval_tools.py</code>, a 16-prompt set halved into should-call and should-NOT-call,
+Wilson intervals over N runs, and a verdict that floors call rate <em>and</em> ceilings false
+calls. Its first real run measured <b>3/3 false calls</b> &mdash; boost's tools fired on "What is
+the difference between a Python list and a tuple?", which the shipped skip list excuses by name.
+Call rate alone would have scored that a perfect 1.00, which is the whole argument for flooring
+both directions, now with a number behind it.
+
+<b>The card stays open because "per host, never averaged" is the binding requirement and only one
+host has been driven.</b> Gemini CLI is not installed on the machine this was built on, and its
+successor Antigravity CLI (<code>agy</code>, which boost already supports as its fifth agent
+target and which has boost registered) cannot be driven from a sandbox: it starts a local
+language server and dies on <code>listen tcp 127.0.0.1:0: bind: operation not permitted</code>.
+Shipping an arm for a host nobody drove would put a number next to a measurement that never
+happened &mdash; the exact unfalsifiable claim this tier exists to retire. The <code>owner</code>
+is cleared rather than left on a merged branch, so the second arm is claimable.
 
 <b>What it unlocks.</b> The first honest answer to "did that description edit help", a baseline the
 next surface change can regress against, and a way to retire claims that survive only because

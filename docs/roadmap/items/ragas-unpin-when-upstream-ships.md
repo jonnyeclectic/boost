@@ -7,7 +7,7 @@ category: Tech-debt
 complexity: S
 impact: Low
 wow: 1
-note: blocked on ragas shipping a release after 0.4.3 — check before starting
+note: still blocked — re-checked 2026-08-30, PyPI's newest ragas is still 0.4.3
 order: 97
 title: unpin the <code>[eval]</code> langchain stack when ragas ships its fix
 ---
@@ -26,6 +26,11 @@ pins, and adapt <code>scripts/eval_explain.py</code> if the 0.4 scoring API move
 <code>evaluate</code>/<code>to_pandas</code> surface is what
 <code>test_eval_faithfulness.py</code> stubs in the unit suite). The <code>eval-explain</code> workflow is
 the live proof — it must stay green with real keys.
+
+<b>Re-checked 2026-08-30.</b> <code>pip index versions ragas</code> still reports
+<code>0.4.3</code> as the newest release, so nothing has changed and this card is still not
+claimable. Recorded here rather than left implicit: a card that says "check before starting"
+gives a reader no way to tell a check that came back negative from a check nobody ran.
 
 <b>Why it stays its own card.</b> The shipped integration card documents the block but will not be
 re-read; an unpin nobody remembers is how a workaround pin outlives its reason by years. This card

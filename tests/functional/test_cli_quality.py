@@ -220,6 +220,46 @@ class TestDoctor:
                 "run `boost reinstall gone`") in r.out
 
 
+
+class TestDoctorSeesTheOtherTenant:
+    """boost is no longer the only writer of ~/.claude/settings.json.
+
+    `garrytan/gstack`'s `./setup` registers its own Stop hooks there and prunes
+    "dead gstack entries" on every run; boost prunes its own by the `# boost:`
+    marker. doctor must be able to *say* the other writer is present without
+    touching it — and must not count it, because boost will never remove it and
+    a health check that stays permanently red on something no command can clear
+    stops being read (the same rule as the foreign broken symlinks above it).
+    """
+
+    THEIRS = "~/.claude/skills/gstack/bin/gstack-timeline-stop"
+
+    def _write_foreign_hook(self):
+        from boost_cli.core import claude_settings as cs
+        cs.save("global", {"hooks": {"Stop": [
+            {"matcher": "*",
+             "hooks": [{"type": "command", "command": self.THEIRS}]}]}})
+
+    def test_doctor_reports_it_and_stays_green(self, boost, tapped):
+        self._write_foreign_hook()
+        r = boost("doctor")                       # the fixture asserts rc == 0
+        assert "not managed by boost" in r.out
+        assert "Stop" in r.out
+
+    def test_doctor_does_not_remove_it(self, boost, tapped):
+        from boost_cli.core import claude_settings as cs
+        self._write_foreign_hook()
+        boost("doctor")
+        blocks = cs.load("global")["hooks"]["Stop"]
+        assert blocks[0]["hooks"][0]["command"] == self.THEIRS
+
+    def test_a_clean_settings_file_says_nothing(self, boost, tapped):
+        # The line must be absent, not merely zero — doctor's output is read
+        # top to bottom and a "0 hooks not managed by boost" line is noise.
+        r = boost("doctor")
+        assert "not managed by boost" not in r.out
+
+
 # ── lint ─────────────────────────────────────────────────────────────────
 
 class TestLint:
