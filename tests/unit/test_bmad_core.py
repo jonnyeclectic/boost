@@ -106,6 +106,61 @@ class TestClassifyTrivial:
         """`SKILL.md` and `store.install` must not read as end-of-sentence."""
         assert bmad.classify("what does store.install do with SKILL.md?") == "trivial"
 
+
+class TestEvidenceScalesWithLength:
+    """One keyword is strong signal in a short prompt and noise in a long one.
+
+    Found in production on the day the autopilot shipped: a user pasted their
+    terminal session back into the chat and got a full delegation banner, on the
+    strength of `\\bupdate\\b` matching inside "boost self-update". ~90 words,
+    one weak hit. The shape gates could not catch it — it is not a question, not
+    a slash command, and far past the word floor — so the missing rule is about
+    evidence density, not shape.
+    """
+
+    # the actual paste, trimmed of ANSI and the shell prompt lines
+    PASTE = """boost self-update
+  updating via pipx: /opt/homebrew/bin/pipx upgrade boost-skill-cli
+  boost v1.0.419 -> v1.0.420
+boost bmad on
+  BMAD autopilot ON (global) - 7 persona subagent(s) + prompt router
+  personas -> ~/.claude/agents
+  hooks -> ~/.claude/settings.json (SessionStart + UserPromptSubmit)
+  every substantive prompt now names its lead persona and its definition of
+  done; trivial asks are left alone
+  restart your agent session to pick up the new subagents
+  full BMAD workflow skills (needs Node): boost bmad install
+boost bmad install
+  installed BMAD in /Users/cassandragaston/IdeaProjects/boost (46 skills)"""
+
+    def test_the_paste_that_prompted_this_rule_is_silent(self):
+        assert len(self.PASTE.split()) > bmad.LONG_PROMPT_WORDS
+        assert bmad.classify(self.PASTE) == "trivial"
+
+    def test_it_is_the_length_that_silences_it_not_the_words(self):
+        """The same weak evidence in a short prompt must still route."""
+        assert bmad.classify("update the flag") == "build"
+
+    def test_a_long_prompt_with_real_evidence_still_routes(self):
+        """Two hits is enough — genuine long asks name the work more than once."""
+        prompt = (
+            "I have been going back and forth on this for a while and I think "
+            "the cleanest thing is to refactor the retrieval layer so that the "
+            "dense engine and the BM25 engine share one index build path, "
+            "because right now they diverge in ways that are hard to reason "
+            "about and it keeps biting us whenever somebody touches either "
+            "one of them, so please update the module boundary as well while "
+            "you are in there and leave it tidy for the next person"
+        )
+        assert len(prompt.split()) > bmad.LONG_PROMPT_WORDS
+        assert bmad.classify(prompt) == "build"
+
+    def test_repeating_one_keyword_is_not_more_evidence(self):
+        """Scoring counts distinct patterns, not occurrences — so a long log
+        that says "update" twenty times still scores 1 and stays silent."""
+        wordy = ("please update it " * 20) + ("blah " * bmad.LONG_PROMPT_WORDS)
+        assert bmad.classify(wordy) == "trivial"
+
     def test_a_question_of_exactly_the_cutoff_length_is_trivial(self):
         """The boundary itself is inclusive — 30 words is still a question."""
         prompt = ("how should we handle the case where a tap has no SKILL.md at "
