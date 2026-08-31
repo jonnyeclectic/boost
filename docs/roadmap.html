@@ -814,7 +814,7 @@ an oversight.</p></details>
       </article>
 
       <article class="cap rcard" id="tool-call-eval-tier">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Eval</span></div>
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Eval</span></div>
         <h3>a Tier 3 eval for tool-call behaviour, floored in <b>both</b> directions</h3>
         <p>boost's required gate floors <b>four</b> retrieval metrics — recall@k &ge; 0.78, hit@1 &ge; 0.40,
 MRR &ge; 0.52, nDCG@k &ge; 0.58 — over a 91-query golden set and a 10,152-entry corpus, every
@@ -865,6 +865,23 @@ N runs per prompt with an interval rather than a single pass/fail, the way
 <code>golden-set-statistical-power</code> established for retrieval — a one-shot replay cannot tell
 a wording regression from a sampling wobble.
 
+<b>Where this stands (2026-08-30).</b> The Claude Code arm shipped in #616:
+<code>scripts/eval_tools.py</code>, a 16-prompt set halved into should-call and should-NOT-call,
+Wilson intervals over N runs, and a verdict that floors call rate <em>and</em> ceilings false
+calls. Its first real run measured <b>3/3 false calls</b> &mdash; boost's tools fired on "What is
+the difference between a Python list and a tuple?", which the shipped skip list excuses by name.
+Call rate alone would have scored that a perfect 1.00, which is the whole argument for flooring
+both directions, now with a number behind it.
+
+<b>The card stays open because "per host, never averaged" is the binding requirement and only one
+host has been driven.</b> Gemini CLI is not installed on the machine this was built on, and its
+successor Antigravity CLI (<code>agy</code>, which boost already supports as its fifth agent
+target and which has boost registered) cannot be driven from a sandbox: it starts a local
+language server and dies on <code>listen tcp 127.0.0.1:0: bind: operation not permitted</code>.
+Shipping an arm for a host nobody drove would put a number next to a measurement that never
+happened &mdash; the exact unfalsifiable claim this tier exists to retire. The <code>owner</code>
+is cleared rather than left on a merged branch, so the second arm is claimable.
+
 <b>What it unlocks.</b> The first honest answer to "did that description edit help", a baseline the
 next surface change can regress against, and a way to retire claims that survive only because
 nobody can check them.</p>
@@ -872,7 +889,7 @@ nobody can check them.</p>
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
-          <span class="m">boost floors four retrieval metrics and measures whether an agent ever calls the tools zero times</span>
+          <span class="m">Claude Code arm shipped in</span>
         </div>
       </article>
 
@@ -895,6 +912,11 @@ pins, and adapt <code>scripts/eval_explain.py</code> if the 0.4 scoring API move
 <code>test_eval_faithfulness.py</code> stubs in the unit suite). The <code>eval-explain</code> workflow is
 the live proof — it must stay green with real keys.
 
+<b>Re-checked 2026-08-30.</b> <code>pip index versions ragas</code> still reports
+<code>0.4.3</code> as the newest release, so nothing has changed and this card is still not
+claimable. Recorded here rather than left implicit: a card that says "check before starting"
+gives a reader no way to tell a check that came back negative from a check nobody ran.
+
 <b>Why it stays its own card.</b> The shipped integration card documents the block but will not be
 re-read; an unpin nobody remembers is how a workaround pin outlives its reason by years. This card
 is the reminder, and it is deliberately not claimable until the upstream release exists.</p>
@@ -902,7 +924,7 @@ is the reminder, and it is deliberately not claimable until the upstream release
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">blocked on ragas shipping a release after 0.4.3 — check before starting</span>
+          <span class="m">still blocked — re-checked 2026-08-30, PyPI's newest ragas is still 0.4.3</span>
         </div>
       </article>
 
@@ -11903,13 +11925,16 @@ about 4.7&times; by sampling and then re-ranked by a filter the report never men
       </article>
 
       <article class="cap rcard" id="gstack-tap-first-then-coexistence">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Interop · Registry</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop · Registry</span></div>
         <h3><code>garrytan/gstack</code> &mdash; tap it first, then learn to coexist with it</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><a href="https://github.com/garrytan/gstack">garrytan/gstack</a> is the largest thing in
 boost's domain that boost has never heard of: <b>130,344 stars, 19,602 forks</b>, MIT, created
-2026-03-11 and pushed the same day this was written. It ships roughly 35 slash-command skills
+2026-03-11 and pushed the same day this was written. It ships <b>61 measured items</b> &mdash; the repo
+<em>description</em> advertises 23 and its README lists ~35, and
+<code>scripts/measure_registry.py</code> over a sparse clone of <code>07b59e39</code> counts 61
 &mdash; <code>/review</code>, <code>/ship</code>, <code>/qa</code>, <code>/cso</code>,
-<code>/autoplan</code>, <code>/office-hours</code> &mdash; each as a
+<code>/autoplan</code>, <code>/office-hours</code> among them, each as a
 <code>&lt;name&gt;/SKILL.md</code> directory at the repo root, which is <em>exactly</em> the
 layout <code>catalog.scan_dir</code> already indexes. Nothing needs building for boost to
 catalogue it.
@@ -11945,12 +11970,16 @@ Boost should not own bun, Chromium, or someone else's upgrade channel.
 into the same places boost does, and at 130k stars it is now the likeliest other tenant on a
 user's machine:
 
-<b>The canonical store.</b> Repo-local gstack installs land at
-<code>.agents/skills/gstack</code> &mdash; the same path boost treats as its single source of
-truth. <code>store.duplicate_discovery()</code> is already <em>topology, not ownership</em>, for
-exactly this reason, and <code>heal --prune-duplicates</code> must keep proving it: gstack's
-directories are real directories and its per-host copies are its own, so neither may ever be
-swept as "boost's stale links".
+<b>The canonical store.</b> <b>Corrected on implementation:</b> this card claimed repo-local
+gstack installs land at <code>.agents/skills/gstack</code>. They do not &mdash; gstack's README
+installs to <code>~/.claude/skills/gstack</code>, a <em>real directory</em> inside a linking
+agent's skills dir, and the team install bootstraps <code>.claude/</code> rather than
+<code>.agents/</code>. The hazard is real either way and lands one path over:
+<code>store.duplicate_discovery()</code> is already <em>topology, not ownership</em>, and
+<code>sync_plan</code>'s stale-link sweep asks <code>is_symlink()</code> before anything else, so
+gstack's real directories are never candidates. Neither had a test saying so, and the cost of
+being wrong is an 8&nbsp;MB working install of someone else's program deleted as "boost's stale
+links".
 
 <b>Host dotdirs boost does not target.</b> gstack installs to
 <code>~/.codex/skills/gstack-*</code>, <code>~/.config/opencode/skills/gstack-*</code>,
@@ -11971,7 +12000,7 @@ should be able to <em>see</em> a foreign hook block and report it without touchi
 <b>Deliberately out of scope:</b> vendoring gstack, re-implementing its skills, or having boost
 run <code>./setup</code>. The proposal is one registry row, one honest "self-installing" marker
 on the install path, and one coexistence test per hazard named above &mdash; scoped down on purpose,
-because the fit is a catalogue fit, not an engine fit.</p>
+because the fit is a catalogue fit, not an engine fit.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>

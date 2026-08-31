@@ -24,6 +24,7 @@ from ..core import (
     agents,
     ai,
     catalog,
+    claude_settings,
     complete,
     frontmatter,
     gitutil,
@@ -548,6 +549,20 @@ def cmd_doctor(argv):
         out.info("%d broken symlink%s in agent dirs not created by boost — "
                  "left alone; yours to remove or repair"
                  % (len(foreign), _s(len(foreign))))
+
+    others = claude_settings.foreign_hooks("global")
+    if others:
+        # `out.info`, not `bad`, for the same reason as the foreign symlinks
+        # above: boost did not write these and will never remove them, so
+        # counting them would leave doctor permanently red on something no
+        # boost command can clear. Naming them is still worth a line — at
+        # 130k stars gstack is now a likely second writer of this exact file,
+        # and a user debugging a hook needs to know boost is not the only one
+        # in it.
+        events = sorted({h["event"] for h in others})
+        out.info("%d hook%s in ~/.claude/settings.json not managed by boost "
+                 "(%s) — left alone; `boost hooks` only touches its own"
+                 % (len(others), _s(len(others)), ", ".join(events)), wrap=True)
 
     for dup in store.duplicate_discovery():
         # An agent that reads the canonical store natively, holding its own

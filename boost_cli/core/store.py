@@ -17,6 +17,7 @@ from pathlib import Path
 from ..errors import BoostError
 from . import (
     agents,
+    config,
     gitutil,
     journal,
     lockfile,
@@ -489,6 +490,24 @@ def _require_project_base(scope: str, base, what: str) -> Path | None:
     return resolved
 
 
+def _refuse_self_installing(entry: dict) -> None:
+    """Refuse to half-copy an item whose repo installs itself.
+
+    Checked before the kind dispatch because the property belongs to the repo,
+    not the item: every kind it ships has the same missing build step. Naming
+    the upstream command is the whole point — a refusal that only says "no"
+    leaves the user exactly where `boost install` pretending would have.
+    """
+    cmd = config.self_installing_command(entry.get("tap") or "")
+    if not cmd:
+        return
+    raise BoostError(
+        "%s comes from %s, which installs itself — boost would copy its "
+        "Markdown and leave a skill that cannot run"
+        % (entry.get("name", "?"), entry.get("tap", "?")),
+        hint="run the registry's own installer: %s" % cmd)
+
+
 def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
             scope: str = "user", base=None) -> InstallResult:
@@ -499,6 +518,7 @@ def install(entry: dict, force: bool = False,
     current repo). Every kind honors it.
     """
     scopes.check_scope(scope)
+    _refuse_self_installing(entry)
     kind = entry.get("kind", "skill")
     if kind == "rule":
         return _install_rule(entry, force=force, only_agents=only_agents,
