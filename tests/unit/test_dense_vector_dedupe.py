@@ -369,6 +369,61 @@ class TestDeletionCountsReferentsAfterTheRowsAreGone:
         finally:
             con.close()
 
+    def test_the_orphan_sweep_survives_a_chunk_with_no_vid(self, store):
+        """`NOT IN` against a set containing NULL matches nothing, ever.
+
+        A half-written chunk row is enough to make the sweep silently stop
+        sweeping — SQL's three-valued logic turns the whole predicate unknown —
+        so the subquery filters the NULLs out rather than trusting there to be
+        none.
+        """
+        dense.build(entries=[_e("a", "alpha")], force=True)
+        con = _open()
+        try:
+            con.execute("INSERT INTO chunks (name, tap, path, kind, cix, vid) "
+                        "VALUES ('half', 't', 'p', 'skill', 0, NULL)")
+            dense._vector_id(con, b"\x00" * 32)      # the orphan to sweep
+            assert dense._gc_orphan_vectors(con) == 1
+            assert _counts(con)["vectors"] == 1
+        finally:
+            con.close()
+
+    def test_dropping_more_vectors_than_one_batch_holds(self, store,
+                                                        monkeypatch):
+        """`deduplicate` hands this every duplicate at once — 260,949 on a real
+        install — and SQLite caps a statement's bound parameters."""
+        dense.build(entries=[_e("s%d" % i, "body-%d" % i) for i in range(5)],
+                    force=True)
+        monkeypatch.setattr(dense, "_DELETE_BATCH", 2)
+        con = _open()
+        try:
+            vids = [r[0] for r in con.execute("SELECT vid FROM chunks")]
+            assert len(vids) == 5
+            con.execute("DELETE FROM chunks")
+            dense._gc_vectors(con, vids)
+            assert _counts(con) == {"chunks": 0, "vectors": 0, "blobs": 0}
+        finally:
+            con.close()
+
+    def test_a_wipe_takes_the_identity_relation_with_it(self, store):
+        """A surviving `vectors` row hands a rebuilt store a vid for nothing.
+
+        `build` wipes when the embedding space changes. If the hashes outlived
+        the vectors they describe, `_vector_id` would answer from the old table
+        and every chunk in the new space would name a row `vec_chunks` no
+        longer has — findable by nothing, reported by nothing.
+        """
+        dense.build(entries=[_e("a", "alpha"), _e("b", "beta")], force=True)
+        store.setattr(embed, "model", lambda: "toy-other")
+        stats = dense.build(entries=[_e("a", "alpha"), _e("b", "beta")])
+        assert stats["model"] == "toy-other"
+        con = _open()
+        try:
+            assert _counts(con) == {"chunks": 2, "vectors": 2, "blobs": 2}
+            assert _unresolved(con) == 0, "a chunk named a wiped vector"
+        finally:
+            con.close()
+
     def test_the_orphan_sweep_is_a_noop_with_no_vector_relation(self, store):
         """Nothing built is the ordinary empty case, not the corrupt one."""
         con = _open()
@@ -848,6 +903,31 @@ class TestDeduplicateCollapsesWhatIsAlreadyOnDisk:
         con = _open()
         try:
             assert _counts(con)["blobs"] == 3, "the store was left damaged"
+        finally:
+            con.close()
+
+    def test_it_refuses_when_a_chunk_resolves_to_nothing(self, store):
+        """The other half of the verification, and not the same failure.
+
+        A store can end the pass with exactly the right number of vectors and
+        still have a chunk naming one that was never there. Counting vectors
+        alone would call that a success, and the chunk would simply stop being
+        findable — the failure this whole change has to avoid.
+        """
+        _legacy_store(dense.db_path(), [("a", "same"), ("b", "other")])
+        con = _open()
+        try:
+            _plain_schema(con, 8)         # adopts, so there is work to do
+            con.execute("INSERT INTO chunks (name, tap, path, kind, cix, vid) "
+                        "VALUES ('ghost', 'acme/skills', 'p', 'skill', 0, 999)")
+            con.commit()
+        finally:
+            con.close()
+        with pytest.raises(BoostError, match="store left unchanged"):
+            dense.deduplicate()
+        con = _open()
+        try:
+            assert _counts(con)["blobs"] == 2, "the store was left damaged"
         finally:
             con.close()
 
