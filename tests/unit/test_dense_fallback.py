@@ -70,6 +70,14 @@ class _FakeCon:
     def execute(self, sql, params=()):
         if "MATCH" in sql:
             return _Cur(self._knn)
+        if "ROW_NUMBER" in sql:
+            # `_expand` maps ranked vector ids to the chunk rows naming them.
+            # This store predates the `vectors` relation, so `_vid_col` reads
+            # `id` and the map is the identity — including for a vector whose
+            # chunk row is gone, which is what
+            # `test_knn_row_without_a_chunk_row_is_skipped` needs to reach
+            # `retrieve`'s own guard.
+            return _Cur([(rid, rid) for rid, _d in self._knn])
         if "id IN" in sql:
             return _Cur(self._chunks)
         return _Cur([])
@@ -406,13 +414,19 @@ class TestBuildWithoutExtension:
             con.execute(
                 "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY"
                 " AUTOINCREMENT, name TEXT, tap TEXT, path TEXT, kind TEXT,"
-                " cix INTEGER, snip TEXT, digest TEXT)")
+                " cix INTEGER, snip TEXT, digest TEXT, vid INTEGER)")
             con.execute(
                 "CREATE INDEX IF NOT EXISTS chunks_tap ON chunks(tap)")
             con.execute(
                 "CREATE INDEX IF NOT EXISTS chunks_entry ON chunks(tap, path)")
+            con.execute(
+                "CREATE INDEX IF NOT EXISTS chunks_vid ON chunks(vid)")
             con.execute("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY,"
                         " v TEXT)")
+            con.execute("CREATE TABLE IF NOT EXISTS vectors (vid INTEGER"
+                        " PRIMARY KEY AUTOINCREMENT, hash BLOB)")
+            con.execute("CREATE UNIQUE INDEX IF NOT EXISTS vectors_hash ON"
+                        " vectors(hash)")
             con.execute("CREATE TABLE IF NOT EXISTS vec_chunks (rowid INTEGER"
                         " PRIMARY KEY, embedding BLOB)")
 
@@ -443,7 +457,14 @@ class TestBuildWithoutExtension:
         assert stats["reindexed"] == ["acme/skills"]
         assert stats["reused"] == []
         con = sqlite3.connect(str(dense.db_path()))
-        assert con.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0] == 2
+        # One vector row per DISTINCT embedding, not per chunk copy. This
+        # module's toy embedder keys on `len(text) % 3`, and both entries land
+        # on the same vector — so two chunks share one stored blob, which is
+        # the saving. What must still hold is that both chunks resolve.
+        assert con.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0] == 1
+        assert con.execute(
+            "SELECT COUNT(*) FROM chunks c JOIN vec_chunks v ON v.rowid = c.vid"
+        ).fetchone()[0] == 2
 
     def test_unchanged_tap_is_reused_not_reembedded(self, store):
         first = dense.build(entries=_ENTRIES, force=True)
@@ -486,7 +507,15 @@ class TestBuildWithoutExtension:
         con = sqlite3.connect(str(dense.db_path()))
         assert con.execute("SELECT COUNT(*) FROM chunks WHERE tap = 'old/skills'"
                            ).fetchone()[0] == 0
-        assert con.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0] == 2
+        # The surviving tap's two chunks share one vector (see
+        # `test_build_stats_and_stored_rows`), and the removed tap's own vector
+        # is gone — dropped by the refcounted sweep, not by having been the
+        # only referent of a row that was deleted wholesale.
+        assert con.execute("SELECT COUNT(*) FROM vec_chunks").fetchone()[0] == 1
+        assert con.execute(
+            "SELECT COUNT(*) FROM chunks c WHERE NOT EXISTS "
+            "(SELECT 1 FROM vec_chunks v WHERE v.rowid = c.vid)"
+        ).fetchone()[0] == 0
         con.close()
 
     def test_nothing_is_pruned_when_every_tap_is_still_present(self, store):

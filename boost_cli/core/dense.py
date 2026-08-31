@@ -39,6 +39,11 @@ _BATCH = 128            # texts per embedding request
 _COMMIT_EVERY = 5000
 _POOL = 8              # chunk over-fetch factor for KNN before per-entry reduce
 
+#: Ids per `DELETE ... IN (...)`. Under SQLite's oldest still-shipping limit
+#: (999 bound parameters) rather than the current one, because the only caller
+#: that gets near it is a migration, where raising is the worst outcome.
+_DELETE_BATCH = 500
+
 
 def _load():
     """The sqlite_vec module, or None when the [rag] extra isn't installed."""
@@ -126,6 +131,29 @@ def _has_table(con: sqlite3.Connection, name: str) -> bool:
         return False
 
 
+def _has_column(con: sqlite3.Connection, table: str, col: str) -> bool:
+    """Whether ``table`` carries ``col``. Missing table reads as missing column."""
+    try:
+        # The table name is a literal from this module, never caller data.
+        rows = con.execute("PRAGMA table_info(%s)" % table).fetchall()
+    except sqlite3.DatabaseError:
+        return False
+    return any(r[1] == col for r in rows)
+
+
+def _vid_col(con: sqlite3.Connection) -> str:
+    """The ``chunks`` column that names a row's vector.
+
+    ``vid`` once the store carries the :func:`_adopt_vectors` relation, and
+    ``id`` on one built before it — where every chunk owns its own vector row
+    and those two numbers are already the same. Returning a *name* rather than
+    a boolean is what keeps every vector-joining query in this module one
+    statement instead of two: the pre-dedup store is not a second layout, it is
+    this layout with the indirection collapsed.
+    """
+    return "vid" if _has_column(con, "chunks", "vid") else "id"
+
+
 def quantized(con: sqlite3.Connection) -> bool:
     """True when this store holds the two-stage (binary + exact) layout.
 
@@ -137,12 +165,66 @@ def quantized(con: sqlite3.Connection) -> bool:
     return _has_table(con, "vec_chunks_bin") and _has_table(con, "vec_raw")
 
 
+def _adopt_vectors(con: sqlite3.Connection) -> int:
+    """Give a store built before the ``vectors`` relation the shape it needs.
+
+    Structural only, and deliberately so: it reads no embeddings. A store that
+    predates this already holds one vector per chunk, keyed by the chunk's own
+    id — so ``vid = id`` is not a placeholder, it is the identity those two
+    numbers already had. That makes the step two DDL statements and one pass
+    over an integer column rather than a pass over every 4 KB blob, which is
+    what lets it run inside :func:`_ensure_schema` on the way into an ordinary
+    build. Collapsing the copies is :func:`deduplicate`, which is where the
+    blobs actually get read, and it is opt-in for exactly that reason.
+
+    The adopted rows get a NULL ``hash``, which is the honest value: nothing
+    here has hashed them. A NULL never matches in :func:`_vector_id`, so a
+    later build stores its own copy rather than claiming a vector it has not
+    compared — the cost is a missed saving, which :func:`deduplicate` reclaims,
+    and the alternative would be a wrong answer nothing later notices.
+
+    Returns the number of rows adopted; 0 when the store already has them.
+
+    This is an in-place migration rather than an ``INDEX_VERSION`` bump on
+    purpose. v3's bump charged every user a full re-embed and this module says
+    in writing that it was the last one this mechanism needs; reclaiming disk
+    is not a reason to break that.
+    """
+    if _has_column(con, "chunks", "vid"):
+        return 0
+    con.execute("ALTER TABLE chunks ADD COLUMN vid INTEGER")
+    con.execute("UPDATE chunks SET vid = id")
+    con.execute("INSERT OR IGNORE INTO vectors (vid, hash) "
+                "SELECT id, NULL FROM chunks")
+    return int(con.execute("SELECT COUNT(*) FROM vectors").fetchone()[0])
+
+
 def _ensure_schema(con: sqlite3.Connection, dim: int) -> None:
     con.execute(
         "CREATE TABLE IF NOT EXISTS chunks (id INTEGER PRIMARY KEY AUTOINCREMENT,"
         " name TEXT, tap TEXT, path TEXT, kind TEXT, cix INTEGER, snip TEXT,"
-        " digest TEXT)")
+        " digest TEXT, vid INTEGER)")
     con.execute("CREATE INDEX IF NOT EXISTS chunks_tap ON chunks(tap)")
+    # One row per DISTINCT embedding, keyed by the hash of its bytes. `chunks`
+    # is already the chunk-to-tap relation, so nothing else is needed: a chunk
+    # names its vector through `vid`, and many chunks may name the same one.
+    #
+    # `hash` is UNIQUE and NULLABLE, and both halves are load-bearing. UNIQUE
+    # is what makes "have I stored this vector before?" one index probe.
+    # NULLABLE is how a store that predates this relation joins it without its
+    # blobs being read (see `_adopt_vectors`): SQLite holds NULLs distinct in a
+    # unique index, so an unknown hash never collides with another unknown —
+    # the same rule CLAUDE.md sets for a missing content digest. Two absences
+    # are two unknowns, never a match.
+    con.execute("CREATE TABLE IF NOT EXISTS vectors "
+                "(vid INTEGER PRIMARY KEY AUTOINCREMENT, hash BLOB)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS vectors_hash "
+                "ON vectors(hash)")
+    _adopt_vectors(con)
+    # Scopes the refcount question — "does any chunk still name this vector?" —
+    # to a b-tree descent. Without it `_gc_vectors` would scan `chunks` once
+    # per deleted row.
+    con.execute("CREATE INDEX IF NOT EXISTS chunks_vid ON chunks(vid)")
     # Keyed by (tap, path) because that is `rag.entry_key` — row identity, the
     # thing an entry's chunks belong to. Keying it on `digest` alone would be
     # the content question, which is a different one: two taps shipping the
@@ -167,8 +249,8 @@ def _ensure_schema(con: sqlite3.Connection, dim: int) -> None:
 
 
 def _store_vector(con: sqlite3.Connection, rowid: int | None,
-                  blob: bytes) -> None:
-    """Write one chunk's vector into whichever layout this store uses.
+                  blob: bytes) -> int:
+    """Write one vector into whichever layout this store uses. Returns its id.
 
     Quantization happens in SQL rather than in Python: `vec_quantize_binary`
     is the same function the query side calls on the query vector, so the two
@@ -190,18 +272,101 @@ def _store_vector(con: sqlite3.Connection, rowid: int | None,
     else:
         con.execute("INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
                     (rowid, blob))
+    return rowid
 
 
-def _drop_vectors(con: sqlite3.Connection, ids: list[int]) -> None:
-    """Remove these chunk ids from every vector relation the store has."""
-    for i in ids:
+def _vector_id(con: sqlite3.Connection, blob: bytes) -> int:
+    """The id of the row holding exactly these bytes, storing them if new.
+
+    **The key is the embedding blob, not the chunk text**, and that constraint
+    decides the design rather than merely permitting it. `export_shard` ships
+    ``name/tap/path/kind/cix/snip/digest/embedding`` and ``snip`` is
+    ``text[:200]``, so the full chunk text is in neither the store nor the
+    shard: a ``text_hash`` column would be unpopulatable on the import path.
+    ``sha256(embedding)`` answers the same question — a provider is
+    deterministic, so identical texts serialize to identical bytes — and it
+    answers it identically for a local build, an imported shard and the
+    migration, which is what lets one relation serve all three.
+
+    Reuse is therefore persistent rather than per-build: `_embed_and_store`'s
+    local `seen` dict only ever collapsed the copies inside one run, while this
+    table also collapses them across runs and across taps. A newly tapped
+    mirror registry costs no new vector rows for content already stored.
+    """
+    h = hashlib.sha256(blob).digest()
+    row = con.execute("SELECT vid FROM vectors WHERE hash = ?", (h,)).fetchone()
+    if row is not None:
+        return int(row[0])
+    cur = con.execute("INSERT INTO vectors (hash) VALUES (?)", (h,))
+    return _store_vector(con, cur.lastrowid, blob)
+
+
+def _drop_vectors(con: sqlite3.Connection, vids: list[int]) -> None:
+    """Remove these vector ids from every relation the store has."""
+    for i in vids:
         # vec0 deletes one rowid at a time; the plain table takes a set.
         for tbl in ("vec_chunks", "vec_chunks_bin"):
             if _has_table(con, tbl):
                 con.execute("DELETE FROM %s WHERE rowid = ?" % tbl, (i,))  # noqa: S608  table name from a literal tuple
-    if ids and _has_table(con, "vec_raw"):
-        con.execute("DELETE FROM vec_raw WHERE id IN (%s)"  # noqa: S608  interpolates only `?` placeholders
-                    % ",".join("?" * len(ids)), ids)
+    for tbl, col in (("vec_raw", "id"), ("vectors", "vid")):
+        if not _has_table(con, tbl):
+            continue
+        # Batched, because `deduplicate` hands this every duplicate in the
+        # store at once — 260,949 of them on a real install — and SQLite caps a
+        # statement's bound parameters (999 on builds still in the wild). One
+        # `IN` list of every id is a migration that raises rather than runs.
+        for start in range(0, len(vids), _DELETE_BATCH):
+            batch = vids[start:start + _DELETE_BATCH]
+            con.execute("DELETE FROM %s WHERE %s IN (%s)"  # noqa: S608  names from a literal pair; ids are bound
+                        % (tbl, col, ",".join("?" * len(batch))), batch)
+
+
+def _gc_vectors(con: sqlite3.Connection, vids: list[int]) -> int:
+    """Drop whichever of ``vids`` no chunk row references any more.
+
+    **Call this AFTER the chunk rows are gone, never before.** The refcount is
+    derived — one indexed probe of `chunks` per candidate — rather than stored,
+    so running it while the rows are still there counts references that are
+    about to vanish and leaves the vector behind for good: nothing later
+    revisits it, because every other sweep in this module is scoped through
+    `chunks`. Deriving the count is also what makes it impossible for a stored
+    counter to drift out of step with the rows it claims to describe.
+
+    Correct on a store that predates the `vectors` relation too: there
+    :func:`_vid_col` reads ``id``, every vector has exactly one referent, and
+    the probe therefore answers "orphan" for precisely the rows just deleted —
+    the behaviour tap deletion always had.
+    """
+    if not vids:
+        return 0
+    col = _vid_col(con)
+    orphans = [v for v in dict.fromkeys(vids)
+               if con.execute("SELECT 1 FROM chunks WHERE %s = ? LIMIT 1"  # noqa: S608  column name from _vid_col
+                              % col, (v,)).fetchone() is None]
+    _drop_vectors(con, orphans)
+    return len(orphans)
+
+
+def _gc_orphan_vectors(con: sqlite3.Connection) -> int:
+    """Sweep every vector row nothing references. Whole-store, so rarely.
+
+    :func:`_gc_vectors` keeps the store clean as rows are deleted, which is the
+    cheap, scoped mechanism and the one an ordinary build uses. This is the
+    repair: it costs a pass over the whole vector relation, so only
+    :func:`deduplicate` runs it — where a full pass is already being paid for,
+    and where an orphan would otherwise be counted as a distinct vector and
+    make the migration's own verification refuse a store that is merely untidy.
+    """
+    tbl, key = ("vec_raw", "id") if quantized(con) else ("vec_chunks", "rowid")
+    if not _has_table(con, tbl):
+        return 0
+    col = _vid_col(con)
+    orphans = [r[0] for r in con.execute(
+        "SELECT %s FROM %s WHERE %s NOT IN "  # noqa: S608  names from a literal pair and _vid_col
+        "(SELECT %s FROM chunks WHERE %s IS NOT NULL)"
+        % (key, tbl, key, col, col))]
+    _drop_vectors(con, orphans)
+    return len(orphans)
 
 
 def _read_meta(con: sqlite3.Connection) -> dict[str, object]:
@@ -230,6 +395,10 @@ def _wipe(con: sqlite3.Connection) -> None:
     # vectors behind to be merged with the new ones under reused rowids.
     con.execute("DROP TABLE IF EXISTS vec_chunks_bin")
     con.execute("DROP TABLE IF EXISTS vec_raw")
+    # The identity relation goes with them: a `vectors` row surviving the wipe
+    # would hand a rebuilt store a `vid` for a vector no relation holds, which
+    # is a chunk that can never rank and nothing reports.
+    con.execute("DROP TABLE IF EXISTS vectors")
 
 
 def _chunk_texts(entry: dict, tap_paths: dict[str, Path] | None
@@ -701,8 +870,14 @@ def export_shard(tap: str) -> dict:
             # `vec_raw` on a quantized store is an ordinary table, so this
             # join needs no extension at all — which is the failure this
             # function's docstring describes, gone rather than worked around.
-            vt = "vec_raw v ON v.id = c.id" if quantized(con) \
-                else "vec_chunks v ON v.rowid = c.id"
+            # Through `vid`, because a chunk no longer owns its vector — it
+            # names one. Leaving this as `v.id = c.id` is the same shape whose
+            # breakage this docstring already records as having killed two
+            # scheduled `shards` runs, and it would fail the same way: rows for
+            # a tap that has chunks, silently unjoinable.
+            col = _vid_col(con)
+            vt = ("vec_raw v ON v.id = c.%s" % col) if quantized(con) \
+                else ("vec_chunks v ON v.rowid = c.%s" % col)
             rows = con.execute(
                 "SELECT c.name, c.tap, c.path, c.kind, c.cix, c.snip, "  # noqa: S608  relation name from a literal pair
                 "c.digest, v.embedding "
@@ -822,18 +997,20 @@ def import_shard(shard: dict, commit: str) -> tuple[bool, str]:
         _delete_taps(con, [str(shard.get("tap") or "")])
         mod = _load()
         for c in shard.get("chunks") or []:
-            cur = con.execute(
-                "INSERT INTO chunks (name, tap, path, kind, cix, snip, digest) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            # The vector first, because the chunk row has to name it. Keying on
+            # the blob is what lets an import share storage with rows already
+            # here: a shard for a mirror registry stores no new vectors at all.
+            vid = _vector_id(con, base64.b64decode(c["embedding"]))
+            con.execute(
+                "INSERT INTO chunks (name, tap, path, kind, cix, snip, digest,"
+                " vid) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (c.get("name"), c.get("tap"), c.get("path"), c.get("kind"),
                  c.get("cix"), c.get("snip"),
                  # A shard published before the digest travelled has none, and
                  # None is the honest value: that tap re-embeds once, which is
                  # what it did before this existed. Never a placeholder — a
                  # wrong digest would suppress a real re-embed forever.
-                 c.get("digest")))
-            blob = base64.b64decode(c["embedding"])
-            _store_vector(con, cur.lastrowid, blob)
+                 c.get("digest"), vid))
         commits = meta.get("commits")
         commits = dict(commits) if isinstance(commits, dict) else {}
         commits[str(shard.get("tap") or "").replace("/", "__")] = commit
@@ -866,12 +1043,17 @@ def _delete_matching(con: sqlite3.Connection, where: str,
                      params: tuple) -> int:
     """Drop the chunk rows matching ``where``, and their vectors. Rows hit.
 
-    Deleting a chunk is two statements that must not drift apart: the vectors
-    go through :func:`_drop_vectors` (which knows both store layouts) and only
-    then does the row go. Tap-level and entry-level deletion had that pair
-    written out twice, which is one copy too many for a rule this easy to half-
-    apply — an orphan vector outlives every later deletion, because those are
-    all scoped through ``chunks``.
+    Deleting a chunk is three statements that must not drift apart, and the
+    **order reversed** when vectors became shared. It used to drop the vectors
+    first and the rows second, which was right while the two were one-to-one.
+    Under dedup a vector may still be needed, so the rows go first and
+    :func:`_gc_vectors` then asks which of their vectors nobody names any more.
+    Asking first would count references that the very next statement removes:
+    every shared vector would look live, survive the deletion, and never be
+    revisited — because every sweep in this module is scoped through ``chunks``.
+
+    Tap-level and entry-level deletion had this written out twice, which is one
+    copy too many for a rule this easy to half-apply.
 
     ``where`` is a literal from this module, never caller data; the parameters
     are bound.
@@ -880,13 +1062,14 @@ def _delete_matching(con: sqlite3.Connection, where: str,
     # module: those are the shapes ruff's S608 is known to flag here, so the
     # suppression is one ruff actually consumes rather than an unused `noqa`
     # that RUF100 would then reject.
-    ids = [r[0] for r in con.execute(
-        "SELECT id FROM chunks WHERE %s" % where, params)]  # noqa: S608  literal clause
-    if not ids:
+    col = _vid_col(con)
+    rows = con.execute(
+        "SELECT id, %s FROM chunks WHERE %s" % (col, where), params).fetchall()  # noqa: S608  literal clause
+    if not rows:
         return 0
-    _drop_vectors(con, ids)
     con.execute("DELETE FROM chunks WHERE %s" % where, params)  # noqa: S608  same literal
-    return len(ids)
+    _gc_vectors(con, [r[1] for r in rows if r[1] is not None])
+    return len(rows)
 
 
 def _delete_entries(con: sqlite3.Connection,
@@ -1028,6 +1211,10 @@ def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
     # each changed tap's old rows, so a partial store is replaced rather than
     # doubled.
     since_commit = 0
+    # Which vector row each distinct text landed in. `_vector_id` would answer
+    # the same from the index, so this only saves the probe — but it saves it
+    # once per repeated chunk, which on a real install is 39.7% of them.
+    vid_of: dict[str, int] = {}
     for e, ci, text in rows:
         vec = vec_of.get(text)
         if vec is None:
@@ -1035,16 +1222,22 @@ def _embed_and_store(con: sqlite3.Connection, entries: list[dict],
             # whichever copy happened to sit in the failed batch.
             failed_taps.add(e["tap"])
             continue
-        cur = con.execute(
-            "INSERT INTO chunks (name, tap, path, kind, cix, snip, digest) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        vid = vid_of.get(text)
+        if vid is None:
+            vid = _vector_id(con, mod.serialize_float32(vec))
+            vid_of[text] = vid
+        # One `chunks` row per copy, still: tap deletion is scoped through
+        # `chunks.tap`, so collapsing the rows would strand a tap's vectors.
+        # Only the *storage* behind them is shared.
+        con.execute(
+            "INSERT INTO chunks (name, tap, path, kind, cix, snip, digest, vid)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (e["name"], e["tap"], e["skill_md"],
              e.get("kind", "skill"), ci, text[:200].strip(),
              # None where the catalog has no digest, which `_split_by_digest`
              # then refuses to reuse — the honest answer for a cache written
              # before CACHE_FORMAT stamped one.
-             e.get("content")))
-        _store_vector(con, cur.lastrowid, mod.serialize_float32(vec))
+             e.get("content"), vid))
         added += 1
         since_commit += 1
         if since_commit >= _COMMIT_EVERY:
@@ -1122,6 +1315,172 @@ def quantize() -> dict | None:
     return {"chunks": before, "bytes": db_path().stat().st_size}
 
 
+def deduplicate() -> dict | None:
+    """Collapse byte-identical vectors so the store holds one copy of each.
+
+    Offline and free, the posture :func:`quantize` established: every input is
+    already on disk, so this re-*keys* vectors rather than re-embedding them.
+    No provider is called and no text is re-chunked. It is an in-place
+    migration rather than an ``INDEX_VERSION`` bump for the reason this module
+    states above the constant — v3's bump charged every user a full re-embed
+    and was meant to be the last one — and reclaiming disk is not a reason to
+    go back on that, even where the embedder is free.
+
+    **Measured on a real 657,587-chunk / 384-d store**: the vector rows collapse
+    to 396,638 distinct — 39.7% repeats. `vec_raw` is 1,287.6 MB and
+    `vec_chunks_bin` 45.1 MB of a 1,634 MB file, so vectors are 81.6% of it;
+    deduplicating them saves 529 MB, and the `vid` column plus two indexes take
+    some back, for **1,634 -> ~1,140 MB, 1.43x whole-store**. On a 1024-d store,
+    where vectors are ~90% of the file, it lands nearer 1.6x.
+
+    The canonical row for a cluster is its **lowest id**, which is why nothing
+    is rewritten: that row is already in `vec_raw` and `vec_chunks_bin` at that
+    rowid, so the migration only redirects `chunks.vid` and deletes the copies.
+
+    Three refusals, all before anything is destroyed, because a wrong answer
+    here is silent — a chunk pointing at a vector that is gone simply stops
+    being findable, and nothing counts it:
+
+    * orphan vectors are swept first, or they would be counted as distinct and
+      make the arithmetic below refuse a store that is merely untidy;
+    * the surviving vector count must equal the number of distinct hashes;
+    * every chunk must still resolve to a vector row.
+
+    Returns None when there is nothing to do (no store, no backend, no recorded
+    width, or a store already deduplicated).
+    """
+    if not db_path().exists():
+        return None
+    con = _connect()
+    if con is None:
+        return None
+    try:
+        meta = _read_meta(con)
+        dim = meta.get("dim")
+        if not isinstance(dim, int):
+            # No recorded width means no store this function can reason about;
+            # `quantize` refuses the same case for the same reason.
+            return None
+        _ensure_schema(con, dim)
+        tbl, key = ("vec_raw", "id") if quantized(con) else ("vec_chunks", "rowid")
+        if not _has_table(con, tbl):
+            return None
+        # Everything already hashed is already distinct — `vectors.hash` is
+        # UNIQUE, so two hashed rows cannot hold the same bytes. Duplicates
+        # therefore live only among the rows `_adopt_vectors` left unhashed,
+        # and this probe is what keeps the pass from re-reading 1.3 GB of
+        # blobs on every `boost reindex --dense` to discover it has nothing to
+        # do. It is a b-tree descent, not a heuristic.
+        pending = {int(r[0]) for r in con.execute(
+            "SELECT vid FROM vectors WHERE hash IS NULL")}
+        if not pending:
+            return None
+        _gc_orphan_vectors(con)
+        before = int(con.execute("SELECT COUNT(*) FROM %s" % tbl).fetchone()[0])  # noqa: S608  name from a literal pair
+        # Seeded with what is already known, so an unhashed row can collapse
+        # onto a vector a later build had already stored under its hash.
+        canonical: dict[bytes, int] = {
+            bytes(h): int(vid) for vid, h in con.execute(
+                "SELECT vid, hash FROM vectors WHERE hash IS NOT NULL")}
+        dupes: list[tuple[int, int]] = []
+        for vid, blob in con.execute(
+                "SELECT %s, embedding FROM %s ORDER BY %s"  # noqa: S608  names from a literal pair
+                % (key, tbl, key)):
+            if vid not in pending:
+                continue
+            pending.discard(vid)
+            h = hashlib.sha256(bytes(blob)).digest()
+            keep = canonical.get(h)
+            if keep is None:
+                canonical[h] = vid
+                # Backfilling the hash is what makes the saving persist: a row
+                # adopted with a NULL hash is invisible to `_vector_id`, so the
+                # next build would store its own copy all over again.
+                con.execute("UPDATE vectors SET hash = ? WHERE vid = ?",
+                            (h, vid))
+            else:
+                dupes.append((vid, keep))
+        # An identity row the scan never reached names no vector at all. Left
+        # alone it would keep the probe above answering "there is work to do"
+        # forever, so a full pass would run on every reindex; the `dangling`
+        # check below still refuses if a chunk was relying on it.
+        _drop_vectors(con, sorted(pending))
+        for vid, keep in dupes:
+            con.execute("UPDATE chunks SET vid = ? WHERE vid = ?", (keep, vid))
+        _drop_vectors(con, [vid for vid, _keep in dupes])
+        after = int(con.execute("SELECT COUNT(*) FROM %s" % tbl).fetchone()[0])  # noqa: S608  name from a literal pair
+        dangling = int(con.execute(
+            "SELECT COUNT(*) FROM chunks c WHERE NOT EXISTS "
+            "(SELECT 1 FROM vectors v WHERE v.vid = c.vid)").fetchone()[0])
+        if after != len(canonical) or dangling:
+            con.rollback()
+            raise BoostError(
+                "deduplicate left %d of %d vectors and %d unresolved chunk%s — "
+                "store left unchanged"
+                % (after, len(canonical), dangling,
+                   "" if dangling == 1 else "s"),
+                hint="rebuild instead: `boost reindex --dense --force`")
+        con.commit()
+    finally:
+        con.close()
+    # Outside the transaction: VACUUM cannot run inside one, and without it the
+    # pages the duplicates held stay allocated to the file — which is the whole
+    # point of this pass. Only when something was actually freed: a VACUUM
+    # rewrites the entire database, which on the 1.6 GB store this exists for
+    # is minutes of I/O to reclaim nothing.
+    if before > after:
+        con2 = _connect()
+        if con2 is not None:
+            try:
+                con2.execute("VACUUM")
+            except sqlite3.DatabaseError:
+                pass        # a bigger file is a cosmetic loss, not a failure
+            finally:
+                con2.close()
+    return {"vectors": after, "freed": before - after,
+            "bytes": db_path().stat().st_size}
+
+
+def _expand(con: sqlite3.Connection, ranked: list[tuple[int, float, bytes]],
+            pool: int) -> list[tuple[int, float, bytes]]:
+    """Turn ranked *vectors* into the ranked *chunk rows* that name them.
+
+    One vector now backs many chunks, so this is where the store's compression
+    is undone for the caller — `retrieve` still reduces over chunk rows and
+    must not learn about `vid`.
+
+    Two bounds, and both matter. :data:`MAX_PER_VECTOR` is applied **in SQL**,
+    through a window rather than in Python, because the cluster this exists for
+    is 1,464 chunks behind one vector on a real store: reading them all in
+    order to keep three is the shape the cap was written to avoid, one level
+    down. And the walk stops at ``pool``, so the rows that fill it are the
+    nearest ones and a vector short of the cap costs nothing.
+
+    On a store that predates the relation :func:`_vid_col` reads ``id``, each
+    vector has exactly one chunk, and both bounds are no-ops — the same rows
+    the previous shape returned.
+    """
+    if not ranked:
+        return []
+    col = _vid_col(con)
+    ids = [vid for vid, _d, _k in ranked]
+    holes = ",".join("?" * len(ids))
+    per_vector: dict[int, list[int]] = {}
+    for cid, vid in con.execute(
+            "SELECT id, vid FROM (SELECT id AS id, %s AS vid, ROW_NUMBER() "  # noqa: S608  column name from _vid_col; ids are bound
+            "OVER (PARTITION BY %s ORDER BY id) AS rn FROM chunks "
+            "WHERE %s IN (%s)) WHERE rn <= ?"
+            % (col, col, col, holes), (*ids, MAX_PER_VECTOR)):
+        per_vector.setdefault(vid, []).append(cid)
+    out: list[tuple[int, float, bytes]] = []
+    for vid, dist, vkey in ranked:
+        for cid in per_vector.get(vid, ()):
+            if len(out) >= pool:
+                return out
+            out.append((cid, dist, vkey))
+    return out
+
+
 def _knn(con: sqlite3.Connection, qblob: bytes,
          pool: int) -> list[tuple[int, float, bytes]]:
     """``(chunk_id, cosine_distance, vector_key)`` for the nearest chunks.
@@ -1175,25 +1534,31 @@ def _knn(con: sqlite3.Connection, qblob: bytes,
         # MAX_PER_VECTOR of it. Rows arrive sorted, so the copies that survive
         # are the nearest ones and the slots freed go to the next *distinct*
         # vector rather than to the next copy of this one.
-        out: list[tuple[int, float, bytes]] = []
+        #
+        # On a deduplicated store this cap is already structural — one row per
+        # distinct vector — and the hash costs one sha256 over bytes that were
+        # read anyway. It stays because it is what still thins a store that has
+        # not run `deduplicate()` yet, where the copies are real rows.
+        ranked: list[tuple[int, float, bytes]] = []
         per: dict[bytes, int] = {}
         for rid, dist, blob in rows:
-            if len(out) >= pool:
+            if len(ranked) >= pool:
                 break
             vkey = hashlib.sha256(blob).digest()[:16]
             if per.get(vkey, 0) >= MAX_PER_VECTOR:
                 continue
             per[vkey] = per.get(vkey, 0) + 1
-            out.append((rid, dist, vkey))
-        return out
-    # Legacy float32 layout: one row per chunk with no separate blob table, so
-    # there is nothing cheap to hash. Each row becomes its own group, which
-    # makes the cap a no-op — correct rather than clever, because this path
-    # exists for widths `bit[N]` cannot take and no real store is on it.
-    return [(rid, dist, b"%d" % rid) for rid, dist in con.execute(
-        "SELECT rowid, distance FROM vec_chunks "
-        "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
-        (qblob, pool)).fetchall()]
+            ranked.append((rid, dist, vkey))
+    else:
+        # Legacy float32 layout: no separate blob table, so there is nothing
+        # cheap to hash and each vector row becomes its own group. Correct
+        # rather than clever — this path exists for widths `bit[N]` cannot take
+        # and no real store is on it.
+        ranked = [(rid, dist, b"%d" % rid) for rid, dist in con.execute(
+            "SELECT rowid, distance FROM vec_chunks "
+            "WHERE embedding MATCH ? ORDER BY distance LIMIT ?",
+            (qblob, pool)).fetchall()]
+    return _expand(con, ranked, pool)
 
 
 def retrieve(query: str, k: int = 60, kind: str | None = None,

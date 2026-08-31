@@ -104,11 +104,17 @@ def test_duplicates_get_the_same_vector(counting_env):
     if dense.build(entries) is None:
         pytest.skip("sqlite-vec backend unavailable")
     con = dense._connect()
+    # Through `vid`: a chunk NAMES its vector rather than owning one, so the
+    # two rows below resolve to the same stored blob instead of to two copies
+    # of it. That indirection is the whole saving — before it, `v.id = c.id`
+    # joined two identical 4 KB blobs.
     rows = list(con.execute(
         "SELECT c.name, v.embedding FROM chunks c "
-        "JOIN vec_raw v ON v.id = c.id ORDER BY c.name"))
+        "JOIN vec_raw v ON v.id = c.vid ORDER BY c.name"))
     assert len(rows) == 2
     assert rows[0][1] == rows[1][1], "same text must store the same vector"
+    assert con.execute("SELECT COUNT(*) FROM vec_raw").fetchone()[0] == 1, (
+        "one text was stored twice")
     con.close()
 
 

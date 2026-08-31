@@ -138,9 +138,21 @@ class TestThePremiseHolds:
             rows = con.execute("SELECT COUNT(*) FROM vec_raw").fetchone()[0]
         finally:
             con.close()
-        assert rows == len(_ENTRIES)
-        # 12 pasters collapse to one distinct blob; 4 originals keep their own.
+        # One row per DISTINCT vector, not one per chunk: 12 pasters collapse
+        # to a single stored blob and the 4 originals keep their own. Before
+        # `dense-store-holds-every-vector-once-per-copy` this table held 16
+        # rows for those 5 vectors, which is the storage the cluster cost.
         assert len(blobs) == 1 + len(_ORIGINALS), len(blobs)
+        assert rows == len(blobs)
+        # The compression must be invisible: every chunk still resolves.
+        con2 = _open()
+        try:
+            unresolved = con2.execute(
+                "SELECT COUNT(*) FROM chunks c WHERE NOT EXISTS "
+                "(SELECT 1 FROM vec_raw v WHERE v.id = c.vid)").fetchone()[0]
+        finally:
+            con2.close()
+        assert unresolved == 0
 
 
 class TestThePoolIsThinnedByVector:

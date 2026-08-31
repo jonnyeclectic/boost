@@ -4910,8 +4910,9 @@ existing table, and <code>build</code> already wipes on a version change. One fu
       </article>
 
       <article class="cap rcard" id="dense-store-holds-every-vector-once-per-copy">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Storage</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Storage</span></div>
         <h3>The dense store keeps one vector per <em>copy</em>, not one per distinct text</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>_embed_and_store</code> already buys each distinct text <b>once</b> &mdash; <code>seen</code>
 de-duplicates before the provider call, which is why <code>build</code>'s progress total counts
 distinct texts rather than rows. The <em>storage</em> never got the same treatment: every chunk row
@@ -4975,7 +4976,7 @@ each needing mutant-killing tests. And the one invariant that catches silent cor
 <code>test_dense_entry_reuse.py</code>'s two-way <code>chunks.id</code> &harr; <code>vec_raw.id</code>
 bijection &mdash; must be <b>rewritten</b> rather than extended, because dedup breaks one direction
 by design. Its replacement: every <code>chunks.vid</code> resolves, and every <code>vectors</code>
-row has at least one referent.</p>
+row has at least one referent.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m">Impact <b>Med</b></span>
