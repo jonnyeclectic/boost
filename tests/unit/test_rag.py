@@ -1367,8 +1367,11 @@ class TestEngineRouting:
         # is the only engine available", not a preference between the two.
         # There is no preference any more — with both present they fuse.
         monkeypatch.setattr(dense_mod, "ready", lambda: True)
-        picked = [{"entry": {"name": "d", "tap": "x/y"}, "score": 9.0,
-                   "snippet": "D"}]
+        # `skill_md` is required — `entry_key` (used by `_with_content` and
+        # now by `collapse_near_duplicates`) is deliberately strict about it,
+        # same as every real dense hit carries.
+        picked = [{"entry": {"name": "d", "tap": "x/y", "skill_md": "d/SKILL.md"},
+                   "score": 9.0, "snippet": "D"}]
         monkeypatch.setattr(dense_mod, "retrieve", lambda *a, **k: picked)
         hits, label = rag.search("react", smart=False)
         assert label == "dense vectors"
