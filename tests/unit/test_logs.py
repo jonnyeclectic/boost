@@ -200,7 +200,7 @@ def test_configure_survives_file_handler_oserror(env, monkeypatch):
     def _boom(*a, **k):
         raise OSError("read-only filesystem")
 
-    monkeypatch.setattr(logs.logging.handlers, "RotatingFileHandler", _boom)
+    monkeypatch.setattr(logs, "_BestEffortFileHandler", _boom)
     logs.reset()
     logger = logs.configure()          # the OSError is swallowed, CLI proceeds
     assert logger is logs.get_logger()
@@ -208,6 +208,37 @@ def test_configure_survives_file_handler_oserror(env, monkeypatch):
     assert not any(isinstance(h, logging.handlers.RotatingFileHandler)
                    for h in logger.handlers)
     logger.info("still-alive")
+
+
+def test_file_handler_emit_failure_is_silent(env, capsys):
+    """delay=True defers the file open past configure()'s own
+    contextlib.suppress(OSError) to the first emit() — on a different stack,
+    with nothing catching it. Left at the logging module's default, that
+    prints a "--- Logging error ---" traceback to stderr for every failed
+    write. handleError must swallow it instead."""
+    logs.configure()
+    fh = next(h for h in logs.get_logger().handlers
+              if isinstance(h, logging.handlers.RotatingFileHandler))
+
+    def _boom():
+        raise OSError("simulated: filesystem policy denies this write")
+
+    fh._open = _boom  # force the failure emit() hits, without touching disk
+    logs.get_logger().debug("should not blow up")  # must not raise
+    err = capsys.readouterr().err
+    assert "Logging error" not in err
+    assert "OSError" not in err
+
+
+def test_file_handler_class_overrides_handle_error(env, capsys):
+    """handleError is overridden on the handler itself — not by flipping the
+    module-global logging.raiseExceptions, which would silence every logger
+    in the process rather than just boost's best-effort file handler."""
+    assert logging.raiseExceptions is True  # the module global is left alone
+    handler = logs._BestEffortFileHandler.__new__(logs._BestEffortFileHandler)
+    record = logging.LogRecord("boost", logging.DEBUG, __file__, 1, "x", None, None)
+    handler.handleError(record)  # must not raise, and must not print
+    assert capsys.readouterr().err == ""
 
 
 def test_boost_version_falls_back_to_unknown(env, monkeypatch):

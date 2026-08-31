@@ -169,6 +169,24 @@ def _file_enabled() -> bool:
     return bool(config.get("logging.file", True))
 
 
+class _BestEffortFileHandler(logging.handlers.RotatingFileHandler):
+    """A rotating file handler whose own I/O failures never reach the user.
+
+    ``delay=True`` (below) defers the file open past construction — past the
+    ``contextlib.suppress(OSError)`` in :func:`configure` — to the first
+    ``emit()``, on a different stack frame with nothing catching it. Left at
+    the default, ``logging.Handler.handleError`` prints ``--- Logging
+    error ---`` and a full traceback to stderr for every failed write, which
+    is exactly the noise the file handler exists to keep out of the user's
+    way. Overriding ``handleError`` here scopes the swallow to this one
+    handler, rather than flipping the module-global ``logging.raiseExceptions``
+    for every logger in the process.
+    """
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        pass
+
+
 def get_logger() -> logging.Logger:
     """Return the shared ``boost`` logger; :func:`configure` attaches handlers."""
     return logging.getLogger(LOGGER_NAME)
@@ -214,7 +232,7 @@ def configure(verbose: bool = False, debug: bool = False,
     if _file_enabled():
         with contextlib.suppress(OSError):
             paths.logs_dir().mkdir(parents=True, exist_ok=True)
-            fh = logging.handlers.RotatingFileHandler(
+            fh = _BestEffortFileHandler(
                 log_path(), maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT,
                 encoding="utf-8", delay=True,
             )

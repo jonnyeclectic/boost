@@ -2,7 +2,8 @@
 id: delay-true-defeats-the-log-suppress
 board: code
 section: planned
-status: planned
+status: inflight
+owner: loop/log-suppress-delay-true
 category: Health · Robustness
 complexity: S
 impact: Medium
