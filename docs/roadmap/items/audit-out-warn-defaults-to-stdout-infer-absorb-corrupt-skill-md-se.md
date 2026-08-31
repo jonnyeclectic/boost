@@ -7,7 +7,7 @@ category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
-note: boost infer > SKILL.md writes the AI warning as line 1 of the generated file
+note: boost infer &gt; SKILL.md writes the AI warning as line 1 of the generated file
 order: 222
 owner:
 pr:

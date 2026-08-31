@@ -147,6 +147,11 @@ _BLOCK_RE = re.compile(r"<(%s)[\s/>]" % "|".join(_BLOCK_TAGS), re.IGNORECASE)
 #: after every roadmap script has said clean. `x < w - 1` shipped that way.
 _RAW_LT_RE = re.compile(r"<(?![/!a-zA-Z])")
 
+#: A well-formed tag, so text can be told apart from markup. Attribute values
+#: may not carry an angle bracket, which is true of every card and keeps this a
+#: regex rather than a parser.
+_TAG_RE = re.compile(r"</?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?/?>")
+
 #: Inline tags a card body may use. Everything else — including the accidental
 #: `<y>` that `x<y` opens — is refused here rather than by html-validate.
 _INLINE_TAGS = frozenset({"a", "b", "br", "code", "em", "i", "s", "small",
@@ -171,6 +176,20 @@ def check_body_is_inline(where: str, body: str) -> None:
             "fails the build with 'Raw \"<\" must be encoded as \"&lt;\"'. "
             "Write &lt; instead, including inside <code>. Near: ...%s..."
             % (where, near.replace("\n", " ")))
+    # `no-raw-characters` rejects a bare `>` in text content exactly as it
+    # rejects a bare `<`, and just as late — a separate required workflow,
+    # minutes after every roadmap script has said clean. Strip the well-formed
+    # tags and whatever `>` is left is literal. `boost infer > SKILL.md` and a
+    # quoted `"> "` prompt both shipped that way, in a `note:`.
+    stripped = _TAG_RE.sub("", body or "")
+    gt = stripped.find(">")
+    if gt >= 0:
+        near = stripped[max(0, gt - 30):gt + 30]
+        raise RoadmapError(
+            "%s: a raw \">\" that closes no tag is invalid HTML — "
+            "html-validate fails the build with 'Raw \">\" must be encoded as "
+            "\"&gt;\"'. Write &gt; instead, including inside <code>. "
+            "Near: ...%s..." % (where, near.replace("\n", " ")))
     # A `<` followed by a letter *does* open a tag — just not necessarily a real
     # one. `x<y` reads as `<y>` and html-validate rejects it as an unknown
     # element, which is the same trap wearing a different message. An allowlist
@@ -220,6 +239,11 @@ def render_code_card(item: dict) -> str:
     imp_cls = " hi" if impact.lower() == "high" else ""
     stars = "★" * _as_int(item.get("wow"), 0)
     note = item.get("note")
+    # The note renders into a <span> as raw HTML, exactly as the body renders
+    # into a <p>. It carried no guard at all until two cards reached
+    # html-validate with a raw `>` in one.
+    if note not in (None, ""):
+        check_body_is_inline(item["_file"], str(note))
     lines = [
         # The item id doubles as the card's anchor, so one item can link
         # another (`<a href="#other-id">`) and a card can be deep-linked.

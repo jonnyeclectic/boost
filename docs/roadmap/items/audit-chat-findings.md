@@ -7,7 +7,7 @@ category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
-note: chat's own printed suggestion retrieves the wrong skill; its "> " prompt leaks into piped stdout
+note: chat's own printed suggestion retrieves the wrong skill; its "&gt; " prompt leaks into piped stdout
 order: 255
 owner:
 pr:
