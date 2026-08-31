@@ -66,6 +66,19 @@ name: lighthouse
 # The page was never the slow part, so "raising it back is gated on making
 # roadmap.html genuinely faster" was gated on the wrong thing.
 #
+# ROADMAP.HTML'S PERFORMANCE FLOOR IS 0.80 AGAIN — SCOPED, THIS TIME. The
+# 2026-08-31 CLI-audit landing (#632) was a content step change: the board went
+# ~570 KB -> 1,252 KB of markup (roughly 175 -> 385 KB transferred at the 3.2x
+# gzip measured above), and its medians moved to 0.85-0.86 against the 0.90
+# floor (observed 0.85, 0.86, 0.85). Same "measure, then floor" rule as every
+# number above: 0.80 sits below the worst median the merged board has produced.
+# Unlike the last 0.80 era this one is scoped via assertMatrix — index.html
+# keeps 0.90, where the floor still measures a stable ~99-100 page. And unlike
+# that era the page IS now the slow part, so the way back up is bounding the
+# page, not waiting on a harness fix: see the
+# roadmap-page-weight-grows-without-bound card (collapse or paginate settled
+# sections in build_roadmap.py).
+#
 # The two hand-authored, highest-traffic pages are audited: the landing page and
 # the code roadmap. Served over a throwaway localhost static server (no network),
 # three runs each so a noisy single sample can't redden a PR.

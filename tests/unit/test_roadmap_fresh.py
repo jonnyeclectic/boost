@@ -135,10 +135,63 @@ def test_a_raw_angle_bracket_is_refused(body):
 
 
 @pytest.mark.skipif(not _SCRIPT.exists(), reason="repo-root files not reachable")
+@pytest.mark.parametrize("text", [
+    "boost infer > SKILL.md writes the AI warning as line 1",
+    'its "> " prompt leaks into piped stdout',
+    "prose with a > b comparison",
+    "<code>x -> y</code>",
+])
+def test_a_raw_greater_than_is_refused(text):
+    """The other half of the raw-`<` guard.
+
+    `no-raw-characters` rejects a bare `>` in text content exactly as it
+    rejects a bare `<`, and in the same place: a separate required workflow,
+    minutes after every roadmap script has reported clean. Two cards shipped
+    that way — both in a `note:`, which nothing checked at all.
+    """
+    builder = _load_builder()
+    with pytest.raises(builder.RoadmapError) as ei:
+        builder.check_body_is_inline("some-card.md", text)
+    assert "some-card.md" in str(ei.value)
+    assert "&gt;" in str(ei.value), "the message must say what to write instead"
+
+
+@pytest.mark.skipif(not _SCRIPT.exists(), reason="repo-root files not reachable")
+def test_a_card_note_is_guarded_like_a_body():
+    """`note:` is interpolated into a <span> as raw HTML, so it needs the guard.
+
+    The body had two angle-bracket guards and the one-line note beside it had
+    none, which is how `boost infer > SKILL.md` reached html-validate.
+    """
+    builder = _load_builder()
+    item = {"_file": "some-card.md", "id": "x", "title": "t", "body": "b",
+            "status": "planned", "impact": "Med", "wow": 1,
+            "complexity": "S", "category": "c",
+            "note": "boost infer > SKILL.md"}
+    with pytest.raises(builder.RoadmapError) as ei:
+        builder.render_code_card(item)
+    assert "some-card.md" in str(ei.value)
+
+
+@pytest.mark.skipif(not (_SCRIPT.exists() and _ITEMS.exists()),
+                    reason="repo-root files not reachable")
+def test_every_card_note_is_inline():
+    """Every shipped `note:` survives the guard the renderer now applies."""
+    builder = _load_builder()
+    for board in ("code", "design"):
+        for item in builder.load_items(board):
+            note = item.get("note")
+            if note not in (None, ""):
+                builder.check_body_is_inline(item["_file"], str(note))
+
+
+@pytest.mark.skipif(not _SCRIPT.exists(), reason="repo-root files not reachable")
 @pytest.mark.parametrize("body", [
     "plain prose with no markup at all",
     "<b>bold</b> and <em>italic</em> and <code>code</code>",
     "an escaped <code>a &lt; b</code> comparison",
+    "an escaped <code>a &gt; b</code> comparison",
+    "an arrow <code>a -&gt; b</code> inside code",
     "an arrow → and a middot &middot; and an entity &amp;",
     "<a href='#x'>a link</a>",
 ])
