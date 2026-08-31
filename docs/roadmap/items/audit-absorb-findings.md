@@ -2,14 +2,14 @@
 id: audit-absorb-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Consistency
 complexity: S
 impact: Low
 wow: 1
 note: absorb is the only generated-skill command with no journal.log call at all
 order: 246
-owner:
+owner: loop/absorb-journal
 pr:
 title: "boost absorb: CLI audit findings (2026-08)"
 ---
