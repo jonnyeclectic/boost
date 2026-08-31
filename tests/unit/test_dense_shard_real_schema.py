@@ -89,15 +89,17 @@ def _production_store(tap: str = "acme/skills", rows: int = 2):
     try:
         dense._ensure_schema(con, DIM)
         for i in range(rows):
-            cur = con.execute(
-                "INSERT INTO chunks (name, tap, path, kind, cix, snip) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                ("skill-%d" % i, tap, "skill-%d/SKILL.md" % i, "skill", 0,
-                 "snippet %d" % i))
+            # Through `_vector_id`, the way `dense.build` stores one: a chunk
+            # NAMES its vector rather than owning it, so writing `vec_chunks`
+            # by hand and leaving `chunks.vid` NULL would build a store no
+            # export could join — the very failure this file exists to catch.
+            vid = dense._vector_id(
+                con, sqlite_vec.serialize_float32([0.1 * (i + 1)] * DIM))
             con.execute(
-                "INSERT INTO vec_chunks (rowid, embedding) VALUES (?, ?)",
-                (cur.lastrowid,
-                 sqlite_vec.serialize_float32([0.1 * (i + 1)] * DIM)))
+                "INSERT INTO chunks (name, tap, path, kind, cix, snip, vid) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("skill-%d" % i, tap, "skill-%d/SKILL.md" % i, "skill", 0,
+                 "snippet %d" % i, vid))
         meta = {"version": dense.INDEX_VERSION, "provider": "local",
                 "model": "bge-small-en-v1.5", "dim": DIM,
                 "commits": {tap.replace("/", "__"): "c0ffee"}}

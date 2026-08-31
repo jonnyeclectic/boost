@@ -189,7 +189,13 @@ class TestRankingIsUnchanged:
 
         con = dense._connect()
         try:
-            names = dict(con.execute("SELECT id, name FROM chunks"))
+            # Keyed by `vid`: `vec_chunks_bin` is keyed by the VECTOR, not by
+            # the chunk. The two numbers happen to coincide on this fixture
+            # (sixteen distinct bodies, so both sequences advance in step) and
+            # keying on `id` would pass for that reason rather than the right
+            # one — the same class of accident this file's premise assertions
+            # exist to rule out.
+            names = dict(con.execute("SELECT vid, name FROM chunks"))
             qblob = dense._load().serialize_float32(_VEC["skill-07"])
             coarse = [names[r[0]] for r in con.execute(
                 "SELECT rowid FROM vec_chunks_bin "
@@ -363,8 +369,12 @@ class TestTapDeletion:
         dense.build(entries=entries, force=True)
         con = dense._connect()
         try:
+            # `_drop_vectors` takes VECTOR ids, which is what `chunks.vid`
+            # names — passing chunk ids would only work while the two
+            # coincided, and that is not a property the store has.
             ids = [r[0] for r in con.execute(
-                "SELECT id FROM chunks WHERE tap = ?", ("other/repo",))]
+                "SELECT DISTINCT vid FROM chunks WHERE tap = ?",
+                ("other/repo",))]
             assert ids
             dense._drop_vectors(con, ids)
             con.commit()
