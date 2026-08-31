@@ -437,7 +437,7 @@ def ingest(taps: list[str], commits: dict[str, str],
             continue
         want = str(row.get("commit") or "")
         local = commits.get(tap, "")
-        if want and local == want and built.get(tap, "") == want:
+        if want and local == want == built.get(tap, ""):
             results.append({"tap": tap, "status": "current", "moved": False})
             _emit(on_event, tap, "current", "")
             continue
