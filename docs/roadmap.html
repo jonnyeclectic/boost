@@ -1012,8 +1012,9 @@ published version works against PyPI as it stands today.</p>
       </article>
 
       <article class="cap rcard" id="delay-true-defeats-the-log-suppress">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Health · Robustness</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Health · Robustness</span></div>
         <h3>A best-effort log handler prints a traceback over every command's output</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>logs.configure</code> says what it means to do &mdash; <em>&ldquo;File handler &mdash; always
 DEBUG, best-effort (never break the CLI over a log)&rdquo;</em> &mdash; and wraps the handler in
 <code>contextlib.suppress(OSError)</code> to guarantee it. The guarantee does not hold, and the
@@ -1052,12 +1053,12 @@ agree about what &ldquo;writable&rdquo; means. The check passed (<code>&#10003; 
 ~/.boost/logs/boost.log</code>) in the same session where the handler was failing on every emit,
 because the two ask different questions &mdash; one about the path's mode bits, the other about
 what an <code>open()</code> actually returns. A health check that reports green while the thing it
-checks fails on every invocation is the more expensive half of this card.</p>
+checks fails on every invocation is the more expensive half of this card.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Medium</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">PR</span>
+          <span class="m">handleError overridden on the file handler, scoped to emit; CI's make check (incl. mutation) green on</span>
         </div>
       </article>
 

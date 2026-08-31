@@ -2,13 +2,13 @@
 id: delay-true-defeats-the-log-suppress
 board: code
 section: planned
-status: inflight
+status: shipped
 owner: loop/log-suppress-delay-true
 category: Health · Robustness
 complexity: S
 impact: Medium
 wow: 2
-note: PR #637 open — handleError overridden on the file handler; make check unverified locally (sandbox has no PyPI access), pending CI
+note: handleError overridden on the file handler, scoped to emit; CI's make check (incl. mutation) green on #637
 pr: 637
 order: 130
 title: A best-effort log handler prints a traceback over every command's output
