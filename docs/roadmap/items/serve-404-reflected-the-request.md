@@ -2,7 +2,7 @@
 id: serve-404-reflected-the-request
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Security · Bug
 complexity: S
 impact: Med
@@ -10,6 +10,7 @@ wow: 3
 note: the test suite pinned the echo in place as if it were the contract
 order: 97
 owner: loop/serve-no-reflected-request
+pr: 489
 pr: 489
 title: <code>boost serve</code> echoed the request path back into its 404 body
 ---

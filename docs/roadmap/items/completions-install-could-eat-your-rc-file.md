@@ -2,7 +2,7 @@
 id: completions-install-could-eat-your-rc-file
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Bug
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: two runs of a "no-op" command deleted the lines between two markers
 order: 113
 owner: fix/completions-malformed-block
-pr:
+pr: 523
 title: <code>completions --install</code> could delete the config between its own markers
 ---
 Found by asking a plain question — <em>is <code>boost completions</code>

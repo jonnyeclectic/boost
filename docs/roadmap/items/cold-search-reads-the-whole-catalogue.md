@@ -2,7 +2,7 @@
 id: cold-search-reads-the-whole-catalogue
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: Performance · Search
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: 0.94 s cold search at 71.6k entries — ~0.5 s spent materialising data the top hits never use
 order: 122
 owner: loop/search-perf
-pr:
+pr: 542
 title: A cold search materialises 71,600 entries to print five
 ---
 Profiled cold <code>boost search</code> at real scale (458 taps, 71,600
