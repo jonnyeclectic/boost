@@ -113,6 +113,18 @@ def tap_refresh_marker() -> Path:
     return state_dir() / "last-tap-refresh"
 
 
+def shard_sync_marker() -> Path:
+    """File whose mtime records when published vectors were last ingested.
+
+    Deliberately beside the tap marker and NOT under ``cache/``: `boost clean`
+    sweeps `cache/*.json` whose stem is not a tap, and a marker there would be
+    deleted on every clean — after which search would nag about vectors that
+    were refreshed this morning. Same one-`stat` contract as the tap marker,
+    for the same reason: search reads it, and search does no network.
+    """
+    return state_dir() / "last-shard-sync"
+
+
 def snapshots_dir() -> Path:
     """Return the directory for ``snap-*`` store snapshot tarballs."""
     return state_dir() / "snapshots"

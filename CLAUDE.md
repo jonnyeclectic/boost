@@ -543,6 +543,41 @@ each agent's skills dir, and updating the lock file.
   by another key-holder; `scripts/publish_shards.py manifest` refuses to
   describe two spaces in one file.
 
+- **`sync` and `ingest` differ in which side is authoritative, and only one of
+  them survives a republish.** `shards.sync` takes this machine's commits as
+  given and asks whether a published shard happens to match — right on setup
+  day, wrong a week later, because the weekly run republishes against whatever
+  the registries moved to. So for most taps the answer becomes "no", and the
+  user is told their vectors are stale with no way to act on it but hours of
+  local CPU: `boost update` chases branch HEAD and `--force` chases it while
+  dropping the pin, neither of which can land on a commit a manifest names.
+  `shards.ingest` reads the manifest as the **target**: a row for a tap held at
+  another commit is a reason to move the tap (`registry.retarget` — checkout
+  then pin, never the reverse), and `boost update --shards` is the surface. Two
+  invariants are load-bearing. **Download and verify before moving**: a move
+  followed by a failed download leaves vectors stale but present, the failure
+  that looks like nothing at all — `retarget` is injected so the ordering is
+  testable without a git remote. **Skip on `built`, not on `commits`**:
+  `dense.tap_commits()` says which commit the *vectors* were built at, and a tap
+  matching on both is skipped without a download, which is the whole reason a
+  weekly cron line costs one manifest fetch. A registry that dropped out of the
+  manifest is left pinned where it sits — falling back to HEAD would invent a
+  target no published vectors describe. And a tap that moves invalidates more
+  than vectors: its catalog cache and the BM25 index name entries from the old
+  tree, so `catalog.rebuild_tap` and `rag.build` run for anything that moved.
+
+- **Search reads two mtimes and makes zero network calls, and cheapness is not
+  the argument.** The manifest is ~170 KB, so an inline check would be
+  affordable; acting on its answer means moving taps and downloading hundreds of
+  megabytes, which cannot happen inside a sub-second search. So the most an
+  inline check could ever produce is the one line `_hint_stale_shards` already
+  prints for one `stat` — at the price of a round trip per query and
+  unannounced egress. `paths.shard_sync_marker()` lives under `state/`, not
+  `cache/`, because `boost clean` sweeps `cache/*.json` and would delete it,
+  after which search would nag about vectors refreshed that morning. The shard
+  hint suppresses the tap-age hint when it fires: its remedy moves the taps too,
+  and two staleness lines under one result set is how a hint becomes noise.
+
 **Search has two engines**, both in `core/`: `rag.py` is the always-on,
 zero-dependency BM25 engine (full-content index, auto-builds on first
 search — this is what the required `eval` gate floors at recall@k ≥ 0.78).

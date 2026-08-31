@@ -155,14 +155,34 @@ for every one that has a published shard.
 Already tapped? `boost reindex --fetch-shards` does the download half alone,
 and `boost reindex --dense` embeds locally whatever has no published shard.
 
+Vectors are republished weekly, and `boost update --shards` is the ingestion
+side of that. It reads the manifest as the *target* state: each tap is moved
+onto the commit its published vectors were built from, those vectors are
+imported, and the keyword index is rebuilt for anything that moved. A tap
+already sitting at the published commit with those vectors already built is
+skipped without downloading anything, so in a week where a registry did not
+move the command does nothing at all — which is what makes it safe to schedule:
+
+```bash
+# refresh prebuilt vectors every Monday at 09:00 — crontab -e
+0 9 * * 1 /full/path/to/boost update --shards >> ~/.boost/logs/shards.log 2>&1
+```
+
+Plain `boost update` moves each tap to its branch head; `--shards` moves each
+tap to the commit the published vectors describe. Two different targets, so
+they are separate modes rather than one pass, and `--shards --taps-only` is
+refused rather than silently picking one.
+
 Because vectors are keyed to a registry's commit, `quickstart` **pins** each tap
 it fetches vectors for, and `boost update` skips a pinned tap rather than moving
 it out from under them (`--force` moves it anyway and drops the pin). When a tap
 does move, boost checks whether a newer shard exists for the new commit and
 imports it; if none does, it says so instead of leaving stale vectors looking
-fresh. `boost search` never refreshes taps behind your back — it prints one line
-when they are more than two weeks old and leaves the fetching to
-`boost update --taps-only`.
+fresh. `boost search` never refreshes taps behind your back, and never checks
+the manifest either — acting on that answer means moving taps and downloading
+hundreds of megabytes, which cannot happen inside a sub-second search. It prints
+one line when the taps or the prebuilt vectors are more than two weeks old and
+leaves the fetching to `boost update --taps-only` or `boost update --shards`.
 Every download is checked against the sha256 in the manifest and refused on a
 mismatch, and shards for a registry that has moved since publication are
 refused rather than merged — stale vectors would otherwise look fresh forever.

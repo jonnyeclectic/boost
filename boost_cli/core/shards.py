@@ -34,9 +34,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import suppress
 from pathlib import Path
 
 from ..errors import BoostError
@@ -328,6 +330,13 @@ def sync(taps: list[str], commits: dict[str, str],
         results.append({"tap": tap, "status": status, "detail": reason,
                         "chunks": int(row.get("chunks") or 0)})
         _emit(on_event, tap, status, reason)
+    if any(r["status"] == "imported" for r in results):
+        # Stamped here as well as in `ingest`, because this is the path a new
+        # machine takes: `boost quickstart` imports through `sync`, so without
+        # this the marker stays unset for exactly the users the staleness hint
+        # is written for, and the one surface that teaches `boost update
+        # --shards` exists would never fire on the onboarding path.
+        mark_synced()
     return results
 
 
@@ -343,3 +352,127 @@ def _size_label(row: dict) -> str:
     if not isinstance(size, int) or size <= 0:
         return ""
     return util.human_size(size)
+
+
+#: How long published vectors may go un-ingested before `boost search` says so.
+#: The publish cadence is weekly, so this is two missed runs — a hint that fires
+#: the morning after every run is one users learn to read past, and the remedy
+#: it names moves taps, which is not a thing to nag anyone into hourly.
+STALE_SHARDS_DAYS = 14
+
+
+def mark_synced() -> None:
+    """Stamp "published vectors were ingested just now"; never fails a run."""
+    with suppress(OSError):
+        paths.ensure_dirs()
+        paths.shard_sync_marker().write_text("", encoding="utf-8")
+
+
+def sync_age_days() -> float | None:
+    """Days since published vectors were last ingested, or None if never.
+
+    None is not zero and not infinity, the same distinction
+    ``registry.refresh_age_days`` draws: a machine that embedded everything
+    locally has never ingested a shard and must not be nagged about the age of
+    something it does not use.
+    """
+    try:
+        age = time.time() - paths.shard_sync_marker().stat().st_mtime
+    except OSError:
+        return None
+    return max(0.0, age / 86400.0)
+
+
+def ingest(taps: list[str], commits: dict[str, str],
+           built: dict[str, str] | None = None, manifest: dict | None = None,
+           cache_dir: Path | None = None, on_event=None,
+           retarget=None) -> list[dict]:
+    """Bring `taps` to the state the published manifest describes.
+
+    WHICH SIDE IS AUTHORITATIVE is the whole difference from :func:`sync`.
+    `sync` takes this machine's commits as given and asks whether a published
+    shard happens to match. That is right on the day a machine is set up, and
+    wrong a week later: the weekly run republishes against whatever the
+    registries have moved to, so for most taps the answer becomes "no", and the
+    user is told their vectors are stale with no way to act on it but hours of
+    local CPU. `ingest` reads the manifest as the *target*: a row for a tap this
+    machine holds at another commit is a reason to move the tap, because the
+    commit was pinned to match the vectors in the first place.
+
+    `built` maps tap name -> the commit this machine's vector store holds for
+    it (``dense.tap_commits``), and it is what makes the weekly case free: a tap
+    already at the row's commit *with vectors already built there* is skipped
+    without downloading anything. Passing only `commits` would re-download a
+    store's own rows every week.
+
+    ORDER IS LOAD-BEARING: download and verify the bytes, and only then move the
+    tap. Moving first and failing the download leaves the clone on a commit
+    whose vectors are stale but still present — the failure that looks like
+    nothing at all, and the one this module exists to refuse. `retarget` is
+    injected so the ordering can be tested without a git remote; it defaults to
+    ``registry.retarget``.
+
+    Never raises for one tap. A registry that dropped out of the manifest is
+    reported "unpublished" and left pinned exactly where it sits — falling back
+    to moving it to HEAD would be inventing a target no vectors describe.
+    """
+    from . import dense
+    manifest = manifest if manifest is not None else fetch_manifest()
+    why = incompatible(manifest)
+    if why:
+        return [{"tap": t, "status": "incompatible", "detail": why,
+                 "moved": False} for t in taps]
+    if retarget is None:
+        from . import registry
+        retarget = registry.retarget
+    index = rows(manifest)
+    cache_dir = cache_dir or (paths.cache_dir() / "shards")
+    built = built or {}
+    results: list[dict] = []
+    for tap in taps:
+        row = index.get(tap)
+        if row is None:
+            results.append({"tap": tap, "status": "unpublished", "moved": False})
+            _emit(on_event, tap, "unpublished", "")
+            continue
+        want = str(row.get("commit") or "")
+        local = commits.get(tap, "")
+        if want and local == want == built.get(tap, ""):
+            results.append({"tap": tap, "status": "current", "moved": False})
+            _emit(on_event, tap, "current", "")
+            continue
+        dest = cache_dir / (tap.replace("/", "__") + ".shard.json")
+        moved = False
+        try:
+            _emit(on_event, tap, "downloading", _size_label(row))
+            download(row, dest, manifest)
+            shard = json.loads(dest.read_text(encoding="utf-8"))
+            if local != want:
+                _emit(on_event, tap, "moving", want[:7])
+                retarget(tap, want)
+                moved = True
+            ok, reason = dense.import_shard(shard, commit=want)
+        except BoostError as exc:
+            results.append({"tap": tap, "status": "failed", "moved": moved,
+                            "detail": exc.message})
+            _emit(on_event, tap, "failed", exc.message)
+            continue
+        except (OSError, json.JSONDecodeError) as exc:
+            results.append({"tap": tap, "status": "failed", "moved": moved,
+                            "detail": str(exc)})
+            _emit(on_event, tap, "failed", str(exc))
+            continue
+        finally:
+            # The shard is a transfer format, not a cache — see `sync`.
+            dest.unlink(missing_ok=True)
+        status = "imported" if ok else "failed"
+        results.append({"tap": tap, "status": status, "detail": reason,
+                        "moved": moved, "chunks": int(row.get("chunks") or 0)})
+        _emit(on_event, tap, status, reason)
+    if any(r["status"] in ("imported", "current") for r in results):
+        # Stamped for "the manifest was read and acted on", not for "something
+        # changed": a run where every tap was already current is the successful
+        # weekly case, and leaving the marker cold would make search nag about
+        # vectors refreshed this morning.
+        mark_synced()
+    return results

@@ -199,8 +199,14 @@ class TestDownload:
         assert shards._size_label({"bytes": "big"}) == ""
 
 
+@pytest.mark.usefixtures("sandbox")
 class TestSync:
-    """Per-tap outcomes: one failure never costs another tap its vectors."""
+    """Per-tap outcomes: one failure never costs another tap its vectors.
+
+    ``sandbox`` because a successful import stamps the shard-sync marker under
+    ``$HOME`` — the mtime `boost search` reads — and a test suite must not write
+    into the developer's real ``~/.boost/state`` to find that out.
+    """
 
     def _manifest_for(self, tmp_path, taps):
         rows = [_shard_file(tmp_path, tap, commit)[1] for tap, commit in taps]

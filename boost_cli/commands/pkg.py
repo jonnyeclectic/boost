@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from itertools import chain
 from pathlib import Path
 
-from .. import cliparse
+from .. import cliparse, spin
 from ..core import (
     adapters,
     agents,
@@ -878,6 +878,103 @@ def _resync_vectors(moved: list[str]) -> None:
                           "`boost reindex --dense`" % left, "muted"))
 
 
+def _ingest_event(tap: str, status: str, detail: str) -> None:
+    """Progress for one tap, quiet enough to run over four hundred of them."""
+    if status == "downloading":
+        out.info(out.role("fetching %s %s" % (tap, detail), "muted"))
+    elif status == "moving":
+        out.info(out.role("moving %s to %s" % (tap, detail), "muted"))
+    elif status == "failed":
+        out.info(out.role("%s: failed%s"
+                          % (tap, " (%s)" % detail if detail else ""), "muted"))
+
+
+def _ingest_shards(args) -> int:
+    """`boost update --shards`: refresh vectors from the published manifest.
+
+    Its own mode rather than a step of the normal update, because the two move
+    taps toward different targets: a plain `boost update` moves each tap to its
+    branch HEAD, and this moves each tap to the commit the published vectors
+    were built from. Running both in one pass would move every tap twice and
+    leave the second answer standing, so the flag replaces the update rather
+    than extending it.
+
+    This is the ingestion path for the weekly shard run. It is a no-op on a
+    machine that already holds this week's vectors, which is what makes it
+    safe to put in a cron line — see the docs.
+    """
+    from ..core import dense, shards
+    taps = registry.list_taps()
+    if not taps:
+        raise BoostError("no taps configured — nothing to refresh",
+                         hint="`boost quickstart` taps the starters and loads "
+                              "their vectors in one pass")
+    manifest = shards.fetch_manifest()
+    why = shards.incompatible(manifest)
+    if why:
+        raise BoostError("published shards cannot serve this machine — %s" % why,
+                         hint=dense.fix_hint(dense.status().get("reason", "")))
+    commits = rag._tap_commits()
+    stored = dense.tap_commits()
+    # Both maps are keyed by tap name; the two sources are keyed by safe name.
+    by_name = {t.name: commits.get(t.safe_name, "") for t in taps}
+    built = {t.name: stored.get(t.safe_name, "") for t in taps}
+    results = shards.ingest(
+        list(by_name), by_name, built=built, manifest=manifest,
+        # Progress goes to stdout, which is where the JSON goes: under `--json`
+        # the two would interleave into something no parser can read.
+        on_event=None if args.as_json else _ingest_event)
+
+    imported = [r for r in results if r["status"] == "imported"]
+    current = [r for r in results if r["status"] == "current"]
+    failed = [r for r in results if r["status"] == "failed"]
+    moved = [r["tap"] for r in results if r.get("moved")]
+    # Before the output branch, never inside it: a tap that moved is describing
+    # a different tree, so its catalog cache and the keyword index both name
+    # entries that may no longer exist. Vectors are not the only thing a commit
+    # is load-bearing for, and a `--json` caller is owed the same repair.
+    for name in moved:
+        catalog.rebuild_tap(registry.get(name))
+    if moved:
+        # Spinners write to stderr, so this is safe under `--json`.
+        with spin.Spinner("rebuilding the keyword index"):
+            rag.build()
+        complete.refresh_names()
+    journal.log("update", "--shards")
+    # Nothing landed and nothing was already current: the manifest and this
+    # machine have nothing to say to each other, which a cron line should
+    # notice rather than read as a quiet success.
+    rc = 1 if failed and not imported and not current else 0
+    if args.as_json:
+        print(json.dumps({"shards": results}, indent=2))
+        return rc
+
+    if imported:
+        total = sum(int(r.get("chunks") or 0) for r in imported)
+        out.ok("imported %s (%s chunk%s)%s"
+               % (_plural(len(imported), "shard"), format(total, ","),
+                  "" if total == 1 else "s",
+                  ", %d moved to a newer commit" % len(moved) if moved else ""))
+    if current:
+        out.info(out.role("%s already at the published commit"
+                          % _plural(len(current), "tap"), "muted"))
+    if not imported and not current:
+        # Never a tick. Nothing landed, and "imported 0" with a tick reads as a
+        # job well done to the one user who most needs to know otherwise.
+        out.warn("no published vectors matched your taps")
+    unpublished = [r["tap"] for r in results if r["status"] == "unpublished"]
+    if unpublished:
+        out.info(out.role(
+            "%s not in the manifest, left where they are: %s"
+            % (_plural(len(unpublished), "tap"), ", ".join(unpublished[:5])
+               + (" …" if len(unpublished) > 5 else "")), "muted"))
+    for r in failed:
+        out.warn("%s: %s" % (r["tap"], r.get("detail") or "failed"))
+    if failed:
+        out.info("embed those locally with `boost reindex --dense`")
+    return rc
+
+
 def cmd_update(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost update",
                                  description="Sync taps or update installed skills")
@@ -894,7 +991,16 @@ def cmd_update(argv: list[str]) -> int:
                     help="skip the confirmation prompt")
     ap.add_argument("--force", action="store_true",
                     help="move pinned taps too, clearing their pin")
+    ap.add_argument("--shards", action="store_true",
+                    help="refresh prebuilt vectors from the published "
+                         "manifest, moving taps to the commits it names")
+    ap.add_argument("--json", dest="as_json", action="store_true",
+                    help="with --shards: print the per-tap result as JSON")
     args = ap.parse_args(argv)
+    if args.shards:
+        if args.taps_only:
+            ap.error("--shards and --taps-only move taps to different commits")
+        return _ingest_shards(args)
     results, failures = registry.update(args.tap or None, force=args.force)
     if not results and not failures:
         out.info("no taps configured — start with `boost tap --defaults`")
