@@ -1561,6 +1561,51 @@ def _knn(con: sqlite3.Connection, qblob: bytes,
     return _expand(con, ranked, pool)
 
 
+def entry_vectors(entry_keys: list[tuple[str, str]],
+                  ) -> dict[tuple[str, str], bytes]:
+    """Raw float32 embedding for each entry's first chunk, keyed by ``(tap, path)``.
+
+    Feeds `rag.collapse_near_duplicate_hits`, whose clustering needs one
+    representative vector per *entry* rather than per chunk. The lowest-``cix``
+    chunk is that representative: `rag.chunk` always emits the name+description
+    chunk first, which is enough signal to place a translation or a paraphrase
+    near its original without reading the rest of the body.
+
+    Only a quantized store answers this cheaply: `vec_raw` is a plain
+    rowid-keyed table, so looking vectors up by id is an index probe (see
+    `_knn`'s comment on why the same lookup against a `vec0` table plans as a
+    full scan instead). A legacy float32 store returns ``{}``, and near-dup
+    collapsing degrades to a no-op there — the same way every other feature on
+    that path degrades, rather than paying a full-scan cost per entry.
+    """
+    if not entry_keys:
+        return {}
+    con = _connect()
+    if con is None:
+        return {}
+    try:
+        if not quantized(con):
+            return {}
+        col = _vid_col(con)
+        vids: dict[tuple[str, str], int] = {}
+        for tap, path in entry_keys:
+            row = con.execute(
+                "SELECT %s FROM chunks WHERE tap = ? AND path = ? "  # noqa: S608  col is a literal from _vid_col; tap/path are bound
+                "ORDER BY cix LIMIT 1" % col, (tap, path)).fetchone()
+            if row is not None and row[0] is not None:
+                vids[(tap, path)] = row[0]
+        if not vids:
+            return {}
+        ids = sorted(set(vids.values()))
+        rows = con.execute(
+            "SELECT id, embedding FROM vec_raw WHERE id IN (%s)"  # noqa: S608  interpolates only `?` placeholders; ids are bound
+            % ",".join("?" * len(ids)), ids).fetchall()
+        blobs = dict(rows)
+        return {key: blobs[vid] for key, vid in vids.items() if vid in blobs}
+    finally:
+        con.close()
+
+
 def retrieve(query: str, k: int = 60, kind: str | None = None,
              entries: list[dict] | None = None) -> list[Hit] | None:
     """Top-k dense hits for ``query``, or None to signal 'fall back to BM25'."""

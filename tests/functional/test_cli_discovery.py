@@ -264,6 +264,16 @@ class TestSearch:
         r = boost("search", "x", "--limit", "abc", expect=2)
         assert "invalid int value: 'abc'" in r.err
 
+    def test_collapse_near_duplicates_flag_is_a_no_op_without_a_dense_store(
+            self, boost, tapped):
+        # Opt-in and unwired into the default path (see
+        # rag.NEAR_DUPLICATE_THRESHOLD): with no dense index built, the flag
+        # must parse and change nothing about a plain BM25 search.
+        with_flag = boost("search", "commit", "messages",
+                          "--collapse-near-duplicates")
+        without_flag = boost("search", "commit", "messages")
+        assert with_flag.out == without_flag.out
+
 
 # ---------------------------------------------------------------- index
 

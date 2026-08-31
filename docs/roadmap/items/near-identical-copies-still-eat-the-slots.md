@@ -2,12 +2,13 @@
 id: near-identical-copies-still-eat-the-slots
 board: code
 section: planned
-status: planned
+status: inflight
+owner: loop/near-dup-collapse
 category: Search · Ranking
 complexity: M
 impact: High
 wow: 4
-note: 10 of 10 slots on a real 466-tap install, all past byte-identical dedup
+note: mechanism + tests shipped opt-in; corpus safety proof and default-on still open
 order: 131
 title: Near-identical copies survive content-hash dedup and take the whole result page
 ---
@@ -67,3 +68,28 @@ install from.
 <b>Not to be confused with <code>#629</code></b>, which deduplicated vector <em>storage</em> (one
 row per distinct embedding, 39.7% repeats reclaimed). That is a disk-size fix beneath the index and
 changes no ranking; this is about which rows reach the user's screen.
+
+<b>What shipped, and what did not.</b> <code>rag.collapse_near_duplicate_hits</code> is the same
+"keep the earliest rank slot, promote a better source" contract as <code>dedupe_by_content</code>,
+run over cosine similarity of the entries' first-chunk embeddings
+(<code>dense.entry_vectors</code>, an index probe through <code>chunks_entry</code> on a quantized
+store) instead of a body hash, at the <code>retrieve_any</code> seam before <code>k</code> is
+applied. It is covered by unit tests down to the arithmetic (<code>_cosine</code>'s dimension-
+mismatch and zero-vector guards), the clustering contract (rank order, quality-prior promotion,
+limit-after-collapse), the <code>dense.entry_vectors</code> lookup against a real quantized
+sqlite-vec store, and the <code>retrieve_any</code>/<code>boost search
+--collapse-near-duplicates</code> wiring in both directions (on and off).
+
+It ships <b>opt-in and off by default</b> — <code>retrieve_any(..., collapse_near_duplicates=True)</code>
+or <code>boost search --collapse-near-duplicates</code> — rather than replacing
+<code>dedupe_by_content</code>'s output on the default path. Two things this card asks for are still
+open, and both need a real embedding backend (a built dense index, over a real multi-tap corpus)
+that the environment this was implemented in cannot reach — no network path to an embeddings
+provider or to the local ONNX model download, confirmed rather than assumed: <code>huggingface.co</code>
+and <code>pypi.org</code> both refuse at the network policy layer. <b>First</b>, the safety proof
+this card itself demands before defaulting the mechanism on &mdash; &ldquo;over a real corpus, at
+the chosen threshold, count clusters spanning more than one meaning&rdquo; &mdash; has not been run;
+<code>NEAR_DUPLICATE_THRESHOLD = 0.97</code> is a starting point, not a validated floor. <b>Second</b>,
+re-measuring the <code>exa search</code> case (and per-query maxima generally) against the fix needs
+that same corpus and index. Whoever runs that measurement should flip the CLI flag's default, fold
+the corpus count into this card's evidence, and only then consider this shipped.

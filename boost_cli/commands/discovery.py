@@ -96,6 +96,12 @@ def cmd_search(argv):
                    help="rerank the top hits with Claude")
     p.add_argument("--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
+    p.add_argument("--collapse-near-duplicates", action="store_true",
+                   dest="collapse_dupes",
+                   help="collapse near-identical entries (translations, "
+                        "paraphrases) via dense embeddings — opt-in, needs a "
+                        "built dense index; threshold not yet validated "
+                        "against a real corpus, see the roadmap")
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
@@ -127,7 +133,9 @@ def cmd_search(argv):
         # retrieve_any, not retrieve: this picks the dense backend when one is
         # built and floors to BM25 otherwise, so the CLI and the MCP server
         # answer from the same engine instead of the CLI being BM25-only.
-        hits, engine = rag.retrieve_any(query, k=max(60, args.limit * 4))
+        hits, engine = rag.retrieve_any(
+            query, k=max(60, args.limit * 4),
+            collapse_near_duplicates=args.collapse_dupes)
         scored = [(h["entry"], h["score"]) for h in (hits or [])]
     else:
         scored = catalog.search(query)
