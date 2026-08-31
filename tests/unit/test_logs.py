@@ -382,6 +382,35 @@ def test_doctor_reports_log_location(boost):
     assert "diagnostic log at" in res.out
 
 
+def test_doctor_flags_a_log_path_that_exists_but_wont_open(boost):
+    """``os.access(path, os.W_OK)`` reads mode bits and says yes for a
+    directory sitting where the log file should be — doctor has to ask the
+    real question (``open(path, "a")``) or it reports a green checkmark for
+    a log that is failing on every invocation, same as the handler itself
+    experiences."""
+    boost("count")  # creates a real, writable boost.log first
+    lp = logs.log_path()
+    assert lp.is_file()
+    # configure() is idempotent per process, so the file handler opened above
+    # (delay=True) still holds this path open here. Release it before
+    # swapping the path for a directory: unlinking an open file is silently
+    # fine on POSIX but raises on Windows, and leaving the stale handle in
+    # place would also make doctor's own logging reuse the old (still
+    # writable) file object instead of really hitting the broken path below.
+    logs.reset()
+    lp.unlink()
+    lp.mkdir()  # a directory is unmistakably not open()-able in append mode,
+                # yet os.access(..., os.W_OK) reports it as writable
+    res = boost("doctor", expect=None)
+    assert "diagnostic log" in res.out
+    assert "is not writable" in res.out
+    assert "diagnostic log at" not in res.out  # never the ok-branch wording
+    # doctor itself just tried to log against that broken path — end to end
+    # confirmation that the handler's own quiet-swallow keeps stderr clean
+    # while doctor is busy reporting the very same fault.
+    assert "Logging error" not in res.err
+
+
 def _file_formatter():
     """The formatter attached to the configured file handler."""
     for h in logs.get_logger().handlers:
