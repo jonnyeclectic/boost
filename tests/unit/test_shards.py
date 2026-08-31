@@ -435,10 +435,25 @@ class TestStaleVersionStore:
         con.commit()
         con.close()
 
+    def _plain_connect(self, monkeypatch):
+        """Open the store without sqlite-vec.
+
+        `_connect` loads the extension and returns None without it, so
+        `import_shard` would exit at "no vector backend available" before
+        reaching the decision under test. The decision itself is pure sqlite.
+        Ubuntu and Windows runners carry the [rag] extra and macOS ones do not,
+        so leaving this unpatched passes on two thirds of the matrix.
+        """
+        from boost_cli.core import dense
+        monkeypatch.setattr(
+            dense, "_connect",
+            lambda: sqlite3.connect(str(dense.db_path())))
+
     def test_a_stale_version_store_is_replaced_rather_than_appended_to(
             self, sandbox, monkeypatch):
         from boost_cli.core import dense
         self._v2_store(sandbox)
+        self._plain_connect(monkeypatch)
         wiped = []
         monkeypatch.setattr(dense, "_wipe", lambda con: wiped.append(1))
         # Stop after the wipe decision; the INSERT path needs sqlite-vec.
@@ -461,6 +476,7 @@ class TestStaleVersionStore:
                     (str(dense.INDEX_VERSION),))
         con.commit()
         con.close()
+        self._plain_connect(monkeypatch)
         wiped = []
         monkeypatch.setattr(dense, "_wipe", lambda con: wiped.append(1))
         monkeypatch.setattr(dense, "_ensure_schema",
