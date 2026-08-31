@@ -302,7 +302,17 @@ def tap_commits() -> dict[str, str]:
     Read without sqlite-vec (see :func:`_recorded_meta`) so a machine that lost
     the extra still gets a truthful answer rather than an empty one.
     """
-    commits = _recorded_meta().get("commits")
+    meta = _recorded_meta()
+    if meta.get("version") != INDEX_VERSION:
+        # A store from an older boost is about to be discarded — `build` wipes
+        # it and so does `import_shard` — so it holds no vectors anyone can
+        # reuse, and saying otherwise is worse than saying nothing. The caller
+        # asking this question is deciding which taps to SKIP: answering with a
+        # stale store's commits let `ingest` skip 417 taps as "already current"
+        # and then wipe their vectors on the first import, leaving a store that
+        # was silently missing them while the output said they were fine.
+        return {}
+    commits = meta.get("commits")
     if not isinstance(commits, dict):
         return {}
     return {str(k): str(v) for k, v in commits.items() if v}
@@ -766,6 +776,18 @@ def import_shard(shard: dict, commit: str) -> tuple[bool, str]:
         return False, "no vector backend available"
     try:
         meta = _read_meta(con)
+        if meta.get("version") not in (None, INDEX_VERSION):
+            # The same wipe `build` does, for the same reason: `_ensure_schema`
+            # is CREATE TABLE IF NOT EXISTS, so it cannot add v3's `digest`
+            # column to a table built by an older boost, and the INSERT below
+            # would fail per row with "table chunks has no column named
+            # digest". On a real machine that is 449 shards reporting a sqlite
+            # message about a column, where the honest answer is that the store
+            # predates this format. Wiping loses nothing that was in use — a
+            # stale-version store is already dead weight, refused by `ready()`
+            # and wiped by `build()` on its next run.
+            _wipe(con)
+            meta = {}
         # An empty store has no opinion yet, so it adopts the shard's backend.
         if meta.get("provider"):
             for field in ("provider", "model", "dim"):
