@@ -19,6 +19,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Sequence
+from itertools import chain
 from pathlib import Path
 
 from ..errors import BoostError
@@ -1608,7 +1609,7 @@ def near_duplicate_clusters(keys: Sequence[tuple[str, str]],
         if not _has_table(con, table):
             return {}
         holes = " OR ".join(["(tap = ? AND path = ?)"] * len(keys))
-        params = [v for key in keys for v in key]
+        params = list(chain.from_iterable(keys))
         rows = con.execute(
             "SELECT tap, path, vid FROM chunks WHERE cix = 0 AND (%s)"  # noqa: S608  literal placeholders only; values are bound
             % holes, params).fetchall()
