@@ -371,6 +371,23 @@ is pure noise. A 45-word paragraph that happens to begin "how should we…" is a
 design brief, so length is what separates them.
 """
 
+LONG_PROMPT_WORDS = 60
+"""Past this, one keyword is not enough evidence to route on.
+
+The other trivial gates all key on *shape* — a question, a slash command, too
+few words — and a pasted terminal session is none of those. The day the
+autopilot shipped, a user pasted ~90 words of their own shell output back into
+the chat and got a full delegation banner because `\\bupdate\\b` matched inside
+"boost self-update": one weak hit in a wall of text.
+
+Density is the missing signal. In a short prompt every word is deliberate, so a
+single keyword is strong evidence; in a long one it is easily incidental, while
+a genuine long request names its work more than once ("refactor … and update
+…"). Requiring two distinct hits above this length costs real requests nothing
+and silences pastes, which is the right way round: this module would rather
+under-route than talk over someone.
+"""
+
 
 def classify(prompt: str) -> str:
     """Name the track a prompt belongs to, or ``"trivial"`` to stay silent.
@@ -378,7 +395,8 @@ def classify(prompt: str) -> str:
     Silence is the default for anything that is not recognisably a unit of
     work: empty input, an acknowledgement, a slash command (which carries its
     own instructions), a short informational question, an explicit opt-out
-    ("no bmad"), or a prompt that matches no track at all.
+    ("no bmad"), a prompt that matches no track at all, or — past
+    :data:`LONG_PROMPT_WORDS` — one that matches only a single keyword.
     """
     text = prompt.strip()
     if not text or _SLASH.match(text) or _OPT_OUT.search(text):
@@ -389,10 +407,12 @@ def classify(prompt: str) -> str:
     if (_INFO_QUESTION.match(text) and len(words) <= QUESTION_MAX_WORDS
             and not _SECOND_SENTENCE.search(text)):
         return TRIVIAL
+    # Distinct patterns matched, not occurrences: saying "update" twenty times
+    # is one piece of evidence, which is what keeps a repetitive log quiet.
     scores = {t: sum(1 for rx in pats if rx.search(text))
               for t, pats in _COMPILED.items()}
     best = max(scores.values())
-    if best == 0:
+    if best == 0 or (best < 2 and len(words) > LONG_PROMPT_WORDS):
         return TRIVIAL
     return next(t for t in TRACK_ORDER if scores[t] == best)
 
