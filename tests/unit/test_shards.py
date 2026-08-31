@@ -15,7 +15,9 @@ The fixtures are plain dicts and `file:` URLs. `download` is exercised for
 real — it is the function with a digest, a size ceiling and an origin check in
 it, and mocking urlopen would test none of them.
 """
+import contextlib
 import json
+import sqlite3
 
 import pytest
 
@@ -297,3 +299,179 @@ class TestSync:
                     on_event=lambda t, s, d: seen.append((t, s)))
         assert ("a/b", "downloading") in seen
         assert ("a/b", "imported") in seen
+
+
+class _StreamedResponse:
+    """A response whose ``read(amt)`` behaves like a socket, not like a file.
+
+    Every other fixture in this file is a ``file:`` URL, where one ``read``
+    returns the whole document — which is exactly why the suite could not see
+    either failure this class reproduces. ``chunk`` caps how much any single
+    read returns (a resumable short read); ``cut`` stops the body early and
+    then reports EOF, the way a dropped connection does.
+    """
+
+    def __init__(self, body: bytes, chunk: int | None = None,
+                 cut: int | None = None, headers: dict | None = None):
+        self._body = body
+        self._pos = 0
+        self._chunk = chunk or len(body)
+        self._cut = len(body) if cut is None else cut
+        self.headers = ({"Content-Length": str(len(body))}
+                        if headers is None else headers)
+
+    def read(self, amt: int | None = None) -> bytes:
+        if self._pos >= self._cut:
+            return b""
+        n = min(amt or len(self._body), self._chunk, self._cut - self._pos)
+        out = self._body[self._pos:self._pos + n]
+        self._pos += n
+        return out
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _served(monkeypatch, **kw):
+    """Serve a well-formed manifest through a streamed response."""
+    body = json.dumps({"version": 1, **SPACE,
+                       "shards": [{"tap": "a/b", "commit": "1" * 40,
+                                   "url": "https://example.test/a.json",
+                                   "sha256": "0" * 64}]}).encode()
+    resp = _StreamedResponse(body, **kw)
+    monkeypatch.setattr(shards, "_open", lambda url, timeout: resp)
+    return body
+
+
+class TestTruncatedManifest:
+    """A body that arrives short must never be parsed as if it were whole.
+
+    ``read(amt)`` returns *up to* amt bytes and performs no length check — that
+    belongs to ``read()`` with no argument — so a single read left the JSON
+    decoder to report a network artefact as "not valid JSON", pointing the user
+    at a corrupt publish that does not exist.
+    """
+
+    def test_a_short_reading_stream_still_yields_the_whole_manifest(
+            self, monkeypatch):
+        """The loop: 32 bytes at a time must still assemble the document."""
+        _served(monkeypatch, chunk=32)
+        got = shards.fetch_manifest("https://example.test/m.json")
+        assert got["provider"] == "local"
+        assert len(got["shards"]) == 1
+
+    def test_a_cut_stream_says_truncated_rather_than_invalid_json(
+            self, monkeypatch):
+        """The honest error names the network, not the publisher."""
+        body = _served(monkeypatch, chunk=32, cut=40)
+        with pytest.raises(BoostError) as err:
+            shards.fetch_manifest("https://example.test/m.json")
+        assert "truncated" in err.value.message
+        # The real numbers, so the message can be acted on.
+        assert "40 of %d" % len(body) in err.value.message
+
+    def test_a_compressed_response_is_not_judged_by_content_length(
+            self, monkeypatch):
+        """Content-Length is the wire size; `raw` is the decoded body.
+
+        Comparing the two behind a gzipping proxy would invent a truncation —
+        the same class of bug the check exists to remove.
+        """
+        _served(monkeypatch, headers={"Content-Length": "999999",
+                                      "Content-Encoding": "gzip"})
+        got = shards.fetch_manifest("https://example.test/m.json")
+        assert got["dim"] == 384
+
+    def test_identity_encoding_is_still_checked(self, monkeypatch):
+        """`identity` means unencoded, so the length still has to add up."""
+        _served(monkeypatch, cut=40, headers={"Content-Length": "999999",
+                                              "Content-Encoding": "identity"})
+        with pytest.raises(BoostError, match="truncated"):
+            shards.fetch_manifest("https://example.test/m.json")
+
+    def test_no_content_length_is_not_a_truncation(self, monkeypatch):
+        """An unanswerable question is left alone, not guessed at."""
+        _served(monkeypatch, chunk=32, headers={})
+        got = shards.fetch_manifest("https://example.test/m.json")
+        assert got["version"] == 1
+
+    def test_an_oversized_manifest_is_named_oversized_not_truncated(
+            self, monkeypatch):
+        """Order matters: too big is also 'shorter than declared'."""
+        monkeypatch.setattr(shards, "MAX_MANIFEST_BYTES", 64)
+        _served(monkeypatch, chunk=16)
+        with pytest.raises(BoostError, match="implausibly large"):
+            shards.fetch_manifest("https://example.test/m.json")
+
+
+class TestStaleVersionStore:
+    """A store from an older boost must be replaced, not INSERTed into.
+
+    ``_ensure_schema`` is CREATE TABLE IF NOT EXISTS, so it cannot add a column
+    to a table an older boost built. ``build`` has wiped on a version change
+    since that bit it once; ``import_shard`` did not, so importing into a v2
+    store failed per row with "table chunks has no column named digest" — a
+    sqlite message about a column, where the honest answer is that the store
+    predates this format. On a real machine that is one confusing failure per
+    published shard.
+    """
+
+    def _v2_store(self, sandbox):
+        """A store stamped with the previous index version."""
+        from boost_cli.core import dense
+        dense.db_path().parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(str(dense.db_path()))
+        con.execute("CREATE TABLE meta (k TEXT PRIMARY KEY, v TEXT)")
+        # v2's `chunks` has no `digest` column — that is the whole point.
+        con.execute("CREATE TABLE chunks (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    " name TEXT, tap TEXT, path TEXT, kind TEXT, cix INTEGER,"
+                    " snip TEXT)")
+        for k, v in (("version", "2"), ("provider", '"local"'),
+                     ("model", '"BAAI/bge-small-en-v1.5"'), ("dim", "384")):
+            con.execute("INSERT INTO meta (k, v) VALUES (?, ?)", (k, v))
+        con.commit()
+        con.close()
+
+    def test_a_stale_version_store_is_replaced_rather_than_appended_to(
+            self, sandbox, monkeypatch):
+        from boost_cli.core import dense
+        self._v2_store(sandbox)
+        wiped = []
+        monkeypatch.setattr(dense, "_wipe", lambda con: wiped.append(1))
+        # Stop after the wipe decision; the INSERT path needs sqlite-vec.
+        monkeypatch.setattr(dense, "_ensure_schema",
+                            lambda con, dim: (_ for _ in ()).throw(
+                                _Stop()))
+        with contextlib.suppress(_Stop):
+            dense.import_shard({"tap": "a/b", "commit": "1" * 40,
+                                "provider": "local",
+                                "model": "BAAI/bge-small-en-v1.5",
+                                "dim": 384, "chunks": []}, commit="1" * 40)
+        assert wiped == [1]
+
+    def test_a_matching_version_is_left_alone(self, sandbox, monkeypatch):
+        """The wipe is for a format change, not for every import."""
+        from boost_cli.core import dense
+        self._v2_store(sandbox)
+        con = sqlite3.connect(str(dense.db_path()))
+        con.execute("UPDATE meta SET v = ? WHERE k = 'version'",
+                    (str(dense.INDEX_VERSION),))
+        con.commit()
+        con.close()
+        wiped = []
+        monkeypatch.setattr(dense, "_wipe", lambda con: wiped.append(1))
+        monkeypatch.setattr(dense, "_ensure_schema",
+                            lambda con, dim: (_ for _ in ()).throw(_Stop()))
+        with contextlib.suppress(_Stop):
+            dense.import_shard({"tap": "a/b", "commit": "1" * 40,
+                                "provider": "local",
+                                "model": "BAAI/bge-small-en-v1.5",
+                                "dim": 384, "chunks": []}, commit="1" * 40)
+        assert wiped == []
+
+
+class _Stop(Exception):
+    """Ends an import once the assertion's decision point has been reached."""

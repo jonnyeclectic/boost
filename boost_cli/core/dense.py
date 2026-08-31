@@ -766,6 +766,18 @@ def import_shard(shard: dict, commit: str) -> tuple[bool, str]:
         return False, "no vector backend available"
     try:
         meta = _read_meta(con)
+        if meta.get("version") not in (None, INDEX_VERSION):
+            # The same wipe `build` does, for the same reason: `_ensure_schema`
+            # is CREATE TABLE IF NOT EXISTS, so it cannot add v3's `digest`
+            # column to a table built by an older boost, and the INSERT below
+            # would fail per row with "table chunks has no column named
+            # digest". On a real machine that is 449 shards reporting a sqlite
+            # message about a column, where the honest answer is that the store
+            # predates this format. Wiping loses nothing that was in use — a
+            # stale-version store is already dead weight, refused by `ready()`
+            # and wiped by `build()` on its next run.
+            _wipe(con)
+            meta = {}
         # An empty store has no opinion yet, so it adopts the shard's backend.
         if meta.get("provider"):
             for field in ("provider", "model", "dim"):

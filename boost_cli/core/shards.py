@@ -94,6 +94,67 @@ def _open(url: str, timeout: float):
                               "embeds locally instead") from exc
 
 
+def _read_capped(resp, cap: int) -> bytes:
+    """Read the whole response, stopping once it exceeds `cap` bytes.
+
+    THE LOOP IS THE POINT. ``HTTPResponse.read(amt)`` returns *up to* `amt`
+    bytes, not `amt` bytes, and over a real connection it routinely returns
+    less — one read of the live 166 KB manifest came back with 131,072 bytes
+    on one run and 146,547 on the next. A single ``resp.read(cap + 1)``
+    therefore handed a truncated document to ``json.loads``, which reported it
+    as "not valid JSON": a network artefact wearing the costume of a corrupt
+    publish, on every command that reads the manifest.
+
+    The unit suite could not see it, and still cannot without help: its
+    fixtures are ``file:`` URLs, where one read does return the whole file.
+    ``tests/unit/test_shards.py`` covers this with a response that short-reads
+    on purpose.
+
+    Reading `cap + 1` in total keeps the size check that follows honest — one
+    byte over the ceiling is enough to fail it, and nothing larger is buffered.
+    """
+    chunks: list[bytes] = []
+    total = 0
+    while total <= cap:
+        buf = resp.read(min(_CHUNK, cap + 1 - total))
+        if not buf:
+            break
+        chunks.append(buf)
+        total += len(buf)
+    return b"".join(chunks)
+
+
+def _verify_complete(resp, raw: bytes, url: str) -> None:
+    """Refuse a body that arrived shorter than the server said it would.
+
+    ``read(amt)`` performs no length check — that is done only by ``read()``
+    with no argument — so a connection cut mid-stream returns a short body and
+    then a clean EOF. The truncated document reaches ``json.loads``, which
+    calls it "not valid JSON", and the user goes looking for a corrupt publish
+    that does not exist. Observed here against the live 166,210-byte manifest:
+    a read returned 146,547 bytes and the next returned nothing.
+
+    The Content-Encoding guard is not defensive padding. ``Content-Length``
+    describes the bytes ON THE WIRE, so against a gzipping proxy it is the
+    compressed size while `raw` is the decoded body — comparing the two would
+    manufacture a truncation failure, which is the same class of bug this
+    function exists to remove. A missing or unparseable header means the
+    question cannot be answered and is left alone.
+    """
+    enc = (resp.headers.get("Content-Encoding") or "").strip().lower()
+    if enc and enc != "identity":
+        return
+    try:
+        want = int(resp.headers.get("Content-Length"))
+    except (TypeError, ValueError):
+        return
+    if len(raw) < want:
+        raise BoostError(
+            "shard manifest download from %s was truncated (%d of %d bytes)"
+            % (url, len(raw), want),
+            hint="a proxy or a dropped connection cut the stream — retry")
+
+
 def fetch_manifest(url: str | None = None, timeout: float = 30.0) -> dict:
     """Download and validate the shard manifest.
 
@@ -104,9 +165,13 @@ def fetch_manifest(url: str | None = None, timeout: float = 30.0) -> dict:
     """
     url = url or manifest_url()
     with _open(url, timeout) as resp:
-        raw = resp.read(MAX_MANIFEST_BYTES + 1)
-    if len(raw) > MAX_MANIFEST_BYTES:
-        raise BoostError("shard manifest at %s is implausibly large" % url)
+        raw = _read_capped(resp, MAX_MANIFEST_BYTES)
+        # Size ceiling first, completeness second: a manifest larger than the
+        # cap is also "shorter than declared", and reporting that one as a
+        # truncated download would name the wrong problem.
+        if len(raw) > MAX_MANIFEST_BYTES:
+            raise BoostError("shard manifest at %s is implausibly large" % url)
+        _verify_complete(resp, raw, url)
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
