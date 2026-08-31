@@ -2,13 +2,13 @@
 id: tool-call-eval-tier
 board: code
 section: planned
-status: planned
+status: inflight
 category: Quality · Eval
 complexity: L
 impact: High
 wow: 4
-note: the Claude Code probe was broken and its finding was an artifact; fixed, second host still unwritten
-owner:
+note: probe fixed; --strict-mcp-config shipped for the surface confound; second host (Gemini CLI) still unwritten
+owner: loop/eval-tools-strict-mcp
 order: 96
 title: a Tier 3 eval for tool-call behaviour, floored in <b>both</b> directions
 ---
@@ -99,6 +99,27 @@ one this card argues about.
 <b>$30&ndash;50 per host per invocation</b> on a machine with a crowded tool surface.
 <code>--strict-mcp-config</code> with a boost-only config cuts that sharply and controls the
 surface confound in the same move.
+
+<b>2026-08-31: <code>--strict-mcp-config</code> shipped.</b> <code>eval_tools.py</code> now takes
+a <code>--strict-mcp-config</code> flag: it writes a boost-only <code>mcpServers</code> config
+(the same <code>&lt;launcher&gt; mcp --stdio</code> invocation and fork-safety <code>env</code>
+<code>core.mcphost.register_argv</code> uses for a real registration — confirmed against an actual
+<code>claude mcp add-json</code> write, not guessed at the schema) to a temp file and passes
+<code>--strict-mcp-config --mcp-config &lt;path&gt;</code> to every <code>claude -p</code> call,
+cleaning the file up afterward. This session's sandbox had no network path to PyPI, so the pinned
+toolchain (<code>pytest</code>, <code>ruff</code>, <code>mypy</code>, …) could not be installed and
+<code>make check</code> could not be run here; the change was verified by hand instead — direct
+<code>python3.12</code> import of the module, the new unit tests executed by eye against the
+interpreter, <code>py_compile</code>, a manual line-length check against ruff's 88-column default,
+and an end-to-end dry run with <code>subprocess.run</code> mocked that confirms the flags land on
+the argv and the temp file is created and removed. CI runs the real gate on the PR.
+
+<b>Still unwritten: the second host arm (Gemini CLI).</b> No <code>gemini</code> CLI was reachable
+in this sandbox to capture a real stream from, and building that arm on an invented model of
+Gemini's non-interactive output format is the exact mistake this card's own probe fix (2026-08-30)
+already paid for once — "a fixture the author invented cannot catch the author's wrong model of the
+input." That arm stays a placeholder until it can be built against a captured real stream, on a
+machine with the <code>gemini</code> CLI installed.
 
 <b>What it unlocks.</b> The first honest answer to "did that description edit help", a baseline the
 next surface change can regress against, and a way to retire claims that survive only because
