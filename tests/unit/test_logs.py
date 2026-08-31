@@ -200,6 +200,9 @@ def test_configure_survives_file_handler_oserror(env, monkeypatch):
     def _boom(*a, **k):
         raise OSError("read-only filesystem")
 
+    # configure() constructs boost's own subclass (_BestEffortFileHandler),
+    # not logging.handlers.RotatingFileHandler directly — patch the name it
+    # actually calls, or the OSError this test means to force never fires.
     monkeypatch.setattr(logs, "_BestEffortFileHandler", _boom)
     logs.reset()
     logger = logs.configure()          # the OSError is swallowed, CLI proceeds
@@ -226,6 +229,10 @@ def test_file_handler_emit_failure_is_silent(env, capsys):
     fh._open = _boom  # force the failure emit() hits, without touching disk
     logs.get_logger().debug("should not blow up")  # must not raise
     err = capsys.readouterr().err
+    # Nothing at all reaches stderr — a stricter bar than "no traceback",
+    # because a bare one-line logging complaint is still output the user did
+    # not ask for and cannot act on.
+    assert err == ""
     assert "Logging error" not in err
     assert "OSError" not in err
 

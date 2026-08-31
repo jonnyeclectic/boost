@@ -8,7 +8,7 @@ category: Health · Robustness
 complexity: S
 impact: Medium
 wow: 2
-note: handleError overridden on the file handler, scoped to emit; CI's make check (incl. mutation) green on #637
+note: handleError overridden on the file handler, scoped to emit (#637); doctor probes open() rather than mode bits (#638)
 pr: 637
 order: 130
 title: A best-effort log handler prints a traceback over every command's output
