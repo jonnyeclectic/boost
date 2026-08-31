@@ -132,8 +132,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>7</b><span>Planned</span></div>
-      <div class="stat"><b>291</b><span>Loop finds</span></div>
+      <div class="stat"><b>9</b><span>Planned</span></div>
+      <div class="stat"><b>293</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -987,6 +987,123 @@ published version works against PyPI as it stands today.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">declined — superseded by shipping the integration inside the boost-skill-cli wheel (see langchain-in-the-wheel)</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="delay-true-defeats-the-log-suppress">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Health · Robustness</span></div>
+        <h3>A best-effort log handler prints a traceback over every command's output</h3>
+        <p><code>logs.configure</code> says what it means to do &mdash; <em>&ldquo;File handler &mdash; always
+DEBUG, best-effort (never break the CLI over a log)&rdquo;</em> &mdash; and wraps the handler in
+<code>contextlib.suppress(OSError)</code> to guarantee it. The guarantee does not hold, and the
+reason is one keyword inside the block: <code>with contextlib.suppress(OSError):</code> &middot;
+<code>paths.logs_dir().mkdir(parents=True, exist_ok=True)</code> &middot;
+<code>fh = logging.handlers.RotatingFileHandler(log_path(), maxBytes=MAX_BYTES,
+backupCount=BACKUP_COUNT, encoding="utf-8", <b>delay=True</b>)</code>.
+
+<code>delay=True</code> means the file is <b>not opened during construction</b>. It is opened on the
+first <code>emit()</code>, inside <code>shouldRollover</code> &mdash; which happens later, on a
+different stack, outside the <code>suppress</code>. So the <code>OSError</code> the block exists to
+swallow is relocated to exactly where nothing is catching it. <code>logging.raiseExceptions</code>
+is left at its default <code>True</code>, so Python's logging module prints
+<code>--- Logging error ---</code> and a full traceback to stderr instead.
+
+<b>Observed on a real machine</b>, with the log at <code>rw-r--r--</code> owned by the invoking user
+and the directory writable, under a harness whose filesystem policy did not include
+<code>~/.boost/logs</code>. Every <code>boost</code> command emitted <b>two</b> tracebacks &mdash;
+one from <code>log_invocation</code> at <code>cli.py:311</code> and one from
+<code>log_completion</code> at <code>cli.py:343</code> &mdash; roughly thirty lines of Python
+internals wrapped around the fifteen lines of search results the user actually asked for. The
+command itself returned <code>rc=0</code>. Nothing was broken except the output.
+
+<b>Two things to get right.</b> First, catching the error is not the same as reporting it: a handler
+that silently swallows every write means a user whose diagnostics have been dead for months learns
+nothing, which is the failure <code>doctor</code>'s log check already exists to prevent. The right
+shape is to fail <em>quietly per emit</em> and let <code>doctor</code> stay the surface that says
+so &mdash; it already reports <code>&ldquo;diagnostic log &hellip; is not writable &mdash; every
+invocation is failing to record&rdquo;</code>, which was accurate the whole time this was spewing
+tracebacks. Second, <code>logging.raiseExceptions</code> is a <b>module-global</b>: boost sets it
+for every library in the process, so flipping it wholesale is louder than it looks. Overriding
+<code>handleError</code> on boost's own handler is the scoped version of the same fix.
+
+<b>Worth checking while here</b>: whether <code>doctor</code>'s writability check and the handler
+agree about what &ldquo;writable&rdquo; means. The check passed (<code>&#10003; diagnostic log at
+~/.boost/logs/boost.log</code>) in the same session where the handler was failing on every emit,
+because the two ask different questions &mdash; one about the path's mode bits, the other about
+what an <code>open()</code> actually returns. A health check that reports green while the thing it
+checks fails on every invocation is the more expensive half of this card.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">the suppress guards construction; delay=True moves the failure to emit</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="near-identical-copies-still-eat-the-slots">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Ranking</span></div>
+        <h3>Near-identical copies survive content-hash dedup and take the whole result page</h3>
+        <p><a href="#near-duplicate-items-eat-the-result-slots">Content-hash dedup</a> shipped and worked:
+<code>rag.dedupe_by_content</code> took duplicate result slots from <b>4.94 to 0.60 per query</b>
+over a 77-tap corpus. That card closed naming one thing still open &mdash; <em>near-identical
+rather than byte-identical clustering, where <code>core/typosquat.py</code>'s confusion machinery
+would apply</em> &mdash; and buried it under a <code>shipped</code> status where nobody would claim
+it. This card is that remainder, with a measurement that makes it look considerably worse than
+&ldquo;refinement&rdquo;.
+
+<b>Observed on a real 466-tap install</b> with hybrid RRF serving (658,131 chunks): for the query
+<code>exa search</code>, every one of the top ten rows is <code>exa-search</code>, and the
+descriptions are what give the
+shape away &mdash; one Japanese (<code>Exa MCPによるウェブ、コード、企業調査</code>), two Chinese
+(<code>通过Exa MCP进行神经搜索</code>), five English variants of <code>Neural search via Exa MCP</code>,
+plus <code>Use Exa MCP for current web&hellip;</code> and <code>AI-powered web search&hellip;</code>.
+All ten are <code>★ curated</code>. The footer reads
+<code>51 matches &middot; ranked by hybrid RRF (BM25 + dense)</code>.
+
+<b>Every one of those passed dedup correctly.</b> They are not byte-identical: they are the same
+skill in Japanese, in Chinese, and in five English phrasings across different registries. The body
+digest differs, so <code>dedupe_by_content</code> keeps them all &mdash; which is exactly the
+behaviour <code>#366</code> proved must be preserved, since two entries sharing a name can be
+genuinely different rules. The shipped fix is not misbehaving. It simply does not reach this shape.
+
+<b>What the 0.60 residual actually was.</b> The prior card described its leftover as &ldquo;entries
+sharing a <em>name</em> whose bodies genuinely differ, which must stay separate&rdquo; &mdash; true
+as stated, and it reads as a rounding error. At 466 taps the same residual is a full result page.
+The gap between 0.60 and 10.0 is worth understanding before designing anything: the 77-tap
+measurement used 50 natural-language queries averaged, and an <em>average</em> hides the shape here.
+Duplicate pressure was already known to be a step function of <em>which</em> registries are tapped
+rather than how many; near-identical pressure looks like a step function of <b>which query</b> &mdash;
+harmless across a query set, total on any query that lands on a widely-mirrored skill. Re-measure
+per-query maxima, not means.
+
+<b>The hard part is the safety proof, not the clustering.</b> Content hashing was adoptable because
+one count settled it: of 14,153 distinct bodies, clusters spanning more than one name numbered
+<b>zero</b>, so collapsing could not merge two different skills. Near-identical clustering has no
+such free proof &mdash; any similarity threshold loose enough to merge a Japanese translation with
+its English original is loose enough to merge two genuinely different skills that share boilerplate.
+Establish the equivalent bound first (over a real corpus, at the chosen threshold, count clusters
+spanning more than one <em>meaning</em>) or the fix trades a visible problem for a silent one.
+
+<b>Three things to get right.</b> <em>Translations are the motivating case and the hardest</em>: they
+share almost no tokens with the original, so token-overlap similarity will not find them while an
+embedding will &mdash; and the vectors are already on disk, which makes this cheaper here than it
+would be anywhere else. <em>Collapse before <code>k</code></em>, and at both the
+<code>retrieve</code> and <code>retrieve_any</code> seams, for the reason the shipped dedup already
+documents: fusion reintroduces copies either engine dropped, because the copies are distinct
+<code>(tap, skill_md)</code> keys and RRF has no reason to treat them as one. <em>The existing
+quality prior carries over unchanged</em> &mdash; <code>rag.source_rank</code> orders on the user's
+<code>curated</code> flag first and shipped <code>confidence</code> second, and choosing among
+near-identical copies is the same question as choosing among identical ones: where should the user
+install from.
+
+<b>Not to be confused with <code>#629</code></b>, which deduplicated vector <em>storage</em> (one
+row per distinct embedding, 39.7% repeats reclaimed). That is a disk-size fix beneath the index and
+changes no ranking; this is about which rows reach the user's screen.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">10 of 10 slots on a real 466-tap install, all past byte-identical dedup</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -7306,7 +7423,16 @@ bodies cannot merge two genuinely different skills, which name-clustering would 
 
 <b>Related follow-on:</b> the same duplicate shape reaches <code>resolve_one</code>, where a tap that
 vendors its own skills produced an unanswerable disambiguation prompt. Tracked separately in
-<code>resolve-vendored-duplicate-copies</code>.</p></details>
+<code>resolve-vendored-duplicate-copies</code>.
+
+<b>The remainder now has its own card, and it is not a rounding error.</b> This card's last open
+item &mdash; near-identical rather than byte-identical clustering &mdash; was left as a footnote
+under a <code>shipped</code> status, described by the 0.60 residual duplicate slots per query. On a
+real 466-tap install a single query (<code>exa search</code>) puts the same skill in <b>10 of 10
+slots</b>, in Japanese, Chinese and five English phrasings, every copy passing content-hash dedup
+correctly because the bodies genuinely differ. The averaged residual hid a per-query maximum an
+order of magnitude larger. See
+<a href="#near-identical-copies-still-eat-the-slots">near-identical copies still eat the slots</a>.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
