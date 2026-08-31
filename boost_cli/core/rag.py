@@ -17,6 +17,7 @@ no AI -> the BM25 order is returned as-is.
 """
 from __future__ import annotations
 
+import array
 import contextlib
 import hashlib
 import json
@@ -773,6 +774,91 @@ def dedupe_by_content(hits: list[Hit], limit: int) -> list[Hit]:
     return out[:limit]
 
 
+#: Cosine-similarity floor for two entries to collapse as near-duplicates.
+#:
+#: Deliberately conservative and deliberately unproven. `dedupe_by_content`
+#: above shipped only after one count settled its safety: of 14,153 distinct
+#: bodies, the clusters spanning more than one *name* numbered zero, so
+#: collapsing on content hash could not merge two different skills. No
+#: equivalent count exists yet for near-identical clustering — the measurement
+#: the roadmap card asks for is "over a real corpus, at the chosen threshold,
+#: count clusters spanning more than one meaning" and nobody has run it. Until
+#: someone does, `collapse_near_duplicate_hits` stays reachable only opt-in
+#: (see `retrieve_any`'s `collapse_near_duplicates` parameter), so the default
+#: search path is unaffected by a threshold nobody has validated.
+NEAR_DUPLICATE_THRESHOLD = 0.97
+
+
+def _decode_vector(blob: bytes) -> array.array:
+    """A stored float32 embedding blob as a sequence of floats."""
+    vec = array.array("f")
+    vec.frombytes(blob)
+    return vec
+
+
+def _cosine(a: array.array, b: array.array) -> float:
+    """Cosine similarity of two float32 vectors, 0.0 for any comparison that
+    cannot be trusted: a dimension mismatch (different embedding models) or
+    either side being the zero vector. An ambiguous comparison must never read
+    as a match, the same rule a missing content hash follows above.
+    """
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if 0.0 in (norm_a, norm_b):
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def collapse_near_duplicate_hits(hits: list[Hit],
+                                  vectors: dict[tuple[str, str], bytes],
+                                  limit: int,
+                                  threshold: float = NEAR_DUPLICATE_THRESHOLD,
+                                  ) -> list[Hit]:
+    """Collapse entries whose embeddings are near-identical, then take ``limit``.
+
+    Runs on the output of :func:`dedupe_by_content`, on the same contract —
+    keep the earliest rank slot, promote a better source into it — for the
+    residual that survives byte-identical dedup: the same skill translated or
+    paraphrased across mirrors. Observed on a real 466-tap install: the query
+    ``exa search`` returned ten rows that were all one skill in Japanese,
+    Chinese, and five English variants, none sharing a body digest, so
+    ``dedupe_by_content`` correctly kept every one of them apart.
+
+    ``vectors`` maps ``entry_key(hit["entry"])`` to a raw float32 embedding
+    blob, looked up by the caller (:func:`boost_cli.core.dense.entry_vectors`)
+    rather than fetched here — this stays pure so it is cheap to test with
+    synthetic vectors, and clustering ``hits`` is O(n * clusters), never
+    O(n^2) against the whole store.
+
+    A hit with no vector — no dense store built, or the entry never got one —
+    is never merged into anything: two unknowns must not collapse into each
+    other, the same rule :func:`dedupe_by_content` follows for a missing
+    content hash.
+    """
+    out: list[Hit] = []
+    reps: list[array.array | None] = []   # parallel to `out`
+    for hit in hits:
+        blob = vectors.get(entry_key(hit["entry"]))
+        vec = _decode_vector(blob) if blob else None
+        merge_at = None
+        if vec is not None:
+            for i, rep in enumerate(reps):
+                if rep is not None and _cosine(vec, rep) >= threshold:
+                    merge_at = i
+                    break
+        if merge_at is None:
+            out.append(hit)
+            reps.append(vec)
+            continue
+        kept = out[merge_at]
+        if source_rank(hit["entry"]) < source_rank(kept["entry"]):
+            out[merge_at] = cast(Hit, {**kept, "entry": hit["entry"]})
+    return out[:limit]
+
+
 def _windowed(hits: list[Hit], terms: Sequence[str]) -> list[Hit]:
     """Window each hit's raw stored snip onto the query terms.
 
@@ -1087,7 +1173,8 @@ def _with_content(hits: list[Hit]) -> list[Hit]:
 
 
 def retrieve_any(query: str, k: int = 60, kind: str | None = None,
-                 entries: list[dict] | None = None
+                 entries: list[dict] | None = None,
+                 collapse_near_duplicates: bool = False,
                  ) -> tuple[list[Hit] | None, str]:
     """Fuse BM25 and dense when both are available; floor to whichever is.
 
@@ -1107,6 +1194,12 @@ def retrieve_any(query: str, k: int = 60, kind: str | None = None,
     Both engines are over-fetched to ``RRF_K`` before fusing. Fusing only the
     top-k of each would discard exactly the candidates the other engine was
     going to promote, which is most of the value.
+
+    ``collapse_near_duplicates`` runs :func:`collapse_near_duplicate_hits` over
+    the result, on top of the byte-identical dedup every branch below already
+    does — off by default (see :data:`NEAR_DUPLICATE_THRESHOLD` for why) and a
+    no-op whenever no dense store is built, since that is the only source of
+    the embeddings the collapse needs.
     """
     from . import dense
     pool = max(k, RRF_K)
@@ -1127,13 +1220,20 @@ def retrieve_any(query: str, k: int = 60, kind: str | None = None,
     # no reason to treat them as one.
     if dense_hits and bm25_hits:
         fused = rrf_fuse([bm25_hits, dense_hits], limit=max(k, RRF_K))
-        return (dedupe_by_content(_with_content(fused), k),
-                "hybrid RRF (BM25 + dense)")
-    if dense_hits:
-        return dedupe_by_content(_with_content(dense_hits), k), "dense vectors"
-    if bm25_hits is not None:
-        return bm25_hits[:k], "BM25 full-content"     # already deduped
-    return None, ""
+        hits, engine = dedupe_by_content(_with_content(fused), k), \
+            "hybrid RRF (BM25 + dense)"
+    elif dense_hits:
+        hits, engine = dedupe_by_content(_with_content(dense_hits), k), \
+            "dense vectors"
+    elif bm25_hits is not None:
+        hits, engine = bm25_hits[:k], "BM25 full-content"     # already deduped
+    else:
+        return None, ""
+    if collapse_near_duplicates and hits and dense.ready():
+        vectors = dense.entry_vectors([entry_key(h["entry"]) for h in hits])
+        if vectors:
+            hits = collapse_near_duplicate_hits(hits, vectors, k)
+    return hits, engine
 
 
 def search(query: str, limit: int = 10, kind: str | None = None,
