@@ -2,7 +2,7 @@
 id: search-and-browse-visual-refresh
 board: code
 section: dx
-status: inflight
+status: shipped
 category: UX · Design
 complexity: M
 impact: High
@@ -10,6 +10,7 @@ wow: 4
 note: search rows learned kind/tap/installed with a stated drop order; browse got its gradient, an empty state, a badge rail, a list scrollbar and a session chip
 order: 122
 owner: feat/tui-visual-refresh
+pr: 540
 pr: 540
 title: One design system across <code>search</code> and <code>browse</code>
 ---

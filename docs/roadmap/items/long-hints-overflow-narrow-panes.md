@@ -2,7 +2,7 @@
 id: long-hints-overflow-narrow-panes
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Output
 complexity: M
 impact: Low
@@ -10,7 +10,7 @@ wow: 2
 note: a code span is one atomic token, so a hint folds to the pane without splitting the command it tells you to run
 order: 126
 owner: loop/wrap-long-hints
-pr:
+pr: 555
 title: The hints still run past the pane, and the worst one is pinned by six test files
 ---
 <b>Measured, at <code>COLUMNS=80</code>, over 46 commands.</b> After the box and the help screen

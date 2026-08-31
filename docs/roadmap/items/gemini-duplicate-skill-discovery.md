@@ -2,7 +2,7 @@
 id: gemini-duplicate-skill-discovery
 board: code
 section: health
-status: inflight
+status: shipped
 category: Interop · Bug
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: Gemini warned once per skill per session and no boost surface could see it
 order: 40
 owner: loop/gemini-stale-links
-pr:
+pr: 568
 title: Gemini logged a skill conflict every session and <code>boost doctor</code> called the machine healthy
 ---
 Gemini CLI printed this on <b>every session start, once per skill</b>, on a machine whose

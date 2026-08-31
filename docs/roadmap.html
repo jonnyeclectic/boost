@@ -1402,8 +1402,9 @@ revisiting once that card is measured.
       </article>
 
       <article class="cap rcard" id="dense-search-rescans-every-vector">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Performance</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Performance</span></div>
         <h3>Every dense search re-scanned all 3.08&nbsp;GB of vectors &mdash; <code>vec0</code> has no ANN index</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>A user reported <code>boost search "refactor UI with taste"</code> taking 34 seconds.</b> The
 log agrees exactly: <code>done: boost search refactor UI with taste -&gt; rc=0 in 33943ms</code>,
 and the same query four minutes later at <code>2458ms</code>.
@@ -1482,7 +1483,7 @@ remedy that re-embeds everything they already paid for.
 <b>Not done here, worth its own card:</b> 42.9% of the 750,416 chunks are byte-identical texts that
 were embedded once and stored per row. Deduplicating the vectors would cut the store a further
 ~1.75x on top of quantization, but it needs a chunk&rarr;tap join table, because
-<code>chunks.tap</code> is what scopes tap deletion today.</p>
+<code>chunks.tap</code> is what scopes tap deletion today.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -4215,8 +4216,9 @@ assertion and leave <code>boost edit</code> opening a blank document.</p></detai
       </article>
 
       <article class="cap rcard" id="taps-check-out-freight-they-never-index">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Storage · Footprint</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Storage · Footprint</span></div>
         <h3>Taps download and check out the 84% of a repo that boost never opens</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Measured on a real install, not estimated.</b> <code>~/.boost</code> had grown to
 <b>16 GB</b>: <code>repos/</code> 12 GB across 458 taps, <code>cache/</code> 3.9 GB.
 The cache is earned — 3.2 GB of it is the dense vector store
@@ -4313,7 +4315,7 @@ decimals, per-kind breakdown included. The corpus itself goes 642 MB &rarr;
 The remaining lever is the 3.2 GB vector store — int8 quantization would take it
 to ~800 MB — but that is a retrieval-quality change that has to clear the eval
 gate's four floors, so it belongs in its own card rather than riding along with a
-storage cleanup.</p>
+storage cleanup.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -4605,8 +4607,9 @@ all 185 rows: the 20 required rows come back byte-identical, all 185 end up pinn
       </article>
 
       <article class="cap rcard" id="marketing-crm-domain-had-no-category">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Catalog · Curation</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Catalog · Curation</span></div>
         <h3><code>--category marketing</code> matched nothing, while four marketing registries sat in the catalog under other names</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The catalog carried marketing registries and could not hand you one.</b>
 <code>boost tap --catalog --category marketing</code> returned zero rows, because no row was filed
 that way. Four already existed: <code>coreyhaines31/marketingskills</code> (45,374 stars) under
@@ -4664,7 +4667,7 @@ mixed rather than bad: <code>Varnan-Tech/opendirectory</code> (64 items, but
 <code>citedy/adclaw</code>, <code>manojbajaj95/claude-gtm-plugin</code>,
 <code>markster-public/markster-os</code> and <code>hyperfx-ai/marketing-skills</code>. They are
 recorded here rather than merely dropped, so the next sweep does not re-derive them from the same
-search and re-litigate the same call.</p>
+search and re-litigate the same call.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -5085,8 +5088,9 @@ three are listed as human actions at the end of the badge document.</p></details
       </article>
 
       <article class="cap rcard" id="osps-baseline-levels">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Security · Posture</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Posture</span></div>
         <h3>OSPS Baseline — three levels, audited rather than assumed</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The <a href="roadmap.html#openssf-best-practices-badge">passing badge</a> is one of
 <b>four</b> badges bestpractices.dev issues for a project. The other three are the OSPS
 Baseline series, a different criteria set with different questions, and nobody had looked at
@@ -5124,7 +5128,7 @@ defect; the alert was only the trigger.
 <b>Level 3 is blocked, and it is the same wall as gold.</b> OSPS-QA-07.01 requires a
 non-author human approval before merging. This repo merges parallel <code>loop/*</code>
 branches with no second reviewer, which its own <a href="roadmap.html#scorecard-findings-triage">Scorecard triage</a>
-already refuses to lie about. Not a gap to close with a commit — it needs a second person.</p>
+already refuses to lie about. Not a gap to close with a commit — it needs a second person.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -5179,8 +5183,9 @@ improvement is real (or isn't)."</p></details>
       </article>
 
       <article class="cap rcard" id="openssf-silver">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Security · Posture</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Posture</span></div>
         <h3>OpenSSF silver — reachable solo, and mostly already true</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Silver reads like a wall — <b>55 criteria</b> on top of passing — and the board showed 31%
 with 37 unanswered. Reading them rather than assuming turned the estimate from "a day" into
 <b>two documents</b>. The same lesson <a href="roadmap.html#osps-baseline-levels">the Baseline
@@ -5204,7 +5209,7 @@ wanted the badges hyperlinked from the front page.
 unsigned; releases carry SLSA provenance instead), <code>crypto_algorithm_agility</code>
 (minisign is Ed25519-only by format) and <code>internationalization</code> (the CLI is
 English-only). Gold remains out of reach for the reason it always was — it needs a second
-human, not a commit.</p>
+human, not a commit.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -5259,8 +5264,9 @@ human, not a commit.</p>
       </article>
 
       <article class="cap rcard" id="openssf-gold-ceiling">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Security · Posture</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Posture</span></div>
         <h3>OpenSSF gold — how far it goes without a second human</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Gold sat at <b>26%</b> with eleven criteria unanswered, and the standing assumption was that
 gold needs a second person so none of it was worth doing. Half of that was true. Answering the
 eleven rather than assuming took gold from 26% to <b>61%</b> live, and every flip was evidence that
@@ -5301,7 +5307,7 @@ whole exercise.
 <code>secure_2FA</code> — the only two gold criterion names containing a capital letter. 21 is
 a plausible-looking total, so nothing flagged it; the gap appeared only on the submission form,
 where 23 rows were waiting. Same shape as the <a href="roadmap.html#openssf-best-practices-badge">
-fingerprint no test asserted</a>: the check ran, returned a believable answer, and was wrong.</p>
+fingerprint no test asserted</a>: the check ran, returned a believable answer, and was wrong.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -5334,8 +5340,9 @@ fingerprint no test asserted</a>: the check ran, returned a believable answer, a
       </article>
 
       <article class="cap rcard" id="readme-prune-and-search-guide">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Docs · Onboarding</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Onboarding</span></div>
         <h3>The README read like a machine wrote it — measurably</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The README had grown to <b>609 lines and 3,687 words of prose</b>, and it was carrying
 reference material nobody reads on a landing page: the whole semantic-search setup, the whole
 BMAD surface, the eval harness in full. Both are now their own pages and the README links to
@@ -5357,7 +5364,7 @@ document, so a user who wanted semantic search had a README subsection and nothi
 model costs, how to tell which engine is actually serving, the whole <code>fix_hint</code>
 table as a troubleshooting matrix, sharing vectors instead of re-embedding them, and why a
 store built against an API key must not be "fixed" by reinstalling the extra — that answer
-re-embeds every vector already paid for.</p>
+re-embeds every vector already paid for.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -5367,8 +5374,9 @@ re-embeds every vector already paid for.</p>
       </article>
 
       <article class="cap rcard" id="branch-current-gate">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CI · Release safety</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Release safety</span></div>
         <h3>main went red because "require branches up to date" was never actually on</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Two pull requests, each green against the <code>main</code> it was tested on, merged into a
 combination that turned <code>main</code> red. Their source files did not conflict. The
 <b>generated</b> <code>docs/roadmap.html</code> did — and a squash merge takes one side of a
@@ -5392,7 +5400,7 @@ from the API rather than trusting the settings page. And <code>branch-current</c
 required check, because that setting is invisible config that drifted once and can drift again
 — a required check is in the diff, in <code>required-checks.txt</code>, and shows up in review.
 Within minutes of the fix, GitHub moved two open pull requests to <code>behind</code> and
-refused them; an hour earlier both would have merged and broken <code>main</code> a second time.</p>
+refused them; an hour earlier both would have merged and broken <code>main</code> a second time.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -5577,8 +5585,9 @@ widening the assertions: the boundaries are precisely the behaviour worth pinnin
       </article>
 
       <article class="cap rcard" id="gemini-duplicate-skill-discovery">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Interop · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop · Bug</span></div>
         <h3>Gemini logged a skill conflict every session and <code>boost doctor</code> called the machine healthy</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Gemini CLI printed this on <b>every session start, once per skill</b>, on a machine whose
 <code>boost doctor</code> reported <code>● healthy</code>:
 
@@ -5630,7 +5639,7 @@ worse than the warning it clears.
 <b>Why it was invisible.</b> <code>heal</code>'s broken-link sweep walks <code>linking_agents</code>,
 which deliberately excludes Gemini, so nothing ever looked in that directory — and the links are not
 broken anyway, so a dangling-link sweep would have missed them there too. Two correct decisions
-composed into a blind spot, which is the shape most of these have.</p>
+composed into a blind spot, which is the shape most of these have.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -7809,8 +7818,9 @@ the push.</p></details>
       </article>
 
       <article class="cap rcard" id="sweep-died-at-launch-not-at-a-page">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CI · Bug</span></div>
         <h3>The <code>sweep</code> gate died at browser launch, not at a page</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Every <code>sweep</code> run failed from 2026-08-15 onward — on <code>main</code>
 and on every branch — and the failure was not a visual regression at all. Chrome
 died during the CDP startup handshake, before a single page loaded:
@@ -7859,7 +7869,7 @@ CI's, so it is interference, not a reproduction. CI is the verifier.
 the build if either harness hands a sandbox-only flag to a full Chrome, and if
 the two stop agreeing on the predicate. The bug here was not the flag — it was
 that one file was fixed and the other was not, and the only thing recording that
-was a comment. A comment cannot fail a build.</p>
+was a comment. A comment cannot fail a build.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -7869,8 +7879,9 @@ was a comment. A comment cannot fail a build.</p>
       </article>
 
       <article class="cap rcard" id="cold-search-reads-the-whole-catalogue">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Performance · Search</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance · Search</span></div>
         <h3>A cold search materialises 71,600 entries to print five</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Profiled cold <code>boost search</code> at real scale (458 taps, 71,600
 entries): 0.94 s, of which <b>0.32 s</b> is <code>catalog.all_entries()</code>
 parsing every tap cache on the machine (~100 MB of JSON) to build a
@@ -7904,7 +7915,7 @@ MCP serve) thrashes full 71k-file reindexes across the version boundary.
 follow-up ever lands, fold the snip move into that single format bump.
 Residual known cost: the "semantic search is off" hint imports the backend
 (~0.1 s) on machines with the extra installed but no store built — the one
-state where that line is the advice.</p>
+state where that line is the advice.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -7914,8 +7925,9 @@ state where that line is the advice.</p>
       </article>
 
       <article class="cap rcard" id="bm25-has-no-stemming">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Retrieval</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Retrieval</span></div>
         <h3><code>boost search brainstorm</code> finds nothing, and <code>brainstorming</code> finds it</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The symptom, in two commands against the same five-skill tap.</b>
 <code>boost search brainstorming</code> returns the skill.
 <code>boost search brainstorm</code> returns <b>zero</b> matches and sends the user to
@@ -7968,7 +7980,7 @@ new lines and all nine died, including that one.
 inflection — a user typing <code>patterns</code> still will not reach an item named
 <code>pattern</code>, because <code>patterns</code> has postings of its own and is left alone.
 Closing that means conflating terms that both exist, which changes established rankings and costs
-an index-format bump plus a regenerated <code>tests/eval/baseline.json</code>.</p>
+an index-format bump plus a regenerated <code>tests/eval/baseline.json</code>.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -9425,8 +9437,9 @@ quietly turn the flag into a path constructor.</p></details>
       </article>
 
       <article class="cap rcard" id="discover-searches-github-not-a-stale-sample">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">DX · Feature</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">DX · Feature</span></div>
         <h3><code>boost discover &lt;query&gt;</code> asks GitHub, instead of filtering whatever <code>boost index</code> happened to sample</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>What was wrong.</b> <code>boost discover react</code> read as a question about GitHub and
 was answered by a local cache — one built by <code>boost index</code>, which sampled
 <code>filename:SKILL.md</code> with no query at all and kept whatever code search ranked
@@ -9498,7 +9511,7 @@ asserted as a string, never run. Executing it is what revealed that it dropped t
 qualifier the user had already typed correctly — so the suggested "fix" resolved in the
 wrong registry, or failed as cross-tap ambiguous, for precisely the user who needed the
 tap. The test now lifts the arguments back out of the hint and feeds them to
-<code>resolve_one</code>.</p>
+<code>resolve_one</code>.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -9570,8 +9583,9 @@ traversal that raises after writing the file has still written the file.</p></de
       </article>
 
       <article class="cap rcard" id="boost-first-carried-the-losing-trigger">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Interop · Adoption</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Interop · Adoption</span></div>
         <h3><code>boost-first</code> carried the trigger that had already fired and lost — and could never be updated</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Two defects, and the second is why the first survived.</b> Reported from a live session:
 the rule was installed, materialized into <code>claude-code</code>, and sitting in the agent's
 context for the whole conversation — and the agent still built a subsystem, a generator script
@@ -9656,7 +9670,7 @@ siblings had already retired.
 <code>boost update</code>. Built a real git tap with a rule in it, changed it upstream, ran the
 command: "refreshed rule driftrule v0.0.0 (source changed)". Rules from a git tap update
 correctly — <code>_update_materialized</code> never calls that function. The bug was only ever
-the builtin tap.</p>
+the builtin tap.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -9666,8 +9680,9 @@ the builtin tap.</p>
       </article>
 
       <article class="cap rcard" id="serve-is-a-searchable-catalogue">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">DX · Feature</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">DX · Feature</span></div>
         <h3><code>boost serve</code> becomes a searchable, faceted catalogue with a graph of the taps</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>What it was.</b> A single dark table of the <em>installed</em> items and two JSON links.
 On the machine this was measured on that is <b>147 rows out of 71,695</b> — the served page
 could not show you 99.8% of the catalogue, could not search, and had no notion of a tag. The
@@ -9744,7 +9759,7 @@ tells a third party which port a developer's machine is serving on is not one ei
 
 <b>The old page's guarantees moved rather than went away.</b> "A rule gets no raw-content link" is
 now pinned on the two facts that enforce it — the row says which kind it is, and
-<code>/skill/&lt;name&gt;</code> 404s for a rule whatever a client chooses to render.</p>
+<code>/skill/&lt;name&gt;</code> 404s for a rule whatever a client chooses to render.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>L</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -9754,8 +9769,9 @@ now pinned on the two facts that enforce it — the row says which kind it is, a
       </article>
 
       <article class="cap rcard" id="completions-install-could-eat-your-rc-file">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
         <h3><code>completions --install</code> could delete the config between its own markers</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Found by asking a plain question — <em>is <code>boost completions</code>
 idempotent?</em> — and testing the answer rather than reading the docstring. For
 every ordinary input it is: seven paths reach a fixed point on the second run,
@@ -9822,7 +9838,7 @@ catch.
 An rc file is the user's own hand-written config and the worst file boost owns
 an edit to, which is what moves this from tidy-up to High impact. The old tests
 covered only the well-formed path — a double install leaving one marker — so
-none of the three states had a failing test to find them.</p>
+none of the three states had a failing test to find them.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -9832,8 +9848,9 @@ none of the three states had a failing test to find them.</p>
       </article>
 
       <article class="cap rcard" id="browse-could-not-search-two-words">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Bug · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug · UX</span></div>
         <h3><code>browse</code> could not search for two words, and the fix reshaped the whole browser</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The bug was two lines.</b> <code>space</code> toggled multi-select, and the
 printable range that fed the query started at 33 — one past space, deliberately.
 So a space could never reach the filter, and <code>code review</code> was
@@ -9950,7 +9967,7 @@ haystack into a per-scope index built once (125→112 ms), then replace the
 (112→<b>32 ms</b>, a 4.5x win on the inner loop, verified identical on every
 input by a brute-force cross-check against the old implementation). The shipped
 browser searched a shorter haystack and still cost 32–39 ms, so this is more
-search for less time.</p>
+search for less time.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -9960,8 +9977,9 @@ search for less time.</p>
       </article>
 
       <article class="cap rcard" id="search-and-browse-visual-refresh">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">UX · Design</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">UX · Design</span></div>
         <h3>One design system across <code>search</code> and <code>browse</code></h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The brief was "make the CLI look good", and the answer was a design pass,
 not a paint job.</b> Three design proposals (information-density, brand,
 restraint) were judged into one spec with a doctrine budget: hierarchy from
@@ -10009,7 +10027,7 @@ helpers (four in <code>core/output</code>, eight in <code>core/browse</code>)
 with boundary, drop-order, precedence and partition tests; the draw layer only
 places what they return. Dead code left with the change: the six-hue
 <code>_aurora_theme</code>, a duplicate subsequence matcher, and an unused
-fuzzy filter.</p>
+fuzzy filter.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -10019,8 +10037,9 @@ fuzzy filter.</p>
       </article>
 
       <article class="cap rcard" id="smart-rerank-pays-per-novel-query">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Performance · MCP</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Performance · MCP</span></div>
         <h3>The smart rerank pays the LLM again for a search it already answered</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The MCP <code>boost_search</code> path passes <code>smart=True</code> on every
 call and <i>mcp-search-cost-was-understated</i> measured it at 11.7-17.0 s —
 nearly all of it the LLM rerank, paid again in full for a byte-identical
@@ -10042,7 +10061,7 @@ always live. Both MCP cost surfaces (server instructions and the
 <code>boost_search</code> description) now state the repeat-search cost, pinned
 by the same agreement test that keeps them from drifting apart. Sibling of
 <i>cold-search-reads-the-whole-catalogue</i>, which took the retrieval half of
-the same search from 0.94 s to 0.49 s.</p>
+the same search from 0.94 s to 0.49 s.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -10052,8 +10071,9 @@ the same search from 0.94 s to 0.49 s.</p>
       </article>
 
       <article class="cap rcard" id="cli-output-ignored-the-terminal">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Output</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Output</span></div>
         <h3>The box drew 108 columns into an 80-column pane, and <code>--help</code> never asked how wide the pane was</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Every one of the 80 commands was run, not just read.</b> All 80 answered
 <code>--help</code> with exit 0 and no traceback; ~73 were then driven for their real effect
 against a disposable <code>HOME</code> — install, link, quarantine, focus, snapshot, replay,
@@ -10094,7 +10114,7 @@ and the tagline are. The version never is — it is what a bug report needs.
 still overflow 80 columns, but the remainder are prose hints, and the worst of them is one shared
 string that six test files and a BDD feature pin by substring — wrapping it is a cross-cutting
 output change, not a rider on this one. See <code>long-hints-overflow-narrow-panes</code> and
-<code>bm25-has-no-stemming</code>.</p>
+<code>bm25-has-no-stemming</code>.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -10104,8 +10124,9 @@ output change, not a rider on this one. See <code>long-hints-overflow-narrow-pan
       </article>
 
       <article class="cap rcard" id="long-hints-overflow-narrow-panes">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Output</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Output</span></div>
         <h3>The hints still run past the pane, and the worst one is pinned by six test files</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Measured, at <code>COLUMNS=80</code>, over 46 commands.</b> After the box and the help screen
 were fitted, <b>11</b> still emitted a line past 80 columns. Ranked:
 <code>doctor</code>'s semantic-search hint at <b>127</b>; the AI-fallback notice at <b>101</b>,
@@ -10159,7 +10180,7 @@ different decision from fitting boost's own hints.
 <code>doctor</code>'s <code>·</code>-joined status summaries run to 71, and
 <code>protocol</code>'s <code>try it:</code> example is a single 59-column command that cannot
 fold. Neither is in this item's scope — both are recorded here so the next pass does not
-rediscover them as new.</p>
+rediscover them as new.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -11304,8 +11325,9 @@ so a card rename cannot leave the boards unprotected behind a green test.</p></d
       </article>
 
       <article class="cap rcard" id="gemini-mcp-parity">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Compat</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compat</span></div>
         <h3>What Gemini actually receives from boost, audited</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>"Do Gemini hooks invoke boost's MCP the same way Claude does?" turned out to be two questions
 with different answers, and answering them properly cost three of our own claims.
 <b>MCP tools: yes. The guidance around them: not by the same route.</b> boost is registered and
@@ -11330,7 +11352,7 @@ v0.46.0 tag has that yargs block byte-identical, and <code>populate--</code> plu
 The argv was correct for a reason nobody had checked. Re-verified against 0.57.0 by reading the
 bundled yargs definitions and running every argv under a throwaway <code>HOME</code> <i>and</i>
 CWD — Gemini writes project scope to <code>./.gemini</code>, so <code>HOME</code> alone does not
-sandbox it.</p>
+sandbox it.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -11357,8 +11379,9 @@ sandbox it.</p>
       </article>
 
       <article class="cap rcard" id="gemini-hooks-host-aware">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Compat</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Compat</span></div>
         <h3>boost hooks learns a second host — and finds two bugs upstream</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost hooks</code> managed Claude Code's <code>settings.json</code> and nothing else,
 while Gemini CLI 0.57.0 has had hooks — and a <code>migrate --from-claude</code> path — for
 some time. The schema was <b>established, not guessed</b>: from the bundle's own shipped
@@ -11384,7 +11407,7 @@ rejects <code>name: 123</code> with a schema error while accepting boost's outpu
 <code>core/hookhost.py</code> is a pure I/O-free per-host table in the shape
 <code>core/mcphost.py</code> already set. Claude's behaviour is byte-preserved — including the
 exact row dict of <code>list_hooks</code>, which is why <code>list_all_hooks</code> is a
-separate function rather than a new key on the old one.</p>
+separate function rather than a new key on the old one.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -12712,8 +12735,9 @@ be skill-only. Fixing twenty commands without that just resets the counter.</p><
       </article>
 
       <article class="cap rcard" id="serve-404-reflected-the-request">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Security · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Security · Bug</span></div>
         <h3><code>boost serve</code> echoed the request path back into its 404 body</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>What happened.</b> <code>route()</code> unquotes the request path before matching, so
 the segment after <code>/skill/</code> is arbitrary bytes of the caller's choosing. When
 that segment failed <code>SKILL_NAME_RE</code>, it was interpolated straight back into the
@@ -12751,7 +12775,7 @@ test can hold a defect in place as firmly as it can catch one, and this one had,
 long as the endpoint has existed. It now asserts the opposite — that the attempt is not
 repeated back — alongside four payload cases and a check that no <code>&lt;</code>,
 <code>&gt;</code>, <code>&amp;</code> or <code>'</code> reaches the body at all, which are
-bytes a structurally-correct JSON response never emits.</p>
+bytes a structurally-correct JSON response never emits.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

@@ -2,7 +2,7 @@
 id: openssf-silver
 board: code
 section: health
-status: inflight
+status: shipped
 category: Security · Posture
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: 55 criteria, 31% → the gap was two documents, not fifty
 order: 7
 owner: loop/openssf-silver
-pr:
+pr: 567
 title: OpenSSF silver — reachable solo, and mostly already true
 ---
 Silver reads like a wall — <b>55 criteria</b> on top of passing — and the board showed 31%
