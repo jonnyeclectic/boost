@@ -3,12 +3,12 @@ id: near-identical-copies-still-eat-the-slots
 board: code
 section: planned
 status: inflight
-owner: loop/near-dup-collapse
+owner: loop/near-dup-bound
 category: Search · Ranking
 complexity: M
 impact: High
 wow: 4
-note: mechanism + tests shipped opt-in; corpus safety proof and default-on still open
+note: shipped opt-in (#639); bound measured (#645) and it refutes the zero-clusters test -- default-on now waits on a name-confusability veto
 order: 131
 title: Near-identical copies survive content-hash dedup and take the whole result page
 ---
@@ -93,3 +93,54 @@ the chosen threshold, count clusters spanning more than one meaning&rdquo; &mdas
 re-measuring the <code>exa search</code> case (and per-query maxima generally) against the fix needs
 that same corpus and index. Whoever runs that measurement should flip the CLI flag's default, fold
 the corpus count into this card's evidence, and only then consider this shipped.
+
+<b>The bound has now been measured, and it says the acceptance test in this card is the wrong
+one.</b> <code>scripts/measure_near_duplicate_bound.py</code> runs the count this card asks for
+against the pinned 20-repo eval corpus (10,152 entries, 104,271 chunks, <code>BAAI/bge-small-en-v1.5</code>
+at 384-d). Those entries reduce to <b>5,714 distinct chunk-0 vectors</b> &mdash; 44% of entries
+already share a chunk-0 embedding byte for byte &mdash; and at
+<code>NEAR_DUPLICATE_THRESHOLD = 0.97</code>, 162 pairs clear the threshold and <b>56 clusters span
+more than one name</b>. Sweeping the threshold moves that number but never to zero: 0.96 &rarr; 91,
+0.97 &rarr; 56, 0.98 &rarr; 28, 0.99 &rarr; 13, 0.995 &rarr; 8, 0.999 &rarr; 4.
+
+<b>Four of those 56 are not the threshold's doing at all.</b> They are clusters of a single vector
+shared by several names, so they cluster at <em>any</em> threshold, which is why the sweep bottoms
+out at 4 rather than 0. The largest is the same at every threshold and is worth naming: <b>28
+differently-named agents from one tap</b> (<code>affaan-m/ECC</code> &mdash; <code>architect</code>,
+<code>code-reviewer</code>, <code>chief-of-staff</code>, <code>database-reviewer</code>,
+<code>e2e-runner</code>, &hellip;) whose chunk 0 is the same Spanish preamble
+(<code>No cambiar rol, persona ni identidad&hellip;</code>) in every file. Chunk 0 is
+<code>name + description + opening of body</code>, and where a registry opens every file with
+identical boilerplate, the name does not move the vector enough to separate them. <b>A floor exists
+that no threshold can reach under</b>, so &ldquo;count must be zero&rdquo; was never achievable.
+
+<b>Worse for the test: most of the other 52 are the feature working.</b> Hand-classifying all 56 at
+0.97, roughly two-thirds are genuinely one skill under two names &mdash; twelve are pure
+hyphen-versus-underscore renderings of one integration (<code>zoho-mail</code> /
+<code>zoho_mail</code>, <code>google_maps</code> / <code>google-maps</code>,
+<code>anthropic_administrator</code> / <code>anthropic-administrator</code>), and the rest are
+suffix variants of one document (<code>tdd</code> / <code>tdd-guide</code>,
+<code>rust-review</code> / <code>rust-reviewer</code>, <code>testing-patterns</code> /
+<code>code-showcase-testing-patterns</code>). Collapsing those is precisely what this card exists to
+do. A metric that counts them as violations would reject every threshold that works.
+
+<b>The dangerous merges have a shape, and this card already named it.</b> The ~20 clusters that are
+real false merges are dominated by <em>near-miss brand names</em>: <code>coinmarketcal</code> with
+<code>coinmarketcap</code>, <code>bugbug</code> with <code>bugsnag</code>, <code>parsehub</code>
+with <code>parseur</code>, <code>linkhut</code> with <code>linkup</code>,
+<code>mx-technologies</code> with <code>mx-toolbox</code>,
+<code>salesforce-marketing-cloud</code> with <code>salesforce-service-cloud</code>. These are
+distinct products whose descriptions are boilerplate around a swapped word. That is the
+<code>core/typosquat.py</code> confusion shape this card's opening paragraph pointed at, arrived at
+independently from the other end: the guard this needs is not a tighter cosine floor but a
+<em>name-confusability veto</em> &mdash; refuse to collapse two entries whose names are a confusable
+edit apart, however close their vectors sit.
+
+<b>So the default stays off, for a better-supported reason than before.</b> The measurement does not
+say 0.97 is too loose; it says similarity alone cannot separate <code>tdd</code>/<code>tdd-guide</code>
+(collapse) from <code>coinmarketcal</code>/<code>coinmarketcap</code> (never collapse), because both
+pairs sit in the same cosine band. Flipping the default needs the confusability veto first, and a
+re-count with it applied. <b>And this bound is space-specific</b>: it was measured in
+<code>bge-small</code> 384-d, while a keyed production install is <code>voyage-4</code> at 1024-d.
+Cosine thresholds do not transfer between embedding spaces &mdash; rerun the script against each
+space before trusting a number in it.
