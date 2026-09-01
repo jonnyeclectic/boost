@@ -2,14 +2,14 @@
 id: audit-hooks-remove-n-cannot-find-hooks-boost-itself-added-unknown
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
 note: remove -n says "no boost hook named" about a hook boost wrote, and exits 0
 order: 207
-owner:
+owner: loop/hooks-remove-name-miss
 pr:
 title: "hooks remove <code>-n</code> cannot find hooks boost itself added (unknown events skipped, embedded <code># boost:</code> mangles the name)"
 ---
