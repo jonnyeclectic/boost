@@ -1427,6 +1427,48 @@ def remove_duplicate_discovery(dup: DuplicateDiscovery) -> bool:
     return True
 
 
+def restore_preserve_newer_lock_sections(
+        pre_rules: dict, pre_workflows: dict) -> dict[str, list[str]]:
+    """After a lock file has been replaced wholesale (snapshot restore),
+    re-add rule/workflow entries that were installed live but are absent from
+    the just-restored lock.
+
+    A snapshot only archives the skill store (which is where the lock file
+    itself lives), never the agent context files a rule's or workflow's
+    materialization writes into (``CLAUDE.md``, a rendered slash command,
+    ...). Restoring an *older* snapshot therefore drops any rule/workflow
+    installed since — its lock entry vanishes with the rest of the archived
+    lock, but its materialized file is untouched on disk, so the block
+    becomes orphaned: still present, no longer traceable, and impossible to
+    ``boost uninstall``.
+
+    Filling the gap rather than overwriting the section outright preserves
+    the other, already-correct direction: an entry the snapshot *did* carry
+    that was later uninstalled comes back through the normal archived lock
+    contents, and :func:`sync_plan`/:func:`sync_apply` re-materializes it
+    from its tap same as any other missing materialization. Only names
+    genuinely absent from the restored lock are filled in here.
+
+    ``pre_rules``/``pre_workflows`` must be captured by the caller *before*
+    the store is emptied for extraction. Returns the names actually kept, per
+    section, so the caller can report what changed; writes the lock only when
+    there is something to add back.
+    """
+    lock = lockfile.read()
+    kept: dict[str, list[str]] = {"rules": [], "workflows": []}
+    for name, entry in pre_rules.items():
+        if name not in lock["rules"]:
+            lock["rules"][name] = entry
+            kept["rules"].append(name)
+    for name, entry in pre_workflows.items():
+        if name not in lock["workflows"]:
+            lock["workflows"][name] = entry
+            kept["workflows"].append(name)
+    if kept["rules"] or kept["workflows"]:
+        lockfile.write(lock)
+    return kept
+
+
 def sync_plan() -> dict[str, list]:
     """Compare lock file <-> store <-> agent symlinks.
 
