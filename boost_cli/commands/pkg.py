@@ -1581,8 +1581,8 @@ def _snapshot_restore(snap_id: str) -> int:
     # outside the store and untouched by a restore. Capture them before the
     # store is emptied so they can be added back — see
     # store.restore_preserve_newer_lock_sections.
-    pre_rules = dict(lockfile.installed_rules())
-    pre_workflows = dict(lockfile.installed_workflows())
+    pre_rules = lockfile.installed_rules().copy()
+    pre_workflows = lockfile.installed_workflows().copy()
     # Read the whole archive BEFORE touching the store, so a corrupt
     # snapshot can never leave us with an emptied environment.
     try:
