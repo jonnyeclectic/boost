@@ -10,7 +10,7 @@ wow: 2
 note: 5 failed removals still print "✓ cleaned 6 item(s)", journal the lie, and exit 0
 order: 201
 owner: loop/clean-failed-removal-accounting
-pr:
+pr: 664
 title: "<code>clean</code> counts failed removals as cleaned, journals the inflated count, and exits 0"
 ---
 With 5 surplus lock-history files in a directory chmod'd 555 so unlink fails, <code>boost clean</code> prints five <em>&ldquo;! could not remove &hellip;: [Errno 13] Permission denied&rdquo;</em> warnings and then <em>&ldquo;&#10003; cleaned 6 item(s) &middot; 15B freed&rdquo;</em>, exit 0 &mdash; only 1 item was actually removed. Run it again: <em>&ldquo;&#10003; cleaned 5 item(s) &middot; 0B freed&rdquo;</em>, exit 0, nothing removed, files still present. The rerun repeating &ldquo;cleaned 5&rdquo; is the proof the count is fiction.
