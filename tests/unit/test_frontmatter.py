@@ -28,6 +28,40 @@ class TestSplit:
         assert frontmatter.split(text) == ("", text)
 
 
+class TestUnclosed:
+    """`split()` reads a fence that opens and never closes as "no frontmatter
+    at all" — the same outcome as a file with no fence to begin with. This is
+    the check a caller uses to tell those two apart before reporting one
+    diagnosis instead of three symptoms of it (see util.score_skill)."""
+
+    def test_open_fence_no_close_is_unclosed(self):
+        assert frontmatter.unclosed(
+            "---\nname: x\ndescription: y\nno closing fence\n") is True
+
+    def test_closed_fence_is_not_unclosed(self):
+        assert frontmatter.unclosed("---\nname: x\n---\nbody") is False
+
+    def test_dots_terminator_counts_as_closed(self):
+        assert frontmatter.unclosed("---\nname: x\n...\nbody") is False
+
+    def test_no_fence_at_all_is_not_unclosed(self):
+        assert frontmatter.unclosed("just a plain markdown body\n") is False
+
+    def test_leading_content_before_dashes_is_not_unclosed(self):
+        # Same case split() treats as "no frontmatter" — the first line isn't
+        # a bare "---", so this was never an attempt to open a fence.
+        assert frontmatter.unclosed("hello\n---\nname: x\n") is False
+
+    def test_empty_text_is_not_unclosed(self):
+        assert frontmatter.unclosed("") is False
+
+    def test_only_the_opening_fence_with_nothing_after(self):
+        assert frontmatter.unclosed("---\n") is True
+
+    def test_fence_line_with_trailing_whitespace_still_closes(self):
+        assert frontmatter.unclosed("---\nname: x\n---  \nbody") is False
+
+
 class TestParse:
     def test_scalars(self):
         meta, _ = frontmatter.parse(

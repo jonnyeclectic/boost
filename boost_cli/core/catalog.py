@@ -312,21 +312,81 @@ def lint_targets(entries: list[dict], tap_root: Path,
     (an entry with no `kind` counts as a skill, for caches written before
     kinds existed), `skipped` is `{"name", "kind"}` per non-skill entry.
     A non-empty `names` filters both lists, so an explicitly named rule is
-    still reported as skipped rather than vanishing.
+    still reported as skipped rather than vanishing — and a name matching
+    neither list at all is a typo, so it raises rather than being dropped
+    silently into a success line.
+
+    A registry that vendors one skill into a copy per agent (a `content`
+    digest shared across several `rel_dir`s) is one skill, not several — the
+    house convention everywhere else (`measure_registry`, `resolve_one`) is to
+    dedupe mirrors by content, and this used to be the one place reporting the
+    opposite: 9 indistinguishable rows for 2 real skills. Only entries that
+    *carry* a digest collapse; an absent digest never matches another absent
+    digest, so caches from before content-hashing still list every copy.
+    Distinct skills that happen to share a `name` still print separately, with
+    `rel_dir` folded into the label so the rows are no longer identical text.
     """
     wanted = set(names or ())
-    targets: list[tuple[str, Path]] = []
+    if wanted:
+        unknown = sorted(wanted - {e["name"] for e in entries})
+        if unknown:
+            raise BoostError(
+                "no such name%s in this tap: %s"
+                % ("" if len(unknown) == 1 else "s", ", ".join(unknown)),
+                hint="run without NAMEs to lint everything in the tap")
+    skills: list[dict] = []
     skipped: list[dict] = []
+    seen_content: set = set()
     for entry in entries:
         if wanted and entry["name"] not in wanted:
             continue
         kind = entry.get("kind", KIND_SKILL)
-        if kind == KIND_SKILL:
-            targets.append((entry["name"],
-                            Path(tap_root) / entry.get("rel_dir", ".")))
-        else:
+        if kind != KIND_SKILL:
             skipped.append({"name": entry["name"], "kind": kind})
+            continue
+        digest = entry.get("content")
+        if digest:
+            if digest in seen_content:
+                continue
+            seen_content.add(digest)
+        skills.append(entry)
+
+    name_counts: dict[str, int] = {}
+    for entry in skills:
+        name_counts[entry["name"]] = name_counts.get(entry["name"], 0) + 1
+
+    targets: list[tuple[str, Path]] = []
+    for entry in skills:
+        rel_dir = entry.get("rel_dir", ".")
+        label = ("%s (%s)" % (entry["name"], rel_dir)
+                 if name_counts[entry["name"]] > 1 else entry["name"])
+        targets.append((label, Path(tap_root) / rel_dir))
     return targets, skipped
+
+
+def is_path_target(name: str) -> bool:
+    """True when `name` should be linted as a path on disk, not a resolved
+    skill name — it looks like a path, or a path by that name is really there.
+
+    `boost lint ./my-skill` used to reach only `_iter_installed`, which knows
+    installed names and nothing else, so an author had to install a skill
+    before they could lint it. A bare word with no separator that happens not
+    to exist on disk still falls through to the installed-name lookup, so
+    this never shadows an ordinary skill name.
+    """
+    return "/" in name or "\\" in name or Path(name).exists()
+
+
+def resolve_path_target(name: str) -> Path:
+    """`name` (a skill directory, or a path to its SKILL.md) -> the directory
+    `util.score_skill` should read. Raises BoostError if nothing is there."""
+    p = Path(name).expanduser()
+    if p.is_file():
+        p = p.parent
+    if not p.is_dir():
+        raise BoostError("no such directory: %s" % name,
+                         hint="pass a skill directory, or the path to its SKILL.md")
+    return p
 
 
 def all_entries() -> list[dict]:

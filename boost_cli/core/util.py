@@ -280,6 +280,11 @@ def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
         text = skill_md.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return 0, ["unreadable SKILL.md: %s" % e]
+    if frontmatter.unclosed(text):
+        # Every field below would read as absent — the block never parsed —
+        # so scoring by field would report three symptoms of one cause. The
+        # broken fence is the whole diagnosis.
+        return 0, [frontmatter.UNCLOSED_NOTE]
     meta, body = frontmatter.parse(text)
     score = 20  # exists and parses
 
@@ -294,6 +299,12 @@ def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
             score += 5
         else:
             notes.append("description is thin (<40 chars)")
+        if len(desc) > 1024:
+            # The Agent Skills format caps descriptions at 1024 chars and
+            # hosts truncate past it — a longer one still lints clean today,
+            # so an author never learns their description is being cut.
+            score -= 10
+            notes.append("description exceeds 1024 chars — agent hosts truncate it")
     else:
         notes.append("frontmatter missing `description`")
     if meta.get("version"):

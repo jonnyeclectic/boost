@@ -1131,3 +1131,113 @@ class TestLintTargets:
         targets, _ = catalog.lint_targets([self._e("s", "skill", "d")],
                                           "/taps/demo")
         assert targets == [("s", Path("/taps/demo/d"))]
+
+    def _ec(self, name, content, rel_dir):
+        """A skill entry carrying a content digest, for the dedup tests."""
+        e = self._e(name, "skill", rel_dir)
+        e["content"] = content
+        return e
+
+    def test_mirrors_sharing_a_content_digest_collapse_to_one_target(self):
+        # A registry vendoring the same skill per agent (claude/, cursor/,
+        # windsurf/, ...) used to print one row per mirror — 9 indistinguishable
+        # rows for 2 real skills over a whole tap. Same content -> one target,
+        # and the survivor is the first one scanned.
+        entries = [self._ec("tdd", "abc123", "claude/tdd"),
+                   self._ec("tdd", "abc123", "cursor/tdd"),
+                   self._ec("tdd", "abc123", "windsurf/tdd")]
+        targets, skipped = catalog.lint_targets(entries, self.ROOT)
+        assert targets == [("tdd", self.ROOT / "claude/tdd")]
+        assert skipped == []
+
+    def test_entries_without_a_content_digest_never_collapse(self):
+        # "absent digest never matches" — caches written before content-hashing
+        # existed must keep listing every copy rather than silently merging
+        # unrelated entries that all happen to have no digest.
+        entries = [self._e("tdd", "skill", "one/tdd"),
+                   self._e("tdd", "skill", "two/tdd")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert [p for _n, p in targets] == [self.ROOT / "one/tdd",
+                                            self.ROOT / "two/tdd"]
+
+    def test_same_name_different_content_stays_two_rows_with_rel_dir(self):
+        # Genuinely different skills that happen to share a name must not
+        # collapse (their content differs) — but must stop printing identical
+        # label text, so rel_dir is folded into the label to disambiguate.
+        entries = [self._ec("tdd", "abc123", "one/tdd"),
+                   self._ec("tdd", "xyz789", "two/tdd")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert targets == [("tdd (one/tdd)", self.ROOT / "one/tdd"),
+                           ("tdd (two/tdd)", self.ROOT / "two/tdd")]
+
+    def test_a_name_with_no_collision_keeps_the_bare_label(self):
+        entries = [self._ec("solo", "abc123", "solo")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert targets == [("solo", self.ROOT / "solo")]
+
+    def test_distinct_content_summary_count_reflects_collapsed_targets(self):
+        # `cmd_lint` reports `len(results)`, built one-to-one from `targets` —
+        # so the dedup above is what makes the summary say "distinct skills",
+        # without any extra counting logic in the command layer.
+        entries = [self._ec("tdd", "abc123", "claude/tdd"),
+                   self._ec("tdd", "abc123", "cursor/tdd"),
+                   self._ec("other", "def456", "other")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert len(targets) == 2
+
+    def test_unknown_name_raises_instead_of_silently_dropping(self):
+        entries = [self._e("one", "skill", "one")]
+        with pytest.raises(BoostError, match="nosuchskill"):
+            catalog.lint_targets(entries, self.ROOT, ["nosuchskill"])
+
+    def test_unknown_name_mixed_with_a_valid_one_still_raises(self):
+        # A typo mixed with a real name must not vanish behind the real
+        # name's success — that is exactly how a misspelling passed CI
+        # silently before this fix.
+        entries = [self._e("one", "skill", "one")]
+        with pytest.raises(BoostError, match="nosuchskill"):
+            catalog.lint_targets(entries, self.ROOT, ["one", "nosuchskill"])
+
+    def test_unknown_name_matching_a_skipped_rule_does_not_raise(self):
+        # A rule/workflow name is a legitimate (if non-lintable) match — it
+        # belongs in `skipped`, not in the unknown-name error.
+        entries = [self._e("py-style", "rule", "rules/py-style.mdc")]
+        targets, skipped = catalog.lint_targets(entries, self.ROOT, ["py-style"])
+        assert targets == []
+        assert skipped == [{"name": "py-style", "kind": "rule"}]
+
+
+class TestPathTarget:
+    """`is_path_target` / `resolve_path_target` let `boost lint` score a
+    skill directory on disk before it is ever installed."""
+
+    def test_a_relative_path_with_a_separator_is_a_path_target(self):
+        assert catalog.is_path_target("./my-skill") is True
+
+    def test_a_windows_style_separator_is_a_path_target(self):
+        assert catalog.is_path_target("some\\dir") is True
+
+    def test_a_bare_name_that_does_not_exist_is_not_a_path_target(self):
+        assert catalog.is_path_target("nonexistent-bare-name-xyz") is False
+
+    def test_a_bare_name_that_exists_on_disk_is_a_path_target(self, tmp_path,
+                                                               monkeypatch):
+        (tmp_path / "my-skill").mkdir()
+        monkeypatch.chdir(tmp_path)
+        assert catalog.is_path_target("my-skill") is True
+
+    def test_resolve_directory_returns_it_unchanged(self, tmp_path):
+        d = tmp_path / "my-skill"
+        d.mkdir()
+        assert catalog.resolve_path_target(str(d)) == d
+
+    def test_resolve_a_skill_md_file_returns_its_parent_directory(self, tmp_path):
+        d = tmp_path / "my-skill"
+        d.mkdir()
+        md = d / "SKILL.md"
+        md.write_text("---\nname: my-skill\n---\n", encoding="utf-8")
+        assert catalog.resolve_path_target(str(md)) == d
+
+    def test_resolve_a_missing_path_raises(self, tmp_path):
+        with pytest.raises(BoostError, match="no such directory"):
+            catalog.resolve_path_target(str(tmp_path / "nope"))

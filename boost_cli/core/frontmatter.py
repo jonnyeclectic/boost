@@ -31,6 +31,31 @@ def split(text: str) -> tuple[str, str]:
     return "", text
 
 
+# The one-line diagnosis for `unclosed()` below — shared so a caller can
+# recognise and filter the note `util.score_skill` emits for the same fault
+# rather than re-typing the string (and risking the two drifting apart).
+UNCLOSED_NOTE = "frontmatter is not closed (no terminating ---)"
+
+
+def unclosed(text: str) -> bool:
+    """True if `text` opens a frontmatter fence but never closes it.
+
+    `split()` falls back to "no frontmatter at all" for this case — the block
+    comes back "" and every field it would have carried reads as absent. That
+    misdiagnoses a real syntax error (a missing closing `---`/`...`) as three
+    unrelated missing-field errors, so callers that want to tell the two apart
+    check this first: a file that never opens a fence (doesn't start with
+    `---`) is legitimately frontmatter-less, but one that opens and never
+    closes is broken and should say so once, not by omission three times over.
+    """
+    if not text.startswith("---"):
+        return False
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    return not any(line.strip() in ("---", "...") for line in lines[1:])
+
+
 def _scalar(raw: str):
     s = raw.strip()
     if not s:
