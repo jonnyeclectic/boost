@@ -8,8 +8,9 @@ complexity: S
 impact: High
 wow: 3
 note:
-owner: loop/capability-policy-rule-workflow
 order: 129
+owner: loop/capability-policy-rule-workflow
+pr: 651
 title: <code>denied_capabilities</code> policy never applied to rule/workflow installs
 ---
 <code>capabilities.py</code>'s own docstring frames this as "not <i>which</i> skill, but <i>what
