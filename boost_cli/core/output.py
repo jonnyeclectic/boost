@@ -366,6 +366,11 @@ def visible_len(s: str) -> int:
 _CODE_SPAN_RE = re.compile(r"`[^`]*`")
 
 
+def _glued(text: str, i: int) -> bool:
+    """True when `text[i]` exists, is not whitespace, and is not a backtick."""
+    return i < len(text) and not text[i].isspace() and text[i] != "`"
+
+
 def _wrap_tokens(text: str) -> list[str]:
     """Split text into wrap units, keeping each `code span` whole.
 
@@ -376,6 +381,22 @@ def _wrap_tokens(text: str) -> list[str]:
     :func:`truncate` does; the span itself is copied verbatim, so a command
     that legitimately holds two spaces survives.
 
+    The span also absorbs punctuation glued directly against its backticks
+    with no whitespace between, so a source string like ``(see `x y`)``
+    stays one token and `wrap()` never manufactures a space the source never
+    had. That absorption is a pair of plain index scans (`_glued`), not a
+    wider regex: a quantifier written to match it (``\\S*`[^`]*`\\S*``) lets
+    the engine backtrack the leading run into the following literal backtick
+    for every starting position, which is quadratic in the length of an
+    unterminated glued run — worth avoiding even though nothing here reads
+    from outside the process, since these are still user-composed strings
+    (a skill name, a tap path) flowing into `out.warn`/`out.info`. The scan
+    stops at a backtick on either side for the same reason the regex
+    excluded one: an adjacent ``` `beta` ``` must start its own span, not
+    fold into the one before it, or two spans separated only by ordinary
+    prose (` `alpha` between `beta` `) would bridge into one unbreakable
+    token.
+
     An unterminated backtick simply never matches, and its text wraps as
     ordinary words. That is the right failure: a half-open span is a typo in
     the message, not a reason to refuse to render it.
@@ -383,9 +404,16 @@ def _wrap_tokens(text: str) -> list[str]:
     parts: list[str] = []
     pos = 0
     for m in _CODE_SPAN_RE.finditer(text):
-        parts.extend(text[pos:m.start()].split())
-        parts.append(m.group(0))
-        pos = m.end()
+        start, end = m.start(), m.end()
+        if start < pos:
+            continue  # already absorbed into the previous span's suffix
+        while start > pos and _glued(text, start - 1):
+            start -= 1
+        while _glued(text, end):
+            end += 1
+        parts.extend(text[pos:start].split())
+        parts.append(text[start:end])
+        pos = end
     parts.extend(text[pos:].split())
     return parts
 

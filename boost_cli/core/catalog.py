@@ -27,7 +27,7 @@ import re
 from pathlib import Path
 
 from ..errors import BoostError
-from . import frontmatter, gitutil, paths, registry, util
+from . import config, frontmatter, gitutil, paths, registry, util
 
 # Bumped whenever a scan starts recording something the previous scan did not,
 # so 460 caches on a real machine invalidate on read instead of needing a
@@ -35,7 +35,8 @@ from . import frontmatter, gitutil, paths, registry, util
 # the same reason; the tap cache was the one derived artifact that did not, and
 # without it there was no way to ship a new entry field at all.
 #   1 -- entries carry `content` (see `_content_digest`)
-CACHE_FORMAT = 1
+#   2 -- entries carry `category` (see `_entry_category`)
+CACHE_FORMAT = 2
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -102,8 +103,32 @@ def _content_digest(name: str, description: str, body: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8", "replace")).hexdigest()[:16]
 
 
+def _entry_category(meta: dict, tap_category: str) -> str:
+    """An item's own category, falling back to its tap's curated category.
+
+    Declared beats inherited: an item that names its own frontmatter
+    ``category`` (or, failing that, its first ``tags`` entry) is trusted over
+    the registry-wide label, because one registry can genuinely mix domains
+    (see CLAUDE.md's design-domain note on `awesome-design-skills` vs
+    `ai-design-skills`). ``tap_category`` — looked up once per scan from the
+    bundled registry catalog, never per item — is everything an un-annotated
+    item has, and is itself often empty for a tap outside the bundled 487.
+    """
+    own = str(meta.get("category") or "").strip()
+    if own:
+        return own
+    tags = meta.get("tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            tag = str(tag or "").strip()
+            if tag:
+                return tag
+    return tap_category
+
+
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
-                tap_name: str, curated: bool, meta: dict, body: str) -> dict:
+                tap_name: str, curated: bool, meta: dict, body: str,
+                tap_category: str = "") -> dict:
     name = str(meta.get("name") or "").strip() or default_name
     # Slugify anything that is not already a safe path component, not just names
     # containing a space: this name becomes a rule/workflow filename, so
@@ -118,6 +143,7 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
         "tap": tap_name,
         "curated": curated,
         "kind": kind,
+        "category": _entry_category(meta, tap_category),
         "rel_dir": item_dir.relative_to(root).as_posix() if item_dir != root else ".",
         "skill_md": defining_file.relative_to(root).as_posix(),
         "meta": meta,
@@ -159,6 +185,10 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
     root = Path(root)
     entries: list[dict] = []
     skill_dirs: set[Path] = set()
+    # Looked up once per scan (one JSON read of the bundled registry catalog),
+    # not once per item — the whole point of threading it through rather than
+    # having `_entry_category` call `config.registry_categories()` itself.
+    tap_category = config.registry_categories().get(tap_name, "")
     # One top-down walk instead of two rglob passes: prune ignored dirs in place
     # so we never descend into .git/__pycache__, and test skill-dir membership
     # against a set via each dir's own ancestor chain rather than O(files × dirs).
@@ -176,7 +206,7 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
                 default = here.name if here != root else root.name
                 entries.append(_make_entry(root, here / "SKILL.md", KIND_SKILL,
                                            default, tap_name, curated,
-                                           meta, body))
+                                           meta, body, tap_category))
                 skill_dirs.add(here)
         # Files inside any skill directory belong to that skill, never re-indexed.
         if here in skill_dirs or any(a in skill_dirs for a in here.parents):
@@ -202,7 +232,7 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
             else:
                 default = path.stem
             entries.append(_make_entry(root, path, kind, default,
-                                       tap_name, curated, meta, body))
+                                       tap_name, curated, meta, body, tap_category))
 
     entries.sort(key=operator.itemgetter("skill_md", "name"))
     return entries
@@ -312,21 +342,81 @@ def lint_targets(entries: list[dict], tap_root: Path,
     (an entry with no `kind` counts as a skill, for caches written before
     kinds existed), `skipped` is `{"name", "kind"}` per non-skill entry.
     A non-empty `names` filters both lists, so an explicitly named rule is
-    still reported as skipped rather than vanishing.
+    still reported as skipped rather than vanishing — and a name matching
+    neither list at all is a typo, so it raises rather than being dropped
+    silently into a success line.
+
+    A registry that vendors one skill into a copy per agent (a `content`
+    digest shared across several `rel_dir`s) is one skill, not several — the
+    house convention everywhere else (`measure_registry`, `resolve_one`) is to
+    dedupe mirrors by content, and this used to be the one place reporting the
+    opposite: 9 indistinguishable rows for 2 real skills. Only entries that
+    *carry* a digest collapse; an absent digest never matches another absent
+    digest, so caches from before content-hashing still list every copy.
+    Distinct skills that happen to share a `name` still print separately, with
+    `rel_dir` folded into the label so the rows are no longer identical text.
     """
     wanted = set(names or ())
-    targets: list[tuple[str, Path]] = []
+    if wanted:
+        unknown = sorted(wanted - {e["name"] for e in entries})
+        if unknown:
+            raise BoostError(
+                "no such name%s in this tap: %s"
+                % ("" if len(unknown) == 1 else "s", ", ".join(unknown)),
+                hint="run without NAMEs to lint everything in the tap")
+    skills: list[dict] = []
     skipped: list[dict] = []
+    seen_content: set = set()
     for entry in entries:
         if wanted and entry["name"] not in wanted:
             continue
         kind = entry.get("kind", KIND_SKILL)
-        if kind == KIND_SKILL:
-            targets.append((entry["name"],
-                            Path(tap_root) / entry.get("rel_dir", ".")))
-        else:
+        if kind != KIND_SKILL:
             skipped.append({"name": entry["name"], "kind": kind})
+            continue
+        digest = entry.get("content")
+        if digest:
+            if digest in seen_content:
+                continue
+            seen_content.add(digest)
+        skills.append(entry)
+
+    name_counts: dict[str, int] = {}
+    for entry in skills:
+        name_counts[entry["name"]] = name_counts.get(entry["name"], 0) + 1
+
+    targets: list[tuple[str, Path]] = []
+    for entry in skills:
+        rel_dir = entry.get("rel_dir", ".")
+        label = ("%s (%s)" % (entry["name"], rel_dir)
+                 if name_counts[entry["name"]] > 1 else entry["name"])
+        targets.append((label, Path(tap_root) / rel_dir))
     return targets, skipped
+
+
+def is_path_target(name: str) -> bool:
+    """True when `name` should be linted as a path on disk, not a resolved
+    skill name — it looks like a path, or a path by that name is really there.
+
+    `boost lint ./my-skill` used to reach only `_iter_installed`, which knows
+    installed names and nothing else, so an author had to install a skill
+    before they could lint it. A bare word with no separator that happens not
+    to exist on disk still falls through to the installed-name lookup, so
+    this never shadows an ordinary skill name.
+    """
+    return "/" in name or "\\" in name or Path(name).exists()
+
+
+def resolve_path_target(name: str) -> Path:
+    """`name` (a skill directory, or a path to its SKILL.md) -> the directory
+    `util.score_skill` should read. Raises BoostError if nothing is there."""
+    p = Path(name).expanduser()
+    if p.is_file():
+        p = p.parent
+    if not p.is_dir():
+        raise BoostError("no such directory: %s" % name,
+                         hint="pass a skill directory, or the path to its SKILL.md")
+    return p
 
 
 def all_entries() -> list[dict]:
@@ -549,11 +639,24 @@ def resolve_one(name: str, path: str | None = None) -> dict:
             # boost cannot pick, and telling the user to "qualify by tap" is
             # advice that reproduces this very error. Name the paths instead.
             paths = ", ".join(sorted(str(e.get("rel_dir", "?")) for e in matches))
+            # `--path` only disambiguates for `install` (and, for an unrelated
+            # reason, `recommend`/`infer` — their `--path` is a project
+            # directory, not this). Every other caller of resolve_one — adapt,
+            # run, log, home, explain, cat, … — has no such flag, so a hint
+            # naming it here earned "unrecognized arguments: --path", exit 2,
+            # from the CLI's own suggestion. `install --path` always works
+            # regardless of which command hit this error, and callers here
+            # resolve an *installed* copy through the lock file before ever
+            # reaching the catalog (see e.g. `_resolve_skill_md`,
+            # `_resolve_skill`), so installing one clears the ambiguity for
+            # every command that would otherwise hit it again.
+            kind = str(matches[0].get("kind") or "skill")
             raise BoostError(
-                "%r matches %d different skills in %s: %s"
-                % (bare, len(matches), taps[0], paths),
-                hint="that registry ships one name twice — pick one with "
-                     "`--path <one of the above>`, and raise it with the tap")
+                "%r matches %d different %ss in %s: %s"
+                % (bare, len(matches), kind, taps[0], paths),
+                hint="that registry ships one name twice — install one with "
+                     "`boost install %s --path <one of the above>`, then "
+                     "retry; raise it with the tap" % bare)
         # Several taps, one thing. Registries mirror each other constantly, so
         # the common cross-tap collision is N byte-identical copies of one
         # skill — and the within-tap branch above already decided that
@@ -660,3 +763,21 @@ def search(query: str, entries: list[dict] | None = None):
             scored.append((e, score))
     scored.sort(key=lambda x: (-x[1], x[0]["name"]))
     return scored
+
+
+def matches_category(entry: dict, category: str) -> bool:
+    """True when `entry`'s stamped category equals `category`, case-insensitively.
+
+    An empty `category` always matches — the no-filter case — so callers can
+    apply this unconditionally instead of branching on "was --category given".
+    A missing/empty `entry["category"]` (an old cache predating `CACHE_FORMAT`
+    2, or a synthesised entry) only matches an equally empty `category`.
+    """
+    if not category:
+        return True
+    return (entry.get("category") or "").strip().lower() == category.strip().lower()
+
+
+def filter_by_category(entries: list[dict], category: str) -> list[dict]:
+    """`entries` narrowed to those matching `category` (see `matches_category`)."""
+    return [e for e in entries if matches_category(e, category)]

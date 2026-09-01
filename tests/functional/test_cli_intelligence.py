@@ -331,6 +331,20 @@ class TestAbsorb:
         assert "installed absorbed-patterns" in r.out
         lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
         assert lock["skills"]["absorbed-patterns"]["tap"] == "local"
+        evs = journal.events(action="absorb")
+        assert evs[0]["subject"] == "absorbed-patterns"
+        assert evs[0]["patterns"] == 1
+        assert evs[0]["files"] == 1
+
+    def test_stdout_journals_too(self, boost, sandbox, tmp_path):
+        f = tmp_path / "h.jsonl"
+        f.write_text("\n".join(
+            [_history_line("please write docstrings for every function")] * 3), encoding="utf-8")
+        boost("absorb", "--history", f)
+        evs = journal.events(action="absorb")
+        assert evs[0]["subject"] == "absorbed-patterns"
+        assert evs[0]["patterns"] == 1
+        assert evs[0]["files"] == 1
 
     def test_ai_path(self, boost, sandbox, tmp_path, ai_on):
         ai_on(ask_author="---\nname: absorbed-patterns\ndescription: canned\n"

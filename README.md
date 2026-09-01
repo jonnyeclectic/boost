@@ -249,6 +249,11 @@ because they rebuild in seconds, and vectors because they are only valid inside
 the embedding space that made them. Import merges, so it never drops taps the
 receiving machine already had.
 
+A tap sourced from a local directory is bundled with its sender-machine path
+as its URL — the catalogue still searches fine on the receiving machine, but
+`boost update` on that tap will fail once that path is gone. `--import` names
+which taps this applies to.
+
 ## Under the hood
 
 ```text

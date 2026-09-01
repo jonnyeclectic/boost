@@ -105,11 +105,18 @@ def _tap_defaults(selection: list[dict], pins: dict[str, dict],
 def _report(results: list[dict]) -> None:
     """Say what each shard did, and name the remedy for what it did not do."""
     imported = [r for r in results if r["status"] == "imported"]
+    current = [r for r in results if r["status"] == "current"]
     if imported:
         total = sum(int(r.get("chunks") or 0) for r in imported)
         out.ok("imported %d prebuilt shard%s (%s chunks) — no embedding needed"
                % (len(imported), "" if len(imported) == 1 else "s",
                   format(total, ",")))
+    if current:
+        # Nothing downloaded: the store already holds vectors for exactly the
+        # commit the manifest publishes, which is the common case on a rerun.
+        out.info(out.role("%d shard%s already up to date — nothing to fetch"
+                          % (len(current), "" if len(current) == 1 else "s"),
+                          "muted"))
     for kind, label in (("unpublished", "no published shard"),
                         ("refused", "shard refused"),
                         ("failed", "shard failed")):
@@ -121,7 +128,8 @@ def _report(results: list[dict]) -> None:
             out.info(out.role("%s: %s%s" % (r["tap"], label,
                                             " (%s)" % detail if detail else ""),
                               "muted"))
-    left = [r["tap"] for r in results if r["status"] != "imported"]
+    left = [r["tap"] for r in results
+            if r["status"] not in ("imported", "current")]
     if left:
         out.info("embed the rest locally when you want to: "
                  "`boost reindex --dense`")
@@ -191,11 +199,15 @@ def cmd_quickstart(argv) -> int:
 
     if manifest is not None:
         commits = rag._tap_commits()
-        # `_tap_commits` is keyed by safe name; `sync` speaks tap names.
+        stored = dense.tap_commits()
+        # `_tap_commits`/`dense.tap_commits` are keyed by safe name; `sync`
+        # speaks tap names.
         by_name = {t.name: commits.get(t.safe_name, "")
                    for t in registry.list_taps()}
+        built = {t.name: stored.get(t.safe_name, "")
+                 for t in registry.list_taps()}
         results = shards.sync([n for n in names if n in by_name], by_name,
-                              manifest=manifest)
+                              manifest=manifest, built=built)
         _report(results)
     elif args.no_vectors:
         out.info(out.role("skipped vectors as asked", "muted"))

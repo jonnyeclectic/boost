@@ -117,11 +117,11 @@
     </div>
     <div class="group" data-group="find">
       <div class="group-h">Find &amp; search</div>
-      <a class="cmd-link" href="#cmd-search" data-search="search search skills across tap registries (ai-ranked)  --smart --limit limit --collapse-near-duplicates --json query">search</a>
+      <a class="cmd-link" href="#cmd-search" data-search="search search skills across tap registries (ai-ranked)  --smart --category category --limit limit --collapse-near-duplicates --json query">search</a>
       <a class="cmd-link" href="#cmd-reindex" data-search="reindex build/refresh the full-content search index build or refresh the full-content search index --force --dense --export-shard tap --import-shard file --fetch-shards --json">reindex</a>
       <a class="cmd-link" href="#cmd-discover" data-search="discover search github for skill repos you have not tapped yet search github for skill repositories you have not tapped yet --limit limit --json --local query">discover</a>
-      <a class="cmd-link" href="#cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --limit limit --json">recommend</a>
-      <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search ">browse</a>
+      <a class="cmd-link" href="#cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --category category --limit limit --json">recommend</a>
+      <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">browse</a>
       <a class="cmd-link" href="#cmd-index" data-search="index build the discovery registry via github code search  --limit limit query">index</a>
       <a class="cmd-link" href="#cmd-trending" data-search="trending show trending skills by install count  --limit limit">trending</a>
       <a class="cmd-link" href="#cmd-stats" data-search="stats install statistics &amp; trend for a single skill  --json name">stats</a>
@@ -397,10 +397,10 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-find">Find &amp; search</h2>
-      <section class="cmd" id="cmd-search" data-search="search search skills across tap registries (ai-ranked)  --smart --limit limit --collapse-near-duplicates --json query">
+      <section class="cmd" id="cmd-search" data-search="search search skills across tap registries (ai-ranked)  --smart --category category --limit limit --collapse-near-duplicates --json query">
         <h3><span class="cname">search</span><span class="gtag">find</span></h3>
         <p class="summary">Search skills across tap registries (AI-ranked)</p>
-        <pre class="syn">boost search [--smart] [--limit LIMIT] [--collapse-near-duplicates] [--json] query [query ...]</pre>
+        <pre class="syn">boost search [--smart] [--category CATEGORY] [--limit LIMIT] [--collapse-near-duplicates] [--json] query [query ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>query</code><span>search terms</span></div>
@@ -408,6 +408,7 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--smart</code><span>rerank the top hits with Claude</span></div>
+          <div class="arg"><code>--category CATEGORY</code><span>only show entries whose category matches (case-insensitive)</span></div>
           <div class="arg"><code>--limit LIMIT</code><span>max results (default 15)</span></div>
           <div class="arg"><code>--collapse-near-duplicates</code><span>collapse near-identical entries (translations, paraphrases) via dense embeddings — opt-in, needs a built dense index; threshold not yet validated against a real corpus, see the roadmap</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
@@ -444,21 +445,26 @@
           <div class="arg"><code>--local</code><span>search only the cached index, never the network</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --limit limit --json">
+      <section class="cmd" id="cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --category category --limit limit --json">
         <h3><span class="cname">recommend</span><span class="gtag">find</span></h3>
         <p class="summary">Suggest skills based on your project&#x27;s tech stack</p>
-        <pre class="syn">boost recommend [--path PATH] [--limit LIMIT] [--json]</pre>
+        <pre class="syn">boost recommend [--path PATH] [--category CATEGORY] [--limit LIMIT] [--json]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--path PATH</code><span>project directory (default: cwd)</span></div>
+          <div class="arg"><code>--category CATEGORY</code><span>only recommend entries whose category matches (case-insensitive)</span></div>
           <div class="arg"><code>--limit LIMIT</code><span>max suggestions (default 8)</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-browse" data-search="browse interactive full-screen tui with fuzzy search ">
+      <section class="cmd" id="cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">
         <h3><span class="cname">browse</span><span class="gtag">find</span></h3>
         <p class="summary">Interactive full-screen TUI with fuzzy search</p>
-        <pre class="syn">boost browse</pre>
+        <pre class="syn">boost browse [--category CATEGORY]</pre>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--category CATEGORY</code><span>only browse entries whose category matches (case-insensitive)</span></div>
+        </div>
       </section>
       <section class="cmd" id="cmd-index" data-search="index build the discovery registry via github code search  --limit limit query">
         <h3><span class="cname">index</span><span class="gtag">find</span></h3>
@@ -823,7 +829,7 @@
         <pre class="syn">boost lint [--tap TAP] [--min N] [--json] [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
-          <div class="arg"><code>NAME</code><span></span></div>
+          <div class="arg"><code>NAME</code><span>installed skill name(s), or a path to a skill directory / its SKILL.md</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">

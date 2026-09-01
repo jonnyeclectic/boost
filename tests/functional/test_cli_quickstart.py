@@ -288,6 +288,57 @@ class TestFetchShards:
         data = json.loads(res.out)
         assert [r["status"] for r in data["shards"]] == ["unpublished"]
 
+    def test_a_tap_already_built_at_the_published_commit_is_not_redownloaded(
+            self, boost, manifest, monkeypatch):
+        """A rerun must not re-pay for a shard the store already holds.
+
+        This is the bug the card describes: `sync` used to have no `built`
+        map at all, so every rerun of `--fetch-shards` re-downloaded every
+        shard unconditionally, even one imported moments before.
+        """
+        from boost_cli.core import dense, embed, rag, registry, shards
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(embed, "dimension", lambda: 384)
+        monkeypatch.setattr(registry, "list_taps",
+                            lambda: [registry.Tap(name="a/b", url="file:///x")])
+        monkeypatch.setattr(rag, "_tap_commits", lambda: {"a__b": "1" * 40})
+        monkeypatch.setattr(dense, "tap_commits", lambda: {"a__b": "1" * 40})
+
+        def boom(*a, **k):
+            raise AssertionError("sync must not download an already-current shard")
+        monkeypatch.setattr(shards, "download", boom)
+
+        res = boost("reindex", "--fetch-shards")
+        assert "already up to date" in res.out
+        # Never reported as a tap that still needs local embedding.
+        assert "reindex --dense" not in res.out
+
+    def test_imported_and_current_shards_are_both_reported(
+            self, boost, fixture_tap_src, manifest, monkeypatch):
+        """A run that imports some and finds the rest current has two things
+        to say, and must say both.
+
+        The first cut of this reporting chained them as `if got / elif
+        current`, so the already-up-to-date line vanished the moment anything
+        imported — which is the common case on a partial refresh, and the one
+        case where the count of what was skipped is worth the most.
+        """
+        from boost_cli.core import embed, shards
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(embed, "dimension", lambda: 384)
+        monkeypatch.setattr(shards, "sync", lambda *a, **k: [
+            {"tap": "a/b", "status": "imported", "chunks": 12},
+            {"tap": "c/d", "status": "current"},
+        ])
+        boost("tap", str(fixture_tap_src))
+        res = boost("reindex", "--fetch-shards")
+        assert "imported 1 shard(s)" in res.out
+        assert "1 shard(s) already up to date" in res.out
+        # Neither status is a gap, so neither earns the local-embed remedy.
+        assert "reindex --dense" not in res.out
+
 
 class TestTapAt:
     """`--at` is what makes a shard importable; a bad pin must not tap HEAD."""

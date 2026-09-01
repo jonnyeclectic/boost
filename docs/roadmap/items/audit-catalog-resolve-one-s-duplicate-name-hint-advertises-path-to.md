@@ -2,14 +2,14 @@
 id: audit-catalog-resolve-one-s-duplicate-name-hint-advertises-path-to
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 1
 note: Following the CLI's own hint earns `unrecognized arguments: --path`, exit 2
 order: 215
-owner:
+owner: loop/resolve-one-path-hint
 pr:
 title: "<code>catalog.resolve_one</code>'s duplicate-name hint advertises <code>--path</code> to commands that reject it"
 ---

@@ -12,6 +12,7 @@ import getpass
 import io
 import itertools
 import json
+import pathlib
 import socket
 import subprocess
 import sys
@@ -60,6 +61,23 @@ class TestConfig:
         r = boost("config")
         assert "~/.boost/config.json" in r.out
 
+    def test_list_on_pristine_home_names_the_missing_file(self, boost, sandbox):
+        # `config list` must never claim ~/.boost/config.json is the source of
+        # the defaults it just printed when that file does not exist yet.
+        assert not paths.config_path().exists()
+        r = boost("config")
+        assert "~/.boost/config.json not created yet" in r.out
+        assert not paths.config_path().exists()  # listing must not create it
+
+    def test_list_once_config_json_exists_names_it_plainly(self, boost, sandbox):
+        # The sibling of the pristine-home case: once the file is real, the
+        # trailer goes back to naming it with no "not created yet" caveat.
+        boost("config", "set", "telemetry", "true")
+        assert paths.config_path().exists()
+        r = boost("config")
+        assert r.out.rstrip().endswith("~/.boost/config.json")
+        assert "not created yet" not in r.out
+
     def test_get_hit_and_miss(self, boost, sandbox):
         r = boost("config", "get", "ai.model")
         assert r.out.strip() == "claude-haiku-4-5-20251001"
@@ -93,6 +111,16 @@ class TestConfig:
         r = boost("config", "unset", "custom.flag")
         assert "custom.flag not set" in r.out
 
+    def test_unset_defaulted_key_on_pristine_home_creates_no_file(self, boost,
+                                                                   sandbox):
+        # A key present only via DEFAULTS has nothing on disk to remove — this
+        # used to report success and freeze all of DEFAULTS into a brand new
+        # config.json.
+        assert not paths.config_path().exists()
+        r = boost("config", "unset", "telemetry")
+        assert "telemetry not set" in r.out
+        assert not paths.config_path().exists()
+
 
 # ---------------------------------------------------------------- clean
 
@@ -124,6 +152,37 @@ class TestClean:
     def test_fresh_sandbox_has_nothing_to_clean(self, boost, sandbox):
         r = boost("clean")
         assert "nothing to clean" in r.out
+
+    def test_a_failed_removal_is_not_counted_cleaned_and_exits_1(
+            self, boost, installed, monkeypatch):
+        # The audit repro: some items can't be unlinked (permission denied on
+        # the containing directory). The old code warned, kept going, then
+        # reported every candidate as removed and exited 0 anyway.
+        stuck = paths.cache_dir() / "stuck__tap.json"
+        stuck.write_text('{"skills": []}', encoding="utf-8")             # 14 bytes
+        stale = paths.cache_dir() / "old__tap.json"
+        stale.write_text('{"skills": []}', encoding="utf-8")             # 14 bytes
+        real_unlink = pathlib.Path.unlink
+
+        def _unlink(self, *a, **k):
+            if self == stuck:
+                raise OSError(13, "Permission denied")
+            return real_unlink(self, *a, **k)
+
+        monkeypatch.setattr(pathlib.Path, "unlink", _unlink)
+
+        r = boost("clean", expect=1)
+        assert "could not remove ~/.boost/cache/stuck__tap.json" in r.err
+        assert "cleaned 1 item(s), 1 failed · 14B freed" in r.out
+        assert stuck.exists()
+        assert not stale.exists()
+
+        assert journal.events(action="clean")[0]["subject"] \
+            == "cleaned 1 item(s), 1 failed · 14B freed"
+
+        # rerun: the failed item is still there next time, not silently gone
+        r = boost("clean", expect=1)
+        assert "cleaned 0 item(s), 1 failed · 0B freed" in r.out
 
     def test_leaves_a_broken_symlink_boost_does_not_own(self, boost, installed):
         # `clean` carried the same overreach as `sync`: it removed every broken

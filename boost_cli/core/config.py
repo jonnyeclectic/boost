@@ -131,6 +131,15 @@ def load_registry_catalog() -> list:
     return data.get("registries", [])
 
 
+def registry_categories() -> dict:
+    """tap name ('owner/repo') -> curated category, from the bundled registry
+    catalog (`data/registries.json`) — the only place a *tap-level* category
+    lives. A catalog entry's own stamped category (`catalog._entry_category`)
+    falls back to this when the item declares none of its own."""
+    return {e["name"]: e["category"] for e in load_registry_catalog()
+            if e.get("category")}
+
+
 def self_installing_command(tap: str) -> str | None:
     """The repo's own install command, when boost must not copy its items.
 
@@ -203,6 +212,23 @@ def _read() -> dict:
     return _merge(DEFAULTS, user)
 
 
+def _read_raw() -> dict:
+    """The on-disk overrides only, with no DEFAULTS merged in.
+
+    A missing or corrupt file reads as no overrides — the same "absent" the
+    merged view falls back to, so a caller walking this dict never has to
+    special-case the file not existing.
+    """
+    p = paths.config_path()
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def _cached() -> dict:
     """The merged config, re-read from disk only when the file changes."""
     global _cache, _cache_key
@@ -261,8 +287,16 @@ def set_value(dotted: str, raw: str) -> None:
 
 
 def unset(dotted: str) -> bool:
-    """Delete a dotted key and save; True if removed, False (no write) if absent."""
-    cfg = load()
+    """Delete a dotted key and save; True if removed, False (no write) if absent.
+
+    Walks the raw on-disk overrides, not the DEFAULTS-merged view `load()`
+    returns. A key that is only present via DEFAULTS has nothing on disk to
+    remove — walking the merged view instead made every defaulted key
+    `in node` forever, so a repeat `unset` (or a first one on a pristine
+    machine with no config.json at all) reported success and wrote the whole
+    of DEFAULTS to disk, freezing them against future default changes.
+    """
+    cfg = _read_raw()
     node: Any = cfg
     parts = dotted.split(".")
     for part in parts[:-1]:

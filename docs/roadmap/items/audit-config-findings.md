@@ -2,15 +2,15 @@
 id: audit-config-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 2
 note: `config unset` on a pristine HOME creates config.json and freezes all defaults into it
 order: 258
-owner:
-pr:
+owner: loop/config-unset-raw
+pr: 650
 title: "boost config: CLI audit findings (2026-08)"
 ---
 <b><code>config unset</code> on a defaulted key always reports success and rewrites the file.</b>

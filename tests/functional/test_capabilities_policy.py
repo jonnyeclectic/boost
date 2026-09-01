@@ -31,6 +31,36 @@ def _tap_with(fixture_tap_src, tmp_path, name, frontmatter_extra="", body="Body.
     return dst
 
 
+def _tap_with_rule(fixture_tap_src, tmp_path, name, frontmatter_extra=""):
+    """A tap holding one rule (``.mdc``) instead of a skill."""
+    dst = tmp_path / (name + "-rule-tap")
+    shutil.copytree(fixture_tap_src, dst)
+    md = dst / "rules" / (name + ".mdc")
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text("---\nname: %s\n%s---\n\nAlways write tests first.\n"
+                  % (name, frontmatter_extra), encoding="utf-8")
+    subprocess.run(["git", "-C", str(dst), "add", "-A"], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(dst), "commit", "-qm", "add " + name],
+                   check=True, capture_output=True)
+    return dst
+
+
+def _tap_with_workflow(fixture_tap_src, tmp_path, name, frontmatter_extra=""):
+    """A tap holding one workflow (slash command) instead of a skill."""
+    dst = tmp_path / (name + "-workflow-tap")
+    shutil.copytree(fixture_tap_src, dst)
+    md = dst / "commands" / (name + ".md")
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text("---\nname: %s\ndescription: a test workflow\n%s---\n\nDo it.\n"
+                  % (name, frontmatter_extra), encoding="utf-8")
+    subprocess.run(["git", "-C", str(dst), "add", "-A"], check=True,
+                   capture_output=True)
+    subprocess.run(["git", "-C", str(dst), "commit", "-qm", "add " + name],
+                   check=True, capture_output=True)
+    return dst
+
+
 @pytest.fixture()
 def deny(boost):
     def _set(caps, strict=False):
@@ -70,6 +100,33 @@ def test_no_policy_means_no_capability_gate(boost, fixture_tap_src, tmp_path):
                     frontmatter_extra="capabilities: [network]\n")
     boost("tap", tap)
     boost("install", "netskill")            # empty deny list — installs freely
+
+
+# ── rules and workflows get the same gate as skills ──────────────────────
+# A rule is merged into a context file the agent reads every session and a
+# workflow becomes a slash command run verbatim — each at least as invasive
+# as a skill, so `denied_capabilities` must refuse them the same way.
+
+def test_denied_capability_blocks_a_rule_install(boost, fixture_tap_src,
+                                                  tmp_path, deny):
+    tap = _tap_with_rule(fixture_tap_src, tmp_path, "shelly-rule",
+                         frontmatter_extra="capabilities: [shell]\n")
+    boost("tap", tap)
+    deny(["shell"])
+    res = boost("install", "shelly-rule", expect=1)
+    assert "declares the 'shell' capability, denied by policy" in (res.out + res.err)
+    assert boost("list").out.count("shelly-rule") == 0
+
+
+def test_denied_capability_blocks_a_workflow_install(boost, fixture_tap_src,
+                                                      tmp_path, deny):
+    tap = _tap_with_workflow(fixture_tap_src, tmp_path, "shelly-flow",
+                             frontmatter_extra="capabilities: [shell]\n")
+    boost("tap", tap)
+    deny(["shell"])
+    res = boost("install", "shelly-flow", expect=1)
+    assert "declares the 'shell' capability, denied by policy" in (res.out + res.err)
+    assert boost("list").out.count("shelly-flow") == 0
 
 
 # ── detected capabilities (strict, opt-in) ───────────────────────────────

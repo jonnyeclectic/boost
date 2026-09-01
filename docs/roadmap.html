@@ -133,7 +133,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>9</b><span>Planned</span></div>
-      <div class="stat"><b>401</b><span>Loop finds</span></div>
+      <div class="stat"><b>402</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5343,7 +5343,7 @@ regenerate <code>docs/commands.html</code> if summaries change. Found by the 202
       </article>
 
       <article class="cap rcard" id="audit-snapshot-restore-replaces-the-lock-wholesale-orphaning-newer">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
         <h3><code>snapshot restore</code> replaces the lock wholesale, orphaning newer rules' CLAUDE.md blocks</h3>
         <p><code>_snapshot_save</code> tars every child of <code>store_dir()</code> including
 <code>.skill-lock.json</code> (<code>boost_cli/commands/pkg.py:1509-1511</code>), and
@@ -5440,8 +5440,9 @@ Found by the 2026-08 CLI audit (clusters <code>manifest-truncated-read</code>, <
       </article>
 
       <article class="cap rcard" id="shard-refresh-skips-processed-commits">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Performance</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Performance</span></div>
         <h3><code>quickstart</code> reruns re-download every shard; <code>shards.sync</code> never asks what is built</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>From a user request: <em>"update PRs to not reprocess the same shards repeatedly. have a
 progress map with commit sha or something."</em> The user-visible symptom: running
 <code>boost quickstart</code> a second time — after an interrupt, after adding
@@ -5481,7 +5482,7 @@ resumable for free — taps imported before the interrupt skip on the next run, 
 durability half of the user's ask. No flags change, so <code>docs/commands.html</code> needs no
 regeneration; no other docs affected. Filed from the user's request during the 2026-08 CLI audit;
 verified by reading <code>core/shards.py</code> — the missing check is unambiguous in code, no
-repro run needed. Absolute date of verification: 2026-08-31.</p>
+repro run needed. Absolute date of verification: 2026-08-31.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6457,8 +6458,9 @@ deps/drift/verify/lint/audit empties through <code>out.empty_state</code> with o
       </article>
 
       <article class="cap rcard" id="audit-doctor-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost doctor: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Three wording defects in one report, all verified.</b> The crash-report notice —
 <em>"! 1 crash report in ~/.boost/logs (newest: &hellip;) — see `boost log --crashes`"</em> —
 wears the "!" issue glyph but is never counted: <code>bad()</code>
@@ -6480,7 +6482,7 @@ found in verification: the verdict line itself has a number-agreement slip — <
 attention"</em> — because <code>quality.py:637</code> pluralises the noun but not the verb; make
 it <em>"1 issue needs attention"</em>. Update <code>docs/DEBUGGING.md</code> (its doctor output
 excerpts at <code>:159-164</code>) to match. Found by the 2026-08 CLI audit (cluster
-<code>doctor-output-polish</code>); repro in the audit log.</p>
+<code>doctor-output-polish</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -6579,8 +6581,9 @@ removed, health prints <em>gemini 1/1 &#10003; (reads the store directly)</em> b
       </article>
 
       <article class="cap rcard" id="audit-lint-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost lint</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>A path on disk cannot be linted</b> <em>(med)</em>. <code>lint ./my-skill</code> and
 <code>lint &hellip;/SKILL.md</code> both fail <em>&ldquo;Error: not installed: &hellip; / hint: see
 what is with <code>boost list</code>&rdquo;</em> &mdash; only installed names and <code>--tap</code>
@@ -6622,7 +6625,7 @@ so a misspelt name passes CI silently, while the installed-name path errors (exi
 <code>catalog.lint_targets</code>, raise <code>BoostError</code> for any requested name matching
 neither targets nor skipped, on the <code>--json</code> path too (<code>quality.py:729</code>,
 <code>catalog.py:303-329</code>). Found by the 2026-08 CLI audit (cluster
-<code>lint-tap-unknown-name</code>); repro in the audit log.</p>
+<code>lint-tap-unknown-name</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -11417,15 +11420,16 @@ procedure. Its one-liner gives no sign. That is the gap the body closes.</p></de
       </article>
 
       <article class="cap rcard" id="audit-clean-counts-failed-removals-as-cleaned-journals-the-inflate">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>clean</code> counts failed removals as cleaned, journals the inflated count, and exits 0</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>With 5 surplus lock-history files in a directory chmod'd 555 so unlink fails, <code>boost clean</code> prints five <em>&ldquo;! could not remove &hellip;: [Errno 13] Permission denied&rdquo;</em> warnings and then <em>&ldquo;&#10003; cleaned 6 item(s) &middot; 15B freed&rdquo;</em>, exit 0 &mdash; only 1 item was actually removed. Run it again: <em>&ldquo;&#10003; cleaned 5 item(s) &middot; 0B freed&rdquo;</em>, exit 0, nothing removed, files still present. The rerun repeating &ldquo;cleaned 5&rdquo; is the proof the count is fiction.
 
 The mechanism is <code>boost_cli/commands/configuration.py:189-206</code>: the <code>except OSError</code> branch warns and continues, but the summary prints <code>len(items)</code> and the function unconditionally returns 0. Two verified aggravations: the <em>&ldquo;! could not remove&rdquo;</em> warnings go to stdout rather than stderr, and <code>journal.log</code> records the same inflated &ldquo;N items&rdquo; count (<code>configuration.py:204</code>) &mdash; so both the human and the audit trail are told the machine is clean when it is not.
 
 Fix per the verified recommendation: increment a <code>removed</code> counter only after a successful unlink/rmtree, print <em>&ldquo;cleaned N item(s), M failed&rdquo;</em> when failures exist, log the real count to the journal, and <code>return 1</code> when any removal failed. No docs change beyond regenerating <code>docs/commands.html</code> if the summary wording moves into help text (behaviour-only otherwise).
 
-Found by the 2026-08 CLI audit (cluster <code>clean-failure-accounting</code>); repro in the audit log. Verified 2026-08-31: reproduced, high confidence &mdash; a wrong count plus exit 0 on failure are both on the audit contract's high-severity list.</p>
+Found by the 2026-08 CLI audit (cluster <code>clean-failure-accounting</code>); repro in the audit log. Verified 2026-08-31: reproduced, high confidence &mdash; a wrong count plus exit 0 on failure are both on the audit contract's high-severity list.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -11562,8 +11566,9 @@ audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-hooks-remove-n-cannot-find-hooks-boost-itself-added-unknown">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>hooks remove <code>-n</code> cannot find hooks boost itself added (unknown events skipped, embedded <code># boost:</code> mangles the name)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Two ways a boost-added hook becomes unremovable by its own name. First, unknown events:
 <code>hooks add Bogus -c 'echo bogus' -n b1</code> warns and adds, but <code>hooks remove -n
 b1</code> prints <em>"! no boost hook named 'b1' in project scope"</em> — exit 0, hook stays —
@@ -11588,7 +11593,7 @@ named"; in <code>core/claude_settings.py</code> use <code>rsplit(MARKER, 1)</cod
 unless behaviour text is reworded — regenerate if so.
 
 Found by the 2026-08 CLI audit (cluster <code>hooks-remove-name-miss</code>); repro in the audit
-log.</p>
+log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -11758,7 +11763,7 @@ they describe the offer's scope. Found by the 2026-08 CLI audit (cluster
       </article>
 
       <article class="cap rcard" id="audit-catalog-resolve-one-s-duplicate-name-hint-advertises-path-to">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>catalog.resolve_one</code>'s duplicate-name hint advertises <code>--path</code> to commands that reject it</h3>
         <p>When a name matches two skills inside one tap, every <code>catalog.resolve_one</code> caller prints
 the same hint: <em>&ldquo;that registry ships one name twice &mdash; pick one with
@@ -12490,7 +12495,7 @@ ID, digests, hook commands) so narrow TTYs shrink chrome (WHO/WHEN/URL) first &m
       </article>
 
       <article class="cap rcard" id="audit-output-wrap-tokens-splits-punctuation-off-backtick-spans-ins">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>output._wrap_tokens</code> splits punctuation off backtick spans, inserting a stray space</h3>
         <p>CLAUDE.md's wrap law makes a backtick span one atomic token so pasteable commands survive folding
 &mdash; but <code>output._wrap_tokens</code> (<code>boost_cli/core/output.py:383&ndash;391</code>) also makes the
@@ -12715,8 +12720,9 @@ fixes touches a COMMANDS row, so <code>docs/commands.html</code> is unaffected.
       </article>
 
       <article class="cap rcard" id="audit-absorb-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Consistency</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Consistency</span></div>
         <h3>boost absorb: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>cmd_absorb</code> never calls <code>journal.log</code>.</b> After two
 <code>absorb --install</code> runs, <code>boost log</code> lists <em>&ldquo;infer
 project-conventions&rdquo;</em>, <em>&ldquo;distill brainstorming-distilled&rdquo;</em> and an
@@ -12736,7 +12742,7 @@ report would misreport a local re-import as a fresh tap install. Fix is the jour
 both branches of <code>cmd_absorb</code> (<code>intelligence.py:528-580</code>), mirroring distill's
 placement. No doc changes.
 
-<br><br>Found by the 2026-08 CLI audit (cluster <code>absorb-parity</code>); repro in the audit log.</p>
+<br><br>Found by the 2026-08 CLI audit (cluster <code>absorb-parity</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -12939,7 +12945,7 @@ COMMANDS changes.</p>
       </article>
 
       <article class="cap rcard" id="audit-catalog-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost catalog: CLI audit findings (2026-08)</h3>
         <p><b><code>catalog --show</code> silently truncates the tap table at 20 rows</b> (cluster
 <code>catalog-show-row-cap</code>, med). Reproduced offline with 22 taps: the heading says
@@ -13129,8 +13135,9 @@ the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-config-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost config: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>config unset</code> on a defaulted key always reports success and rewrites the file.</b>
 A second <code>config unset ai.enabled</code> — the key already gone from
 <code>config.json</code> — prints <em>"&#10003; unset ai.enabled"</em>, exits 0, and rewrites the
@@ -13149,7 +13156,7 @@ followed by <code>~/.boost/config.json</code> as their source — a path that do
 (<code>commands/configuration.py:78</code> prints it unconditionally). Vary the dim trailer when
 <code>paths.config_path()</code> is missing: <em>"defaults — ~/.boost/config.json not created
 yet"</em>. No doc changes. Found by the 2026-08 CLI audit (cluster
-<code>config-state-reporting</code>); repro in the audit log.</p>
+<code>config-state-reporting</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
@@ -14034,7 +14041,7 @@ Two bookkeeping notes. The one <em>known</em> cluster, <code>wrap-law-remaining-
       </article>
 
       <article class="cap rcard" id="catalog-categories-beyond-curated">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Catalog · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Catalog · UX</span></div>
         <h3>Per-item categories in <code>search</code>/<code>browse</code>/<code>info</code> — not just a ★ curated bool</h3>
         <p>From a user request: <em>&ldquo;proper categories for skills (can't have all of them listed as just
 curated)&rdquo;</em>. They are right about the item level: the only taxonomy a catalog entry carries is
@@ -14076,12 +14083,26 @@ curation/trust only. Consumers must degrade cleanly when <code>category</code> i
 caches, synthesised entries), same as the <code>content</code> digest rule.
 Docs: regenerate <code>docs/commands.html</code> for the new flags; no other doc names categories.
 Found by the 2026-08 CLI audit (cluster <code>catalog-categories-beyond-curated</code>, filed from
-the user's request); repro in the audit log. Verified against source 2026-08-31.</p>
+the user's request); repro in the audit log. Verified against source 2026-08-31.
+
+<b>Status (2026-09-01).</b> Landed: the <code>category</code> stamp at scan time
+(<code>catalog._entry_category</code>, own frontmatter <code>category</code> → first
+<code>tags</code> entry → tap's registry category), <code>CACHE_FORMAT</code> bumped to 2 so
+existing caches backfill on next scan, a <code>--category</code> filter on
+<code>search</code>/<code>browse</code>/<code>recommend</code>
+(<code>catalog.matches_category</code>/<code>filter_by_category</code>), <code>info</code>'s kv row
+and <code>--json</code> field, and <code>browse</code>'s row badge switched from the tap-level
+lookup to the entry's own field (falling back to the tap lookup for a cache not yet rescanned).
+<b>Not done: the badge in plain <code>boost search</code> rows.</b> That row's column widths
+(<code>out.search_layout</code>/<code>format_search_row</code>) are a tuned, heavily-pinned budget
+system (drop order, per-cap name shrinking, a reserved curated tail) — working it out safely needs
+its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> rather than
+<code>shipped</code> for that reason; the next claim on this item is scoped to exactly that piece.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">487 registries carry 21 categories; the items themselves carry only a curated bool</span>
+          <span class="m">landed everywhere except the search-row badge — see PR for what remains</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -16591,6 +16612,51 @@ bytes a structurally-correct JSON response never emits.</p></details>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">the test suite pinned the echo in place as if it were the contract</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="capability-policy-skips-rules-and-workflows">
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Security · Bug</span></div>
+        <h3><code>denied_capabilities</code> policy never applied to rule/workflow installs</h3>
+        <p><code>capabilities.py</code>'s own docstring frames this as "not <i>which</i> skill, but <i>what
+it is allowed to make the agent do</i>" — no kind restriction. <code>store.install()</code> agrees
+in practice for one of the three installable kinds: the skill path calls
+<code>_enforce_capability_policy</code> right before copying, so a skill that declares (or, under
+the opt-in strict flag, merely looks like it uses) a denied capability is refused with "policy
+blocks installing X: declares the 'shell' capability, denied by policy". <code>install_from_path</code>
+(the local-import path used by <code>import</code>/<code>create --install</code>/<code>distill
+--install</code>) got the same gate wired in by a prior card
+(<code>install-from-path-bypasses-policy-and-pin-checks</code>).
+
+<code>_install_rule</code> and <code>_install_workflow</code> — the other two of the three kinds
+CLAUDE.md itself says "all three install" — never call it. A rule with <code>capabilities:
+[shell]</code> in its frontmatter merges straight into <code>~/.claude/CLAUDE.md</code>, the
+standing instructions the agent reads every session (which this repo's own docs already call
+"more invasive than a skill, not less"); a workflow with the same frontmatter drops straight into
+an agent's <code>commands/</code> or <code>agents/</code> dir as a slash command or subagent run
+verbatim. Either way <code>denied_capabilities</code> is silently a no-op — a team that configures
+"deny shell" to keep untrusted taps from installing anything that shells out is only half
+enforced, and the half that isn't is the more invasive half.
+
+Distinct from <code>rules-install-but-cannot-be-governed</code> (PR 464, which swept 20 commands
+that couldn't <i>see</i> an installed rule/workflow afterwards) and from
+<code>install-from-path-bypasses-policy-and-pin-checks</code> (the local-import path, already
+fixed): this is the tap-install path for the other two kinds skipping a pre-install gate that
+already exists and already works for skills, not a governance-after-the-fact problem.
+
+<b>Fix.</b> <code>_enforce_capability_policy</code> never actually required a
+<code>SKILL.md</code>-shaped path — it just reads a Markdown file and checks its frontmatter +
+body against policy — so <code>_install_rule</code> and <code>_install_workflow</code> now call it
+on their own source file before materializing anything, the same placement (right after the
+"source vanished from tap" check, before any write) the skill path already uses. Covered by new
+unit tests in both <code>TestRuleInstall</code>/<code>TestWorkflowInstall</code> (denied capability
+refuses and leaves no lock entry / no materialized file; a non-denied capability still installs)
+and new functional tests in <code>test_capabilities_policy.py</code> exercising the same denial
+end to end through <code>boost install</code> for a tapped rule and a tapped workflow.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
         </div>
       </article>
 
