@@ -292,3 +292,22 @@ class TestRegistryCatalog:
     def test_missing_file_returns_empty(self, monkeypatch, tmp_path):
         monkeypatch.setattr(config, "REGISTRY_CATALOG", tmp_path / "nope.json")
         assert config.load_registry_catalog() == []
+
+
+class TestRegistryCategories:
+    def test_maps_name_to_category_dropping_uncategorized_rows(self, monkeypatch):
+        monkeypatch.setattr(config, "load_registry_catalog", lambda: [
+            {"name": "acme/ai-tap", "category": "ai"},
+            {"name": "acme/no-category-tap"},
+            {"name": "acme/blank-category-tap", "category": ""},
+        ])
+        assert config.registry_categories() == {"acme/ai-tap": "ai"}
+
+    def test_against_the_real_bundled_catalog(self):
+        # Every category value present is a non-empty string, and the map
+        # covers exactly the rows the raw catalog itself marks categorized.
+        cats = config.registry_categories()
+        raw = config.load_registry_catalog()
+        assert cats  # the bundled catalog does carry categories
+        assert set(cats) == {e["name"] for e in raw if e.get("category")}
+        assert all(isinstance(v, str) and v for v in cats.values())

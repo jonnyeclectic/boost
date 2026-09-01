@@ -27,7 +27,7 @@ import re
 from pathlib import Path
 
 from ..errors import BoostError
-from . import frontmatter, gitutil, paths, registry, util
+from . import config, frontmatter, gitutil, paths, registry, util
 
 # Bumped whenever a scan starts recording something the previous scan did not,
 # so 460 caches on a real machine invalidate on read instead of needing a
@@ -35,7 +35,8 @@ from . import frontmatter, gitutil, paths, registry, util
 # the same reason; the tap cache was the one derived artifact that did not, and
 # without it there was no way to ship a new entry field at all.
 #   1 -- entries carry `content` (see `_content_digest`)
-CACHE_FORMAT = 1
+#   2 -- entries carry `category` (see `_entry_category`)
+CACHE_FORMAT = 2
 
 KIND_SKILL = "skill"
 KIND_RULE = "rule"
@@ -102,8 +103,32 @@ def _content_digest(name: str, description: str, body: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8", "replace")).hexdigest()[:16]
 
 
+def _entry_category(meta: dict, tap_category: str) -> str:
+    """An item's own category, falling back to its tap's curated category.
+
+    Declared beats inherited: an item that names its own frontmatter
+    ``category`` (or, failing that, its first ``tags`` entry) is trusted over
+    the registry-wide label, because one registry can genuinely mix domains
+    (see CLAUDE.md's design-domain note on `awesome-design-skills` vs
+    `ai-design-skills`). ``tap_category`` — looked up once per scan from the
+    bundled registry catalog, never per item — is everything an un-annotated
+    item has, and is itself often empty for a tap outside the bundled 487.
+    """
+    own = str(meta.get("category") or "").strip()
+    if own:
+        return own
+    tags = meta.get("tags")
+    if isinstance(tags, list):
+        for tag in tags:
+            tag = str(tag or "").strip()
+            if tag:
+                return tag
+    return tap_category
+
+
 def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
-                tap_name: str, curated: bool, meta: dict, body: str) -> dict:
+                tap_name: str, curated: bool, meta: dict, body: str,
+                tap_category: str = "") -> dict:
     name = str(meta.get("name") or "").strip() or default_name
     # Slugify anything that is not already a safe path component, not just names
     # containing a space: this name becomes a rule/workflow filename, so
@@ -118,6 +143,7 @@ def _make_entry(root: Path, defining_file: Path, kind: str, default_name: str,
         "tap": tap_name,
         "curated": curated,
         "kind": kind,
+        "category": _entry_category(meta, tap_category),
         "rel_dir": item_dir.relative_to(root).as_posix() if item_dir != root else ".",
         "skill_md": defining_file.relative_to(root).as_posix(),
         "meta": meta,
@@ -159,6 +185,10 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
     root = Path(root)
     entries: list[dict] = []
     skill_dirs: set[Path] = set()
+    # Looked up once per scan (one JSON read of the bundled registry catalog),
+    # not once per item — the whole point of threading it through rather than
+    # having `_entry_category` call `config.registry_categories()` itself.
+    tap_category = config.registry_categories().get(tap_name, "")
     # One top-down walk instead of two rglob passes: prune ignored dirs in place
     # so we never descend into .git/__pycache__, and test skill-dir membership
     # against a set via each dir's own ancestor chain rather than O(files × dirs).
@@ -176,7 +206,7 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
                 default = here.name if here != root else root.name
                 entries.append(_make_entry(root, here / "SKILL.md", KIND_SKILL,
                                            default, tap_name, curated,
-                                           meta, body))
+                                           meta, body, tap_category))
                 skill_dirs.add(here)
         # Files inside any skill directory belong to that skill, never re-indexed.
         if here in skill_dirs or any(a in skill_dirs for a in here.parents):
@@ -202,7 +232,7 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
             else:
                 default = path.stem
             entries.append(_make_entry(root, path, kind, default,
-                                       tap_name, curated, meta, body))
+                                       tap_name, curated, meta, body, tap_category))
 
     entries.sort(key=operator.itemgetter("skill_md", "name"))
     return entries
@@ -660,3 +690,21 @@ def search(query: str, entries: list[dict] | None = None):
             scored.append((e, score))
     scored.sort(key=lambda x: (-x[1], x[0]["name"]))
     return scored
+
+
+def matches_category(entry: dict, category: str) -> bool:
+    """True when `entry`'s stamped category equals `category`, case-insensitively.
+
+    An empty `category` always matches — the no-filter case — so callers can
+    apply this unconditionally instead of branching on "was --category given".
+    A missing/empty `entry["category"]` (an old cache predating `CACHE_FORMAT`
+    2, or a synthesised entry) only matches an equally empty `category`.
+    """
+    if not category:
+        return True
+    return (entry.get("category") or "").strip().lower() == category.strip().lower()
+
+
+def filter_by_category(entries: list[dict], category: str) -> list[dict]:
+    """`entries` narrowed to those matching `category` (see `matches_category`)."""
+    return [e for e in entries if matches_category(e, category)]

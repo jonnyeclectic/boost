@@ -2,14 +2,14 @@
 id: catalog-categories-beyond-curated
 board: code
 section: dx
-status: planned
+status: inflight
 category: Catalog · UX
 complexity: M
 impact: Med
 wow: 2
-note: 487 registries carry 21 categories; the items themselves carry only a curated bool
+note: landed everywhere except the search-row badge — see PR for what remains
 order: 305
-owner:
+owner: loop/catalog-per-item-categories
 pr:
 title: "Per-item categories in <code>search</code>/<code>browse</code>/<code>info</code> — not just a ★ curated bool"
 ---
@@ -54,3 +54,17 @@ caches, synthesised entries), same as the <code>content</code> digest rule.
 Docs: regenerate <code>docs/commands.html</code> for the new flags; no other doc names categories.
 Found by the 2026-08 CLI audit (cluster <code>catalog-categories-beyond-curated</code>, filed from
 the user's request); repro in the audit log. Verified against source 2026-08-31.
+
+<b>Status (2026-09-01).</b> Landed: the <code>category</code> stamp at scan time
+(<code>catalog._entry_category</code>, own frontmatter <code>category</code> → first
+<code>tags</code> entry → tap's registry category), <code>CACHE_FORMAT</code> bumped to 2 so
+existing caches backfill on next scan, a <code>--category</code> filter on
+<code>search</code>/<code>browse</code>/<code>recommend</code>
+(<code>catalog.matches_category</code>/<code>filter_by_category</code>), <code>info</code>'s kv row
+and <code>--json</code> field, and <code>browse</code>'s row badge switched from the tap-level
+lookup to the entry's own field (falling back to the tap lookup for a cache not yet rescanned).
+<b>Not done: the badge in plain <code>boost search</code> rows.</b> That row's column widths
+(<code>out.search_layout</code>/<code>format_search_row</code>) are a tuned, heavily-pinned budget
+system (drop order, per-cap name shrinking, a reserved curated tail) — working it out safely needs
+its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> rather than
+<code>shipped</code> for that reason; the next claim on this item is scoped to exactly that piece.

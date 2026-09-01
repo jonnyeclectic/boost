@@ -263,6 +263,35 @@ class TestInfo:
         assert data["quality"] == 95
         assert data["files"] == 1
 
+    def test_category_kv_row_and_json_field(self, boost, installed):
+        # brainstorming declares no explicit `category`, so it falls back to
+        # its first tag ("ideation") — see catalog._entry_category.
+        r = boost("info", "brainstorming")
+        assert re.search(r"category\s+ideation", r.out)
+        data = json.loads(boost("info", "brainstorming", "--json").out)
+        assert data["category"] == "ideation"
+
+    def test_category_absent_is_null_in_json_and_no_kv_row(self, boost, tapped,
+                                                            monkeypatch):
+        # A cache written before catalog.CACHE_FORMAT 2 carries no `category`
+        # key at all — degrade cleanly rather than printing "category  None".
+        from boost_cli.core import catalog as core_catalog
+        real_all_entries = core_catalog.all_entries
+
+        def stripped():
+            out = []
+            for e in real_all_entries():
+                e = dict(e)
+                e.pop("category", None)
+                out.append(e)
+            return out
+
+        monkeypatch.setattr(core_catalog, "all_entries", stripped)
+        r = boost("info", "jira-integration")
+        assert "category" not in r.out
+        data = json.loads(boost("info", "jira-integration", "--json").out)
+        assert data["category"] is None
+
     def test_unknown_rc1(self, boost, tapped):
         r = boost("info", "definitely-nope", expect=1)
         assert "no skill named 'definitely-nope' in any tap" in r.err

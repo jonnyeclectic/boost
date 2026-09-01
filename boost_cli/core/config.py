@@ -131,6 +131,15 @@ def load_registry_catalog() -> list:
     return data.get("registries", [])
 
 
+def registry_categories() -> dict:
+    """tap name ('owner/repo') -> curated category, from the bundled registry
+    catalog (`data/registries.json`) — the only place a *tap-level* category
+    lives. A catalog entry's own stamped category (`catalog._entry_category`)
+    falls back to this when the item declares none of its own."""
+    return {e["name"]: e["category"] for e in load_registry_catalog()
+            if e.get("category")}
+
+
 def self_installing_command(tap: str) -> str | None:
     """The repo's own install command, when boost must not copy its items.
 
