@@ -440,17 +440,20 @@ def unregister_project_mcp(base, skill: str) -> list[str]:
     return removed
 
 
-def _enforce_capability_policy(name: str, skill_md: Path) -> None:
-    """Raise if the skill's declared/detected capabilities are denied by policy.
+def _enforce_capability_policy(name: str, source_md: Path) -> None:
+    """Raise if the item's declared/detected capabilities are denied by policy.
 
-    Runs on the skill's own SKILL.md before it is copied anywhere — a skill is a
-    bundle of instructions the agent will execute, and least-privilege means the
-    user's policy can refuse one that expects a capability they don't grant. A
+    Runs on the item's own source Markdown (a skill's ``SKILL.md``, or a rule's
+    or workflow's source file) before anything is materialized — a skill, rule
+    or workflow is alike a bundle of instructions the agent will execute (a
+    rule is merged into a context file read every session; a workflow becomes
+    a slash command or subagent run verbatim), and least-privilege means the
+    user's policy can refuse any of them for a capability they don't grant. A
     no-op unless the policy names a denied capability.
     """
     from . import frontmatter
     try:
-        raw = skill_md.read_text(encoding="utf-8", errors="replace")
+        raw = source_md.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return
     meta, _body = frontmatter.parse(raw)
@@ -853,6 +856,7 @@ def _install_rule(entry: dict, force: bool = False,
     if not src.is_file():
         raise BoostError("source for rule %s vanished from tap %s" % (name, tap.name),
                         hint="run `boost update %s`" % tap.name)
+    _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
     meta, body = frontmatter.parse(raw)
     claude_body = rules.render_claude_body(str(meta.get("name") or name), body)
@@ -1088,6 +1092,7 @@ def _install_workflow(entry: dict, force: bool = False,
     if not src.is_file():
         raise BoostError("source for workflow %s vanished from tap %s" % (name, tap.name),
                         hint="run `boost update %s`" % tap.name)
+    _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
 
