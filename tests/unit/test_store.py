@@ -275,6 +275,34 @@ class TestSourceDirFor:
         assert calls == []
 
 
+class TestHasContent:
+    """store.has_content() — is there a skill dir on disk, lock file aside.
+
+    A store dir outlives a missing/corrupt lock file, so this is how
+    `boost verify`/`drift`/`doctor` tell a genuinely fresh install apart from
+    one whose record vanished out from under real skills.
+    """
+
+    def test_empty_or_missing_store_dir(self, sandbox):
+        assert not store.has_content()
+
+    def test_true_once_a_skill_is_installed(self, brainstorming):
+        assert store.has_content()
+
+    def test_true_for_an_orphaned_dir_even_with_no_lock_entry(self, brainstorming):
+        # The exact scenario this exists for: the lock record is gone (or
+        # never existed) but the store dir it should have described is still
+        # on disk.
+        paths.lockfile_path().unlink()
+        assert store.has_content()
+
+    def test_ignores_dotdirs(self, sandbox):
+        paths.ensure_dirs()
+        paths.store_dir().mkdir(parents=True, exist_ok=True)
+        (paths.store_dir() / ".tmp-scratch").mkdir()
+        assert not store.has_content()
+
+
 class TestUnlinkAgents:
     def test_removes_only_symlinks(self, brainstorming):
         cursor_link = _link("cursor")

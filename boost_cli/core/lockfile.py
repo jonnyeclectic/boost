@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import shutil
 from contextlib import suppress
+from typing import NamedTuple
 
 from . import paths, util
 
@@ -73,6 +74,41 @@ def _preserve_corrupt(p) -> None:
         logs.get_logger().warning(
             "lock file %s is corrupt; preserved %s and continuing with an "
             "empty lock", p, backup or "(backup failed)")
+
+
+class Integrity(NamedTuple):
+    """The lock file's own health, as opposed to what it records.
+
+    ``read()`` collapses a missing, corrupt, or wrong-schema lock file into
+    an empty skeleton so every other caller can treat "never installed" and
+    "lock file broke" the same way when they only want the content. A health
+    check must not conflate the two: `boost verify`/`drift`/`doctor` call
+    this instead so they can tell a genuinely empty install apart from one
+    whose record vanished out from under a populated store.
+    """
+    ok: bool
+    problem: str | None    # None | "missing" | "corrupt" | "schema"
+    version: object = None  # the schema version actually found, for "schema"
+
+
+def check() -> Integrity:
+    """Report whether the lock file itself parses as the current schema.
+
+    Does not touch the store — a missing lock file with an empty store is a
+    fresh install, not a fault; callers that care about that distinction
+    combine this with a store-content check of their own.
+    """
+    p = paths.lockfile_path()
+    if not p.exists():
+        return Integrity(False, "missing")
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return Integrity(False, "corrupt")
+    version = raw.get("version")
+    if version != SCHEMA_VERSION:
+        return Integrity(False, "schema", version)
+    return Integrity(True, None, version)
 
 
 def write(lock: dict) -> None:

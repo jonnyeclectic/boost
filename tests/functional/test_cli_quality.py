@@ -151,6 +151,43 @@ class TestDoctor:
         assert "1 skill installed · 1 tap synced · 4 broken links" in r.out
         assert "2 issues need attention" in r.out  # plural verb: two bad() calls
 
+    def test_missing_lock_over_populated_store_rc1(self, boost, installed):
+        # The store dir and its agent links from `installed` are still on
+        # disk; only the lock record is gone. Doctor used to print
+        # "lock file parses (v3)" for a file that does not exist here — the
+        # orphaned-store check below already turned the exit code red, but
+        # both lock lines lied about a state two lines away from the true
+        # diagnosis.
+        paths.lockfile_path().unlink()
+        r = boost("doctor", expect=1)
+        assert "lock file parses (v3)" not in r.out
+        assert "lock file missing — 1 store dir unrecorded, run `boost sync`" in r.out
+        assert "lock file integrity OK" not in r.out
+
+    def test_missing_lock_with_empty_store_is_not_an_issue(self, boost, sandbox):
+        # No lock file and nothing in the store either: a fresh install, not
+        # a fault. Must not claim "parses" for a file that isn't there.
+        assert not paths.lockfile_path().exists()
+        r = boost("doctor")
+        assert "lock file parses (v3)" not in r.out
+        assert "no lock file yet — nothing installed" in r.out
+        assert "lock file integrity OK" in r.out
+
+    def test_corrupt_lock_rc1(self, boost, installed):
+        paths.lockfile_path().write_text(
+            '{"version": 3, "skills": {', encoding="utf-8")
+        r = boost("doctor", expect=1)
+        assert "lock file is corrupt — restore with `boost replay`" in r.out
+        assert "lock file parses (v3)" not in r.out
+        assert "lock file integrity OK" not in r.out
+
+    def test_wrong_schema_lock_rc1(self, boost, installed):
+        paths.lockfile_path().write_text(
+            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+        r = boost("doctor", expect=1)
+        assert "lock file schema is v2, expected v3" in r.out
+        assert "lock file parses (v3)" not in r.out
+
     def test_links_outside_the_declared_scope_rc1(self, boost, installed):
         # doctor must agree with `boost sync`, which reports this. A "healthy"
         # that contradicts the command it tells you to run is worse than no
@@ -585,6 +622,34 @@ class TestVerify:
         r = boost("verify", "ghost", expect=1)
         assert "not installed: ghost" in r.err
 
+    def test_no_lock_file_but_nothing_ever_installed_rc0(self, boost, tapped):
+        # Genuinely fresh: no lock file AND an empty store is not a fault.
+        assert not paths.lockfile_path().exists()
+        r = boost("verify")
+        assert "nothing installed" in r.out
+
+    def test_lock_file_missing_over_populated_store_rc1(self, boost, installed):
+        # The store and agent links from `installed` are still on disk; only
+        # the record of them is gone — the exact state this must not read as
+        # "nothing installed".
+        paths.lockfile_path().unlink()
+        r = boost("verify", expect=1)
+        assert "lock file missing" in r.err
+        assert "boost sync" in r.err
+
+    def test_lock_file_corrupt_rc1(self, boost, installed):
+        paths.lockfile_path().write_text(
+            '{"version": 3, "skills": {', encoding="utf-8")
+        r = boost("verify", expect=1)
+        assert "lock file is corrupt" in r.err
+        assert "boost replay" in r.err
+
+    def test_lock_file_wrong_schema_rc1(self, boost, installed):
+        paths.lockfile_path().write_text(
+            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+        r = boost("verify", expect=1)
+        assert "lock file schema is v2, expected v3" in r.err
+
 
 # ── drift ────────────────────────────────────────────────────────────────
 
@@ -616,6 +681,23 @@ class TestDrift:
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
                                     "status": "upstream-moved",
                                     "hint": "boost update"}]}
+
+    def test_no_lock_file_but_nothing_ever_installed_rc0(self, boost, tapped):
+        r = boost("drift")
+        assert "no skills installed" in r.out
+
+    def test_lock_file_missing_over_populated_store_rc1(self, boost, installed):
+        paths.lockfile_path().unlink()
+        r = boost("drift", expect=1)
+        assert "lock file missing" in r.err
+        assert "boost sync" in r.err
+
+    def test_lock_file_corrupt_rc1(self, boost, installed):
+        paths.lockfile_path().write_text(
+            '{"version": 3, "skills": {', encoding="utf-8")
+        r = boost("drift", expect=1)
+        assert "lock file is corrupt" in r.err
+        assert "boost replay" in r.err
 
 
 # ── test ─────────────────────────────────────────────────────────────────
