@@ -74,25 +74,25 @@
 # shallow clone already carries the pinned commit. CI caches the materialised
 # corpus on the same digest, so a repo that disappears upstream stops being able
 # to redden every open pull request at once.
-anthropics/skills                       b29e7cf65e5cb78a5ac33d582270551bc74a14eb    18
+anthropics/skills                       3b3fad96af16a10759d930941b4520ba0c40edae    20
 0xfurai/claude-code-subagents           9236d10702cdbba37eaa34515f1e1dbff8452506   138
-NeoLabHQ/context-engineering-kit        555b95263ecf13d2ad9be14df676a1263d5a62b2    92
+NeoLabHQ/context-engineering-kit        23e2428e809d77717f8acc9659c374a3a1fcb93e   268
 Aaronontheweb/dotnet-cursor-rules       9be2d201482bdafca8c687359f0ef0a71895d7af    11
 ChrisWiles/claude-code-showcase         a95518f0cb67e86230119da40429169bc4c35a6f    14
-LessUp/awesome-cursorrules-zh           cd6a1f34f4f9eed7a01084751b9f6514eee1882d   470
+LessUp/awesome-cursorrules-zh           ce39351450c4720a11c7edeadaef26d60c5c02e7   470
 
 # --- scale: not golden targets, present so the corpus is a realistic size ---
 aliarghyani/vue-cursor-rules            92609798e192312ce16edb78aa5424a8caaa415b    14
-affaan-m/ECC                            e4e4163101f162881e628f300a9ca4e6a940bcea  1616
+affaan-m/ECC                            ca185ef5f7667078a1e70a763bd3a9c71c48acf0  1621
 BagelHole/DevOps-Security-Agent-Skills  0365f57a079b1332f95cf26e31dd2d5332a8399f   163
 composio-community/awesome-codex-skills 0930e1373789d2eda449039f7ac154b33031de89   880
-first-fluke/oh-my-agent                 3016e9df463f28f8c9c33f4e810a1901425a8bb0   136
+first-fluke/oh-my-agent                 75b3fbce93258f37843d6db8a7e32ab52a6d9aa3   205
 iktakahiro/python-fastapi-ddd-skill     aa498d4c81acae475e05528520009c275cbe554f     6
-langchain-ai/skills-benchmarks          064a5087fda3472a6b2883be7841441d038d2e2f    21
-minio/skills                            d54382989a5ccc5fcc7de2905f7454f944a28d76     3
-OneWave-AI/claude-skills                27f8cdcea225e627a73de89b9a3d477af9e249da   204
+langchain-ai/skills-benchmarks          9195f8c296f7076152cf5c698d6abd4f84853eb9    21
+minio/skills                            22961d30013f4aadc863c41d14b28e58cb64c063     4
+OneWave-AI/claude-skills                82859c0ebaff803889be6ca2efa0834ba8787773   205
 quarkusio/quarkusdev-skills             b7c025b996bb4b9c3054740b242d1f368ae0eadd     5
-sickn33/antigravity-awesome-skills      d43065e483d9057e5c5dd50ca3647652ca7c0b43  6309
+sickn33/antigravity-awesome-skills      782f68446a14547133838e57bb677ebbddfc0cec  6634
 tuanhaviet22/magento-skills             32d21015bd8eb46b8351fc87a8988ddca44de0f7     5
-anthropics/claude-agent-sdk-python      f8b9ec923982082a02c485924e0f60367949c3a1     6
+anthropics/claude-agent-sdk-python      9597fc956a2a18ff8a6dc5675d9823b457e8264f     6
 eclosion-labs/terraform-cursor-plugin   bcaad7033598c7bbb4efd73483b49962bd3398d9    41

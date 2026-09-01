@@ -8,13 +8,41 @@ place lets the modules split without either importing back into the other.
 """
 from __future__ import annotations
 
-from ..core import lockfile
+from ..core import lockfile, store
 from ..errors import BoostError
 
 
 def _s(n: int) -> str:
     """Plural suffix: "" for one, "s" otherwise."""
     return "" if n == 1 else "s"
+
+
+def _require_lock_integrity() -> None:
+    """Fail loudly, before iterating, if the lock file itself is broken.
+
+    `lockfile.read()` collapses a missing/corrupt/wrong-schema lock into an
+    empty skeleton so ordinary reads degrade cleanly — but that means
+    `cmd_verify`/`cmd_drift` would iterate zero entries and report "nothing
+    installed" for exactly the state they exist to catch: a store with real
+    skills in it and no record of them. A missing lock over an empty store is
+    a fresh install, not a fault, so only that combination passes silently;
+    corrupt or wrong-schema is always reported, store empty or not, matching
+    `boost doctor`'s wording so the two commands never disagree.
+    """
+    integ = lockfile.check()
+    if integ.ok:
+        return
+    if integ.problem == "missing":
+        if not store.has_content():
+            return
+        raise BoostError(
+            "lock file missing — the store has skills but nothing is recorded",
+            hint="run `boost sync`")
+    if integ.problem == "corrupt":
+        raise BoostError("lock file is corrupt — restore with `boost replay`")
+    raise BoostError(
+        "lock file schema is v%s, expected v%d" % (integ.version, lockfile.SCHEMA_VERSION),
+        hint="restore with `boost replay`")
 
 
 def _iter_installed(names: list[str] | None = None) -> list[tuple[str, dict]]:

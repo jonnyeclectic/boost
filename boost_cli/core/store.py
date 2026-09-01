@@ -78,6 +78,22 @@ def installed() -> dict:
     return lockfile.installed()
 
 
+def has_content() -> bool:
+    """True if the canonical store holds any skill directory at all.
+
+    Independent of the lock file: a store dir survives even when
+    ``.skill-lock.json`` goes missing or corrupt, so this is how a caller
+    tells a genuinely fresh install (nothing installed, nothing to report)
+    apart from one whose lock record vanished out from under a populated
+    store (a fault `boost verify`/`drift`/`doctor` must not stay quiet
+    about).
+    """
+    root = paths.store_dir()
+    if not root.is_dir():
+        return False
+    return any(c.is_dir() and not c.name.startswith(".") for c in root.iterdir())
+
+
 def source_dir_for(entry: dict) -> Path:
     """Absolute path of a catalog entry's skill dir inside its tap clone.
 

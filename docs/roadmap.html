@@ -132,8 +132,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>9</b><span>Planned</span></div>
-      <div class="stat"><b>402</b><span>Loop finds</span></div>
+      <div class="stat"><b>11</b><span>Planned</span></div>
+      <div class="stat"><b>404</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -1008,6 +1008,130 @@ published version works against PyPI as it stands today.</p>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">declined — superseded by shipping the integration inside the boost-skill-cli wheel (see langchain-in-the-wheel)</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="publish-the-keyword-index">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Search · Performance</span></div>
+        <h3>publish the keyword index the way vectors are published</h3>
+        <p>Dense vectors are built once in CI and downloaded. The BM25 index is not:
+<code>core/rag.py</code> has <b>no export or import function at all</b>, and
+<code>shards.yml</code> / <code>scripts/publish_shards.py</code> are dense-only end to end. Every
+install rebuilds the same index from the same registries, at the same pinned commits, to produce
+the same bytes.
+
+<b>Measured, on a real 458-tap machine.</b> The on-disk index is
+<code>rag_index.json</code> <b>43.7&nbsp;MB</b> plus <code>rag_postings.sqlite</code>
+<b>653.0&nbsp;MB</b> — <b>696.7&nbsp;MB</b> for 18,619,658 postings. Build cost, timed over a
+9,306-entry / 69-tap slice: <b>4.54&nbsp;s</b> reading bodies and tokenizing, <b>3.83&nbsp;s</b>
+writing postings, <b>8.4&nbsp;s</b> total — about 0.9&nbsp;ms per entry, so roughly
+<b>65&nbsp;s</b> and <b>~900&nbsp;MB</b> extrapolated to the full 71,700-entry catalogue.
+
+<b>Which user actually pays it.</b> Not the default one: <code>boost quickstart</code> taps the
+<b>7 starter registries</b> and indexes them in about a second. The cost lands on
+<code>boost quickstart --catalog</code> — 463 registries, 2&nbsp;min 10&nbsp;s of parallel cloning
+and then a minute of indexing on top — and on anyone who taps their way there gradually.
+
+<b>The bug that makes this worth doing is not speed.</b> <code>boost catalog --import</code>
+already exists and already looks like the answer: <i>shareable-catalogue-bundle</i> advertises
+10.9&nbsp;MB replacing a 12&nbsp;GB clone and "59,972 searchable items in 4 seconds". That 4
+seconds is fast for a reason the card does not state. <code>rag.read_body</code> degrades
+<b>silently</b> to name + description when the item's clone is absent
+(<code>rag.py</code>: "Missing files degrade to just the catalog metadata"), and a bundle import
+restores catalogues with <i>zero repositories cloned</i>. So the index it builds is not the
+full-content index the <code>evals</code> gate floors — it is a frontmatter index wearing the same
+file name.
+
+<b>Measured directly</b> over 3,015 real entries, indexing them with and then without their
+clones: <b>3,041,326 tokens versus 182,507</b>. A bundle-only index carries <b>6.0%</b> of the
+searchable text, and nothing in the output says so. That is the same failure shape as an
+unpinned eval corpus — a number that still renders confidently while measuring something else.
+
+<b>Why this is easier than the dense shards, not harder.</b> BM25 looks like it needs global
+statistics, and it does — but none of them are frozen at build time. <code>_bm25</code> derives
+<code>n = len(docs)</code> and <code>df = len(plist)</code> on <i>every query</i>, so IDF is
+computed from whatever corpus is loaded. A per-registry shard therefore merges by offsetting
+<code>doc_id</code>, unioning the postings, and recomputing <code>avg_len</code> from per-shard
+totals — arithmetic, not re-derivation. And unlike vectors there is no embedding space to match
+and no API key to hold, so <code>shards.incompatible()</code> has no analogue here: a published
+keyword index is importable by everyone, including the keyless user who cannot use vectors at all.
+
+<b>Shape.</b> <code>rag.export_shard</code> / <code>rag.import_shard</code> mirroring
+<code>dense</code>'s pair, per-registry assets on the existing <code>shards-latest</code> release,
+rows carried in the same <code>manifest.json</code> with the same commit pin and sha256 — the
+carry-forward machinery in <code>publish_shards.py manifest --carry-forward</code> applies
+unchanged, because a registry whose commit did not move has an index that did not change either.
+Three invariants transfer verbatim from the dense side and each is load-bearing: verify before
+replacing, refuse a shard whose commit is not the tap's commit, and never treat a missing digest
+as a match.
+
+<b>The open question is payload size</b>, and it is large enough to be its own decision — see
+<a href="#shrink-the-published-index">shrink-the-published-index</a>. This card should not ship
+until that one has an answer, because publishing 697&nbsp;MB per refresh to save 65&nbsp;s of CPU
+is not obviously the right trade, and at the compressed sizes measured there it clearly is.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>L</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">every machine rebuilds 697 MB of index for a corpus that is byte-identical on all of them</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="shrink-the-published-index">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Performance · Storage</span></div>
+        <h3>shrink the keyword index before publishing it — structure first, then compression</h3>
+        <p><a href="#publish-the-keyword-index">publish-the-keyword-index</a> is worth doing only if the
+artifact is small enough to ship weekly. This card is the measurement that decides it, and the
+first answer is that <b>compression is the second lever, not the first</b>.
+
+<b>What the format actually stores.</b> <code>_write_postings</code> creates
+<code>postings (term TEXT, doc INTEGER, tf INTEGER)</code> and inserts one row per posting, so the
+<i>term string is repeated in every row</i>. Measured on the real 458-tap store:
+<b>18,619,658</b> rows over <b>210,422</b> distinct terms averaging <b>6.6</b> characters. That is
+<b>~123&nbsp;MB of term text to carry 1.4&nbsp;MB of distinct term text — 88&times; redundancy</b>,
+before the per-row and B-tree overhead that turns it into a 653&nbsp;MB file (page_size 4096,
+167,174 pages, freelist 0, so it is not slack space).
+
+<b>Compression measured on that file, as it stands:</b>
+
+<b><code>rag_index.json</code></b> 43.7&nbsp;MB raw &middot; gzip&nbsp;-6 <b>10.6&nbsp;MB</b> (4.12&times;).<br>
+<b><code>rag_postings.sqlite</code></b> 653.0&nbsp;MB raw &middot; gzip&nbsp;-6 201.7&nbsp;MB (3.23&times;) &middot; zstd&nbsp;-3 169.9&nbsp;MB (3.84&times;) &middot; <b>zstd&nbsp;-19 106.7&nbsp;MB (6.11&times;)</b>.
+
+So even with no format change, <b>zstd -19 puts the whole index near 117&nbsp;MB</b> — under half
+the ~300&nbsp;MB of dense vectors already published weekly. The trade is already good; the point
+of this card is that it can be much better, and that the two levers compose.
+
+<b>Structure first, and it is the bigger win.</b> Interning terms into
+<code>terms(id, term)</code> with <code>postings(term_id, doc, tf)</code> removes ~123&nbsp;MB of
+duplicated strings <i>and</i> shrinks the <code>postings_term</code> index from a text key to an
+integer one. Beyond that, the classic inverted-index encodings apply directly because doc ids
+within a term are ascending: delta-encode them, varint or bitpack the deltas, and store one blob
+per term rather than one row per posting. Both shrink the file <b>on disk</b>, not just in
+transit, which is the half a compressed download never gives back — the user still ends up with
+653&nbsp;MB resident after import.
+
+<b>What must not regress.</b> <code>read_postings</code> exists precisely so a query touches a
+handful of terms instead of materialising the whole map — the change that took cold search from
+8-13&nbsp;s and multiple GB resident to 31-70&nbsp;ms of scoring. A blob-per-term layout keeps
+that property (one row read per query term, decoded on the spot); a scheme that requires decoding
+neighbouring terms to find one does not. <code>_bm25</code> must stay byte-identical, as it did
+through the SQLite move, and <code>TestBm25Math</code> is what says so.
+
+<b>Decompression cost is the thing to measure, not assume.</b> zstd -19 is slow to compress and
+fast to decompress, which is the right asymmetry for a weekly build feeding many imports — but
+"fast" needs a number on the import path before it is a claim, next to the 0.12&nbsp;s that
+importing dense rows costs today. A zstd dictionary trained across shards is the obvious follow-on
+for the many-small-registries case, where per-shard compression has little context to work with.
+
+<b>Deliverable.</b> A measured comparison — raw, interned, delta+varint, each &times; none/gzip/zstd
+— on the real store, with import-side decode time beside each. That table is what tells
+<a href="#publish-the-keyword-index">publish-the-keyword-index</a> what to ship, and it is worth
+having even if publishing is declined: the on-disk win applies to every install today.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">653 MB of postings holds 1.4 MB of distinct terms — the term string is stored 88 times over</span>
         </div>
       </article>
 
@@ -6323,7 +6447,7 @@ Found by the 2026-08 CLI audit (cluster <code>import-all-parity</code>); repro i
       </article>
 
       <article class="cap rcard" id="audit-verify-drift-say-nothing-installed-exit-0-and-doctor-says-lo">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>verify</code>/<code>drift</code> say 'nothing installed' (exit 0) when the lock file is missing or corrupt</h3>
         <p>Delete <code>.skill-lock.json</code> after an install (store and four agent links still present) and
 <code>verify</code> — whose one-line summary is <em>lock-file integrity</em> — prints
@@ -11493,8 +11617,9 @@ Found by the 2026-08 CLI audit (cluster <code>crashes-should-be-messages</code>)
       </article>
 
       <article class="cap rcard" id="audit-distill-s-heuristic-merge-drops-repeated-fences-braces-writi">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>distill's heuristic merge drops repeated <code>```</code> fences/braces, writing a structurally corrupt SKILL.md</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>_distill_merge</code> keeps a global <code>seen</code> set of every stripped non-blank line
 and drops all repeats — so structural lines (closing <code>```</code> fences, <code>}</code>,
 <code>});</code>, <code>---</code> rules, table separators) vanish after their first occurrence.
@@ -11518,7 +11643,7 @@ asserting the merged body has balanced fences. Docs: refresh
 <code>docs/commands.html</code> summary/flag change.
 
 Found by the 2026-08 CLI audit (cluster <code>distill-merge-corruption</code>); repro in the audit
-log.</p>
+log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -12945,8 +13070,9 @@ COMMANDS changes.</p>
       </article>
 
       <article class="cap rcard" id="audit-catalog-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost catalog: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>catalog --show</code> silently truncates the tap table at 20 rows</b> (cluster
 <code>catalog-show-row-cap</code>, med). Reproduced offline with 22 taps: the heading says
 <em>&ldquo;built &hellip; &middot; 22 taps &middot; 10,162 entries&rdquo;</em>, then a
@@ -12972,7 +13098,7 @@ limitation.
 
 <br><br>Found by the 2026-08 CLI audit (clusters <code>catalog-show-row-cap</code>,
 <code>export-local-tap-urls</code>); repro in the audit log. No <code>docs/commands.html</code>
-regeneration unless the summary changes.</p>
+regeneration unless the summary changes.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

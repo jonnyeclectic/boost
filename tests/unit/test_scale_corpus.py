@@ -266,3 +266,76 @@ class TestTheScheduledJobCannotOpenAnUnmergeablePR:
         head = text[:text.rindex("build_scale_corpus.py --check")]
         step = head[head.rindex("      - name:"):] + tail.split("      - name:")[0]
         assert "continue-on-error" not in step
+
+
+class TestEveryPinRefreshingJobRegeneratesTheScaleList:
+    """A job that re-pins `taps.txt` must regenerate and commit `taps-scale.txt`.
+
+    The generator copies the required block out of `taps.txt` **verbatim**, pin
+    and count included, so moving a pin in one file and not the other is not a
+    stale-derived-file nuisance — it is
+    `test_the_required_rows_keep_their_pins_and_counts` failing, and the pull
+    request is unmergeable the moment it is opened.
+
+    `eval-corpus-refresh.yml` shipped exactly that. It ran `--refresh`, then
+    committed `add-paths: tests/eval/taps.txt` and `baseline.json` and nothing
+    else, so every monthly run opened a red PR whose diff read as ordinary pin
+    movement (#659: ten of twenty repositories moved, both scale tests failed).
+    `eval-scale.yml` was already guarded by
+    `TestTheScheduledJobCannotOpenAnUnmergeablePR`; this workflow had no test,
+    which is the whole reason the bug reached `main`.
+
+    Parametrised over the workflows that move pins rather than naming one, so a
+    third refreshing job has to satisfy it before it can pass.
+    """
+
+    _WORKFLOWS = (_ROOT / ".github" / "workflows")
+    _REFRESH = "eval_corpus.py --refresh"
+
+    def _refreshing(self):
+        if not self._WORKFLOWS.is_dir():
+            return []
+        return sorted(p for p in self._WORKFLOWS.glob("*.yml")
+                      if self._REFRESH in p.read_text(encoding="utf-8"))
+
+    def test_at_least_one_workflow_is_actually_examined(self):
+        # A glob that matches nothing would make every test below vacuous.
+        assert self._refreshing(), (
+            "no workflow runs %r — if the refresh moved, move this test with it"
+            % self._REFRESH)
+
+    def test_it_regenerates_the_scale_list_after_refreshing(self):
+        for path in self._refreshing():
+            text = path.read_text(encoding="utf-8")
+            assert "build_scale_corpus.py" in text, (
+                "%s re-pins taps.txt but never regenerates taps-scale.txt"
+                % path.name)
+            assert text.index(self._REFRESH) < text.rindex(
+                "build_scale_corpus.py"), (
+                "%s regenerates the scale list before the refresh, so it "
+                "captures the old pins" % path.name)
+
+    def test_it_commits_the_scale_list_it_regenerated(self):
+        # Regenerating without committing is worse than not regenerating: the
+        # job goes green having written a file that never leaves the runner.
+        for path in self._refreshing():
+            text = path.read_text(encoding="utf-8")
+            if "add-paths" not in text:
+                continue
+            block = text[text.index("add-paths"):]
+            block = block[:block.index("branch:")]
+            assert "tests/eval/taps-scale.txt" in block, (
+                "%s regenerates taps-scale.txt but leaves it out of add-paths"
+                % path.name)
+
+    def test_the_regeneration_is_verified_and_cannot_fail_quietly(self):
+        for path in self._refreshing():
+            text = path.read_text(encoding="utf-8")
+            assert "build_scale_corpus.py --check" in text, (
+                "%s never verifies what the regeneration wrote" % path.name)
+            tail = text[text.rindex("build_scale_corpus.py --check"):]
+            head = text[:text.rindex("build_scale_corpus.py --check")]
+            step = (head[head.rindex("      - name:"):]
+                    + tail.split("      - name:")[0])
+            assert "continue-on-error" not in step, (
+                "%s lets the selection check fail quietly" % path.name)
