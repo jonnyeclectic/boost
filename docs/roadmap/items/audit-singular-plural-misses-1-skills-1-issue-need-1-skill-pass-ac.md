@@ -2,14 +2,14 @@
 id: audit-singular-plural-misses-1-skills-1-issue-need-1-skill-pass-ac
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Polish
 complexity: S
 impact: Low
 wow: 1
 note: a shared _s helper exists at _common.py:15 and six commands hand-roll around it
 order: 242
-owner:
+owner: loop/plural-agreement
 pr:
 title: "Singular/plural misses (&ldquo;1 skills&rdquo;, &ldquo;1 issue need&rdquo;, &ldquo;1 skill pass&rdquo;) across six commands"
 ---
