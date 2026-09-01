@@ -45,6 +45,7 @@ from ..core import (
 )
 from ..core import output as out
 from ..errors import BoostError
+from ._common import _s
 
 _tilde = paths.tilde
 
@@ -482,9 +483,9 @@ def cmd_policy(argv) -> int:
     # The breakdown appears exactly when it carries information (same
     # convention as `boost count`): a skills-only environment keeps the exact
     # summary line it always had.
-    summary = ("%d skills" % counts["skill"]
+    summary = ("%d skill%s" % (counts["skill"], _s(counts["skill"]))
                if not counts["rule"] and not counts["workflow"]
-               else ", ".join("%d %s%s" % (n, kind, "s" if n != 1 else "")
+               else ", ".join("%d %s%s" % (n, kind, _s(n))
                               for kind, n in counts.items()))
 
     if args.json:

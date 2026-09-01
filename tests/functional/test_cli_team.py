@@ -67,6 +67,12 @@ class TestCohort:
         assert ("created cohort pilot (100% rollout, 2 skills) — "
                 "you are IN") in r.out
 
+    def test_create_singular_skill_agrees(self, boost, tapped):
+        r = boost("cohort", "create", "solo",
+                 "--skills", "brainstorming", "--percent", "100")
+        assert ("created cohort solo (100% rollout, 1 skill) — "
+                "you are IN") in r.out
+
     def test_list_membership_column_and_json_determinism(self, boost, tapped):
         boost("cohort", "create", "pilot", "--skills", "brainstorming",
              "--percent", "100")
@@ -226,7 +232,7 @@ class TestProfile:
         assert "(installed, not in profile)" in r.out
 
         r = boost("profile", "use", "solo")
-        assert ("sidelined 1 skill(s) not in the profile (unlinked, still "
+        assert ("sidelined 1 skill not in the profile (unlinked, still "
                 "installed): cowboy-coding") in r.out
         link = paths.home() / ".claude" / "skills" / "cowboy-coding"
         assert not link.exists()
@@ -259,8 +265,8 @@ class TestProfile:
             "kind": "workflow", "version": "1.0.0", "tap": "rule-tap",
             "slot": "commands", "materializations": []})
         r = boost("profile", "save", "daily")
-        assert "saved profile daily (1 skills)" in r.out
-        assert ("1 rule(s) and 1 workflow(s) not captured — profiles carry "
+        assert "saved profile daily (1 skill)" in r.out
+        assert ("1 rule and 1 workflow not captured — profiles carry "
                 "skills only") in r.out
 
     def test_diff_and_use_see_a_name_installed_as_a_rule(self, boost, installed):
