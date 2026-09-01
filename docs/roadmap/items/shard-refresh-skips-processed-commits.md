@@ -2,7 +2,7 @@
 id: shard-refresh-skips-processed-commits
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Search · Performance
 complexity: S
 impact: Med

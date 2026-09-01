@@ -5440,8 +5440,9 @@ Found by the 2026-08 CLI audit (clusters <code>manifest-truncated-read</code>, <
       </article>
 
       <article class="cap rcard" id="shard-refresh-skips-processed-commits">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Search · Performance</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Search · Performance</span></div>
         <h3><code>quickstart</code> reruns re-download every shard; <code>shards.sync</code> never asks what is built</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>From a user request: <em>"update PRs to not reprocess the same shards repeatedly. have a
 progress map with commit sha or something."</em> The user-visible symptom: running
 <code>boost quickstart</code> a second time — after an interrupt, after adding
@@ -5481,7 +5482,7 @@ resumable for free — taps imported before the interrupt skip on the next run, 
 durability half of the user's ask. No flags change, so <code>docs/commands.html</code> needs no
 regeneration; no other docs affected. Filed from the user's request during the 2026-08 CLI audit;
 verified by reading <code>core/shards.py</code> — the missing check is unambiguous in code, no
-repro run needed. Absolute date of verification: 2026-08-31.</p>
+repro run needed. Absolute date of verification: 2026-08-31.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
