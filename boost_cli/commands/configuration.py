@@ -184,25 +184,30 @@ def cmd_clean(argv) -> int:
         out.ok("nothing to clean")
         return 0
 
-    verb = "would remove" if args.dry_run else "removed"
-    freed = 0
-    for pth, kind, size in items:
-        if not args.dry_run:
-            try:
-                if pth.is_symlink() or pth.is_file():
-                    pth.unlink()
-                elif pth.is_dir():
-                    util.rmtree(pth)
-            except OSError as e:
-                out.warn("could not remove %s: %s" % (_tilde(pth), e))
-                continue
-        freed += size
-        out.info("%s %s %s" % (verb, _tilde(pth), out.role("(%s)" % kind, "muted")))
     if args.dry_run:
+        freed = sum(size for _, _, size in items)
+        for pth, kind, _size in items:
+            out.info("would remove %s %s" % (_tilde(pth), out.role("(%s)" % kind, "muted")))
         out.dim("  %d item(s) · %s would be freed" % (len(items), util.human_size(freed)))
-    else:
-        journal.log("clean", "%d items" % len(items), freed=util.human_size(freed))
-        out.ok("cleaned %d item(s) · %s freed" % (len(items), util.human_size(freed)))
+        return 0
+
+    results = util.remove_paths(items)
+    failures = [r for r in results if not r.removed]
+    removed = len(results) - len(failures)
+    freed = sum(r.size for r in results if r.removed)
+    for r in results:
+        if r.removed:
+            out.info("removed %s %s" % (_tilde(r.path), out.role("(%s)" % r.kind, "muted")))
+        else:
+            out.warn("could not remove %s: %s" % (_tilde(r.path), r.error), stream=sys.stderr)
+
+    journal.log("clean", "%d items" % removed, freed=util.human_size(freed),
+                failed=len(failures) or None)
+    if failures:
+        out.ok("cleaned %d item(s) · %s freed · %d failed"
+                % (removed, util.human_size(freed), len(failures)))
+        return 1
+    out.ok("cleaned %d item(s) · %s freed" % (removed, util.human_size(freed)))
     return 0
 
 

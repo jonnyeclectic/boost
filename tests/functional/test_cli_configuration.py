@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -120,6 +121,37 @@ class TestClean:
 
         r = boost("clean")
         assert "nothing to clean" in r.out
+
+    def test_failed_removal_is_not_counted_as_cleaned(self, boost, installed, monkeypatch):
+        # Regression for the audit finding: a failed unlink used to still be
+        # counted in "cleaned N item(s)", freed its size, get logged to the
+        # journal that way, and exit 0 — so a stuck file looked cleaned both
+        # to the user and to the audit trail. Fail one of two removals via a
+        # scoped Path.unlink patch (chmod-based repro needs a non-root
+        # unlink to actually fail, which root here would sail through).
+        stale = paths.cache_dir() / "old__tap.json"
+        stale.write_text('{"skills": []}', encoding="utf-8")
+        stuck = paths.cache_dir() / "stuck__tap.json"
+        stuck.write_text("{}", encoding="utf-8")
+
+        real_unlink = Path.unlink
+
+        def flaky_unlink(self, *a, **kw):
+            if self.name == "stuck__tap.json":
+                raise OSError(13, "Permission denied")
+            return real_unlink(self, *a, **kw)
+
+        monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+        r = boost("clean", expect=1)
+        assert "could not remove ~/.boost/cache/stuck__tap.json" in r.err
+        assert "could not remove" not in r.out
+        assert "cleaned 1 item(s) · 14B freed · 1 failed" in r.out
+        assert not stale.exists() and stuck.exists()
+
+        events = journal.events(action="clean")
+        assert events[0]["subject"] == "1 items"
+        assert events[0]["failed"] == 1
 
     def test_fresh_sandbox_has_nothing_to_clean(self, boost, sandbox):
         r = boost("clean")

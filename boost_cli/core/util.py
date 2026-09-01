@@ -14,8 +14,43 @@ import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 
 IGNORED = {".git", "__pycache__", ".DS_Store"}
+
+
+class RemovalResult(NamedTuple):
+    """Outcome of removing one ``(path, kind, size)`` item for :func:`remove_paths`."""
+    path: Path
+    kind: str
+    size: int
+    removed: bool
+    error: str | None
+
+
+def remove_paths(items) -> list[RemovalResult]:
+    """Unlink or rmtree each ``(path, kind, size)`` item, one result per item.
+
+    A failed removal is reported with ``removed=False`` and its ``error``
+    rather than being silently folded into the same count as a success — a
+    caller that sums ``size`` unconditionally, or ``len(items)`` instead of
+    the number of results with ``removed=True``, is exactly the accounting
+    bug this helper exists to make impossible to reintroduce (``boost clean``
+    used to do both: it reported every requested item as cleaned, freed the
+    size of files still on disk, and exited 0 with unremoved files present).
+    """
+    results = []
+    for pth, kind, size in items:
+        try:
+            if pth.is_symlink() or pth.is_file():
+                pth.unlink()
+            elif pth.is_dir():
+                rmtree(pth)
+        except OSError as e:
+            results.append(RemovalResult(pth, kind, size, False, str(e)))
+            continue
+        results.append(RemovalResult(pth, kind, size, True, None))
+    return results
 
 
 def _clear_readonly_and_retry(func, path, _exc) -> None:

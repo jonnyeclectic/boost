@@ -661,3 +661,58 @@ class TestPositiveInt:
         with pytest.raises(argparse.ArgumentTypeError) as exc:
             util.positive_int("abc")
         assert str(exc.value) == "invalid int value: 'abc'"
+
+
+class TestRemovePaths:
+    """`util.remove_paths` — per-item removal outcomes for `boost clean`.
+
+    A failed unlink/rmtree must report ``removed=False`` and never be folded
+    into the same count or freed-bytes total as a real success (the
+    accounting bug `boost clean` used to have: every requested item was
+    reported cleaned regardless of whether it was actually removed).
+    """
+
+    def test_all_succeed_reports_removed_and_sums_freed_bytes(self, tmp_path):
+        a = tmp_path / "a.txt"
+        a.write_text("x")
+        b = tmp_path / "sub"
+        b.mkdir()
+        (b / "f").write_text("yy")
+
+        results = util.remove_paths([(a, "kind-a", 1), (b, "kind-b", 2)])
+
+        assert [r.removed for r in results] == [True, True]
+        assert [r.error for r in results] == [None, None]
+        assert not a.exists() and not b.exists()
+
+    def test_failure_is_not_counted_as_removed_or_freed(self, tmp_path, monkeypatch):
+        ok = tmp_path / "ok.txt"
+        ok.write_text("x")
+        bad = tmp_path / "bad.txt"
+        bad.write_text("xx")
+
+        real_unlink = type(ok).unlink
+
+        def flaky_unlink(self, *a, **kw):
+            if self.name == "bad.txt":
+                raise OSError(13, "Permission denied")
+            return real_unlink(self, *a, **kw)
+
+        monkeypatch.setattr(type(ok), "unlink", flaky_unlink)
+
+        results = util.remove_paths([(ok, "file", 1), (bad, "file", 2)])
+
+        assert [r.removed for r in results] == [True, False]
+        assert results[1].error == "[Errno 13] Permission denied"
+        removed = [r for r in results if r.removed]
+        assert len(removed) == 1                    # not len(items) == 2
+        assert sum(r.size for r in removed) == 1     # not 1 + 2
+        assert not ok.exists() and bad.exists()      # the failure left it in place
+
+    def test_an_already_gone_path_is_a_silent_no_op_success(self, tmp_path):
+        # Neither is_file() nor is_dir() is True for a path that never
+        # existed, so no branch runs and nothing raises — matching the
+        # pre-fix loop's behavior for an item removed out from under it.
+        ghost = tmp_path / "gone"
+        results = util.remove_paths([(ghost, "old snapshot", 5)])
+        assert results == [util.RemovalResult(ghost, "old snapshot", 5, True, None)]

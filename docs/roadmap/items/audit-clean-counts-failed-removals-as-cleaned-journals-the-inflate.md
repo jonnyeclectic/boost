@@ -2,14 +2,14 @@
 id: audit-clean-counts-failed-removals-as-cleaned-journals-the-inflate
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
 note: 5 failed removals still print "✓ cleaned 6 item(s)", journal the lie, and exit 0
 order: 201
-owner:
+owner: loop/clean-failure-accounting
 pr:
 title: "<code>clean</code> counts failed removals as cleaned, journals the inflated count, and exits 0"
 ---
