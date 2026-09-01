@@ -79,6 +79,22 @@ jobs:
         run: |
           PYTHONPATH=. python scripts/eval_corpus.py --refresh \
             --summary-md "$RUNNER_TEMP/corpus-summary.md"
+      - name: regenerate the scale corpus onto the moved pins
+        # The Tier 1b list is the required list PLUS distractors, and
+        # `build_scale_corpus.py` copies the required block out of `taps.txt`
+        # VERBATIM — pin and count included. So a refresh that moves pins here
+        # and not there does not leave a stale derived file, it leaves
+        # `test_scale_corpus.py::test_the_required_rows_keep_their_pins_and_counts`
+        # failing, and the pull request this job opens is unmergeable the moment
+        # it exists. #659 was that: ten of twenty repositories moved, both scale
+        # tests red, and the diff read as ordinary pin movement.
+        #
+        # `--check` after the write, not instead of it: the write proves nothing
+        # about its own output, and this is the same ordering
+        # `eval-scale.yml` already uses for the same reason.
+        run: |
+          python3 scripts/build_scale_corpus.py
+          python3 scripts/build_scale_corpus.py --check
       - name: score the refreshed corpus
         id: gate
         # Deliberately non-blocking. A corpus that no longer clears the floors
@@ -190,6 +206,7 @@ jobs:
           sign-commits: true
           add-paths: |
             tests/eval/taps.txt
+            tests/eval/taps-scale.txt
             tests/eval/baseline.json
           branch: bot/eval-corpus-refresh
           delete-branch: true
