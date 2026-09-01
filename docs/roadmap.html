@@ -6581,8 +6581,9 @@ removed, health prints <em>gemini 1/1 &#10003; (reads the store directly)</em> b
       </article>
 
       <article class="cap rcard" id="audit-lint-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost lint</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>A path on disk cannot be linted</b> <em>(med)</em>. <code>lint ./my-skill</code> and
 <code>lint &hellip;/SKILL.md</code> both fail <em>&ldquo;Error: not installed: &hellip; / hint: see
 what is with <code>boost list</code>&rdquo;</em> &mdash; only installed names and <code>--tap</code>
@@ -6624,7 +6625,7 @@ so a misspelt name passes CI silently, while the installed-name path errors (exi
 <code>catalog.lint_targets</code>, raise <code>BoostError</code> for any requested name matching
 neither targets nor skipped, on the <code>--json</code> path too (<code>quality.py:729</code>,
 <code>catalog.py:303-329</code>). Found by the 2026-08 CLI audit (cluster
-<code>lint-tap-unknown-name</code>); repro in the audit log.</p>
+<code>lint-tap-unknown-name</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>

@@ -493,6 +493,39 @@ class TestScoreSkill:
                           extra_files={"notes.md": "x\n"})
         assert util.score_skill(licensed)[0] - util.score_skill(plain)[0] == 5
 
+    def test_description_over_1024_chars_penalized_and_noted(self, tmp_path):
+        d = make_skill(tmp_path, full_text(desc="d" * 1025))
+        score, notes = util.score_skill(d)
+        assert score == 85  # 95 - 10 for the length penalty
+        assert "description exceeds 1024 chars — agent hosts truncate it" in notes
+
+    def test_description_exactly_1024_chars_is_not_penalized(self, tmp_path):
+        d = make_skill(tmp_path, full_text(desc="d" * 1024))
+        score, notes = util.score_skill(d)
+        assert score == 95
+        assert not any("truncate" in n for n in notes)
+
+    def test_unclosed_frontmatter_is_one_note_not_three(self, tmp_path):
+        # A SKILL.md that opens `---` and never closes it used to score like a
+        # file missing name/description/version separately (three notes for
+        # one cause), because `frontmatter.parse` silently degrades to "no
+        # frontmatter" for this exact input.
+        d = make_skill(tmp_path,
+                       "---\nname: x\ndescription: y\nversion: 1.0.0\n"
+                       "no closing fence\n")
+        assert util.score_skill(d) == (
+            0, ["frontmatter is not closed (no terminating ---)"])
+
+    def test_missing_frontmatter_entirely_is_unaffected(self, tmp_path):
+        # The un-fenced case must still fall through to the ordinary
+        # missing-field notes — only a file that *opens* a fence and never
+        # closes it gets the single-note short circuit.
+        d = make_skill(tmp_path, "just a plain markdown body\n")
+        score, notes = util.score_skill(d)
+        assert score == 25
+        assert "frontmatter missing `name`" in notes
+        assert "frontmatter is not closed (no terminating ---)" not in notes
+
 
 class TestAtomicWriteText:
     def test_writes_content(self, tmp_path):

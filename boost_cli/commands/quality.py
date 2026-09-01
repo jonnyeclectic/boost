@@ -722,7 +722,9 @@ def _print_skipped(skipped: list[dict]) -> None:
 def cmd_lint(argv):
     ap = cliparse.parser(
         prog="boost lint", description="Validate SKILL.md frontmatter & quality")
-    ap.add_argument("names", nargs="*", metavar="NAME")
+    ap.add_argument("names", nargs="*", metavar="NAME",
+                    help="installed skill name(s), or a path to a skill "
+                         "directory / its SKILL.md")
     ap.add_argument("--tap", metavar="TAP", help="lint every skill in a tap's clone")
     ap.add_argument("--min", type=int, default=40, dest="min_score", metavar="N",
                     help="minimum passing score (default 40)")
@@ -739,8 +741,15 @@ def cmd_lint(argv):
         targets, skipped = catalog.lint_targets(
             catalog.load_tap(tap), tap.path, args.names or None)
     else:
-        targets = [(n, store.skill_store_dir(n))
-                   for n, _e in _iter_installed(args.names or None)]
+        names = args.names or []
+        path_names = [n for n in names if catalog.is_path_target(n)]
+        other_names = [n for n in names if n not in path_names]
+        for n in path_names:
+            p = catalog.resolve_path_target(n)
+            targets.append((p.name, p))
+        if not names or other_names:
+            targets += [(n, store.skill_store_dir(n))
+                       for n, _e in _iter_installed(other_names or None)]
     if not targets:
         if args.json:
             print(json.dumps({"min": args.min_score, "skills": [],
@@ -755,8 +764,16 @@ def cmd_lint(argv):
         score, notes = util.score_skill(sdir)
         meta, _ = _read_skill(sdir)
         errors = []
-        if not (sdir / "SKILL.md").exists():
+        md = sdir / "SKILL.md"
+        if not md.exists():
             errors.append("missing SKILL.md")
+        elif not meta and frontmatter.unclosed(
+                md.read_text(encoding="utf-8", errors="replace")):
+            # An open `---` with no closing fence parses as no frontmatter at
+            # all, so `name`/`description` both read absent — the same
+            # symptom three separate checks would otherwise each report on
+            # their own. One diagnosis for one cause.
+            errors.append(frontmatter.UNCLOSED_NOTE)
         else:
             if not meta.get("name"):
                 errors.append("missing required field: name")
@@ -764,7 +781,7 @@ def cmd_lint(argv):
                 errors.append("missing required field: description")
         notes = [n for n in notes
                  if "missing `name`" not in n and "missing `description`" not in n
-                 and n != "missing SKILL.md"]
+                 and n != "missing SKILL.md" and n != frontmatter.UNCLOSED_NOTE]
         results.append({"name": name, "score": score, "notes": notes,
                         "errors": errors, "path": str(sdir)})
 
