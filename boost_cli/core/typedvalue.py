@@ -27,8 +27,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-#: Spec names. A spec is a plain string so the tables that use it stay
-#: readable and JSON-dumpable, and so an unknown spec is a loud KeyError.
+#: Spec names. A spec is a plain string so the tables that use it stay readable
+#: and JSON-dumpable, and so it can be printed straight into a hint the user
+#: retypes (``boost policy set pin_only <bool>``). An unrecognised spec is the
+#: lenient :data:`ANY`, never an error — see :func:`describe` for why.
 BOOL = "bool"
 INT = "int"
 INT_OR_NONE = "int-or-null"
