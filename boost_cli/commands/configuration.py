@@ -75,7 +75,11 @@ def cmd_config(argv) -> int:
         cfg = config.load()
         print(json.dumps(cfg, indent=2))
         if not args.json:
-            out.dim("  " + _tilde(paths.config_path()))
+            cfg_path = paths.config_path()
+            if cfg_path.exists():
+                out.dim("  " + _tilde(cfg_path))
+            else:
+                out.dim("  defaults — %s not created yet" % _tilde(cfg_path))
         return 0
 
     if args.action == "get":
