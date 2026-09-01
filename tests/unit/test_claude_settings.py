@@ -89,6 +89,41 @@ class TestHooks:
     def test_remove_absent_is_zero(self, sandbox):
         assert cs.remove_hook("global", "SessionStart", "bmad") == 0
 
+    def test_hook_name_uses_last_marker_not_first(self, sandbox):
+        # A command that itself contains the literal "# boost:" text (e.g.
+        # quoting another hook's tagged command) must not be mistaken for
+        # boost's own trailing tag, which is always the *last* marker.
+        cs.add_hook("global", "SessionStart", "h9", "echo x # boost:zzz")
+        rows = cs.list_hooks("global")
+        assert rows == [{
+            "scope": "global", "event": "SessionStart", "name": "h9",
+            "command": "echo x # boost:zzz", "matcher": "",
+        }]
+        assert cs.has_hook("global", "SessionStart", "h9")
+        assert cs.remove_hook("global", "SessionStart", "h9") == 1
+
+    def test_remove_by_name_scans_events_actually_present(self, sandbox):
+        # remove_hook_by_name with event=None must find a hook filed under an
+        # event outside the known-event table (add_hook accepts any event
+        # name; only the CLI layer warns).
+        cs.add_hook("global", "Bogus", "b1", "echo bogus")
+        assert cs.remove_hook_by_name("global", "b1") == 1
+        assert not cs.has_hook("global", "Bogus", "b1")
+
+    def test_remove_by_name_with_explicit_event_is_scoped(self, sandbox):
+        cs.add_hook("global", "SessionStart", "n", "echo a")
+        cs.add_hook("global", "Stop", "n", "echo b")
+        assert cs.remove_hook_by_name("global", "n", event="Stop") == 1
+        assert not cs.has_hook("global", "Stop", "n")
+        assert cs.has_hook("global", "SessionStart", "n")
+
+    def test_remove_by_name_absent_is_zero(self, sandbox):
+        assert cs.remove_hook_by_name("global", "nope") == 0
+
+    def test_remove_by_name_no_hooks_key_is_zero(self, sandbox):
+        cs.save("global", {"model": "opus"})
+        assert cs.remove_hook_by_name("global", "nope") == 0
+
     def test_never_clobbers_user_hooks(self, sandbox):
         # A pre-existing, non-boost user hook must survive add + remove.
         user_block = {"matcher": "Bash",

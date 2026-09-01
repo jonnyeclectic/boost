@@ -117,10 +117,17 @@ def _tag(command: str, name: str) -> str:
 
 
 def _hook_name(command: str) -> str | None:
-    """The boost name embedded in a command string, or None if unmanaged."""
+    """The boost name embedded in a command string, or None if unmanaged.
+
+    Split on the *last* marker: boost's own tag is always the one it just
+    appended in :func:`_tag`, and a user command can legitimately contain the
+    literal text ``# boost:...`` earlier in the string (e.g. quoting another
+    hook's command). Splitting on the first marker would read that embedded
+    text as the name instead of boost's own tag.
+    """
     if MARKER not in command:
         return None
-    return command.split(MARKER, 1)[1].strip() or None
+    return command.rsplit(MARKER, 1)[1].strip() or None
 
 
 # ------------------------------------------------------------------ hook CRUD
@@ -167,6 +174,26 @@ def remove_hook(scope: str, event: str, name: str,
         del data["hooks"]
     save(scope, data, project_dir, host)
     return removed
+
+
+def remove_hook_by_name(scope: str, name: str, event: str | None = None,
+                        project_dir: Path | None = None,
+                        host: str = hookhost.CLAUDE) -> int:
+    """Remove boost-managed hooks named ``name``; return how many were removed.
+
+    With ``event`` given, scoped to just that event, like :func:`remove_hook`.
+    With ``event=None``, scans the events actually present in the settings
+    file rather than a fixed known-event table: ``add_hook``'s caller accepts
+    (with a warning) an event name outside that table, and such a hook would
+    otherwise be unremovable by name alone — only by naming its event
+    positionally too.
+    """
+    if event is not None:
+        events: tuple[str, ...] = (event,)
+    else:
+        present = load(scope, project_dir, host).get("hooks")
+        events = tuple(present) if isinstance(present, dict) else ()
+    return sum(remove_hook(scope, ev, name, project_dir, host) for ev in events)
 
 
 def _strip(event_list: list, name: str) -> int:
@@ -257,7 +284,7 @@ def list_hooks(scope: str | None = None,
                         "scope": sc,
                         "event": event,
                         "name": nm,
-                        "command": raw.split(MARKER, 1)[0].strip(),
+                        "command": raw.rsplit(MARKER, 1)[0].strip(),
                         "matcher": block.get("matcher", ""),
                     })
     return rows
