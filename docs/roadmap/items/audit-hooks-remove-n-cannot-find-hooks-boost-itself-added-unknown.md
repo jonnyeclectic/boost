@@ -10,7 +10,7 @@ wow: 2
 note: remove -n says "no boost hook named" about a hook boost wrote, and exits 0
 order: 207
 owner: loop/hooks-remove-name-miss
-pr:
+pr: 660
 title: "hooks remove <code>-n</code> cannot find hooks boost itself added (unknown events skipped, embedded <code># boost:</code> mangles the name)"
 ---
 Two ways a boost-added hook becomes unremovable by its own name. First, unknown events:
