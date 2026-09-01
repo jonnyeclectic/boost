@@ -6447,8 +6447,9 @@ Found by the 2026-08 CLI audit (cluster <code>import-all-parity</code>); repro i
       </article>
 
       <article class="cap rcard" id="audit-verify-drift-say-nothing-installed-exit-0-and-doctor-says-lo">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>verify</code>/<code>drift</code> say 'nothing installed' (exit 0) when the lock file is missing or corrupt</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Delete <code>.skill-lock.json</code> after an install (store and four agent links still present) and
 <code>verify</code> — whose one-line summary is <em>lock-file integrity</em> — prints
 <em>&ldquo;&nbsp;&nbsp;nothing installed&rdquo;</em> and exits 0. Truncate the lock to
@@ -6475,12 +6476,21 @@ absent while the store dir has entries, unparseable, or <code>version != SCHEMA_
 dirs unrecorded, run `boost sync`&rdquo;</em>). Docs: <code>docs/security-design.md</code> (verify's
 integrity contract) and <code>docs/DEBUGGING.md</code> (doctor's lock lines); no flag change, so
 <code>docs/commands.html</code> needs no regeneration. Found by the 2026-08 CLI audit (cluster
-<code>missing-lock-reported-healthy</code>); repro in the audit log.</p>
+<code>missing-lock-reported-healthy</code>); repro in the audit log.
+
+<br><br><b>Shipped.</b> <code>lockfile.check()</code> reports the lock file's raw state (<code>ok</code> /
+<code>missing</code> / <code>corrupt</code> / <code>schema</code>) instead of the empty skeleton
+<code>read()</code> collapses it to, and <code>store.has_content()</code> tells a genuinely empty
+install apart from one whose record vanished out from under real skills. <code>cmd_verify</code> and
+<code>cmd_drift</code> now call a shared <code>_require_lock_integrity()</code> before iterating, and
+<code>cmd_doctor</code>'s lock section is rewritten on the same two primitives, so all three commands
+agree and &ldquo;parses&rdquo;/&ldquo;integrity OK&rdquo; are only ever claimed for a lock file that
+really is. See PR #674.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">rm the lock, verify exits 0 'nothing installed'; doctor still prints 'lock parses (v3)'</span>
+          <span class="m">fixed — verify/drift fail loudly on a missing/corrupt lock; doctor's lines match reality</span>
         </div>
       </article>
 
