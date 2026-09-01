@@ -1504,6 +1504,22 @@ class TestWrap:
         text = "keep every word of this hint including `a b c` intact"
         assert " ".join(output.wrap(text, 12)).split() == text.split()
 
+    def test_glued_closing_punctuation_stays_attached_to_the_span(self):
+        # The wrapper must not manufacture a space the source never had: a
+        # paren glued directly against the closing backtick with no
+        # whitespace between them stays glued.
+        assert output.wrap("(see `x y`)", 40) == ["(see `x y`)"]
+
+    def test_glued_leading_punctuation_stays_attached_to_the_span(self):
+        assert output.wrap("prefix`a b`", 40) == ["prefix`a b`"]
+
+    def test_span_with_glued_punctuation_still_wraps_as_one_token(self):
+        # The glued span is still one unbreakable unit — it must land whole
+        # on a line rather than being split at the punctuation boundary.
+        span = "`" + "x" * 40 + "`"
+        lines = output.wrap("run (" + span + ") now", 20)
+        assert "(" + span + ")" in lines
+
 
 class TestWrappingEmitters:
     """`warn`/`info`/`dim` wrap only when asked, and to their own prefix."""

@@ -363,7 +363,7 @@ def visible_len(s: str) -> int:
     return sum(_char_width(ch) for ch in _ANSI_RE.sub("", s))
 
 
-_CODE_SPAN_RE = re.compile(r"`[^`]*`")
+_CODE_SPAN_RE = re.compile(r"[^\s`]*`[^`]*`[^\s`]*")
 
 
 def _wrap_tokens(text: str) -> list[str]:
@@ -375,6 +375,15 @@ def _wrap_tokens(text: str) -> list[str]:
     split on whitespace, which collapses runs and newlines the way
     :func:`truncate` does; the span itself is copied verbatim, so a command
     that legitimately holds two spaces survives.
+
+    The span also absorbs punctuation glued directly against its backticks
+    with no whitespace between (the leading/trailing non-backtick,
+    non-whitespace run in `_CODE_SPAN_RE`), so a source string like
+    ``(see `x y`)`` stays one token and `wrap()` never manufactures a space
+    the source never had. That run excludes backticks on purpose — an
+    adjacent ``` `beta` ``` must start its own span, not get folded into the
+    one before it, or two spans separated only by ordinary prose (` `alpha`
+    between `beta` `) would bridge into one unbreakable token.
 
     An unterminated backtick simply never matches, and its text wraps as
     ordinary words. That is the right failure: a half-open span is a typo in
