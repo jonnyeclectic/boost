@@ -36,7 +36,13 @@ from ..core import (
 from ..core import output as out
 from ..core import rules as rules_mod
 from ..errors import BoostError
-from ._common import _iter_installed, _iter_installed_all, _s, _shadowed_kinds
+from ._common import (
+    _iter_installed,
+    _iter_installed_all,
+    _require_lock_integrity,
+    _s,
+    _shadowed_kinds,
+)
 
 # --- audit: dangerous-content patterns ------------------------------------
 
@@ -334,6 +340,11 @@ def cmd_verify(argv):
     ap.add_argument("names", nargs="*", metavar="NAME")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+
+    # Before trusting anything the lock file says: a missing/corrupt/wrong-
+    # schema lock over a populated store must be reported, not read as "no
+    # skills installed" — that is the failure this command exists to catch.
+    _require_lock_integrity()
 
     # A named item may be installed at user OR project scope. Validate against
     # both up front so `boost verify <vendored-skill>` doesn't wrongly error

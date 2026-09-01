@@ -74,6 +74,54 @@ class TestRead:
         assert lock["skills"] == {}
 
 
+class TestCheck:
+    """lockfile.check() — the lock file's own health, not its content.
+
+    Unlike read(), which collapses missing/corrupt/wrong-schema into an empty
+    skeleton for callers that only want the data, check() must report each
+    state distinctly so `boost verify`/`drift`/`doctor` can tell "nothing
+    installed yet" apart from "the record broke".
+    """
+
+    def test_missing_file(self, sandbox):
+        integ = lockfile.check()
+        assert integ == (False, "missing", None)
+        assert not integ.ok
+
+    def test_valid_file(self, sandbox):
+        lockfile.set_skill("a", {"version": "1.0"})
+        integ = lockfile.check()
+        assert integ.ok
+        assert integ.problem is None
+        assert integ.version == 3
+
+    def test_corrupt_file(self, sandbox):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text("{definitely not json", encoding="utf-8")
+        integ = lockfile.check()
+        assert not integ.ok
+        assert integ.problem == "corrupt"
+
+    def test_wrong_schema_version(self, sandbox):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text(
+            json.dumps({"version": 2, "skills": {}}), encoding="utf-8")
+        integ = lockfile.check()
+        assert not integ.ok
+        assert integ.problem == "schema"
+        assert integ.version == 2
+
+    def test_check_does_not_mutate_or_preserve_corrupt(self, sandbox):
+        # check() only reports; it must not trigger the .corrupt sidecar that
+        # read() writes as a side effect (that stays read()'s job on the
+        # first real access).
+        paths.ensure_dirs()
+        p = paths.lockfile_path()
+        p.write_text("{definitely not json", encoding="utf-8")
+        lockfile.check()
+        assert not p.with_name(p.name + ".corrupt").exists()
+
+
 class TestWrite:
     def test_write_stamps_version_and_updated(self, sandbox):
         lockfile.write({"version": 99, "skills": {"a": {"version": "1.0"}}})
