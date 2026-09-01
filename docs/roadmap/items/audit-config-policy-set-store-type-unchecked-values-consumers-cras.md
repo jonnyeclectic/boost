@@ -2,7 +2,7 @@
 id: audit-config-policy-set-store-type-unchecked-values-consumers-cras
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 2
 note: '`policy set pin_only no` stores the truthy string "no" — pin-only ON, installs frozen'
 order: 202
 owner: loop/typed-config-values
-pr:
+pr: 683
 title: "<code>config</code>/<code>policy set</code> store type-unchecked values; consumers crash exit 70 and <code>pin_only no</code> freezes installs"
 ---
 Both setters accept any value for any known key and the damage lands later, elsewhere. <code>policy set max_skills abc</code> &rarr; <em>&ldquo;&#10003; set max_skills = &quot;abc&quot;&rdquo;</em> exit 0; the next <code>install brainstorming</code> &rarr; <em>&ldquo;Error: boost hit an unexpected error: ValueError: invalid literal for int() with base 10: 'abc'&rdquo;</em> exit 70 plus a crash report. <code>config set serve.port abc</code> then crashes even <code>serve --help</code> with the same ValueError &mdash; before argparse runs. <code>policy set blocked_skills 42</code> &rarr; <em>&ldquo;TypeError: argument of type 'int' is not iterable&rdquo;</em> from <code>policy check</code> and <code>install</code>.
@@ -20,3 +20,5 @@ The nastiest shape is silent inversion, not a crash: <code>policy set pin_only n
 Fix per the verified recommendation: in <code>_parse_policy_value</code> (<code>boost_cli/commands/configuration.py:382-390</code>) and <code>config.set_value</code> (<code>boost_cli/core/config.py:246-258</code>), derive a per-key type from <code>policy.DEFAULTS</code> (<code>boost_cli/core/policy.py:15-34</code>) / <code>config.DEFAULTS</code>: map bools from {true,yes,on,1}/{false,no,off,0} case-insensitively, ints via <code>int()</code>, lists via <code>json.loads</code>, treat <code>max_skills</code> as int|None, and reject mismatches with a BoostError naming the expected type. Wrap the consumers (<code>cmd_serve</code>'s port read, <code>policy.load</code>) so a hand-edited bad value is a framed error with a hint, never a traceback. Regenerate <code>docs/commands.html</code> if the help epilogs gain the valid-value lists.
 
 Found by the 2026-08 CLI audit (cluster <code>config-policy-set-validation</code>); repro in the audit log. Verified 2026-08-31: reproduced end to end, including the pin_only inversion and the exit-70 consumers.
+
+<b>Shipped in #683.</b> The per-key type lives in one place, <code>core/typedvalue.py</code>, derived from the two <code>DEFAULTS</code> tables through <code>config.spec_for</code> / <code>policy.spec_for</code> &mdash; so a new key needs a default of the right type and no validation code. Four invariants carry the fix and each was a bug waiting: <b>bool is tested before int</b> (a <code>bool</code> <i>is</i> an <code>int</code> in Python, so the natural order types every boolean key as a number); <b>a list key never raises</b>, because its documented surface is a comma list, which is what turns <code>blocked_skills 42</code> into <code>["42"]</code> rather than a stored <code>42</code>; <b>a key <code>DEFAULTS</code> has never heard of keeps the old lenient parse</b>, because <code>config set</code> accepts keys integrations invent; and <b><code>policy.load()</code> coerces and reports rather than raising</b> &mdash; a hand-edited <code>"pin_only": "no"</code> reads as the boolean the user meant, and anything unreadable falls back to the default and is named by <code>policy.invalid_values()</code> in <code>policy list</code>/<code>check</code>, because a traceback from inside an install is not a remedy and a silent substitution is not honest. <code>cmd_serve</code> reads its default through <code>config.get_int()</code> and frames the failure, so <code>serve --help</code> on a bad port is one line instead of exit 70. The help epilogs gained no valid-value lists &mdash; the type travels in the error hint (<code>try `boost policy set pin_only &lt;bool&gt;`</code>), which the tests pin verbatim &mdash; so <code>docs/commands.html</code> is unchanged.
