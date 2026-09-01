@@ -1146,6 +1146,32 @@ class TestRuleInstall:
         with pytest.raises(BoostError, match="vanished from tap"):
             store.install(entry)
 
+    # ── capability policy: a rule is merged into a context file the agent
+    # reads every session, so it is at least as invasive as a skill — yet
+    # `_install_rule` never called the same gate `install()` does for a
+    # skill, so `denied_capabilities` silently did not apply to rules.
+
+    def test_denied_capability_refuses(self, tap):
+        entry = _rule_entry(tap)
+        (tap.path / entry["skill_md"]).write_text(
+            "---\nname: Team Conventions\ncapabilities: [shell]\n---\n\n"
+            "Always write tests first.\n", encoding="utf-8")
+        policy.save({"denied_capabilities": ["shell"]})
+        with pytest.raises(BoostError, match="shell"):
+            store.install(entry)
+        # nothing materialized and nothing recorded
+        assert lockfile.get_rule("team-conventions") is None
+        assert not self._claude_md().exists()
+
+    def test_non_denied_capability_installs(self, tap):
+        entry = _rule_entry(tap)
+        (tap.path / entry["skill_md"]).write_text(
+            "---\nname: Team Conventions\ncapabilities: [filesystem]\n---\n\n"
+            "Always write tests first.\n", encoding="utf-8")
+        policy.save({"denied_capabilities": ["shell"]})
+        store.install(entry)          # allowed: filesystem is not denied
+        assert lockfile.get_rule("team-conventions") is not None
+
 
 def _workflow_entry(tap, name="ship-it", rel="commands/ship.md",
                     body="---\nname: ship-it\ndescription: release helper\n"
@@ -1295,6 +1321,29 @@ class TestWorkflowInstall:
         (tap.path / entry["skill_md"]).unlink()
         with pytest.raises(BoostError, match="vanished from tap"):
             store.install(entry)
+
+    # ── capability policy: a workflow becomes a slash command or subagent run
+    # verbatim, so `_install_workflow` needs the same gate `install()` runs
+    # for a skill — it never called it, so `denied_capabilities` silently did
+    # not apply to workflows.
+
+    def test_denied_capability_refuses(self, tap):
+        entry = _workflow_entry(
+            tap, body="---\nname: ship-it\ndescription: release helper\n"
+                      "capabilities: [shell]\n---\n\nRun the release.\n")
+        policy.save({"denied_capabilities": ["shell"]})
+        with pytest.raises(BoostError, match="shell"):
+            store.install(entry)
+        assert lockfile.get_workflow("ship-it") is None
+        assert not (paths.home() / ".claude" / "commands" / "ship-it.md").exists()
+
+    def test_non_denied_capability_installs(self, tap):
+        entry = _workflow_entry(
+            tap, body="---\nname: ship-it\ndescription: release helper\n"
+                      "capabilities: [filesystem]\n---\n\nRun the release.\n")
+        policy.save({"denied_capabilities": ["shell"]})
+        store.install(entry)          # allowed: filesystem is not denied
+        assert lockfile.get_workflow("ship-it") is not None
 
 
 class TestSyncMaterializations:
