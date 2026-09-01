@@ -378,18 +378,21 @@ def _fetch_shards(args) -> int:
     if got:
         out.ok("imported %d shard(s), %s chunks — no embedding needed"
                % (len(got), format(total, ",")))
-    elif current:
+    if current:
         # Nothing to download: the store already holds vectors for exactly
-        # the commit the manifest publishes for every matched tap.
+        # the commit the manifest publishes. Reported alongside `got` rather
+        # than instead of it — a run that imports some shards and finds the
+        # rest already current has two things to say, and an `elif` here said
+        # only the first.
         out.info(out.role("%d shard(s) already up to date — nothing to fetch"
                           % len(current), "muted"))
-    else:
+    if not got and not current:
         # Not a success line. Nothing landed, and saying "imported 0" with a
         # tick reads as a job well done to the one user who most needs to know
         # their vectors are still missing.
         out.warn("no published vectors matched your taps")
     missing = [r["tap"] for r in results
-              if r["status"] not in ("imported", "current")]
+               if r["status"] not in ("imported", "current")]
     if missing:
         out.info(out.role("%d tap(s) without usable vectors: %s"
                           % (len(missing), ", ".join(missing[:5])
