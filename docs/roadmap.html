@@ -13129,8 +13129,9 @@ the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-config-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost config: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>config unset</code> on a defaulted key always reports success and rewrites the file.</b>
 A second <code>config unset ai.enabled</code> — the key already gone from
 <code>config.json</code> — prints <em>"&#10003; unset ai.enabled"</em>, exits 0, and rewrites the
@@ -13149,7 +13150,7 @@ followed by <code>~/.boost/config.json</code> as their source — a path that do
 (<code>commands/configuration.py:78</code> prints it unconditionally). Vary the dim trailer when
 <code>paths.config_path()</code> is missing: <em>"defaults — ~/.boost/config.json not created
 yet"</em>. No doc changes. Found by the 2026-08 CLI audit (cluster
-<code>config-state-reporting</code>); repro in the audit log.</p>
+<code>config-state-reporting</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
