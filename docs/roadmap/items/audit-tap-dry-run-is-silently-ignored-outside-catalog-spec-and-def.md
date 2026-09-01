@@ -2,14 +2,14 @@
 id: audit-tap-dry-run-is-silently-ignored-outside-catalog-spec-and-def
 board: code
 section: dx
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: High
 wow: 2
 note: tap --dry-run expo/skills clones for real; --defaults --dry-run taps five registries
 order: 220
-owner:
+owner: loop/tap-dry-run
 pr:
 title: "<code>tap --dry-run</code> is silently ignored outside <code>--catalog</code>: SPEC and <code>--defaults</code> clone for real"
 ---

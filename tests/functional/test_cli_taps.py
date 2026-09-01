@@ -131,6 +131,49 @@ class TestTap:
         assert "anthropics/skills already tapped" in r.out
         assert "obra/superpowers already tapped" in r.out
 
+    def test_dry_run_single_spec_clones_nothing(self, boost, sandbox,
+                                                monkeypatch):
+        from boost_cli.core import registry
+
+        def boom(url, dest):
+            raise AssertionError("dry run must not clone")
+
+        monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow", boom)
+        r = boost("tap", "--dry-run", "expo/skills")
+        assert "expo/skills" in r.out
+        assert "https://github.com/expo/skills" in r.out
+        assert "dry run — nothing tapped" in r.out
+        assert registry.list_taps() == []
+        assert not paths.config_path().exists()
+
+    def test_dry_run_multi_spec_clones_nothing(self, boost, sandbox,
+                                               monkeypatch):
+        from boost_cli.core import registry
+
+        def boom(url, dest):
+            raise AssertionError("dry run must not clone")
+
+        monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow", boom)
+        r = boost("tap", "--dry-run", "expo/skills", "anthropics/skills")
+        assert "expo/skills" in r.out
+        assert "anthropics/skills" in r.out
+        assert "2 registries" in r.out
+        assert registry.list_taps() == []
+
+    def test_dry_run_defaults_clones_nothing(self, boost, sandbox,
+                                             monkeypatch):
+        from boost_cli.core import registry
+
+        def boom(url, dest):
+            raise AssertionError("dry run must not clone")
+
+        monkeypatch.setattr("boost_cli.core.gitutil.clone_shallow", boom)
+        r = boost("tap", "--defaults", "--dry-run")
+        assert "anthropics/skills" in r.out
+        assert "%d registries" % len(config.DEFAULT_TAPS) in r.out
+        assert "dry run — nothing tapped" in r.out
+        assert registry.list_taps() == []
+
 
 class TestTapCatalog:
     def test_dry_run_lists_without_tapping(self, boost, sandbox):
