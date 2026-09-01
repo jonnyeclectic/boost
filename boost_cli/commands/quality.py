@@ -42,7 +42,7 @@ from ..core import (
 )
 from ..core import output as out
 from ..errors import BoostError
-from ._common import _iter_installed, _iter_installed_all, _s
+from ._common import _iter_installed, _iter_installed_all, _require_lock_integrity, _s
 
 # --- conflict: normative-rule extraction -----------------------------------
 
@@ -405,20 +405,32 @@ def cmd_doctor(argv):
         out.info("no registries tapped — nothing is searchable yet; add the "
                  "recommended ones with `boost tap --defaults`", wrap=True)
 
-    lock_ok = True
-    lp = paths.lockfile_path()
-    if lp.exists():
-        try:
-            raw = json.loads(lp.read_text(encoding="utf-8"))
-            if raw.get("version") != lockfile.SCHEMA_VERSION:
-                bad("lock file schema is v%s, expected v%d"
-                    % (raw.get("version"), lockfile.SCHEMA_VERSION))
-                lock_ok = False
-        except (json.JSONDecodeError, OSError):
-            bad("lock file is corrupt — restore with `boost replay`")
-            lock_ok = False
-    if lock_ok:
+    # lockfile.read() collapses missing/corrupt/wrong-schema into an empty
+    # skeleton so ordinary reads degrade cleanly — but that is exactly why
+    # this used to print "lock file parses (v3)" for a lock file that did not
+    # exist. check() reports the raw state instead, so "parses" is only ever
+    # claimed for a file doctor actually parsed.
+    integ = lockfile.check()
+    if integ.ok:
         out.ok("lock file parses (v%d)" % lockfile.SCHEMA_VERSION)
+        lock_ok = True
+    elif integ.problem == "missing":
+        if store.has_content():
+            n = sum(1 for c in paths.store_dir().iterdir()
+                    if c.is_dir() and not c.name.startswith("."))
+            bad("lock file missing — %d store dir%s unrecorded, run `boost sync`"
+                % (n, _s(n)))
+            lock_ok = False
+        else:
+            out.info("no lock file yet — nothing installed")
+            lock_ok = True
+    elif integ.problem == "corrupt":
+        bad("lock file is corrupt — restore with `boost replay`")
+        lock_ok = False
+    else:  # "schema"
+        bad("lock file schema is v%s, expected v%d"
+            % (integ.version, lockfile.SCHEMA_VERSION))
+        lock_ok = False
 
     skills = lockfile.installed()
     enabled = agents.enabled_agents()
@@ -818,6 +830,10 @@ def cmd_drift(argv):
     ap.add_argument("names", nargs="*", metavar="NAME")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+
+    # Same rule as `boost verify`: a missing/corrupt/wrong-schema lock over a
+    # populated store is a fault, not "no skills installed".
+    _require_lock_integrity()
 
     rows = []
     for kind, name, entry in _iter_installed_all(args.names or None):
