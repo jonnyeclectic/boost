@@ -94,6 +94,8 @@ def cmd_search(argv):
     p.add_argument("query", nargs="+", help="search terms")
     p.add_argument("--smart", action="store_true",
                    help="rerank the top hits with Claude")
+    p.add_argument("--category", default="",
+                   help="only show entries whose category matches (case-insensitive)")
     p.add_argument("--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
     p.add_argument("--collapse-near-duplicates", action="store_true",
@@ -139,6 +141,9 @@ def cmd_search(argv):
         scored = [(h["entry"], h["score"]) for h in (hits or [])]
     else:
         scored = catalog.search(query)
+    if args.category:
+        scored = [(e, s) for e, s in scored
+                 if catalog.matches_category(e, args.category)]
     if args.as_json:
         print(json.dumps([e | {"score": s} for e, s in scored[:args.limit]]))
         return 0
@@ -888,6 +893,8 @@ def cmd_recommend(argv):
         prog="boost recommend",
         description="Suggest skills based on your project's tech stack")
     p.add_argument("--path", default=".", help="project directory (default: cwd)")
+    p.add_argument("--category", default="",
+                   help="only recommend entries whose category matches (case-insensitive)")
     p.add_argument("--limit", type=util.positive_int, default=8,
                    help="max suggestions (default 8)")
     p.add_argument("--json", action="store_true", dest="as_json",
@@ -897,7 +904,12 @@ def cmd_recommend(argv):
     if not target.is_dir():
         raise BoostError("no such directory: %s" % args.path)
     entries = catalog.all_entries()
-    if not entries:
+    if args.category:
+        entries = catalog.filter_by_category(entries, args.category)
+        if not entries:
+            raise BoostError("no entries in category %r" % args.category,
+                            hint="try `boost recommend` with no --category")
+    elif not entries:
         raise BoostError("no skills in any tap to recommend from",
                         hint="add registries with `boost tap --defaults`")
     stack = detect_stack(target)
@@ -966,10 +978,11 @@ def _browse_plain(entries, why: str):
 
 def _tap_categories() -> dict:
     """tap name ('owner/repo') -> curated category, from the bundled registry
-    catalog (data/registries.json) — the only place "category" lives; catalog
-    entries themselves carry no category, only their tap does."""
-    return {e["name"]: e["category"] for e in config.load_registry_catalog()
-            if e.get("category")}
+    catalog (data/registries.json). Fallback only: a catalog entry's own
+    stamped `category` (`catalog.CACHE_FORMAT` 2+) is preferred wherever one is
+    available; this is what `_row_badges` falls back to for a cache written
+    before that field existed."""
+    return config.registry_categories()
 
 
 _KIND_BADGE_KEYS = {"skill": "badge_skill", "rule": "badge_rule",
@@ -982,14 +995,20 @@ def _kind_theme_key(kind: str) -> str:
 
 def _row_badges(e: dict, categories: dict):
     """Ordered (text, theme-key) badges for a browse row: kind, version, tap,
-    and — when the tap is one of the curated registries — its category.
-    Most-important-first, so a narrow terminal drops from the tail without
-    losing the essentials (kind and version survive; category goes first)."""
+    and the item's category, when one is known. Most-important-first, so a
+    narrow terminal drops from the tail without losing the essentials (kind
+    and version survive; category goes first).
+
+    The entry's own stamped `category` (`catalog.CACHE_FORMAT` 2+) is used
+    first — it covers un-bundled taps too, which the old tap-level lookup
+    never could. `categories` (`_tap_categories`) is the fallback for a cache
+    written before that field existed, so an un-rescanned tap doesn't lose its
+    badge outright."""
     badges = [(out.kind_label(e.get("kind", "skill")),
                _kind_theme_key(e.get("kind", "skill"))),
               ("v" + e["version"], "version"),
               ("[%s]" % e["tap"], "tap")]
-    category = categories.get(e["tap"])
+    category = e.get("category") or categories.get(e["tap"])
     if category:
         badges.append(("[%s]" % category, "badge_category"))
     return badges
@@ -1684,9 +1703,16 @@ def cmd_browse(argv):
     p = cliparse.parser(
         prog="boost browse",
         description="Interactive full-screen TUI with fuzzy search")
-    p.parse_args(argv)
+    p.add_argument("--category", default="",
+                   help="only browse entries whose category matches (case-insensitive)")
+    args = p.parse_args(argv)
     entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
-    if not entries:
+    if args.category:
+        entries = catalog.filter_by_category(entries, args.category)
+        if not entries:
+            raise BoostError("no entries in category %r" % args.category,
+                            hint="try `boost browse` with no --category to see them all")
+    elif not entries:
         raise BoostError("no skills available to browse",
                         hint="add registries with `boost tap --defaults`")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):

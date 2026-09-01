@@ -1281,3 +1281,102 @@ class TestPathTarget:
     def test_resolve_a_missing_path_raises(self, tmp_path):
         with pytest.raises(BoostError, match="no such directory"):
             catalog.resolve_path_target(str(tmp_path / "nope"))
+
+
+class TestEntryCategory:
+    """`scan_dir` stamps a `category` on every entry: the item's own
+    frontmatter wins, then its first tag, then its tap's registry category."""
+
+    def test_own_frontmatter_category_wins(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "registry_categories",
+                            lambda: {"acme/tap": "ai"})
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\ncategory: security\ntags: [ui]\n---")
+        (e,) = catalog.scan_dir(root, tap_name="acme/tap")
+        assert e["category"] == "security"
+
+    def test_falls_back_to_first_tag_when_no_category(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "registry_categories",
+                            lambda: {"acme/tap": "ai"})
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\ntags: [design, ui]\n---")
+        (e,) = catalog.scan_dir(root, tap_name="acme/tap")
+        assert e["category"] == "design"
+
+    def test_falls_back_to_tap_category_when_item_declares_nothing(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "registry_categories",
+                            lambda: {"acme/tap": "ai"})
+        root = tmp_path / "tap"
+        write_skill(root / "s")
+        (e,) = catalog.scan_dir(root, tap_name="acme/tap")
+        assert e["category"] == "ai"
+
+    def test_empty_when_neither_item_nor_tap_declares_one(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "registry_categories", lambda: {})
+        root = tmp_path / "tap"
+        write_skill(root / "s")
+        (e,) = catalog.scan_dir(root, tap_name="unbundled/tap")
+        assert e["category"] == ""
+
+    def test_blank_tags_entries_are_skipped_for_the_first_real_one(
+            self, tmp_path, monkeypatch):
+        # A mutant that used tags[0] unconditionally would return "" here
+        # instead of falling through to the first non-blank tag.
+        monkeypatch.setattr(config, "registry_categories", lambda: {})
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\ntags: ['', '  ', backend]\n---")
+        (e,) = catalog.scan_dir(root, tap_name="acme/tap")
+        assert e["category"] == "backend"
+
+    def test_registry_categories_looked_up_once_per_scan_not_per_entry(
+            self, tmp_path, monkeypatch):
+        calls = []
+        real = config.registry_categories
+
+        def counting():
+            calls.append(1)
+            return real()
+
+        monkeypatch.setattr(config, "registry_categories", counting)
+        root = tmp_path / "tap"
+        write_skill(root / "a")
+        write_skill(root / "b")
+        write_skill(root / "c")
+        entries = catalog.scan_dir(root, tap_name="acme/tap")
+        assert len(entries) == 3
+        assert len(calls) == 1
+
+
+class TestMatchesAndFilterByCategory:
+    def test_empty_filter_matches_everything(self):
+        assert catalog.matches_category(_entry("x", "t"), "")
+
+    def test_empty_filter_never_excludes_even_a_categoryless_entry(self):
+        e = _entry("x", "t")
+        assert "category" not in e
+        assert catalog.matches_category(e, "")
+
+    def test_case_insensitive_match(self):
+        e = _entry("x", "t") | {"category": "AI"}
+        assert catalog.matches_category(e, "ai")
+        assert catalog.matches_category(e, "Ai")
+
+    def test_no_match_for_a_different_category(self):
+        e = _entry("x", "t") | {"category": "ai"}
+        assert not catalog.matches_category(e, "ui")
+
+    def test_missing_category_only_matches_an_empty_filter(self):
+        e = _entry("x", "t")
+        assert not catalog.matches_category(e, "ai")
+
+    def test_filter_by_category_narrows_the_list(self):
+        entries = [_entry("a", "t") | {"category": "ai"},
+                  _entry("b", "t") | {"category": "ui"},
+                  _entry("c", "t") | {"category": "ai"}]
+        assert [e["name"] for e in catalog.filter_by_category(entries, "ai")] \
+            == ["a", "c"]
+
+    def test_filter_by_category_empty_is_a_no_op(self):
+        entries = [_entry("a", "t"), _entry("b", "t")]
+        assert catalog.filter_by_category(entries, "") == entries

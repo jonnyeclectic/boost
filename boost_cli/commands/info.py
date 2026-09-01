@@ -459,6 +459,7 @@ def cmd_info(argv):
             "mcp_servers": [r["name"] for r in mcp_servers],
             "latest": (cat or {}).get("version"),
             "tap": (lock or plock or cat or {}).get("tap"),
+            "category": (cat or {}).get("category") or None,
             "store": str(sdir) if lock and sdir.is_dir() else None,
             "quality": score, "size": size, "files": files,
         }, indent=2))
@@ -502,6 +503,9 @@ def cmd_info(argv):
     else:
         out.kv("latest", str((cat or {}).get("version", "?")))
     out.kv("tap", (lock or cat or {}).get("tap", "?"))
+    category = (cat or {}).get("category")
+    if category:
+        out.kv("category", category)
     if lock and sdir.is_dir():
         out.kv("store", _tilde(sdir))
     src = lock.get("source_dir") if lock else (cat or {}).get("rel_dir")
