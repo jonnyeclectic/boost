@@ -300,6 +300,57 @@ class TestSync:
         assert ("a/b", "downloading") in seen
         assert ("a/b", "imported") in seen
 
+    def test_a_tap_already_built_at_the_published_commit_skips_download(
+            self, tmp_path, monkeypatch):
+        manifest = self._manifest_for(tmp_path, [("a/b", "1" * 40)])
+        called = []
+        monkeypatch.setattr(shards, "download",
+                            lambda *a, **k: called.append(1))
+        res = shards.sync(["a/b"], {"a/b": "1" * 40}, manifest=manifest,
+                          cache_dir=tmp_path / "cache",
+                          built={"a/b": "1" * 40})
+        assert res == [{"tap": "a/b", "status": "current"}]
+        assert called == []
+
+    def test_built_map_defaults_to_empty_and_still_downloads(
+            self, tmp_path, monkeypatch):
+        # Omitting `built` must reproduce the pre-existing always-download
+        # behaviour exactly — callers like `pkg._resync_vectors` rely on it.
+        manifest = self._manifest_for(tmp_path, [("a/b", "1" * 40)])
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit: (True, "ok"))
+        res = shards.sync(["a/b"], {"a/b": "1" * 40}, manifest=manifest,
+                          cache_dir=tmp_path / "cache")
+        assert res[0]["status"] == "imported"
+
+    def test_a_built_commit_that_does_not_match_still_downloads(
+            self, tmp_path, monkeypatch):
+        # `built` names an older commit (a prior import, or a stale record) —
+        # the triple-equality must fail closed and pay for a fresh shard.
+        manifest = self._manifest_for(tmp_path, [("a/b", "1" * 40)])
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit: (True, "ok"))
+        res = shards.sync(["a/b"], {"a/b": "1" * 40}, manifest=manifest,
+                          cache_dir=tmp_path / "cache",
+                          built={"a/b": "9" * 40})
+        assert res[0]["status"] == "imported"
+
+    def test_current_status_is_emitted_and_marks_sync_fresh(
+            self, tmp_path, monkeypatch):
+        manifest = self._manifest_for(tmp_path, [("a/b", "1" * 40)])
+        seen = []
+        res = shards.sync(["a/b"], {"a/b": "1" * 40}, manifest=manifest,
+                          cache_dir=tmp_path / "cache",
+                          built={"a/b": "1" * 40},
+                          on_event=lambda t, s, d: seen.append((t, s)))
+        assert ("a/b", "current") in seen
+        # "current" is not "imported" — a rerun that changes nothing must not
+        # falsely stamp the shard-sync marker via the `any(... == "imported")`
+        # check, and must not have tried to download anything either.
+        assert res[0]["status"] == "current"
+
 
 class _StreamedResponse:
     """A response whose ``read(amt)`` behaves like a socket, not like a file.
