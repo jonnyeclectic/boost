@@ -131,6 +131,104 @@ class TestExport:
             catalogbundle.export_bundle(tmp_path / "c.tgz")
 
 
+class TestLocalTaps:
+    """A local-directory tap's URL only means something on the machine that
+    tapped it. Export flags it so a receiver isn't left to find out the hard
+    way, from a `boost update` that fails naming a path that was never theirs.
+    """
+
+    @staticmethod
+    def _tap_local(name: str, local_dir) -> None:
+        local_dir.mkdir(exist_ok=True)
+        cfg = config.load()
+        taps = cfg.get("taps") or []
+        taps = [t for t in taps if t.get("name") != name]
+        taps.append({"name": name, "url": str(local_dir), "curated": False})
+        cfg["taps"] = taps
+        config.save(cfg)
+
+    def test_a_local_directory_tap_is_flagged_in_the_manifest(
+            self, sandbox, tmp_path):
+        self._tap_local("acme/skills", tmp_path / "local-repo")
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        catalogbundle.export_bundle(dest)
+        taps = catalogbundle.read_manifest(dest)["taps"]
+        assert taps[0]["local"] is True
+
+    def test_a_remote_tap_is_not_flagged_local(self, sandbox, tmp_path):
+        _tapped("acme/skills")
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        catalogbundle.export_bundle(dest)
+        taps = catalogbundle.read_manifest(dest)["taps"]
+        assert taps[0]["local"] is False
+
+    def test_import_reports_newly_added_local_taps(self, sandbox, tmp_path):
+        self._tap_local("acme/skills", tmp_path / "local-repo")
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        catalogbundle.export_bundle(dest)
+        config.save({"taps": []})
+        for path in paths.cache_dir().glob("*.json"):
+            path.unlink()
+
+        stats = catalogbundle.import_bundle(dest)
+
+        assert stats["local_added"] == ["acme/skills"]
+
+    def test_a_remote_tap_reports_no_local_additions(self, sandbox, tmp_path):
+        _tapped("acme/skills")
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        catalogbundle.export_bundle(dest)
+        config.save({"taps": []})
+        for path in paths.cache_dir().glob("*.json"):
+            path.unlink()
+
+        stats = catalogbundle.import_bundle(dest)
+
+        assert stats["local_added"] == []
+
+    def test_reimporting_an_already_known_local_tap_reports_nothing_new(
+            self, sandbox, tmp_path):
+        # The row is still local, but it is not a NEW risk to the receiver —
+        # their config already carries that path from the first import.
+        self._tap_local("acme/skills", tmp_path / "local-repo")
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        catalogbundle.export_bundle(dest)
+
+        stats = catalogbundle.import_bundle(dest)   # tap already configured
+
+        assert stats["added"] == 0
+        assert stats["local_added"] == []
+
+    def test_a_manifest_with_no_local_key_is_never_treated_as_local(
+            self, sandbox, tmp_path):
+        # A bundle exported by an older boost carries no "local" key at all.
+        # An absent flag must read as "unknown", never as "confirmed local" —
+        # the same rule CLAUDE.md pins for content digests.
+        _tapped("acme/skills")
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        catalogbundle.export_bundle(dest)
+        _rewrite_manifest(dest, {
+            "format": catalogbundle.BUNDLE_FORMAT, "generated": "2026-01-01",
+            "entries": 2,
+            "taps": [{"name": "acme/skills",
+                     "url": "https://example.test/acme/skills",
+                     "curated": False, "commit": "c0ffee", "entries": 2,
+                     "file": "acme__skills.json"}]})
+        config.save({"taps": []})
+        for path in paths.cache_dir().glob("*.json"):
+            path.unlink()
+
+        stats = catalogbundle.import_bundle(dest)
+
+        assert stats["local_added"] == []
+
+
 class TestManifest:
     def test_the_manifest_names_the_format_version(self, sandbox, tmp_path):
         # A format that cannot say what it is cannot be rejected later.

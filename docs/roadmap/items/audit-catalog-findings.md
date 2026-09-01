@@ -2,14 +2,14 @@
 id: audit-catalog-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: --show says "22 taps" then tables exactly 20; --export ships sender-machine paths as URLs
 order: 253
-owner:
+owner: loop/catalog-bundle-audit-fixes
 pr:
 title: "boost catalog: CLI audit findings (2026-08)"
 ---
