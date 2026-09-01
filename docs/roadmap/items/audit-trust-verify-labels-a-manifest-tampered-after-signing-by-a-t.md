@@ -2,7 +2,7 @@
 id: audit-trust-verify-labels-a-manifest-tampered-after-signing-by-a-t
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: High
