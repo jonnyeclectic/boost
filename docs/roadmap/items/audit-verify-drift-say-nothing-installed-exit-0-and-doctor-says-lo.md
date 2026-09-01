@@ -10,7 +10,7 @@ wow: 2
 note: rm the lock, verify exits 0 'nothing installed'; doctor still prints 'lock parses (v3)'
 order: 214
 owner: loop/lock-integrity-reporting
-pr:
+pr: 674
 title: "<code>verify</code>/<code>drift</code> say 'nothing installed' (exit 0) when the lock file is missing or corrupt"
 ---
 Delete <code>.skill-lock.json</code> after an install (store and four agent links still present) and
