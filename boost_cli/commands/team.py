@@ -23,6 +23,7 @@ from ..core import (
 )
 from ..core import output as out
 from ..errors import BoostError
+from ._common import _s
 
 _tilde = paths.tilde
 
@@ -102,8 +103,8 @@ def cmd_cohort(argv) -> int:
         _save_cohorts(cohorts)
         journal.log("cohort", args.name, op="create", percent=args.percent)
         member = _is_member(user, args.name, args.percent)
-        out.ok("created cohort %s (%d%% rollout, %d skills) — you are %s"
-               % (args.name, args.percent, len(skills),
+        out.ok("created cohort %s (%d%% rollout, %d skill%s) — you are %s"
+               % (args.name, args.percent, len(skills), _s(len(skills)),
                   "IN" if member else "OUT"))
         return 0
 
@@ -274,12 +275,14 @@ def cmd_profile(argv) -> int:
         paths.ensure_dirs()
         _profile_path(args.name).write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         journal.log("profile", args.name, op="save", skills=len(installed))
-        out.ok("saved profile %s (%d skills)" % (args.name, len(installed)))
+        out.ok("saved profile %s (%d skill%s)"
+               % (args.name, len(installed), _s(len(installed))))
         n_rules = len(lockfile.installed_rules())
         n_workflows = len(lockfile.installed_workflows())
         if n_rules or n_workflows:
-            out.warn("%d rule(s) and %d workflow(s) not captured — profiles "
-                     "carry skills only" % (n_rules, n_workflows))
+            out.warn("%d rule%s and %d workflow%s not captured — profiles "
+                     "carry skills only"
+                     % (n_rules, _s(n_rules), n_workflows, _s(n_workflows)))
         return 0
 
     if args.action == "show":
@@ -351,8 +354,8 @@ def cmd_profile(argv) -> int:
             store.link_agents(n)
     if extras:
         if args.prune:
-            if out.confirm("uninstall %d skill(s) not in the profile (%s)?"
-                           % (len(extras), ", ".join(extras))):
+            if out.confirm("uninstall %d skill%s not in the profile (%s)?"
+                           % (len(extras), _s(len(extras)), ", ".join(extras))):
                 for n in extras:
                     store.uninstall(n)
                     out.ok("uninstalled %s" % n)
@@ -361,8 +364,8 @@ def cmd_profile(argv) -> int:
         else:
             for n in extras:
                 store.unlink_agents(n)
-            out.info("sidelined %d skill(s) not in the profile (unlinked, still installed): %s"
-                     % (len(extras), ", ".join(extras)))
+            out.info("sidelined %d skill%s not in the profile (unlinked, still installed): %s"
+                     % (len(extras), _s(len(extras)), ", ".join(extras)))
     journal.log("profile", args.name, op="use")
     out.ok("switched to profile %s" % args.name)
     return 0
