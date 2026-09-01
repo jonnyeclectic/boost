@@ -60,6 +60,14 @@ class TestConfig:
         r = boost("config")
         assert "~/.boost/config.json" in r.out
 
+    def test_list_on_pristine_home_names_the_missing_file(self, boost, sandbox):
+        # `config list` must never claim ~/.boost/config.json is the source of
+        # the defaults it just printed when that file does not exist yet.
+        assert not paths.config_path().exists()
+        r = boost("config")
+        assert "~/.boost/config.json not created yet" in r.out
+        assert not paths.config_path().exists()  # listing must not create it
+
     def test_get_hit_and_miss(self, boost, sandbox):
         r = boost("config", "get", "ai.model")
         assert r.out.strip() == "claude-haiku-4-5-20251001"
@@ -92,6 +100,16 @@ class TestConfig:
         assert "unset custom.flag" in r.out
         r = boost("config", "unset", "custom.flag")
         assert "custom.flag not set" in r.out
+
+    def test_unset_defaulted_key_on_pristine_home_creates_no_file(self, boost,
+                                                                   sandbox):
+        # A key present only via DEFAULTS has nothing on disk to remove — this
+        # used to report success and freeze all of DEFAULTS into a brand new
+        # config.json.
+        assert not paths.config_path().exists()
+        r = boost("config", "unset", "telemetry")
+        assert "telemetry not set" in r.out
+        assert not paths.config_path().exists()
 
 
 # ---------------------------------------------------------------- clean

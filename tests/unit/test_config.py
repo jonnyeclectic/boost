@@ -238,6 +238,27 @@ class TestUnset:
     def test_path_through_scalar_returns_false(self, sandbox):
         assert config.unset("ai.model.sub") is False
 
+    def test_defaulted_key_on_pristine_home_returns_false_no_file_created(
+            self, sandbox):
+        # A key present only via DEFAULTS has nothing on disk to remove —
+        # unset() used to walk the DEFAULTS-merged view, where every
+        # defaulted key is `in node` forever, so this reported success and
+        # wrote a brand new config.json holding all of DEFAULTS.
+        assert not paths.config_path().exists()
+        assert config.unset("telemetry") is False
+        assert not paths.config_path().exists()
+
+    def test_repeat_unset_of_already_removed_key_returns_false_no_rewrite(
+            self, sandbox):
+        config.set_value("ai.enabled", "false")
+        assert config.unset("ai.enabled") is True
+        stamp = paths.config_path().stat().st_mtime_ns
+        # Second call: the key is gone from the file, present only via
+        # DEFAULTS again — must not report success or touch the file.
+        assert config.unset("ai.enabled") is False
+        assert paths.config_path().stat().st_mtime_ns == stamp
+        assert config.get("ai.enabled") is True  # back to default
+
 
 class TestDefaultTaps:
     def test_shape(self):
