@@ -103,6 +103,12 @@ posture is reachable without a surprise breakage first.
 minisign signatures over tap content against a trusted Ed25519 public key. Both
 are **verify-only** — boost holds no private key material and cannot sign.
 Correctness is pinned by the RFC 8032 §7.1 test vectors in the unit suite.
+`core/provenance.verify_dir` distinguishes a signature no trusted key accepts
+(`untrusted` — an unrecognised signer) from one whose key id names a *trusted*
+key but that no longer verifies (`invalid` — the tampering this feature exists
+to catch: a manifest edited after a trusted key signed it). `boost trust
+verify`'s sweep alarms — and exits non-zero — on `invalid`, so it must never be
+reported as the merely-unrecognised `untrusted` case.
 
 **Tamper evidence.** Every installed item records a sha256 of its content and
 the commit it came from in the v3 lock file. `core/integrity.py` promotes that

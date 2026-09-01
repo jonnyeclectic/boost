@@ -158,6 +158,18 @@ def verify_dir(clone: Path) -> Result:
             return Result(VERIFIED, key_name=name,
                           fingerprint=minisign.key_id_hex(pk.key_id),
                           trusted_comment=sig.trusted_comment)
+    # A signature carrying a *trusted* key's id that still fails to verify is
+    # not a merely-unknown signer — it is the tampering this module exists to
+    # catch (the manifest was edited after a trusted key signed it). Report it
+    # as INVALID, not UNTRUSTED, so callers that only alarm on INVALID (the
+    # `trust verify` sweep) don't wave a modified manifest through.
+    for name, pk in _public_keys():
+        if sig.key_id == pk.key_id:
+            return Result(INVALID, key_name=name,
+                          fingerprint=minisign.key_id_hex(pk.key_id),
+                          trusted_comment=sig.trusted_comment,
+                          detail="signature by trusted key %s does not verify"
+                                 " — manifest modified?" % name)
     return Result(UNTRUSTED, fingerprint=minisign.key_id_hex(sig.key_id),
                   trusted_comment=sig.trusted_comment,
                   detail="no trusted key verifies this signature")

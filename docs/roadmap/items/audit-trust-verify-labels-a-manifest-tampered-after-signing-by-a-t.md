@@ -2,15 +2,15 @@
 id: audit-trust-verify-labels-a-manifest-tampered-after-signing-by-a-t
 board: code
 section: trust
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: High
 wow: 2
 note: the tampering case the feature exists for reads as "key unknown", and the sweep exits 0
 order: 221
-owner:
-pr:
+owner: loop/trust-verify-tamper
+pr: 675
 title: "<code>trust verify</code> labels a manifest tampered after signing by a TRUSTED key 'untrusted'; sweep exits 0"
 ---
 Sign a tap's manifest with a trusted key, then edit the manifest &mdash; the exact tampering <code>trust verify</code> exists to catch. The sweep reports <code>iktakahiro/python-fastapi-ddd-sk&hellip;&nbsp; untrusted&nbsp; no trusted key verifies this sig&hellip;</code> and <b>exits 0</b>; <code>--json</code> says <code>{"status": "untrusted", "key_name": null, "fingerprint": "1122334455667788"}</code> &mdash; and that fingerprint is the trusted <code>acme</code> key's own. So a modified manifest is indistinguishable from a merely unknown signer, and a scripted sweep sails past it. One narrowing from verification: the named-tap path (<code>trust verify TAP</code>) does exit 1; the exit-0 hole is the sweep, whose alarm at <code>boost_cli/commands/quality.py:1329</code> fires only on INVALID. The 'untrusted / key unknown' mislabel affects both paths.
