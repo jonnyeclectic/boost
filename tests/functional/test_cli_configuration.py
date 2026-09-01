@@ -2096,3 +2096,130 @@ class TestSearchNamesItsRanker:
         monkeypatch.setattr(ai, "ask", lambda *a, **k: "sorry, I cannot")
         assert rag.rerank("q2", hits, engine="BM25 full-content")[1] == \
             "BM25 full-content"
+
+
+# ------------------------------------------------- typed config/policy values
+
+class TestTypedValues:
+    """`config set` / `policy set` refuse a value at the keyboard.
+
+    Every case here used to exit 0 and land the damage somewhere else — as
+    `exit 70` plus a crash report out of a later command, or, for `pin_only`,
+    as no error at all and a frozen machine.
+    """
+
+    def test_policy_set_pin_only_no_turns_it_off(self, boost, tapped):
+        # The silent inversion: "no" is a truthy string, so this stored
+        # pin-only ON and refused every install afterwards.
+        r = boost("policy", "set", "pin_only", "no")
+        assert "set pin_only = false" in r.out
+        on_disk = json.loads(paths.policy_path().read_text(encoding="utf-8"))
+        assert on_disk["pin_only"] is False
+        r = boost("policy", "check")
+        assert "pin-only mode is on" not in r.out
+        boost("install", "brainstorming")          # not frozen
+
+    def test_policy_set_rejects_a_non_boolean(self, boost, sandbox):
+        r = boost("policy", "set", "pin_only", "maybe", expect=1)
+        assert ("pin_only expects a boolean (true/false, yes/no, on/off, 1/0)"
+                in r.err)
+        # The hint names the type as a placeholder the user can retype into.
+        assert 'got "maybe" — try `boost policy set pin_only <bool>`' in r.err
+        assert not paths.policy_path().exists()
+
+    def test_policy_set_rejects_a_non_number_instead_of_crashing_install(
+            self, boost, tapped):
+        r = boost("policy", "set", "max_skills", "abc", expect=1)
+        assert "max_skills expects a whole number, or null for no limit" in r.err
+        assert "`boost policy set max_skills <int-or-null>`" in r.err
+        # The command that used to die on int('abc') with exit 70:
+        boost("install", "brainstorming")
+
+    def test_policy_set_rejects_a_non_number_quality_score(self, boost, sandbox):
+        r = boost("policy", "set", "min_quality_score", "high", expect=1)
+        assert "min_quality_score expects a whole number" in r.err
+        assert "`boost policy set min_quality_score <int>`" in r.err
+
+    def test_policy_set_max_skills_still_takes_a_number_and_null(self, boost,
+                                                                 sandbox):
+        assert "set max_skills = 5" in boost("policy", "set",
+                                             "max_skills", "5").out
+        assert "set max_skills = null" in boost("policy", "set",
+                                                "max_skills", "null").out
+
+    def test_policy_set_a_bare_number_for_a_list_key_is_a_list(self, boost,
+                                                               sandbox):
+        # Stored as the int 42, `name in 42` was "TypeError: argument of type
+        # 'int' is not iterable" out of both `policy check` and `install`.
+        r = boost("policy", "set", "blocked_skills", "42")
+        assert 'set blocked_skills = ["42"]' in r.out
+        assert "policy check passed" in boost("policy", "check").out
+
+    def test_policy_reports_a_hand_edited_value_it_cannot_read(self, boost,
+                                                               sandbox):
+        paths.ensure_dirs()
+        paths.policy_path().write_text(
+            json.dumps({"max_skills": "abc", "blocked_skills": 42}),
+            encoding="utf-8")
+        for argv in (("policy", "list"), ("policy", "check")):
+            r = boost(*argv)
+            assert ('ignoring max_skills = "abc" in policy.json — expects '
+                    "a whole number, or null for no limit") in r.out
+            assert ("ignoring blocked_skills = 42 in policy.json — expects "
+                    "a comma-separated list, or a JSON array") in r.out
+            assert ("using the default; fix it with "
+                    "`boost policy set max_skills <int-or-null>`") in r.out
+
+    def test_policy_json_output_stays_machine_readable(self, boost, sandbox):
+        # The warning is chrome, so --json must not gain a line.
+        paths.ensure_dirs()
+        paths.policy_path().write_text(json.dumps({"max_skills": "abc"}),
+                                       encoding="utf-8")
+        r = boost("policy", "list", "--json")
+        assert json.loads(r.out)["max_skills"] is None
+
+    def test_policy_reads_a_hand_edited_string_boolean_as_written(self, boost,
+                                                                  tapped):
+        paths.ensure_dirs()
+        paths.policy_path().write_text(json.dumps({"pin_only": "no"}),
+                                       encoding="utf-8")
+        assert json.loads(boost("policy", "list", "--json").out)[
+            "pin_only"] is False
+        boost("install", "brainstorming")          # not frozen
+
+    def test_config_set_rejects_a_non_number_port(self, boost, sandbox):
+        r = boost("config", "set", "serve.port", "abc", expect=1)
+        assert "serve.port expects a whole number" in r.err
+        assert '`boost config set serve.port <int>`' in r.err
+        assert not paths.config_path().exists()
+
+    def test_config_set_boolean_words(self, boost, sandbox):
+        assert "set telemetry = false" in boost("config", "set",
+                                                "telemetry", "no").out
+        assert "set telemetry = true" in boost("config", "set",
+                                               "telemetry", "on").out
+        r = boost("config", "set", "telemetry", "maybe", expect=1)
+        assert "telemetry expects a boolean" in r.err
+        assert "`boost config set telemetry <bool>`" in r.err
+
+    def test_config_set_rejects_a_scalar_for_a_section(self, boost, sandbox):
+        r = boost("config", "set", "ai", "3", expect=1)
+        assert "ai expects a JSON object" in r.err
+        assert "`boost config set ai <dict>`" in r.err
+        assert boost("config", "get", "ai.enabled", "--json").out.strip() == "true"
+
+    def test_config_set_keeps_an_unknown_key_lenient(self, boost, sandbox):
+        # Keys boost does not ship stay untyped — refusing them would break
+        # integrations that already write their own.
+        boost("config", "set", "custom.flag", "true")
+        assert boost("config", "get", "custom.flag", "--json").out.strip() == "true"
+
+    def test_serve_help_survives_a_hand_edited_port(self, boost, sandbox):
+        # `serve --help` used to die with a bare ValueError and exit 70,
+        # before argparse ever ran.
+        paths.ensure_dirs()
+        paths.config_path().write_text(json.dumps({"serve": {"port": "abc"}}),
+                                       encoding="utf-8")
+        r = boost("serve", "--help", expect=1)
+        assert "serve.port expects a whole number" in r.err
+        assert "Traceback" not in r.err

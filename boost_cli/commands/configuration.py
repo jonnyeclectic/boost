@@ -41,12 +41,24 @@ from ..core import (
     selfupdate,
     serve,
     store,
+    typedvalue,
     util,
 )
 from ..core import output as out
 from ..errors import BoostError
 
 _tilde = paths.tilde
+
+
+def _bad_value(e: typedvalue.ValueTypeError, retry: str) -> BoostError:
+    """Frame a type mismatch as a user-facing error naming the expected type.
+
+    The whole point of the typed setters is that the user hears about a bad
+    value here, holding the keyboard, instead of as `exit 70` plus a crash
+    report out of the next `install`.
+    """
+    return BoostError("%s expects %s" % (e.key, e.expected),
+                      hint="got %s — try `%s`" % (json.dumps(e.raw), retry))
 
 
 # ---------------------------------------------------------------- config
@@ -99,6 +111,9 @@ def cmd_config(argv) -> int:
     if args.action == "set":
         try:
             config.set_value(args.key, args.value)
+        except typedvalue.ValueTypeError as e:
+            raise _bad_value(e, "boost config set %s <%s>"
+                             % (args.key, config.spec_for(args.key))) from e
         except TypeError as e:
             raise BoostError(str(e),
                             hint="the parent key holds a plain value — "
@@ -390,13 +405,30 @@ def cmd_create(argv) -> int:
 # ---------------------------------------------------------------- policy
 
 def _parse_policy_value(key: str, raw: str):
+    """Read `raw` at the key's declared type, or raise a framed BoostError.
+
+    Thin glue over `core.policy.parse_value` — the parsing itself lives in
+    core, where the mutation gate can reach it.
+    """
     try:
-        return json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        pass
-    if isinstance(policy.DEFAULTS.get(key), list):
-        return [s.strip() for s in raw.split(",") if s.strip()]
-    return raw
+        return policy.parse_value(key, raw)
+    except typedvalue.ValueTypeError as e:
+        raise _bad_value(e, "boost policy set %s <%s>"
+                         % (key, policy.spec_for(key))) from e
+
+
+def _warn_invalid_policy_values() -> None:
+    """Name every stored policy value boost had to ignore, and why.
+
+    `policy.load()` substitutes the default for a value it cannot read at the
+    key's type, which is the right thing to do in the middle of an install and
+    the wrong thing to do silently. This is where it stops being silent.
+    """
+    for key, value, expected in policy.invalid_values():
+        out.warn("ignoring %s = %s in policy.json — expects %s"
+                 % (key, json.dumps(value), expected))
+        out.dim("  using the default; fix it with `boost policy set %s <%s>`"
+                % (key, policy.spec_for(key)))
 
 
 def cmd_policy(argv) -> int:
@@ -425,6 +457,7 @@ def cmd_policy(argv) -> int:
         pol = policy.load()
         print(json.dumps(pol, indent=2))
         if not args.json:
+            _warn_invalid_policy_values()
             diff = sorted(k for k in policy.DEFAULTS
                           if pol.get(k) != policy.DEFAULTS[k])
             out.dim("  modified from defaults: %s" % ", ".join(diff)
@@ -500,6 +533,7 @@ def cmd_policy(argv) -> int:
         }, indent=2))
         return 1 if violations else 0
 
+    _warn_invalid_policy_values()
     if pol["pin_only"]:
         out.info("pin-only mode is on — installs/updates are frozen"
                  + (" (%d unpinned item(s): %s)"
@@ -1011,11 +1045,17 @@ def cmd_schedule(argv) -> int:
 
 def cmd_serve(argv) -> int:
     """boost serve [--port N] [--host H] — thin wrapper over core.serve."""
+    # The default is read BEFORE argparse runs, so a hand-edited
+    # `serve.port: "abc"` used to crash even `boost serve --help` with a bare
+    # ValueError and exit 70. Framed, it is one line naming the key.
+    try:
+        default_port = config.get_int("serve.port", 8787) or 8787
+    except typedvalue.ValueTypeError as e:
+        raise _bad_value(e, "boost config set serve.port <int>") from e
     p = cliparse.parser(
         prog="boost serve",
         description="Browse the catalogue in a browser: search, facets and a tap graph")
-    p.add_argument("--port", type=int,
-                   default=int(config.get("serve.port", 8787) or 8787),
+    p.add_argument("--port", type=int, default=default_port,
                    help="port to listen on (default: config serve.port)")
     p.add_argument("--host", default="127.0.0.1",
                    help="address to bind (default: 127.0.0.1)")
