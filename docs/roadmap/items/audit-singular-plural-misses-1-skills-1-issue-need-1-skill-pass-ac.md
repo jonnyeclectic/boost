@@ -2,12 +2,12 @@
 id: audit-singular-plural-misses-1-skills-1-issue-need-1-skill-pass-ac
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Polish
 complexity: S
 impact: Low
 wow: 1
-note: a shared _s helper exists at _common.py:15 and six commands hand-roll around it
+note: fixed via the shared _s helper across seven sites; doctor's verb agreement was already correct
 order: 242
 owner: loop/plural-agreement
 pr:
@@ -36,3 +36,14 @@ Fix as one sweep PR: reuse <code>_s</code> at <code>configuration.py:475</code> 
 (<em>needs/need</em>, <em>passes/pass</em>) &mdash; <code>_s</code> alone cannot fix verb agreement. Add a small
 unit test asserting the <code>n == 1</code> strings. No docs change &mdash; these are runtime messages only.
 Found by the 2026-08 CLI audit (cluster pluralisation-sweep); repro in the audit log.
+
+<b>Shipped.</b> <code>lint</code> now agrees noun and verb (<em>&ldquo;1 skill passes lint&rdquo;</em> vs
+<em>&ldquo;2 skills pass lint&rdquo;</em>); doctor's verb already agreed on re-verification and needed no
+change. <code>policy check</code>'s skills-only summary, <code>cohort create</code>'s rollout line,
+<code>count</code>'s kind breakdown, and <code>focus</code>'s sidelined-count line all switched from a
+hardcoded plural to <code>_s</code>. <code>profile save</code> and <code>profile use</code> lost their
+<code>skill(s)</code>/<code>rule(s)</code>/<code>workflow(s)</code> hedges in favor of the same helper.
+Functional tests updated at every site (<code>test_cli_configuration.py</code>,
+<code>test_cli_team.py</code>, <code>test_cli_intelligence.py</code>, <code>test_cli_discovery.py</code>,
+<code>test_cli_quality.py</code>, <code>test_kind_conformance.py</code>), plus a new singular-count case
+for <code>cohort create</code>.

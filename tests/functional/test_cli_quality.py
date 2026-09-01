@@ -334,7 +334,7 @@ class TestLint:
         assert "very large SKILL.md (>48KB) — consider splitting" in r.out
         assert "1 of 1 skill below 40 or with errors" in r.out
         r = boost("lint", "--min", "0")
-        assert "1 skill pass lint (min 0)" in r.out
+        assert "1 skill passes lint (min 0)" in r.out
 
     def test_missing_fields_error_rc1_and_json(self, boost, sandbox, tmp_path):
         d = tmp_path / "noname"
@@ -357,7 +357,7 @@ class TestLint:
         r = boost("lint", "--tap", "fixture-tap", "cowboy-coding")
         assert "cowboy-coding" in r.out
         assert "80/100" in r.out
-        assert "1 skill pass lint (min 40)" in r.out
+        assert "1 skill passes lint (min 40)" in r.out
 
 
     def test_tap_with_rules_lints_only_the_skills(self, boost, fixture_tap_src,
@@ -440,7 +440,7 @@ class TestLint:
             % ("d" * 45, "body text. " * 20), encoding="utf-8")
         r = boost("lint", str(d))
         assert "my-skill" in r.out
-        assert "1 skill pass lint (min 40)" in r.out
+        assert "1 skill passes lint (min 40)" in r.out
 
     def test_path_target_accepts_a_skill_md_file_directly(
             self, boost, sandbox, tmp_path):
@@ -451,7 +451,7 @@ class TestLint:
                       encoding="utf-8")
         r = boost("lint", str(md), "--min", "0")
         assert "my-skill" in r.out
-        assert "1 skill pass lint (min 0)" in r.out
+        assert "1 skill passes lint (min 0)" in r.out
 
     def test_path_target_missing_directory_errors(self, boost, sandbox, tmp_path):
         r = boost("lint", str(tmp_path / "nope"), expect=1)
