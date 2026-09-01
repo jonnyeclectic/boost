@@ -2,7 +2,7 @@
 id: audit-distill-s-heuristic-merge-drops-repeated-fences-braces-writi
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 2
 note: merged SKILL.md keeps 4 fence lines where one source alone had 56 — blocks never close
 order: 205
 owner: loop/distill-merge-fence-corruption
-pr:
+pr: 668
 title: "distill's heuristic merge drops repeated <code>```</code> fences/braces, writing a structurally corrupt SKILL.md"
 ---
 <code>_distill_merge</code> keeps a global <code>seen</code> set of every stripped non-blank line
