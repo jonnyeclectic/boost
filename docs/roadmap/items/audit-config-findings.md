@@ -10,7 +10,7 @@ wow: 2
 note: `config unset` on a pristine HOME creates config.json and freezes all defaults into it
 order: 258
 owner: loop/config-unset-raw
-pr:
+pr: 650
 title: "boost config: CLI audit findings (2026-08)"
 ---
 <b><code>config unset</code> on a defaulted key always reports success and rewrites the file.</b>
