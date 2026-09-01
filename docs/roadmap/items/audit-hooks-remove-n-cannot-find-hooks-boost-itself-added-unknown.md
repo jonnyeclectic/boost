@@ -2,7 +2,7 @@
 id: audit-hooks-remove-n-cannot-find-hooks-boost-itself-added-unknown
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High
