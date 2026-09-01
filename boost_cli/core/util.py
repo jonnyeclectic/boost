@@ -35,6 +35,35 @@ def rmtree(path) -> None:
     shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
 
 
+def remove_items(
+        items: list[tuple[Path, str, int]]) -> tuple[int, int, list[tuple[Path, str]]]:
+    """Delete each ``(path, kind, size)`` triple; report only what actually went.
+
+    Returns ``(removed_count, freed_bytes, failures)`` where ``failures`` pairs
+    a path with the ``OSError`` text that stopped its removal. A caller must
+    size its summary from ``removed_count``, never from ``len(items)`` — that
+    was the bug this function exists to make impossible: a partial run used to
+    report every candidate as removed and still exit 0.
+    """
+    removed = 0
+    freed = 0
+    failures: list[tuple[Path, str]] = []
+    for pth, _kind, size in items:
+        try:
+            if pth.is_symlink() or pth.is_file():
+                pth.unlink()
+            elif pth.is_dir():
+                rmtree(pth)
+            else:
+                continue
+        except OSError as e:
+            failures.append((pth, str(e)))
+            continue
+        removed += 1
+        freed += size
+    return removed, freed, failures
+
+
 def _lock_is_stale(path: Path, stale_after: float) -> bool:
     """True when a lock file is old enough to have been abandoned."""
     try:

@@ -8,6 +8,7 @@ import hashlib
 import re
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -661,3 +662,75 @@ class TestPositiveInt:
         with pytest.raises(argparse.ArgumentTypeError) as exc:
             util.positive_int("abc")
         assert str(exc.value) == "invalid int value: 'abc'"
+
+
+class TestRemoveItems:
+    """`util.remove_items` — the counter `boost clean` reports and journals.
+
+    A caller must be able to trust ``removed_count`` as "actually gone", not
+    "attempted": the bug this replaces counted every candidate as removed
+    regardless of whether the unlink/rmtree call raised.
+    """
+
+    def test_all_succeed(self, tmp_path):
+        a = tmp_path / "a"
+        a.write_bytes(b"1234")
+        b = tmp_path / "b"
+        b.write_bytes(b"123")
+        items = [(a, "file", 4), (b, "file", 3)]
+
+        removed, freed, failures = util.remove_items(items)
+
+        assert removed == 2
+        assert freed == 7
+        assert failures == []
+        assert not a.exists() and not b.exists()
+
+    def test_a_failure_is_not_counted_removed_and_freed_excludes_it(self, tmp_path, monkeypatch):
+        keep = tmp_path / "locked"
+        keep.write_bytes(b"12345")
+        gone = tmp_path / "gone"
+        gone.write_bytes(b"12")
+        real_unlink = Path.unlink
+
+        def _unlink(self, *a, **k):
+            if self == keep:
+                raise OSError(13, "Permission denied")
+            return real_unlink(self, *a, **k)
+
+        monkeypatch.setattr(Path, "unlink", _unlink)
+        items = [(keep, "file", 5), (gone, "file", 2)]
+
+        removed, freed, failures = util.remove_items(items)
+
+        assert removed == 1
+        assert freed == 2                    # the failed item's bytes are not freed
+        assert len(failures) == 1
+        assert failures[0][0] == keep
+        assert "Permission denied" in failures[0][1]
+        assert keep.exists()                 # the failure left it in place
+        assert not gone.exists()
+
+    def test_a_directory_is_removed_via_rmtree(self, tmp_path):
+        d = tmp_path / "adir"
+        d.mkdir()
+        (d / "f").write_text("x", encoding="utf-8")
+
+        removed, freed, failures = util.remove_items([(d, "old snapshot", 1)])
+
+        assert removed == 1
+        assert freed == 1
+        assert failures == []
+        assert not d.exists()
+
+    def test_a_path_that_is_neither_file_nor_dir_is_skipped_not_counted(self, tmp_path):
+        missing = tmp_path / "never-existed"
+
+        removed, freed, failures = util.remove_items([(missing, "ghost", 9)])
+
+        assert removed == 0
+        assert freed == 0
+        assert failures == []
+
+    def test_empty_input_reports_nothing(self):
+        assert util.remove_items([]) == (0, 0, [])

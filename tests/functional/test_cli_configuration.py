@@ -12,6 +12,7 @@ import getpass
 import io
 import itertools
 import json
+import pathlib
 import socket
 import subprocess
 import sys
@@ -151,6 +152,37 @@ class TestClean:
     def test_fresh_sandbox_has_nothing_to_clean(self, boost, sandbox):
         r = boost("clean")
         assert "nothing to clean" in r.out
+
+    def test_a_failed_removal_is_not_counted_cleaned_and_exits_1(
+            self, boost, installed, monkeypatch):
+        # The audit repro: some items can't be unlinked (permission denied on
+        # the containing directory). The old code warned, kept going, then
+        # reported every candidate as removed and exited 0 anyway.
+        stuck = paths.cache_dir() / "stuck__tap.json"
+        stuck.write_text('{"skills": []}', encoding="utf-8")             # 14 bytes
+        stale = paths.cache_dir() / "old__tap.json"
+        stale.write_text('{"skills": []}', encoding="utf-8")             # 14 bytes
+        real_unlink = pathlib.Path.unlink
+
+        def _unlink(self, *a, **k):
+            if self == stuck:
+                raise OSError(13, "Permission denied")
+            return real_unlink(self, *a, **k)
+
+        monkeypatch.setattr(pathlib.Path, "unlink", _unlink)
+
+        r = boost("clean", expect=1)
+        assert "could not remove ~/.boost/cache/stuck__tap.json" in r.err
+        assert "cleaned 1 item(s), 1 failed · 14B freed" in r.out
+        assert stuck.exists()
+        assert not stale.exists()
+
+        assert journal.events(action="clean")[0]["subject"] \
+            == "cleaned 1 item(s), 1 failed · 14B freed"
+
+        # rerun: the failed item is still there next time, not silently gone
+        r = boost("clean", expect=1)
+        assert "cleaned 0 item(s), 1 failed · 0B freed" in r.out
 
     def test_leaves_a_broken_symlink_boost_does_not_own(self, boost, installed):
         # `clean` carried the same overreach as `sync`: it removed every broken
