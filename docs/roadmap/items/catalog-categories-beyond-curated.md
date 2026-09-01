@@ -10,7 +10,7 @@ wow: 2
 note: landed everywhere except the search-row badge — see PR for what remains
 order: 305
 owner: loop/catalog-per-item-categories
-pr:
+pr: 666
 title: "Per-item categories in <code>search</code>/<code>browse</code>/<code>info</code> — not just a ★ curated bool"
 ---
 From a user request: <em>&ldquo;proper categories for skills (can't have all of them listed as just
