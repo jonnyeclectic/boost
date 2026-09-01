@@ -794,6 +794,46 @@ class TestResolveOneVendoredCopies:
             catalog.resolve_one("dbg")
         assert "--path" in (excinfo.value.hint or "")
 
+    def test_the_ambiguity_hint_names_a_command_that_actually_takes_path(self, sandbox):
+        """Bare `--path <one of the above>` was only actionable for `install`
+        (and, for an unrelated reason, `recommend`/`infer` — their `--path` is
+        a project directory). Every other caller of `resolve_one` — `adapt`,
+        `run`, `log`, `home`, `explain`, `cat`, … — has no such flag, so
+        following the old hint there earned `unrecognized arguments: --path`.
+        `install --path` works for any of them: those callers resolve an
+        installed copy through the lock file before ever reaching the
+        catalog, so installing one clears the ambiguity everywhere."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dbg")
+        hint = excinfo.value.hint or ""
+        assert "boost install dbg --path" in hint
+
+    def test_the_ambiguity_message_names_the_entry_s_own_kind(self, sandbox):
+        """A workflow sharing a name inside one tap was still reported as
+        `different skills` — the kind was hardcoded rather than read off the
+        entry. Verified live: `csharp-reviewer` is a workflow."""
+        wf = _entry("csharp-reviewer", "t", desc="a", rel_dir="a/csharp-reviewer")
+        wf["kind"] = "workflow"
+        wf2 = _entry("csharp-reviewer", "t", desc="b", rel_dir="b/csharp-reviewer")
+        wf2["kind"] = "workflow"
+        _fake_taps(("t", [wf, wf2]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("csharp-reviewer")
+        assert "different workflows in" in excinfo.value.message
+        assert "different skills in" not in excinfo.value.message
+
+    def test_the_ambiguity_message_defaults_to_skill_when_kind_is_absent(self, sandbox):
+        """A cache written before `kind` was recorded must not crash or claim
+        an unknown kind — `skill` is what every entry was before kinds
+        existed."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dbg")
+        assert "different skills in" in excinfo.value.message
+
     def test_path_picks_one_of_two_real_alternatives(self, sandbox):
         _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
                           _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))

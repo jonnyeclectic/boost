@@ -549,11 +549,24 @@ def resolve_one(name: str, path: str | None = None) -> dict:
             # boost cannot pick, and telling the user to "qualify by tap" is
             # advice that reproduces this very error. Name the paths instead.
             paths = ", ".join(sorted(str(e.get("rel_dir", "?")) for e in matches))
+            # `--path` only disambiguates for `install` (and, for an unrelated
+            # reason, `recommend`/`infer` — their `--path` is a project
+            # directory, not this). Every other caller of resolve_one — adapt,
+            # run, log, home, explain, cat, … — has no such flag, so a hint
+            # naming it here earned "unrecognized arguments: --path", exit 2,
+            # from the CLI's own suggestion. `install --path` always works
+            # regardless of which command hit this error, and callers here
+            # resolve an *installed* copy through the lock file before ever
+            # reaching the catalog (see e.g. `_resolve_skill_md`,
+            # `_resolve_skill`), so installing one clears the ambiguity for
+            # every command that would otherwise hit it again.
+            kind = str(matches[0].get("kind") or "skill")
             raise BoostError(
-                "%r matches %d different skills in %s: %s"
-                % (bare, len(matches), taps[0], paths),
-                hint="that registry ships one name twice — pick one with "
-                     "`--path <one of the above>`, and raise it with the tap")
+                "%r matches %d different %ss in %s: %s"
+                % (bare, len(matches), kind, taps[0], paths),
+                hint="that registry ships one name twice — install one with "
+                     "`boost install %s --path <one of the above>`, then "
+                     "retry; raise it with the tap" % bare)
         # Several taps, one thing. Registries mirror each other constantly, so
         # the common cross-tap collision is N byte-identical copies of one
         # skill — and the within-tap branch above already decided that
