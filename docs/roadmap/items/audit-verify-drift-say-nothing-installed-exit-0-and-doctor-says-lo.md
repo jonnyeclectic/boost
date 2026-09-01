@@ -2,14 +2,14 @@
 id: audit-verify-drift-say-nothing-installed-exit-0-and-doctor-says-lo
 board: code
 section: health
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
 note: rm the lock, verify exits 0 'nothing installed'; doctor still prints 'lock parses (v3)'
 order: 214
-owner:
+owner: loop/lock-integrity-reporting
 pr:
 title: "<code>verify</code>/<code>drift</code> say 'nothing installed' (exit 0) when the lock file is missing or corrupt"
 ---
