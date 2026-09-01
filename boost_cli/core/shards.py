@@ -325,18 +325,30 @@ def download(row: dict, dest: Path, manifest: dict,
 
 
 #: One shard's outcome. `status` is the vocabulary both callers render:
-#: "imported" (vectors landed), "unpublished" (no row for this tap),
+#: "imported" (vectors landed), "current" (already built at this commit),
+#: "unpublished" (no row for this tap),
 #: "refused" (row existed, import said no — commit or space mismatch),
 #: "failed" (download or verification error).
 def sync(taps: list[str], commits: dict[str, str],
          manifest: dict | None = None, cache_dir: Path | None = None,
-         on_event=None) -> list[dict]:
+         built: dict[str, str] | None = None, on_event=None) -> list[dict]:
     """Download and import a published shard for each of `taps`.
 
     `commits` maps tap name -> the commit this machine has it at, which is what
     ``dense.import_shard`` validates against. Passing it in rather than reading
     it here keeps this function testable without a tap on disk, and keeps the
     "which commit" question answered in exactly one place per caller.
+
+    `built` maps tap name -> the commit the vector store already holds for it
+    (``dense.tap_commits()``). A tap whose local commit, the manifest's row and
+    the store's own commit all agree needs nothing: the same bytes are already
+    in the store, so re-downloading and re-importing them would spend hundreds
+    of megabytes to write back what is already there. Checked before the
+    download, the same place the moved-tap refusal is checked, so a repeat
+    ``boost quickstart`` or ``boost reindex --fetch-shards`` costs nothing for
+    every tap it already ingested — the resumability this buys after an
+    interrupted run is a side effect of the same check, not a separate one.
+    Omitting `built` (the default) preserves the old unconditional behaviour.
 
     Never raises for one tap's failure. A shard is an optimisation over local
     embedding, so the useful behaviour when one is missing, stale or corrupt is
@@ -351,6 +363,7 @@ def sync(taps: list[str], commits: dict[str, str],
                 for t in taps]
     index = rows(manifest)
     cache_dir = cache_dir or (paths.cache_dir() / "shards")
+    built = built or {}
     # Annotated because the rows are not uniform: only an imported shard
     # carries `chunks`, and inference from the first append would fix the value
     # type as `str`.
@@ -362,7 +375,12 @@ def sync(taps: list[str], commits: dict[str, str],
             _emit(on_event, tap, "unpublished", "")
             continue
         local = commits.get(tap, "")
-        if local and str(row.get("commit")) != local:
+        want = str(row.get("commit") or "")
+        if local and want == local == built.get(tap, ""):
+            results.append({"tap": tap, "status": "current"})
+            _emit(on_event, tap, "current", "")
+            continue
+        if local and want != local:
             # Caught here as well as in `import_shard` so the download is
             # skipped rather than paid for and then thrown away.
             results.append({"tap": tap, "status": "refused",

@@ -355,9 +355,12 @@ def _fetch_shards(args) -> int:
         raise BoostError("published shards cannot serve this machine — %s" % why,
                         hint=dense.fix_hint(dense.status().get("reason", "")))
     commits = rag._tap_commits()
+    stored = dense.tap_commits()
+    # Both maps are keyed by tap name; the two sources are keyed by safe name.
     by_name = {t.name: commits.get(t.safe_name, "") for t in registry.list_taps()}
+    built = {t.name: stored.get(t.safe_name, "") for t in registry.list_taps()}
     results = shards.sync(
-        list(by_name), by_name, manifest=manifest,
+        list(by_name), by_name, manifest=manifest, built=built,
         # Progress goes to stdout, and so does the JSON: emitting both left
         # `--json` printing "fetching ..." lines ahead of the document, which
         # no parser can read past.
@@ -366,16 +369,23 @@ def _fetch_shards(args) -> int:
         print(json.dumps({"shards": results}, indent=2))
         return 0
     got = [r for r in results if r["status"] == "imported"]
+    current = [r for r in results if r["status"] == "current"]
     total = sum(int(r.get("chunks") or 0) for r in got)
     if got:
         out.ok("imported %d shard(s), %s chunks — no embedding needed"
                % (len(got), format(total, ",")))
-    else:
+    if current:
+        # Already ingested on a previous run — say so, but it is not a
+        # remedy-needing gap, so it stays out of `missing` below.
+        out.info(out.role("%d shard(s) already at the published commit"
+                          % len(current), "muted"))
+    if not got and not current:
         # Not a success line. Nothing landed, and saying "imported 0" with a
         # tick reads as a job well done to the one user who most needs to know
         # their vectors are still missing.
         out.warn("no published vectors matched your taps")
-    missing = [r["tap"] for r in results if r["status"] != "imported"]
+    missing = [r["tap"] for r in results
+               if r["status"] not in ("imported", "current")]
     if missing:
         out.info(out.role("%d tap(s) without usable vectors: %s"
                           % (len(missing), ", ".join(missing[:5])

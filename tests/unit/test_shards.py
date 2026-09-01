@@ -300,6 +300,55 @@ class TestSync:
         assert ("a/b", "downloading") in seen
         assert ("a/b", "imported") in seen
 
+    def test_a_tap_already_built_at_the_commit_costs_no_download(
+            self, tmp_path, monkeypatch):
+        """The repeat-`quickstart` case: same commit, vectors already there."""
+        manifest = self._manifest_for(tmp_path, [("a/b", "1" * 40)])
+        called = []
+        monkeypatch.setattr(shards, "download",
+                            lambda *a, **k: called.append(1))
+        res = shards.sync(["a/b"], {"a/b": "1" * 40}, manifest=manifest,
+                          cache_dir=tmp_path / "cache",
+                          built={"a/b": "1" * 40})
+        assert res == [{"tap": "a/b", "status": "current"}]
+        assert called == []
+
+    def test_the_same_commit_without_built_vectors_is_still_imported(
+            self, tmp_path, monkeypatch):
+        """Pinned right, embedded never — the shard is exactly what is missing."""
+        manifest = self._manifest_for(tmp_path, [("a/b", "1" * 40)])
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit: (True, "1 chunk"))
+        res = shards.sync(["a/b"], {"a/b": "1" * 40}, manifest=manifest,
+                          cache_dir=tmp_path / "cache",
+                          built={"a/b": "9" * 40})
+        assert res[0]["status"] == "imported"
+
+    def test_a_moved_tap_is_still_refused_even_if_built_elsewhere(
+            self, tmp_path, monkeypatch):
+        """`built` never overrides the moved-tap refusal `sync` already made."""
+        manifest = self._manifest_for(tmp_path, [("a/b", "1" * 40)])
+        called = []
+        monkeypatch.setattr(shards, "download",
+                            lambda *a, **k: called.append(1))
+        res = shards.sync(["a/b"], {"a/b": "9" * 40}, manifest=manifest,
+                          cache_dir=tmp_path / "cache",
+                          built={"a/b": "9" * 40})
+        assert res[0]["status"] == "refused"
+        assert called == []
+
+    def test_omitting_built_preserves_the_old_unconditional_behaviour(
+            self, tmp_path, monkeypatch):
+        """No `built` map means no idempotence check — the pre-existing path."""
+        manifest = self._manifest_for(tmp_path, [("a/b", "1" * 40)])
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "import_shard",
+                            lambda shard, commit: (True, "1 chunk"))
+        res = shards.sync(["a/b"], {"a/b": "1" * 40}, manifest=manifest,
+                          cache_dir=tmp_path / "cache")
+        assert res[0]["status"] == "imported"
+
 
 class _StreamedResponse:
     """A response whose ``read(amt)`` behaves like a socket, not like a file.
