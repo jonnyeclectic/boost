@@ -10,7 +10,7 @@ wow: 2
 note: tap --dry-run expo/skills clones for real; --defaults --dry-run taps five registries
 order: 220
 owner: loop/tap-dry-run
-pr:
+pr: 685
 title: "<code>tap --dry-run</code> is silently ignored outside <code>--catalog</code>: SPEC and <code>--defaults</code> clone for real"
 ---
 On a pristine HOME, <code>boost tap --dry-run expo/skills</code> printed <code>&#10003; Tapped expo/skills (26 items)</code>, exit 0 in 1.56&nbsp;s &mdash; and the clone exists and <code>config.json</code> gained the row. <code>tap --defaults --dry-run</code> cloned five registries (<code>&#10003; tapped trailofbits/skills (124 items) &hellip;</code>) and grew the config from 21 to 26 taps. The multi-spec path is the same: <code>tap --dry-run expo/skills anthropics/skills</code> answered with <code>already tapped</code> lines, proving registry code ran. Help does say <em>&ldquo;with --catalog: print what would be tapped, tap nothing&rdquo;</em> &mdash; documented-narrow, but a flag literally named <code>--dry-run</code> that clones repos and writes config is a safety hole regardless of wording.
