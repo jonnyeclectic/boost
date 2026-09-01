@@ -11493,8 +11493,9 @@ Found by the 2026-08 CLI audit (cluster <code>crashes-should-be-messages</code>)
       </article>
 
       <article class="cap rcard" id="audit-distill-s-heuristic-merge-drops-repeated-fences-braces-writi">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>distill's heuristic merge drops repeated <code>```</code> fences/braces, writing a structurally corrupt SKILL.md</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>_distill_merge</code> keeps a global <code>seen</code> set of every stripped non-blank line
 and drops all repeats — so structural lines (closing <code>```</code> fences, <code>}</code>,
 <code>});</code>, <code>---</code> rules, table separators) vanish after their first occurrence.
@@ -11518,7 +11519,7 @@ asserting the merged body has balanced fences. Docs: refresh
 <code>docs/commands.html</code> summary/flag change.
 
 Found by the 2026-08 CLI audit (cluster <code>distill-merge-corruption</code>); repro in the audit
-log.</p>
+log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
