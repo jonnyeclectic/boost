@@ -82,7 +82,7 @@ NEVER_DENY = (
 ALL_CLEAR = (
     ("list", ("list",), (SKILL, RULE, WORKFLOW)),
     ("count", ("count",),
-     ("installed 3 (1 skills · 1 rules · 1 workflows)",)),
+     ("installed 3 (1 skill · 1 rule · 1 workflow)",)),
     ("policy", ("policy", "check"),
      ("policy check passed (1 skill, 1 rule, 1 workflow)",)),
     ("doctor", ("doctor",),

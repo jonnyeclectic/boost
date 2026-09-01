@@ -1562,7 +1562,7 @@ class TestCount:
                                           "tap": "rule-tap", "slot": "commands",
                                           "materializations": []})
         r = boost("count")
-        assert "installed 3 (1 skills · 1 rules · 1 workflows)" in r.out
+        assert "installed 3 (1 skill · 1 rule · 1 workflow)" in r.out
         data = json.loads(boost("count", "--json").out)
         assert data["installed"] == 3
         assert (data["skills"], data["rules"], data["workflows"]) == (1, 1, 1)

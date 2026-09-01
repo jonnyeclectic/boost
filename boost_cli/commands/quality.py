@@ -818,8 +818,9 @@ def cmd_lint(argv):
         out.warn("%d of %d skill%s below %d or with errors"
                  % (len(failed), len(results), _s(len(results)), args.min_score))
         return 1
-    out.ok("%d skill%s pass lint (min %d)" % (len(results), _s(len(results)),
-                                              args.min_score))
+    out.ok("%d skill%s %s lint (min %d)"
+           % (len(results), _s(len(results)),
+              "passes" if len(results) == 1 else "pass", args.min_score))
     return 0
 
 

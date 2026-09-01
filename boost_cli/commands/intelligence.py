@@ -38,6 +38,7 @@ from ..core import (
 )
 from ..core import output as out
 from ..errors import BoostError
+from ._common import _s
 
 # ---------------------------------------------------------------- helpers
 
@@ -1036,7 +1037,7 @@ def cmd_focus(argv: list[str]) -> int:
     journal.log("focus", ",".join(names))
     out.info("⌁ focus: %s %s"
              % (", ".join(names),
-                out.role("(other %d skills sidelined)" % sidelined, "muted")))
+                out.role("(other %d skill%s sidelined)" % (sidelined, _s(sidelined)), "muted")))
     return 0
 
 
