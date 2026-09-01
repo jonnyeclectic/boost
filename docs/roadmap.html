@@ -11435,7 +11435,7 @@ Found by the 2026-08 CLI audit (cluster <code>clean-failure-accounting</code>); 
       </article>
 
       <article class="cap rcard" id="audit-config-policy-set-store-type-unchecked-values-consumers-cras">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>config</code>/<code>policy set</code> store type-unchecked values; consumers crash exit 70 and <code>pin_only no</code> freezes installs</h3>
         <p>Both setters accept any value for any known key and the damage lands later, elsewhere. <code>policy set max_skills abc</code> &rarr; <em>&ldquo;&#10003; set max_skills = &quot;abc&quot;&rdquo;</em> exit 0; the next <code>install brainstorming</code> &rarr; <em>&ldquo;Error: boost hit an unexpected error: ValueError: invalid literal for int() with base 10: 'abc'&rdquo;</em> exit 70 plus a crash report. <code>config set serve.port abc</code> then crashes even <code>serve --help</code> with the same ValueError &mdash; before argparse runs. <code>policy set blocked_skills 42</code> &rarr; <em>&ldquo;TypeError: argument of type 'int' is not iterable&rdquo;</em> from <code>policy check</code> and <code>install</code>.
 

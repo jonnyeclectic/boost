@@ -2,14 +2,14 @@
 id: audit-config-policy-set-store-type-unchecked-values-consumers-cras
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: High
 wow: 2
 note: '`policy set pin_only no` stores the truthy string "no" — pin-only ON, installs frozen'
 order: 202
-owner:
+owner: loop/policy-config-value-validation
 pr:
 title: "<code>config</code>/<code>policy set</code> store type-unchecked values; consumers crash exit 70 and <code>pin_only no</code> freezes installs"
 ---
