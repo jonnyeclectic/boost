@@ -2,14 +2,14 @@
 id: audit-trust-verify-labels-a-manifest-tampered-after-signing-by-a-t
 board: code
 section: trust
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: High
 wow: 2
 note: the tampering case the feature exists for reads as "key unknown", and the sweep exits 0
 order: 221
-owner:
+owner: loop/trust-verify-tamper
 pr:
 title: "<code>trust verify</code> labels a manifest tampered after signing by a TRUSTED key 'untrusted'; sweep exits 0"
 ---

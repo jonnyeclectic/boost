@@ -103,13 +103,31 @@ def test_untrusted_when_key_not_registered(sandbox, signer, tmp_path):
     assert r.fingerprint == "1122334455667788"    # still reports whose key
 
 
-def test_untrusted_when_content_tampered(sandbox, signer, tmp_path):
+def test_invalid_when_trusted_keys_content_tampered(sandbox, signer, tmp_path):
+    """A manifest edited after a TRUSTED key signed it is INVALID, not merely
+    UNTRUSTED — the signature's key id still matches a trusted key, so this is
+    the tampering `trust verify` exists to catch, not an unknown signer."""
     provenance.add_trusted_key("acme", signer.public_key_text())
     clone = tmp_path / "clone"
     clone.mkdir()
     signer.write_signed(clone, manifest=b"original\n")
     (clone / provenance.SIGNED_FILE).write_bytes(b"tampered\n")
-    assert provenance.verify_dir(clone).status == provenance.UNTRUSTED
+    r = provenance.verify_dir(clone)
+    assert r.status == provenance.INVALID and not r.ok
+    assert r.key_name == "acme"
+    assert r.fingerprint == "1122334455667788"
+
+
+def test_untrusted_when_content_tampered_and_key_unknown(sandbox, signer, tmp_path):
+    """Tampering under a key that was never trusted stays UNTRUSTED — there is
+    no trusted key to blame, so it reads as an unrecognised signer."""
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    signer.write_signed(clone, manifest=b"original\n")
+    (clone / provenance.SIGNED_FILE).write_bytes(b"tampered\n")
+    r = provenance.verify_dir(clone)
+    assert r.status == provenance.UNTRUSTED
+    assert r.fingerprint == "1122334455667788"
 
 
 def test_invalid_when_signature_present_but_manifest_missing(sandbox, signer, tmp_path):

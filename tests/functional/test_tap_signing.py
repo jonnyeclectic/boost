@@ -108,6 +108,41 @@ def test_unsigned_tap_shows_unsigned(boost, tapped):
     assert "unsigned" in boost("trust", "verify").out
 
 
+def test_tampered_manifest_from_trusted_key_reports_invalid_not_untrusted(
+        boost, fixture_tap_src, tmp_path, signer):
+    """Editing a manifest after a TRUSTED key signed it must not read as an
+    unknown signer.
+
+    A signature whose key id belongs to a trusted key but that no longer
+    verifies is exactly the tampering `trust verify` exists to catch — it must
+    not be indistinguishable from a merely-unrecognised signer.
+    """
+    from boost_cli.core import provenance, registry
+
+    tap = _signed_tap(fixture_tap_src, tmp_path, signer, name="tampered")
+    boost("tap", tap)
+    boost("trust", "add", "acme", signer.public_key_text())
+
+    # Tamper with the CLONE's manifest post-signing, without re-signing — the
+    # signature on disk now belongs to a trusted key id but fails to verify.
+    clone = registry.get("tampered").path
+    manifest = clone / provenance.SIGNED_FILE
+    manifest.write_bytes(manifest.read_bytes() + b"tampered\n")
+
+    r = boost("trust", "verify", "tampered", expect=1)
+    assert "invalid" in r.out
+    assert "untrusted" not in r.out
+
+    data = json.loads(boost("trust", "verify", "tampered", "--json", expect=1).out)
+    assert data[0]["status"] == "invalid"
+    assert data[0]["key_name"] == "acme"
+    assert data[0]["fingerprint"] == "1122334455667788"
+
+    # The sweep (no tap name) must alarm on this too, not exit 0.
+    sweep = boost("trust", "verify", expect=1)
+    assert "invalid" in sweep.out
+
+
 # ── enforcement: require_signed_taps ─────────────────────────────────────
 
 @pytest.fixture()
