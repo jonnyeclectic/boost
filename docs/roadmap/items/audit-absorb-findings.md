@@ -2,15 +2,15 @@
 id: audit-absorb-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Consistency
 complexity: S
 impact: Low
 wow: 1
 note: absorb is the only generated-skill command with no journal.log call at all
 order: 246
-owner:
-pr:
+owner: loop/absorb-journal
+pr: 647
 title: "boost absorb: CLI audit findings (2026-08)"
 ---
 <b><code>cmd_absorb</code> never calls <code>journal.log</code>.</b> After two

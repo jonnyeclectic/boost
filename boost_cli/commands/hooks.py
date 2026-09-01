@@ -144,15 +144,13 @@ def _remove(args) -> int:
                          hint="the name you gave the hook when adding it")
     scope = args.scope or "project"
     host = _write_host(args.host)
-    events = ((_native_event(host, args.event),) if args.event
-              else hookhost.events(host))
-    removed = sum(cs.remove_hook(scope, ev, args.name, host=host)
-                  for ev in events)
+    event = _native_event(host, args.event) if args.event else None
+    removed = cs.remove_hook_by_name(scope, args.name, event, host=host)
     journal.log("hook-remove", args.name, scope=scope, host=host)
     if removed:
         out.ok("removed %d hook(s) named '%s' (%s)"
                % (removed, args.name, _where(host, scope)))
-    else:
-        out.warn("no boost hook named '%s' in %s scope"
-                 % (args.name, _where(host, scope)))
-    return 0
+        return 0
+    out.warn("no boost hook named '%s' in %s scope"
+             % (args.name, _where(host, scope)))
+    return 1

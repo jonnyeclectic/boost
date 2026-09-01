@@ -13,7 +13,7 @@ import subprocess
 import tarfile
 import zipfile
 
-from boost_cli.core import paths
+from boost_cli.core import lockfile, paths
 
 
 def _copy_tap(src, dest):
@@ -1120,12 +1120,64 @@ class TestKindAwarePkgSurface:
         r = boost("snapshot", "save")
         m = re.search(r"saved (snap-[\w-]+) \(1 skill,", r.out)
         assert m, r.out                              # skills counted as skills
-        assert ("1 rule not captured — snapshots cover the skill store only"
-                in r.out)
+        assert ("1 rule tracked but not archived here — their CLAUDE.md/command "
+                "files live outside the skill store" in r.out)
         r = boost("snapshot", "restore", m.group(1))
         assert "restored %s (1 skill)" % m.group(1) in r.out
         assert ("1 rule untouched — snapshots cover the skill store only"
                 in r.out)
+
+    def test_restore_keeps_a_rule_installed_after_the_snapshot(
+            self, boost, fixture_tap_src, tmp_path):
+        """A rule installed after a snapshot must survive restoring it.
+
+        Regression for the bug where `_snapshot_restore` replaced the whole
+        lock file with the archived one: a rule installed after the save
+        vanished from the lock while its CLAUDE.md block stayed behind,
+        un-traceable and un-uninstallable.
+        """
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "later-tap"))
+        boost("install", "brainstorming")
+        r = boost("snapshot", "save")
+        m = re.search(r"saved (snap-[\w-]+) \(1 skill,", r.out)
+        assert m, r.out
+
+        boost("install", "house-style")
+        claude = paths.home() / ".claude" / "CLAUDE.md"
+        assert "boost:rule:house-style start" in claude.read_text(encoding="utf-8")
+
+        r = boost("snapshot", "restore", m.group(1))
+        assert "restored %s (1 skill)" % m.group(1) in r.out
+        assert "1 entry installed after this snapshot kept as-is" in r.out
+
+        # still in the lock, block untouched, and still removable through the
+        # normal path -- none of that held before the fix.
+        assert "boost:rule:house-style start" in claude.read_text(encoding="utf-8")
+        boost("uninstall", "house-style")
+        # CLAUDE.md held only that one managed block, so uninstall deletes it
+        # outright rather than leaving an empty file.
+        assert not claude.exists()
+
+    def test_restore_rematerializes_a_rule_dropped_after_the_snapshot(
+            self, boost, fixture_tap_src, tmp_path):
+        """The reverse direction: a rule the snapshot *did* capture, but that
+        was uninstalled before the restore, still comes back via the normal
+        missing-materialization repair -- the fix must not disturb this."""
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "rev-tap"))
+        boost("install", "brainstorming", "house-style")
+        r = boost("snapshot", "save")
+        m = re.search(r"saved (snap-[\w-]+) \(1 skill,", r.out)
+        assert m, r.out
+
+        boost("uninstall", "house-style")
+        claude = paths.home() / ".claude" / "CLAUDE.md"
+        assert not claude.exists()
+
+        r = boost("snapshot", "restore", m.group(1))
+        assert "re-materialized rule house-style" in r.out
+        assert "1 entry re-materialized from its tap" in r.out
+        assert "boost:rule:house-style start" in claude.read_text(encoding="utf-8")
+        assert "house-style" in lockfile.installed_rules()
 
 
 # ── edge coverage: install ───────────────────────────────────────────────

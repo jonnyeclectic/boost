@@ -35,6 +35,35 @@ def rmtree(path) -> None:
     shutil.rmtree(str(path), onexc=_clear_readonly_and_retry)
 
 
+def remove_items(
+        items: list[tuple[Path, str, int]]) -> tuple[int, int, list[tuple[Path, str]]]:
+    """Delete each ``(path, kind, size)`` triple; report only what actually went.
+
+    Returns ``(removed_count, freed_bytes, failures)`` where ``failures`` pairs
+    a path with the ``OSError`` text that stopped its removal. A caller must
+    size its summary from ``removed_count``, never from ``len(items)`` — that
+    was the bug this function exists to make impossible: a partial run used to
+    report every candidate as removed and still exit 0.
+    """
+    removed = 0
+    freed = 0
+    failures: list[tuple[Path, str]] = []
+    for pth, _kind, size in items:
+        try:
+            if pth.is_symlink() or pth.is_file():
+                pth.unlink()
+            elif pth.is_dir():
+                rmtree(pth)
+            else:
+                continue
+        except OSError as e:
+            failures.append((pth, str(e)))
+            continue
+        removed += 1
+        freed += size
+    return removed, freed, failures
+
+
 def _lock_is_stale(path: Path, stale_after: float) -> bool:
     """True when a lock file is old enough to have been abandoned."""
     try:
@@ -280,6 +309,11 @@ def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
         text = skill_md.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
         return 0, ["unreadable SKILL.md: %s" % e]
+    if frontmatter.unclosed(text):
+        # Every field below would read as absent — the block never parsed —
+        # so scoring by field would report three symptoms of one cause. The
+        # broken fence is the whole diagnosis.
+        return 0, [frontmatter.UNCLOSED_NOTE]
     meta, body = frontmatter.parse(text)
     score = 20  # exists and parses
 
@@ -294,6 +328,12 @@ def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
             score += 5
         else:
             notes.append("description is thin (<40 chars)")
+        if len(desc) > 1024:
+            # The Agent Skills format caps descriptions at 1024 chars and
+            # hosts truncate past it — a longer one still lints clean today,
+            # so an author never learns their description is being cut.
+            score -= 10
+            notes.append("description exceeds 1024 chars — agent hosts truncate it")
     else:
         notes.append("frontmatter missing `description`")
     if meta.get("version"):

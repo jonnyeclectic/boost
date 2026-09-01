@@ -275,6 +275,31 @@ class TestSearch:
         assert with_flag.out == without_flag.out
 
 
+class TestSearchCategoryFilter:
+    """Every fixture skill's `category` (see catalog.CACHE_FORMAT 2) is its
+    first frontmatter tag, since none declares an explicit `category`:
+    tdd-workflow/cowboy-coding -> "testing", jira-integration -> "jira"."""
+
+    def test_narrows_to_matching_category(self, boost, tapped):
+        r = boost("search", "workflow", "--category", "testing", "--json")
+        data = json.loads(r.out)
+        assert [e["name"] for e in data] == ["tdd-workflow"]
+
+    def test_case_insensitive(self, boost, tapped):
+        r = boost("search", "workflow", "--category", "Testing", "--json")
+        data = json.loads(r.out)
+        assert [e["name"] for e in data] == ["tdd-workflow"]
+
+    def test_no_filter_keeps_every_match(self, boost, tapped):
+        r = boost("search", "workflow", "--json")
+        data = json.loads(r.out)
+        assert {e["name"] for e in data} == {"tdd-workflow", "jira-integration"}
+
+    def test_filtering_to_nothing_reuses_the_standard_empty_state(self, boost, tapped):
+        r = boost("search", "workflow", "--category", "no-such-category")
+        assert "no matches for 'workflow'" in r.out
+
+
 # ---------------------------------------------------------------- index
 
 def _gh_page(items, total=7):
@@ -886,6 +911,25 @@ class TestRecommend:
         r = boost("recommend", "--path", tmp_path, expect=1)
         assert "no skills in any tap to recommend from" in r.err
 
+    def test_category_narrows_the_curated_fallback(self, boost, fixture_tap_src,
+                                                    tmp_path):
+        boost("tap", fixture_tap_src, "--curated")
+        proj = tmp_path / "empty-proj"
+        proj.mkdir()
+        r = boost("recommend", "--path", proj, "--category", "testing")
+        assert "tdd-workflow" in r.out or "cowboy-coding" in r.out
+        assert "brainstorming" not in r.out
+        assert "jira-integration" not in r.out
+        assert "commit-messages" not in r.out
+
+    def test_category_matching_nothing_raises_with_hint(self, boost, tapped,
+                                                         tmp_path):
+        proj = tmp_path / "empty-proj"
+        proj.mkdir()
+        r = boost("recommend", "--path", proj, "--category", "no-such-category",
+                  expect=1)
+        assert "no entries in category 'no-such-category'" in r.err
+
     def test_ai_picks(self, boost, stack_tap, react_project, monkeypatch):
         monkeypatch.delenv("BOOST_NO_AI", raising=False)
         monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
@@ -958,6 +1002,23 @@ class TestBrowse:
     def test_no_skills(self, boost, sandbox):
         r = boost("browse", expect=1)
         assert "no skills available to browse" in r.err
+
+    def test_category_narrows_the_non_tty_fallback(self, boost, tapped):
+        # tdd-workflow and cowboy-coding are the only fixture skills whose
+        # (first-tag-derived) category is "testing".
+        r = boost("browse", "--category", "testing")
+        assert "tdd-workflow" in r.out
+        assert "cowboy-coding" in r.out
+        for name in ("brainstorming", "commit-messages", "jira-integration"):
+            assert name not in r.out
+
+    def test_category_case_insensitive(self, boost, tapped):
+        r = boost("browse", "--category", "TESTING")
+        assert "tdd-workflow" in r.out
+
+    def test_category_matching_nothing_raises_with_hint(self, boost, tapped):
+        r = boost("browse", "--category", "no-such-category", expect=1)
+        assert "no entries in category 'no-such-category'" in r.err
 
     def test_tui_pick_installs(self, boost, tapped, monkeypatch):
         if not _curses_available():

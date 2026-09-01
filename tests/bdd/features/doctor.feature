@@ -28,5 +28,5 @@ Feature: boost doctor
     When I run "boost doctor"
     Then the exit code should be 1
     And the output should contain "1 broken symlink in agent dirs — run `boost heal`"
-    And the output should contain "need attention"
+    And the output should contain "1 issue needs attention"
 

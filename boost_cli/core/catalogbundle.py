@@ -60,6 +60,23 @@ CATALOG_PREFIX = "catalog/"
 MAX_MEMBERS = 5000
 MAX_MEMBER_BYTES = 256 * 1024 * 1024
 
+#: Schemes `registry.parse_spec` gives a tap cloned from a real remote. A
+#: local-directory tap's URL is `str(Path.resolve())` instead — none of these
+#: — and only ever resolves on the machine that tapped it.
+_REMOTE_URL_SCHEMES = ("http://", "https://", "git@", "ssh://")
+
+
+def _is_local_url(url: str) -> bool:
+    """True if `url` names a directory on this machine, not a clonable remote.
+
+    A bundle ships this row's URL "precisely so the receiving machine can
+    clone" (module docstring) — a promise a local path cannot keep once it
+    is sent elsewhere. Callers use this to flag the row rather than silently
+    shipping a path that only means something here.
+    """
+    return bool(url) and not url.startswith(_REMOTE_URL_SCHEMES)
+
+
 def export_bundle(dest: Path) -> dict:
     """Pack every tapped registry's catalogue into ``dest``. Returns stats.
 
@@ -100,6 +117,7 @@ def export_bundle(dest: Path) -> dict:
         entries += count
         packed.append({"name": tap.name, "url": tap.url,
                        "curated": tap.curated,
+                       "local": _is_local_url(tap.url),
                        "commit": str(data.get("commit") or ""),
                        "entries": count,
                        "file": "%s.json" % tap.safe_name})
@@ -215,6 +233,11 @@ def import_bundle(src: Path) -> dict:
     its own, and silently dropping them would be a worse outcome than the slow
     tap this feature exists to avoid. A tap already configured keeps its
     existing entry; its catalogue file is overwritten, which is the point.
+
+    Stats include ``local_added``: names of newly-added taps whose URL was a
+    directory on the *exporting* machine (see `_is_local_url`). The catalogue
+    still searches fine, but `boost update` on one of these will fail once the
+    sender's path is gone — the caller is expected to say so.
     """
     src = Path(src)
     manifest = read_manifest(src)
@@ -250,6 +273,7 @@ def import_bundle(src: Path) -> dict:
         existing = []
     known = {t.get("name") for t in existing if isinstance(t, dict)}
     added = 0
+    local_added: list[str] = []
     for row in manifest.get("taps") or []:
         name = row.get("name")
         if not name or name in known:
@@ -258,10 +282,17 @@ def import_bundle(src: Path) -> dict:
                          "curated": bool(row.get("curated"))})
         known.add(name)
         added += 1
+        # Flagged at export time (`_is_local_url`), not re-derived here: a
+        # manifest from an older boost simply carries no "local" key, and a
+        # missing flag must read as "unknown", never as "confirmed remote".
+        if row.get("local"):
+            local_added.append(name)
+
     cfg["taps"] = existing
     config.save(cfg)
 
     return {"path": str(src), "taps": len(manifest.get("taps") or []),
             "added": added, "files": written,
             "entries": int(manifest.get("entries") or 0),
-            "generated": manifest.get("generated", "")}
+            "generated": manifest.get("generated", ""),
+            "local_added": local_added}

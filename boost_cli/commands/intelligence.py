@@ -600,6 +600,7 @@ def cmd_absorb(argv: list[str]) -> int:
         _install_generated(name, text)
     else:
         print(text, end="" if text.endswith("\n") else "\n")
+    journal.log("absorb", name, patterns=len(patterns), files=len(files))
     return 0
 
 

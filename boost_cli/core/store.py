@@ -440,17 +440,20 @@ def unregister_project_mcp(base, skill: str) -> list[str]:
     return removed
 
 
-def _enforce_capability_policy(name: str, skill_md: Path) -> None:
-    """Raise if the skill's declared/detected capabilities are denied by policy.
+def _enforce_capability_policy(name: str, source_md: Path) -> None:
+    """Raise if the item's declared/detected capabilities are denied by policy.
 
-    Runs on the skill's own SKILL.md before it is copied anywhere — a skill is a
-    bundle of instructions the agent will execute, and least-privilege means the
-    user's policy can refuse one that expects a capability they don't grant. A
+    Runs on the item's own source Markdown (a skill's ``SKILL.md``, or a rule's
+    or workflow's source file) before anything is materialized — a skill, rule
+    or workflow is alike a bundle of instructions the agent will execute (a
+    rule is merged into a context file read every session; a workflow becomes
+    a slash command or subagent run verbatim), and least-privilege means the
+    user's policy can refuse any of them for a capability they don't grant. A
     no-op unless the policy names a denied capability.
     """
     from . import frontmatter
     try:
-        raw = skill_md.read_text(encoding="utf-8", errors="replace")
+        raw = source_md.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return
     meta, _body = frontmatter.parse(raw)
@@ -853,6 +856,7 @@ def _install_rule(entry: dict, force: bool = False,
     if not src.is_file():
         raise BoostError("source for rule %s vanished from tap %s" % (name, tap.name),
                         hint="run `boost update %s`" % tap.name)
+    _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
     meta, body = frontmatter.parse(raw)
     claude_body = rules.render_claude_body(str(meta.get("name") or name), body)
@@ -1088,6 +1092,7 @@ def _install_workflow(entry: dict, force: bool = False,
     if not src.is_file():
         raise BoostError("source for workflow %s vanished from tap %s" % (name, tap.name),
                         hint="run `boost update %s`" % tap.name)
+    _enforce_capability_policy(name, src)
     raw = src.read_text(encoding="utf-8", errors="replace")
     slot = workflows.detect_slot(source_rel)
 
@@ -1425,6 +1430,48 @@ def remove_duplicate_discovery(dup: DuplicateDiscovery) -> bool:
     except OSError:
         return False
     return True
+
+
+def restore_preserve_newer_lock_sections(
+        pre_rules: dict, pre_workflows: dict) -> dict[str, list[str]]:
+    """After a lock file has been replaced wholesale (snapshot restore),
+    re-add rule/workflow entries that were installed live but are absent from
+    the just-restored lock.
+
+    A snapshot only archives the skill store (which is where the lock file
+    itself lives), never the agent context files a rule's or workflow's
+    materialization writes into (``CLAUDE.md``, a rendered slash command,
+    ...). Restoring an *older* snapshot therefore drops any rule/workflow
+    installed since — its lock entry vanishes with the rest of the archived
+    lock, but its materialized file is untouched on disk, so the block
+    becomes orphaned: still present, no longer traceable, and impossible to
+    ``boost uninstall``.
+
+    Filling the gap rather than overwriting the section outright preserves
+    the other, already-correct direction: an entry the snapshot *did* carry
+    that was later uninstalled comes back through the normal archived lock
+    contents, and :func:`sync_plan`/:func:`sync_apply` re-materializes it
+    from its tap same as any other missing materialization. Only names
+    genuinely absent from the restored lock are filled in here.
+
+    ``pre_rules``/``pre_workflows`` must be captured by the caller *before*
+    the store is emptied for extraction. Returns the names actually kept, per
+    section, so the caller can report what changed; writes the lock only when
+    there is something to add back.
+    """
+    lock = lockfile.read()
+    kept: dict[str, list[str]] = {"rules": [], "workflows": []}
+    for name, entry in pre_rules.items():
+        if name not in lock["rules"]:
+            lock["rules"][name] = entry
+            kept["rules"].append(name)
+    for name, entry in pre_workflows.items():
+        if name not in lock["workflows"]:
+            lock["workflows"][name] = entry
+            kept["workflows"].append(name)
+    if kept["rules"] or kept["workflows"]:
+        lockfile.write(lock)
+    return kept
 
 
 def sync_plan() -> dict[str, list]:

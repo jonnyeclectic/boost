@@ -94,6 +94,8 @@ def cmd_search(argv):
     p.add_argument("query", nargs="+", help="search terms")
     p.add_argument("--smart", action="store_true",
                    help="rerank the top hits with Claude")
+    p.add_argument("--category", default="",
+                   help="only show entries whose category matches (case-insensitive)")
     p.add_argument("--limit", type=util.positive_int, default=15,
                    help="max results (default 15)")
     p.add_argument("--collapse-near-duplicates", action="store_true",
@@ -139,6 +141,9 @@ def cmd_search(argv):
         scored = [(h["entry"], h["score"]) for h in (hits or [])]
     else:
         scored = catalog.search(query)
+    if args.category:
+        scored = [(e, s) for e, s in scored
+                 if catalog.matches_category(e, args.category)]
     if args.as_json:
         print(json.dumps([e | {"score": s} for e, s in scored[:args.limit]]))
         return 0
@@ -355,9 +360,11 @@ def _fetch_shards(args) -> int:
         raise BoostError("published shards cannot serve this machine — %s" % why,
                         hint=dense.fix_hint(dense.status().get("reason", "")))
     commits = rag._tap_commits()
+    stored = dense.tap_commits()
     by_name = {t.name: commits.get(t.safe_name, "") for t in registry.list_taps()}
+    built = {t.name: stored.get(t.safe_name, "") for t in registry.list_taps()}
     results = shards.sync(
-        list(by_name), by_name, manifest=manifest,
+        list(by_name), by_name, manifest=manifest, built=built,
         # Progress goes to stdout, and so does the JSON: emitting both left
         # `--json` printing "fetching ..." lines ahead of the document, which
         # no parser can read past.
@@ -366,16 +373,26 @@ def _fetch_shards(args) -> int:
         print(json.dumps({"shards": results}, indent=2))
         return 0
     got = [r for r in results if r["status"] == "imported"]
+    current = [r for r in results if r["status"] == "current"]
     total = sum(int(r.get("chunks") or 0) for r in got)
     if got:
         out.ok("imported %d shard(s), %s chunks — no embedding needed"
                % (len(got), format(total, ",")))
-    else:
+    if current:
+        # Nothing to download: the store already holds vectors for exactly
+        # the commit the manifest publishes. Reported alongside `got` rather
+        # than instead of it — a run that imports some shards and finds the
+        # rest already current has two things to say, and an `elif` here said
+        # only the first.
+        out.info(out.role("%d shard(s) already up to date — nothing to fetch"
+                          % len(current), "muted"))
+    if not got and not current:
         # Not a success line. Nothing landed, and saying "imported 0" with a
         # tick reads as a job well done to the one user who most needs to know
         # their vectors are still missing.
         out.warn("no published vectors matched your taps")
-    missing = [r["tap"] for r in results if r["status"] != "imported"]
+    missing = [r["tap"] for r in results
+               if r["status"] not in ("imported", "current")]
     if missing:
         out.info(out.role("%d tap(s) without usable vectors: %s"
                           % (len(missing), ", ".join(missing[:5])
@@ -879,6 +896,8 @@ def cmd_recommend(argv):
         prog="boost recommend",
         description="Suggest skills based on your project's tech stack")
     p.add_argument("--path", default=".", help="project directory (default: cwd)")
+    p.add_argument("--category", default="",
+                   help="only recommend entries whose category matches (case-insensitive)")
     p.add_argument("--limit", type=util.positive_int, default=8,
                    help="max suggestions (default 8)")
     p.add_argument("--json", action="store_true", dest="as_json",
@@ -888,7 +907,12 @@ def cmd_recommend(argv):
     if not target.is_dir():
         raise BoostError("no such directory: %s" % args.path)
     entries = catalog.all_entries()
-    if not entries:
+    if args.category:
+        entries = catalog.filter_by_category(entries, args.category)
+        if not entries:
+            raise BoostError("no entries in category %r" % args.category,
+                            hint="try `boost recommend` with no --category")
+    elif not entries:
         raise BoostError("no skills in any tap to recommend from",
                         hint="add registries with `boost tap --defaults`")
     stack = detect_stack(target)
@@ -957,10 +981,11 @@ def _browse_plain(entries, why: str):
 
 def _tap_categories() -> dict:
     """tap name ('owner/repo') -> curated category, from the bundled registry
-    catalog (data/registries.json) — the only place "category" lives; catalog
-    entries themselves carry no category, only their tap does."""
-    return {e["name"]: e["category"] for e in config.load_registry_catalog()
-            if e.get("category")}
+    catalog (data/registries.json). Fallback only: a catalog entry's own
+    stamped `category` (`catalog.CACHE_FORMAT` 2+) is preferred wherever one is
+    available; this is what `_row_badges` falls back to for a cache written
+    before that field existed."""
+    return config.registry_categories()
 
 
 _KIND_BADGE_KEYS = {"skill": "badge_skill", "rule": "badge_rule",
@@ -973,14 +998,20 @@ def _kind_theme_key(kind: str) -> str:
 
 def _row_badges(e: dict, categories: dict):
     """Ordered (text, theme-key) badges for a browse row: kind, version, tap,
-    and — when the tap is one of the curated registries — its category.
-    Most-important-first, so a narrow terminal drops from the tail without
-    losing the essentials (kind and version survive; category goes first)."""
+    and the item's category, when one is known. Most-important-first, so a
+    narrow terminal drops from the tail without losing the essentials (kind
+    and version survive; category goes first).
+
+    The entry's own stamped `category` (`catalog.CACHE_FORMAT` 2+) is used
+    first — it covers un-bundled taps too, which the old tap-level lookup
+    never could. `categories` (`_tap_categories`) is the fallback for a cache
+    written before that field existed, so an un-rescanned tap doesn't lose its
+    badge outright."""
     badges = [(out.kind_label(e.get("kind", "skill")),
                _kind_theme_key(e.get("kind", "skill"))),
               ("v" + e["version"], "version"),
               ("[%s]" % e["tap"], "tap")]
-    category = categories.get(e["tap"])
+    category = e.get("category") or categories.get(e["tap"])
     if category:
         badges.append(("[%s]" % category, "badge_category"))
     return badges
@@ -1675,9 +1706,16 @@ def cmd_browse(argv):
     p = cliparse.parser(
         prog="boost browse",
         description="Interactive full-screen TUI with fuzzy search")
-    p.parse_args(argv)
+    p.add_argument("--category", default="",
+                   help="only browse entries whose category matches (case-insensitive)")
+    args = p.parse_args(argv)
     entries = sorted(catalog.all_entries(), key=operator.itemgetter("name"))
-    if not entries:
+    if args.category:
+        entries = catalog.filter_by_category(entries, args.category)
+        if not entries:
+            raise BoostError("no entries in category %r" % args.category,
+                            hint="try `boost browse` with no --category to see them all")
+    elif not entries:
         raise BoostError("no skills available to browse",
                         hint="add registries with `boost tap --defaults`")
     if not (sys.stdin.isatty() and sys.stdout.isatty()):

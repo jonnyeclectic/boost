@@ -359,6 +359,11 @@ def cmd_outdated(argv) -> int:
     return 0
 
 
+#: `--show` prints a table, not the full manifest — `--json` already carries
+#: every row, so this exists to keep the table on a screen, not to hide data.
+_SHOW_ROW_CAP = 20
+
+
 def cmd_catalog(argv) -> int:
     """boost catalog --export FILE | --import FILE [--json]"""
     p = cliparse.parser(
@@ -387,11 +392,15 @@ def cmd_catalog(argv) -> int:
                  % (manifest.get("generated", "?"),
                     len(manifest.get("taps") or []),
                     "{:,}".format(int(manifest.get("entries") or 0))))
+        manifest_taps = manifest.get("taps") or []
         rows = [(t.get("name", "?"), str(t.get("entries", "?")),
                  (t.get("commit") or "")[:7])
-                for t in (manifest.get("taps") or [])[:20]]
+                for t in manifest_taps[:_SHOW_ROW_CAP]]
         if rows:
             out.table(rows, headers=("TAP", "ENTRIES", "COMMIT"))
+        if len(manifest_taps) > _SHOW_ROW_CAP:
+            out.dim("… and %d more (use --json for the full list)"
+                    % (len(manifest_taps) - _SHOW_ROW_CAP))
         return 0
 
     if args.export:
@@ -417,6 +426,16 @@ def cmd_catalog(argv) -> int:
         return 0
     out.ok("imported %d catalogue file(s) · %s entries · %d new tap(s)"
            % (stats["files"], "{:,}".format(stats["entries"]), stats["added"]))
+    local_added = stats.get("local_added") or []
+    if local_added:
+        # These clone fine right now — the catalogue is already on disk — but
+        # `boost update`/`--force` on one of them will fail the moment the
+        # exporting machine's directory is gone, and there is nothing in a
+        # local path to warn the receiver of that on its own.
+        out.warn("%d tap(s) point at a directory on the exporting machine, "
+                 "not a clonable URL: %s — `boost update` on these will fail "
+                 "once that path is gone"
+                 % (len(local_added), ", ".join(local_added[:5])))
     out.dim("`boost search` works now; `boost install` clones just the one "
             "registry it needs")
     return 0

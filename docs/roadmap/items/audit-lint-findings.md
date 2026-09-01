@@ -2,15 +2,15 @@
 id: audit-lint-findings
 board: code
 section: health
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: lint can't lint a path on disk, counts 6307 "skills" for 1997 names, misreads one missing ---
 order: 274
-owner:
-pr:
+owner: loop/lint-audit-findings
+pr: 662
 title: "<code>boost lint</code>: CLI audit findings (2026-08)"
 ---
 <b>A path on disk cannot be linted</b> <em>(med)</em>. <code>lint ./my-skill</code> and

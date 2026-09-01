@@ -75,7 +75,11 @@ def cmd_config(argv) -> int:
         cfg = config.load()
         print(json.dumps(cfg, indent=2))
         if not args.json:
-            out.dim("  " + _tilde(paths.config_path()))
+            cfg_path = paths.config_path()
+            if cfg_path.exists():
+                out.dim("  " + _tilde(cfg_path))
+            else:
+                out.dim("  defaults — %s not created yet" % _tilde(cfg_path))
         return 0
 
     if args.action == "get":
@@ -184,25 +188,31 @@ def cmd_clean(argv) -> int:
         out.ok("nothing to clean")
         return 0
 
-    verb = "would remove" if args.dry_run else "removed"
-    freed = 0
-    for pth, kind, size in items:
-        if not args.dry_run:
-            try:
-                if pth.is_symlink() or pth.is_file():
-                    pth.unlink()
-                elif pth.is_dir():
-                    util.rmtree(pth)
-            except OSError as e:
-                out.warn("could not remove %s: %s" % (_tilde(pth), e))
-                continue
-        freed += size
-        out.info("%s %s %s" % (verb, _tilde(pth), out.role("(%s)" % kind, "muted")))
     if args.dry_run:
+        freed = sum(size for _, _, size in items)
+        for pth, kind, _size in items:
+            out.info("would remove %s %s" % (_tilde(pth), out.role("(%s)" % kind, "muted")))
         out.dim("  %d item(s) · %s would be freed" % (len(items), util.human_size(freed)))
-    else:
-        journal.log("clean", "%d items" % len(items), freed=util.human_size(freed))
-        out.ok("cleaned %d item(s) · %s freed" % (len(items), util.human_size(freed)))
+        return 0
+
+    removed, freed, failures = util.remove_items(items)
+    failed_errors = dict(failures)
+    for pth, kind, _size in items:
+        if pth in failed_errors:
+            out.warn("could not remove %s: %s" % (_tilde(pth), failed_errors[pth]),
+                     stream=sys.stderr)
+        else:
+            out.info("removed %s %s" % (_tilde(pth), out.role("(%s)" % kind, "muted")))
+
+    summary = "cleaned %d item(s)" % removed
+    if failures:
+        summary += ", %d failed" % len(failures)
+    summary += " · %s freed" % util.human_size(freed)
+    journal.log("clean", summary, freed=util.human_size(freed))
+    if failures:
+        out.warn(summary)
+        return 1
+    out.ok(summary)
     return 0
 
 

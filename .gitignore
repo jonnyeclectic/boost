@@ -235,6 +235,7 @@ _bmad-output/
 # these are only this repo's project-scoped copies.
 .boost/
 .claude/skills/
+.claude/worktrees/
 .cursor/
 .gemini/
 .windsurf/

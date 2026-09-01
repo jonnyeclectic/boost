@@ -2,15 +2,15 @@
 id: shard-refresh-skips-processed-commits
 board: code
 section: internals
-status: planned
+status: shipped
 category: Search · Performance
 complexity: S
 impact: Med
 wow: 2
 note: a quickstart rerun re-downloads every shard the store already holds at that commit
 order: 306
-owner:
-pr:
+owner: loop/shard-sync-skip-current
+pr: 649
 title: "<code>quickstart</code> reruns re-download every shard; <code>shards.sync</code> never asks what is built"
 ---
 From a user request: <em>"update PRs to not reprocess the same shards repeatedly. have a

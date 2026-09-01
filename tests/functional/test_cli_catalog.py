@@ -122,6 +122,23 @@ class TestShow:
         r = boost("catalog", "--show", str(bad), expect=1)
         assert "bundle" in r.err.lower()
 
+    def test_it_names_the_remainder_past_the_row_cap(self, boost, sandbox,
+                                                     tmp_path):
+        # The heading's own count must not contradict the table under it —
+        # 22 taps in, a 20-row table, and nothing said about the other 2.
+        names = ["acme/skills-%02d" % i for i in range(22)]
+        _tapped(*names)
+        for n in names:
+            _cache(n)
+        dest = tmp_path / "c.tgz"
+        boost("catalog", "--export", str(dest))
+
+        r = boost("catalog", "--show", str(dest))
+
+        assert "22 taps" in r.out
+        assert "and 2 more" in r.out
+        assert "--json" in r.out
+
 
 class TestImport:
     def test_a_round_trip_restores_a_searchable_catalogue(self, boost, sandbox,
@@ -203,6 +220,40 @@ class TestImport:
             tar.add(str(notes), arcname="notes.txt")
         r = boost("catalog", "--import", str(bundle), expect=1)
         assert "not a boost catalogue bundle" in r.err
+
+    def test_import_warns_about_taps_pointing_at_a_local_directory(
+            self, boost, sandbox, tmp_path):
+        local_dir = tmp_path / "local-repo"
+        local_dir.mkdir()
+        cfg = config.load()
+        cfg["taps"] = [{"name": "acme/skills", "url": str(local_dir),
+                        "curated": False}]
+        config.save(cfg)
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        boost("catalog", "--export", str(dest))
+        config.save({"taps": []})
+        for path in paths.cache_dir().glob("*.json"):
+            path.unlink()
+
+        r = boost("catalog", "--import", str(dest))
+
+        assert "acme/skills" in r.out + r.err
+        assert "exporting machine" in r.out + r.err
+
+    def test_import_of_a_remote_bundle_prints_no_local_tap_warning(
+            self, boost, sandbox, tmp_path):
+        _tapped("acme/skills")
+        _cache("acme/skills")
+        dest = tmp_path / "c.tgz"
+        boost("catalog", "--export", str(dest))
+        config.save({"taps": []})
+        for path in paths.cache_dir().glob("*.json"):
+            path.unlink()
+
+        r = boost("catalog", "--import", str(dest))
+
+        assert "exporting machine" not in r.out + r.err
 
     def test_the_three_modes_are_mutually_exclusive(self, boost, sandbox,
                                                     tmp_path):

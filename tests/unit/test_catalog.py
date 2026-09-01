@@ -794,6 +794,46 @@ class TestResolveOneVendoredCopies:
             catalog.resolve_one("dbg")
         assert "--path" in (excinfo.value.hint or "")
 
+    def test_the_ambiguity_hint_names_a_command_that_actually_takes_path(self, sandbox):
+        """Bare `--path <one of the above>` was only actionable for `install`
+        (and, for an unrelated reason, `recommend`/`infer` — their `--path` is
+        a project directory). Every other caller of `resolve_one` — `adapt`,
+        `run`, `log`, `home`, `explain`, `cat`, … — has no such flag, so
+        following the old hint there earned `unrecognized arguments: --path`.
+        `install --path` works for any of them: those callers resolve an
+        installed copy through the lock file before ever reaching the
+        catalog, so installing one clears the ambiguity everywhere."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dbg")
+        hint = excinfo.value.hint or ""
+        assert "boost install dbg --path" in hint
+
+    def test_the_ambiguity_message_names_the_entry_s_own_kind(self, sandbox):
+        """A workflow sharing a name inside one tap was still reported as
+        `different skills` — the kind was hardcoded rather than read off the
+        entry. Verified live: `csharp-reviewer` is a workflow."""
+        wf = _entry("csharp-reviewer", "t", desc="a", rel_dir="a/csharp-reviewer")
+        wf["kind"] = "workflow"
+        wf2 = _entry("csharp-reviewer", "t", desc="b", rel_dir="b/csharp-reviewer")
+        wf2["kind"] = "workflow"
+        _fake_taps(("t", [wf, wf2]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("csharp-reviewer")
+        assert "different workflows in" in excinfo.value.message
+        assert "different skills in" not in excinfo.value.message
+
+    def test_the_ambiguity_message_defaults_to_skill_when_kind_is_absent(self, sandbox):
+        """A cache written before `kind` was recorded must not crash or claim
+        an unknown kind — `skill` is what every entry was before kinds
+        existed."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
+                          _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dbg")
+        assert "different skills in" in excinfo.value.message
+
     def test_path_picks_one_of_two_real_alternatives(self, sandbox):
         _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg"),
                           _entry("dbg", "t", desc="rust", rel_dir="b/dbg")]))
@@ -1131,3 +1171,212 @@ class TestLintTargets:
         targets, _ = catalog.lint_targets([self._e("s", "skill", "d")],
                                           "/taps/demo")
         assert targets == [("s", Path("/taps/demo/d"))]
+
+    def _ec(self, name, content, rel_dir):
+        """A skill entry carrying a content digest, for the dedup tests."""
+        e = self._e(name, "skill", rel_dir)
+        e["content"] = content
+        return e
+
+    def test_mirrors_sharing_a_content_digest_collapse_to_one_target(self):
+        # A registry vendoring the same skill per agent (claude/, cursor/,
+        # windsurf/, ...) used to print one row per mirror — 9 indistinguishable
+        # rows for 2 real skills over a whole tap. Same content -> one target,
+        # and the survivor is the first one scanned.
+        entries = [self._ec("tdd", "abc123", "claude/tdd"),
+                   self._ec("tdd", "abc123", "cursor/tdd"),
+                   self._ec("tdd", "abc123", "windsurf/tdd")]
+        targets, skipped = catalog.lint_targets(entries, self.ROOT)
+        assert targets == [("tdd", self.ROOT / "claude/tdd")]
+        assert skipped == []
+
+    def test_entries_without_a_content_digest_never_collapse(self):
+        # "absent digest never matches" — caches written before content-hashing
+        # existed must keep listing every copy rather than silently merging
+        # unrelated entries that all happen to have no digest.
+        entries = [self._e("tdd", "skill", "one/tdd"),
+                   self._e("tdd", "skill", "two/tdd")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert [p for _n, p in targets] == [self.ROOT / "one/tdd",
+                                            self.ROOT / "two/tdd"]
+
+    def test_same_name_different_content_stays_two_rows_with_rel_dir(self):
+        # Genuinely different skills that happen to share a name must not
+        # collapse (their content differs) — but must stop printing identical
+        # label text, so rel_dir is folded into the label to disambiguate.
+        entries = [self._ec("tdd", "abc123", "one/tdd"),
+                   self._ec("tdd", "xyz789", "two/tdd")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert targets == [("tdd (one/tdd)", self.ROOT / "one/tdd"),
+                           ("tdd (two/tdd)", self.ROOT / "two/tdd")]
+
+    def test_a_name_with_no_collision_keeps_the_bare_label(self):
+        entries = [self._ec("solo", "abc123", "solo")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert targets == [("solo", self.ROOT / "solo")]
+
+    def test_distinct_content_summary_count_reflects_collapsed_targets(self):
+        # `cmd_lint` reports `len(results)`, built one-to-one from `targets` —
+        # so the dedup above is what makes the summary say "distinct skills",
+        # without any extra counting logic in the command layer.
+        entries = [self._ec("tdd", "abc123", "claude/tdd"),
+                   self._ec("tdd", "abc123", "cursor/tdd"),
+                   self._ec("other", "def456", "other")]
+        targets, _ = catalog.lint_targets(entries, self.ROOT)
+        assert len(targets) == 2
+
+    def test_unknown_name_raises_instead_of_silently_dropping(self):
+        entries = [self._e("one", "skill", "one")]
+        with pytest.raises(BoostError, match="nosuchskill"):
+            catalog.lint_targets(entries, self.ROOT, ["nosuchskill"])
+
+    def test_unknown_name_mixed_with_a_valid_one_still_raises(self):
+        # A typo mixed with a real name must not vanish behind the real
+        # name's success — that is exactly how a misspelling passed CI
+        # silently before this fix.
+        entries = [self._e("one", "skill", "one")]
+        with pytest.raises(BoostError, match="nosuchskill"):
+            catalog.lint_targets(entries, self.ROOT, ["one", "nosuchskill"])
+
+    def test_unknown_name_matching_a_skipped_rule_does_not_raise(self):
+        # A rule/workflow name is a legitimate (if non-lintable) match — it
+        # belongs in `skipped`, not in the unknown-name error.
+        entries = [self._e("py-style", "rule", "rules/py-style.mdc")]
+        targets, skipped = catalog.lint_targets(entries, self.ROOT, ["py-style"])
+        assert targets == []
+        assert skipped == [{"name": "py-style", "kind": "rule"}]
+
+
+class TestPathTarget:
+    """`is_path_target` / `resolve_path_target` let `boost lint` score a
+    skill directory on disk before it is ever installed."""
+
+    def test_a_relative_path_with_a_separator_is_a_path_target(self):
+        assert catalog.is_path_target("./my-skill") is True
+
+    def test_a_windows_style_separator_is_a_path_target(self):
+        assert catalog.is_path_target("some\\dir") is True
+
+    def test_a_bare_name_that_does_not_exist_is_not_a_path_target(self):
+        assert catalog.is_path_target("nonexistent-bare-name-xyz") is False
+
+    def test_a_bare_name_that_exists_on_disk_is_a_path_target(self, tmp_path,
+                                                               monkeypatch):
+        (tmp_path / "my-skill").mkdir()
+        monkeypatch.chdir(tmp_path)
+        assert catalog.is_path_target("my-skill") is True
+
+    def test_resolve_directory_returns_it_unchanged(self, tmp_path):
+        d = tmp_path / "my-skill"
+        d.mkdir()
+        assert catalog.resolve_path_target(str(d)) == d
+
+    def test_resolve_a_skill_md_file_returns_its_parent_directory(self, tmp_path):
+        d = tmp_path / "my-skill"
+        d.mkdir()
+        md = d / "SKILL.md"
+        md.write_text("---\nname: my-skill\n---\n", encoding="utf-8")
+        assert catalog.resolve_path_target(str(md)) == d
+
+    def test_resolve_a_missing_path_raises(self, tmp_path):
+        with pytest.raises(BoostError, match="no such directory"):
+            catalog.resolve_path_target(str(tmp_path / "nope"))
+
+
+class TestEntryCategory:
+    """`scan_dir` stamps a `category` on every entry: the item's own
+    frontmatter wins, then its first tag, then its tap's registry category."""
+
+    def test_own_frontmatter_category_wins(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "registry_categories",
+                            lambda: {"acme/tap": "ai"})
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\ncategory: security\ntags: [ui]\n---")
+        (e,) = catalog.scan_dir(root, tap_name="acme/tap")
+        assert e["category"] == "security"
+
+    def test_falls_back_to_first_tag_when_no_category(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "registry_categories",
+                            lambda: {"acme/tap": "ai"})
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\ntags: [design, ui]\n---")
+        (e,) = catalog.scan_dir(root, tap_name="acme/tap")
+        assert e["category"] == "design"
+
+    def test_falls_back_to_tap_category_when_item_declares_nothing(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "registry_categories",
+                            lambda: {"acme/tap": "ai"})
+        root = tmp_path / "tap"
+        write_skill(root / "s")
+        (e,) = catalog.scan_dir(root, tap_name="acme/tap")
+        assert e["category"] == "ai"
+
+    def test_empty_when_neither_item_nor_tap_declares_one(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "registry_categories", lambda: {})
+        root = tmp_path / "tap"
+        write_skill(root / "s")
+        (e,) = catalog.scan_dir(root, tap_name="unbundled/tap")
+        assert e["category"] == ""
+
+    def test_blank_tags_entries_are_skipped_for_the_first_real_one(
+            self, tmp_path, monkeypatch):
+        # A mutant that used tags[0] unconditionally would return "" here
+        # instead of falling through to the first non-blank tag.
+        monkeypatch.setattr(config, "registry_categories", lambda: {})
+        root = tmp_path / "tap"
+        write_skill(root / "s", "---\ntags: ['', '  ', backend]\n---")
+        (e,) = catalog.scan_dir(root, tap_name="acme/tap")
+        assert e["category"] == "backend"
+
+    def test_registry_categories_looked_up_once_per_scan_not_per_entry(
+            self, tmp_path, monkeypatch):
+        calls = []
+        real = config.registry_categories
+
+        def counting():
+            calls.append(1)
+            return real()
+
+        monkeypatch.setattr(config, "registry_categories", counting)
+        root = tmp_path / "tap"
+        write_skill(root / "a")
+        write_skill(root / "b")
+        write_skill(root / "c")
+        entries = catalog.scan_dir(root, tap_name="acme/tap")
+        assert len(entries) == 3
+        assert len(calls) == 1
+
+
+class TestMatchesAndFilterByCategory:
+    def test_empty_filter_matches_everything(self):
+        assert catalog.matches_category(_entry("x", "t"), "")
+
+    def test_empty_filter_never_excludes_even_a_categoryless_entry(self):
+        e = _entry("x", "t")
+        assert "category" not in e
+        assert catalog.matches_category(e, "")
+
+    def test_case_insensitive_match(self):
+        e = _entry("x", "t") | {"category": "AI"}
+        assert catalog.matches_category(e, "ai")
+        assert catalog.matches_category(e, "Ai")
+
+    def test_no_match_for_a_different_category(self):
+        e = _entry("x", "t") | {"category": "ai"}
+        assert not catalog.matches_category(e, "ui")
+
+    def test_missing_category_only_matches_an_empty_filter(self):
+        e = _entry("x", "t")
+        assert not catalog.matches_category(e, "ai")
+
+    def test_filter_by_category_narrows_the_list(self):
+        entries = [_entry("a", "t") | {"category": "ai"},
+                  _entry("b", "t") | {"category": "ui"},
+                  _entry("c", "t") | {"category": "ai"}]
+        assert [e["name"] for e in catalog.filter_by_category(entries, "ai")] \
+            == ["a", "c"]
+
+    def test_filter_by_category_empty_is_a_no_op(self):
+        entries = [_entry("a", "t"), _entry("b", "t")]
+        assert catalog.filter_by_category(entries, "") == entries
