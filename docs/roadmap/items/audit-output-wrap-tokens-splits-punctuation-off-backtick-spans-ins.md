@@ -2,14 +2,14 @@
 id: audit-output-wrap-tokens-splits-punctuation-off-backtick-spans-ins
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: the wrapper rejoins span + ")" with a space; one fix covers doctor, reindex and all help
 order: 240
-owner:
+owner: loop/wrap-tokens-punctuation
 pr:
 title: "<code>output._wrap_tokens</code> splits punctuation off backtick spans, inserting a stray space"
 ---
