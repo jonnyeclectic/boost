@@ -288,6 +288,32 @@ class TestFetchShards:
         data = json.loads(res.out)
         assert [r["status"] for r in data["shards"]] == ["unpublished"]
 
+    def test_a_tap_already_built_at_the_published_commit_is_not_redownloaded(
+            self, boost, manifest, monkeypatch):
+        """A rerun must not re-pay for a shard the store already holds.
+
+        This is the bug the card describes: `sync` used to have no `built`
+        map at all, so every rerun of `--fetch-shards` re-downloaded every
+        shard unconditionally, even one imported moments before.
+        """
+        from boost_cli.core import dense, embed, rag, registry, shards
+        monkeypatch.setattr(embed, "provider", lambda: "local")
+        monkeypatch.setattr(embed, "model", lambda: SPACE["model"])
+        monkeypatch.setattr(embed, "dimension", lambda: 384)
+        monkeypatch.setattr(registry, "list_taps",
+                            lambda: [registry.Tap(name="a/b", url="file:///x")])
+        monkeypatch.setattr(rag, "_tap_commits", lambda: {"a__b": "1" * 40})
+        monkeypatch.setattr(dense, "tap_commits", lambda: {"a__b": "1" * 40})
+
+        def boom(*a, **k):
+            raise AssertionError("sync must not download an already-current shard")
+        monkeypatch.setattr(shards, "download", boom)
+
+        res = boost("reindex", "--fetch-shards")
+        assert "already up to date" in res.out
+        # Never reported as a tap that still needs local embedding.
+        assert "reindex --dense" not in res.out
+
 
 class TestTapAt:
     """`--at` is what makes a shard importable; a bad pin must not tap HEAD."""

@@ -325,18 +325,27 @@ def download(row: dict, dest: Path, manifest: dict,
 
 
 #: One shard's outcome. `status` is the vocabulary both callers render:
-#: "imported" (vectors landed), "unpublished" (no row for this tap),
+#: "imported" (vectors landed), "current" (store already holds this exact
+#: commit's vectors, nothing downloaded), "unpublished" (no row for this tap),
 #: "refused" (row existed, import said no — commit or space mismatch),
 #: "failed" (download or verification error).
 def sync(taps: list[str], commits: dict[str, str],
          manifest: dict | None = None, cache_dir: Path | None = None,
-         on_event=None) -> list[dict]:
+         on_event=None, built: dict[str, str] | None = None) -> list[dict]:
     """Download and import a published shard for each of `taps`.
 
     `commits` maps tap name -> the commit this machine has it at, which is what
     ``dense.import_shard`` validates against. Passing it in rather than reading
     it here keeps this function testable without a tap on disk, and keeps the
     "which commit" question answered in exactly one place per caller.
+
+    `built` maps tap name -> the commit the vector store already holds for it
+    (``dense.tap_commits()``), same triple-equality short-circuit as
+    :func:`ingest`: a tap already at the manifest row's commit *with vectors
+    already built there* skips the download entirely and reports "current".
+    Omit it (the default) to keep the old always-download behaviour — the
+    right choice for a caller like `pkg._resync_vectors` where the tap just
+    moved and a fresh shard is exactly what is wanted.
 
     Never raises for one tap's failure. A shard is an optimisation over local
     embedding, so the useful behaviour when one is missing, stale or corrupt is
@@ -351,6 +360,7 @@ def sync(taps: list[str], commits: dict[str, str],
                 for t in taps]
     index = rows(manifest)
     cache_dir = cache_dir or (paths.cache_dir() / "shards")
+    built = built or {}
     # Annotated because the rows are not uniform: only an imported shard
     # carries `chunks`, and inference from the first append would fix the value
     # type as `str`.
@@ -362,6 +372,11 @@ def sync(taps: list[str], commits: dict[str, str],
             _emit(on_event, tap, "unpublished", "")
             continue
         local = commits.get(tap, "")
+        want = str(row.get("commit") or "")
+        if want and local == want == built.get(tap, ""):
+            results.append({"tap": tap, "status": "current"})
+            _emit(on_event, tap, "current", "")
+            continue
         if local and str(row.get("commit")) != local:
             # Caught here as well as in `import_shard` so the download is
             # skipped rather than paid for and then thrown away.
