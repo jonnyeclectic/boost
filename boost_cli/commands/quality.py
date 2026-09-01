@@ -618,7 +618,11 @@ def cmd_doctor(argv):
     crashes = sorted(paths.logs_dir().glob("crash-*.log")) \
         if paths.logs_dir().is_dir() else []
     if crashes:
-        out.warn("%d crash report%s in %s (newest: %s) — see `boost log --crashes`"
+        # `out.info`, not `bad`/`out.warn`, for the same reason as the foreign
+        # symlinks and hooks above: a crash report is history, not a current
+        # fault, so it must not wear the "!" glyph or verdict a healthy
+        # machine as having an issue that needs attention.
+        out.info("%d crash report%s in %s (newest: %s) — see `boost log --crashes`"
                  % (len(crashes), _s(len(crashes)), _tilde(paths.logs_dir()),
                     crashes[-1].name))
 
@@ -645,8 +649,8 @@ def cmd_doctor(argv):
     else:
         out.verdict(issues == 0,
                     "healthy" if not issues else
-                    "%d issue%s need attention — see the suggestions above"
-                    % (issues, _s(issues)))
+                    "%d issue%s %s attention — see the suggestions above"
+                    % (issues, _s(issues), "needs" if issues == 1 else "need"))
     return 1 if issues else 0
 
 
@@ -698,7 +702,7 @@ def _report_search_engine(bad) -> None:
         elif st["reason"] == "empty":
             detail += " but holds no vectors"
         bad("semantic search silently off — %d-chunk vector store %s; "
-            "searches are using BM25. %s" % (st["chunks"], detail, fix),
+            "searches are using BM25 — %s" % (st["chunks"], detail, fix),
             wrap=True)
         return
 

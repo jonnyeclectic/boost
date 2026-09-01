@@ -161,8 +161,10 @@ boost health      # skill-environment dashboard
 boost heal        # self-diagnose & repair
 ```
 
-`boost doctor` now surfaces the diagnostic log location and warns when crash
+`boost doctor` now surfaces the diagnostic log location and notes when crash
 reports are present, so a stuck environment points you at its own evidence.
+That note is informational, not a fault — a crash report is history, so it
+does not count toward doctor's issue tally or its exit code.
 
 ---
 
