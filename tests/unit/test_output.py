@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 
 import pytest
 
@@ -1519,6 +1520,21 @@ class TestWrap:
         span = "`" + "x" * 40 + "`"
         lines = output.wrap("run (" + span + ") now", 20)
         assert "(" + span + ")" in lines
+
+    def test_a_long_glued_run_extends_in_linear_time(self):
+        # The punctuation-absorbing scan must stay a bounded pair of index
+        # walks, not a regex whose backtracking is polynomial in the length
+        # of an unterminated glued run.
+        text = "run `ok` " + "x" * 200_000
+        start = time.perf_counter()
+        output.wrap(text, 80)
+        assert time.perf_counter() - start < 2.0
+
+    def test_an_unterminated_glued_backtick_extends_in_linear_time(self):
+        text = "`" + "x" * 200_000
+        start = time.perf_counter()
+        output.wrap(text, 80)
+        assert time.perf_counter() - start < 2.0
 
 
 class TestWrappingEmitters:
