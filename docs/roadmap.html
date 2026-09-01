@@ -6457,8 +6457,9 @@ deps/drift/verify/lint/audit empties through <code>out.empty_state</code> with o
       </article>
 
       <article class="cap rcard" id="audit-doctor-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost doctor: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Three wording defects in one report, all verified.</b> The crash-report notice —
 <em>"! 1 crash report in ~/.boost/logs (newest: &hellip;) — see `boost log --crashes`"</em> —
 wears the "!" issue glyph but is never counted: <code>bad()</code>
@@ -6480,7 +6481,7 @@ found in verification: the verdict line itself has a number-agreement slip — <
 attention"</em> — because <code>quality.py:637</code> pluralises the noun but not the verb; make
 it <em>"1 issue needs attention"</em>. Update <code>docs/DEBUGGING.md</code> (its doctor output
 excerpts at <code>:159-164</code>) to match. Found by the 2026-08 CLI audit (cluster
-<code>doctor-output-polish</code>); repro in the audit log.</p>
+<code>doctor-output-polish</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>

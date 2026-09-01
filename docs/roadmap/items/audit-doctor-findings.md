@@ -2,7 +2,7 @@
 id: audit-doctor-findings
 board: code
 section: health
-status: inflight
+status: shipped
 category: CLI · UX
 complexity: S
 impact: Low
@@ -10,7 +10,7 @@ wow: 1
 note: crash line wears "!" but verdicts "● healthy" exit 0; and "1 issue need attention"
 order: 263
 owner: loop/doctor-output-polish
-pr:
+pr: 656
 title: "boost doctor: CLI audit findings (2026-08)"
 ---
 <b>Three wording defects in one report, all verified.</b> The crash-report notice —
