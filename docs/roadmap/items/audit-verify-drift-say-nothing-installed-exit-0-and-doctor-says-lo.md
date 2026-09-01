@@ -2,12 +2,12 @@
 id: audit-verify-drift-say-nothing-installed-exit-0-and-doctor-says-lo
 board: code
 section: health
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
-note: rm the lock, verify exits 0 'nothing installed'; doctor still prints 'lock parses (v3)'
+note: fixed — verify/drift fail loudly on a missing/corrupt lock; doctor's lines match reality
 order: 214
 owner: loop/lock-integrity-reporting
 pr: 674
@@ -40,3 +40,12 @@ dirs unrecorded, run `boost sync`&rdquo;</em>). Docs: <code>docs/security-design
 integrity contract) and <code>docs/DEBUGGING.md</code> (doctor's lock lines); no flag change, so
 <code>docs/commands.html</code> needs no regeneration. Found by the 2026-08 CLI audit (cluster
 <code>missing-lock-reported-healthy</code>); repro in the audit log.
+
+<br><br><b>Shipped.</b> <code>lockfile.check()</code> reports the lock file's raw state (<code>ok</code> /
+<code>missing</code> / <code>corrupt</code> / <code>schema</code>) instead of the empty skeleton
+<code>read()</code> collapses it to, and <code>store.has_content()</code> tells a genuinely empty
+install apart from one whose record vanished out from under real skills. <code>cmd_verify</code> and
+<code>cmd_drift</code> now call a shared <code>_require_lock_integrity()</code> before iterating, and
+<code>cmd_doctor</code>'s lock section is rewritten on the same two primitives, so all three commands
+agree and &ldquo;parses&rdquo;/&ldquo;integrity OK&rdquo; are only ever claimed for a lock file that
+really is. See PR #674.

@@ -40,6 +40,7 @@ from ..core import (
 from ..core import output as out
 from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
 from ..errors import BoostError
+from ._common import _s
 
 __all__ = ["detect_stack"]
 
@@ -1909,8 +1910,10 @@ def cmd_count(argv):
     # The breakdown appears exactly when it carries information: with only
     # skills installed, "installed 2" already means two skills.
     detail = ("" if not (by_kind["rule"] or by_kind["workflow"])
-              else " (%d skills · %d rules · %d workflows)"
-              % (by_kind["skill"], by_kind["rule"], by_kind["workflow"]))
+              else " (%d skill%s · %d rule%s · %d workflow%s)"
+              % (by_kind["skill"], _s(by_kind["skill"]),
+                 by_kind["rule"], _s(by_kind["rule"]),
+                 by_kind["workflow"], _s(by_kind["workflow"])))
     summary = ("installed %d%s · available %d (across %d tap%s) · discovery index %s"
                % (installed_n, detail, available_n, taps_n,
                   "" if taps_n == 1 else "s",

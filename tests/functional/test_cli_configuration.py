@@ -292,7 +292,7 @@ class TestPolicy:
 
     def test_check_clean_vs_violations(self, boost, installed):
         r = boost("policy", "check")
-        assert "policy check passed (1 skills)" in r.out
+        assert "policy check passed (1 skill)" in r.out
         r = boost("policy", "check", "--json")
         assert json.loads(r.out) == {
             "skills": 1, "counts": {"skill": 1, "rule": 0, "workflow": 0},

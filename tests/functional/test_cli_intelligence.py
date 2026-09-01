@@ -515,7 +515,7 @@ class TestFocus:
         boost("install", "jira-integration", "--no-deps")
         r = boost("focus", "brainstorming")
         assert "focus: brainstorming" in r.out
-        assert "(other 1 skills sidelined)" in r.out
+        assert "(other 1 skill sidelined)" in r.out
         jira_link = paths.home() / ".claude" / "skills" / "jira-integration"
         assert not jira_link.exists()
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
