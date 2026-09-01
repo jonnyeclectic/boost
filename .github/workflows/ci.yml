@@ -506,7 +506,31 @@ jobs:
     if: needs.mutation-scope.outputs.relevant == 'true'
     # mutmut needs 3.11+; one representative environment keeps CI fast
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 75, NOT 45, AND THE OLD NUMBER HAD NO MARGIN AT ALL. The planner packs the
+    # six shards to within 0.11% of each other (1,444,148-1,445,766 ms), so the
+    # split is not the problem — the runners are. Identical `boost_cli/core`
+    # code measured 43.4 min on shard 4 in one run and 17.0 min in the next, a
+    # 2.6x swing on the same work, against a planned 24.1 min per shard.
+    #
+    # So the observed range is 7.4-55.0 min around a 24.1-minute prediction, and
+    # a 45-minute ceiling sat 3.6% above the slowest run that ever PASSED (43.4
+    # min, on #667). That is the inverse of the convention this repository
+    # applies everywhere else — eval floors sit ~10% clear of their measured
+    # value precisely so ordinary drift cannot flake the build. Here one slow
+    # runner was enough, and on #673 it happened: shard 2 was killed mid-run,
+    # `mutation` failed "upstream jobs must be conclusive", and a batch whose
+    # other five shards were green could not merge.
+    #
+    # A ceiling costs nothing on a run that does not reach it — the four fast
+    # shards are unaffected — so the trade is a rare 75-minute job against a
+    # gate that blocks merges at random. 75 is ~3.1x the planned per-shard time
+    # and 36% above the worst run yet seen, and stays far under the 6-hour
+    # per-job limit the shard matrix already documents.
+    #
+    # This is a ceiling, not a budget: if a shard ever genuinely approaches it,
+    # the answer is to re-measure `scripts/mutation_weights.json` (last written
+    # 2026-07-30) and re-pack, not to raise this again.
+    timeout-minutes: 75
     permissions:
       contents: read
     strategy:
