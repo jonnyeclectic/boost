@@ -1403,6 +1403,55 @@ class TestSyncMaterializations:
         assert "Run the release." in res.scan_text
 
 
+class TestRestorePreserveNewerLockSections:
+    """store.restore_preserve_newer_lock_sections: the snapshot-restore fix.
+
+    A snapshot archives the skill store, the lock file included, but never
+    the materialized files a rule/workflow install writes elsewhere (a
+    CLAUDE.md block, a rendered command). Wholesale-replacing the lock on
+    restore therefore drops any entry installed after the snapshot while its
+    materialization survives on disk -- orphaned, untraceable, unremovable.
+    The fix fills those names back in without disturbing what the archive
+    itself restored.
+    """
+
+    def test_fills_in_a_rule_missing_from_the_restored_lock(self, tap):
+        pre_rules = {"newer-rule": {"tap": tap.name, "version": "1.0.0"}}
+        assert lockfile.installed_rules() == {}   # nothing on disk yet
+        kept = store.restore_preserve_newer_lock_sections(pre_rules, {})
+        assert kept == {"rules": ["newer-rule"], "workflows": []}
+        assert lockfile.installed_rules() == pre_rules
+
+    def test_fills_in_a_workflow_missing_from_the_restored_lock(self, tap):
+        pre_workflows = {"newer-flow": {"tap": tap.name, "version": "1.0.0"}}
+        kept = store.restore_preserve_newer_lock_sections({}, pre_workflows)
+        assert kept == {"rules": [], "workflows": ["newer-flow"]}
+        assert lockfile.installed_workflows() == pre_workflows
+
+    def test_does_not_touch_an_entry_the_restored_lock_already_has(self, tap):
+        self._install_rule(tap)
+        pre_rules = dict(lockfile.installed_rules())
+        assert pre_rules  # sanity: the fixture actually installed something
+        kept = store.restore_preserve_newer_lock_sections(pre_rules, {})
+        # already present after "restore" (nothing was wiped in this test) ->
+        # nothing to fill in, and no spurious write.
+        assert kept == {"rules": [], "workflows": []}
+
+    def test_no_write_when_nothing_needs_keeping(self, tap):
+        # No install has happened in this test, so the lock file was never
+        # created -- a spurious write would bring one into existence.
+        assert not paths.lockfile_path().exists()
+        kept = store.restore_preserve_newer_lock_sections({}, {})
+        assert kept == {"rules": [], "workflows": []}
+        assert not paths.lockfile_path().exists()
+
+    def _install_rule(self, tap, name="team-conventions"):
+        entry = _rule_entry(tap, name=name)
+        catalog.rebuild_tap(tap)
+        store.install(entry)
+        return entry
+
+
 class TestInstallScope:
     def test_resolve_base(self):
         from pathlib import Path as P
