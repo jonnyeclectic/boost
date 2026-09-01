@@ -208,6 +208,21 @@ def _distill_ai(new: str, sources: list[dict]) -> str | None:
     return text if meta.get("name") else None
 
 
+_FENCE_RE = re.compile(r"^`{3,}")
+_STRUCTURAL_LINES = frozenset({"```", "---", "}", ");"})
+_TABLE_RULE_RE = re.compile(r"^-{3,}$|^[\s:|-]*\|[\s:|-]*$")
+
+
+def _is_structural_line(key: str) -> bool:
+    """Pure-syntax lines that must survive a dedupe pass unconditionally.
+
+    A closing fence, a lone brace/paren, an hr, or a table separator row
+    repeats verbatim across sources by construction, not by accident —
+    deduping them corrupts the merged document's structure.
+    """
+    return key in _STRUCTURAL_LINES or bool(_TABLE_RULE_RE.match(key))
+
+
 def _distill_merge(new: str, sources: list[dict]) -> str:
     """Mechanical merge: union tags, dedupe exact-duplicate body lines."""
     tags: list[str] = []
@@ -222,17 +237,27 @@ def _distill_merge(new: str, sources: list[dict]) -> str:
             "version": "1.0.0"}
     if tags:
         meta["tags"] = tags
-    seen = set()
+    seen: set[str] = set()
     sections = ["# %s\n\nDistilled from: %s."
                 % (new, ", ".join(s["name"] for s in sources))]
     for s in sources:
         kept = []
+        in_fence = False
         for raw in s["body"].splitlines():
             key = raw.strip()
-            if key:
-                if key in seen:
-                    continue
-                seen.add(key)
+            if not key:
+                kept.append(raw)
+                continue
+            if _FENCE_RE.match(key):
+                in_fence = not in_fence
+                kept.append(raw)
+                continue
+            if in_fence or _is_structural_line(key):
+                kept.append(raw)
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
             kept.append(raw)
         sections.append("## From %s\n\n%s" % (s["name"], "\n".join(kept).strip()))
     body = re.sub(r"\n{3,}", "\n\n", "\n\n".join(sections))

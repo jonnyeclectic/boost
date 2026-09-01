@@ -96,7 +96,13 @@ class TestDistill:
         text = (tmp_path / "combo" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["name"] == "combo"
         assert text.count("## Rules") == 1      # exact-duplicate line dropped
-        assert text.count("```text") == 1
+        # Each source's own fenced example is structural, not a duplicate
+        # heading — its opening/closing fences must both survive, balanced.
+        assert text.count("```text") == 2
+        assert text.count("diverge -> cluster -> converge") == 1
+        assert text.count("feat(parser): tolerate folded YAML scalars") == 1
+        fences = [ln for ln in text.splitlines() if ln.strip().startswith("```")]
+        assert len(fences) == 4 and len(fences) % 2 == 0
 
     def test_install_lands_in_store_as_local(self, boost, tapped):
         r = boost("distill", "tdd-workflow", "commit-messages", "--install")
