@@ -68,6 +68,15 @@ class TestConfig:
         assert "~/.boost/config.json not created yet" in r.out
         assert not paths.config_path().exists()  # listing must not create it
 
+    def test_list_once_config_json_exists_names_it_plainly(self, boost, sandbox):
+        # The sibling of the pristine-home case: once the file is real, the
+        # trailer goes back to naming it with no "not created yet" caveat.
+        boost("config", "set", "telemetry", "true")
+        assert paths.config_path().exists()
+        r = boost("config")
+        assert r.out.rstrip().endswith("~/.boost/config.json")
+        assert "not created yet" not in r.out
+
     def test_get_hit_and_miss(self, boost, sandbox):
         r = boost("config", "get", "ai.model")
         assert r.out.strip() == "claude-haiku-4-5-20251001"

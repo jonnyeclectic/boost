@@ -259,6 +259,14 @@ class TestUnset:
         assert paths.config_path().stat().st_mtime_ns == stamp
         assert config.get("ai.enabled") is True  # back to default
 
+    def test_corrupt_json_reads_as_no_overrides_and_does_not_raise(
+            self, sandbox):
+        # _read_raw() must degrade the same way _read() does: a malformed
+        # file is "no overrides", never a crash and never a match.
+        paths.ensure_dirs()
+        paths.config_path().write_text("{not json!!", encoding="utf-8")
+        assert config.unset("telemetry") is False
+
 
 class TestDefaultTaps:
     def test_shape(self):
