@@ -10,7 +10,7 @@ wow: 1
 note: fixed via the shared _s helper across seven sites; doctor's verb agreement was already correct
 order: 242
 owner: loop/plural-agreement
-pr:
+pr: 678
 title: "Singular/plural misses (&ldquo;1 skills&rdquo;, &ldquo;1 issue need&rdquo;, &ldquo;1 skill pass&rdquo;) across six commands"
 ---
 Six commands hand-roll plurals and get the singular wrong. Reproduced verbatim on a fresh HOME with one
