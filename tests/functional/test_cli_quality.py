@@ -114,7 +114,7 @@ class TestDoctor:
         r = boost("doctor", expect=1)
         assert "1 broken symlink in agent dirs — run `boost heal`" in r.out
         assert "1 skill installed · 1 tap synced · 1 broken link" in r.out
-        assert "need attention" in r.out          # verdict flips on issues
+        assert "1 issue needs attention" in r.out  # verdict flips on issues, singular verb
 
     def test_a_foreign_broken_link_is_reported_but_not_an_issue(
             self, boost, installed):
@@ -127,6 +127,20 @@ class TestDoctor:
         assert "0 broken links" in r.out          # none of boost's are broken
         assert "need attention" not in r.out
 
+    def test_a_crash_report_is_noted_but_not_an_issue(self, boost, tapped):
+        # The crash line used to wear the "!" glyph without incrementing the
+        # issue count — the report could read "!" and still verdict "healthy"
+        # with exit 0. It is history, not a current fault, so `out.info`, not
+        # `out.warn`, and it must never flip the verdict.
+        paths.logs_dir().mkdir(parents=True, exist_ok=True)
+        (paths.logs_dir() / "crash-20260101-000000.log").write_text(
+            "boom", encoding="utf-8")
+        r = boost("doctor")                       # rc 0, not 1
+        assert "1 crash report" in r.out
+        assert "see `boost log --crashes`" in r.out
+        assert "● healthy" in r.out
+        assert "! 1 crash report" not in r.out
+
     def test_missing_store_rc1(self, boost, installed):
         shutil.rmtree(paths.store_dir() / "brainstorming")
         r = boost("doctor", expect=1)
@@ -135,6 +149,7 @@ class TestDoctor:
         # the canonical store natively)
         assert "4 broken symlinks in agent dirs" in r.out
         assert "1 skill installed · 1 tap synced · 4 broken links" in r.out
+        assert "2 issues need attention" in r.out  # plural verb: two bad() calls
 
     def test_links_outside_the_declared_scope_rc1(self, boost, installed):
         # doctor must agree with `boost sync`, which reports this. A "healthy"
@@ -147,7 +162,7 @@ class TestDoctor:
                 "antigravity, outside its declared scope (cursor) — run "
                 "`boost sync --prune`"
                 in r.out)
-        assert "need attention" in r.out
+        assert "1 issue needs attention" in r.out
 
     def test_a_narrowed_skill_with_no_stray_links_is_healthy(self, boost, tapped):
         # A first narrow install declares AND links the same set, so the check
@@ -171,7 +186,7 @@ class TestDoctor:
         _tamper("brainstorming")
         r = boost("doctor", expect=1)
         assert "skill brainstorming modified since install — run `boost verify`" in r.out
-        assert "need attention" in r.out
+        assert "1 issue needs attention" in r.out
 
     def test_materialized_rules_and_workflows_ok_rc0(self, boost, sandbox):
         from boost_cli.core import lockfile
@@ -197,7 +212,7 @@ class TestDoctor:
         r = boost("doctor", expect=1)
         assert ("rule gone missing its cursor materialization — "
                 "run `boost reinstall gone`") in r.out
-        assert "need attention" in r.out
+        assert "1 issue needs attention" in r.out
 
     def test_missing_claude_block_rc1(self, boost, sandbox):
         from boost_cli.core import lockfile
@@ -1037,7 +1052,7 @@ class TestDuplicateSkillDiscovery:
         assert "~/.gemini/skills/brainstorming" in r.out
         assert "~/.agents/skills/brainstorming" in r.out
         assert "boost heal --prune-duplicates" in r.out
-        assert "need attention" in r.out
+        assert "1 issue needs attention" in r.out
 
     def test_doctor_is_healthy_without_the_duplicate(self, boost, installed):
         assert "● healthy" in boost("doctor").out
