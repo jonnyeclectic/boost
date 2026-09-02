@@ -167,6 +167,7 @@ traceback
 tracebacks
 triaged
 triages
+truthy
 typosquat
 typosquatted
 unkilled
