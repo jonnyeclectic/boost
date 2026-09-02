@@ -6442,8 +6442,9 @@ instead.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-import-all-skips-the-injection-secret-scans-and-the-per-skil">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3>import <code>--all</code> skips the injection/secret scans and the per-skill report single import runs</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Importing one skill runs the safety report: <code>import fx/sketchy/beta</code> prints <em>"! beta:
 2 suspicious patterns in SKILL.md (high) — review before use"</em>, <em>"L7 [high] moves
 credentials/secrets off the machine"</em>, <em>"! beta: 1 possible secret &hellip; L8 [high] AWS
@@ -6466,7 +6467,7 @@ try/except contract and fixes the report shape too), or at minimum call
 fixture with an injection line via <code>--all</code> and asserting the warning. No doc changes
 (no summary or flag change).
 
-Found by the 2026-08 CLI audit (cluster <code>import-all-parity</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>import-all-parity</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
