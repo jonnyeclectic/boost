@@ -7,10 +7,10 @@ category: Safety · Bug
 complexity: S
 impact: High
 wow: 2
-note: consent screen prints 1 path; disk gains 4 files across claude/gemini/cursor/windsurf
+note: fix + regression tests pushed in #697; make check not run locally — see PR (sandbox blocks PyPI)
 order: 213
 owner: loop/mcp-consent-scope
-pr:
+pr: 697
 title: "<code>mcp register</code>'s boost-first consent names one file but writes every agent"
 ---
 After a real Gemini registration (<code>mcp register --host gemini --no-seed</code>, Gemini CLI on
