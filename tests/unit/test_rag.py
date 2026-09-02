@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -1533,3 +1534,89 @@ class TestPostingsStore:
         rag._CACHE.clear()
         assert rag.ready() is False, \
             "a docs-only index would score every query to zero hits"
+
+
+class TestPostingsInterning:
+    """Terms live in their own table, not repeated on every posting row.
+
+    Measured on a real 458-tap store: 18,619,658 posting rows over 210,422
+    distinct terms averaging 6.6 characters — the term string alone was ~123 MB
+    of a 653 MB file, each term stored 88 times over on average. These tests
+    pin the interned shape directly against the SQLite file, because
+    `read_postings`/`stem_expansions` alone would pass just as well against the
+    old un-interned layout — a mutant that reverted `_write_postings` to store
+    `term TEXT` on every posting row would leave every other test in this file
+    green.
+    """
+
+    def _built(self):
+        rag._save([{"n": "a", "t": "x/y", "f": "a/SKILL.md", "h": "h1",
+                    "k": "skill", "c": 0, "l": 2, "snip": "sa",
+                    "tf": {"react": 2, "test": 1}},
+                   {"n": "b", "t": "x/y", "f": "b/SKILL.md", "h": "h2",
+                    "k": "skill", "c": 0, "l": 1, "snip": "sb",
+                    "tf": {"test": 3}}], {})
+        rag._CACHE.clear()
+
+    def _connect(self):
+        return sqlite3.connect("file:%s?mode=ro" % rag.postings_path(),
+                                uri=True)
+
+    def test_postings_rows_carry_an_integer_term_id_not_term_text(
+            self, sandbox):
+        self._built()
+        con = self._connect()
+        try:
+            cols = {row[1]: row[2]
+                    for row in con.execute("PRAGMA table_info(postings)")}
+        finally:
+            con.close()
+        assert cols == {"term_id": "INTEGER", "doc": "INTEGER", "tf": "INTEGER"}
+
+    def test_every_posting_row_resolves_to_a_term_via_the_terms_table(
+            self, sandbox):
+        self._built()
+        con = self._connect()
+        try:
+            rows = con.execute(
+                "SELECT t.term, p.doc, p.tf FROM postings p "
+                "JOIN terms t ON p.term_id = t.id "
+                "WHERE t.term = 'test' ORDER BY p.doc").fetchall()
+        finally:
+            con.close()
+        assert rows == [("test", 0, 1), ("test", 1, 3)]
+
+    def test_a_term_used_by_two_docs_is_stored_once_in_the_terms_table(
+            self, sandbox):
+        self._built()
+        con = self._connect()
+        try:
+            term_ids = {row[0] for row in
+                        con.execute("SELECT term_id FROM postings p "
+                                    "JOIN terms t ON p.term_id = t.id "
+                                    "WHERE t.term = 'test'")}
+            term_rows = con.execute(
+                "SELECT COUNT(*) FROM terms WHERE term = 'test'").fetchone()[0]
+        finally:
+            con.close()
+        assert len(term_ids) == 1, "test's two postings must share one term_id"
+        assert term_rows == 1, "the term string itself must appear exactly once"
+
+    def test_document_frequency_is_precomputed_per_term(self, sandbox):
+        self._built()
+        con = self._connect()
+        try:
+            df = dict(con.execute("SELECT term, df FROM terms"))
+        finally:
+            con.close()
+        assert df == {"react": 1, "test": 2}
+
+    def test_term_text_is_unique_in_the_terms_table(self, sandbox):
+        self._built()
+        con = sqlite3.connect(str(rag.postings_path()))
+        try:
+            with pytest.raises(sqlite3.IntegrityError):
+                con.execute("INSERT INTO terms (id, term, df) "
+                            "VALUES (999, 'test', 1)")
+        finally:
+            con.close()

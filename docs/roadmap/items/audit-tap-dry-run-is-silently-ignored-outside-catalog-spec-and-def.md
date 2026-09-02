@@ -2,7 +2,7 @@
 id: audit-tap-dry-run-is-silently-ignored-outside-catalog-spec-and-def
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: High
