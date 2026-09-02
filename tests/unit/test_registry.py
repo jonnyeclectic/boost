@@ -231,6 +231,34 @@ class TestListAndGet:
             registry.get("zzzzzz")
         assert ei.value.hint == "list taps with `boost taps`"
 
+    # ── is_tapped: exact-name membership, no shorthand/ambiguity tiering ───
+
+    def test_is_tapped_true_for_configured_tap(self, sandbox):
+        self._seed()
+        assert registry.is_tapped("owner/repo") is True
+
+    def test_is_tapped_false_when_untapped(self, sandbox):
+        self._seed()
+        assert registry.is_tapped("nobody/nothing") is False
+
+    def test_is_tapped_false_by_default(self, sandbox):
+        assert registry.is_tapped("owner/repo") is False
+
+    def test_is_tapped_exact_only_no_shorthand(self, sandbox):
+        """Unlike `get()`, a bare tail or safe_name must not count as tapped —
+        a lock entry's `tap` field always stores the full `owner/repo` name,
+        so a shorthand match here would be a false positive."""
+        self._seed()
+        assert registry.is_tapped("repo") is False
+        assert registry.is_tapped("owner__repo") is False
+
+    def test_is_tapped_does_not_raise_on_ambiguous_tail(self, sandbox):
+        """`get()` raises on an ambiguous short name; `is_tapped` never does,
+        since it only ever compares against the full name."""
+        self._seed_two()
+        assert registry.is_tapped("skills") is False
+        assert registry.is_tapped("angular/skills") is True
+
 
 class TestAddRemove:
     def test_add_local_repo_clones_and_persists(self, sandbox, fixture_tap_src):

@@ -2,15 +2,15 @@
 id: audit-drift-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
-note: source-missing hint is `boost update` — a guaranteed no-op once the tap is untapped
+note: fix up in #719, awaiting CI + review — sandbox couldn't run the full mutation/eval/smoke gate locally (no PyPI egress)
 order: 264
-owner:
-pr:
+owner: loop/drift-source-missing-hint
+pr: 719
 title: "boost drift: CLI audit findings (2026-08)"
 ---
 <b>drift hints <code>boost update</code> for source-missing items whose tap was untapped — a

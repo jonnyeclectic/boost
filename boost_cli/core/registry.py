@@ -182,6 +182,18 @@ def get(name: str) -> Tap:
                     else "list taps with `boost taps`")
 
 
+def is_tapped(name: str) -> bool:
+    """True if `name` is a currently configured tap's exact ``Tap.name``.
+
+    Exact match only, unlike ``get()``'s shorthand/ambiguity tiering: a lock
+    entry's ``tap`` field always records the full ``owner/repo`` name a skill
+    was installed from, so callers checking "is this entry's tap still
+    tapped?" want a plain membership test, not a fuzzy lookup that could
+    raise on an unrelated ambiguous shorthand.
+    """
+    return any(t.name == name for t in list_taps())
+
+
 def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
     """Parse `spec`, shallow-clone it, and record the tap in config.
 
