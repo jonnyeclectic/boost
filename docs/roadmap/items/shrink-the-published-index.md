@@ -2,13 +2,14 @@
 id: shrink-the-published-index
 board: code
 section: planned
-status: planned
+status: inflight
 category: Performance · Storage
 complexity: M
 impact: Med
 wow: 3
 note: 653 MB of postings holds 1.4 MB of distinct terms — the term string is stored 88 times over
 order: 100
+owner: loop/shrink-postings-index
 title: shrink the keyword index before publishing it — structure first, then compression
 ---
 <a href="#publish-the-keyword-index">publish-the-keyword-index</a> is worth doing only if the
@@ -58,3 +59,17 @@ for the many-small-registries case, where per-shard compression has little conte
 — on the real store, with import-side decode time beside each. That table is what tells
 <a href="#publish-the-keyword-index">publish-the-keyword-index</a> what to ship, and it is worth
 having even if publishing is declined: the on-disk win applies to every install today.
+
+<b>Progress (PR pending).</b> The structural half shipped: <code>_write_postings</code> now
+interns terms into their own <code>terms(id, term, df)</code> table, with <code>postings</code>
+carrying an integer <code>term_id</code> instead of repeating the term string on every row —
+exactly the "structure first" change this card calls the bigger win, and it bumps
+<code>INDEX_VERSION</code> so every store picks it up on its next rebuild.
+<code>stem_expansions</code> now reads the precomputed <code>df</code> column directly instead of
+a <code>GROUP BY COUNT(*)</code> over <code>postings</code> on every prefix lookup. Not done: the
+delta/varint doc-id encoding, and the full raw/interned/delta+varint &times;
+none/gzip/zstd comparison table with import-side decode times on a real multi-hundred-MB store —
+this sandbox has no such store to measure against, only a small synthetic one (interning alone cut
+a 1.8M-posting/20k-term synthetic store from 63.6&nbsp;MB to 47.9&nbsp;MB, directionally consistent
+with the real-store estimate above but not a substitute for it). Left as follow-on work before this
+card can be called shipped.
