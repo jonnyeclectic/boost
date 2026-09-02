@@ -6685,8 +6685,9 @@ entry's tap into <code>_drift_hint</code> (<code>quality.py:255-258</code>) and 
       </article>
 
       <article class="cap rcard" id="audit-fingerprint-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost fingerprint</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>fingerprint ignores quarantine state and silently hashes uncloned taps as empty commits.</b>
 Measured: the digest was <code>092c60d8b4324373</code> both before and after
 <code>quarantine brainstorming</code> &mdash; although <code>_fingerprint</code>'s own comment
@@ -6705,7 +6706,7 @@ entry has <code>quarantined</code> set &mdash; kind-prefixed, so an environment 
 quarantined keeps its current digest &mdash; and return the uncloned-tap names so
 <code>cmd_fingerprint</code> can print <em>&ldquo;! tap X not cloned &mdash; fingerprint incomplete
 (boost update)&rdquo;</em> on stderr and add <code>"incomplete": [...]</code> to the JSON. Exit
-stays 0. Found by the 2026-08 CLI audit (cluster fingerprint-completeness); repro in the audit log.</p>
+stays 0. Found by the 2026-08 CLI audit (cluster fingerprint-completeness); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>

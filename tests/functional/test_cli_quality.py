@@ -744,6 +744,33 @@ class TestFingerprint:
         assert d3["fingerprint"] != d1["fingerprint"]
         assert len(d3["components"]) == 1
 
+    def test_quarantine_changes_fingerprint(self, boost, installed):
+        d1 = json.loads(boost("fingerprint", "--json").out)
+        boost("quarantine", "brainstorming")
+        d2 = json.loads(boost("fingerprint", "--json").out)
+        assert d2["fingerprint"] != d1["fingerprint"]
+        sha = _lock()["brainstorming"]["sha256"]
+        assert "brainstorming:%s:q" % sha in d2["components"]
+
+        boost("quarantine", "--release", "brainstorming")
+        d3 = json.loads(boost("fingerprint", "--json").out)
+        assert d3["fingerprint"] == d1["fingerprint"]   # release restores it
+
+    def test_uncloned_tap_reported_incomplete(self, boost, installed):
+        d1 = json.loads(boost("fingerprint", "--json").out)
+        assert d1["incomplete"] == []
+
+        shutil.rmtree(paths.repos_dir() / "fixture-tap")
+        d2 = json.loads(boost("fingerprint", "--json").out)
+        assert d2["incomplete"] == ["fixture-tap"]
+        assert d2["fingerprint"] != d1["fingerprint"]
+        assert "fixture-tap:" in d2["components"]
+
+        r = boost("fingerprint")
+        assert ("tap fixture-tap not cloned — fingerprint incomplete "
+                "(boost update)" in r.err)
+        assert r.rc == 0
+
 
 # ── quarantine ───────────────────────────────────────────────────────────
 
