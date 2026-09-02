@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 from ..errors import BoostError
 
@@ -14,6 +15,34 @@ from ..errors import BoostError
 def has_git() -> bool:
     """Return True when a `git` executable is on PATH."""
     return shutil.which("git") is not None
+
+
+class BranchState(NamedTuple):
+    """cwd's git state, keeping three states separate that callers used to
+    flatten into one ``None``: no git binary on PATH, cwd outside any repo,
+    and cwd inside a repo with no commits yet (``in_repo`` True, ``branch``
+    None)."""
+    has_git: bool
+    in_repo: bool
+    branch: str | None
+
+
+def branch_state(cwd: Path | None = None) -> BranchState:
+    """Return `cwd`'s :class:`BranchState`.
+
+    Distinct from a bare ``None`` branch: a caller that only checked "do I
+    have a branch name" could not tell a missing `git` binary from a cwd
+    that simply isn't a repo, and reported both the same way.
+    """
+    if not has_git():
+        return BranchState(has_git=False, in_repo=False, branch=None)
+    cwd = cwd or Path.cwd()
+    wt = run(["-C", str(cwd), "rev-parse", "--is-inside-work-tree"], check=False)
+    if wt.returncode != 0 or wt.stdout.strip() != "true":
+        return BranchState(has_git=True, in_repo=False, branch=None)
+    proc = run(["-C", str(cwd), "rev-parse", "--abbrev-ref", "HEAD"], check=False)
+    branch = proc.stdout.strip() if proc.returncode == 0 else None
+    return BranchState(has_git=True, in_repo=True, branch=branch)
 
 
 def run(args: list[str], cwd: Path | None = None, check: bool = True,

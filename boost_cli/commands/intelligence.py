@@ -139,11 +139,7 @@ def _write_generated(dest: Path, text: str) -> bool:
 
 def _current_branch(cwd: Path | None = None) -> str | None:
     """Current git branch of cwd, or None when not in a repo / no git."""
-    if not gitutil.has_git():
-        return None
-    proc = gitutil.run(["rev-parse", "--abbrev-ref", "HEAD"],
-                       cwd=cwd or Path.cwd(), check=False)
-    return proc.stdout.strip() if proc.returncode == 0 else None
+    return gitutil.branch_state(cwd).branch
 
 
 # ---------------------------------------------------------------- distill
@@ -892,14 +888,19 @@ def _mentioned_skills(state: dict) -> set:
 
 
 def _context_status(state: dict, as_json: bool) -> int:
-    branch = _current_branch()
+    git = gitutil.branch_state()
+    branch = git.branch
     if as_json:
         print(json.dumps({"enabled": bool(state.get("enabled")),
-                          "branch": branch, "rules": state.get("rules", [])}))
+                          "branch": branch, "git": git.has_git,
+                          "rules": state.get("rules", [])}))
         return 0
     out.heading("branch-aware skill activation")
     out.kv("enabled", "yes" if state.get("enabled") else "no")
-    out.kv("branch", branch or "(not in a git repository)")
+    if not git.has_git:
+        out.kv("branch", "(git not found on PATH)")
+    else:
+        out.kv("branch", branch or "(not in a git repository)")
     rules = state.get("rules", [])
     if not rules:
         out.info("no rules — add one with `boost context map 'feature/*' "
@@ -913,9 +914,11 @@ def _context_status(state: dict, as_json: bool) -> int:
 
 
 def _context_apply(state: dict) -> int:
-    branch = _current_branch()
+    git = gitutil.branch_state()
+    branch = git.branch
     if branch is None:
-        out.info("not inside a git repository — nothing to apply")
+        out.info("git not found on PATH — nothing to apply" if not git.has_git
+                 else "not inside a git repository — nothing to apply")
         return 0
     rules = state.get("rules", [])
     matched = [r for r in rules if fnmatch.fnmatch(branch, r.get("pattern", ""))]
@@ -1052,6 +1055,10 @@ def cmd_impact(argv: list[str]) -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
+    git = gitutil.branch_state()
+    in_repo = git.in_repo
+    note = _IMPACT_NOTE if in_repo else _IMPACT_NOTE_NO_REPO
+
     inst = lockfile.installed()
     if args.name:
         if args.name not in inst:
@@ -1069,16 +1076,10 @@ def cmd_impact(argv: list[str]) -> int:
         names = sorted(inst)
         if not names:
             if args.json:
-                print(json.dumps({"note": _IMPACT_NOTE, "skills": []}))
+                print(json.dumps({"note": note, "git": git.has_git, "skills": []}))
             else:
                 out.info("no skills installed — nothing to measure")
             return 0
-
-    in_repo = False
-    if gitutil.has_git():
-        proc = gitutil.run(["rev-parse", "--is-inside-work-tree"],
-                           cwd=Path.cwd(), check=False)
-        in_repo = proc.returncode == 0 and proc.stdout.strip() == "true"
 
     rows, data = [], []
     for name in names:
@@ -1093,7 +1094,7 @@ def cmd_impact(argv: list[str]) -> int:
                      "events": events})
 
     if args.json:
-        print(json.dumps({"note": _IMPACT_NOTE, "skills": data}))
+        print(json.dumps({"note": note, "git": git.has_git, "skills": data}))
         return 0
     out.heading("impact" + ((" of %s" % args.name) if args.name else ""))
     out.table(rows, headers=("SKILL", "INSTALLED", "COMMITS SINCE", "EVENTS"))
@@ -1111,11 +1112,12 @@ def cmd_impact(argv: list[str]) -> int:
                 print(textwrap.indent(textwrap.fill(reply, width=76), "  "))
         else:
             _note_fallback()
-    out.dim("  " + _IMPACT_NOTE)
+    out.dim("  " + note)
     return 0
 
 
 _IMPACT_NOTE = "correlation, not causation — commits since install in this repo"
+_IMPACT_NOTE_NO_REPO = "not inside a git repository — commit counts unavailable"
 
 
 def _repo_activity(since: str) -> tuple[int | None, int | None]:
