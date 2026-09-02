@@ -38,6 +38,20 @@ class TestLoadSave:
         p.write_text("{not json", encoding="utf-8")
         assert cs.load("global") == {}
 
+    def test_corrupt_file_warns_on_stderr_naming_the_file(self, sandbox, capsys):
+        p = cs.settings_path("global")
+        p.parent.mkdir(parents=True)
+        p.write_text("{not json", encoding="utf-8")
+        cs.load("global")
+        captured = capsys.readouterr()
+        assert str(p) in captured.err
+        assert captured.out == ""
+
+    def test_missing_file_does_not_warn(self, sandbox, capsys):
+        cs.load("global")
+        captured = capsys.readouterr()
+        assert captured.err == ""
+
     def test_save_round_trips(self, sandbox):
         cs.save("global", {"model": "opus"})
         assert cs.load("global") == {"model": "opus"}
@@ -45,12 +59,25 @@ class TestLoadSave:
         raw = cs.settings_path("global").read_text(encoding="utf-8")
         assert json.loads(raw)["model"] == "opus"
 
+    def test_save_returns_none_when_nothing_to_snapshot(self, sandbox):
+        assert cs.save("global", {"model": "opus"}) is None
+
     def test_save_snapshots_prior_version(self, sandbox):
         cs.save("global", {"v": 1})
-        cs.save("global", {"v": 2})
+        dest = cs.save("global", {"v": 2})
         hist = list((paths.state_dir() / "claude-settings-history").glob("global-*.json"))
         assert len(hist) == 1
         assert json.loads(hist[0].read_text(encoding="utf-8")) == {"v": 1}
+        # the returned path is exactly the snapshot just written
+        assert dest == hist[0]
+
+    def test_save_snapshots_a_corrupt_prior_file_verbatim(self, sandbox):
+        p = cs.settings_path("global")
+        p.parent.mkdir(parents=True)
+        p.write_text("{not json", encoding="utf-8")
+        dest = cs.save("global", {"model": "opus"})
+        assert dest is not None
+        assert dest.read_text(encoding="utf-8") == "{not json"
 
 
 # -------------------------------------------------------------------- hook CRUD
@@ -65,6 +92,15 @@ class TestHooks:
             "scope": "global", "event": "SessionStart", "name": "bmad",
             "command": "boost bmad orient", "matcher": "startup|resume",
         }]
+
+    def test_add_hook_returns_none_on_first_write(self, sandbox):
+        assert cs.add_hook("global", "SessionStart", "bmad", "cmd") is None
+
+    def test_add_hook_returns_snapshot_path_on_second_write(self, sandbox):
+        cs.add_hook("global", "SessionStart", "bmad", "cmd-v1")
+        dest = cs.add_hook("global", "SessionStart", "bmad", "cmd-v2")
+        assert dest is not None
+        assert dest.exists()
 
     def test_marker_embedded_in_command(self, sandbox):
         cs.add_hook("global", "SessionStart", "bmad", "boost bmad orient")

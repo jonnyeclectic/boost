@@ -9,12 +9,14 @@ import platform
 import shutil
 import stat
 import urllib.parse
+from typing import Any
 
 from .. import cliparse
 from ..core import (
     catalog,
     complete,
     journal,
+    jsonstate,
     lockfile,
     paths,
     registry,
@@ -258,15 +260,20 @@ def cmd_profile(argv) -> int:
         p.error("%s needs a profile NAME" % args.action)
 
     if args.action == "list":
-        profiles = []
+        profiles: list[dict[str, Any]] = []
         for f in sorted(paths.profiles_dir().glob("*.json")):
-            try:
-                data = json.loads(f.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+            data, _err = jsonstate.read_object(f)
+            if data is None:
+                # Surfaced rather than skipped: a corrupt profile used to be
+                # invisible here yet still block `profile delete` (it parsed
+                # the file again as an existence check) — see `delete` below.
+                profiles.append({"name": f.stem, "skills": None,
+                                 "saved": None, "unreadable": True})
                 continue
             profiles.append({"name": data.get("name", f.stem),
                              "skills": len(data.get("skills", {})),
-                             "saved": data.get("saved", "?")})
+                             "saved": data.get("saved", "?"),
+                             "unreadable": False})
         if args.json:
             print(json.dumps(profiles, indent=2))
             return 0
@@ -274,8 +281,11 @@ def cmd_profile(argv) -> int:
             out.info("no profiles saved")
             out.info(out.role("snapshot the current setup: `boost profile save daily`", "muted"))
             return 0
-        rows = [(pr["name"], str(pr["skills"]), util.rel_time(pr["saved"]))
-                for pr in profiles]
+        rows = [(pr["name"],
+                str(pr["skills"]) if not pr["unreadable"] else "?",
+                util.rel_time(pr["saved"]) if not pr["unreadable"]
+                else out.role("(unreadable)", "danger"))
+               for pr in profiles]
         out.table(rows, headers=("PROFILE", "SKILLS", "SAVED"))
         return 0
 
@@ -347,7 +357,9 @@ def cmd_profile(argv) -> int:
         return 0
 
     if args.action == "delete":
-        _load_profile(args.name)  # existence check
+        if not _profile_path(args.name).exists():
+            raise BoostError("no profile named %s" % args.name,
+                            hint="list profiles with `boost profile list`")
         if not out.confirm("delete profile %s?" % args.name):
             out.info("cancelled")
             return 1
