@@ -240,6 +240,7 @@ def _report_result(res: store.InstallResult, no_mcp: bool = False) -> None:
                 % projectlock.LOCK_DIRNAME)
         _warn_injection(res)
         _warn_secrets(res)
+        _offer_mcp(res, no_mcp=no_mcp)
         return
     out.ok("copied to %s" % _tilde(res.dest))
     if res.linked:
@@ -555,6 +556,11 @@ def cmd_uninstall(argv: list[str]) -> int:
         # have put it — a project skill never touches the canonical store.
         if info.get("scope") == scopes.SCOPE_PROJECT:
             out.ok("removed from %s" % _tilde(info.get("base", "this repo")))
+            unregistered = info.get("mcp_unregistered") or []
+            if unregistered:
+                from ..core import mcpdecl
+                out.ok("removed %s from %s"
+                       % (_plural(len(unregistered), "MCP server"), mcpdecl.SIDECAR))
         else:
             out.ok("removed %s" % _tilde(store.skill_store_dir(name)))
         removed += 1

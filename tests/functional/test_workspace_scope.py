@@ -300,6 +300,18 @@ def test_a_local_install_records_mcp_servers_in_the_repo(boost, tapped, repo):
         "the entry must name the skill that asked for it, so uninstall can reverse it"
 
 
+def test_a_local_install_reports_the_recorded_mcp_servers(boost, tapped, repo):
+    """THE BUG: the "recorded N servers" report is dead code on the project
+    branch — `_report_result` returns before `_offer_mcp` ever runs, so a file
+    the user is told to commit was edited with zero mention of it.
+    """
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming")
+    res = boost("install", "brainstorming", "--local")
+    assert "recorded 1 MCP server" in res.out
+    assert mcpdecl.SIDECAR in res.out
+
+
 def test_uninstalling_locally_removes_the_servers_it_added(boost, tapped, repo):
     from boost_cli.core import mcpdecl
     _declare_mcp(tapped, "brainstorming")
@@ -308,6 +320,15 @@ def test_uninstalling_locally_removes_the_servers_it_added(boost, tapped, repo):
     servers = json.loads((repo / mcpdecl.SIDECAR).read_text())[mcpdecl.SERVERS_KEY]
     assert "gh" not in servers, \
         "a skill removed from the repo must stop launching its server"
+
+
+def test_uninstalling_locally_reports_the_removed_mcp_servers(boost, tapped, repo):
+    from boost_cli.core import mcpdecl
+    _declare_mcp(tapped, "brainstorming")
+    boost("install", "brainstorming", "--local")
+    res = boost("uninstall", "brainstorming", "--local")
+    assert "removed 1 MCP server" in res.out
+    assert mcpdecl.SIDECAR in res.out
 
 
 def test_uninstall_leaves_a_hand_written_server_alone(boost, tapped, repo):
