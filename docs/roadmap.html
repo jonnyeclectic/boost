@@ -5339,7 +5339,7 @@ row has at least one referent.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-adapt-renders-every-sibling-of-a-flat-agents-dir-workflow-as">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>adapt</code> renders every sibling of a flat <code>agents/</code>-dir workflow as a 138-agent crew</h3>
         <p><code>adapt actix-expert --to crewai -o x.py</code> prints <em>&ldquo;&#10003; adapted actix-expert &rarr; x.py (crew of 138 &middot; claude-haiku-4-5-20251001)&rdquo;</em> and writes a <b>383 KB</b> render containing <b>138 <code>Agent()</code> + 138 <code>Task()</code></b> &mdash; <code>actix_expert</code>, then <code>actix_expert_1</code> (the item itself, again), then android-expert, angular-expert, &hellip; every sibling in the registry's <code>agents/</code> directory. <code>--to agents-sdk</code> announces <em>&ldquo;note: actix-expert declares 137 subagent(s)&rdquo;</em>. The item is one flat frontmatter file declaring nothing.
 
