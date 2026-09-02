@@ -6666,8 +6666,9 @@ excerpts at <code>:159-164</code>) to match. Found by the 2026-08 CLI audit (clu
       </article>
 
       <article class="cap rcard" id="audit-drift-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost drift: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>drift hints <code>boost update</code> for source-missing items whose tap was untapped — a
 guaranteed no-op.</b> After <code>untap Aaronontheweb/dotnet-cursor-rules</code>, drift reports
 <em>"dotnet-build (rule)&nbsp; source-missing&nbsp; boost update"</em>; running
@@ -6685,12 +6686,12 @@ entry's tap into <code>_drift_hint</code> (<code>quality.py:255-258</code>) and 
 <code>boost tap &lt;tap&gt;</code> when that tap is not among the configured registries, keeping
 <code>boost update</code> only for a configured-but-uncloned tap. No flag changes, so
 <code>docs/commands.html</code> is untouched. Found by the 2026-08 CLI audit (cluster
-<code>drift-source-missing-hint</code>); repro in the audit log.</p>
+<code>drift-source-missing-hint</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">fix up in</span>
+          <span class="m">fixed in</span>
         </div>
       </article>
 
