@@ -2,7 +2,7 @@
 id: audit-import-all-skips-the-injection-secret-scans-and-the-per-skil
 board: code
 section: health
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 2
 note: a skill flagged "moves credentials off the machine" imports via --all with zero warnings
 order: 208
 owner: loop/import-all-scans
-pr:
+pr: 702
 title: "import <code>--all</code> skips the injection/secret scans and the per-skill report single import runs"
 ---
 Importing one skill runs the safety report: <code>import fx/sketchy/beta</code> prints <em>"! beta:
