@@ -758,8 +758,8 @@ def cmd_lint(argv):
                     help="installed skill name(s), or a path to a skill "
                          "directory / its SKILL.md")
     ap.add_argument("--tap", metavar="TAP", help="lint every skill in a tap's clone")
-    ap.add_argument("--min", type=int, default=40, dest="min_score", metavar="N",
-                    help="minimum passing score (default 40)")
+    ap.add_argument("--min", type=util.score_int, default=40, dest="min_score", metavar="N",
+                    help="minimum passing score, 0-100 (default 40)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
@@ -1205,7 +1205,7 @@ def cmd_changelog(argv):
         prog="boost changelog",
         description="Show a skill's upstream change history")
     ap.add_argument("name", metavar="NAME")
-    ap.add_argument("-n", type=int, default=20, metavar="N",
+    ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
     args = ap.parse_args(argv)
 

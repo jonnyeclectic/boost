@@ -108,3 +108,11 @@ class TestLimit:
     def test_limit_bounds_the_candidates(self, boost, tapped):
         payload = json.loads(boost("chat", "--json", "-k", "2", "skills").out)
         assert len(payload["skills"]) <= 2
+
+    def test_limit_must_be_positive_int(self, boost, tapped):
+        # -k 0 used to slice every retrieved hit to nothing and fabricate
+        # "Nothing in the tapped catalogue matches that" for a real query.
+        r = boost("chat", "-k", "0", "skills", expect=2)
+        assert "must be >= 1" in r.err
+        r = boost("chat", "-k", "-1", "skills", expect=2)
+        assert "must be >= 1" in r.err

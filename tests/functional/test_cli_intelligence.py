@@ -324,6 +324,14 @@ class TestAbsorb:
         assert "no chat history found under ~/.claude — nothing to absorb" in r.out
         assert "--history PATH" in r.out
 
+    def test_limit_must_be_positive_int(self, boost, sandbox):
+        # --limit 0 used to slice every recurring pattern away and fabricate
+        # "no recurring patterns" even when some were found.
+        r = boost("absorb", "--limit", "0", expect=2)
+        assert "must be >= 1" in r.err
+        r = boost("absorb", "--limit", "-1", expect=2)
+        assert "must be >= 1" in r.err
+
     def test_pattern_surfaced_from_projects_dir(self, boost, sandbox):
         hist = sandbox / ".claude" / "projects" / "proj"
         hist.mkdir(parents=True)
