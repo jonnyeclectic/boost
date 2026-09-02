@@ -94,11 +94,12 @@ class TestHintsFitBesideUserContent:
                                                     cols):
         # Sliced out of the surrounding skill text: the note is the leading
         # `!` line plus the continuations indented under it, and it is the one
-        # part of `explain`'s output boost wrote.
+        # part of `explain`'s output boost wrote. It goes to stderr (`explain`'s
+        # stdout is the plain-English summary alone).
         boost("install", "brainstorming")
         pane(cols)
         r = boost("explain", "brainstorming", expect=None)
-        lines = r.out.splitlines()
+        lines = r.err.splitlines()
         note = [lines[0]]
         note += [ln for ln in lines[1:len(lines)] if ln.startswith("    ")][:1]
         assert lines[0].lstrip().startswith("!")

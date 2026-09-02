@@ -218,9 +218,11 @@ class TestSearch:
 
     def test_smart_without_ai_warns_and_keeps_base_ranker(self, boost, tapped):
         # Without AI, --smart warns and keeps the base ranking — which is now
-        # the BM25 default, not the heuristic.
+        # the BM25 default, not the heuristic. The warning goes to stderr so
+        # `search --smart 2>/dev/null` doesn't show it ahead of the results.
         r = boost("search", "workflow", "--smart")
-        assert "using the heuristic fallback" in " ".join(r.out.split())
+        assert "using the heuristic fallback" not in " ".join(r.out.split())
+        assert "using the heuristic fallback" in " ".join(r.err.split())
         assert "ranked by full-content BM25" in r.out
 
     def test_smart_with_ai_reorders_and_credits_haiku(self, boost, tapped,

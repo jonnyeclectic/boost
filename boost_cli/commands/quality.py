@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from itertools import starmap
@@ -286,23 +287,42 @@ def _parse_ts(iso: str) -> datetime | None:
         return None
 
 
-def _fingerprint() -> tuple[str, list[str]]:
-    """(sha256 hexdigest, component lines). Deterministic: the same lock file
-    and tap commits always produce the same hash."""
-    comps = sorted("%s:%s" % (n, e.get("sha256", ""))
+def _q_suffix(e: dict) -> str:
+    # Quarantine de-arms a component (a poisoned rule stops being materialized,
+    # a skill's links are removed) without deleting its lock entry, so the
+    # digest must move too or a quarantined-then-released environment reads
+    # as unchanged. Suffixed rather than dropped: dropping the line would make
+    # quarantine indistinguishable from uninstall.
+    return ":q" if e.get("quarantined") else ""
+
+
+def _fingerprint() -> tuple[str, list[str], list[str]]:
+    """(sha256 hexdigest, component lines, uncloned tap names).
+
+    Deterministic: the same lock file and tap commits always produce the same
+    hash. An uncloned tap hashes as an empty commit rather than being skipped
+    silently — its name is returned separately so callers can say the digest
+    is incomplete instead of passing it off as a real measurement."""
+    comps = sorted("%s:%s%s" % (n, e.get("sha256", ""), _q_suffix(e))
                    for n, e in lockfile.installed().items())
     # Rules and workflows are part of the environment the agent runs on —
     # a poisoned CLAUDE.md rule must change the fingerprint. Kind-prefixed so
     # a skill-only environment's fingerprint is unchanged by this addition.
-    comps += sorted("%s/%s:%s" % (kind, n, e.get("sha256", ""))
+    comps += sorted("%s/%s:%s%s" % (kind, n, e.get("sha256", ""), _q_suffix(e))
                     for kind, section in lockfile.all_installed().items()
                     if kind != "skill" for n, e in section.items())
-    comps += sorted("%s:%s" % (t.name,
-                               gitutil.head_commit(t.path)
-                               if t.is_cloned and gitutil.has_git() else "")
-                    for t in registry.list_taps())
+    uncloned = []
+    tap_lines = []
+    for t in registry.list_taps():
+        if t.is_cloned and gitutil.has_git():
+            commit = gitutil.head_commit(t.path)
+        else:
+            commit = ""
+            uncloned.append(t.name)
+        tap_lines.append("%s:%s" % (t.name, commit))
+    comps += sorted(tap_lines)
     digest = hashlib.sha256("\n".join(comps).encode()).hexdigest()
-    return digest, comps
+    return digest, comps, sorted(uncloned)
 
 
 def _norm_token(tok: str) -> str:
@@ -906,10 +926,10 @@ def cmd_fingerprint(argv):
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
 
-    digest, comps = _fingerprint()
+    digest, comps, incomplete = _fingerprint()
     if args.json:
         print(json.dumps({"fingerprint": digest, "short": digest[:16],
-                          "components": comps}))
+                          "components": comps, "incomplete": incomplete}))
         return 0
     out.heading("environment fingerprint")
     print("  " + out.role(digest[:16], "accent", bold=True)
@@ -917,6 +937,9 @@ def cmd_fingerprint(argv):
     if args.verbose:
         out.table([tuple(line.split(":", 1)) for line in comps],
                   headers=("COMPONENT", "DIGEST/COMMIT"))
+    for name in incomplete:
+        out.warn("tap %s not cloned — fingerprint incomplete (boost update)"
+                 % name, stream=sys.stderr)
     return 0
 
 

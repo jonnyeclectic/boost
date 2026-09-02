@@ -111,7 +111,7 @@
       <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill to its current version  --commit name">pin</a>
       <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill to update again  name">unpin</a>
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json {save,list,restore} label|id">snapshot</a>
-      <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip name">export</a>
+      <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">export</a>
       <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">adapt</a>
       <a class="cmd-link" href="#cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent --model m --print -o, --out file name target">run</a>
     </div>
@@ -349,10 +349,10 @@
           <div class="arg"><code>--json</code><span>machine-readable output (list)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip name">
+      <section class="cmd" id="cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">
         <h3><span class="cname">export</span><span class="gtag">pkg</span></h3>
         <p class="summary">Package skills as shareable zip/tar archives</p>
-        <pre class="syn">boost export [--out OUT] [--zip] [NAME ...]</pre>
+        <pre class="syn">boost export [--out OUT] [--zip] [--force] [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>skills to export (default: all installed)</span></div>
@@ -361,6 +361,7 @@
         <div class="args">
           <div class="arg"><code>-o, --out OUT</code><span>output archive path</span></div>
           <div class="arg"><code>--zip</code><span>build a .zip instead of .tar.gz</span></div>
+          <div class="arg"><code>--force</code><span>overwrite OUT if it already exists</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">

@@ -2,15 +2,15 @@
 id: audit-install-dry-run-promises-agents-the-real-install-never-write
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
-note: dry run invents an antigravity-cli/skills copy and never mentions the .mcp.json write
+note: fixed — dry run now reads agents_for_scope/materializing_agents and plans the MCP action; PR awaiting CI (PyPI unreachable in the authoring sandbox, so make check needs CI's confirmation)
 order: 209
-owner:
-pr:
+owner: loop/install-dry-run-plan-gaps
+pr: 704
 title: "install <code>--dry-run</code> promises agents the real install never writes (antigravity-cli copy, antigravity materialize) and omits the MCP plan"
 ---
 Three dry-run plans diverge from what install actually does. Project scope: <code>install

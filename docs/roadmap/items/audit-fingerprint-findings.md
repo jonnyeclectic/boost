@@ -2,15 +2,15 @@
 id: audit-fingerprint-findings
 board: code
 section: health
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: quarantine doesn't change the fingerprint; an uncloned tap hashes as empty, silently
 order: 269
-owner:
-pr:
+owner: loop/fingerprint-quarantine
+pr: 703
 title: "<code>boost fingerprint</code>: CLI audit findings (2026-08)"
 ---
 <b>fingerprint ignores quarantine state and silently hashes uncloned taps as empty commits.</b>
