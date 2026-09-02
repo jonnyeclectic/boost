@@ -10,7 +10,7 @@ wow: 2
 note: one flat agents/x.md adapts into a 383 KB crew of 138 Agent()s — including itself, twice
 order: 200
 owner: loop/adapt-flat-agents-subagent-misdetect
-pr:
+pr: 695
 title: "<code>adapt</code> renders every sibling of a flat <code>agents/</code>-dir workflow as a 138-agent crew"
 ---
 <code>adapt actix-expert --to crewai -o x.py</code> prints <em>&ldquo;&#10003; adapted actix-expert &rarr; x.py (crew of 138 &middot; claude-haiku-4-5-20251001)&rdquo;</em> and writes a <b>383 KB</b> render containing <b>138 <code>Agent()</code> + 138 <code>Task()</code></b> &mdash; <code>actix_expert</code>, then <code>actix_expert_1</code> (the item itself, again), then android-expert, angular-expert, &hellip; every sibling in the registry's <code>agents/</code> directory. <code>--to agents-sdk</code> announces <em>&ldquo;note: actix-expert declares 137 subagent(s)&rdquo;</em>. The item is one flat frontmatter file declaring nothing.
