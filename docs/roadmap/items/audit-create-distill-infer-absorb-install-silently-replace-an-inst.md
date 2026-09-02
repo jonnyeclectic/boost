@@ -10,7 +10,7 @@ wow: 2
 note: a tap skill becomes the TODO scaffold, lock flips to local — and the message says installed
 order: 206
 owner: loop/generated-install-overwrite
-pr:
+pr: 716
 title: "create/distill/infer/absorb <code>--install</code> silently replace an installed (unpinned) skill and flip its lock provenance to local"
 ---
 The generated-skill install path never checks whether the name is already taken. Verified: after
