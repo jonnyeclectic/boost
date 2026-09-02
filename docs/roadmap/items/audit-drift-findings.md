@@ -2,14 +2,14 @@
 id: audit-drift-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: source-missing hint is `boost update` — a guaranteed no-op once the tap is untapped
 order: 264
-owner:
+owner: loop/drift-source-missing-hint
 pr:
 title: "boost drift: CLI audit findings (2026-08)"
 ---
