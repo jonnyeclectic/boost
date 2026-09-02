@@ -735,6 +735,35 @@ class TestInstallFromPath:
         assert ei.value.message == "%s has no SKILL.md" % empty
 
 
+class TestExistingSkillOwner:
+    """`install_from_path` refuses to overwrite a *pinned* name but silently
+    replaces an unpinned one — deliberately, since it doubles as the
+    `boost import`/`reinstall` path. The generated-install callers
+    (create/distill/infer/absorb --install) use this to catch the unpinned
+    case themselves before calling in, since `install_from_path` won't.
+    """
+
+    def test_none_when_nothing_installed(self, sandbox):
+        assert store.existing_skill_owner("nobody-home") is None
+
+    def test_returns_the_installed_tap(self, sandbox, tmp_path):
+        src = tmp_path / "dir-name-skill"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: owned\nversion: 1.0.0\n---\n\nBody\n", encoding="utf-8")
+        store.install_from_path(src, tap_label="acme/repo")
+        assert store.existing_skill_owner("owned") == "acme/repo"
+
+    def test_none_after_uninstall(self, sandbox, tmp_path):
+        src = tmp_path / "dir-name-skill"
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: transient\nversion: 1.0.0\n---\n\nBody\n", encoding="utf-8")
+        store.install_from_path(src)
+        store.uninstall("transient")
+        assert store.existing_skill_owner("transient") is None
+
+
 class TestUninstall:
     def test_uninstall_removes_everything(self, brainstorming):
         result = store.uninstall("brainstorming")
