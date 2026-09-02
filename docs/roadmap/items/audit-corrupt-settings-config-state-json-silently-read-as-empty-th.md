@@ -2,14 +2,14 @@
 id: audit-corrupt-settings-config-state-json-silently-read-as-empty-th
 board: code
 section: dx
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: M
 impact: High
 wow: 2
 note: a trailing comma in settings.json costs the permissions/model block on the next hooks add
 order: 203
-owner:
+owner: loop/corrupt-json-clobbered
 pr:
 title: "Corrupt settings/config/state JSON silently read as empty, then clobbered on the next write"
 ---
