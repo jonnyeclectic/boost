@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 from typing import Any
 
-from . import paths, util
+from . import paths, typedvalue, util
 
 DEFAULTS = {
     "agents": {
@@ -269,12 +269,43 @@ def get(dotted: str, default=None):
     return deepcopy(node)
 
 
+def spec_for(dotted: str) -> str:
+    """The value type of a dotted key, derived from :data:`DEFAULTS`.
+
+    A key DEFAULTS does not describe types as :data:`typedvalue.ANY`: `boost
+    config set` accepts keys boost has never heard of (integrations write their
+    own), and inventing a type for those would refuse values that work today.
+    """
+    node: Any = DEFAULTS
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return typedvalue.ANY
+        node = node[part]
+    return typedvalue.spec_for(node)
+
+
+def get_int(dotted: str, default: int) -> int:
+    """Read a config key as an int, or raise :class:`typedvalue.ValueTypeError`.
+
+    The consumers of a numeric setting used to call `int()` on whatever was
+    stored, so a hand-edited `serve.port: "abc"` crashed `boost serve --help`
+    with a traceback and exit 70 — before argparse had even run. Callers catch
+    this and frame it instead.
+    """
+    value = get(dotted, default)
+    if value is None:
+        return default
+    return typedvalue.adapt(dotted, value, typedvalue.INT)
+
+
 def set_value(dotted: str, raw: str) -> None:
-    """Set a dotted key. Values parse as JSON when possible, else string."""
-    try:
-        value = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        value = raw
+    """Set a dotted key, reading the value at the type :data:`DEFAULTS` declares.
+
+    Raises :class:`typedvalue.ValueTypeError` when the text cannot be read at
+    that type. Keys with no default keep the old lenient behaviour: JSON when
+    it parses, the string otherwise.
+    """
+    value = typedvalue.coerce(dotted, raw, spec_for(dotted))
     cfg = load()
     node: Any = cfg
     parts = dotted.split(".")

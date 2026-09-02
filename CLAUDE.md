@@ -251,6 +251,26 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   a workflow is rendered per agent (TOML for Gemini, see
   `workflows.TOML_COMMAND_AGENTS`). Installing a rule therefore edits a file the
   user reads every session — treat it as more invasive than a skill, not less.
+- **A settable value is read at the type its `DEFAULTS` entry already declares.**
+  `core/typedvalue.py` turns `config.DEFAULTS` / `policy.DEFAULTS` into a
+  parser (`config.spec_for`, `policy.spec_for`), so a new key needs no
+  validation code — only a default of the right type. Four rules, each a bug
+  that shipped: **`bool` is tested before `int`**, because in Python a `bool`
+  *is* an `int` and the natural order types every `bool` key as a number;
+  **a list key never raises**, because its documented surface is a comma list,
+  which is what turns `policy set blocked_skills 42` from a stored `42` (and
+  `TypeError: argument of type 'int' is not iterable` out of the next install)
+  into `["42"]`; **a key `DEFAULTS` has never heard of keeps the old lenient
+  parse**, because `boost config set` accepts keys integrations invent; and
+  **`policy.load()` coerces and reports, it never raises** — a hand-edited
+  value it cannot read falls back to the default and is named by
+  `policy.invalid_values()` in `policy list`/`check`,
+  because a traceback from inside an install is not a remedy and a silent
+  substitution is not honest. The failure this closes was not the crash but the
+  inversion: `policy set pin_only no` stored the *string* `"no"`, which is
+  truthy, so boost reported "pin-only mode is on" and froze every install for a
+  user who had just turned it off.
+
 - **A long line is either chrome or data, and only chrome may be wrapped.**
   `out.wrap()` folds prose to the pane, and the emitters take it opt-in —
   `warn`/`info`/`dim`/`kv` accept `wrap=True` and each pays for its own prefix,

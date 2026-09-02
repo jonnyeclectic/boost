@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 
-from boost_cli.core import config, paths, policy
+import pytest
+
+from boost_cli.core import config, paths, policy, typedvalue
 
 GOOD_ENTRY = {"name": "brainstorming", "tap": "acme/skills",
               "description": "Structured ideation", "version": "1.4.0"}
@@ -228,3 +230,116 @@ class TestCheckTapSigning:
         clone = tmp_path / "c"
         clone.mkdir()
         assert policy.check_tap_signing(clone) == []
+
+
+# ------------------------------------------------------- typed policy values
+
+def write_policy_json(raw: dict) -> None:
+    """Write policy.json verbatim — no save() filtering, no type checking."""
+    paths.ensure_dirs()
+    paths.policy_path().write_text(json.dumps(raw), encoding="utf-8")
+
+
+class TestSpecFor:
+    def test_every_default_key_declares_a_type(self, sandbox):
+        assert set(policy.VALUE_TYPES) == set(policy.DEFAULTS)
+
+    def test_types_are_derived_from_the_defaults(self, sandbox):
+        assert policy.spec_for("pin_only") == typedvalue.BOOL
+        assert policy.spec_for("require_signed_taps") == typedvalue.BOOL
+        assert policy.spec_for("min_quality_score") == typedvalue.INT
+        assert policy.spec_for("blocked_skills") == typedvalue.LIST
+        assert policy.spec_for("denied_capabilities") == typedvalue.LIST
+
+    def test_max_skills_declares_the_type_its_default_cannot(self, sandbox):
+        # Its default is None, which names no type at all.
+        assert policy.DEFAULTS["max_skills"] is None
+        assert policy.spec_for("max_skills") == typedvalue.INT_OR_NONE
+
+    def test_an_unknown_key_is_untyped(self, sandbox):
+        assert policy.spec_for("no_such_key") == typedvalue.ANY
+
+
+class TestParseValue:
+    def test_a_boolean_key_reads_the_word_the_user_typed(self, sandbox):
+        # THE bug: "no" is a truthy string, so `policy set pin_only no` used
+        # to turn pin-only ON and freeze every install.
+        assert policy.parse_value("pin_only", "no") is False
+        assert policy.parse_value("pin_only", "off") is False
+        assert policy.parse_value("pin_only", "0") is False
+        assert policy.parse_value("pin_only", "yes") is True
+
+    def test_a_bad_boolean_is_refused_at_the_setter(self, sandbox):
+        with pytest.raises(typedvalue.ValueTypeError):
+            policy.parse_value("pin_only", "maybe")
+
+    def test_a_bad_number_is_refused_at_the_setter(self, sandbox):
+        with pytest.raises(typedvalue.ValueTypeError):
+            policy.parse_value("max_skills", "abc")
+        with pytest.raises(typedvalue.ValueTypeError):
+            policy.parse_value("min_quality_score", "abc")
+
+    def test_a_bare_number_for_a_list_key_is_a_one_item_list(self, sandbox):
+        assert policy.parse_value("blocked_skills", "42") == ["42"]
+
+    def test_a_comma_list_still_works(self, sandbox):
+        assert policy.parse_value("blocked_skills", "a,b") == ["a", "b"]
+
+
+class TestLoadCoercesStoredValues:
+    def test_a_string_boolean_written_by_hand_is_read_as_the_boolean(self, sandbox):
+        write_policy_json({"pin_only": "no"})
+        assert policy.load()["pin_only"] is False
+        assert policy.check_install(GOOD_ENTRY, 0) == []
+
+    def test_a_string_number_written_by_hand_is_read_as_the_number(self, sandbox):
+        write_policy_json({"max_skills": "2"})
+        assert policy.load()["max_skills"] == 2
+        assert policy.check_install(GOOD_ENTRY, 2) == ["max_skills limit (2) reached"]
+
+    def test_an_unreadable_value_falls_back_to_the_default(self, sandbox):
+        # A caller mid-install must get a working policy, not a traceback.
+        write_policy_json({"max_skills": "abc", "blocked_skills": 42})
+        pol = policy.load()
+        assert pol["max_skills"] is None
+        assert pol["blocked_skills"] == []
+        assert policy.check_install(GOOD_ENTRY, 500) == []
+
+    def test_a_good_value_beside_a_bad_one_still_applies(self, sandbox):
+        write_policy_json({"max_skills": "abc", "pin_only": True})
+        assert policy.load()["pin_only"] is True
+
+    def test_unknown_keys_are_carried_through_untouched(self, sandbox):
+        write_policy_json({"rogue": {"deep": 1}})
+        assert policy.load()["rogue"] == {"deep": 1}
+
+    def test_a_non_dict_file_reads_as_no_overrides(self, sandbox):
+        paths.ensure_dirs()
+        paths.policy_path().write_text("[1, 2]", encoding="utf-8")
+        assert policy.load() == policy.DEFAULTS
+
+
+class TestInvalidValues:
+    def test_a_clean_file_reports_nothing(self, sandbox):
+        write_policy_json({"pin_only": True, "max_skills": 5})
+        assert policy.invalid_values() == []
+
+    def test_a_missing_file_reports_nothing(self, sandbox):
+        assert policy.invalid_values() == []
+
+    def test_a_coercible_string_is_not_an_error(self, sandbox):
+        write_policy_json({"pin_only": "no"})
+        assert policy.invalid_values() == []
+
+    def test_each_bad_value_is_named_with_what_was_expected(self, sandbox):
+        write_policy_json({"max_skills": "abc", "blocked_skills": 42})
+        bad = {k: (v, e) for k, v, e in policy.invalid_values()}
+        assert set(bad) == {"max_skills", "blocked_skills"}
+        assert bad["max_skills"][0] == "abc"
+        assert bad["max_skills"][1] == typedvalue.describe(typedvalue.INT_OR_NONE)
+        assert bad["blocked_skills"][0] == 42
+        assert bad["blocked_skills"][1] == typedvalue.describe(typedvalue.LIST)
+
+    def test_unknown_keys_are_not_reported_as_invalid(self, sandbox):
+        write_policy_json({"rogue": "anything"})
+        assert policy.invalid_values() == []
