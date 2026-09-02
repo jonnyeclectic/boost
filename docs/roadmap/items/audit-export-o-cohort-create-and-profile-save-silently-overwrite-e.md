@@ -2,14 +2,14 @@
 id: audit-export-o-cohort-create-and-profile-save-silently-overwrite-e
 board: code
 section: dx
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: Med
 wow: 1
 note: export -o same.tar.gz twice — both runs say "exported", the first archive is gone
 order: 237
-owner:
+owner: loop/silent-overwrites
 pr:
 title: "<code>export -o</code>, <code>cohort create</code> and <code>profile save</code> silently overwrite existing outputs and still say created/saved"
 ---
