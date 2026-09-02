@@ -1412,6 +1412,8 @@ def _import_root(root: Path, name: str | None, do_all: bool,
                 continue
             out.ok("imported %s v%s (score %d/100)" % (res.name, e["version"],
                                                        res.score))
+            _warn_injection(res)
+            _warn_secrets(res)
             imported += 1
         out.info("Imported %s" % _plural(imported, "skill"))
         return 1 if refused else 0
