@@ -10,7 +10,7 @@ wow: 2
 note: compact --reclone moved a pin to HEAD and printed "every tap is already compact"
 order: 216
 owner: loop/tap-pin-integrity
-pr:
+pr: 725
 title: "Pinned taps silently moved to HEAD by <code>update</code> re-clone and <code>compact --reclone</code>, pin left stale"
 ---
 The pin invariant &mdash; only <code>update --force</code> may move a pinned tap, and moving one is
