@@ -10,7 +10,7 @@ wow: 2
 note: a trailing comma in settings.json costs the permissions/model block on the next hooks add
 order: 203
 owner: loop/corrupt-json-state
-pr:
+pr: 714
 title: "Corrupt settings/config/state JSON silently read as empty, then clobbered on the next write"
 ---
 One shared load pattern across four surfaces: a JSON file that exists but does not parse is read as <code>{}</code> (<code>except (JSONDecodeError, OSError)</code> at <code>boost_cli/core/claude_settings.py:74-75</code> and <code>boost_cli/core/config.py:129</code>/<code>196-203</code>/<code>246-250</code>), and the next write replaces it. Verified worst case: with a trailing comma in <code>~/.claude/settings.json</code>, <code>hooks add SessionStart &hellip;</code> prints <em>&ldquo;&#10003; added SessionStart hook&rdquo;</em> exit 0 and the file afterwards holds <em>only</em> <code>{"hooks": &hellip;}</code> &mdash; the user's <code>permissions</code> and <code>model</code> keys are gone, no warning. With a corrupt <code>~/.boost/config.json</code>, <code>config list</code> silently prints the defaults, and <code>config set ai.enabled true</code> rewrites the file to defaults-plus-that-key &mdash; a 20-tap list unrecoverable, <b>no backup</b>. <code>context status</code>/<code>context map</code> and <code>focus --status</code> do the same to <code>state/context.json</code>/<code>focus.json</code>; a corrupt profile is invisible to <code>profile list</code> yet <code>profile delete broken</code> <em>refuses</em> with exit 1, because the existence check parses the file before deleting.
