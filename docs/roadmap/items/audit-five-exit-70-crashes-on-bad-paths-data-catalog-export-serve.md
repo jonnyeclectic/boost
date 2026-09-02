@@ -2,14 +2,14 @@
 id: audit-five-exit-70-crashes-on-bad-paths-data-catalog-export-serve
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: High
 wow: 1
 note: five user-reachable bad paths/values end in exit 70 + a crash report instead of one line
 order: 204
-owner:
+owner: loop/exit70-hardening
 pr:
 title: "Five exit-70 crashes on bad paths/data: <code>catalog --export</code>, <code>serve --port</code>, <code>count</code>, <code>replay</code>, <code>infer -o</code>"
 ---
