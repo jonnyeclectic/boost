@@ -156,6 +156,35 @@ class TestDiscoverSubagents:
         f.write_text("---\nname: wf\ndescription: t\n---\n", encoding="utf-8")
         assert adapters.discover_subagents(f) == []   # not a directory
 
+    def test_shared_dir_itself_named_agents_has_no_subagents(self, tmp_path):
+        # A flat agents/<x>.md workflow item's "skill_dir" (its own file's
+        # parent) IS the registry-wide agents/ folder — siblings sitting
+        # directly inside it are not nested under an agents/subagents dir
+        # *beneath* skill_dir, so none of them count as subagents.
+        shared = tmp_path / "agents"
+        shared.mkdir()
+        (shared / "actix-expert.md").write_text(
+            "---\nname: actix-expert\ndescription: d\n---\nB\n", encoding="utf-8")
+        (shared / "android-expert.md").write_text(
+            "---\nname: android-expert\ndescription: d\n---\nB\n", encoding="utf-8")
+        assert adapters.discover_subagents(shared) == []
+
+    def test_own_file_excluded_even_when_nested(self, tmp_path):
+        # Defense in depth: the entry being adapted never counts as one of
+        # its own subagents, even if it happens to sit under a nested
+        # agents/subagents dir that legitimately holds other subagents.
+        _skill(tmp_path, {
+            "self.md": "---\nname: self\ndescription: d\n---\nB\n",
+            "helper.md": "---\nname: helper\ndescription: d\n---\nB\n",
+        })
+        own = tmp_path / "agents" / "self.md"
+        specs = adapters.discover_subagents(tmp_path, own_file=own)
+        assert [s.name for s in specs] == ["helper"]
+
+    def test_own_file_none_does_not_exclude_anything(self, tmp_path):
+        _skill(tmp_path, {"a.md": "---\nname: a\ndescription: x\n---\nB\n"})
+        assert [s.name for s in adapters.discover_subagents(tmp_path, own_file=None)] == ["a"]
+
 
 # --- helpers: idents & tool union ----------------------------------------
 
