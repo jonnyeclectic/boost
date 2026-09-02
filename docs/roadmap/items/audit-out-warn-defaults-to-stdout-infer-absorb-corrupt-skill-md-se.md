@@ -2,15 +2,15 @@
 id: audit-out-warn-defaults-to-stdout-infer-absorb-corrupt-skill-md-se
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
 note: boost infer &gt; SKILL.md writes the AI warning as line 1 of the generated file
 order: 222
-owner:
-pr:
+owner: loop/warn-stream-corruption
+pr: 712
 title: "<code>out.warn</code> defaults to stdout: infer/absorb corrupt <code>&gt; SKILL.md</code>; search/explain/context warnings pollute piped stdout"
 ---
 With stderr discarded, four commands still print their warnings on <b>stdout</b>: <code>search --smart 2&gt;/dev/null</code> and <code>explain brainstorming 2&gt;/dev/null</code> begin <code>! AI features need one of `claude` or `gemini` on PATH&hellip;</code>; <code>infer 2&gt;/dev/null</code> prints that warning <em>before</em> the <code>---</code> frontmatter; <code>context apply 2&gt;/dev/null</code> prints <code>! context is disabled &hellip; &mdash; applying anyway</code>. The worst case is data corruption, not noise: <code>boost infer &gt; SKILL.md</code> writes a file whose first line is the warning, and <code>absorb</code>'s stdout carries the <code>==&gt; recurring patterns</code> heading and PATTERN/SEEN table ahead of the SKILL.md payload.
