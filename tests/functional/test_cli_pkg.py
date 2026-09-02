@@ -991,7 +991,10 @@ class TestExport:
         dest = tmp_path / "x.tar.gz"
         dest.write_text("not a real archive", encoding="utf-8")
         r = boost("export", "brainstorming", "-o", dest, expect=1)
-        assert "%s already exists" % dest in r.err
+        # the error names the path via paths.tilde(), which always renders
+        # forward-slashed for display — dest.as_posix(), not str(dest)
+        # (backslashed on Windows), is what the message actually contains.
+        assert "%s already exists" % dest.as_posix() in r.err
         assert "pass --force to overwrite" in r.err
         # the original file must survive a declined export untouched
         assert dest.read_text(encoding="utf-8") == "not a real archive"
