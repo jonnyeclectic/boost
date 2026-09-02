@@ -775,6 +775,13 @@ class TestPlain:
         output.heading("Section")
         assert capsys.readouterr().out == "==> Section\n"
 
+    def test_heading_stream_routes_to_stderr(self, capsys):
+        import sys
+        output.heading("Section", stream=sys.stderr)
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err == "==> Section\n"
+
     def test_verdict_healthy_plain(self, capsys):
         output.verdict(True, "healthy")
         assert capsys.readouterr().out == "  ● healthy\n"
@@ -868,6 +875,13 @@ class TestTable:
     def test_alignment_with_headers(self, capsys):
         output.table([("x", "1")], headers=["NAME", "N"])
         assert capsys.readouterr().out == "NAME  N\nx     1\n"
+
+    def test_stream_routes_headers_and_rows_to_stderr(self, capsys):
+        import sys
+        output.table([("x", "1")], headers=["NAME", "N"], stream=sys.stderr)
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err == "NAME  N\nx     1\n"
 
     def test_header_wider_than_cells_sets_width(self, capsys):
         output.table([("a", "b"), ("c", "d")], headers=["LONGHEAD", "H"])

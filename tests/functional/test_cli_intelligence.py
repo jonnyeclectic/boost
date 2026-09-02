@@ -74,7 +74,7 @@ class TestDistill:
         r = boost("distill", "tdd-workflow", "cowboy-coding")
         assert ("distilling tdd-workflow, cowboy-coding → "
                 "tdd-workflow-distilled") in r.out
-        assert FALLBACK in flat(r.out)
+        assert FALLBACK in flat(r.err)
         assert "install it with `boost import ./tdd-workflow-distilled`" in r.out
         text = (tmp_path / "tdd-workflow-distilled" / "SKILL.md").read_text(encoding="utf-8")
         meta, body = frontmatter.parse(text)
@@ -146,7 +146,7 @@ class TestDistill:
                          "version: 1.0.0\n---\n\n# Merged X\n\n"
                          "- Always do the AI thing.\n```")
         r = boost("distill", "brainstorming", "commit-messages", "-o", "merged-x")
-        assert FALLBACK not in flat(r.out)
+        assert FALLBACK not in flat(r.out + r.err)
         text = (tmp_path / "merged-x" / "SKILL.md").read_text(encoding="utf-8")
         assert "Always do the AI thing." in text
         assert frontmatter.parse(text)[0]["name"] == "merged-x"
@@ -156,7 +156,7 @@ class TestDistill:
         monkeypatch.chdir(tmp_path)
         ai_on(ask_author=None)
         r = boost("distill", "tdd-workflow", "cowboy-coding")
-        assert FALLBACK in flat(r.out)
+        assert FALLBACK in flat(r.err)
         assert (tmp_path / "tdd-workflow-distilled" / "SKILL.md").is_file()
 
     def test_needs_two_distinct_skills(self, boost, tapped):
@@ -188,7 +188,7 @@ class TestSimulate:
         r = boost("simulate", "tdd-workflow")
         assert "simulating tdd-workflow" in r.out
         assert "(tap fixture-tap)" in r.out
-        assert FALLBACK in flat(r.out)
+        assert FALLBACK in flat(r.err)
         assert "a typical coding task in this repo" in r.out
         assert "Without it: default behavior" in r.out
         assert "With tdd-workflow active, Claude would:" in r.out
@@ -209,7 +209,7 @@ class TestSimulate:
         r = boost("simulate", "tdd-workflow")
         assert "WITH: writes tests first" in r.out
         assert "Without it: default behavior" not in r.out
-        assert FALLBACK not in flat(r.out)
+        assert FALLBACK not in flat(r.out + r.err)
 
 
 # ---------------------------------------------------------------- infer
@@ -228,8 +228,12 @@ def py_project(tmp_path):
 class TestInfer:
     def test_template_to_stdout(self, boost, sandbox, py_project):
         r = boost("infer", "--path", py_project)
-        assert FALLBACK in flat(r.out)
-        meta, _ = frontmatter.parse(r.out.split("heuristic fallback", 1)[1].lstrip())
+        # The fallback warning goes to stderr so a `boost infer > SKILL.md`
+        # redirect captures only the generated skill — never a warning line
+        # ahead of the frontmatter.
+        assert FALLBACK in flat(r.err)
+        assert FALLBACK not in flat(r.out)
+        meta, _ = frontmatter.parse(r.out)
         assert meta["name"] == "project-conventions"
         assert meta["description"] == "Working conventions for this repository (python)"
         assert meta["version"] == "1.0.0"
@@ -273,7 +277,7 @@ class TestInfer:
                          "version: 1.0.0\n---\n\n# Rules\n\n- Use ruff always.\n")
         r = boost("infer", "--path", py_project)
         assert "- Use ruff always." in r.out
-        assert FALLBACK not in flat(r.out)
+        assert FALLBACK not in flat(r.out + r.err)
 
     def test_bad_path(self, boost, sandbox):
         r = boost("infer", "--path", "/nope/nowhere", expect=1)
@@ -307,11 +311,14 @@ class TestAbsorb:
         lines += [_history_line("ok") for _ in range(5)]  # trivial: too short
         (hist / "chat.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
         r = boost("absorb")
-        assert "recurring patterns from 1 history file(s)" in r.out
-        assert "always run the linter before committing" in r.out
-        assert "4x" in r.out
+        # The progress heading/table go to stderr — stdout carries only the
+        # generated SKILL.md, so a `boost absorb > SKILL.md` redirect is safe.
+        assert "recurring patterns from 1 history file(s)" in r.err
+        assert "always run the linter before committing" in r.err
+        assert "4x" in r.err
         assert "- Always run the linter before committing. (seen 4x)" in r.out
         assert "name: absorbed-patterns" in r.out
+        assert "recurring patterns from" not in r.out
 
     def test_history_flag_missing_and_empty_dir(self, boost, sandbox, tmp_path):
         r = boost("absorb", "--history", "/no/such/file.jsonl", expect=1)
@@ -360,7 +367,7 @@ class TestAbsorb:
             [_history_line("please write docstrings for every function")] * 3), encoding="utf-8")
         r = boost("absorb", "--history", f)
         assert "- AI absorbed rule." in r.out
-        assert FALLBACK not in flat(r.out)
+        assert FALLBACK not in flat(r.out + r.err)
 
 
 # ---------------------------------------------------------------- evolve
@@ -501,7 +508,8 @@ class TestContext:
     def test_apply_outside_repo(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         r = boost("context", "apply")
-        assert "context is disabled (`boost context enable`) — applying anyway" in r.out
+        assert ("context is disabled (`boost context enable`) — applying anyway"
+                in r.err)
         assert "not inside a git repository — nothing to apply" in r.out
 
     def test_status_and_apply_report_missing_git_binary_distinctly(
@@ -585,7 +593,7 @@ class TestImpact:
         row = next(l for l in r.out.splitlines()
                    if l.startswith("brainstorming"))
         assert "—" in row
-        assert FALLBACK in flat(r.out)
+        assert FALLBACK in flat(r.err)
         # outside a repo the note says why the count is missing, rather than
         # the in-repo correlation caveat that made no sense without one.
         assert "not inside a git repository — commit counts unavailable" in r.out
@@ -633,7 +641,7 @@ class TestImpact:
         ai_on(ask="This data is correlational only.")
         r = boost("impact", "brainstorming")
         assert "This data is correlational only." in r.out
-        assert FALLBACK not in flat(r.out)
+        assert FALLBACK not in flat(r.out + r.err)
 
 
 # ---------------------------------------------------------------- kind declines

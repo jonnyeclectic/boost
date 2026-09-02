@@ -92,13 +92,13 @@ class TestHintsFitBesideUserContent:
     @pytest.mark.parametrize("cols", [40, 60, 80, 120])
     def test_the_fallback_note_itself_fits_any_pane(self, boost, tapped, pane,
                                                     cols):
-        # Sliced out of the surrounding skill text: the note is the leading
-        # `!` line plus the continuations indented under it, and it is the one
-        # part of `explain`'s output boost wrote.
+        # The note is the leading `!` line plus the continuations indented
+        # under it. It prints to stderr (so a `boost explain` redirect never
+        # picks it up), separate from the skill text on stdout.
         boost("install", "brainstorming")
         pane(cols)
         r = boost("explain", "brainstorming", expect=None)
-        lines = r.out.splitlines()
+        lines = r.err.splitlines()
         note = [lines[0]]
         note += [ln for ln in lines[1:len(lines)] if ln.startswith("    ")][:1]
         assert lines[0].lstrip().startswith("!")

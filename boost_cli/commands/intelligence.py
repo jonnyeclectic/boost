@@ -14,6 +14,7 @@ import difflib
 import fnmatch
 import json
 import re
+import sys
 import tempfile
 import textwrap
 from collections import Counter
@@ -46,10 +47,16 @@ _warned_fallback = False
 
 
 def _note_fallback() -> None:
-    """Warn once per invocation that the AI path is unavailable."""
+    """Warn once per invocation that the AI path is unavailable.
+
+    stderr, not stdout: several callers (``infer``, ``absorb``) print a
+    generated SKILL.md to stdout when the AI path falls through to this
+    warning, and a `boost infer > SKILL.md` must not corrupt that payload
+    with a warning line ahead of the frontmatter.
+    """
     global _warned_fallback
     if not _warned_fallback:
-        out.warn(ai.fallback_note(), wrap=True)
+        out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
         _warned_fallback = True
 
 
@@ -584,10 +591,14 @@ def cmd_absorb(argv: list[str]) -> int:
         return 0
 
     name = "absorbed-patterns"
-    out.heading("recurring patterns from %d history file(s)" % len(files))
+    # stderr, not stdout: without --install, the generated SKILL.md prints to
+    # stdout below, and this progress heading/table must not sit ahead of it
+    # in a `boost absorb > SKILL.md` redirect.
+    out.heading("recurring patterns from %d history file(s)" % len(files),
+                stream=sys.stderr)
     out.table([(p, "%dx" % n) for p, n in patterns],
-              headers=("PATTERN", "SEEN"))
-    print()
+              headers=("PATTERN", "SEEN"), stream=sys.stderr)
+    print(file=sys.stderr)
 
     text = _absorb_ai(name, patterns) if ai.available() else None
     if text is None:
@@ -879,7 +890,8 @@ def cmd_context(argv: list[str]) -> int:
         return 0
     # apply
     if not state.get("enabled"):
-        out.warn("context is disabled (`boost context enable`) — applying anyway")
+        out.warn("context is disabled (`boost context enable`) — applying anyway",
+                 stream=sys.stderr)
     return _context_apply(state)
 
 

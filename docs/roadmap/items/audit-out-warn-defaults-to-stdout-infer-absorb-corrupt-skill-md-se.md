@@ -2,14 +2,14 @@
 id: audit-out-warn-defaults-to-stdout-infer-absorb-corrupt-skill-md-se
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
 note: boost infer &gt; SKILL.md writes the AI warning as line 1 of the generated file
 order: 222
-owner:
+owner: loop/warn-stderr
 pr:
 title: "<code>out.warn</code> defaults to stdout: infer/absorb corrupt <code>&gt; SKILL.md</code>; search/explain/context warnings pollute piped stdout"
 ---

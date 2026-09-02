@@ -554,7 +554,8 @@ class TestPreview:
 class TestExplain:
     def test_no_ai_fallback(self, boost, installed):
         r = boost("explain", "brainstorming")
-        assert "using the heuristic fallback" in " ".join(r.out.split())
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+        assert "using the heuristic fallback" not in " ".join(r.out.split())
         assert "Structured ideation & divergent-thinking facilitation" in r.out
         assert "Outline:" in r.out
         assert "Brainstorming" in r.out and "Rules" in r.out
@@ -605,8 +606,8 @@ class TestExplain:
                             "Deploys via `kubectl apply` to K8S and posts to "
                             "`slack-notify` with --webhook.")
         r = boost("explain", "brainstorming", expect=0)
-        assert "ungrounded" in r.out              # the guardrail spoke
-        assert "kubectl" in r.out                 # names an offending term
+        assert "ungrounded" in r.err               # the guardrail spoke
+        assert "kubectl" in r.err                  # names an offending term
         # and it showed the grounded extractive summary instead
         assert "Key rules:" in r.out
         assert "• Never critique during the diverge phase." in r.out

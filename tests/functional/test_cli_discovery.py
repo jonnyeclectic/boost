@@ -220,7 +220,8 @@ class TestSearch:
         # Without AI, --smart warns and keeps the base ranking — which is now
         # the BM25 default, not the heuristic.
         r = boost("search", "workflow", "--smart")
-        assert "using the heuristic fallback" in " ".join(r.out.split())
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+        assert "using the heuristic fallback" not in " ".join(r.out.split())
         assert "ranked by full-content BM25" in r.out
 
     def test_smart_with_ai_reorders_and_credits_haiku(self, boost, tapped,
