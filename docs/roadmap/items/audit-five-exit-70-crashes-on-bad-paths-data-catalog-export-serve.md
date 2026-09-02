@@ -2,7 +2,7 @@
 id: audit-five-exit-70-crashes-on-bad-paths-data-catalog-export-serve
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: High
