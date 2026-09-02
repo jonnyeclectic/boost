@@ -621,6 +621,15 @@ class TestVerify:
     def test_unknown_name_rc1(self, boost, installed):
         r = boost("verify", "ghost", expect=1)
         assert "not installed: ghost" in r.err
+        assert "closest matches" not in r.err
+
+    def test_typo_gets_close_match_hint(self, boost, installed):
+        # One character off 'brainstorming', the only thing installed — the
+        # old hint was the same fixed "see what is with `boost list`" a
+        # totally unrelated name would get.
+        r = boost("verify", "brainstormin", expect=1)
+        assert "not installed: brainstormin" in r.err
+        assert "closest matches: brainstorming" in r.err
 
     def test_no_lock_file_but_nothing_ever_installed_rc0(self, boost, tapped):
         # Genuinely fresh: no lock file AND an empty store is not a fault.
@@ -666,6 +675,13 @@ class TestDrift:
         assert "local-edits" in r.out
         assert "boost reinstall brainstorming to discard local edits" in r.out
         assert "1 local-edits" in r.out
+
+    def test_unknown_name_close_match_hint(self, boost, installed):
+        # `drift` resolves across every lock section via `_iter_installed_all`
+        # — the same miss-hint gap as `verify`, in the other resolver.
+        r = boost("drift", "brainstormin", expect=1)
+        assert "not installed: brainstormin" in r.err
+        assert "closest matches: brainstorming" in r.err
 
     def test_upstream_moved_via_tap_copy(self, boost, fixture_tap_src,
                                          tmp_path):
@@ -743,6 +759,33 @@ class TestFingerprint:
         d3 = json.loads(boost("fingerprint", "--json").out)
         assert d3["fingerprint"] != d1["fingerprint"]
         assert len(d3["components"]) == 1
+
+    def test_quarantine_changes_fingerprint(self, boost, installed):
+        d1 = json.loads(boost("fingerprint", "--json").out)
+        boost("quarantine", "brainstorming")
+        d2 = json.loads(boost("fingerprint", "--json").out)
+        assert d2["fingerprint"] != d1["fingerprint"]
+        sha = _lock()["brainstorming"]["sha256"]
+        assert "brainstorming:%s:q" % sha in d2["components"]
+
+        boost("quarantine", "--release", "brainstorming")
+        d3 = json.loads(boost("fingerprint", "--json").out)
+        assert d3["fingerprint"] == d1["fingerprint"]   # release restores it
+
+    def test_uncloned_tap_reported_incomplete(self, boost, installed):
+        d1 = json.loads(boost("fingerprint", "--json").out)
+        assert d1["incomplete"] == []
+
+        shutil.rmtree(paths.repos_dir() / "fixture-tap")
+        d2 = json.loads(boost("fingerprint", "--json").out)
+        assert d2["incomplete"] == ["fixture-tap"]
+        assert d2["fingerprint"] != d1["fingerprint"]
+        assert "fixture-tap:" in d2["components"]
+
+        r = boost("fingerprint")
+        assert ("tap fixture-tap not cloned — fingerprint incomplete "
+                "(boost update)" in r.err)
+        assert r.rc == 0
 
 
 # ── quarantine ───────────────────────────────────────────────────────────

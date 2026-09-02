@@ -11,6 +11,8 @@ exactly what committing skills is supposed to fix.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -184,6 +186,56 @@ def test_dry_run_local_changes_nothing_and_names_the_repo(boost, tapped, repo):
     assert "brainstorming" in res.out
     assert not (repo / ".claude").exists()
     assert projectlock.get_skill(repo, "brainstorming") is None
+
+
+def test_dry_run_local_copy_list_matches_the_real_install(boost, tapped, repo):
+    # Antigravity CLI's project layout is unknown (agents.project_agents), so
+    # the real `--local` install never copies for it; a dry run that read
+    # `enabled_agents()` invented a fifth "copy → .../antigravity-cli/skills/…"
+    # line the real install never writes.
+    preview = boost("install", "brainstorming", "--local", "--dry-run").out
+    copy_lines = sorted(x.split("→", 1)[1].strip()
+                        for x in preview.splitlines() if "copy  →" in x)
+    real = boost("install", "brainstorming", "--local").out
+    real_agents = real.split("copied into this repo →", 1)[1].splitlines()[0].strip()
+    assert len(copy_lines) == len(real_agents.split(" · "))
+    assert not any("antigravity" in line for line in copy_lines)
+
+
+def _mcp_skill_tap(fixture_tap_src, tmp_path, name="mcp-proj-skill",
+                   decl="github", sidecar=None):
+    """A tap holding one skill that declares an MCP server, own commit."""
+    tap_dir = tmp_path / "mcp-proj-tap"
+    shutil.copytree(fixture_tap_src, tap_dir)
+    skill_dir = tap_dir / "skills" / name
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: %s\ndescription: needs an MCP server to work\n"
+        "version: 1.0.0\nmcp: %s\n---\n\n# %s\n\nBody.\n" % (name, decl, name),
+        encoding="utf-8")
+    if sidecar is not None:
+        (skill_dir / ".mcp.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    subprocess.run(["git", "-C", str(tap_dir), "add", "-A"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", "add " + name],
+                   check=True, capture_output=True)
+    return tap_dir
+
+
+def test_dry_run_local_plans_the_mcp_json_record(boost, fixture_tap_src,
+                                                  tmp_path, repo):
+    # The real `--local` install records a declaring skill's servers into the
+    # repo's own .mcp.json (store.register_project_mcp); no dry run ever said
+    # so, which made the preview silent about the one file install --local
+    # actually writes beyond the skill copies themselves.
+    tap_dir = _mcp_skill_tap(
+        fixture_tap_src, tmp_path,
+        sidecar={"mcpServers": {"github": {"command": "npx",
+                                           "args": ["-y", "srv"]}}})
+    boost("tap", tap_dir)
+    r = boost("install", "mcp-proj-skill", "--local", "--dry-run")
+    assert "mcp   → record github in .mcp.json" in r.out
+    assert not (repo / ".mcp.json").exists()
 
 
 # ── sync ─────────────────────────────────────────────────────────────────

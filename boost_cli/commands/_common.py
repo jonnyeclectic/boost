@@ -8,6 +8,9 @@ place lets the modules split without either importing back into the other.
 """
 from __future__ import annotations
 
+import difflib
+from itertools import chain
+
 from ..core import lockfile, store
 from ..errors import BoostError
 
@@ -15,6 +18,28 @@ from ..errors import BoostError
 def _s(n: int) -> str:
     """Plural suffix: "" for one, "s" otherwise."""
     return "" if n == 1 else "s"
+
+
+def _not_installed_hint(missing: list[str], candidates: list[str]) -> str:
+    """The "see what is with `boost list`" hint, fronted by a close-match guess.
+
+    A typo one character off an installed name (``lint brainstormin`` with
+    only ``brainstorming`` installed) used to get the same bare hint as
+    genuinely nonsense input — the fixed pointer to ``boost list`` says
+    nothing a fuzzy match could have said directly. Checked against every
+    missing name so a multi-name call still surfaces a guess for the one that
+    has one, and deduplicated in case two misses guess the same candidate.
+    """
+    names = sorted(set(candidates))
+    close: list[str] = []
+    for n in missing:
+        for c in difflib.get_close_matches(n, names, n=3):
+            if c not in close:
+                close.append(c)
+    if not close:
+        return "see what is with `boost list`"
+    return ("closest matches: %s — see what is with `boost list`"
+            % ", ".join(close))
 
 
 def _require_lock_integrity() -> None:
@@ -71,8 +96,9 @@ def _iter_installed(names: list[str] | None = None) -> list[tuple[str, dict]]:
                 hint="rules and workflows are governed by pin / quarantine / "
                      "verify / update")
         if missing:
-            raise BoostError("not installed: %s" % ", ".join(missing),
-                            hint="see what is with `boost list`")
+            raise BoostError(
+                "not installed: %s" % ", ".join(missing),
+                hint=_not_installed_hint(missing, list(skills)))
         return [(n, skills[n]) for n in names]
     return sorted(skills.items())
 
@@ -100,8 +126,10 @@ def _iter_installed_all(
             else:
                 out.append((found[0], n, found[1]))
         if missing:
-            raise BoostError("not installed: %s" % ", ".join(missing),
-                            hint="see what is with `boost list`")
+            all_names = chain.from_iterable(lockfile.all_installed().values())
+            raise BoostError(
+                "not installed: %s" % ", ".join(missing),
+                hint=_not_installed_hint(missing, list(all_names)))
         return out
     return [(kind, n, e)
             for kind, section in lockfile.all_installed().items()

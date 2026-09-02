@@ -48,10 +48,16 @@ _warned_fallback = False
 
 
 def _note_fallback() -> None:
-    """Warn once per invocation that the AI path is unavailable."""
+    """Warn once per invocation that the AI path is unavailable.
+
+    Routed to stderr: `infer`/`absorb` write generated SKILL.md content to
+    stdout when neither `--install` nor `-o` is given, and this note used to
+    print as stdout's first line — `boost infer > SKILL.md` wrote a file
+    whose body opened with the warning instead of the frontmatter.
+    """
     global _warned_fallback
     if not _warned_fallback:
-        out.warn(ai.fallback_note(), wrap=True)
+        out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
         _warned_fallback = True
 
 
@@ -595,10 +601,14 @@ def cmd_absorb(argv: list[str]) -> int:
         return 0
 
     name = "absorbed-patterns"
-    out.heading("recurring patterns from %d history file(s)" % len(files))
+    # Without --install, stdout carries the generated SKILL.md (`boost absorb
+    # > SKILL.md`), so this report must not land ahead of it there.
+    report_stream = None if args.install else sys.stderr
+    out.heading("recurring patterns from %d history file(s)" % len(files),
+                stream=report_stream)
     out.table([(p, "%dx" % n) for p, n in patterns],
-              headers=("PATTERN", "SEEN"))
-    print()
+              headers=("PATTERN", "SEEN"), stream=report_stream)
+    print(file=report_stream)
 
     text = _absorb_ai(name, patterns) if ai.available() else None
     if text is None:
@@ -890,7 +900,8 @@ def cmd_context(argv: list[str]) -> int:
         return 0
     # apply
     if not state.get("enabled"):
-        out.warn("context is disabled (`boost context enable`) — applying anyway")
+        out.warn("context is disabled (`boost context enable`) — applying anyway",
+                 stream=sys.stderr)
     return _context_apply(state)
 
 

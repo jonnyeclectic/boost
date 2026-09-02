@@ -775,6 +775,12 @@ class TestPlain:
         output.heading("Section")
         assert capsys.readouterr().out == "==> Section\n"
 
+    def test_heading_stream_routes_off_stdout(self, capsys):
+        output.heading("Section", stream=sys.stderr)
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err == "==> Section\n"
+
     def test_verdict_healthy_plain(self, capsys):
         output.verdict(True, "healthy")
         assert capsys.readouterr().out == "  ● healthy\n"
@@ -906,6 +912,12 @@ class TestTable:
     def test_non_string_cells_coerced(self, capsys):
         output.table([(1, 22.5)])
         assert capsys.readouterr().out == "1  22.5\n"
+
+    def test_stream_routes_headers_and_rows_off_stdout(self, capsys):
+        output.table([("x", "1")], headers=["NAME", "N"], stream=sys.stderr)
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert cap.err == "NAME  N\nx     1\n"
 
 
 class TestRpad:
