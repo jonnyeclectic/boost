@@ -1686,3 +1686,41 @@ class TestConcurrentPostingsBuildsDoNotDestroyEachOther:
         rag._write_postings({"alpha": [[0, 1]]})
         leftovers = list(rag.postings_path().parent.glob("*.tmp*"))
         assert leftovers == [], "left %s behind" % leftovers
+
+    def test_a_failed_build_cleans_up_and_leaves_the_old_index_standing(
+            self, sandbox):
+        """A build that raises must not leave a temp behind or eat the error.
+
+        The cleanup path is the whole reason the temp is unique: if a failing
+        build left its file, the directory would fill with one per crash, and
+        a swallowed exception would report success for an index that was never
+        written. `util.atomic_write_text` makes the same two guarantees.
+        """
+        rag._write_postings({"alpha": [[0, 1]]})       # an index worth keeping
+        before = rag.postings_path().read_bytes()
+
+        closed: list[bool] = []
+
+        class Boom:
+            def execute(self, *a, **kw):
+                raise RuntimeError("disk went away")
+
+            def executemany(self, *a, **kw):  # pragma: no cover - unreached
+                raise RuntimeError("disk went away")
+
+            def commit(self):  # pragma: no cover - unreached
+                pass
+
+            def close(self):
+                closed.append(True)
+
+        with (mock.patch.object(rag.sqlite3, "connect", return_value=Boom()),
+              pytest.raises(RuntimeError, match="disk went away")):
+            rag._write_postings({"beta": [[1, 1]]})
+
+        assert closed, "the connection was leaked on the failure path"
+        assert list(rag.postings_path().parent.glob("*.tmp*")) == []
+        # The swap never happened, so the previous index is still the one on
+        # disk — a failed rebuild must not cost you the index you had.
+        assert rag.postings_path().read_bytes() == before
+        assert rag.read_postings(["alpha"])["alpha"] == [[0, 1]]
