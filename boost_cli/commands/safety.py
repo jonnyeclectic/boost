@@ -39,6 +39,7 @@ from ..errors import BoostError
 from ._common import (
     _iter_installed,
     _iter_installed_all,
+    _not_installed_hint,
     _require_lock_integrity,
     _s,
     _shadowed_kinds,
@@ -357,8 +358,10 @@ def cmd_verify(argv):
         unknown = [n for n in args.names
                    if lockfile.find_any(n) is None and n not in pskills]
         if unknown:
+            candidates = [n for section in lockfile.all_installed().values()
+                         for n in section] + list(pskills)
             raise BoostError("not installed: %s" % ", ".join(unknown),
-                            hint="see what is with `boost list`")
+                            hint=_not_installed_hint(unknown, candidates))
     user_names = [n for n in (args.names or [])
                   if lockfile.find_any(n) is not None]
 

@@ -2,14 +2,14 @@
 id: audit-name-miss-errors-unknown-tap-qualifier-unnamed-no-close-matc
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: S
 impact: Med
 wow: 2
 note: a one-letter typo gets no hint while nonsense input gets three suggestions
 order: 233
-owner:
+owner: loop/name-miss-hints
 pr:
 title: "Name-miss errors: unknown tap qualifier never named, no close-match hint, tap tokens pollute suggestions"
 ---
