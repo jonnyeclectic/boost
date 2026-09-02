@@ -14,6 +14,7 @@ import math
 import os
 import sqlite3
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -1620,3 +1621,68 @@ class TestPostingsInterning:
                             "VALUES (999, 'test', 1)")
         finally:
             con.close()
+
+
+class TestConcurrentPostingsBuildsDoNotDestroyEachOther:
+    """Two `rag.build()` runs must not delete each other's temp file.
+
+    `_write_postings` writes to a temp beside the final path and swaps it in.
+    While that temp had a FIXED name and was unlinked on entry, a second build
+    starting mid-flight deleted the first's finished file, and the first then
+    raised `FileNotFoundError` out of `tmp.replace(final)` — observed on a real
+    464-tap install:
+
+        FileNotFoundError: rag_postings.sqlite.tmp -> rag_postings.sqlite
+          at rag.py in _write_postings, tmp.replace(final)
+
+    The loser's work is thrown away and the user gets a crash report rather
+    than a result, on a command whose whole job is to rebuild that file.
+    `boost search` auto-builds on a cold index, so two terminals is enough.
+    """
+
+    def test_a_second_build_does_not_delete_the_first_s_temp(self, sandbox):
+        # A writes its temp; B runs to completion in the middle; A must still
+        # be able to swap its own file in.
+        seen: list = []
+        real_connect = rag.sqlite3.connect
+
+        def connect_then_run_a_rival(path, *a, **kw):
+            con = real_connect(path, *a, **kw)
+            if not seen:
+                seen.append(path)
+                # A rival build, start to finish, while this one is open.
+                rag._write_postings({"beta": [[1, 1]]})
+            return con
+
+        with mock.patch.object(rag.sqlite3, "connect",
+                               side_effect=connect_then_run_a_rival):
+            rag._write_postings({"alpha": [[0, 1]]})
+
+        # No crash is the headline, and the file the outer build wrote is the
+        # one that must be standing.
+        assert rag.postings_path().exists()
+        assert rag.read_postings(["alpha"])["alpha"] == [[0, 1]]
+
+    def test_each_build_uses_its_own_temp_path(self, sandbox):
+        # The mechanism, pinned directly: a shared constant temp name is what
+        # made the race possible, so two builds must not name the same file.
+        names: list[str] = []
+        real_connect = rag.sqlite3.connect
+
+        def record(path, *a, **kw):
+            names.append(str(path))
+            return real_connect(path, *a, **kw)
+
+        with mock.patch.object(rag.sqlite3, "connect", side_effect=record):
+            rag._write_postings({"alpha": [[0, 1]]})
+            rag._write_postings({"beta": [[1, 1]]})
+
+        assert len(names) == 2
+        assert names[0] != names[1], (
+            "both builds wrote %s — a fixed temp name lets one delete the "
+            "other's finished file" % names[0])
+
+    def test_no_temp_files_are_left_behind(self, sandbox):
+        rag._write_postings({"alpha": [[0, 1]]})
+        leftovers = list(rag.postings_path().parent.glob("*.tmp*"))
+        assert leftovers == [], "left %s behind" % leftovers

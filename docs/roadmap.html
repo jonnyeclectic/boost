@@ -133,7 +133,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>11</b><span>Planned</span></div>
-      <div class="stat"><b>404</b><span>Loop finds</span></div>
+      <div class="stat"><b>405</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5627,6 +5627,20 @@ repro run needed. Absolute date of verification: 2026-08-31.</p></details>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">a quickstart rerun re-downloads every shard the store already holds at that commit</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="concurrent-rag-builds-delete-each-others-temp-index">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Reliability · Bug</span></div>
+        <h3>Two concurrent <code>rag.build()</code> runs delete each other's temp index</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p>Observed on a real 464-tap install during <code>boost update --shards</code>, at boost 1.2.80:
+<code>FileNotFoundError: [Errno&nbsp;2] No such file or directory: '~/.boost/cache/rag_postings.sqlite.tmp' -&gt; '~/.boost/cache/rag_postings.sqlite'</code>, raised from <code>tmp.replace(final)</code> in <code>_write_postings</code>. <code>_write_postings</code> wrote every build to the <b>same</b> fixed temp path and unlinked it on entry, so a second build starting mid-flight deleted the first's <em>completed</em> file: A builds its 644&nbsp;MB temp &rarr; B enters and <code>unlink()</code>s it &rarr; A crashes on the swap. Confirmed by timestamps &mdash; the crash landed at 21:25 and a fresh <code>.tmp</code> appeared at 21:26, which then swapped in cleanly, so the index was never corrupt and the loser simply threw away several minutes of work and returned a crash report. It needs no exotic setup: <code>boost search</code> builds on a cold index, so two terminals is enough, and <code>_ingest_shards</code> rebuilds the index for any tap that moved. Fixed by giving each build its own <code>tempfile.mkstemp</code> name and unlinking it on failure &mdash; the same shape <code>util.atomic_write_text</code> already uses for every other file boost must not lose.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">two overlapping rag.build() runs share one .tmp name; the second unlinks the first's finished 644 MB file and the first dies on replace()</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

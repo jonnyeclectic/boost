@@ -25,6 +25,7 @@ import math
 import os
 import re
 import sqlite3
+import tempfile
 from collections import defaultdict
 from collections.abc import Sequence
 from functools import lru_cache
@@ -345,9 +346,24 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     """
     paths.ensure_dirs()
     final = postings_path()
-    tmp = final.with_suffix(".sqlite.tmp")
-    with contextlib.suppress(OSError):
-        tmp.unlink()
+    # A UNIQUE temp per build, not a fixed `.sqlite.tmp`, and this is a
+    # concurrency fix rather than tidiness. Every build used to write the same
+    # name and unlink it on entry, so a second build starting mid-flight
+    # deleted the first's *finished* file and the first died on the swap:
+    #
+    #   FileNotFoundError: rag_postings.sqlite.tmp -> rag_postings.sqlite
+    #
+    # observed on a real 464-tap install. The loser threw away several minutes
+    # of work and returned a crash report instead of an index. Nothing here is
+    # exotic — `boost search` builds on a cold index, so two terminals is
+    # enough to hit it. Same mkstemp-then-replace shape as
+    # `util.atomic_write_text`, which every other file boost must not lose
+    # already goes through.
+    fd, tmp_name = tempfile.mkstemp(dir=str(final.parent),
+                                    prefix="." + final.name + ".",
+                                    suffix=".tmp")
+    os.close(fd)                # SQLite opens the path itself
+    tmp = Path(tmp_name)
     con = sqlite3.connect(str(tmp))
     try:
         # No durability needed: this file is a derived cache, and a crash
@@ -371,7 +387,14 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
         con.execute("CREATE UNIQUE INDEX terms_term ON terms(term)")
         con.execute("CREATE INDEX postings_term_id ON postings(term_id)")
         con.commit()
-    finally:
+    except BaseException:
+        # Never leave a temp behind, and never mask the original error —
+        # `util.atomic_write_text`'s rule, for the same reason.
+        con.close()
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+    else:
         con.close()
     tmp.replace(final)          # atomic swap, same as the JSON half
 
