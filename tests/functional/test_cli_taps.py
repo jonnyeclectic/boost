@@ -200,6 +200,14 @@ class TestTapCatalog:
                   expect=1)
         assert "no catalog registries match" in r.out
 
+    def test_limit_must_be_positive_int(self, boost, sandbox):
+        # --limit -1 used to silently drop the last registry (entries[:-1])
+        # rather than being rejected as meaningless.
+        r = boost("tap", "--catalog", "--limit", "-1", "--dry-run", expect=2)
+        assert "must be >= 1" in r.err
+        r = boost("tap", "--catalog", "--limit", "0", "--dry-run", expect=2)
+        assert "must be >= 1" in r.err
+
     def test_real_tap_from_catalog(self, boost, sandbox, fixture_tap_src,
                                    monkeypatch):
         from boost_cli.core import registry

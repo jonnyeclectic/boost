@@ -560,7 +560,7 @@ def cmd_absorb(argv: list[str]) -> int:
         description="Turn recurring chat-history patterns into a skill")
     ap.add_argument("--history", metavar="PATH",
                     help="history .jsonl file or directory of them")
-    ap.add_argument("--limit", type=int, default=5, metavar="N",
+    ap.add_argument("--limit", type=util.positive_int, default=5, metavar="N",
                     help="max patterns to absorb (default: 5)")
     ap.add_argument("--install", action="store_true",
                     help="install the generated skill")
@@ -1195,7 +1195,7 @@ def cmd_chat(argv: list[str]) -> int:
         description="Ask about skills in plain language")
     ap.add_argument("question", nargs="*", metavar="QUESTION",
                     help="ask once and exit; omit for an interactive session")
-    ap.add_argument("-k", "--limit", type=int, default=chat_engine.TOP_K,
+    ap.add_argument("-k", "--limit", type=util.positive_int, default=chat_engine.TOP_K,
                     metavar="N", help="candidate skills to consider (default %d)"
                                       % chat_engine.TOP_K)
     ap.add_argument("--no-sources", action="store_true",

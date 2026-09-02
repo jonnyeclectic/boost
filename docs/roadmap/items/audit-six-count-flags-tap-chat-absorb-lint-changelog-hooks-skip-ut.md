@@ -2,14 +2,14 @@
 id: audit-six-count-flags-tap-chat-absorb-lint-changelog-hooks-skip-ut
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: chat -k 0 fabricates "nothing matches"; hooks --timeout -5 lands in settings.json
 order: 234
-owner:
+owner: loop/count-flags-reject-zero-negative
 pr:
 title: "Six count flags (<code>tap</code>/<code>chat</code>/<code>absorb</code>/<code>lint</code>/<code>changelog</code>/<code>hooks</code>) accept 0 and negatives"
 ---

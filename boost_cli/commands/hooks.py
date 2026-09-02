@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from .. import cliparse
 from ..core import claude_settings as cs
-from ..core import hookhost, journal
+from ..core import hookhost, journal, util
 from ..core import output as out
 from ..errors import BoostError
 
@@ -50,7 +50,7 @@ def cmd_hooks(argv) -> int:
                    help="settings scope (default: project; list shows both)")
     p.add_argument("-m", "--matcher",
                    help="Claude matcher, e.g. 'startup|resume|clear'")
-    p.add_argument("--timeout", type=int, default=10,
+    p.add_argument("--timeout", type=util.positive_int, default=10,
                    help="hook timeout in seconds (default: 10)")
     args = p.parse_args(argv)
 

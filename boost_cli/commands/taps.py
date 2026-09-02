@@ -129,7 +129,7 @@ def cmd_tap(argv) -> int:
     p.add_argument("--type", choices=("skill", "rule", "workflow"),
                    help="with --catalog: restrict to one item type")
     p.add_argument("--category", help="with --catalog: restrict to one category")
-    p.add_argument("--limit", type=int, metavar="N",
+    p.add_argument("--limit", type=util.positive_int, metavar="N",
                    help="with --catalog: only the top N registries by est. size")
     p.add_argument("--include-lists", action="store_true",
                    help="with --catalog: also tap awesome-list/index repos")
