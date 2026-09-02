@@ -266,7 +266,7 @@ _DRIFT_ROLE = {"in-sync": "success", "local-edits": "warn",
                "quarantined": "muted"}
 
 
-def _drift_hint(name: str, status: str) -> str:
+def _drift_hint(name: str, status: str, tap: str = "") -> str:
     if status == "quarantined":
         return "boost quarantine --release %s to restore" % name
     if status == "upstream-moved":
@@ -274,7 +274,10 @@ def _drift_hint(name: str, status: str) -> str:
     if status == "local-edits":
         return "boost reinstall %s to discard local edits" % name
     if status == "source-missing":
-        return "boost update"
+        # `boost update` only refreshes configured taps. When the entry's
+        # tap has been untapped, that command is a guaranteed no-op — the
+        # only remedy that can actually restore the source is re-tapping it.
+        return "boost update" if registry.is_tapped(tap) else "boost tap %s" % tap
     if status == "store-missing":
         return "boost heal"
     return ""
@@ -861,7 +864,7 @@ def cmd_drift(argv):
         status = (_drift_status(name, entry) if kind == "skill"
                   else _drift_status_materialized(kind, name, entry))
         rows.append({"name": name, "kind": kind, "status": status,
-                     "hint": _drift_hint(name, status)})
+                     "hint": _drift_hint(name, status, entry.get("tap", ""))})
     if args.json:
         print(json.dumps({"skills": rows}))
         return 0

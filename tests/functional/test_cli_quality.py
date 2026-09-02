@@ -698,6 +698,20 @@ class TestDrift:
                                     "status": "upstream-moved",
                                     "hint": "boost update"}]}
 
+    def test_source_missing_after_untap_hints_retap_not_update(self, boost,
+                                                                installed):
+        # `boost update` only refreshes configured taps — once the tap is
+        # gone, it's a guaranteed no-op. The only remedy that can actually
+        # restore the source is re-tapping it.
+        boost("untap", "fixture-tap")
+        r = boost("drift")
+        assert "source-missing" in r.out
+        assert "boost tap fixture-tap" in r.out
+        data = json.loads(boost("drift", "--json").out)
+        assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
+                                    "status": "source-missing",
+                                    "hint": "boost tap fixture-tap"}]}
+
     def test_no_lock_file_but_nothing_ever_installed_rc0(self, boost, tapped):
         r = boost("drift")
         assert "no skills installed" in r.out
