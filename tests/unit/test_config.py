@@ -433,3 +433,54 @@ class TestGetInt:
         config.save(cfg)
         with pytest.raises(typedvalue.ValueTypeError):
             config.get_int("serve.port", 8787)
+
+
+class TestCorruptFile:
+    """A config.json that exists but fails to parse must warn (not silently
+    degrade unremarked) and must never be clobbered by the next save without
+    a trace — see the audit-corrupt-settings-config-state-json roadmap item."""
+
+    def test_corrupt_read_warns_on_stderr(self, sandbox, capsys):
+        paths.ensure_dirs()
+        paths.config_path().write_text("{not json!!", encoding="utf-8")
+        config.load()
+        captured = capsys.readouterr()
+        assert str(paths.config_path()) in captured.err
+        assert captured.out == ""
+
+    def test_missing_file_does_not_warn(self, sandbox, capsys):
+        config.load()
+        captured = capsys.readouterr()
+        assert captured.err == ""
+
+    def test_set_value_quarantines_corrupt_file_instead_of_destroying_it(
+            self, sandbox):
+        paths.ensure_dirs()
+        original = '{"taps": [{"name": "a/b", "url": "x", "curated": false}]'
+        paths.config_path().write_text(original, encoding="utf-8")
+
+        config.set_value("telemetry", "true")
+
+        quarantined = paths.config_path().with_name("config.json.corrupt")
+        assert quarantined.read_text(encoding="utf-8") == original
+        fresh = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert fresh["telemetry"] is True
+        # the corrupt file's content never survives into the new one
+        assert "taps" not in fresh or fresh["taps"] == []
+
+    def test_save_over_a_valid_file_never_quarantines(self, sandbox):
+        config.save({"telemetry": True})
+        config.save({"telemetry": False})
+        assert not paths.config_path().with_name("config.json.corrupt").exists()
+
+    def test_repeated_corruption_keeps_every_quarantined_copy(self, sandbox):
+        paths.ensure_dirs()
+        paths.config_path().write_text("bad one", encoding="utf-8")
+        config.set_value("telemetry", "true")
+        paths.config_path().write_text("bad two", encoding="utf-8")
+        config.set_value("telemetry", "true")
+
+        first = paths.config_path().with_name("config.json.corrupt")
+        second = paths.config_path().with_name("config.json.corrupt.2")
+        assert first.read_text(encoding="utf-8") == "bad one"
+        assert second.read_text(encoding="utf-8") == "bad two"

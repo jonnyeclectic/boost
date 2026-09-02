@@ -32,10 +32,11 @@ from __future__ import annotations
 
 import contextlib
 import json
+import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import hookhost, paths, util
+from . import hookhost, jsonstate, output, paths, util
 
 SCOPES = ("global", "project")
 MARKER = "# boost:"
@@ -66,27 +67,39 @@ def _history_dir() -> Path:
 
 def load(scope: str, project_dir: Path | None = None,
          host: str = hookhost.CLAUDE) -> dict:
-    """Parse a scope's settings.json ({} if missing or corrupt)."""
+    """Parse a scope's settings.json ({} if missing or corrupt).
+
+    A file that exists but fails to parse is warned about by name: it stays
+    on disk untouched by this read, but `save` treats an empty `{}` as this
+    scope's *whole* settings from here on, so silently swallowing the error
+    is how a hooks-only settings.json used to eat the user's `permissions`
+    and `model` keys on the next `hooks add`.
+    """
     p = settings_path(scope, project_dir, host)
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    data, err = jsonstate.read_object(p)
+    if err:
+        output.warn(
+            "%s — reading as empty; the file is left on disk but the next "
+            "write here replaces its contents (a snapshot lands in %s "
+            "first)" % (err, _history_dir()), stream=sys.stderr)
+    return data if data is not None else {}
 
 
 def save(scope: str, data: dict, project_dir: Path | None = None,
-         host: str = hookhost.CLAUDE) -> None:
+        host: str = hookhost.CLAUDE) -> Path | None:
     """Write a scope's settings.json, snapshotting the prior version first.
 
     Snapshots are named ``<host prefix><scope>-<stamp>.json``. Claude's prefix
     is empty, so its history filenames are exactly what they always were and a
     Gemini write cannot land on top of one.
+
+    Returns the snapshot path, or None when there was no prior file to
+    snapshot — callers that just replaced a scope's settings (`hooks add`)
+    use this to tell the user where the previous version went.
     """
     p = settings_path(scope, project_dir, host)
     p.parent.mkdir(parents=True, exist_ok=True)
+    dest = None
     if p.exists():
         hist = _history_dir()
         hist.mkdir(parents=True, exist_ok=True)
@@ -100,6 +113,7 @@ def save(scope: str, data: dict, project_dir: Path | None = None,
         dest.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
         _prune_history()
     p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return dest
 
 
 def _prune_history() -> None:
@@ -135,7 +149,7 @@ def _hook_name(command: str) -> str | None:
 def add_hook(scope: str, event: str, name: str, command: str,
              matcher: str | None = None, timeout: int = 10,
              project_dir: Path | None = None,
-             host: str = hookhost.CLAUDE) -> None:
+             host: str = hookhost.CLAUDE) -> Path | None:
     """Idempotently install a boost-managed hook (replaces same-named entry).
 
     ``timeout`` is in **seconds** whatever the host; ``hookhost.hook_entry``
@@ -143,6 +157,9 @@ def add_hook(scope: str, event: str, name: str, command: str,
     must already be spelled the way ``host`` spells it — translating is the
     command layer's job, because a Claude event with no Gemini counterpart has
     to be refused out loud rather than silently dropped here.
+
+    Returns `save`'s snapshot path (or None) so the caller can tell the user
+    where the pre-edit settings.json went.
     """
     data = load(scope, project_dir, host)
     event_list = data.setdefault("hooks", {}).setdefault(event, [])
@@ -154,7 +171,7 @@ def add_hook(scope: str, event: str, name: str, command: str,
     block["hooks"] = [hookhost.hook_entry(host, _tag(command, name), timeout,
                                           name=name)]
     event_list.append(block)
-    save(scope, data, project_dir, host)
+    return save(scope, data, project_dir, host)
 
 
 def remove_hook(scope: str, event: str, name: str,

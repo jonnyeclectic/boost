@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import json
+import sys
 from copy import deepcopy
 from typing import Any
 
-from . import paths, typedvalue, util
+from . import jsonstate, output, paths, typedvalue, util
 
 DEFAULTS = {
     "agents": {
@@ -201,13 +202,20 @@ def _stat_stamp(p: Any) -> tuple:
     return (str(p), st.st_mtime_ns, st.st_size)
 
 
+def _warn_corrupt(err: str) -> None:
+    output.warn(
+        "%s — reading as empty for this command; the file on disk is left "
+        "untouched, but the next `config set`/`config unset` will move it "
+        "aside to '<name>.corrupt' before writing a fresh one" % err,
+        stream=sys.stderr)
+
+
 def _read() -> dict:
     p = paths.config_path()
-    if not p.exists():
-        return deepcopy(DEFAULTS)
-    try:
-        user = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    user, err = jsonstate.read_object(p)
+    if err:
+        _warn_corrupt(err)
+    if user is None:
         return deepcopy(DEFAULTS)
     return _merge(DEFAULTS, user)
 
@@ -217,16 +225,14 @@ def _read_raw() -> dict:
 
     A missing or corrupt file reads as no overrides — the same "absent" the
     merged view falls back to, so a caller walking this dict never has to
-    special-case the file not existing.
+    special-case the file not existing. Corruption is warned about, not
+    silenced: see :func:`_warn_corrupt`.
     """
     p = paths.config_path()
-    if not p.exists():
-        return {}
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    data, err = jsonstate.read_object(p)
+    if err:
+        _warn_corrupt(err)
+    return data if data is not None else {}
 
 
 def _cached() -> dict:
@@ -249,10 +255,21 @@ def load() -> dict:
 
 
 def save(cfg: dict) -> None:
-    """Atomically write `cfg` to `~/.boost/config.json`, creating dirs first."""
+    """Atomically write `cfg` to `~/.boost/config.json`, creating dirs first.
+
+    A config.json that exists but fails to parse is quarantined to
+    `config.json.corrupt` first, so this never overwrites bytes the read path
+    already warned about with a fresh file built from an in-memory view that
+    silently dropped them — see `jsonstate.quarantine`.
+    """
     paths.ensure_dirs()
+    p = paths.config_path()
+    if jsonstate.is_corrupt(p):
+        dest = jsonstate.quarantine(p)
+        output.warn("%s was corrupt and has been moved to %s before writing "
+                     "the new config" % (p, dest), stream=sys.stderr)
     util.atomic_write_text(
-        paths.config_path(), json.dumps(cfg, indent=2, sort_keys=False) + "\n")
+        p, json.dumps(cfg, indent=2, sort_keys=False) + "\n")
 
 
 def get(dotted: str, default=None):

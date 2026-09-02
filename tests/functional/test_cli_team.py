@@ -344,6 +344,29 @@ class TestProfile:
                                                    "version": "1.4.0"}
         assert prof["user"] == USER
 
+    def test_list_marks_a_corrupt_profile_unreadable_instead_of_hiding_it(
+            self, boost, sandbox):
+        paths.ensure_dirs()
+        (paths.profiles_dir() / "broken.json").write_text(
+            "{not json", encoding="utf-8")
+        r = boost("profile", "list")
+        assert "broken" in r.out
+        assert "unreadable" in r.out
+
+    def test_delete_removes_a_corrupt_profile_that_show_cannot_read(
+            self, boost, sandbox):
+        # `show`/`diff` need the content, so they still refuse; `delete` only
+        # needs to know the file is there — a corrupt profile used to be
+        # undeletable because its own existence check parsed it.
+        paths.ensure_dirs()
+        p = paths.profiles_dir() / "broken.json"
+        p.write_text("{not json", encoding="utf-8")
+        r = boost("profile", "show", "broken", expect=1)
+        assert "unreadable" in r.err
+        r = boost("profile", "delete", "broken")
+        assert "deleted profile broken" in r.out
+        assert not p.exists()
+
 
 # ---------------------------------------------------------------- protocol
 
