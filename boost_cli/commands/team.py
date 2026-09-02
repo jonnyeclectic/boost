@@ -98,14 +98,27 @@ def cmd_cohort(argv) -> int:
         for s in skills:
             if not catalog.find(s):
                 out.warn("skill %r not found in any tap (kept anyway)" % s)
-        cohorts[args.name] = {"skills": skills, "percent": args.percent,
-                              "created": util.now_iso(), "creator": user}
+        existing = cohorts.get(args.name)
+        cohorts[args.name] = {
+            "skills": skills, "percent": args.percent,
+            # A second `create` over an existing cohort is a replacement, not
+            # a new cohort — preserving `created` is what makes the "updated"
+            # wording below honest instead of resetting a rollout's history.
+            "created": existing["created"] if existing else util.now_iso(),
+            "creator": user}
         _save_cohorts(cohorts)
         journal.log("cohort", args.name, op="create", percent=args.percent)
         member = _is_member(user, args.name, args.percent)
-        out.ok("created cohort %s (%d%% rollout, %d skill%s) — you are %s"
-               % (args.name, args.percent, len(skills), _s(len(skills)),
-                  "IN" if member else "OUT"))
+        if existing:
+            out.ok("updated cohort %s (was %d%% / %d skill%s) — now %d%% "
+                   "rollout, %d skill%s — you are %s"
+                   % (args.name, existing["percent"], len(existing["skills"]),
+                      _s(len(existing["skills"])), args.percent, len(skills),
+                      _s(len(skills)), "IN" if member else "OUT"))
+        else:
+            out.ok("created cohort %s (%d%% rollout, %d skill%s) — you are %s"
+                   % (args.name, args.percent, len(skills), _s(len(skills)),
+                      "IN" if member else "OUT"))
         return 0
 
     if args.action == "delete":
@@ -268,6 +281,12 @@ def cmd_profile(argv) -> int:
 
     if args.action == "save":
         installed = lockfile.installed()
+        was = None
+        if _profile_path(args.name).exists():
+            try:
+                was = len(_load_profile(args.name).get("skills", {}))
+            except BoostError:
+                was = None   # unreadable old profile: still fine to replace
         profile = {"name": args.name, "saved": util.now_iso(), "user": util.user(),
                    "skills": {n: {"tap": e.get("tap", "local"),
                                   "version": e.get("version", "0.0.0")}
@@ -275,8 +294,12 @@ def cmd_profile(argv) -> int:
         paths.ensure_dirs()
         _profile_path(args.name).write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         journal.log("profile", args.name, op="save", skills=len(installed))
-        out.ok("saved profile %s (%d skill%s)"
-               % (args.name, len(installed), _s(len(installed))))
+        if was is not None:
+            out.ok("updated profile %s (was %d skill%s, now %d skill%s)"
+                   % (args.name, was, _s(was), len(installed), _s(len(installed))))
+        else:
+            out.ok("saved profile %s (%d skill%s)"
+                   % (args.name, len(installed), _s(len(installed))))
         n_rules = len(lockfile.installed_rules())
         n_workflows = len(lockfile.installed_workflows())
         if n_rules or n_workflows:

@@ -1652,6 +1652,8 @@ def cmd_export(argv: list[str]) -> int:
     ap.add_argument("-o", "--out", metavar="OUT", help="output archive path")
     ap.add_argument("--zip", action="store_true",
                     help="build a .zip instead of .tar.gz")
+    ap.add_argument("--force", action="store_true",
+                    help="overwrite OUT if it already exists")
     args = ap.parse_args(argv)
     installed = lockfile.installed()
     names = args.names or sorted(installed)
@@ -1683,6 +1685,10 @@ def cmd_export(argv: list[str]) -> int:
     ext = ".zip" if args.zip else ".tar.gz"
     dest = paths.expand(args.out) if args.out else Path(
         "boost-skills-%s%s" % (stamp, ext))
+    if dest.exists() and not args.force:
+        raise BoostError("%s already exists" % _tilde(dest),
+                        hint="pass --force to overwrite, or choose a "
+                             "different -o path")
     manifest = _boostfile_text(chosen, via="boost export")
     try:
         if args.zip:

@@ -986,6 +986,32 @@ class TestExport:
         assert "store dir for brainstorming is missing" in r.err
         assert "repair with `boost sync`" in r.err
 
+    def test_existing_destination_declines_without_force(
+            self, boost, installed, tmp_path):
+        dest = tmp_path / "x.tar.gz"
+        dest.write_text("not a real archive", encoding="utf-8")
+        r = boost("export", "brainstorming", "-o", dest, expect=1)
+        assert "%s already exists" % dest in r.err
+        assert "pass --force to overwrite" in r.err
+        # the original file must survive a declined export untouched
+        assert dest.read_text(encoding="utf-8") == "not a real archive"
+
+    def test_force_overwrites_an_existing_destination(
+            self, boost, installed, tmp_path):
+        dest = tmp_path / "x.tar.gz"
+        dest.write_text("not a real archive", encoding="utf-8")
+        r = boost("export", "brainstorming", "-o", dest, "--force")
+        assert "exported 1 skill →" in r.out
+        with tarfile.open(str(dest)) as tf:
+            assert "brainstorming/SKILL.md" in tf.getnames()
+
+    def test_a_fresh_destination_needs_no_force(self, boost, installed,
+                                                tmp_path):
+        dest = tmp_path / "fresh.tar.gz"
+        r = boost("export", "brainstorming", "-o", dest)
+        assert "exported 1 skill →" in r.out
+        assert dest.is_file()
+
 
 # ── kind-aware surfaces ──────────────────────────────────────────────────
 
