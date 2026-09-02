@@ -311,6 +311,17 @@ class TestInfer:
         r = boost("infer", "--path", "/nope/nowhere", expect=1)
         assert "is not a directory" in r.err
 
+    def test_unwritable_output_path_is_framed_not_a_crash(
+            self, boost, sandbox, py_project, tmp_path):
+        # -o pointed through a path component that is a file, not a
+        # directory: the mkdir/write used to run unguarded, so this escaped
+        # as a raw NotADirectoryError -> exit 70 crash report.
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("", encoding="utf-8")
+        out_file = blocker / "nope" / "SKILL.md"
+        r = boost("infer", "--path", py_project, "-o", out_file, expect=1)
+        assert str(out_file) in r.err
+
 
 # ---------------------------------------------------------------- absorb
 

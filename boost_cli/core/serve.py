@@ -928,6 +928,9 @@ def serve_http(host: str, port: int) -> None:
     """Bind and run the catalog server until interrupted (blocks)."""
     try:
         httpd = ThreadingHTTPServer((host, port), _CatalogHandler)
+    except OverflowError as e:
+        raise BoostError("invalid --port %r — must be 0-65535" % (port,),
+                        hint="pick a port in that range") from e
     except OSError as e:
         # Windows can report a bind against an already-LISTENing port as
         # WinError 10013 (WSAEACCES) rather than EADDRINUSE.

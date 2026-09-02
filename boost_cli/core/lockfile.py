@@ -259,13 +259,23 @@ def all_installed() -> dict[str, dict]:
     return {kind: lock[section] for kind, section in SECTIONS}
 
 
-def history_list() -> list[dict]:
-    """[{id, path, updated, count}] oldest→newest."""
+def history_list(*, with_skipped: bool = False):
+    """[{id, path, updated, count}] oldest→newest.
+
+    An entry that exists but fails to parse is skipped rather than raised —
+    one bad snapshot must not hide the rest of the history. Pass
+    ``with_skipped=True`` to also learn how many were dropped, so a caller
+    can say so instead of the id silently vanishing; the default keeps the
+    plain-list return existing callers (and their equality assertions) rely
+    on.
+    """
     out = []
+    skipped = 0
     for p in _history_files():
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            skipped += 1
             continue
         out.append({
             "id": p.stem.replace("lock-", ""),
@@ -274,17 +284,22 @@ def history_list() -> list[dict]:
             # All three sections: a snapshot holding one rule is not empty.
             "count": sum(len(data.get(s, {})) for _k, s in SECTIONS),
         })
-    return out
+    return (out, skipped) if with_skipped else out
 
 
 def history_read(hist_id: str) -> dict:
     """Return the parsed lock snapshot for history entry ``hist_id``.
 
-    Raises BoostError (with a `boost replay` hint) if no such entry.
+    Raises BoostError (with a `boost replay` hint) if no such entry, or if
+    the entry exists but is not valid JSON.
     """
+    from ..errors import BoostError
     p = paths.lock_history_dir() / ("lock-%s.json" % hist_id)
     if not p.exists():
-        from ..errors import BoostError
         raise BoostError("no lock history entry %s" % hist_id,
                         hint="list entries with `boost replay`")
-    return json.loads(p.read_text(encoding="utf-8"))
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise BoostError("lock history entry %s is unreadable: %s" % (hist_id, exc),
+                        hint="list other entries with `boost replay`") from exc

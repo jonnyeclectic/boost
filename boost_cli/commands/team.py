@@ -583,7 +583,7 @@ def cmd_replay(argv) -> int:
     args = p.parse_args(argv)
 
     if args.action == "list":
-        history = lockfile.history_list()
+        history, skipped = lockfile.history_list(with_skipped=True)
         if args.json:
             print(json.dumps(history, indent=2))
             return 0
@@ -591,6 +591,9 @@ def cmd_replay(argv) -> int:
             print(out.empty_state(
                 "no lock history yet — every install/uninstall snapshots "
                 "the lock file", wrap=True))
+            if skipped:
+                out.dim("%d unreadable snapshot%s skipped"
+                        % (skipped, "" if skipped == 1 else "s"))
             return 0
         rows = []
         prev_items = None
@@ -619,6 +622,9 @@ def cmd_replay(argv) -> int:
                          str(h["count"]), delta))
         out.table(rows, headers=("ID", "WHEN", "ITEMS", "Δ"))
         print()
+        if skipped:
+            out.dim("%d unreadable snapshot%s skipped"
+                    % (skipped, "" if skipped == 1 else "s"))
         out.dim("inspect with `boost replay show <id>` · restore with `boost replay rollback <id>`")
         return 0
 
