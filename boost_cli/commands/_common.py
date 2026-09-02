@@ -9,6 +9,7 @@ place lets the modules split without either importing back into the other.
 from __future__ import annotations
 
 import difflib
+from itertools import chain
 
 from ..core import lockfile, store
 from ..errors import BoostError
@@ -125,11 +126,10 @@ def _iter_installed_all(
             else:
                 out.append((found[0], n, found[1]))
         if missing:
-            all_names = [n for section in lockfile.all_installed().values()
-                        for n in section]
+            all_names = chain.from_iterable(lockfile.all_installed().values())
             raise BoostError(
                 "not installed: %s" % ", ".join(missing),
-                hint=_not_installed_hint(missing, all_names))
+                hint=_not_installed_hint(missing, list(all_names)))
         return out
     return [(kind, n, e)
             for kind, section in lockfile.all_installed().items()

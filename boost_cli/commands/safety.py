@@ -14,6 +14,7 @@ import json
 import re
 import time
 from contextlib import suppress
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -358,8 +359,8 @@ def cmd_verify(argv):
         unknown = [n for n in args.names
                    if lockfile.find_any(n) is None and n not in pskills]
         if unknown:
-            candidates = [n for section in lockfile.all_installed().values()
-                         for n in section] + list(pskills)
+            candidates = list(chain.from_iterable(
+                lockfile.all_installed().values())) + list(pskills)
             raise BoostError("not installed: %s" % ", ".join(unknown),
                             hint=_not_installed_hint(unknown, candidates))
     user_names = [n for n in (args.names or [])
