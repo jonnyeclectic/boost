@@ -14,6 +14,7 @@ import difflib
 import fnmatch
 import json
 import re
+import sys
 import tempfile
 import textwrap
 from collections import Counter
@@ -27,6 +28,7 @@ from ..core import (
     gitutil,
     imperative,
     journal,
+    jsonstate,
     lockfile,
     paths,
     registry,
@@ -88,17 +90,26 @@ def _bump_patch(v: str) -> str:
 
 def _load_state(fname: str, default: dict) -> dict:
     p = paths.state_dir() / fname
-    if not p.exists():
+    data, err = jsonstate.read_object(p)
+    if err:
+        # stderr unconditionally: some callers (`context status --json`) read
+        # this before deciding whether they're printing JSON to stdout, and a
+        # warning has no business inside that payload.
+        out.warn("%s — reading as the default; the file is left on disk but "
+                 "the next write here replaces it" % err, stream=sys.stderr)
+    if data is None:
         return json.loads(json.dumps(default))
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return json.loads(json.dumps(default))
+    return data
 
 
 def _save_state(fname: str, data: dict) -> None:
     paths.ensure_dirs()
-    (paths.state_dir() / fname).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    p = paths.state_dir() / fname
+    if jsonstate.is_corrupt(p):
+        dest = jsonstate.quarantine(p)
+        out.warn("%s was corrupt and has been moved to %s before writing "
+                 "the new file" % (p, dest), stream=sys.stderr)
+    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def _install_generated(name: str, text: str) -> None:

@@ -2,14 +2,14 @@
 id: audit-corrupt-settings-config-state-json-silently-read-as-empty-th
 board: code
 section: dx
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: M
 impact: High
 wow: 2
 note: a trailing comma in settings.json costs the permissions/model block on the next hooks add
 order: 203
-owner:
+owner: loop/corrupt-json-state
 pr:
 title: "Corrupt settings/config/state JSON silently read as empty, then clobbered on the next write"
 ---
@@ -20,3 +20,5 @@ Verification narrowed the hooks half: <code>claude_settings.save</code> already 
 Fix centrally, per the verified recommendation: when a JSON state file exists but fails to parse, warn on read naming the file and the JSON error, and before any save either refuse with a BoostError and a fix-it hint or move the bad file to <code>&lt;name&gt;.corrupt</code> and say so. <code>hooks add</code> should print the claude-settings-history snapshot path it already writes; <code>profile delete</code> should check <code>_profile_path(name).exists()</code> instead of parsing; <code>profile list</code> should show an <em>(unreadable)</em> marker. Docs: note the corrupt-file behaviour in <code>docs/DEBUGGING.md</code> (config/logging section).
 
 Found by the 2026-08 CLI audit (cluster <code>corrupt-json-clobbered</code>); repro in the audit log. Verified 2026-08-31: all four surfaces reproduced.
+
+<b>2026-09-02, PR open.</b> New <code>core/jsonstate.py</code> (<code>read_object</code>/<code>is_corrupt</code>/<code>quarantine</code>) centralizes the read-vs-corrupt distinction; <code>config.py</code>, <code>claude_settings.py</code> and <code>commands/intelligence.py</code>'s <code>_load_state</code>/<code>_save_state</code> (context/focus) all warn on a corrupt read and quarantine to <code>&lt;name&gt;.corrupt</code> (or reuse the existing history snapshot, for hooks) before the next write. <code>hooks add</code> prints the snapshot path; <code>profile delete</code> checks existence instead of parsing; <code>profile list</code> marks a corrupt profile <em>(unreadable)</em>. <code>docs/DEBUGGING.md</code> has a new section. All four surfaces from the audit are covered. Left <code>inflight</code> rather than <code>shipped</code>: this session's sandbox has no PyPI egress, so the mutation/lint toolchain (mutmut, vulture, xenon, interrogate, refurb, codespell, actionlint, zizmor) could not be installed to run <code>make check</code> locally — ruff, mypy, pyright and pytest (unit+functional, no coverage) were run directly against the changed files and pass clean. CI runs the full gate; flip to <code>shipped</code> once it's green.

@@ -129,12 +129,15 @@ def _add(args) -> int:
     if event not in hookhost.events(host):
         out.warn("'%s' is not a known %s hook event — adding anyway"
                  % (event, hookhost.event_label(host)))
-    cs.add_hook(scope, event, args.name, args.command,
-                matcher=args.matcher, timeout=args.timeout, host=host)
+    snapshot = cs.add_hook(scope, event, args.name, args.command,
+                           matcher=args.matcher, timeout=args.timeout,
+                           host=host)
     journal.log("hook-add", args.name, scope=scope, event=event, host=host)
     out.ok("added %s hook '%s' (%s) → %s"
            % (event, args.name, _where(host, scope), args.command))
     out.dim("  settings: %s" % cs.settings_path(scope, host=host))
+    if snapshot is not None:
+        out.dim("  backup:   %s" % snapshot)
     return 0
 
 

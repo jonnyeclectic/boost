@@ -203,6 +203,42 @@ plain `upgrade` has already been tried and refused.
 
 ---
 
+## A corrupt config/settings/state file
+
+boost keeps several small JSON files — `~/.boost/config.json`, each agent's
+`settings.json` (hooks), `~/.boost/state/context.json`/`focus.json`, and a
+saved `boost profile`. If one of these exists but fails to parse (a truncated
+write, a hand-edited trailing comma), the read that notices prints a warning
+to stderr naming the file and the JSON error, then falls back to that file's
+empty/default state for the current command — the bad bytes are left on disk,
+untouched, by the read itself.
+
+**The next write to that file is what matters.** Rather than silently
+building a fresh file from the empty/default view and overwriting the corrupt
+one — losing whatever was in it, with no way back — boost moves the corrupt
+file aside first:
+
+- `~/.claude/settings.json` (and `~/.gemini/settings.json`) already snapshot
+  the *previous* version into `~/.boost/state/claude-settings-history/` on
+  every write, corrupt or not, so a corrupt file is preserved there too.
+  `boost hooks add` prints that snapshot's path (`backup: ...`) whenever one
+  is written, so you don't have to know the history directory exists to use
+  it.
+- `~/.boost/config.json` and the `context.json`/`focus.json` state files have
+  no such standing history, so the write itself quarantines a corrupt file to
+  `<name>.json.corrupt` (or `.corrupt.2`, `.corrupt.3`, ... if that name is
+  already taken by an earlier corruption) before writing the new one, and
+  says so on stderr.
+- `boost profile list` marks a corrupt profile `(unreadable)` instead of
+  hiding it, and `boost profile delete <name>` only checks that the file
+  exists — not that it parses — so a corrupt profile can still be deleted.
+
+None of this recovers a corrupt file's *content* automatically — it recovers
+the bytes so you can look at them (`<name>.json.corrupt`, or the newest file
+under `claude-settings-history/`) and hand-merge anything worth keeping.
+
+---
+
 ## Environment variables
 
 Everything that changes boost's runtime behaviour, in one place:
