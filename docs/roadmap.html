@@ -1078,7 +1078,7 @@ is not obviously the right trade, and at the compressed sizes measured there it 
       </article>
 
       <article class="cap rcard" id="shrink-the-published-index">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Performance · Storage</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Performance · Storage</span></div>
         <h3>shrink the keyword index before publishing it — structure first, then compression</h3>
         <p><a href="#publish-the-keyword-index">publish-the-keyword-index</a> is worth doing only if the
 artifact is small enough to ship weekly. This card is the measurement that decides it, and the
@@ -1126,7 +1126,21 @@ for the many-small-registries case, where per-shard compression has little conte
 <b>Deliverable.</b> A measured comparison — raw, interned, delta+varint, each &times; none/gzip/zstd
 — on the real store, with import-side decode time beside each. That table is what tells
 <a href="#publish-the-keyword-index">publish-the-keyword-index</a> what to ship, and it is worth
-having even if publishing is declined: the on-disk win applies to every install today.</p>
+having even if publishing is declined: the on-disk win applies to every install today.
+
+<b>Progress (PR pending).</b> The structural half shipped: <code>_write_postings</code> now
+interns terms into their own <code>terms(id, term, df)</code> table, with <code>postings</code>
+carrying an integer <code>term_id</code> instead of repeating the term string on every row —
+exactly the "structure first" change this card calls the bigger win, and it bumps
+<code>INDEX_VERSION</code> so every store picks it up on its next rebuild.
+<code>stem_expansions</code> now reads the precomputed <code>df</code> column directly instead of
+a <code>GROUP BY COUNT(*)</code> over <code>postings</code> on every prefix lookup. Not done: the
+delta/varint doc-id encoding, and the full raw/interned/delta+varint &times;
+none/gzip/zstd comparison table with import-side decode times on a real multi-hundred-MB store —
+this sandbox has no such store to measure against, only a small synthetic one (interning alone cut
+a 1.8M-posting/20k-term synthetic store from 63.6&nbsp;MB to 47.9&nbsp;MB, directionally consistent
+with the real-store estimate above but not a substitute for it). Left as follow-on work before this
+card can be called shipped.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -11982,15 +11996,16 @@ Found by the 2026-08 CLI audit (cluster <code>qualifier-rejected-elsewhere</code
       </article>
 
       <article class="cap rcard" id="audit-tap-dry-run-is-silently-ignored-outside-catalog-spec-and-def">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3><code>tap --dry-run</code> is silently ignored outside <code>--catalog</code>: SPEC and <code>--defaults</code> clone for real</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>On a pristine HOME, <code>boost tap --dry-run expo/skills</code> printed <code>&#10003; Tapped expo/skills (26 items)</code>, exit 0 in 1.56&nbsp;s &mdash; and the clone exists and <code>config.json</code> gained the row. <code>tap --defaults --dry-run</code> cloned five registries (<code>&#10003; tapped trailofbits/skills (124 items) &hellip;</code>) and grew the config from 21 to 26 taps. The multi-spec path is the same: <code>tap --dry-run expo/skills anthropics/skills</code> answered with <code>already tapped</code> lines, proving registry code ran. Help does say <em>&ldquo;with --catalog: print what would be tapped, tap nothing&rdquo;</em> &mdash; documented-narrow, but a flag literally named <code>--dry-run</code> that clones repos and writes config is a safety hole regardless of wording.
 
 The source confirms the shape: <code>taps.py</code> consults <code>args.dry_run</code> only inside <code>_tap_catalog</code> (<code>boost_cli/commands/taps.py:38</code>); <code>cmd_tap</code>'s defaults, single-spec and multi-spec branches (<code>taps.py:144-166</code>) never read it. Not a duplicate of the roadmap's <em>dry-run-promised-a-link-nobody-makes</em>, which is about <code>install --dry-run</code>.
 
 Fix, per the verified recommendation: in <code>cmd_tap</code>, when <code>args.dry_run</code> and (<code>args.spec</code> or <code>args.defaults</code>), print the parsed <code>(name, url)</code> per spec &mdash; or the <code>DEFAULT_TAPS</code> list &mdash; and return 0 <em>before</em> <code>registry.add</code>/<code>_tap_all</code>; update the <code>--dry-run</code> help text; add a unit test that <code>--dry-run SPEC</code> writes nothing. Docs: regenerate <code>docs/commands.html</code> after the help-text change.
 
-Found by the 2026-08 CLI audit (cluster <code>tap-dry-run-ignored</code>); repro in the audit log. Verified against source 2026-08-31.</p>
+Found by the 2026-08 CLI audit (cluster <code>tap-dry-run-ignored</code>); repro in the audit log. Verified against source 2026-08-31.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>

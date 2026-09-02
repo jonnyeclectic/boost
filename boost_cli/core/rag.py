@@ -41,7 +41,10 @@ from . import ai, catalog, config, frontmatter, gitutil, paths, registry, util
 # v2: `snip` stores a larger head of the matched chunk (not just SNIP_WIDTH
 # chars) so `retrieve` can window it onto the query terms; bump forces a
 # one-time reindex.
-INDEX_VERSION = 6
+# v7: postings interns term text into its own `terms` table instead of
+# repeating it on every posting row — see `_write_postings`; bump forces a
+# one-time reindex so every store gets the smaller layout.
+INDEX_VERSION = 7
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -331,6 +334,14 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
     SQLite is used purely as an indexed key-value store here, not as a search
     engine: BM25 scoring stays in `_bm25` byte for byte, so this changes cold
     start cost and nothing about which results come back.
+
+    Terms are interned into their own table rather than repeated on every
+    posting row. Measured on a real 458-tap store: 18,619,658 posting rows over
+    210,422 distinct terms averaging 6.6 characters — the term string alone was
+    ~123 MB of the 653 MB file, stored on average 88 times over. `postings` now
+    carries an integer `term_id`, and `terms` also carries each term's document
+    frequency (`df`, the length of its posting list) so `stem_expansions` can
+    read it directly instead of re-deriving it with `GROUP BY` on every lookup.
     """
     paths.ensure_dirs()
     final = postings_path()
@@ -343,13 +354,22 @@ def _write_postings(postings: dict[str, list[list[int]]]) -> None:
         # mid-build leaves the .tmp behind rather than a torn index.
         con.execute("PRAGMA journal_mode=OFF")
         con.execute("PRAGMA synchronous=OFF")
-        con.execute("CREATE TABLE postings (term TEXT, doc INTEGER, tf INTEGER)")
+        con.execute("CREATE TABLE terms (id INTEGER PRIMARY KEY, "
+                    "term TEXT NOT NULL, df INTEGER NOT NULL)")
+        con.execute("CREATE TABLE postings (term_id INTEGER, doc INTEGER, "
+                    "tf INTEGER)")
+        items = list(postings.items())
         con.executemany(
-            "INSERT INTO postings (term, doc, tf) VALUES (?, ?, ?)",
-            ((term, doc, tf) for term, plist in postings.items()
+            "INSERT INTO terms (id, term, df) VALUES (?, ?, ?)",
+            ((term_id, term, len(plist))
+             for term_id, (term, plist) in enumerate(items)))
+        con.executemany(
+            "INSERT INTO postings (term_id, doc, tf) VALUES (?, ?, ?)",
+            ((term_id, doc, tf) for term_id, (_term, plist) in enumerate(items)
              for doc, tf in plist))
         # Built after the insert: maintaining it per-row is far slower.
-        con.execute("CREATE INDEX postings_term ON postings(term)")
+        con.execute("CREATE UNIQUE INDEX terms_term ON terms(term)")
+        con.execute("CREATE INDEX postings_term_id ON postings(term_id)")
         con.commit()
     finally:
         con.close()
@@ -375,8 +395,9 @@ def read_postings(terms: Sequence[str]) -> dict[str, list[list[int]]]:
         # long query can exceed it.
         for i in range(0, len(uniq), 500):
             batch = uniq[i:i + 500]
-            q = ("SELECT term, doc, tf FROM postings WHERE term IN (%s)"  # noqa: S608  interpolates only `?` placeholders; terms are bound params
-                 % ",".join("?" * len(batch)))
+            q = ("SELECT t.term, p.doc, p.tf FROM postings p "  # noqa: S608  interpolates only `?` placeholders; terms are bound params
+                 "JOIN terms t ON p.term_id = t.id "
+                 "WHERE t.term IN (%s)" % ",".join("?" * len(batch)))
             for term, doc, tf in con.execute(q, batch):
                 out[term].append([doc, tf])
     except sqlite3.Error:
@@ -429,12 +450,14 @@ def stem_expansions(terms: Sequence[str]) -> dict[str, str]:
         for term in missing:
             # `tokenize` emits only [a-z0-9]+, and "~" sorts above every
             # character it can produce — so this half-open range is exactly the
-            # terms beginning with `term`, and it rides the postings_term index
-            # instead of scanning. Ties break on the term itself so the choice
-            # is deterministic across machines.
+            # terms beginning with `term`, and it rides the terms_term index
+            # instead of scanning. `df` (document frequency) is stored per term
+            # at build time, so this needs no join and no GROUP BY. Ties break
+            # on the term itself so the choice is deterministic across
+            # machines.
             row = con.execute(
-                "SELECT term FROM postings WHERE term > ? AND term < ? "
-                "GROUP BY term ORDER BY COUNT(*) DESC, term LIMIT 1",
+                "SELECT term FROM terms WHERE term > ? AND term < ? "
+                "ORDER BY df DESC, term LIMIT 1",
                 (term, term + "~")).fetchone()
             if row:
                 out[term] = row[0]
@@ -453,7 +476,9 @@ def _all_postings() -> dict[str, list[list[int]]]:
         return {}
     out: dict[str, list[list[int]]] = defaultdict(list)
     try:
-        for term, doc, tf in con.execute("SELECT term, doc, tf FROM postings"):
+        for term, doc, tf in con.execute(
+                "SELECT t.term, p.doc, p.tf FROM postings p "
+                "JOIN terms t ON p.term_id = t.id"):
             out[term].append([doc, tf])
     except sqlite3.Error:
         return {}
