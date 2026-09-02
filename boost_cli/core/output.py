@@ -723,7 +723,7 @@ def _numeric_col(cells) -> bool:
     seen = False
     for cell in cells:
         v = _ANSI_RE.sub("", str(cell)).strip()
-        if v == "" or v == _NUMERIC_PLACEHOLDER:
+        if v in ("", _NUMERIC_PLACEHOLDER):
             continue
         seen = True
         if not _NUMERIC_RE.fullmatch(v):
