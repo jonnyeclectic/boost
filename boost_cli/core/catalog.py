@@ -19,6 +19,7 @@ that ship in the same GitHub registries:
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import operator
@@ -573,6 +574,22 @@ def _suggestions(scored, limit: int = 3) -> list[str]:
     return labels
 
 
+def _fuzzy_suggestions(query: str, entries: list[dict], limit: int = 3) -> list[str]:
+    """Edit-distance fallback for a miss ``search`` scored nothing for.
+
+    ``search`` needs a shared token or substring, so a one-character typo like
+    'brainstormng' for 'brainstorming' shares no aligned substring with it and
+    scores zero — the near-miss gets no hint while unrelated nonsense that
+    happens to share a token gets three. ``difflib`` grades whole-string
+    similarity instead, so it catches exactly the case token/substring scoring
+    misses. Names only, not the tap-qualifying dance ``_suggestions`` does for
+    scored hits: a query this close to nothing never produced a match to
+    qualify in the first place.
+    """
+    names = sorted({e["name"] for e in entries})
+    return difflib.get_close_matches(query, names, n=limit)
+
+
 def resolve_one(name: str, path: str | None = None) -> dict:
     """Find exactly one entry or raise with a helpful hint.
 
@@ -612,15 +629,41 @@ def resolve_one(name: str, path: str | None = None) -> dict:
                 hint="`tap:skill` picks the registry; to pick a copy inside "
                      "one, use --path: `boost install %s:%s --path %s`"
                      % (qualifier, bare.rsplit("/", 1)[-1], bare))
+        # A qualified miss searches the BARE name, restricted to the taps the
+        # qualifier actually selects — never the whole `tap:skill` string.
+        # Scoring the full string lets the tap's own tokens dominate (a typo'd
+        # `neolabhq/context-engineering-kit:brainstorm` scored on "context"
+        # and "engineering", never "brainstorm", which that tap ships) and,
+        # when the qualifier itself is wrong, misreports a missing *skill*
+        # instead of naming the tap that does not exist.
+        query, search_entries = name, None
+        if qualifier is not None:
+            known = [t.name for t in registry.list_taps()
+                     if tap_matches(t.name, qualifier)]
+            if not known:
+                shipped_by = sorted({e["tap"] for e in all_entries()
+                                     if e["name"] == bare})
+                raise BoostError(
+                    "no tap named %r" % qualifier,
+                    hint=("%r is shipped by: %s" % (bare, ", ".join(shipped_by))
+                          if shipped_by else None))
+            query = bare
+            search_entries = [e for e in all_entries() if e["tap"] in known]
         # The whole scored list, not a pre-sliced top 3 — see _suggestions:
         # slicing first collapses to one suggestion exactly when a registry
         # mirrors a skill per agent, which is the case it exists to handle.
-        scored = search(name)
+        scored = search(query, entries=search_entries)
         hint = None
         if scored:
             hint = "closest matches: " + ", ".join(_suggestions(scored))
-        elif not registry.list_taps():
-            hint = "no taps configured — start with `boost tap --defaults`"
+        else:
+            fuzzy = _fuzzy_suggestions(
+                query, search_entries if search_entries is not None
+                else all_entries())
+            if fuzzy:
+                hint = "closest matches: " + ", ".join(fuzzy)
+            elif not registry.list_taps():
+                hint = "no taps configured — start with `boost tap --defaults`"
         raise BoostError("no skill named %r in any tap" % name, hint=hint)
     if len(matches) > 1:
         # `name` may already be tap-qualified; hints must re-qualify the BARE

@@ -724,6 +724,64 @@ class TestResolveOne:
         assert ei.value.message == "no skill named 'anything' in any tap"
         assert ei.value.hint == "no taps configured — start with `boost tap --defaults`"
 
+    def test_typo_gets_fuzzy_hint_scored_search_misses(self, sandbox):
+        # 'brainstormng' shares no aligned substring or token with
+        # 'brainstorming', so `search()` scores it zero — the exact gap the
+        # difflib fallback exists to close.
+        _fake_taps(("t", [_entry("brainstorming", "t")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("brainstormng")
+        assert ei.value.hint == "closest matches: brainstorming"
+
+    def test_unknown_tap_qualifier_is_named_not_the_skill(self, sandbox):
+        # The skill exists — the *tap* qualifier is what is wrong. The old
+        # message blamed the skill and said nothing about the typo'd tap.
+        _fake_taps(("owner/repo", [_entry("brainstorming", "owner/repo")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("nosuch/tap:brainstorming")
+        assert ei.value.message == "no tap named 'nosuch/tap'"
+        assert "owner/repo" in ei.value.hint
+
+    def test_unknown_tap_qualifier_hint_lists_every_shipping_tap(self, sandbox):
+        _fake_taps(("owner/alpha", [_entry("brainstorming", "owner/alpha")]),
+                   ("beta", [_entry("brainstorming", "beta")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("nosuch/tap:brainstorming")
+        listed = ei.value.hint.rsplit(": ", 1)[-1].split(", ")
+        assert sorted(listed) == ["beta", "owner/alpha"]
+
+    def test_unknown_tap_qualifier_no_hint_when_name_unshipped(self, sandbox):
+        _fake_taps(("owner/repo", [_entry("brainstorming", "owner/repo")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("nosuch/tap:ghost")
+        assert ei.value.message == "no tap named 'nosuch/tap'"
+        assert ei.value.hint is None
+
+    def test_known_tap_accepted_by_bare_repo_tail(self, sandbox):
+        # `tap_matches` accepts the bare repo tail, not just `owner/repo` — a
+        # qualifier resolving that way must not be treated as unknown.
+        _fake_taps(("owner/repo", [_entry("brainstorming", "owner/repo")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one("repo:ghost")
+        assert ei.value.message == "no skill named 'repo:ghost' in any tap"
+
+    def test_qualified_miss_searches_bare_name_within_the_named_tap_only(
+            self, sandbox):
+        # Reproduces the audit repro: `NeoLabHQ/context-engineering-kit:brainstorming`
+        # (a typo for the tap's own 'brainstorm') used to score against every
+        # tap's entries on the qualified string's own tokens — 'context' and
+        # 'engineering' — surfacing an unrelated tap's items and never the
+        # near-miss the queried tap actually ships.
+        _fake_taps(
+            ("NeoLabHQ/context-engineering-kit",
+             [_entry("brainstorm", "NeoLabHQ/context-engineering-kit")]),
+            ("other/pack", [_entry("context-engineering-basics", "other/pack"),
+                            _entry("context-engineering-advanced", "other/pack")]))
+        with pytest.raises(BoostError) as ei:
+            catalog.resolve_one(
+                "NeoLabHQ/context-engineering-kit:brainstorming")
+        assert ei.value.hint == "closest matches: brainstorm"
+
     def test_multi_tap_ambiguity(self, sandbox):
         _fake_taps(("owner/alpha", [_entry("dup", "owner/alpha")]),
                    ("beta", [_entry("dup", "beta")]))
