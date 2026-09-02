@@ -2,14 +2,14 @@
 id: audit-fingerprint-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: quarantine doesn't change the fingerprint; an uncloned tap hashes as empty, silently
 order: 269
-owner:
+owner: loop/fingerprint-quarantine
 pr:
 title: "<code>boost fingerprint</code>: CLI audit findings (2026-08)"
 ---
