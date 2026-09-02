@@ -348,3 +348,42 @@ class TestLogForPath:
         (args, _), = calls
         assert args[args.index("-n") + 1] == "20"      # default limit, not 21
         assert args[-1] == "."                         # default rel_path
+
+
+class TestBranchState:
+    """gitutil.branch_state keeps "no git on PATH", "not a repo" and "in a
+    repo with a branch" as three distinct answers instead of one bare None,
+    which callers used to conflate (boost_cli/commands/intelligence.py's
+    `context` and `impact` both misreported a missing git binary as "not in
+    a git repository")."""
+
+    def test_no_git_binary(self, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.gitutil.shutil.which", lambda n: None)
+        state = gitutil.branch_state()
+        assert state == gitutil.BranchState(has_git=False, in_repo=False, branch=None)
+
+    def test_git_present_but_not_a_repo(self, tmp_path):
+        state = gitutil.branch_state(tmp_path)
+        assert state == gitutil.BranchState(has_git=True, in_repo=False, branch=None)
+
+    def test_in_repo_on_a_named_branch(self, tmp_path):
+        repo = _make_repo(tmp_path / "repo")
+        _git("checkout", "-qb", "feature/x", cwd=repo)
+        state = gitutil.branch_state(repo)
+        assert state == gitutil.BranchState(has_git=True, in_repo=True,
+                                            branch="feature/x")
+
+    def test_defaults_to_cwd(self, tmp_path, monkeypatch):
+        repo = _make_repo(tmp_path / "repo")
+        _git("checkout", "-qb", "main-ish", cwd=repo)
+        monkeypatch.chdir(repo)
+        assert gitutil.branch_state().branch == "main-ish"
+
+    def test_not_a_repo_short_circuits_before_branch_lookup(self, tmp_path,
+                                                             monkeypatch):
+        calls = _record_run(monkeypatch, stdout="false")
+        gitutil.branch_state(tmp_path)
+        # only the is-inside-work-tree probe ran — no point asking for a
+        # branch name outside any repo.
+        assert len(calls) == 1
+        assert calls[0][0][-1] == "--is-inside-work-tree"

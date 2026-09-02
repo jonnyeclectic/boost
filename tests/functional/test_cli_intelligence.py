@@ -428,7 +428,7 @@ class TestContext:
         assert "feature/*" in r.out and "tdd-workflow" in r.out
         r = boost("context", "status", "--json")
         assert json.loads(r.out) == {
-            "enabled": False, "branch": None,
+            "enabled": False, "branch": None, "git": True,
             "rules": [{"pattern": "feature/*", "skills": ["tdd-workflow"]}]}
         r = boost("context", "unmap", "feature/*")
         assert "unmapped feature/*" in r.out
@@ -504,6 +504,25 @@ class TestContext:
         assert "context is disabled (`boost context enable`) — applying anyway" in r.out
         assert "not inside a git repository — nothing to apply" in r.out
 
+    def test_status_and_apply_report_missing_git_binary_distinctly(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # A repo that genuinely has no branch must not be worded the same as
+        # a machine with no `git` on PATH — the CLI audit found both cases
+        # collapsed into the same "(not in a git repository)" text.
+        from boost_cli.core import gitutil
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+
+        r = boost("context", "status")
+        assert "(git not found on PATH)" in r.out
+        assert "not in a git repository" not in r.out
+        r = boost("context", "status", "--json")
+        assert json.loads(r.out)["git"] is False
+        assert json.loads(r.out)["branch"] is None
+
+        r = boost("context", "apply")
+        assert "git not found on PATH — nothing to apply" in r.out
+
 
 # ---------------------------------------------------------------- focus
 
@@ -549,13 +568,13 @@ class TestFocus:
 
 class TestImpact:
     def test_no_skills_installed(self, boost, sandbox, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)  # not a git repo
         r = boost("impact")
         assert "no skills installed — nothing to measure" in r.out
         r = boost("impact", "--json")
         assert json.loads(r.out) == {
-            "note": "correlation, not causation — commits since install in "
-                    "this repo", "skills": []}
+            "note": "not inside a git repository — commit counts unavailable",
+            "git": True, "skills": []}
 
     def test_table_outside_repo_uses_dash(self, boost, installed, tmp_path,
                                           monkeypatch):
@@ -567,13 +586,24 @@ class TestImpact:
                    if l.startswith("brainstorming"))
         assert "—" in row
         assert FALLBACK in flat(r.out)
-        assert "correlation, not causation" in r.out
+        # outside a repo the note says why the count is missing, rather than
+        # the in-repo correlation caveat that made no sense without one.
+        assert "not inside a git repository — commit counts unavailable" in r.out
+        assert "correlation, not causation" not in r.out
+        r = boost("impact", "brainstorming", "--json")
+        data = json.loads(r.out)
+        assert data["note"] == "not inside a git repository — commit counts unavailable"
+        assert data["git"] is True
+        assert data["skills"][0]["commits_since"] is None
 
     def test_named_in_repo_json(self, boost, installed, tmp_path, monkeypatch):
         repo = _git_repo(tmp_path / "repo")
         monkeypatch.chdir(repo)
         r = boost("impact", "brainstorming", "--json")
         data = json.loads(r.out)
+        assert data["note"] == ("correlation, not causation — commits since "
+                                "install in this repo")
+        assert data["git"] is True
         assert data["skills"][0]["skill"] == "brainstorming"
         # the repo's one (empty) commit was created after the install
         assert data["skills"][0]["commits_since"] == 1
@@ -581,6 +611,18 @@ class TestImpact:
         assert data["skills"][0]["events"] == 1
         r = boost("impact", "brainstorming")
         assert "files touched" in r.out
+        assert "correlation, not causation" in r.out
+
+    def test_no_git_binary_reports_note_and_json_flag(
+            self, boost, installed, tmp_path, monkeypatch):
+        from boost_cli.core import gitutil
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(gitutil, "has_git", lambda: False)
+        r = boost("impact", "brainstorming", "--json")
+        data = json.loads(r.out)
+        assert data["git"] is False
+        assert data["note"] == "not inside a git repository — commit counts unavailable"
+        assert data["skills"][0]["commits_since"] is None
 
     def test_unknown(self, boost, installed):
         r = boost("impact", "ghost", expect=1)

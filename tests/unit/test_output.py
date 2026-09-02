@@ -945,6 +945,16 @@ class TestNumericCol:
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
         assert output._numeric_col([output.aurora("5", "green"), "10"]) is True
 
+    def test_dash_placeholder_ignored_like_blank(self):
+        # `boost impact`'s COMMITS SINCE column: some rows have a real count,
+        # others show "—" for "no data" — the placeholder must not knock the
+        # whole column back to left-aligned text.
+        assert output._numeric_col(["1", "—", "300"]) is True
+
+    def test_all_dash_placeholder_is_not_numeric(self):
+        # nothing to right-align when every row is the placeholder.
+        assert output._numeric_col(["—", "—"]) is False
+
 
 class TestClipVisible:
     def test_noop_when_fits(self):
@@ -1004,6 +1014,18 @@ class TestTableWidthAware:
             "NAME     N\n"
             "alpha    5\n"
             "b      100\n")
+
+    def test_dash_placeholder_row_stays_right_aligned(self, capsys, monkeypatch):
+        monkeypatch.setattr(output, "term_width", lambda: 80)
+        output.table([("alpha", "5"), ("b", "—"), ("cc", "100")],
+                     headers=("NAME", "N"))
+        # a placeholder row keeps the count column right-aligned instead of
+        # dragging the whole column back to left-justified text.
+        assert capsys.readouterr().out == (
+            "NAME     N\n"
+            "alpha    5\n"
+            "b        —\n"
+            "cc     100\n")
 
     def test_overflow_shrinks_text_not_numeric(self, capsys, monkeypatch):
         monkeypatch.setattr(output, "term_width", lambda: 24)

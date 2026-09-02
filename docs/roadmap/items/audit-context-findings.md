@@ -2,15 +2,15 @@
 id: audit-context-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: git missing from PATH is reported as "not in a git repository", even inside a repo
 order: 259
-owner:
-pr:
+owner: loop/context-git-state
+pr: 699
 title: "boost context: CLI audit findings (2026-08)"
 ---
 <b><code>context</code> and <code>impact</code> conflate "git missing from PATH" with "not a git

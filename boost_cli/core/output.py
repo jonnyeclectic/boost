@@ -707,15 +707,23 @@ def _rpad(cell: str, width: int) -> str:
 
 _NUMERIC_RE = re.compile(r"-?\d+(?:\.\d+)?")
 
+# A count column's own "no data for this row" placeholder (e.g. `boost impact`'s
+# COMMITS SINCE column when a skill's git activity is unavailable). Treated like
+# a blank cell below so one placeholder row doesn't knock the whole column back
+# to left-aligned text — the em dash would otherwise sit misaligned under the
+# right-aligned numbers around it.
+_NUMERIC_PLACEHOLDER = "—"
+
 
 def _numeric_col(cells) -> bool:
     """True when every non-empty cell in a column is a plain number, so the
-    column reads as a count and should be right-aligned. Blank cells are
-    ignored; a column of only blanks is not numeric."""
+    column reads as a count and should be right-aligned. Blank cells and the
+    "—" no-data placeholder are ignored; a column of only those is not
+    numeric."""
     seen = False
     for cell in cells:
         v = _ANSI_RE.sub("", str(cell)).strip()
-        if v == "":
+        if v in ("", _NUMERIC_PLACEHOLDER):
             continue
         seen = True
         if not _NUMERIC_RE.fullmatch(v):
