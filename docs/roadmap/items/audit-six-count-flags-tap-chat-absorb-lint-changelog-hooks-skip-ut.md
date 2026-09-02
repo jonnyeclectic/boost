@@ -10,7 +10,7 @@ wow: 1
 note: chat -k 0 fabricates "nothing matches"; hooks --timeout -5 lands in settings.json
 order: 234
 owner: loop/count-flags-reject-zero-negative
-pr:
+pr: 717
 title: "Six count flags (<code>tap</code>/<code>chat</code>/<code>absorb</code>/<code>lint</code>/<code>changelog</code>/<code>hooks</code>) accept 0 and negatives"
 ---
 The same defect class the shipped negative-limit-inverts-log-pulse-output card fixed, at six sites
