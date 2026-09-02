@@ -2,14 +2,14 @@
 id: audit-adapt-renders-every-sibling-of-a-flat-agents-dir-workflow-as
 board: code
 section: internals
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
 note: one flat agents/x.md adapts into a 383 KB crew of 138 Agent()s — including itself, twice
 order: 200
-owner:
+owner: loop/adapt-flat-agents-subagent-scope
 pr:
 title: "<code>adapt</code> renders every sibling of a flat <code>agents/</code>-dir workflow as a 138-agent crew"
 ---

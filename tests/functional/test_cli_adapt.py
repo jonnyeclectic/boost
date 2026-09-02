@@ -3,6 +3,8 @@
 """Functional tests: `boost adapt` — render a skill as framework source."""
 from __future__ import annotations
 
+import subprocess
+
 
 def test_adapt_installed_skill_to_crewai_stdout(boost, installed):
     r = boost("adapt", installed, "--to", "crewai")
@@ -130,3 +132,41 @@ def test_multi_agent_target_without_crew_falls_back_with_note(boost, installed):
     assert "reviewer = Agent(" not in r.out
     assert "declares 2 subagent" in r.err
     compile(r.out, "<sdk>", "exec")
+
+
+# --- flat agents/-dir workflow item: not a multi-agent skill --------------
+
+def _flat_agents_tap(tmp_path):
+    """A registry whose agents/ directory holds one Markdown file per
+    stand-alone workflow item, no SKILL.md anywhere — the shape that made
+    `adapt` mistake every sibling workflow for a subagent of the one being
+    adapted."""
+    tap = tmp_path / "flat-tap"
+    agents = tap / "agents"
+    agents.mkdir(parents=True)
+    (agents / "actix-expert.md").write_text(
+        "---\nname: actix-expert\ndescription: Actix web framework expert\n---\n"
+        "Body for actix.\n", encoding="utf-8")
+    (agents / "android-expert.md").write_text(
+        "---\nname: android-expert\ndescription: Android expert\n---\n"
+        "Body for android.\n", encoding="utf-8")
+    run = lambda *a: subprocess.run(a, cwd=tap, check=True, capture_output=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "fixture@boost.test")
+    run("git", "config", "user.name", "Boost Fixture")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "flat agents fixture")
+    return tap
+
+
+def test_flat_agents_dir_workflow_adapts_as_single_agent(boost, tmp_path):
+    tap = _flat_agents_tap(tmp_path)
+    boost("tap", str(tap))
+    r = boost("adapt", "actix-expert", "--to", "crewai", "--model", "none")
+    assert "actix_expert = Agent(" in r.out
+    # the sibling workflow in the same shared agents/ dir must not appear —
+    # neither as a rendered agent nor as a dropped-subagent note
+    assert "android_expert" not in r.out
+    assert "crew of" not in r.out
+    assert r.err == ""
+    compile(r.out, "<crewai>", "exec")
