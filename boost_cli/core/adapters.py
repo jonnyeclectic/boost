@@ -154,23 +154,27 @@ def parse_tools(meta: dict) -> list[str]:
     return seen
 
 
-def discover_subagents(skill_dir: Path) -> list[AgentSpec]:
+def discover_subagents(skill_dir: Path, own_file: Path | None = None) -> list[AgentSpec]:
     """Discover a skill's subagents for multi-agent adaptation.
 
-    A subagent is a Markdown file (other than ``SKILL.md``) that lives under an
-    ``agents/`` or ``subagents/`` directory anywhere beneath ``skill_dir`` and
-    carries both a frontmatter ``name`` and ``description``. Files are visited in
-    sorted path order so the emitted crew/graph is deterministic. Returns the
-    subagents as :class:`AgentSpec`s — an empty list for a flat single-agent
-    skill or a missing directory.
+    A subagent is a Markdown file (other than ``SKILL.md`` or ``own_file``,
+    the entry being adapted) that lives under an ``agents/`` or ``subagents/``
+    directory strictly beneath ``skill_dir`` — not ``skill_dir`` itself, so a
+    flat item whose own directory happens to be shared (a registry-wide
+    ``agents/`` folder holding one Markdown file per workflow) never treats
+    its siblings as subagents — and carries both a frontmatter ``name`` and
+    ``description``. Files are visited in sorted path order so the emitted
+    crew/graph is deterministic. Returns the subagents as :class:`AgentSpec`s
+    — an empty list for a flat single-agent skill or a missing directory.
     """
     specs: list[AgentSpec] = []
     if not skill_dir or not skill_dir.is_dir():
         return specs
     for path in sorted(skill_dir.rglob("*.md")):
-        if path.name == "SKILL.md":
+        if path.name == "SKILL.md" or path == own_file:
             continue
-        if not (SUBAGENT_DIRS & {part.lower() for part in path.parent.parts}):
+        rel_dirs = {part.lower() for part in path.relative_to(skill_dir).parts[:-1]}
+        if not (SUBAGENT_DIRS & rel_dirs):
             continue
         try:
             meta, body = frontmatter.parse(

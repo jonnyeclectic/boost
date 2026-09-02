@@ -2,7 +2,7 @@
 id: audit-install-local-writes-empties-the-repo-s-mcp-json-silently-of
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High

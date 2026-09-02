@@ -133,7 +133,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>11</b><span>Planned</span></div>
-      <div class="stat"><b>404</b><span>Loop finds</span></div>
+      <div class="stat"><b>405</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -5339,15 +5339,16 @@ row has at least one referent.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-adapt-renders-every-sibling-of-a-flat-agents-dir-workflow-as">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>adapt</code> renders every sibling of a flat <code>agents/</code>-dir workflow as a 138-agent crew</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>adapt actix-expert --to crewai -o x.py</code> prints <em>&ldquo;&#10003; adapted actix-expert &rarr; x.py (crew of 138 &middot; claude-haiku-4-5-20251001)&rdquo;</em> and writes a <b>383 KB</b> render containing <b>138 <code>Agent()</code> + 138 <code>Task()</code></b> &mdash; <code>actix_expert</code>, then <code>actix_expert_1</code> (the item itself, again), then android-expert, angular-expert, &hellip; every sibling in the registry's <code>agents/</code> directory. <code>--to agents-sdk</code> announces <em>&ldquo;note: actix-expert declares 137 subagent(s)&rdquo;</em>. The item is one flat frontmatter file declaring nothing.
 
 The mechanism: <code>cmd_adapt</code> (<code>boost_cli/commands/pkg.py:1737</code>) passes <code>skill_md.parent</code> to <code>discover_subagents</code> (<code>boost_cli/core/adapters.py:157-186</code>). For a SKILL.md-rooted skill that parent is the skill's own directory and the feature works as shipped (<code>adapt brainstorming --to crewai</code> renders a single agent). For a flat <code>agents/&lt;x&gt;.md</code> workflow the parent <em>is</em> the registry-wide <code>agents/</code> dir, so all 137 siblings become a fabricated crew &mdash; and since the exclusion at <code>adapters.py:170-173</code> skips only <code>SKILL.md</code>, the adapted item is re-included as one of its own subagents.
 
 Fix per the verified recommendation: run <code>discover_subagents</code> only when the resolved item is SKILL.md-rooted (<code>skill_md.name == 'SKILL.md'</code>), and harden <code>discover_subagents</code> to skip the entry's own file and require the <code>agents/</code>/<code>subagents/</code> dir to be strictly beneath <code>skill_dir</code>. Add a unit test adapting a bare <code>agents/&lt;x&gt;.md</code> item that asserts a single-<code>Agent()</code> render. Update <code>docs/adapters.html</code> (subagent-discovery wording).
 
-Found by the 2026-08 CLI audit (cluster <code>adapt-subagent-misdetect</code>); repro in the audit log. Verified 2026-08-31: reproduced, defect in the shipped multi-agent adapter feature (whose design intended skill-declared subagents only), not a duplicate of it.</p>
+Found by the 2026-08 CLI audit (cluster <code>adapt-subagent-misdetect</code>); repro in the audit log. Verified 2026-08-31: reproduced, defect in the shipped multi-agent adapter feature (whose design intended skill-declared subagents only), not a duplicate of it.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -5626,6 +5627,20 @@ repro run needed. Absolute date of verification: 2026-08-31.</p></details>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">a quickstart rerun re-downloads every shard the store already holds at that commit</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="concurrent-rag-builds-delete-each-others-temp-index">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Reliability · Bug</span></div>
+        <h3>Two concurrent <code>rag.build()</code> runs delete each other's temp index</h3>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p>Observed on a real 464-tap install during <code>boost update --shards</code>, at boost 1.2.80:
+<code>FileNotFoundError: [Errno&nbsp;2] No such file or directory: '~/.boost/cache/rag_postings.sqlite.tmp' -&gt; '~/.boost/cache/rag_postings.sqlite'</code>, raised from <code>tmp.replace(final)</code> in <code>_write_postings</code>. <code>_write_postings</code> wrote every build to the <b>same</b> fixed temp path and unlinked it on entry, so a second build starting mid-flight deleted the first's <em>completed</em> file: A builds its 644&nbsp;MB temp &rarr; B enters and <code>unlink()</code>s it &rarr; A crashes on the swap. Confirmed by timestamps &mdash; the crash landed at 21:25 and a fresh <code>.tmp</code> appeared at 21:26, which then swapped in cleanly, so the index was never corrupt and the loser simply threw away several minutes of work and returned a crash report. It needs no exotic setup: <code>boost search</code> builds on a cold index, so two terminals is enough, and <code>_ingest_shards</code> rebuilds the index for any tap that moved. Fixed by giving each build its own <code>tempfile.mkstemp</code> name and unlinking it on failure &mdash; the same shape <code>util.atomic_write_text</code> already uses for every other file boost must not lose.</p></details>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">two overlapping rag.build() runs share one .tmp name; the second unlinks the first's finished 644 MB file and the first dies on replace()</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -11840,8 +11855,9 @@ Found by the 2026-08 CLI audit (cluster <code>kinds-reported-as-skills</code>); 
       </article>
 
       <article class="cap rcard" id="audit-install-local-writes-empties-the-repo-s-mcp-json-silently-of">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>install --local</code> writes the repo's <code>.mcp.json</code> silently — the 'recorded N servers' report never runs</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Installing a skill that declares an MCP server with <code>--local</code> prints
 <em>&ldquo;&#10003; copied into this repo &rarr; claude-code &middot; windsurf &middot; cursor &middot;
 gemini / &#10003; project lock updated (.boost/skill-lock.json) / commit .boost/ to share these with
@@ -11867,7 +11883,7 @@ asserting the <em>&ldquo;recorded 1 MCP server in .mcp.json&rdquo;</em> line for
 uninstall side. Docs: fix <code>docs/roadmap/items/mcp-servers-ignore-install-scope.md</code>, which
 describes the recorded-report as reachable; no flag change, so <code>docs/commands.html</code> only
 needs regenerating if a summary moves. Found by the 2026-08 CLI audit (cluster
-<code>mcp-project-scope-report</code>); repro in the audit log.</p>
+<code>mcp-project-scope-report</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m hi">Impact <b>High</b></span>
