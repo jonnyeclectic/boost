@@ -170,7 +170,9 @@ def cmd_search(argv):
             if reranked:
                 scored, ranker = reranked, "Claude Haiku relevance"
         else:
-            out.warn(ai.fallback_note(), wrap=True)
+            # stderr: this text-mode path still writes results to stdout,
+            # and a warning ahead of them would corrupt `boost search | ...`.
+            out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     shown = scored[:args.limit]
     # The dot marks "a skill by this name is installed" — a name match, with
     # the known homonym caveat (13 real skills share `code-reviewer`). A lock

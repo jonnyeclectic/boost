@@ -74,7 +74,8 @@ class TestDistill:
         r = boost("distill", "tdd-workflow", "cowboy-coding")
         assert ("distilling tdd-workflow, cowboy-coding → "
                 "tdd-workflow-distilled") in r.out
-        assert FALLBACK in flat(r.out)
+        assert FALLBACK in flat(r.err)
+        assert FALLBACK not in flat(r.out)
         assert "install it with `boost import ./tdd-workflow-distilled`" in r.out
         text = (tmp_path / "tdd-workflow-distilled" / "SKILL.md").read_text(encoding="utf-8")
         meta, body = frontmatter.parse(text)
@@ -156,7 +157,8 @@ class TestDistill:
         monkeypatch.chdir(tmp_path)
         ai_on(ask_author=None)
         r = boost("distill", "tdd-workflow", "cowboy-coding")
-        assert FALLBACK in flat(r.out)
+        assert FALLBACK in flat(r.err)
+        assert FALLBACK not in flat(r.out)
         assert (tmp_path / "tdd-workflow-distilled" / "SKILL.md").is_file()
 
     def test_needs_two_distinct_skills(self, boost, tapped):
@@ -188,7 +190,8 @@ class TestSimulate:
         r = boost("simulate", "tdd-workflow")
         assert "simulating tdd-workflow" in r.out
         assert "(tap fixture-tap)" in r.out
-        assert FALLBACK in flat(r.out)
+        assert FALLBACK in flat(r.err)
+        assert FALLBACK not in flat(r.out)
         assert "a typical coding task in this repo" in r.out
         assert "Without it: default behavior" in r.out
         assert "With tdd-workflow active, Claude would:" in r.out
@@ -228,8 +231,11 @@ def py_project(tmp_path):
 class TestInfer:
     def test_template_to_stdout(self, boost, sandbox, py_project):
         r = boost("infer", "--path", py_project)
-        assert FALLBACK in flat(r.out)
-        meta, _ = frontmatter.parse(r.out.split("heuristic fallback", 1)[1].lstrip())
+        # The fallback warning goes to stderr: `boost infer > SKILL.md` must
+        # write only the generated frontmatter+body, not the warning as line 1.
+        assert FALLBACK in flat(r.err)
+        assert FALLBACK not in flat(r.out)
+        meta, _ = frontmatter.parse(r.out)
         assert meta["name"] == "project-conventions"
         assert meta["description"] == "Working conventions for this repository (python)"
         assert meta["version"] == "1.0.0"
@@ -307,9 +313,13 @@ class TestAbsorb:
         lines += [_history_line("ok") for _ in range(5)]  # trivial: too short
         (hist / "chat.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
         r = boost("absorb")
-        assert "recurring patterns from 1 history file(s)" in r.out
-        assert "always run the linter before committing" in r.out
-        assert "4x" in r.out
+        # Without --install, stdout carries the generated SKILL.md — the
+        # progress heading/table ahead of it goes to stderr instead, the same
+        # corruption concern as infer's fallback warning.
+        assert "recurring patterns from 1 history file(s)" in r.err
+        assert "always run the linter before committing" in r.err
+        assert "4x" in r.err
+        assert "recurring patterns from 1 history file(s)" not in r.out
         assert "- Always run the linter before committing. (seen 4x)" in r.out
         assert "name: absorbed-patterns" in r.out
 
@@ -501,7 +511,10 @@ class TestContext:
     def test_apply_outside_repo(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         r = boost("context", "apply")
-        assert "context is disabled (`boost context enable`) — applying anyway" in r.out
+        # stderr: `context apply` can write machine-read output on stdout,
+        # so this notice must not land ahead of it.
+        assert ("context is disabled (`boost context enable`) — applying anyway"
+                in r.err)
         assert "not inside a git repository — nothing to apply" in r.out
 
     def test_status_and_apply_report_missing_git_binary_distinctly(
@@ -585,7 +598,8 @@ class TestImpact:
         row = next(l for l in r.out.splitlines()
                    if l.startswith("brainstorming"))
         assert "—" in row
-        assert FALLBACK in flat(r.out)
+        assert FALLBACK in flat(r.err)
+        assert FALLBACK not in flat(r.out)
         # outside a repo the note says why the count is missing, rather than
         # the in-repo correlation caveat that made no sense without one.
         assert "not inside a git repository — commit counts unavailable" in r.out

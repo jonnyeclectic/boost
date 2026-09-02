@@ -14,6 +14,7 @@ import difflib
 import fnmatch
 import json
 import re
+import sys
 import tempfile
 import textwrap
 from collections import Counter
@@ -46,10 +47,15 @@ _warned_fallback = False
 
 
 def _note_fallback() -> None:
-    """Warn once per invocation that the AI path is unavailable."""
+    """Warn once per invocation that the AI path is unavailable.
+
+    Routed to stderr: ``infer``/``absorb`` without ``--install``/``--output``
+    write the generated SKILL.md to stdout, and a warning ahead of it would
+    land as the payload's first line — corrupting `boost infer > SKILL.md`.
+    """
     global _warned_fallback
     if not _warned_fallback:
-        out.warn(ai.fallback_note(), wrap=True)
+        out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
         _warned_fallback = True
 
 
@@ -584,10 +590,15 @@ def cmd_absorb(argv: list[str]) -> int:
         return 0
 
     name = "absorbed-patterns"
-    out.heading("recurring patterns from %d history file(s)" % len(files))
+    # Without --install the generated SKILL.md is the stdout payload (so
+    # `boost absorb > SKILL.md` works) — the progress narration above it must
+    # go to stderr, or it corrupts the file the same way a warning would.
+    progress = sys.stderr if not args.install else None
+    out.heading("recurring patterns from %d history file(s)" % len(files),
+                stream=progress)
     out.table([(p, "%dx" % n) for p, n in patterns],
-              headers=("PATTERN", "SEEN"))
-    print()
+              headers=("PATTERN", "SEEN"), stream=progress)
+    print(file=progress)
 
     text = _absorb_ai(name, patterns) if ai.available() else None
     if text is None:
@@ -879,7 +890,8 @@ def cmd_context(argv: list[str]) -> int:
         return 0
     # apply
     if not state.get("enabled"):
-        out.warn("context is disabled (`boost context enable`) — applying anyway")
+        out.warn("context is disabled (`boost context enable`) — applying anyway",
+                 stream=sys.stderr)
     return _context_apply(state)
 
 

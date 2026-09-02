@@ -289,12 +289,16 @@ def dim(msg: str, wrap: bool = False) -> None:
         print(role(line, "muted"))
 
 
-def heading(msg: str) -> None:
-    """Print a bold section header led by the accent `==>` marker."""
+def heading(msg: str, stream=None) -> None:
+    """Print a bold section header led by the accent `==>` marker.
+
+    ``stream`` as in :func:`warn` — so a progress heading can be routed to
+    stderr when stdout carries a generated payload.
+    """
     # Brand the section marker in the accent role (Aurora cyan — truecolor,
     # 16-color fallback, plain under NO_COLOR) so every command's headers read
     # as one system.
-    print(role("==>", "accent") + " " + c(msg, BOLD))
+    print(role("==>", "accent") + " " + c(msg, BOLD), file=stream)
 
 
 def verdict(ok: bool, msg: str) -> None:
@@ -779,7 +783,7 @@ def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1):
     return widths
 
 
-def table(rows, headers=None) -> None:
+def table(rows, headers=None, stream=None) -> None:
     """Print an aligned table. rows: list of tuples of strings.
 
     Column widths are measured by visible width (ignoring ANSI color codes),
@@ -792,6 +796,9 @@ def table(rows, headers=None) -> None:
     terminal cousin of the web stat blocks' hairline borders. Non-color output
     (pipes, NO_COLOR, tests) keeps the plain two-space gutter byte-for-byte,
     so scripts that parse table output never see the ornament.
+
+    ``stream`` as in :func:`warn` — so a table of progress narration can be
+    routed to stderr when stdout carries a generated payload.
     """
     rows = [[str(x) for x in r] for r in rows]
     all_rows = ([list(map(str, headers))] if headers else []) + rows
@@ -816,9 +823,10 @@ def table(rows, headers=None) -> None:
         # Bold each header cell individually: a whole-line wrap would be
         # cancelled at the first separator's RESET on color terminals.
         cells = [c(fmt(str(h), i), BOLD) for i, h in enumerate(headers)]
-        print(sep.join(cells).rstrip())
+        print(sep.join(cells).rstrip(), file=stream)
     for r in rows:
-        print(sep.join(fmt(cell, i) for i, cell in enumerate(r)).rstrip())
+        print(sep.join(fmt(cell, i) for i, cell in enumerate(r)).rstrip(),
+              file=stream)
 
 
 def confirm(prompt: str, default: bool = False) -> bool:

@@ -735,6 +735,18 @@ class TestHelpers:
         assert cap.out == ""
         assert cap.err == "  ! routed\n  hint\n"
 
+    def test_heading_and_table_can_be_routed_to_stderr(self, capsys):
+        # `absorb` narrates progress (a heading + a table) ahead of a
+        # generated SKILL.md it writes to stdout; routing the narration to
+        # stderr is what keeps `boost absorb > SKILL.md` from being corrupted
+        # by it, the same concern `warn`/`info` already solve above.
+        output.heading("Section", stream=sys.stderr)
+        output.table([("a", "1")], headers=["NAME", "N"], stream=sys.stderr)
+        cap = capsys.readouterr()
+        assert cap.out == ""
+        assert "Section" in cap.err
+        assert "NAME" in cap.err and "a" in cap.err
+
 
 class TestPlain:
     """Control characters are stripped from text boost did not author.

@@ -725,9 +725,12 @@ def cmd_explain(argv):
             # it and fall through to the grounded extractive summary below.
             out.warn("AI explanation looked ungrounded (%s) — showing the "
                      "extractive summary instead"
-                     % ", ".join(faithfulness.ungrounded_terms(reply, text)[:4]))
+                     % ", ".join(faithfulness.ungrounded_terms(reply, text)[:4]),
+                     stream=sys.stderr)
     else:
-        out.warn(ai.fallback_note(), wrap=True)
+        # stderr: the explanation text itself goes to stdout below, and a
+        # warning ahead of it would corrupt `boost explain NAME | ...`.
+        out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     meta, body = frontmatter.parse(text)
     desc = str(meta.get("description") or "").strip()
     if desc:
