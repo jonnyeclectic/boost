@@ -10,7 +10,7 @@ wow: 2
 note: a one-letter typo gets no hint while nonsense input gets three suggestions
 order: 233
 owner: loop/name-miss-hints
-pr:
+pr: 707
 title: "Name-miss errors: unknown tap qualifier never named, no close-match hint, tap tokens pollute suggestions"
 ---
 Three gaps in one resolver make name misses unhelpful across <code>install</code>, <code>info</code>,
