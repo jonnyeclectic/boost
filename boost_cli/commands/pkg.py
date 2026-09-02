@@ -410,14 +410,7 @@ def cmd_install(argv: list[str]) -> int:
         multi = multi or len(entries) > 1
 
     if args.dry_run:
-        # TWO lists, because the three kinds do not reach the same agents.
-        # Rules and workflows materialize into every enabled agent's dotdir,
-        # Gemini included. A skill is symlinked only into the agents that take
-        # links — Gemini reads the canonical store directly and is deliberately
-        # never linked (see agents.linking_agents). One list for both is how
-        # `--dry-run` came to promise a `~/.gemini/skills` symlink that the real
-        # install has never created.
-        targets = [a for a in agents.enabled_agents() if not only or a in only]
+        from ..core import mcpdecl, mcphost
         link_targets = [a for a in agents.linking_agents()
                         if not only or a in only]
         native_targets = [a for a in agents.native_store_agents()
@@ -427,17 +420,36 @@ def cmd_install(argv: list[str]) -> int:
             raise BoostError(
                 "there is no project here to install into",
                 hint="cd into a repo, or drop --local to install for your user")
+        # materializing_agents(base), not enabled_agents(): a rule/workflow
+        # only reaches an agent whose file format is known (agents.py), and at
+        # project scope the *repo-local* dotdirs (agents_for_scope's project
+        # branch), not the user config every other scope writes into.
+        mbase = pbase if args.scope == scopes.SCOPE_PROJECT else None
+        mat_targets = [a for a in agents.materializing_agents(mbase)
+                       if not only or a in only]
+        offer_mcp = not args.no_mcp and not os.environ.get("BOOST_NO_MCP_OFFER")
+        mcp_hosts = [h for h in mcphost.hosts() if shutil.which(mcphost.cli(h))] \
+            or mcphost.hosts()
         for e in entries:
             if args.scope == scopes.SCOPE_PROJECT and e.get("kind", "skill") == "skill":
                 seen = projectlock.get_skill(pbase, e["name"])
                 out.info("would %s %s v%s from %s into %s"
                          % ("reinstall" if seen else "install", e["name"],
                             e["version"], e["tap"], _tilde(pbase)))
-                for agent_name, sdir in agents.enabled_agents().items():
+                # agents_for_scope(pbase), not enabled_agents(): project scope
+                # copies into each agent's *repo-local* dotdir, which excludes
+                # Antigravity CLI (its layout is two levels under ~/.gemini and
+                # has no known project-local path — see agents.project_agents).
+                for agent_name, sdir in agents.agents_for_scope(pbase).items():
                     if only and agent_name not in only:
                         continue
                     out.info("  copy  → %s"
                              % _tilde(scopes.skill_target(sdir, e["name"], base=pbase)))
+                if offer_mcp:
+                    for row in mcpdecl.registrable(
+                            store.declared_mcp_servers(store.source_dir_for(e))):
+                        out.info("  mcp   → record %s in %s"
+                                 % (row["name"], mcpdecl.SIDECAR))
                 continue
             if e.get("kind") in ("rule", "workflow"):
                 k = e["kind"]
@@ -450,7 +462,7 @@ def cmd_install(argv: list[str]) -> int:
                 out.info("would %s %s %s v%s from %s (%s)" % (verb, k, e["name"],
                                                               e["version"], e["tap"],
                                                               where))
-                out.info("  materialize → %s" % (" · ".join(targets)
+                out.info("  materialize → %s" % (" · ".join(mat_targets)
                                                  or "(no enabled agents)"))
                 continue
             verb = "upgrade" if lockfile.get_skill(e["name"]) else "install"
@@ -466,6 +478,12 @@ def cmd_install(argv: list[str]) -> int:
                 out.info("  available to %s (reads the store directly)"
                          % " · ".join(agents.display_name(a)
                                       for a in native_targets))
+            if offer_mcp:
+                for row in mcpdecl.registrable(
+                        store.declared_mcp_servers(store.source_dir_for(e))):
+                    out.info("  mcp   → offer to register %s with %s"
+                             % (row["name"], " · ".join(mcphost.label(h)
+                                                        for h in mcp_hosts)))
         out.info("dry run — nothing was changed")
         return 1 if failed else 0
 
