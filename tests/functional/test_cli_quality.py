@@ -336,6 +336,13 @@ class TestLint:
         r = boost("lint", "--min", "0")
         assert "1 skill passes lint (min 0)" in r.out
 
+    def test_min_out_of_0_to_100_range_is_rejected(self, boost, sandbox):
+        # --min 500 used to fail every skill outright since scores cap at 100.
+        r = boost("lint", "--min", "500", expect=2)
+        assert "must be between 0 and 100" in r.err
+        r = boost("lint", "--min", "-1", expect=2)
+        assert "must be between 0 and 100" in r.err
+
     def test_missing_fields_error_rc1_and_json(self, boost, sandbox, tmp_path):
         d = tmp_path / "noname"
         d.mkdir()
@@ -1186,6 +1193,16 @@ class TestChangelog:
         _import_skill(boost, tmp_path, "local-one", "# Local\n\nBody.\n")
         r = boost("changelog", "local-one")
         assert "no upstream history — local-one was imported locally" in r.out
+
+    def test_n_must_be_positive_int(self, boost, installed):
+        # -n 0 used to print no log lines and claim "no history found" even
+        # when history exists; -n -1 is passed straight to `git log -n -1`,
+        # which git treats as "unlimited" — a surprise the flag's own help
+        # ("number of entries") never suggested.
+        r = boost("changelog", "brainstorming", "-n", "0", expect=2)
+        assert "must be >= 1" in r.err
+        r = boost("changelog", "brainstorming", "-n", "-1", expect=2)
+        assert "must be >= 1" in r.err
 
 
 # ── attest ───────────────────────────────────────────────────────────────

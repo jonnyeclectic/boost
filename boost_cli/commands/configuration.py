@@ -394,8 +394,14 @@ def cmd_create(argv) -> int:
     journal.log("create", name, path=str(target))
     out.ok("created %s" % _tilde(skill_md))
     if args.install:
+        owner = store.existing_skill_owner(name)
+        if owner and not out.confirm(
+                "%s is already installed from %s — replace it?" % (name, owner)):
+            out.warn("not installed: %s is already installed from %s" % (name, owner))
+            out.dim("  next: edit it, then `boost import %s`" % _tilde(target))
+            return 0
         res = store.install_from_path(target, name=name)
-        out.ok("installed %s → %s" % (name, _tilde(res.dest)))
+        out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
         if res.linked:
             out.info("linked: " + ", ".join(agents.display_name(a) for a in res.linked))
     else:

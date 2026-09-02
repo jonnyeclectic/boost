@@ -108,6 +108,13 @@ def _save_state(fname: str, data: dict) -> None:
     (paths.state_dir() / fname).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+def _save_generated_fallback(name: str, text: str, reason: str) -> None:
+    fallback = Path.cwd() / ("%s.SKILL.md" % name)
+    fallback.write_text(text, encoding="utf-8")
+    out.warn("not installed: %s" % reason)
+    out.info("generated skill saved to %s" % _tilde(fallback))
+
+
 def _install_generated(name: str, text: str) -> None:
     """Write a generated SKILL.md to a tempdir and install it as `name`.
 
@@ -115,7 +122,19 @@ def _install_generated(name: str, text: str) -> None:
     must not be allowed to propagate out of the ``with`` block and delete it —
     that would discard an LLM generation the user paid for, with nothing on disk
     to recover. On a refusal, save it beside the cwd and say where it went.
+
+    ``install_from_path`` refuses to overwrite a *pinned* name, but silently
+    replaces an unpinned one — the common case, since it doubles as the
+    ``boost import``/``reinstall`` path. Ask before doing that here, so
+    ``distill``/``infer``/``absorb --install`` don't quietly destroy an
+    existing install and relabel its lock provenance ``local``.
     """
+    owner = store.existing_skill_owner(name)
+    if owner and not out.confirm(
+            "%s is already installed from %s — replace it?" % (name, owner)):
+        _save_generated_fallback(
+            name, text, "%s is already installed from %s" % (name, owner))
+        return
     with tempfile.TemporaryDirectory(prefix="boost-gen-") as td:
         src = Path(td) / name
         src.mkdir()
@@ -123,12 +142,9 @@ def _install_generated(name: str, text: str) -> None:
         try:
             res = store.install_from_path(src, name=name, tap_label="local")
         except BoostError as err:
-            fallback = Path.cwd() / ("%s.SKILL.md" % name)
-            fallback.write_text(text, encoding="utf-8")
-            out.warn("not installed: %s" % err.message)
-            out.info("generated skill saved to %s" % _tilde(fallback))
+            _save_generated_fallback(name, text, err.message)
             return
-    out.ok("installed %s → %s" % (name, _tilde(res.dest)))
+    out.ok("%s %s → %s" % ("replaced" if owner else "installed", name, _tilde(res.dest)))
     if res.linked:
         out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))
 
@@ -560,7 +576,7 @@ def cmd_absorb(argv: list[str]) -> int:
         description="Turn recurring chat-history patterns into a skill")
     ap.add_argument("--history", metavar="PATH",
                     help="history .jsonl file or directory of them")
-    ap.add_argument("--limit", type=int, default=5, metavar="N",
+    ap.add_argument("--limit", type=util.positive_int, default=5, metavar="N",
                     help="max patterns to absorb (default: 5)")
     ap.add_argument("--install", action="store_true",
                     help="install the generated skill")
@@ -1195,7 +1211,7 @@ def cmd_chat(argv: list[str]) -> int:
         description="Ask about skills in plain language")
     ap.add_argument("question", nargs="*", metavar="QUESTION",
                     help="ask once and exit; omit for an interactive session")
-    ap.add_argument("-k", "--limit", type=int, default=chat_engine.TOP_K,
+    ap.add_argument("-k", "--limit", type=util.positive_int, default=chat_engine.TOP_K,
                     metavar="N", help="candidate skills to consider (default %d)"
                                       % chat_engine.TOP_K)
     ap.add_argument("--no-sources", action="store_true",

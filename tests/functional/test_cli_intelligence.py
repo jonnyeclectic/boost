@@ -114,6 +114,31 @@ class TestDistill:
         assert entry["tap"] == "local"
         assert entry["version"] == "1.0.0"
 
+    def test_install_replaces_an_existing_unpinned_skill_when_confirmed(
+            self, boost, installed):
+        # `installed` already put brainstorming on disk from the fixture tap —
+        # BOOST_ASSUME_YES (the sandbox default) auto-confirms the replace.
+        r = boost("distill", "tdd-workflow", "commit-messages", "-o",
+                  "brainstorming", "--install")
+        assert "replaced brainstorming" in r.out
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        entry = lock["skills"]["brainstorming"]
+        assert entry["tap"] == "local"
+        assert entry["version"] == "1.0.0"
+
+    def test_install_declined_leaves_the_existing_skill_and_saves_the_generation(
+            self, boost, installed, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("distill", "tdd-workflow", "commit-messages", "-o",
+                  "brainstorming", "--install")
+        assert "not installed: brainstorming is already installed from fixture-tap" in r.out
+        assert "generated skill saved to" in r.out
+        fallback = tmp_path / "brainstorming.SKILL.md"
+        assert fallback.is_file()
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["skills"]["brainstorming"]["tap"] == "fixture-tap"
+
     def test_refused_install_saves_the_generation_instead_of_losing_it(
             self, boost, tapped, tmp_path, monkeypatch):
         """A refused install must leave the generated skill on disk.
@@ -298,6 +323,14 @@ class TestAbsorb:
         r = boost("absorb")
         assert "no chat history found under ~/.claude — nothing to absorb" in r.out
         assert "--history PATH" in r.out
+
+    def test_limit_must_be_positive_int(self, boost, sandbox):
+        # --limit 0 used to slice every recurring pattern away and fabricate
+        # "no recurring patterns" even when some were found.
+        r = boost("absorb", "--limit", "0", expect=2)
+        assert "must be >= 1" in r.err
+        r = boost("absorb", "--limit", "-1", expect=2)
+        assert "must be >= 1" in r.err
 
     def test_pattern_surfaced_from_projects_dir(self, boost, sandbox):
         hist = sandbox / ".claude" / "projects" / "proj"

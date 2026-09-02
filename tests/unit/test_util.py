@@ -697,6 +697,30 @@ class TestPositiveInt:
         assert str(exc.value) == "invalid int value: 'abc'"
 
 
+class TestScoreInt:
+    """`util.score_int` — the argparse type behind `lint --min` (0-100)."""
+
+    def test_accepts_the_full_0_to_100_range(self):
+        assert util.score_int("0") == 0
+        assert util.score_int("40") == 40
+        assert util.score_int("100") == 100
+
+    def test_negative_rejected_with_exact_message(self):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.score_int("-1")
+        assert str(exc.value) == "must be between 0 and 100"
+
+    def test_above_100_rejected_with_exact_message(self):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.score_int("500")
+        assert str(exc.value) == "must be between 0 and 100"
+
+    def test_non_numeric_rejected_with_exact_message(self):
+        with pytest.raises(argparse.ArgumentTypeError) as exc:
+            util.score_int("abc")
+        assert str(exc.value) == "invalid int value: 'abc'"
+
+
 class TestRemoveItems:
     """`util.remove_items` — the counter `boost clean` reports and journals.
 
