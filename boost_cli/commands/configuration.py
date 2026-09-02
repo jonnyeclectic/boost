@@ -1692,10 +1692,11 @@ def _offer_boost_first(hosts: list[str]) -> None:
     if lockfile.get_rule(builtin.BUILTIN_RULES[0]):
         return                      # already installed; do not re-ask
     body = (builtin.source_dir() / (builtin.BUILTIN_RULES[0] + ".mdc"))
+    scoped_agents = {builtin.AGENT_FOR_HOST.get(h) for h in hosts}
     targets = [str(rules.rule_target(agent, skills_dir,
                                      builtin.BUILTIN_RULES[0])[1])
                for agent, skills_dir in agents.enabled_agents().items()
-               if agent in {builtin.AGENT_FOR_HOST.get(h) for h in hosts}]
+               if agent in scoped_agents]
     if not targets:
         return
     out.info("")
@@ -1714,7 +1715,8 @@ def _offer_boost_first(hosts: list[str]) -> None:
     try:
         builtin.ensure_tap()
         catalog.rebuild_tap(registry.get(builtin.BUILTIN_TAP))
-        store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]))
+        store.install(catalog.resolve_one(builtin.BUILTIN_RULES[0]),
+                     only_agents=[a for a in scoped_agents if a])
     except (BoostError, OSError) as exc:
         out.warn("could not install %s: %s" % (builtin.BUILTIN_RULES[0], exc))
         return
