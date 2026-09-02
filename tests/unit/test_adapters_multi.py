@@ -156,6 +156,46 @@ class TestDiscoverSubagents:
         f.write_text("---\nname: wf\ndescription: t\n---\n", encoding="utf-8")
         assert adapters.discover_subagents(f) == []   # not a directory
 
+    def test_entry_path_excludes_self_when_nested(self, tmp_path):
+        # defense-in-depth: even for a correctly SKILL.md-rooted skill dir, a
+        # subagent file that happens to equal entry_path (the item being
+        # adapted) must not be re-included as its own crew member
+        _skill(tmp_path, {
+            "self.md": "---\nname: self\ndescription: d\n---\nB\n",
+            "other.md": "---\nname: other\ndescription: d\n---\nB\n",
+        })
+        entry = tmp_path / "agents" / "self.md"
+        specs = adapters.discover_subagents(tmp_path, entry_path=entry)
+        assert [s.name for s in specs] == ["other"]
+
+    def test_misuse_with_shared_dir_as_skill_dir_finds_nothing(self, tmp_path):
+        # if a caller mistakenly passes a flat item's *shared* directory (the
+        # bug this hardens against: skill_dir == the registry-wide agents/
+        # dir a flat workflow item lives in) rather than the item's own
+        # directory, siblings sitting directly inside it are not "beneath" a
+        # nested agents/subagents dir and must not be misdetected as subagents
+        d = tmp_path / "agents"
+        d.mkdir()
+        entry = d / "actix-expert.md"
+        entry.write_text(
+            "---\nname: actix-expert\ndescription: d\n---\nB\n", encoding="utf-8")
+        (d / "android-expert.md").write_text(
+            "---\nname: android-expert\ndescription: d\n---\nB\n", encoding="utf-8")
+        assert adapters.discover_subagents(d, entry_path=entry) == []
+
+    def test_sibling_agents_dir_not_beneath_skill_dir_is_ignored(self, tmp_path):
+        # the parent-parts check must be relative to skill_dir, not absolute:
+        # skill_dir itself living under an ancestor named "agents" must not
+        # make every *.md directly inside skill_dir look like a subagent
+        ancestor_agents = tmp_path / "agents"
+        skill_dir = ancestor_agents / "my-skill"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: my-skill\ndescription: d\n---\nB\n", encoding="utf-8")
+        (skill_dir / "sibling.md").write_text(
+            "---\nname: sibling\ndescription: d\n---\nB\n", encoding="utf-8")
+        assert adapters.discover_subagents(skill_dir) == []
+
 
 # --- helpers: idents & tool union ----------------------------------------
 

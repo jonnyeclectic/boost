@@ -3,6 +3,8 @@
 """Functional tests: `boost adapt` — render a skill as framework source."""
 from __future__ import annotations
 
+import subprocess
+
 
 def test_adapt_installed_skill_to_crewai_stdout(boost, installed):
     r = boost("adapt", installed, "--to", "crewai")
@@ -129,4 +131,49 @@ def test_multi_agent_target_without_crew_falls_back_with_note(boost, installed):
     assert "brainstorming = Agent(" in r.out
     assert "reviewer = Agent(" not in r.out
     assert "declares 2 subagent" in r.err
+    compile(r.out, "<sdk>", "exec")
+
+
+# --- flat agents/<x>.md workflow items: no fabricated crew ----------------
+
+def _tap_with_flat_workflow_siblings(tmp_path, fixture_tap_src):
+    """A tap whose `agents/` dir holds two flat, SKILL.md-less workflow items
+    that are each other's siblings — the shape that used to misdetect every
+    sibling in the shared directory as a subagent of the one being adapted."""
+    import shutil
+    tap = tmp_path / "flat-agents-tap"
+    shutil.copytree(fixture_tap_src, tap)
+    agents = tap / "agents"
+    agents.mkdir()
+    (agents / "actix-expert.md").write_text(
+        "---\nname: actix-expert\ndescription: Actix web framework help\n---\n"
+        "Body.\n", encoding="utf-8")
+    (agents / "android-expert.md").write_text(
+        "---\nname: android-expert\ndescription: Android development help\n---\n"
+        "Body.\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(tap), "add", "-A"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tap), "commit", "-qm", "add flat agents"],
+                   check=True, capture_output=True)
+    return tap
+
+
+def test_flat_workflow_item_adapts_as_single_agent(boost, fixture_tap_src, tmp_path):
+    tap = _tap_with_flat_workflow_siblings(tmp_path, fixture_tap_src)
+    boost("tap", str(tap))
+    r = boost("adapt", "actix-expert", "--to", "crewai", "--model", "none")
+    # only the item itself renders — its sibling in the shared agents/ dir
+    # must not be fabricated into a crew, and the item must not double itself
+    assert "actix_expert = Agent(" in r.out
+    assert "android_expert" not in r.out
+    assert "actix_expert_1" not in r.out
+    assert r.out.count("= Agent(") == 1
+    compile(r.out, "<solo>", "exec")
+
+
+def test_flat_workflow_item_agents_sdk_no_subagent_note(boost, fixture_tap_src, tmp_path):
+    tap = _tap_with_flat_workflow_siblings(tmp_path, fixture_tap_src)
+    boost("tap", str(tap))
+    r = boost("adapt", "actix-expert", "--to", "agents-sdk", "--model", "none")
+    assert "subagent" not in r.err
     compile(r.out, "<sdk>", "exec")

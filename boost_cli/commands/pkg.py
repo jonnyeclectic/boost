@@ -1767,8 +1767,12 @@ def cmd_adapt(argv: list[str]) -> int:
     # A skill that declares subagents projects to a runnable multi-agent
     # workflow (a CrewAI Crew / LangGraph StateGraph) when the target supports
     # one; flat skills — and multi-agent targets without a crew path — keep the
-    # single-Agent render.
-    subagents = adapters.discover_subagents(skill_md.parent)
+    # single-Agent render. Subagent discovery only applies to SKILL.md-rooted
+    # skills: a bare `agents/<x>.md` workflow item's parent is the registry's
+    # shared `agents/` dir, and every sibling in it would otherwise be
+    # misdetected as a subagent of the item being adapted.
+    subagents = (adapters.discover_subagents(skill_md.parent, entry_path=skill_md)
+                if skill_md.name == "SKILL.md" else [])
     crew_size = 0
     if subagents and adapters.supports_multi(args.to):
         primary = adapters.AgentSpec(display, description, body,

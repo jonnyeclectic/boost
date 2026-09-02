@@ -2,7 +2,7 @@
 id: audit-adapt-renders-every-sibling-of-a-flat-agents-dir-workflow-as
 board: code
 section: internals
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High
