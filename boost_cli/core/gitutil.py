@@ -67,7 +67,16 @@ def run(args: list[str], cwd: Path | None = None, check: bool = True,
             # files boost actually wants. Pointer files still check out as text, so
             # discovery is unaffected. Only takes effect where git-lfs is installed;
             # elsewhere it is inert.
-            env=os.environ | {"GIT_LFS_SKIP_SMUDGE": "1"},
+            # GIT_TERMINAL_PROMPT=0: without it, a clone/fetch against a
+            # deleted or private repo falls back to an interactive
+            # "Username for 'https://github.com':" prompt — on a real
+            # terminal this blocks tap/import/update forever, and in a
+            # sandbox with no tty it dies as "Device not configured", an
+            # unrelated-looking crash for what is really a 404. With the
+            # flag set git fails fast instead, with wording clone_shallow
+            # and pull() translate into the actual cause.
+            env=os.environ | {"GIT_LFS_SKIP_SMUDGE": "1",
+                              "GIT_TERMINAL_PROMPT": "0"},
         )
     except subprocess.TimeoutExpired:
         raise BoostError("git %s timed out after %ds" % (args[0], timeout)) from None
@@ -121,6 +130,30 @@ def _git_error(text: str) -> str:
         if low.startswith(("fatal:", "error:")):
             return line
     return lines[-1] if lines else "unknown error"
+
+
+# The wording git uses once GIT_TERMINAL_PROMPT=0 stops it from blocking on a
+# credential prompt — all three cover the same underlying cause (a repo that
+# does not exist, or exists but is private to the caller).
+_CREDENTIAL_PROMPT_MARKERS = (
+    "could not read username",
+    "repository not found",
+    "authentication failed",
+)
+
+
+def _credential_error(spec: str, stderr: str) -> BoostError | None:
+    """A friendlier BoostError for a 404/private remote, or None otherwise.
+
+    git's own text here — "could not read Username for '...': terminal
+    prompts disabled" — reads as a login problem, not the actual cause. Name
+    the spec and say what is really going on instead.
+    """
+    low = stderr.lower()
+    if any(m in low for m in _CREDENTIAL_PROMPT_MARKERS):
+        return BoostError("%s: repository not found or private" % spec,
+                          hint="check the spelling, or that you have access")
+    return None
 
 
 # git's remote-helper transports run arbitrary commands straight from the URL
@@ -182,7 +215,7 @@ def clone_shallow(url: str, dest: Path, sparse: bool = True) -> None:
             "-c", "core.autocrlf=false", "-c", "core.eol=lf"]
     tail = ["--", url, str(dest)]
     if not sparse:
-        run([*base, *tail], timeout=600)
+        _clone_or_translate([*base, *tail], url)
         return
 
     proc = run([*base, "--filter=blob:none", "--sparse", *tail],
@@ -190,12 +223,36 @@ def clone_shallow(url: str, dest: Path, sparse: bool = True) -> None:
     if proc.returncode != 0:
         stderr = (proc.stderr or "") + (proc.stdout or "")
         if not any(m in stderr.lower() for m in _NO_SUCH_OPTION):
-            raise BoostError("git clone failed: %s" % _git_error(stderr))
+            _raise_git_error("git clone failed", url, stderr)
         # Too old for --sparse/--filter: a full clone still works, just larger.
         shutil.rmtree(dest, ignore_errors=True)
-        run([*base, *tail], timeout=600)
+        _clone_or_translate([*base, *tail], url)
         return
     set_sparse_cone(dest)
+
+
+def _clone_or_translate(argv: list[str], url: str) -> None:
+    """`run(argv, timeout=600)`, translating a credential-prompt failure.
+
+    Runs with ``check=False`` and inspects the raw output itself rather than
+    catching the BoostError `run` would otherwise raise: `_git_error` keeps
+    only the first `fatal:`/`error:` line, which for a 404 discards the
+    preceding `remote: Repository not found.` line `_credential_error` also
+    matches against.
+    """
+    proc = run(argv, timeout=600, check=False)
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "") + (proc.stdout or "")
+        _raise_git_error("git clone failed", url, stderr)
+
+
+def _raise_git_error(prefix: str, spec: str, stderr: str) -> None:
+    """Raise a BoostError for a failed git op, translating a credential
+    prompt into the actual cause first."""
+    cred = _credential_error(spec, stderr)
+    if cred is not None:
+        raise cred
+    raise BoostError("%s: %s" % (prefix, _git_error(stderr)))
 
 
 def set_sparse_cone(repo: Path, patterns=SPARSE_PATTERNS) -> None:
@@ -298,7 +355,11 @@ def materialize(repo: Path, rel_dir: str) -> None:
 def pull(repo: Path) -> str:
     """Update a shallow clone. Returns a one-line summary."""
     before = head_commit(repo)
-    run(["-C", str(repo), "fetch", "--depth", "1", "--quiet", "origin"])
+    proc = run(["-C", str(repo), "fetch", "--depth", "1", "--quiet", "origin"],
+              check=False)
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "") + (proc.stdout or "")
+        _raise_git_error("git fetch failed", remote_url(repo) or str(repo), stderr)
     run(["-C", str(repo), "reset", "--hard", "--quiet", "origin/HEAD"], check=False)
     # origin/HEAD may be unset on old git; fall back to the fetched head
     if head_commit(repo) == before:

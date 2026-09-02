@@ -55,3 +55,13 @@ tap simply never appears there.
 <b>Verified by reversion</b>: the git-message test was confirmed to fail with the old
 <code>detail[-1]</code> restored, reproducing <i>"git -C failed: and the repository exists."</i>
 exactly.
+
+<b>A later audit found a second failure mode for the same deleted-or-private upstream</b>: without
+<code>GIT_TERMINAL_PROMPT=0</code>, git fell back to an interactive
+<code>"Username for 'https://github.com':"</code> prompt instead of failing at all — on a real
+terminal that blocks <code>tap</code>/<code>import</code>/<code>update</code> outright, and in a
+sandbox with no tty it died as the unrelated-looking <i>"Device not configured."</i>
+<code>gitutil.run</code> now sets the flag, and <code>clone_shallow</code>/<code>pull</code>
+translate git's resulting "could not read Username"/"Repository not found"/"Authentication failed"
+text into <i>"&lt;spec&gt;: repository not found or private"</i>, so the failures branch above is
+actually reached instead of the whole command blocking.
