@@ -165,7 +165,28 @@ class TestInstall:
                         "add rule")
         boost("tap", tap_dir)
         r = boost("install", "house-style", "--dry-run")
-        assert "materialize → claude-code · windsurf · cursor · gemini" in r.out
+        # Whole-field match, not a substring: "a · b · c" contains "a · b", so a
+        # substring check passes even with a stray "· antigravity" appended —
+        # exactly the bug this test exists to catch (antigravity is skills-only,
+        # its rule/workflow format is unverified, and it reaches GEMINI.md only
+        # through the `gemini` agent entry, never its own materialize line).
+        line = next(x for x in r.out.splitlines() if "materialize →" in x)
+        assert line.split("→", 1)[1].strip() == "claude-code · windsurf · cursor · gemini"
+
+    def test_dry_run_rule_predicts_the_real_install(self, boost, fixture_tap_src,
+                                                     tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "rule-dry-tap2")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\nUse tabs.\n",
+                        "add rule")
+        boost("tap", tap_dir)
+        preview = boost("install", "house-style", "--dry-run").out
+        real = boost("install", "house-style").out
+
+        def field(text, marker):
+            line = next(x for x in text.splitlines() if marker in x)
+            return line.split("→", 1)[1].strip()
+        assert field(preview, "materialize →") == field(real, "materialized")
 
     def test_installs_declared_requires_closure(self, boost, tapped):
         # jira-integration declares `requires: [commit-messages]` in the fixture;
@@ -1535,6 +1556,30 @@ def _mcp_skill_dir(tmp_path, name="mcp-skill", decl="github, playwright",
     return d
 
 
+def _mcp_skill_tap(fixture_tap_src, tmp_path, name="needs-mcp", decl="github",
+                   sidecar=None):
+    """A tap holding one skill that declares an MCP server, own commit.
+
+    ``install --dry-run`` resolves through a tap, not a local path, so the
+    plain :func:`_mcp_skill_dir` (used with ``boost import``) cannot exercise
+    it — the skill has to actually live in a tapped registry.
+    """
+    tap = tmp_path / (name + "-tap")
+    shutil.copytree(fixture_tap_src, tap)
+    skill = tap / "skills" / name
+    skill.mkdir(parents=True)
+    skill_md = ("---\nname: %s\ndescription: needs an MCP server to work\n"
+               "version: 1.0.0\nmcp: %s\n---\n\n# %s\n\nBody.\n" % (name, decl, name))
+    (skill / "SKILL.md").write_text(skill_md, encoding="utf-8")
+    if sidecar is not None:
+        (skill / ".mcp.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    subprocess.run(["git", "-C", str(tap), "add", "-A"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(tap), "commit", "-qm", "add " + name],
+                   check=True, capture_output=True)
+    return tap
+
+
 class TestMcpAwareSkills:
     def test_declaration_is_surfaced_on_install(self, boost, sandbox, tmp_path):
         d = _mcp_skill_dir(tmp_path)
@@ -1729,6 +1774,35 @@ class TestMcpAwareSkills:
         monkeypatch.setenv("BOOST_NO_MCP_OFFER", "1")
         r = boost("import", _mcp_skill_dir(tmp_path))
         assert "MCP server" not in r.out
+
+    def test_dry_run_plans_the_registration_offer(self, boost, sandbox,
+                                                   fixture_tap_src, tmp_path,
+                                                   monkeypatch):
+        # No dry run ever mentioned MCP at all, though a real user-scope
+        # install prompts to register every declared server — the preview
+        # must name the same action (`<host> mcp add`) the real run offers.
+        # Tap FIRST — `_fake_which` stubs `shutil.which` wholesale, and `boost
+        # tap` itself shells out to `git`, which `which` must still find.
+        tap = _mcp_skill_tap(
+            fixture_tap_src, tmp_path,
+            sidecar={"mcpServers": {"github": {"command": "npx",
+                                               "args": ["-y", "srv"]}}})
+        boost("tap", tap)
+        self._fake_which(monkeypatch, "claude", "git")
+        r = boost("install", "needs-mcp", "--dry-run")
+        assert "mcp   → offer to register github with Claude Code" in r.out
+
+    def test_dry_run_no_mcp_suppresses_the_plan_line(self, boost, sandbox,
+                                                      fixture_tap_src, tmp_path,
+                                                      monkeypatch):
+        tap = _mcp_skill_tap(
+            fixture_tap_src, tmp_path,
+            sidecar={"mcpServers": {"github": {"command": "npx"}}})
+        boost("tap", tap)
+        self._fake_which(monkeypatch, "claude", "git")
+        r = boost("install", "needs-mcp", "--dry-run", "--no-mcp")
+        assert "mcp   →" not in r.out
+        assert "offer to register" not in r.out
 
 
 class TestLocalInstallGates:

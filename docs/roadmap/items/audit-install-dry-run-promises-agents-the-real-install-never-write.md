@@ -2,14 +2,14 @@
 id: audit-install-dry-run-promises-agents-the-real-install-never-write
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: High
 wow: 2
 note: dry run invents an antigravity-cli/skills copy and never mentions the .mcp.json write
 order: 209
-owner:
+owner: loop/install-dry-run-plan-gaps
 pr:
 title: "install <code>--dry-run</code> promises agents the real install never writes (antigravity-cli copy, antigravity materialize) and omits the MCP plan"
 ---
