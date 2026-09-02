@@ -303,6 +303,18 @@ def cmd_compact(argv) -> int:
             if args.reclone:
                 util.rmtree(tap.path)
                 gitutil.clone_shallow(tap.url, tap.path)
+                if tap.pin:
+                    # A pinned tap re-clones at the default branch like any
+                    # other — nothing about `--reclone` consults the pin — so
+                    # without this the clone silently lands on HEAD while
+                    # config.json, the catalog cache and `boost taps` keep
+                    # naming the old commit. checkout_commit's own BoostError
+                    # (unresolvable pin) surfaces through the except below.
+                    gitutil.checkout_commit(tap.path, tap.pin)
+                # The re-clone can change what's on disk even when the byte
+                # count doesn't (a pinned tap's tree is identical, but the
+                # cache's recorded commit and mtime are now stale either way).
+                catalog.rebuild_tap(tap)
             else:
                 gitutil.narrow(tap.path)
             for rel in keep.get(tap.name, []):
@@ -311,9 +323,12 @@ def cmd_compact(argv) -> int:
             out.warn("could not compact %s: %s" % (tap.name, e))
             continue
         after = util.dir_size(tap.path)
-        if after < before:
+        # A re-clone did real work — refreshed the clone, possibly moved it
+        # back onto its pin — even when it doesn't shrink the tap, so it must
+        # never be silently absorbed into "every tap is already compact".
+        if args.reclone or after < before:
             changed += 1
-            freed += before - after
+            freed += max(before - after, 0)
             out.info("%s  %s → %s" % (tap.name, util.human_size(before),
                                       util.human_size(after)))
 

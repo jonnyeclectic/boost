@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from boost_cli.core import config, gitutil, paths, policy, registry
+from boost_cli.core import config, gitutil, paths, policy, registry, util
 from boost_cli.errors import BoostError
 
 SHA = "a" * 40
@@ -106,6 +106,57 @@ class TestUpdateRespectsPins:
         assert registry.list_taps()[0].pin == SHA
         registry.unpin("o/a")
         assert registry.list_taps()[0].pin == ""
+
+
+class TestUpdateReclonesAMissingPinnedTap:
+    """A pinned tap has nothing to hold still once its clone is gone, so
+    skipping it — the old behaviour — reported "pinned … (skipped)" while
+    leaving nothing on disk at all: `boost taps` kept naming a commit no
+    clone described.
+    """
+
+    def test_recloned_at_its_pin_not_skipped(self, sandbox, fake_clone):
+        registry.add("o/a", at=SHA)
+        util.rmtree(registry.list_taps()[0].path)
+
+        results, failures = registry.update()
+
+        assert failures == {}
+        assert results["o/a"] == "cloned at %s" % SHA[:7]
+        assert registry.list_taps()[0].is_cloned
+        # The pin survives — this is a reclone onto it, not a move off it.
+        assert registry.list_taps()[0].pin == SHA
+        assert fake_clone["checkouts"][-1] == ("o__a", SHA)
+
+    def test_force_clones_at_head_and_drops_the_pin(self, sandbox, fake_clone):
+        registry.add("o/a", at=SHA)
+        util.rmtree(registry.list_taps()[0].path)
+
+        results, failures = registry.update(force=True)
+
+        assert failures == {}
+        assert results["o/a"] == "cloned"
+        assert registry.list_taps()[0].pin == ""
+        # Only the checkout `add(at=SHA)` itself performed — force must not
+        # land the fresh clone back on the pin it just dropped.
+        assert fake_clone["checkouts"] == [("o__a", SHA)]
+
+    def test_an_unhonourable_pin_leaves_no_half_clone(self, sandbox,
+                                                      fake_clone, monkeypatch):
+        registry.add("o/a", at=SHA)
+        clone_path = registry.list_taps()[0].path
+        util.rmtree(clone_path)
+
+        def bad_checkout(repo, sha):
+            raise BoostError("not our ref")
+
+        monkeypatch.setattr(gitutil, "checkout_commit", bad_checkout)
+        with pytest.raises(BoostError):
+            registry.update("o/a")
+        # A clone left on HEAD with the old pin still recorded would read as
+        # cloned-and-current on the next sweep and never be retried.
+        assert not clone_path.exists()
+        assert registry.list_taps()[0].pin == SHA
 
 
 class TestRefreshMarker:
