@@ -2,15 +2,15 @@
 id: audit-git-operations-never-set-git-terminal-prompt-0-so-a-404-priv
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: a typo'd tap makes git ask "Username for 'https://github.com':"
 order: 227
-owner:
-pr:
+owner: loop/git-terminal-prompt
+pr: 705
 title: "git ops never set <code>GIT_TERMINAL_PROMPT=0</code>, so a 404/private repo prompts for credentials"
 ---
 <code>gitutil.run</code> (<code>boost_cli/core/gitutil.py:19-41</code>) passes

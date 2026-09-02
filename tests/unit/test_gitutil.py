@@ -115,6 +115,20 @@ class TestHasGitAndRun:
         assert kw["timeout"] == 300                 # default timeout forwarded
         assert kw["capture_output"] is True and kw["text"] is True
 
+    def test_run_disables_terminal_credential_prompt(self, monkeypatch):
+        # Without GIT_TERMINAL_PROMPT=0, a clone/fetch against a deleted or
+        # private repo blocks on "Username for 'https://github.com':" (or
+        # dies as "Device not configured" with no tty) instead of failing.
+        seen = {}
+
+        def rec(argv, **kw):
+            seen.update(kw.get("env") or {})
+            return FakeProc(rc=0, stdout="ok")
+        monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run", rec)
+        gitutil.run(["status"])
+        assert seen["GIT_TERMINAL_PROMPT"] == "0"
+        assert seen["GIT_LFS_SKIP_SMUDGE"] == "1"
+
     def test_run_failure_prefers_stdout_when_stderr_empty(self, monkeypatch):
         # stderr empty, stdout carries the real error -> it must reach the message
         monkeypatch.setattr("boost_cli.core.gitutil.subprocess.run",
@@ -298,6 +312,92 @@ class TestPull:
 
         gitutil.pull(tmp_path / "clone")
         assert not any("FETCH_HEAD" in a for a in calls)
+
+
+class TestCredentialPromptTranslation:
+    """A 404/private remote, once GIT_TERMINAL_PROMPT=0 stops git blocking on
+    a credential prompt, fails fast with wording that reads as a login
+    problem. gitutil translates it into the actual cause instead."""
+
+    @pytest.mark.parametrize("stderr", [
+        "fatal: could not read Username for 'https://github.com': "
+        "terminal prompts disabled",
+        "remote: Repository not found.\n"
+        "fatal: repository 'https://github.com/x/y/' not found",
+        "fatal: Authentication failed for 'https://github.com/x/y/'",
+    ])
+    def test_matches_known_markers(self, stderr):
+        err = gitutil._credential_error("x/y", stderr)
+        assert err is not None
+        assert err.message == "x/y: repository not found or private"
+        assert "access" in err.hint
+
+    def test_none_for_an_unrelated_failure(self):
+        assert gitutil._credential_error("x/y", "fatal: not a git repository") is None
+
+    def test_clone_shallow_translates_sparse_attempt_failure(self, tmp_path,
+                                                              monkeypatch):
+        # The realistic two-line shape: "remote: Repository not found." ahead
+        # of the fatal line _git_error would otherwise surface alone.
+        calls = []
+
+        def rec(args, **kw):
+            calls.append(args)
+            if "clone" in args:
+                return FakeProc(
+                    rc=128,
+                    stderr="remote: Repository not found.\n"
+                          "fatal: repository 'https://github.com/nosuch/repo/' "
+                          "not found")
+            return FakeProc(rc=0)
+        monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
+        with pytest.raises(BoostError) as ei:
+            gitutil.clone_shallow("https://github.com/nosuch/repo", tmp_path / "d")
+        assert ei.value.message == ("https://github.com/nosuch/repo: "
+                                    "repository not found or private")
+        assert len(calls) == 1     # fails before the sparse-cone follow-up call
+
+    def test_clone_shallow_translates_full_clone_failure(self, tmp_path,
+                                                          monkeypatch):
+        def rec(args, **kw):
+            assert kw.get("check") is False
+            return FakeProc(rc=128, stderr="fatal: Authentication failed "
+                                           "for 'https://github.com/nosuch/repo/'")
+        monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
+        with pytest.raises(BoostError) as ei:
+            gitutil.clone_shallow("https://github.com/nosuch/repo", tmp_path / "d",
+                                  sparse=False)
+        assert ei.value.message == ("https://github.com/nosuch/repo: "
+                                    "repository not found or private")
+
+    def test_pull_translates_fetch_failure(self, tmp_path, monkeypatch):
+        def rec(args, **kw):
+            if "fetch" in args:
+                assert kw.get("check") is False
+                return FakeProc(
+                    rc=128,
+                    stderr="remote: Repository not found.\n"
+                          "fatal: repository 'https://github.com/x/y/' not found")
+            if "get-url" in args:
+                return FakeProc(rc=0, stdout="https://github.com/x/y\n")
+            return FakeProc(rc=0, stdout="a" * 40 + "\n")
+        monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
+        with pytest.raises(BoostError) as ei:
+            gitutil.pull(tmp_path / "clone")
+        assert ei.value.message == ("https://github.com/x/y: "
+                                    "repository not found or private")
+
+    def test_pull_reraises_an_unrelated_fetch_failure(self, tmp_path, monkeypatch):
+        def rec(args, **kw):
+            if "fetch" in args:
+                return FakeProc(rc=128, stderr="fatal: unable to access "
+                                               "'https://github.com/x/y/': timeout")
+            return FakeProc(rc=0, stdout="a" * 40 + "\n")
+        monkeypatch.setattr("boost_cli.core.gitutil.run", rec)
+        with pytest.raises(BoostError) as ei:
+            gitutil.pull(tmp_path / "clone")
+        assert ei.value.message == ("git fetch failed: fatal: unable to access "
+                                    "'https://github.com/x/y/': timeout")
 
 
 class TestLogForPath:
