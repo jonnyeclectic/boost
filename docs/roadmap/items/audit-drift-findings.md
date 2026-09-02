@@ -2,12 +2,12 @@
 id: audit-drift-findings
 board: code
 section: health
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
-note: fix up in #719, awaiting CI + review — sandbox couldn't run the full mutation/eval/smoke gate locally (no PyPI egress)
+note: fixed in #719 — all required CI (lint, eval, full test matrix, smoke, mutation) passed and it landed in main via the train-10 batch
 order: 264
 owner: loop/drift-source-missing-hint
 pr: 719
