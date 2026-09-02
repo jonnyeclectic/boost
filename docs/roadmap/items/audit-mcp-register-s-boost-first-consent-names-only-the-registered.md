@@ -2,14 +2,14 @@
 id: audit-mcp-register-s-boost-first-consent-names-only-the-registered
 board: code
 section: dx
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: High
 wow: 2
 note: consent screen prints 1 path; disk gains 4 files across claude/gemini/cursor/windsurf
 order: 213
-owner:
+owner: loop/mcp-consent-scope
 pr:
 title: "<code>mcp register</code>'s boost-first consent names one file but writes every agent"
 ---
