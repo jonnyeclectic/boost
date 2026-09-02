@@ -70,3 +70,12 @@ unrelated — two <code>test_catalog.py</code> permission tests and one <code>do
 test all rely on a non-root <code>chmod</code> denial, which does not hold running as root here).
 CI carries real network access and should run the full gate on the PR; left <code>inflight</code>
 rather than <code>shipped</code> until that's confirmed green.
+
+<b>CI confirmed green on <code>dc5582b</code>.</b> All 41 checks passed, including <code>lint</code>,
+all six <code>mutation-shard</code> jobs plus the aggregating <code>mutation</code> check,
+<code>evals</code>, the full <code>tests</code> matrix (Linux/macOS/Windows ×
+3.12/3.13/3.14, plus the 3.14 free-threaded canary), <code>install-smoke</code>,
+<code>patch-coverage</code> and <code>branch-current</code>. No merge conflicts
+(<code>mergeable_state: clean</code>), no open review threads. Left <code>inflight</code> rather than
+<code>shipped</code> since it still isn't merged — a human reviews and merges per the run's
+instructions.
