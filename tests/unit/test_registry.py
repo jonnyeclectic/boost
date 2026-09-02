@@ -99,6 +99,28 @@ class TestParseSpec:
         assert ei.value.hint == "use owner/repo, a git URL, or a local directory"
 
 
+class TestParseSpecs:
+    """`tap --dry-run` previews via this — must stay a pure read, no clone."""
+
+    def test_maps_each_spec_in_order(self):
+        assert registry.parse_specs(["owner/repo", "other/thing"]) == [
+            ("owner/repo", "https://github.com/owner/repo"),
+            ("other/thing", "https://github.com/other/thing"),
+        ]
+
+    def test_empty_list(self):
+        assert registry.parse_specs([]) == []
+
+    def test_does_not_touch_config_or_disk(self, sandbox):
+        registry.parse_specs(["owner/repo", "another/one"])
+        assert registry.list_taps() == []
+        assert not (sandbox / ".boost" / "repos").exists()
+
+    def test_one_bad_spec_raises(self):
+        with pytest.raises(BoostError):
+            registry.parse_specs(["owner/repo", "not a tap spec"])
+
+
 class TestListAndGet:
     def _seed(self):
         cfg = config.load()

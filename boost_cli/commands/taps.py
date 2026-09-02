@@ -49,6 +49,18 @@ def _tap_catalog(args) -> int:
                     focus=focus)
 
 
+def _print_dry_run(pairs: list[tuple[str, str]]) -> int:
+    """Print what `--defaults`/SPEC would tap and return 0, tapping nothing.
+
+    Shares the format of the `--catalog --dry-run` table above so the flag
+    reads the same regardless of which branch of `cmd_tap` it modifies.
+    """
+    out.table(pairs, headers=("NAME", "URL"))
+    print()
+    out.dim("%d registries (dry run — nothing tapped)" % len(pairs))
+    return 0
+
+
 def _tap_all(urls: list[str], jobs: int | None,
              focus: dict[str, str] | None = None,
              pins: dict[str, str] | None = None,
@@ -122,7 +134,7 @@ def cmd_tap(argv) -> int:
     p.add_argument("--include-lists", action="store_true",
                    help="with --catalog: also tap awesome-list/index repos")
     p.add_argument("--dry-run", action="store_true",
-                   help="with --catalog: print what would be tapped, tap nothing")
+                   help="print what would be tapped, tap nothing")
     p.add_argument("--curated", action="store_true",
                    help="mark the tap as curated (★ in listings)")
     p.add_argument("--at", metavar="SHA",
@@ -142,14 +154,21 @@ def cmd_tap(argv) -> int:
     if args.catalog:
         rc |= _tap_catalog(args)
     if args.defaults:
-        # "items", not "skills": the defaults now carry rules and workflows, so
-        # a pure rules registry reported "257 skills" immediately after the
-        # README promised three kinds. `_tap_all` says items.
-        rc |= _tap_all([str(d["url"]) for d in config.DEFAULT_TAPS],
-                       jobs=args.jobs,
-                       focus={str(d["name"]): str(d.get("focus", ""))
-                              for d in config.DEFAULT_TAPS})
-    if len(args.spec) == 1:
+        if args.dry_run:
+            rc |= _print_dry_run([(str(d["name"]), str(d["url"]))
+                                  for d in config.DEFAULT_TAPS])
+        else:
+            # "items", not "skills": the defaults now carry rules and
+            # workflows, so a pure rules registry reported "257 skills"
+            # immediately after the README promised three kinds. `_tap_all`
+            # says items.
+            rc |= _tap_all([str(d["url"]) for d in config.DEFAULT_TAPS],
+                           jobs=args.jobs,
+                           focus={str(d["name"]): str(d.get("focus", ""))
+                                  for d in config.DEFAULT_TAPS})
+    if args.spec and args.dry_run:
+        rc |= _print_dry_run(registry.parse_specs(list(args.spec)))
+    elif len(args.spec) == 1:
         with spin.Spinner("cloning %s" % args.spec[0]):
             tap = registry.add(args.spec[0], curated=args.curated, at=args.at)
             entries = catalog.rebuild_tap(tap)
