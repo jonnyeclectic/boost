@@ -10,7 +10,7 @@ wow: 2
 note: a file the user is told to commit is written and emptied with zero output
 order: 212
 owner: loop/mcp-project-scope-report
-pr:
+pr: 686
 title: "<code>install --local</code> writes the repo's <code>.mcp.json</code> silently — the 'recorded N servers' report never runs"
 ---
 Installing a skill that declares an MCP server with <code>--local</code> prints
