@@ -13814,7 +13814,7 @@ covers three distinct look-alikes. Found by the 2026-08 CLI audit (cluster
       </article>
 
       <article class="cap rcard" id="audit-log-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost log: CLI audit findings (2026-08)</h3>
         <p>The diagnostic trail journals a crash code for exits that were fine. After
 <code>boost edit --help</code> (real exit 0) and <code>boost edit</code> (a usage error, real exit 2),
@@ -13837,7 +13837,7 @@ Update <code>docs/DEBUGGING.md</code> where it describes the trail. Found by the
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">every --help and usage error is journaled as rc=70 at WARNING — real exits 0 and 2</span>
+          <span class="m">fix landed in cli.py + tests + DEBUGGING.md; PR's CI runs the full gate — sandbox network policy blocked local make check (PyPI unreachable)</span>
         </div>
       </article>
 

@@ -2,14 +2,14 @@
 id: audit-log-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
-note: every --help and usage error is journaled as rc=70 at WARNING — real exits 0 and 2
+note: "fix landed in cli.py + tests + DEBUGGING.md; PR's CI runs the full gate — sandbox network policy blocked local make check (PyPI unreachable)"
 order: 275
-owner:
+owner: loop/cli-log-rc70
 pr:
 title: "boost log: CLI audit findings (2026-08)"
 ---

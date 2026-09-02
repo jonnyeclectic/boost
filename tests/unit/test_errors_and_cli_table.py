@@ -110,6 +110,29 @@ def run_main(argv):
 VERSION_LINE = re.compile(r"^boost \S+$")
 
 
+class TestSystemExitLoggedWithRealRc:
+    """argparse raises SystemExit for --help and usage errors, which used to
+    skip every except clause in cli.main (SystemExit derives from
+    BaseException, not Exception) and leave the trail's preset rc=70 in the
+    `done:` line even though the real exit was 0 or 2."""
+
+    def test_subcommand_help_logs_rc_0_not_70(self, boost):
+        from boost_cli.core import logs
+        boost("install", "--help", expect=0)
+        line = logs.log_path().read_text(encoding="utf-8")
+        assert "done: boost install --help -> rc=0 in" in line
+        assert "rc=70" not in line
+        assert "WARNING" not in line  # clean exit stays at INFO
+
+    def test_subcommand_usage_error_logs_rc_2_not_70(self, boost):
+        from boost_cli.core import logs
+        boost("install", expect=2)  # missing required NAME positional
+        line = logs.log_path().read_text(encoding="utf-8")
+        assert "done: boost install -> rc=2 in" in line
+        assert "rc=70" not in line
+        assert "WARNING" in line  # non-zero rc still stands out
+
+
 class TestMainDispatch:
     def test_version_flag(self, sandbox, capsys):
         assert cli.main(["--version"]) == 0
