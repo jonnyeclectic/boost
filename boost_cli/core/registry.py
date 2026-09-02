@@ -125,6 +125,16 @@ def _checked(name: str, url: str, spec: str) -> tuple[str, str]:
     return (name, url)
 
 
+def parse_specs(specs: list[str]) -> list[tuple[str, str]]:
+    """Parse each spec to (name, url) via `parse_spec`, touching nothing.
+
+    Used by `tap --dry-run` to preview targets without cloning or writing
+    config — `parse_spec` is already pure (a directory stat at worst), so the
+    only job here is applying it across a SPEC list in order.
+    """
+    return [parse_spec(spec) for spec in specs]
+
+
 def list_taps() -> list[Tap]:
     """Configured taps from config.json.
 
