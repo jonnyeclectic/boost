@@ -10,7 +10,7 @@ wow: 2
 note: a skill flagged "moves credentials off the machine" imports via --all with zero warnings
 order: 208
 owner: loop/import-all-scan-parity
-pr:
+pr: 708
 title: "import <code>--all</code> skips the injection/secret scans and the per-skill report single import runs"
 ---
 Importing one skill runs the safety report: <code>import fx/sketchy/beta</code> prints <em>"! beta:
