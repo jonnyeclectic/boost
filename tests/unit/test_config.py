@@ -8,7 +8,7 @@ import json
 
 import pytest
 
-from boost_cli.core import config, paths
+from boost_cli.core import config, paths, typedvalue
 
 
 class TestLoadDefaults:
@@ -340,3 +340,96 @@ class TestRegistryCategories:
         assert cats  # the bundled catalog does carry categories
         assert set(cats) == {e["name"] for e in raw if e.get("category")}
         assert all(isinstance(v, str) and v for v in cats.values())
+
+
+# ------------------------------------------------------- typed config values
+
+class TestSpecFor:
+    def test_a_key_is_typed_by_its_default(self, sandbox):
+        assert config.spec_for("telemetry") == typedvalue.BOOL
+        assert config.spec_for("policy_enforce") == typedvalue.BOOL
+        assert config.spec_for("serve.port") == typedvalue.INT
+        assert config.spec_for("taps") == typedvalue.LIST
+        assert config.spec_for("ai.model") == typedvalue.STR
+        assert config.spec_for("ai") == typedvalue.DICT
+
+    def test_a_deeply_nested_key_is_typed(self, sandbox):
+        assert config.spec_for("agents.claude-code.enabled") == typedvalue.BOOL
+        assert config.spec_for("agents.claude-code.dir") == typedvalue.STR
+
+    def test_a_key_defaults_has_never_heard_of_is_untyped(self, sandbox):
+        # `boost config set` accepts keys boost does not ship — inventing a
+        # type for those would refuse values that work today.
+        assert config.spec_for("brand.new.key") == typedvalue.ANY
+        assert config.spec_for("security.enforce_digest") == typedvalue.ANY
+        assert config.spec_for("agents.made-up.enabled") == typedvalue.ANY
+
+    def test_a_path_that_crosses_a_scalar_is_untyped(self, sandbox):
+        assert config.spec_for("ai.model.deeper") == typedvalue.ANY
+
+
+class TestSetValueIsTyped:
+    def test_a_boolean_key_reads_the_word_the_user_typed(self, sandbox):
+        config.set_value("telemetry", "no")
+        assert config.get("telemetry") is False
+        config.set_value("telemetry", "on")
+        assert config.get("telemetry") is True
+
+    def test_a_bad_boolean_is_refused_and_nothing_is_written(self, sandbox):
+        with pytest.raises(typedvalue.ValueTypeError):
+            config.set_value("telemetry", "maybe")
+        assert not paths.config_path().exists()
+        assert config.get("telemetry") is False   # still the default
+
+    def test_a_bad_number_is_refused(self, sandbox):
+        with pytest.raises(typedvalue.ValueTypeError) as e:
+            config.set_value("serve.port", "abc")
+        assert e.value.key == "serve.port"
+        assert config.get("serve.port") == 8787
+
+    def test_a_string_key_keeps_a_numeric_looking_value_as_text(self, sandbox):
+        config.set_value("ai.model", "42")
+        assert config.get("ai.model") == "42"
+
+    def test_an_untyped_key_keeps_the_old_lenient_parse(self, sandbox):
+        config.set_value("security.enforce_digest", "true")
+        assert config.get("security.enforce_digest") is True
+
+
+class TestGetInt:
+    def test_a_stored_int(self, sandbox):
+        config.set_value("serve.port", "9001")
+        assert config.get_int("serve.port", 8787) == 9001
+
+    def test_the_default_when_unset(self, sandbox):
+        assert config.get_int("no.such.port", 8787) == 8787
+
+    def test_an_explicit_null_falls_back_to_the_default(self, sandbox):
+        cfg = config.load()
+        cfg["serve"]["port"] = None
+        config.save(cfg)
+        assert config.get_int("serve.port", 8787) == 8787
+
+    def test_a_hand_edited_string_number_is_read(self, sandbox):
+        cfg = config.load()
+        cfg["serve"]["port"] = "8080"
+        config.save(cfg)
+        assert config.get_int("serve.port", 8787) == 8080
+
+    def test_a_hand_edited_non_number_raises_a_typed_error(self, sandbox):
+        # Not a bare ValueError: `boost serve --help` used to die on this with
+        # exit 70 and a crash report, before argparse ever ran.
+        cfg = config.load()
+        cfg["serve"]["port"] = "abc"
+        config.save(cfg)
+        with pytest.raises(typedvalue.ValueTypeError) as e:
+            config.get_int("serve.port", 8787)
+        assert e.value.key == "serve.port"
+        assert e.value.expected == typedvalue.describe(typedvalue.INT)
+
+    def test_a_boolean_is_not_a_port_number(self, sandbox):
+        cfg = config.load()
+        cfg["serve"]["port"] = True
+        config.save(cfg)
+        with pytest.raises(typedvalue.ValueTypeError):
+            config.get_int("serve.port", 8787)

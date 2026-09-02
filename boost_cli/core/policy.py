@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 
-from . import config, paths
+from . import config, paths, typedvalue
 
 DEFAULTS = {
     "blocked_skills": [],      # names never allowed
@@ -31,18 +31,78 @@ DEFAULTS = {
     "require_signed_taps": False,
 }
 
+# Per-key value types, derived from DEFAULTS so the two can never disagree.
+# `max_skills` is the one key whose default (None) names no type, so it says
+# so explicitly: a cap is a number, and "no cap" is null.
+VALUE_TYPES: dict[str, str] = {k: typedvalue.spec_for(v) for k, v in DEFAULTS.items()}
+VALUE_TYPES["max_skills"] = typedvalue.INT_OR_NONE
+
+
+def spec_for(key: str) -> str:
+    """The value type of a policy key; :data:`typedvalue.ANY` if unknown."""
+    return VALUE_TYPES.get(key, typedvalue.ANY)
+
+
+def parse_value(key: str, raw: str):
+    """Read a typed value for `key` out of the string a user typed.
+
+    Raises :class:`typedvalue.ValueTypeError` when the text cannot be read at
+    the key's type — at the setter, where the user can still fix it, rather
+    than as a traceback out of the middle of the next install.
+    """
+    return typedvalue.coerce(key, raw, spec_for(key))
+
+
+def _read_file() -> dict:
+    """The raw contents of policy.json; ``{}`` when missing or unparseable."""
+    p = paths.policy_path()
+    if not p.exists():
+        return {}
+    with contextlib.suppress(json.JSONDecodeError, OSError):
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    return {}
+
 
 def load() -> dict:
     """Return the effective policy: DEFAULTS overlaid with policy.json.
 
-    A missing or unparseable file silently yields the defaults.
+    A missing or unparseable file silently yields the defaults. Every stored
+    value is read at its declared type, so a hand-edited (or older-boost)
+    ``"pin_only": "no"`` is the boolean the user meant and not a truthy string
+    that freezes the machine. A value that cannot be read at its type falls
+    back to the default and is reported by :func:`invalid_values` — never
+    raised into the middle of an install, and never silently obeyed either.
     """
-    p = paths.policy_path()
     base = DEFAULTS.copy()
-    if p.exists():
-        with contextlib.suppress(json.JSONDecodeError, OSError):
-            base.update(json.loads(p.read_text(encoding="utf-8")))
+    for key, value in _read_file().items():
+        if key not in DEFAULTS:
+            base[key] = value
+            continue
+        try:
+            base[key] = typedvalue.adapt(key, value, spec_for(key))
+        except typedvalue.ValueTypeError:
+            base[key] = DEFAULTS[key]
     return base
+
+
+def invalid_values() -> list[tuple[str, object, str]]:
+    """Stored policy values that could not be read at their declared type.
+
+    Each row is ``(key, stored value, expected phrase)``. :func:`load` has
+    already substituted the default for these, so this is what lets `boost
+    policy` say which keys are being ignored and why.
+    """
+    bad: list[tuple[str, object, str]] = []
+    for key, value in _read_file().items():
+        if key not in DEFAULTS:
+            continue
+        try:
+            typedvalue.adapt(key, value, spec_for(key))
+        except typedvalue.ValueTypeError as e:
+            bad.append((key, value, e.expected))
+    return bad
 
 
 def save(pol: dict) -> None:
