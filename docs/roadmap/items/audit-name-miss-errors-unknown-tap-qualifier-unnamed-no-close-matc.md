@@ -2,7 +2,7 @@
 id: audit-name-miss-errors-unknown-tap-qualifier-unnamed-no-close-matc
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · UX
 complexity: S
 impact: Med

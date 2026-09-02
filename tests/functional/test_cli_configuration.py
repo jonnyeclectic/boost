@@ -255,6 +255,26 @@ class TestCreate:
         assert lock["skills"]["inst-skill"]["tap"] == "local"
         assert lock["skills"]["inst-skill"]["version"] == "0.1.0"
 
+    def test_install_flag_replaces_confirmed_overwrite(self, boost, installed,
+                                                        tmp_path):
+        # `installed` already put brainstorming on disk from the fixture tap —
+        # `create brainstorming --install` must not silently clobber it and
+        # relabel its lock provenance `local`.
+        r = boost("create", "brainstorming", "--dir", tmp_path, "--install")
+        assert "replaced brainstorming" in r.out
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["skills"]["brainstorming"]["tap"] == "local"
+        assert lock["skills"]["brainstorming"]["version"] == "0.1.0"
+
+    def test_install_flag_declined_overwrite_leaves_it_installed(
+            self, boost, installed, tmp_path, monkeypatch):
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("create", "brainstorming", "--dir", tmp_path, "--install")
+        assert "not installed: brainstorming is already installed from fixture-tap" in r.out
+        assert (tmp_path / "brainstorming" / "SKILL.md").is_file()
+        lock = json.loads(paths.lockfile_path().read_text(encoding="utf-8"))
+        assert lock["skills"]["brainstorming"]["tap"] == "fixture-tap"
+
 
 # ---------------------------------------------------------------- policy
 

@@ -82,3 +82,14 @@ class TestHooksErrors:
     def test_list_empty(self, boost, sandbox):
         r = boost("hooks", "list")
         assert "no boost-managed hooks" in r.out
+
+    def test_timeout_must_be_positive_int(self, boost, sandbox):
+        # --timeout -5 used to write a negative timeout straight into
+        # settings.json; --timeout 0 is no better (Gemini's is milliseconds,
+        # fed to setTimeout — a hook that expires before it runs).
+        r = boost("hooks", "add", "SessionStart", "-c", "x", "-n", "y",
+                  "-s", "global", "--timeout", "-5", expect=2)
+        assert "must be >= 1" in r.err
+        r = boost("hooks", "add", "SessionStart", "-c", "x", "-n", "y",
+                  "-s", "global", "--timeout", "0", expect=2)
+        assert "must be >= 1" in r.err

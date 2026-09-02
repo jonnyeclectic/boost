@@ -167,6 +167,25 @@ def positive_int(s: str) -> int:
     return v
 
 
+def score_int(s: str) -> int:
+    """argparse ``type=`` for ``lint --min``: an int in [0, 100].
+
+    Scores are capped at 100 (``score_skill``), so a bare ``type=int`` let
+    ``--min 500`` through and failed every skill, and a negative ``--min``
+    passed every skill silently rather than being rejected as meaningless.
+    Unlike :func:`positive_int`, 0 is a legitimate value here — "fail nobody".
+    """
+    import argparse
+
+    try:
+        v = int(s)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("invalid int value: %r" % s) from None
+    if not 0 <= v <= 100:
+        raise argparse.ArgumentTypeError("must be between 0 and 100")
+    return v
+
+
 def now_iso() -> str:
     """Return UTC now as ``'2026-07-16T01:00:00Z'`` (what ``rel_time`` parses)."""
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -2,15 +2,15 @@
 id: audit-create-distill-infer-absorb-install-silently-replace-an-inst
 board: code
 section: dx
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: High
 wow: 2
 note: a tap skill becomes the TODO scaffold, lock flips to local — and the message says installed
 order: 206
-owner:
-pr:
+owner: loop/generated-install-overwrite
+pr: 716
 title: "create/distill/infer/absorb <code>--install</code> silently replace an installed (unpinned) skill and flip its lock provenance to local"
 ---
 The generated-skill install path never checks whether the name is already taken. Verified: after
@@ -40,3 +40,42 @@ create/distill/infer/absorb.
 
 Found by the 2026-08 CLI audit (cluster <code>generated-install-overwrites</code>); repro in the
 audit log.
+
+<br><br><b>Fixed, per the verified recommendation.</b> Added <code>store.existing_skill_owner(name)</code>
+(a thin <code>lockfile.get_skill</code> lookup returning the owning tap, core-level so both callers
+and any future one share it) and used it in <code>_install_generated</code>
+(<code>intelligence.py</code>, shared by distill/infer/absorb) and <code>cmd_create</code>
+(<code>configuration.py</code>): when a name is already installed, ask with <code>out.confirm</code>
+before replacing (mirrors the existing <code>_write_generated</code> overwrite-confirm for the
+non-<code>--install</code> path) rather than adding a new <code>--force</code> flag, print
+&ldquo;replaced&rdquo; instead of &ldquo;installed&rdquo; when confirmed, and on refusal save the
+generated skill to cwd exactly as the existing policy-refusal branch already did (factored into one
+<code>_save_generated_fallback</code> helper). <code>install_from_path</code> itself is unchanged, as
+specified. No CLI surface changed, so <code>docs/commands.html</code> needed no regeneration
+(confirmed via <code>build_command_reference.py --check</code>). New unit tests cover
+<code>existing_skill_owner</code> directly; new functional tests cover the confirmed-replace and
+declined-decline paths for both <code>create --install</code> and
+<code>distill/infer/absorb --install</code>, verified manually end-to-end against a disposable
+<code>BOOST_HOME</code> in both the declined and <code>BOOST_ASSUME_YES</code> branches.
+
+<b>Gate status: implementation verified locally short of the full <code>make check</code>.</b> This
+session's sandbox has no PyPI network access (pip/uv both get 403 from the index), so the
+hash-pinned toolchain in <code>requirements/*.txt</code> could not be installed and
+<code>mutmut</code>/<code>vulture</code>/<code>xenon</code>/<code>interrogate</code>/<code>refurb</code>/<code>codespell</code>/<code>actionlint</code>/<code>zizmor</code>/<code>import-linter</code>
+are unavailable here. Verified instead with what the image does carry: <code>ruff check</code>,
+<code>mypy</code> and <code>pyright</code> clean on every changed file (mypy's two pre-existing
+<code>pkg.py</code> errors are untouched by this change); the full <code>tests/unit</code> +
+<code>tests/functional</code> suite passes under Python 3.12 (three failures are pre-existing and
+unrelated — two <code>test_catalog.py</code> permission tests and one <code>doctor</code> log-write
+test all rely on a non-root <code>chmod</code> denial, which does not hold running as root here).
+CI carries real network access and should run the full gate on the PR; left <code>inflight</code>
+rather than <code>shipped</code> until that's confirmed green.
+
+<b>CI confirmed green on <code>dc5582b</code>.</b> All 41 checks passed, including <code>lint</code>,
+all six <code>mutation-shard</code> jobs plus the aggregating <code>mutation</code> check,
+<code>evals</code>, the full <code>tests</code> matrix (Linux/macOS/Windows ×
+3.12/3.13/3.14, plus the 3.14 free-threaded canary), <code>install-smoke</code>,
+<code>patch-coverage</code> and <code>branch-current</code>. No merge conflicts
+(<code>mergeable_state: clean</code>), no open review threads. Left <code>inflight</code> rather than
+<code>shipped</code> since it still isn't merged — a human reviews and merges per the run's
+instructions.

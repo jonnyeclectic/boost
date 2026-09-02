@@ -1250,6 +1250,23 @@ def install_from_path(src_dir: Path, name: str | None = None,
     return res
 
 
+def existing_skill_owner(name: str) -> str | None:
+    """Tap label of the skill already installed as ``name``, else None.
+
+    For the generated-install paths (``create``/``distill``/``infer``/``absorb``
+    ``--install``) to warn before silently replacing an *unpinned* install and
+    flipping its lock provenance to ``local`` — the loss ``list`` would
+    otherwise never show. ``install_from_path``'s own gate only refuses a
+    *pinned* name (its docstring: that refusal is deliberately not extended to
+    the unpinned case, since this is also the re-import path for ``boost
+    import`` / ``boost reinstall``). Callers that generate a brand-new skill,
+    rather than re-importing an existing one, use this to catch that gap
+    themselves.
+    """
+    existing = lockfile.get_skill(name)
+    return existing.get("tap") if existing else None
+
+
 def uninstall(name: str) -> dict:
     """Uninstall ``name`` whatever its kind (skill, rule, workflow).
 
