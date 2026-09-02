@@ -146,6 +146,31 @@ class TestConsentIsRealRatherThanProcedural:
         assert ("boost uninstall %s" % RULE) in out
 
 
+class TestInstallScopeMatchesTheConsentTargets:
+    """The write must land in exactly the agents named on the consent screen.
+
+    `_offer_boost_first` used to print a scoped target list but then call
+    `store.install` with no `only_agents`, so it materialized into *every*
+    enabled agent regardless of which hosts the offer named — a Gemini-only
+    offer silently also wrote CLAUDE.md, Cursor and Windsurf rule files.
+    """
+
+    def test_claude_only_offer_writes_only_claude_code(self, offering, capsys):
+        configuration._offer_boost_first(["claude"])
+        materialized = {m["agent"] for m in lockfile.get_rule(RULE)["materializations"]}
+        assert materialized == {"claude-code"}
+
+    def test_gemini_only_offer_writes_only_gemini(self, offering, capsys):
+        configuration._offer_boost_first(["gemini"])
+        materialized = {m["agent"] for m in lockfile.get_rule(RULE)["materializations"]}
+        assert materialized == {"gemini"}
+
+    def test_both_hosts_write_both_and_nothing_else(self, offering, capsys):
+        configuration._offer_boost_first(["claude", "gemini"])
+        materialized = {m["agent"] for m in lockfile.get_rule(RULE)["materializations"]}
+        assert materialized == {"claude-code", "gemini"}
+
+
 class TestItNeverAsksTwice:
     def test_an_installed_rule_is_not_re_offered(self, offering, capsys):
         configuration._offer_boost_first(["claude"])
