@@ -171,6 +171,24 @@ class TestCohort:
         r = boost("cohort", "apply")
         assert "no cohorts defined" in r.out
 
+    def test_create_over_existing_updates_and_preserves_created(
+            self, boost, tapped):
+        first = boost("cohort", "create", "pilot", "--skills", "brainstorming",
+                      "--percent", "50")
+        assert "created cohort pilot" in first.out
+        before = json.loads(boost("cohort", "list", "--json").out)[0]["created"]
+
+        second = boost("cohort", "create", "pilot", "--skills",
+                       "brainstorming,tdd-workflow", "--percent", "100")
+        assert "updated cohort pilot (was 50% / 1 skill)" in second.out
+        assert "now 100% rollout, 2 skills" in second.out
+        assert "created cohort pilot" not in second.out
+
+        after = json.loads(boost("cohort", "list", "--json").out)[0]
+        assert after["created"] == before   # replacement, not a fresh cohort
+        assert after["skills"] == ["brainstorming", "tdd-workflow"]
+        assert after["percent"] == 100
+
     def test_empty_listing_hint_wraps_and_keeps_the_command_atomic(
             self, boost, tapped, monkeypatch):
         # The hint's backtick-quoted command is 62 columns by itself — wider
@@ -222,6 +240,19 @@ class TestProfile:
         assert "switched to profile daily" in r.out
         assert "tdd-workflow" in json.loads(
             paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
+
+    def test_save_over_existing_reports_the_update_and_replaces(
+            self, boost, tapped):
+        boost("install", "brainstorming")
+        first = boost("profile", "save", "daily")
+        assert "saved profile daily (1 skill)" in first.out
+
+        boost("install", "tdd-workflow")
+        second = boost("profile", "save", "daily")
+        assert "updated profile daily (was 1 skill, now 2 skills)" in second.out
+        assert "saved profile daily" not in second.out
+        assert json.loads(boost("profile", "show", "daily", "--json").out)[
+            "skills"].keys() == {"brainstorming", "tdd-workflow"}
 
     def test_use_sidelines_then_prune_uninstalls_extras(self, boost, tapped):
         boost("install", "brainstorming")
