@@ -602,6 +602,27 @@ class TestReplay:
         r = boost("replay", "rollback", snap_id)
         assert "brainstorming is gone from every tap — cannot restore" in r.out
 
+    def test_corrupt_snapshot_is_framed_not_raw_and_list_names_it(
+            self, boost, tapped, tick_clock):
+        # Two installs (no uninstall) is enough to produce one snapshot.
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        history = lockfile.history_list()
+        corrupt_id = history[0]["id"]
+        (paths.lock_history_dir() / ("lock-%s.json" % corrupt_id)).write_text(
+            "not json", encoding="utf-8")
+
+        # show/rollback on the now-corrupt entry: a framed BoostError, not a
+        # raw JSONDecodeError traceback and exit 70.
+        r = boost("replay", "show", corrupt_id, expect=1)
+        assert "unreadable" in r.err
+
+        # list: the id doesn't just vanish — one line says how many were
+        # dropped, alongside the entries that still parse.
+        r = boost("replay", "list")
+        assert "1 unreadable snapshot skipped" in r.out
+        assert corrupt_id not in r.out
+
     def test_unknown_and_missing_id(self, boost, sandbox):
         r = boost("replay", "show", "99999999", expect=1)
         assert "no lock history entry 99999999" in r.err

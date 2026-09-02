@@ -258,6 +258,17 @@ class TestServeHttp:
             serve.serve_http("127.0.0.1", 1234)
         assert "cannot bind 127.0.0.1:1234" in ei.value.message
 
+    def test_out_of_range_port_is_framed_not_a_crash(self, monkeypatch):
+        # `--port 99999` (or -1) reaches the real socket.bind() as an
+        # OverflowError, not an OSError, so the OSError-only guard used to
+        # miss it entirely -> an unhandled OverflowError, exit 70.
+        monkeypatch.setattr(serve, "ThreadingHTTPServer",
+                            self._boom(OverflowError("bind(): port must be 0-65535.")))
+        with pytest.raises(BoostError) as ei:
+            serve.serve_http("127.0.0.1", 99999)
+        assert "99999" in ei.value.message
+        assert "0-65535" in ei.value.message
+
     def test_other_oserror_is_generic(self, monkeypatch):
         e = OSError(13, "Permission denied")
         monkeypatch.setattr(serve, "ThreadingHTTPServer", self._boom(e))
