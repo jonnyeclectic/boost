@@ -6535,7 +6535,7 @@ really is. See PR #674.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-quarantine-pin-state-invisible-list-info-doctor-report-links">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
         <h3>Quarantine/pin state invisible: <code>list</code>/<code>info</code>/<code>doctor</code> report links and materializations that were removed</h3>
         <p>Quarantine records its state but the reporting surfaces never consult it. After
 <code>boost quarantine brainstorming</code> removes all four agent links on disk,
@@ -6572,7 +6572,7 @@ audit (cluster <code>quarantine-pin-invisible</code>); repro in the audit log.</
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">doctor says "healthy, 1 skill with agent links" when the only skill is quarantined</span>
+          <span class="m">fix implemented and pushed; make check could not run in this sandbox (PyPI egress blocked) — awaiting CI</span>
         </div>
       </article>
 

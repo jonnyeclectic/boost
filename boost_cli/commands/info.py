@@ -234,17 +234,26 @@ def _kind_table(heading, items, extra=None):
     ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
     count line reuses the heading's trailing noun (`installed rules` -> `rule`)."""
     out.heading(heading)
-    headers: tuple = ("NAME", "VERSION", "TAP", "AGENTS")  # `extra` adds a 5th
-    rows: list[tuple] = []   # 4 columns, or 5 when `extra` adds one
+    # FLAGS mirrors the skills table so a quarantined or pinned rule/workflow
+    # doesn't render byte-identical to a healthy one — `update`/`cat` treat
+    # them differently and a reader needs to see that here, not just in --json.
+    headers: tuple = ("NAME", "VERSION", "TAP", "AGENTS", "FLAGS")
+    rows: list[tuple] = []
     for name in sorted(items):
         e = items[name]
+        quarantined = bool(e.get("quarantined"))
+        agents_cell = "—" if quarantined else _materialized_agents(e)
+        flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
+                ([out.aurora("quarantined", "pink")] if quarantined else [])
         row = [name, e.get("version", "?"), e.get("tap", "?"),
-               _materialized_agents(e)]
+               agents_cell]
         if extra:
             row.append(str(e.get(extra[1], "") or ""))
+        row.append(" ".join(flags))
         rows.append(tuple(row))
     if extra:
-        headers = (*headers, extra[0])
+        headers = (headers[0], headers[1], headers[2], headers[3], extra[0],
+                   headers[4])
     out.table(rows, headers=headers)
     noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
     print("  " + out.aurora("%d %s%s installed"
@@ -379,8 +388,15 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         out.kv("installed", "%s (%s)" % (ia, util.rel_time(ia)))
     if ua and ua != ia:
         out.kv("updated", "%s (%s)" % (ua, util.rel_time(ua)))
-    agents = [m.get("agent", "?") for m in entry.get("materializations") or []]
-    out.kv("materialized", ", ".join(agents) or "(none)")
+    if entry.get("quarantined"):
+        # `materializations` still names what quarantine stashed and would
+        # restore on release — it is not what's on disk right now, which is
+        # nothing. Printing the stale agent list here reads as a lie about
+        # files that were just removed.
+        out.kv("materialized", "(removed — quarantined)")
+    else:
+        agents = [m.get("agent", "?") for m in entry.get("materializations") or []]
+        out.kv("materialized", ", ".join(agents) or "(none)")
     out.kv("pinned", "yes" if entry.get("pinned") else "no")
     out.kv("quarantined", "yes" if entry.get("quarantined") else "no")
     return 0

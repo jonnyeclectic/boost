@@ -2,14 +2,14 @@
 id: audit-quarantine-pin-state-invisible-list-info-doctor-report-links
 board: code
 section: health
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: Med
 wow: 2
-note: doctor says "healthy, 1 skill with agent links" when the only skill is quarantined
+note: fix implemented and pushed; make check could not run in this sandbox (PyPI egress blocked) — awaiting CI
 order: 236
-owner:
+owner: loop/quarantine-visibility
 pr:
 title: "Quarantine/pin state invisible: <code>list</code>/<code>info</code>/<code>doctor</code> report links and materializations that were removed"
 ---

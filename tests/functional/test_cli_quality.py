@@ -821,7 +821,15 @@ class TestQuarantine:
                         ).is_symlink()
         assert (store / "SKILL.md").is_file()
         assert _lock()["brainstorming"]["quarantined"] is True
-        boost("doctor")                          # quarantine is healthy: rc0
+        # The removed links must not linger in the lock — list/info/doctor
+        # all read `agents` to say what's linked.
+        assert _lock()["brainstorming"]["agents"] == []
+        r = boost("doctor")                      # quarantine is healthy: rc0
+        assert "skill present in store with agent links" not in r.out
+        assert "1 skill quarantined, none active" in r.out
+        r = boost("list")
+        assert re.search(r"brainstorming\s+1\.4\.0", r.out)
+        assert "quarantined" in r.out
 
         r = boost("quarantine", "--list")
         assert "brainstorming" in r.out and "1.4.0" in r.out
@@ -836,6 +844,16 @@ class TestQuarantine:
         assert entry["quarantined"] is False
         assert entry["agents"] == ["claude-code", "windsurf", "cursor",
                                    "antigravity"]
+
+    def test_doctor_separates_active_from_quarantined_skills(self, boost, tapped):
+        boost("install", "brainstorming")
+        boost("install", "commit-messages")
+        boost("quarantine", "brainstorming")
+        r = boost("doctor")
+        # One of two skills is quarantined: the surviving active count must
+        # not include it, and the line must say so rather than going quiet.
+        assert "1 skill present in store with agent links (1 quarantined)" \
+            in r.out
 
     def test_edge_cases(self, boost, installed):
         boost("quarantine", "brainstorming")
@@ -897,6 +915,17 @@ class TestQuarantineMaterialized:
         self._seed_claude_rule()
         r = boost("quarantine", "--release", "house")
         assert "house is not quarantined" in r.out
+
+    def test_doctor_names_a_quarantined_rule_instead_of_going_silent(
+            self, boost, sandbox):
+        # Excluding a quarantined rule from doctor's "fully materialized"
+        # count used to make the whole summary line vanish once every
+        # installed rule was quarantined, rather than ever saying so.
+        self._seed_claude_rule()
+        boost("quarantine", "house")
+        r = boost("doctor")
+        assert "0 rules and 0 workflows fully materialized " \
+               "(1 rule quarantined)" in r.out
 
 
 class TestGovernedIntegritySurface:
