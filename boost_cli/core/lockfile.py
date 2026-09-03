@@ -170,7 +170,7 @@ def apply_tag_mods(tags: list[str], mods: list[str]) -> tuple[list[str], bool]:
     sorted before/after here is what makes a no-op read as one.
     """
     before = sorted(tags)
-    result = list(tags)
+    result = tags.copy()
     for tok in mods:
         if not tok or tok[0] not in "+-":
             raise BoostError("cannot parse %r" % tok,
@@ -185,7 +185,7 @@ def apply_tag_mods(tags: list[str], mods: list[str]) -> tuple[list[str], bool]:
             result.append(t)
         elif tok[0] == "-" and t in result:
             result.remove(t)
-    result = sorted(result)
+    result.sort()
     return result, result != before
 
 

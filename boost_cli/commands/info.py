@@ -1042,7 +1042,7 @@ def cmd_tag(argv):
                      "governed by pin / quarantine / verify")
         raise BoostError("%s is not installed" % args.name,
                         hint="see what is with `boost list`")
-    tags, changed = lockfile.apply_tag_mods(list(entry.get("tags") or []), mods)
+    tags, changed = lockfile.apply_tag_mods(entry.get("tags") or [], mods)
     if changed:
         entry["tags"] = tags
         lockfile.set_skill(args.name, entry)
