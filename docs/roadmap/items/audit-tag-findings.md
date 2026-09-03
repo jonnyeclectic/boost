@@ -2,14 +2,14 @@
 id: audit-tag-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 2
 note: "tag brainstorming --verbose exits 0 as a remove of '-verbose'; +x -x writes lock + journal"
 order: 294
-owner:
+owner: loop/tag-arg-parsing
 pr:
 title: "boost tag: CLI audit findings (2026-08)"
 ---
