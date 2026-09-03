@@ -395,19 +395,6 @@ jobs:
             | tee /tmp/pytest.out || rc=$?
           grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | sed 's/^/::error::/' || true
           exit "$rc"
-      # TEMPORARY diagnostic step for PR #728 — this session's job-log tool
-      # cannot read Windows job logs (drowned by harden-runner's own
-      # pre/post-step noise) and check-run annotations aren't reachable
-      # either, so this captures the raw pytest output as a downloadable
-      # artifact instead. Remove before merge.
-      - name: TEMP debug windows pytest output
-        if: always() && matrix.os == 'windows-latest'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: pytest-out-windows-${{ matrix.python }}
-          path: /tmp/pytest.out
-          retention-days: 1
-          if-no-files-found: warn
       - name: shell smoke suite (152 checks, sandboxed)
         run: bash tests/smoke.sh | tee /tmp/smoke.out
       - name: job summary (coverage + counts)
