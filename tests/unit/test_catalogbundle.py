@@ -460,6 +460,23 @@ class TestTheErrorPathsAreReachable:
             catalogbundle.export_bundle(blocked)
         assert "taken.tgz" in str(caught.value)
 
+    def test_an_uncreatable_parent_directory_names_the_path(
+            self, sandbox, tmp_path):
+        # The parent-dir mkdir used to run BEFORE the try/except OSError block,
+        # so a bad --export path (an intermediate path component that is a
+        # file, not a directory — the same PermissionError/NotADirectoryError
+        # shape a nonexistent-parent path on a read-only filesystem hits) blew
+        # past the guard as a raw OSError -> exit 70 crash report instead of a
+        # framed BoostError.
+        _tapped("acme/skills")
+        _cache("acme/skills")
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("", encoding="utf-8")
+        dest = blocker / "sub" / "c.tgz"
+        with pytest.raises(BoostError) as caught:
+            catalogbundle.export_bundle(dest)
+        assert str(dest) in str(caught.value)
+
     def test_a_manifest_that_is_not_json_is_reported_as_malformed(
             self, sandbox, tmp_path):
         # A truncated download is still a valid gzip of a valid tar.

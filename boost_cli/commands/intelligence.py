@@ -164,8 +164,11 @@ def _write_generated(dest: Path, text: str) -> bool:
     if dest.exists() and not out.confirm("overwrite %s?" % _tilde(dest)):
         out.info("aborted — %s left untouched" % _tilde(dest))
         return False
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(text, encoding="utf-8")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        raise BoostError("cannot write %s: %s" % (dest, exc)) from exc
     out.ok("wrote %s" % _tilde(dest))
     return True
 

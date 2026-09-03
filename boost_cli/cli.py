@@ -329,6 +329,14 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.close()
         rc = 0
         return rc
+    except SystemExit as e:
+        # argparse (--help, usage errors) exits via SystemExit, which is a
+        # BaseException and so skips the `except Exception` below entirely —
+        # left uncaught, the trail journaled the preset rc=70 for every
+        # benign --help and usage exit instead of the real 0 or 2.
+        code = e.code
+        rc = 0 if code is None else code if isinstance(code, int) else 1
+        raise
     except Exception as e:
         report = logs.write_crash_report(e, [name, *rest])
         if logs.is_debug():

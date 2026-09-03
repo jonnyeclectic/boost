@@ -1897,9 +1897,12 @@ def cmd_count(argv):
     dpath = _discovery_path()
     if dpath.exists():
         try:
-            discovery = len(json.loads(dpath.read_text(encoding="utf-8")).get("items") or [])
+            data = json.loads(dpath.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            discovery = None
+            data = None
+        if isinstance(data, dict):
+            items = data.get("items")
+            discovery = len(items) if isinstance(items, list) else None
     if args.as_json:
         print(json.dumps({"installed": installed_n,
                           "skills": by_kind["skill"], "rules": by_kind["rule"],

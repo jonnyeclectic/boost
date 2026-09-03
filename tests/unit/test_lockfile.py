@@ -233,6 +233,25 @@ class TestHistory:
         assert ei.value.message == "no lock history entry 20990101T000000Z"
         assert ei.value.hint == "list entries with `boost replay`"
 
+    def test_history_read_corrupt_entry_raises_boosterror_not_raw_jsonerror(self, sandbox):
+        # The entry exists (unlike the miss case above) but fails to parse —
+        # this used to escape as a raw JSONDecodeError, exit 70.
+        self._seed_history()
+        with pytest.raises(BoostError) as ei:
+            lockfile.history_read("19990101T000000Z")
+        assert "19990101T000000Z" in ei.value.message
+        assert "unreadable" in ei.value.message
+
+    def test_history_list_with_skipped_counts_unparseable_entries(self, sandbox):
+        self._seed_history()  # one corrupt entry alongside two valid ones
+        history, skipped = lockfile.history_list(with_skipped=True)
+        assert len(history) == 2
+        assert skipped == 1
+
+    def test_history_list_default_return_is_unchanged_by_with_skipped(self, sandbox):
+        self._seed_history()
+        assert lockfile.history_list() == lockfile.history_list(with_skipped=False)
+
     def test_history_list_skips_corrupt_without_stopping(self, sandbox):
         # a corrupt snapshot that sorts BEFORE a valid one must be skipped, not
         # halt the scan — pins the `continue` (a `break` would drop the later
