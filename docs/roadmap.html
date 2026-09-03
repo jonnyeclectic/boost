@@ -5368,8 +5368,9 @@ Found by the 2026-08 CLI audit (cluster <code>adapt-subagent-misdetect</code>); 
       </article>
 
       <article class="cap rcard" id="audit-reinstall-sync-repair-and-audit-resolve-by-name-tap-ignoring">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3><code>reinstall</code>, sync repair and <code>audit</code> resolve by name+tap, ignoring the lock's source path</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The lock records exactly which copy of an item was installed
 (<code>source_dir</code>/<code>source_file</code>), and four code paths ignore it, resolving by
 name+tap and taking <code>catalog.find(name)[0]</code>. Verified live: install
@@ -5399,7 +5400,7 @@ Verified fix: wherever the lock records a source path, select the catalog entry 
 <code>matches[0]</code> only when the lock has none, with a warning naming the path chosen. Pin with a
 test that installs a <code>--path</code> copy and reinstalls. No doc changes beyond regenerating
 <code>docs/commands.html</code> if summaries move (none expected). Found by the 2026-08 CLI audit
-(cluster <code>lock-source-ignored-on-reinstall</code>); repro in the audit log.</p>
+(cluster <code>lock-source-ignored-on-reinstall</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>

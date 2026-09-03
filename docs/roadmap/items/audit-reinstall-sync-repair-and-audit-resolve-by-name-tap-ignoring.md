@@ -2,7 +2,7 @@
 id: audit-reinstall-sync-repair-and-audit-resolve-by-name-tap-ignoring
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: M
 impact: High
