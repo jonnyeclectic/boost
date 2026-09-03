@@ -584,6 +584,19 @@ class TestAtomicWriteText:
         util.atomic_write_text(p, "hello", mode=0o644)
         assert stat.S_IMODE(p.stat().st_mode) == 0o644
 
+    def test_mode_is_applied_via_path_not_fd(self, tmp_path, monkeypatch):
+        # os.fchmod is Unix-only and raises AttributeError on Windows;
+        # atomic_write_text must chmod the temp file by path (os.chmod),
+        # never the open fd, or `boost adapt -o`/`run --print -o` crash
+        # on Windows the moment `mode` is passed.
+        def boom(*_a, **_kw):
+            raise AttributeError("module 'os' has no attribute 'fchmod'")
+
+        monkeypatch.setattr(os, "fchmod", boom, raising=False)
+        p = tmp_path / "f.txt"
+        util.atomic_write_text(p, "hello", mode=0o644)
+        assert stat.S_IMODE(p.stat().st_mode) == 0o644
+
     def test_rerender_does_not_downgrade_existing_permissions(self, tmp_path):
         # boost adapt -o over a file the user chmod'd 0o644 (e.g. via a
         # shell redirect) used to silently downgrade it to 0o600 on

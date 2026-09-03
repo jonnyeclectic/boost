@@ -143,12 +143,14 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8",
     substitute for a bare ``Path.write_text`` on any file boost must not lose —
     the lock file, the config, the pulse journal.
 
-    ``mode``, when given, ``fchmod``s the temp file before the rename —
+    ``mode``, when given, ``chmod``s the temp file before the rename —
     ``mkstemp`` always creates it 0o600, right for boost's own lock/config/
     state but wrong for source the user asked boost to write to disk (e.g.
     ``boost adapt -o``): re-rendering over an existing 0o644 file would
     otherwise silently downgrade it to owner-only, unlike a shell redirect.
-    The default (``None``) keeps mkstemp's 0o600.
+    The default (``None``) keeps mkstemp's 0o600. Path-based ``os.chmod``,
+    not ``os.fchmod`` on the open fd — the latter is Unix-only and raises
+    ``AttributeError`` on Windows.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,7 +158,7 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8",
                                prefix="." + path.name + ".", suffix=".tmp")
     try:
         if mode is not None:
-            os.fchmod(fd, mode)
+            os.chmod(tmp, mode)
         with os.fdopen(fd, "w", encoding=encoding) as f:
             f.write(text)
             f.flush()
