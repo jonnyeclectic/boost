@@ -465,6 +465,8 @@ class TestEdit:
         r = boost("edit", "brainstorming", expect=1)
         assert "brainstorming is not installed" in r.err
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX shebang script isn't directly executable on Windows")
     def test_qualified_name_matching_the_installed_tap_works(
             self, boost, installed, rival_tap, tmp_path, monkeypatch):
         script = tmp_path / "true-editor.sh"
