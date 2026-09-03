@@ -15,6 +15,7 @@ import zipfile
 from datetime import UTC, datetime
 from itertools import chain
 from pathlib import Path
+from typing import cast
 
 from .. import cliparse, spin
 from ..core import (
@@ -1163,7 +1164,7 @@ def cmd_reinstall(argv: list[str]) -> int:
                 failed += 1
                 continue
             entry, warning = catalog.select_lock_source(matches, lk)
-            assert entry is not None          # matches is non-empty above
+            entry = cast(dict, entry)         # matches is non-empty above
             if warning:
                 out.warn(warning)
             try:
@@ -1206,7 +1207,7 @@ def cmd_reinstall(argv: list[str]) -> int:
             failed += 1
             continue
         entry, warning = catalog.select_lock_source(matches, lk)
-        assert entry is not None              # matches is non-empty above
+        entry = cast(dict, entry)             # matches is non-empty above
         if warning:
             out.warn(warning)
         try:
