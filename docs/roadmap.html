@@ -13922,8 +13922,9 @@ the 2026-08 CLI audit (cluster <code>onboard-lock-path-leak</code>); repro in th
       </article>
 
       <article class="cap rcard" id="audit-outdated-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost outdated: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost outdated</code> handles the same condition two ways depending on item kind. With the skill
 <code>brainstorming</code> installed and its source tap untapped, <code>outdated</code> prints
 <em>&ldquo;&#10003; everything up to date&rdquo;</em> &mdash; the skill is silently omitted. Do the same to a
@@ -13940,7 +13941,7 @@ path has no comment justifying the skip. Fix: in the skill loop, append a <em>so
 instead of <code>continue</code>, matching the rule path, and word the footer per reason so it never sends
 source-missing rows to <code>boost update</code>. No flag changes, so <code>docs/commands.html</code> needs no
 regeneration. Found by the 2026-08 CLI audit (cluster <code>outdated-untapped-skill</code>); repro in the
-audit log.</p>
+audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

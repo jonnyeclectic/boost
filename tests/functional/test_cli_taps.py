@@ -375,9 +375,40 @@ class TestOutdated:
         boost("import", d)
         assert "everything up to date" in boost("outdated").out
 
-    def test_untapped_source_skipped(self, boost, installed):
+    def test_untapped_source_reported(self, boost, installed):
+        # Untapping the skill's own registry used to make it vanish from
+        # `outdated` silently — a rule in the same state is reported as
+        # "source missing" (see test_source_vanished_marker below), and a
+        # skill should be too rather than being dropped from the table.
         boost("untap", "fixture-tap", "--force")
-        assert "everything up to date" in boost("outdated").out
+        r = boost("outdated")
+        assert "source missing" in r.out
+        assert "1 outdated" in r.out
+        assert "can't restore a deleted tap" in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert data == [{"name": "brainstorming", "kind": "skill",
+                         "installed": "1.4.0", "latest": "source missing",
+                         "tap": "fixture-tap", "pinned": False}]
+
+    def test_mixed_footer_splits_upstream_from_source_missing(
+            self, boost, fixture_tap_src, tmp_path):
+        # One row is a real upstream bump (boost update can fix it), the
+        # other's tap is gone (boost update can't) — the footer must not
+        # lump them into one "boost update upgrades" promise.
+        bumped = _copy_tap(fixture_tap_src, tmp_path / "bumped-tap")
+        gone = _copy_tap(fixture_tap_src, tmp_path / "gone-tap")
+        boost("tap", bumped, gone)
+        boost("install", "bumped-tap:brainstorming")
+        boost("install", "gone-tap:jira-integration")
+
+        _bump(bumped, "brainstorming", "1.4.0", "1.5.0")
+        boost("update", "--taps-only")
+        boost("untap", "gone-tap", "--force")
+
+        r = boost("outdated")
+        assert "2 outdated" in r.out
+        assert "1 upstream" in r.out
+        assert "1 source missing" in r.out
 
     def test_content_change_shows_head_commit(self, boost, installed):
         clone = paths.repos_dir() / "fixture-tap"

@@ -2,14 +2,14 @@
 id: audit-outdated-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: an untapped skill vanishes from outdated; the same untapped rule shows "source missing"
 order: 278
-owner:
+owner: loop/outdated-untapped-skill
 pr:
 title: "boost outdated: CLI audit findings (2026-08)"
 ---
