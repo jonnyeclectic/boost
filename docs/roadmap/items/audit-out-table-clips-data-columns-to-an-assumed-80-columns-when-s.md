@@ -10,7 +10,7 @@ wow: 2
 note: boost list | grep NAME matches nothing — piped tables clip to an assumed 80 columns
 order: 239
 owner: loop/table-pipe-clip
-pr:
+pr: 739
 title: "<code>out.table</code> clips data columns to an assumed 80 columns when stdout is a pipe; narrow TTYs clip IDs/hashes"
 ---
 One root cause, twelve findings across ten commands: <code>out.table</code> always fits rows
