@@ -202,6 +202,50 @@ class TestRefreshMarker:
         assert registry.refresh_age_days() is None
 
 
+class TestLastRefreshAt:
+    """The ISO-string sibling of refresh_age_days, for `boost health`.
+
+    A tap clone's own git log is the upstream's clock and never moves on a
+    local sync — that mismatch is what made `boost health` claim a sync from
+    minutes ago was weeks old. This is the same marker, in the shape
+    ``util.rel_time`` expects, so a caller reporting "last tap sync" reads the
+    local action rather than the tap's newest commit.
+    """
+
+    def test_a_machine_that_never_refreshed_has_no_timestamp(self, sandbox):
+        assert registry.last_refresh_at() is None
+
+    def test_a_successful_sweep_stamps_a_recent_timestamp(self, sandbox,
+                                                           fake_clone):
+        import time as time_mod
+        from datetime import UTC, datetime
+
+        registry.add("o/a")
+        registry.update()
+        stamped = registry.last_refresh_at()
+        assert stamped is not None
+        then = datetime.strptime(stamped, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        assert abs(time_mod.time() - then.timestamp()) < 5
+
+    def test_the_timestamp_tracks_the_markers_mtime(self, sandbox, fake_clone):
+        import os
+
+        registry.add("o/a")
+        registry.update()
+        marker = paths.tap_refresh_marker()
+        old = time.time() - 30 * 86400
+        os.utime(marker, (old, old))
+        stamped = registry.last_refresh_at()
+        assert stamped == time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(old))
+
+    def test_an_unreadable_marker_reads_as_unknown(self, sandbox, monkeypatch):
+        def boom(self):
+            raise OSError("nope")
+
+        monkeypatch.setattr("pathlib.Path.stat", boom)
+        assert registry.last_refresh_at() is None
+
+
 class TestPinFailureStillCleansUp:
     def test_a_pin_that_cannot_be_honoured_leaves_no_tap(self, sandbox,
                                                          fake_clone,

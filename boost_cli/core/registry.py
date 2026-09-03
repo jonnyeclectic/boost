@@ -417,6 +417,24 @@ def refresh_age_days() -> float | None:
     return max(0.0, age / 86400.0)
 
 
+def last_refresh_at() -> str | None:
+    """ISO8601 UTC timestamp of the last tap refresh, or None when never.
+
+    Same marker :func:`refresh_age_days` reads, in the shape ``util.rel_time``
+    expects. A caller reporting "last tap sync" wants this rather than a git
+    log timestamp: a tap's newest commit is the *upstream's* clock and does
+    not move when the local clone is refreshed, which is what made `boost
+    health` claim a sync minutes old was "4w ago" — it was reading when
+    someone else last pushed, not when `boost update` last ran here.
+    """
+    marker = paths.tap_refresh_marker()
+    try:
+        mtime = marker.stat().st_mtime
+    except OSError:
+        return None
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(mtime))
+
+
 def pin(name: str, commit: str) -> Tap:
     """Record `commit` as the tap's pin, so `update` leaves it alone."""
     tap = get(name)

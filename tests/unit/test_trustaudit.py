@@ -152,7 +152,24 @@ class TestSkillFindings:
             is_local=False, provenance_status=provenance.VERIFIED,
             tap_age_days=99, upstream_reason=None)
         assert _labels(found) == [trustaudit.STALE_TAP]
-        assert found[0]["detail"] == "tap last synced 99 days ago"
+        # Not "synced": this age comes from the tap clone's git log, which is
+        # the upstream's commit clock and never moves on a local sync.
+        assert found[0]["detail"] == "tap's newest commit is 99 days old"
+
+    def test_pinned_tap_never_reports_stale(self):
+        # A pinned tap is held at a fixed commit on purpose — its age only
+        # grows, so flagging it the same as a neglected tap would be a false
+        # positive on every pinned install.
+        found = trustaudit.skill_findings(
+            is_local=False, provenance_status=provenance.VERIFIED,
+            tap_age_days=99, upstream_reason=None, tap_pinned=True)
+        assert found == []
+
+    def test_pinned_tap_still_reports_other_findings(self):
+        found = trustaudit.skill_findings(
+            is_local=False, provenance_status=provenance.UNTRUSTED,
+            tap_age_days=99, upstream_reason=None, tap_pinned=True)
+        assert _labels(found) == [trustaudit.UNTRUSTED_TAP]
 
     def test_behind_tap_names_the_reason(self):
         found = trustaudit.skill_findings(

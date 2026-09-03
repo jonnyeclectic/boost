@@ -6577,8 +6577,9 @@ audit (cluster <code>quarantine-pin-invisible</code>); repro in the audit log.</
       </article>
 
       <article class="cap rcard" id="audit-audit-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3>boost audit: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Three honesty gaps in the trust scanner.</b> A seeded <code>rm -rf ~/</code> (and <code>rm -rf
 /*</code>) in SKILL.md produced <b>no finding</b> while <code>sudo rm -rf /</code> on the next file
 was flagged HIGH: the destructive regex's lookahead (<code>safety.py:46</code>) rejects a trailing
@@ -6622,7 +6623,7 @@ deps/drift/verify/lint/audit empties through <code>out.empty_state</code> with o
 
 <br><br>Found by the 2026-08 CLI audit (clusters <code>audit-scan-blindspots</code>,
 <code>tap-sync-age-mislabel</code>, <code>audit-finding-order</code>,
-<code>empty-state-hint-drift</code>); repro in the audit log.</p>
+<code>empty-state-hint-drift</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>

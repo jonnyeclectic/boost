@@ -791,7 +791,14 @@ def cmd_lint(argv):
                               "skipped": skipped, "failed": 0}))
         else:
             _print_skipped(skipped)
-            out.info("nothing to lint")
+            if args.tap or args.names:
+                # A narrowed target set (--tap, or explicit names/paths) can
+                # legitimately come up empty while skills are installed —
+                # "no skills installed" would be false here.
+                out.info("nothing to lint")
+            else:
+                print(out.empty_state("no skills installed",
+                                      hint="boost install <skill> to start"))
         return 0
 
     results: list[dict[str, Any]] = []
@@ -869,7 +876,8 @@ def cmd_drift(argv):
         print(json.dumps({"skills": rows}))
         return 0
     if not rows:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     out.table([(r["name"] if r["kind"] == "skill"
                 else "%s (%s)" % (r["name"], r["kind"]),
@@ -1287,18 +1295,12 @@ def cmd_health(argv):
     out.kv("broken links", "%d%s" % (
         len(broken), " (+%d not ours)" % len(foreign) if foreign else ""))
 
-    last_sync = "never"
-    if cloned and gitutil.has_git():
-        stamps = []
-        for tap in cloned:
-            proc = gitutil.run(["-C", str(tap.path), "log", "-1", "--format=%ct"],
-                               check=False)
-            if proc.returncode == 0 and proc.stdout.strip().isdigit():
-                stamps.append(int(proc.stdout.strip()))
-        if stamps:
-            iso = datetime.fromtimestamp(max(stamps), tz=UTC
-                                         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-            last_sync = util.rel_time(iso)
+    # `registry.last_refresh_at` reads the marker `boost update` stamps, not a
+    # tap clone's git log — a clone's newest commit is the *upstream's* clock,
+    # unmoved by a local sync, which is what made this line read "4w ago"
+    # twelve minutes after tapping every configured registry.
+    refreshed_at = registry.last_refresh_at()
+    last_sync = util.rel_time(refreshed_at) if refreshed_at else "never"
     out.kv("last tap sync", last_sync)
 
     week_ago = datetime.now(UTC) - timedelta(days=7)
