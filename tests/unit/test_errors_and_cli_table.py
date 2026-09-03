@@ -171,7 +171,7 @@ class TestMainDispatch:
         for anyone not running a wide pane.
         """
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(cli.out, "term_width", lambda: cols)
+        monkeypatch.setenv("COLUMNS", str(cols))
         assert cli.main(["--help"]) == 0
         for line in capsys.readouterr().out.splitlines():
             assert cli.out.visible_len(line) <= cols, line
@@ -180,7 +180,7 @@ class TestMainDispatch:
             self, sandbox, capsys, monkeypatch):
         """Fitting the banner must not cost the two facts it carries."""
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(cli.out, "term_width", lambda: 60)
+        monkeypatch.setenv("COLUMNS", "60")
         assert cli.main(["--help"]) == 0
         out = capsys.readouterr().out
         assert "Homebrew for AI coding skills" in out
@@ -192,11 +192,23 @@ class TestMainDispatch:
         """Summaries may be clipped to fit; command names never are, or the
         help stops being usable as an index."""
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(cli.out, "term_width", lambda: 60)
+        monkeypatch.setenv("COLUMNS", "60")
         assert cli.main(["--help"]) == 0
         out = capsys.readouterr().out
         for name, _g, _m, _s in cli.COMMANDS:
             assert "\n  %s" % name in out, name
+
+    def test_help_summaries_are_whole_when_piped(self, sandbox, capsys,
+                                                 monkeypatch):
+        """A pipe has no pane to fit, so `boost --help | grep` sees the whole
+        summary rather than one clipped to an assumed 80 columns."""
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.delenv("COLUMNS", raising=False)
+        assert cli.main(["--help"]) == 0
+        out = capsys.readouterr().out
+        assert "…" not in out
+        for _n, _g, _m, summary in cli.COMMANDS:
+            assert summary in out, summary
 
     def test_help_word(self, sandbox, capsys):
         assert cli.main(["help"]) == 0

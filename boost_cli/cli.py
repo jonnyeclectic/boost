@@ -156,6 +156,10 @@ def print_version() -> None:
 # Aurora palette so each command group carries its own brand color.
 _GROUP_HUES = ("cyan", "violet", "pink", "green", "yellow")
 
+# The width to lay out against when there is no pane at all: wider than any
+# line boost composes, so every fit test passes and nothing is truncated.
+_UNPANED = 10 ** 6
+
 
 def print_help() -> None:
     """The command index, fitted to the pane.
@@ -165,8 +169,12 @@ def print_help() -> None:
     at every width and wrapped mid-word for anyone not running a wide
     terminal. Names are never clipped, because the help's whole job is to be
     an index you can copy a command out of; summaries are.
+
+    A pipe has no pane, so nothing is fitted to one: `boost --help | grep
+    install` must see the whole summary, not one clipped to an assumed 80
+    columns.
     """
-    cols = out.term_width()
+    cols = out.pane_width() or _UNPANED
 
     title_line = out.gradient(PRODUCT) + " — Homebrew for AI coding skills"
     stamp = "%s · v%s" % (TAGLINE, __version__)

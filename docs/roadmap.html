@@ -12682,8 +12682,9 @@ Found by the 2026-08 CLI audit (cluster <code>stray-args-ignored</code>); repro 
       </article>
 
       <article class="cap rcard" id="audit-out-table-clips-data-columns-to-an-assumed-80-columns-when-s">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>out.table</code> clips data columns to an assumed 80 columns when stdout is a pipe; narrow TTYs clip IDs/hashes</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>One root cause, twelve findings across ten commands: <code>out.table</code> always fits rows
 through <code>_fit_widths(term_width())</code>, and <code>term_width()</code> answers 80 when
 stdout is detached &mdash; so a pipe, where there is no pane to fit, gets data columns ellipsised.
@@ -12718,7 +12719,7 @@ Verified fix: in <code>out.table</code> skip <code>_fit_widths</code> when stdou
 ID, digests, hook commands) so narrow TTYs shrink chrome (WHO/WHEN/URL) first &middot; give
 <code>cli.print_help</code> its own not-a-TTY branch emitting full summaries &middot; unit-test a
 60-column render asserting full IDs survive. Found by the 2026-08 CLI audit (cluster
-<code>tables-clip-data-columns</code>); repro in the audit log.</p>
+<code>tables-clip-data-columns</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>

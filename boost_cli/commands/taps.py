@@ -273,7 +273,10 @@ def cmd_taps(argv) -> int:
              "@%s" % str(t["pin"])[:7] if t["pin"] else t["updated"],
              "★" if t["curated"] else "", out.role(_tilde(t["url"]), "muted"))
             for t in taps]
-    out.table(rows, headers=("NAME", "SKILLS", "UPDATED", "", "URL"))
+    # NAME is the argument `untap`/`update` take; the URL beside it is chrome
+    # that every row repeats, so it is what a narrow pane should spend.
+    out.table(rows, headers=("NAME", "SKILLS", "UPDATED", "", "URL"),
+              keep=("NAME",))
     print()
     out.dim("%d taps · %d skills" % (len(taps), total))
     return 0

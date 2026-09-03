@@ -1609,7 +1609,11 @@ def _snapshot_list(as_json: bool) -> int:
     out.table([(s["id"], util.rel_time(s["created"]) if s["created"] else "?",
                 s["label"] or "—", s["skills"], util.human_size(s["size"]))
                for s in snaps],
-              headers=("ID", "WHEN", "LABEL", "SKILLS", "SIZE"))
+              headers=("ID", "WHEN", "LABEL", "SKILLS", "SIZE"),
+              # The id is the only argument `snapshot restore` accepts, and
+              # every id shares a prefix — clipped, they all render as the
+              # same unusable stub.
+              keep=("ID",))
     return 0
 
 

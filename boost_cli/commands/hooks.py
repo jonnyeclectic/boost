@@ -69,7 +69,10 @@ def _list(scope, host) -> int:
     out.table(
         [(r["host"], r["scope"], r["event"], r["name"], r["matcher"] or "-",
           r["command"]) for r in rows],
-        headers=("host", "scope", "event", "name", "matcher", "command"))
+        headers=("host", "scope", "event", "name", "matcher", "command"),
+        # A hook's command is what the user came to read — a clipped one
+        # cannot be compared against what they registered, or copied back.
+        keep=("command",))
     return 0
 
 
