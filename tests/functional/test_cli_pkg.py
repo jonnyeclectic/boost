@@ -1051,6 +1051,31 @@ class TestExport:
         assert dest.is_file()
 
 
+class TestExportQualifiedName:
+    """`boost export owner/repo:skill` — same qualifier as `info`/`edit`/`tag`."""
+
+    def test_qualifier_matching_the_installed_tap_exports_it(
+            self, boost, rival_tap, tmp_path):
+        boost("install", "fixture-tap:brainstorming")
+        dest = tmp_path / "out.tar.gz"
+        r = boost("export", "fixture-tap:brainstorming", "-o", dest)
+        assert "invalid skill name" not in r.err
+        assert "exported 1 skill →" in r.out
+        with tarfile.open(str(dest)) as tf:
+            names = tf.getnames()
+        # the archive is keyed by the BARE name, not the qualifier typed in
+        assert "brainstorming/SKILL.md" in names
+        assert not any(":" in n for n in names)
+
+    def test_qualifier_naming_a_different_tap_than_installed_is_not_installed(
+            self, boost, rival_tap, tmp_path):
+        boost("install", "fixture-tap:brainstorming")
+        dest = tmp_path / "out.tar.gz"
+        r = boost("export", "rival-tap:brainstorming", "-o", dest, expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
+        assert "invalid skill name" not in r.err
+
+
 # ── kind-aware surfaces ──────────────────────────────────────────────────
 
 class TestKindAwarePkgSurface:

@@ -17,6 +17,7 @@ from pathlib import Path
 from ..errors import BoostError
 from . import (
     agents,
+    catalog,
     config,
     gitutil,
     journal,
@@ -68,6 +69,21 @@ def skill_store_dir(name: str) -> Path:
     if not util.is_safe_component(name):
         raise BoostError("invalid skill name %r" % name)
     return paths.store_dir() / name
+
+
+def resolve_installed(name: str) -> tuple[str, dict | None]:
+    """(bare_name, lock_entry_or_None) for a possibly ``owner/repo:skill`` name.
+
+    The lock file is keyed by the bare name alone, so a tap qualifier can only
+    be honored by checking it against the resolved entry's own ``tap`` field —
+    never by passing the qualified string to something that expects a lock key
+    or a path component (``skill_store_dir`` raises on the ``:``). The shared
+    place `edit`/`tag`/`export` resolve a possibly-qualified skill name against
+    the lock, so they agree with `info`/`install` on what the qualifier means
+    instead of each re-deriving it.
+    """
+    qualifier, bare = catalog.split_name(name)
+    return bare, catalog.for_tap(lockfile.get_skill(bare), qualifier)
 
 
 def installed() -> dict:

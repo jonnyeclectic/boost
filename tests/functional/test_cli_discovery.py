@@ -1520,6 +1520,47 @@ class TestStats:
         assert data["size"] > 0
 
 
+class TestStatsQualifiedName:
+    """`boost stats owner/repo:skill` — two verified bugs, both from the CLI
+    audit's `qualifier-rejected-elsewhere` cluster: an ambiguous bare name
+    used to silently report whichever tap sorted first instead of refusing
+    like `info`, and a qualified name crashed on `store.skill_store_dir`'s
+    "invalid skill name" for the exact string an ambiguity hint recommends."""
+
+    def test_ambiguous_bare_name_refuses_instead_of_picking_the_first_tap(
+            self, boost, rival_tap):
+        r = boost("stats", "brainstorming", expect=1)
+        assert "exists in multiple taps" in r.err
+        assert "9.9.9" not in r.out
+        assert "1.4.0" not in r.out
+
+    def test_qualified_name_resolves_instead_of_invalid_skill_name(
+            self, boost, rival_tap):
+        r = boost("stats", "rival-tap:brainstorming")
+        assert "invalid skill name" not in r.err
+        assert re.search(r"latest\s+9\.9\.9", r.out) or "9.9.9" in r.out
+        r2 = boost("stats", "fixture-tap:brainstorming")
+        assert "invalid skill name" not in r2.err
+        assert "1.4.0" in r2.out
+
+    def test_installed_copy_reports_its_own_taps_latest_not_the_first(
+            self, boost, rival_tap):
+        # Installed from fixture-tap: "latest" must compare against
+        # fixture-tap's catalog entry, never whichever tap's copy of this
+        # name the catalog happens to list first.
+        boost("install", "fixture-tap:brainstorming")
+        r = boost("stats", "brainstorming")
+        assert re.search(r"tap\s+fixture-tap", r.out)
+        assert "1.4.0 (up to date)" in r.out
+
+    def test_qualifier_naming_a_different_tap_than_installed_reports_uninstalled(
+            self, boost, rival_tap):
+        boost("install", "fixture-tap:brainstorming")
+        r = boost("stats", "rival-tap:brainstorming")
+        assert "not installed" in r.out
+        assert re.search(r"latest\s+9\.9\.9", r.out) or "9.9.9" in r.out
+
+
 # ---------------------------------------------------------------- count
 
 class TestCount:

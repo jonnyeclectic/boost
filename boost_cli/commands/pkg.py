@@ -1685,9 +1685,16 @@ def cmd_export(argv: list[str]) -> int:
                              else "install some with `boost install`")
     chosen = {}
     for name in names:
-        if name not in installed:
-            found = lockfile.find_any(name)
-            if found is not None:
+        # `name` may be tap-qualified (`owner/repo:skill`) — `installed` and the
+        # archive it feeds are keyed by the bare name, so resolve through the
+        # lock rather than testing the qualified string for membership (which
+        # always misses) or handing it to `skill_store_dir` (which raises on
+        # the qualifier's `:`).
+        bare, entry = store.resolve_installed(name)
+        if entry is None:
+            qualifier, _ = catalog.split_name(name)
+            found = lockfile.find_any(bare)
+            if found is not None and catalog.for_tap(found[1], qualifier) is not None:
                 # Same truth _iter_installed tells: it exists, as another kind
                 # — a rule/workflow has no store directory to package.
                 raise BoostError("%s is a %s — `boost export` applies to skills"
@@ -1697,10 +1704,10 @@ def cmd_export(argv: list[str]) -> int:
                                      "from their tap")
             raise BoostError("%s is not installed" % name,
                             hint="see what is with `boost list`")
-        if not store.skill_store_dir(name).is_dir():
+        if not store.skill_store_dir(bare).is_dir():
             raise BoostError("store dir for %s is missing" % name,
                             hint="repair with `boost sync`")
-        chosen[name] = installed[name]
+        chosen[bare] = entry
     stamp = datetime.now(UTC).strftime("%Y%m%d")
     ext = ".zip" if args.zip else ".tar.gz"
     dest = paths.expand(args.out) if args.out else Path(
@@ -1748,9 +1755,20 @@ def _resolve_skill(name: str):
     that need the skill's directory (e.g. subagent discovery for multi-agent
     adaptation) don't re-resolve. Raises BoostError if the name resolves
     nowhere.
+
+    ``name`` may be tap-qualified (``owner/repo:skill``) — the store probe is
+    skipped for that shape rather than attempted and failed: the store is
+    keyed by the bare name only, and ``skill_store_dir`` raises outright on a
+    qualifier's ``:`` (not a safe path component), which used to surface as
+    "invalid skill name" for the exact string `adapt`'s own ambiguity hint
+    recommends typing. ``catalog.resolve_one`` already parses that grammar.
     """
-    p = store.skill_store_dir(name) / "SKILL.md"
-    if not p.exists():
+    p = None
+    if util.is_safe_component(name):
+        candidate = store.skill_store_dir(name) / "SKILL.md"
+        if candidate.exists():
+            p = candidate
+    if p is None:
         entry = catalog.resolve_one(name)   # raises BoostError if unknown
         p = registry.get(entry["tap"]).path / entry["skill_md"]
         if not p.exists():

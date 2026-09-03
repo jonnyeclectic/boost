@@ -481,6 +481,41 @@ class TestTapMatches:
     def test_empty_tap_name_never_matches(self):
         assert catalog.tap_matches("", "skills") is False
 
+
+class TestForTap:
+    """The one place a possibly-qualified name is checked against an entry
+    actually in hand (a lock row, a project-lock row, a find_any hit) —
+    `info`, `edit`, `tag`, `export` and `stats` all resolve through it so a
+    `tap:` qualifier means the same thing everywhere."""
+
+    def test_no_qualifier_passes_entry_through(self):
+        entry = {"tap": "trailofbits/skills", "version": "1.0.0"}
+        assert catalog.for_tap(entry, None) is entry
+
+    def test_matching_qualifier_passes_entry_through(self):
+        entry = {"tap": "trailofbits/skills", "version": "1.0.0"}
+        assert catalog.for_tap(entry, "trailofbits/skills") is entry
+
+    def test_matching_bare_tail_qualifier_passes_entry_through(self):
+        entry = {"tap": "trailofbits/skills", "version": "1.0.0"}
+        assert catalog.for_tap(entry, "skills") is entry
+
+    def test_mismatched_qualifier_hides_the_entry(self):
+        # Installed from tap A, asked about via tap-b:skill — tap A's entry
+        # is the wrong answer, not the best available one.
+        entry = {"tap": "trailofbits/skills", "version": "1.0.0"}
+        assert catalog.for_tap(entry, "other/repo") is None
+
+    def test_none_entry_stays_none_regardless_of_qualifier(self):
+        assert catalog.for_tap(None, "trailofbits/skills") is None
+        assert catalog.for_tap(None, None) is None
+
+    def test_entry_missing_tap_field_never_matches_a_qualifier(self):
+        # A malformed/legacy entry with no tap is not "any tap" — a qualifier
+        # must still fail closed rather than accept it by default.
+        entry = {"version": "1.0.0"}
+        assert catalog.for_tap(entry, "trailofbits/skills") is None
+
     def test_two_empties_do_not_match_each_other(self):
         # Pins the `bool(tap_name)` guard: without it a tap-less lock entry
         # ("" tap) would satisfy an empty qualifier by string equality.

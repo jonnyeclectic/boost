@@ -65,3 +65,15 @@ def test_run_unknown_skill_errors(boost, tapped):
 
 def test_run_missing_name_is_usage_error(boost):
     boost("run", expect=2)                         # argparse: name is required
+
+
+def test_run_print_accepts_the_tap_qualifier_that_resolves_ambiguity(
+        boost, rival_tap):
+    # Two taps both ship "brainstorming" — the bare name is ambiguous, and
+    # `run --print` (via the same `_resolve_skill` as `adapt`) used to reject
+    # the qualified form with "invalid skill name" instead of resolving it.
+    boost("run", "brainstorming", "--print", expect=1)
+    r = boost("run", "rival-tap:brainstorming", "--print")
+    assert "invalid skill name" not in r.err
+    assert "from agents import Agent" in r.out
+    compile(r.out, "<printed>", "exec")

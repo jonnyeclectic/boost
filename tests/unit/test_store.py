@@ -242,6 +242,56 @@ class TestInstall:
         assert ei.value.hint == "run `boost update fixture-tap`"
 
 
+class TestResolveInstalled:
+    """`edit`/`tag`/`export` all resolve a possibly tap-qualified skill name
+    through this one function, so a `tap:name` qualifier means the same thing
+    there as it does in `info`/`install` (see `catalog.for_tap`)."""
+
+    def test_unqualified_name_resolves_the_lock_entry(self, tap, brainstorming):
+        bare, lock = store.resolve_installed("brainstorming")
+        assert bare == "brainstorming"
+        assert lock is not None
+        assert lock["tap"] == "fixture-tap"
+
+    def test_owner_repo_qualified_name_resolves_when_it_matches(
+            self, tap, brainstorming):
+        bare, lock = store.resolve_installed("%s:brainstorming" % tap.name)
+        assert bare == "brainstorming"
+        assert lock is not None
+
+    def test_bare_tail_qualified_name_resolves_when_it_matches(
+            self, tap, brainstorming):
+        # fixture-tap has no "/" in it, so the bare-tail and owner/repo forms
+        # coincide here; a real registry name (owner/repo) is covered by
+        # TestForTap directly. This still exercises `split_name` + `for_tap`
+        # wired together through the store, not just each piece alone.
+        bare, lock = store.resolve_installed("fixture-tap:brainstorming")
+        assert bare == "brainstorming"
+        assert lock is not None
+
+    def test_qualifier_naming_a_different_tap_is_not_installed(
+            self, tap, brainstorming):
+        # Installed from fixture-tap; a qualifier naming some other tap must
+        # answer "not installed from there", not silently serve fixture-tap's
+        # record as though it belonged to the tap the caller asked about.
+        bare, lock = store.resolve_installed("other/repo:brainstorming")
+        assert bare == "brainstorming"
+        assert lock is None
+
+    def test_unknown_name_resolves_to_no_lock_entry(self, sandbox):
+        bare, lock = store.resolve_installed("never-installed")
+        assert bare == "never-installed"
+        assert lock is None
+
+    def test_qualified_name_never_reaches_skill_store_dir_unresolved(
+            self, tap, brainstorming):
+        # The bug this exists to fix: `owner/repo:skill` is not a safe path
+        # component, so resolving it must never end up calling
+        # `skill_store_dir` with the qualifier still attached.
+        bare, _lock = store.resolve_installed("%s:brainstorming" % tap.name)
+        assert store.skill_store_dir(bare).is_dir()
+
+
 class TestSourceDirFor:
     """A tap `boost catalog --import` registered but never cloned.
 

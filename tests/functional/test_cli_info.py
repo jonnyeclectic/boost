@@ -6,36 +6,11 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 
 import pytest
 
 from boost_cli.core import paths
-
-
-@pytest.fixture()
-def rival_tap(boost, tapped, tmp_path):
-    """A second real tap that also ships `brainstorming`, at a louder version.
-
-    Two taps carrying one name is the only way to reach the ambiguity error —
-    and its hint — so the qualified-name path needs a genuine second clone
-    rather than a hand-written cache.
-    """
-    root = tmp_path / "rival-tap"
-    (root / "skills" / "brainstorming").mkdir(parents=True)
-    (root / "skills" / "brainstorming" / "SKILL.md").write_text(
-        "---\nname: brainstorming\ndescription: A rival ideation skill\n"
-        "version: 9.9.9\n---\n\n# Brainstorming\n\nThe other tap's copy.\n",
-        encoding="utf-8")
-    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
-    run("git", "init", "-q")
-    run("git", "config", "user.email", "rival@boost.test")
-    run("git", "config", "user.name", "Rival Tap")
-    run("git", "add", "-A")
-    run("git", "commit", "-qm", "rival skills")
-    boost("tap", root)
-    return "rival-tap"
 
 
 def _lock():
@@ -411,7 +386,7 @@ class TestCat:
 class TestMcpReadHonoursTheQualifier:
     """`boost_read`'s `installed:` line answers about the item that was NAMED.
 
-    `_for_tap` returns None when a `tap:` qualifier names a different tap than
+    `catalog.for_tap` returns None when a `tap:` qualifier names a different tap than
     the installed record — its docstring is explicit that reporting tap A's
     lock entry for a `tap-b:` question "would describe another tap's install as
     this one's". `boost_read` derives `installed` from that same value, so it
@@ -489,6 +464,33 @@ class TestEdit:
     def test_not_installed_rc1(self, boost, tapped):
         r = boost("edit", "brainstorming", expect=1)
         assert "brainstorming is not installed" in r.err
+
+
+class TestEditQualifiedName:
+    """`boost edit owner/repo:skill` — the same qualifier `info`/`install`
+    accept and `adapt`'s ambiguity hint recommends typing."""
+
+    def test_qualifier_matching_the_installed_tap_edits_it(
+            self, boost, rival_tap, tmp_path, monkeypatch):
+        boost("install", "fixture-tap:brainstorming")
+        script = tmp_path / "fake-editor.sh"
+        script.write_text('#!/bin/sh\necho "- extra line" >> "$1"\n', encoding="utf-8")
+        script.chmod(0o755)
+        monkeypatch.setenv("EDITOR", str(script))
+        monkeypatch.delenv("VISUAL", raising=False)
+        r = boost("edit", "fixture-tap:brainstorming")
+        assert "invalid skill name" not in r.err
+        assert "local edits diverge" in r.out
+        assert any(e["subject"] == "brainstorming" for e in _journal_events("edit"))
+
+    def test_qualifier_naming_a_different_tap_than_installed_is_not_installed(
+            self, boost, rival_tap):
+        # Installed from fixture-tap; asking to edit rival-tap's copy must not
+        # silently open fixture-tap's installed SKILL.md instead.
+        boost("install", "fixture-tap:brainstorming")
+        r = boost("edit", "rival-tap:brainstorming", expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
+        assert "invalid skill name" not in r.err
 
 
 # ── preview ──────────────────────────────────────────────────────────────
@@ -789,6 +791,24 @@ class TestTag:
         boost("tag", "brainstorming", "+shared")
         r = boost("tag", "--list")
         assert "#shared" in r.out
+
+
+class TestTagQualifiedName:
+    """`boost tag owner/repo:skill +tag` — same qualifier as `info`/`edit`."""
+
+    def test_qualifier_matching_the_installed_tap_tags_it(self, boost, rival_tap):
+        boost("install", "fixture-tap:brainstorming")
+        r = boost("tag", "fixture-tap:brainstorming", "+alpha")
+        assert "invalid skill name" not in r.err
+        assert "#alpha" in r.out
+        assert _lock()["brainstorming"]["tags"] == ["alpha"]
+
+    def test_qualifier_naming_a_different_tap_than_installed_is_not_installed(
+            self, boost, rival_tap):
+        boost("install", "fixture-tap:brainstorming")
+        r = boost("tag", "rival-tap:brainstorming", "+x", expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
+        assert "invalid skill name" not in r.err
 
 
 # ── installed rules & workflows ──────────────────────────────────────────

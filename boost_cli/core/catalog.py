@@ -477,6 +477,21 @@ def tap_matches(tap_name: str, qualifier: str) -> bool:
     return bool(tap_name) and qualifier in (tap_name, tap_name.split("/")[-1])
 
 
+def for_tap(entry: dict | None, qualifier: str | None) -> dict | None:
+    """``entry`` unless a ``tap:`` qualifier was given that it does not satisfy.
+
+    A qualifier has to be honored against the entry actually in hand — a lock
+    row, a project-lock row, a ``find_any`` hit — not only the catalog: one
+    skill installed from tap A, asked about via ``tap-b:skill``, must not
+    answer with tap A's record as if it were tap B's. The single place this
+    check is spelled out, so every caller that resolves a possibly-qualified
+    name against something tap-bearing agrees on what the qualifier means.
+    """
+    if entry and qualifier and not tap_matches(str(entry.get("tap") or ""), qualifier):
+        return None
+    return entry
+
+
 def find(name: str, tap: str | None = None) -> list[dict]:
     """Exact-name lookup. Supports 'owner/repo:skill' qualified form."""
     qualifier, bare = split_name(name)

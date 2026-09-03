@@ -59,6 +59,37 @@ def test_default_model_wires_boost_ai_model(boost, installed):
     compile(r.out, "<crewai>", "exec")
 
 
+# ── owner/repo:skill — the qualifier the ambiguity error hints to type ────
+
+def test_ambiguous_name_names_the_taps_and_the_qualifier_resolves(
+        boost, rival_tap):
+    # Two taps both ship "brainstorming" — resolving it bare has to refuse
+    # rather than silently render one tap's copy, and the qualified form the
+    # error names has to actually work (it used to hit `skill_store_dir`'s
+    # "invalid skill name" for the exact string the hint recommends).
+    r = boost("adapt", "brainstorming", "--to", "crewai", expect=1)
+    assert "exists in multiple taps" in r.err
+    r = boost("adapt", "rival-tap:brainstorming", "--to", "crewai")
+    assert "invalid skill name" not in r.err
+    assert "brainstorming = Agent(" in r.out
+
+
+def test_qualified_name_picks_the_named_taps_copy(boost, rival_tap):
+    r_rival = boost("adapt", "rival-tap:brainstorming", "--to", "crewai")
+    r_fixture = boost("adapt", "fixture-tap:brainstorming", "--to", "crewai")
+    assert "A rival ideation skill" in r_rival.out
+    assert "Structured ideation" in r_fixture.out
+
+
+def test_qualified_name_still_resolves_once_installed(boost, rival_tap):
+    # Installing the ambiguous name (now qualified) must not reopen the
+    # ambiguity for later qualified lookups.
+    boost("install", "fixture-tap:brainstorming")
+    r = boost("adapt", "fixture-tap:brainstorming", "--to", "crewai")
+    assert "invalid skill name" not in r.err
+    assert "brainstorming = Agent(" in r.out
+
+
 def test_model_none_opts_out(boost, installed):
     # `--model none` restores the framework's own default (no LLM wiring).
     r = boost("adapt", installed, "--to", "crewai", "--model", "none")

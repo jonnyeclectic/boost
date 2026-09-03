@@ -1802,15 +1802,42 @@ def cmd_stats(argv):
                    help="machine-readable output")
     args = p.parse_args(argv)
     name = args.name
+    # `name` may be tap-qualified (`owner/repo:skill`); the lock and journal
+    # are keyed by the bare name, so split once and honor the qualifier
+    # against whatever the lock actually holds via `catalog.for_tap`.
+    qualifier, bare = catalog.split_name(name)
     # find_any: a rule's lock facts are the answer, not "no skill named X".
-    found = lockfile.find_any(name)
+    found = lockfile.find_any(bare)
     kind, lock = found if found is not None else ("skill", None)
-    matches = catalog.find(name)
-    cat = matches[0] if matches else None
+    lock = catalog.for_tap(lock, qualifier)
+    if lock is None:
+        kind = "skill"
+    if lock is not None:
+        # Installed: the lock's own tap is unambiguous, so look the catalog
+        # entry up there directly rather than whichever tap's copy of this
+        # name the catalog lists first.
+        cmatches = catalog.find(name, tap=lock.get("tap"))
+        cat = cmatches[0] if cmatches else None
+    elif qualifier:
+        # Not installed and qualified: resolve through the catalog, which
+        # parses `owner/repo:skill` itself and raises a helpful "no tap
+        # named" / ambiguity hint — never `store.skill_store_dir`'s bare
+        # "invalid skill name" for the exact string an ambiguity hint
+        # elsewhere recommends typing.
+        cat = catalog.resolve_one(name)
+    else:
+        matches = catalog.find(name)
+        if len(matches) > 1:
+            # Not installed and ambiguous: refuse and ask to qualify — like
+            # `info` — instead of silently reporting whichever tap's entry
+            # happened to sort first as though the name were unambiguous.
+            cat = catalog.resolve_one(name)
+        else:
+            cat = matches[0] if matches else None
     if not lock and not cat:
         raise BoostError("no skill named %r installed or in any tap" % name,
                         hint="try `boost search %s`" % name)
-    acts = {a: len(journal.events(action=a, subject=name))
+    acts = {a: len(journal.events(action=a, subject=bare))
             for a in ("install", "update", "uninstall")}
     if lock is not None and kind != "skill":
         # Materialized kinds have no store dir or agent symlinks; the lock
@@ -1842,8 +1869,8 @@ def cmd_stats(argv):
             if tap.is_cloned:
                 lines = gitutil.log_for_path(tap.path, cat["rel_dir"], n=1)
                 upstream = lines[0] if lines else None
-    sdir = store.skill_store_dir(name)
-    size = util.dir_size(sdir) if lock and sdir.is_dir() else None
+    sdir = store.skill_store_dir(bare) if lock else None
+    size = util.dir_size(sdir) if sdir is not None and sdir.is_dir() else None
     if args.as_json:
         print(json.dumps({
             "name": name, "installed": bool(lock), "lock": lock, "size": size,

@@ -54,20 +54,6 @@ def _read(p: Path) -> str:
         raise BoostError("cannot read %s: %s" % (_tilde(p), e)) from e
 
 
-def _for_tap(entry, qualifier):
-    """``entry`` unless a ``tap:`` qualifier was given that it does not satisfy.
-
-    A qualifier has to be honored against the *installed* record, not only the
-    catalog: with one skill installed from tap A and asked about via
-    ``tap-b:skill``, tap A's lock entry is the wrong answer, and reporting it
-    would describe another tap's install as this one's.
-    """
-    if entry and qualifier and not catalog.tap_matches(
-            str(entry.get("tap") or ""), qualifier):
-        return None
-    return entry
-
-
 def _resolve_skill_md(name: str):
     """Locate a skill's SKILL.md — installed store first, then tap clones.
 
@@ -79,7 +65,7 @@ def _resolve_skill_md(name: str):
     Returns (path, lock_entry_or_None, catalog_entry_or_None).
     """
     qualifier, bare = catalog.split_name(name)
-    lock = _for_tap(lockfile.get_skill(bare), qualifier)
+    lock = catalog.for_tap(lockfile.get_skill(bare), qualifier)
     if lock:
         # The single place skill content is served from — so it is the single
         # place to refuse serving a tree that has drifted from its locked digest
@@ -165,7 +151,7 @@ def _resolve_text(name: str):
                 if lock is None and cat else "skill")
         return _read(path), kind, lock, cat
     kind, entry = found
-    lock = _for_tap(entry, qualifier)
+    lock = catalog.for_tap(entry, qualifier)
     if lock is not None:
         text = _materialized_text(bare, kind, lock)
         if text is not None:
@@ -399,20 +385,20 @@ def cmd_info(argv):
     # rejects the qualified string, since `owner/repo:skill` is not a safe path
     # component). Everything below this line works from the bare name.
     qualifier, name = catalog.split_name(args.name)
-    lock = _for_tap(lockfile.get_skill(name), qualifier)
+    lock = catalog.for_tap(lockfile.get_skill(name), qualifier)
     if lock is None:
         # An installed rule/workflow is installed — `boost list` shows it, so
         # answering from the catalog (or "unknown") here would deny it exists.
         found = lockfile.find_any(name)
         if found is not None and found[0] != "skill":
-            kentry = _for_tap(found[1], qualifier)
+            kentry = catalog.for_tap(found[1], qualifier)
             if kentry is not None:
                 return _info_materialized(name, found[0], kentry, args.json)
     # A project-scoped skill is installed — just not at user scope. Without this
     # `boost info` would call it "not installed" while it sits in the repo, and
     # the install banner's own "next: boost info <name>" would lead nowhere.
     pbase = scopes.project_root()
-    plock = (_for_tap(projectlock.get_skill(pbase, name), qualifier)
+    plock = (catalog.for_tap(projectlock.get_skill(pbase, name), qualifier)
              if pbase is not None else None)
     if lock:
         matches = catalog.find(args.name)
@@ -575,22 +561,24 @@ def cmd_edit(argv):
                                  description="Open a skill's SKILL.md in your editor")
     ap.add_argument("name")
     args = ap.parse_args(argv)
-    lock = lockfile.get_skill(args.name)
+    name = args.name
+    bare, lock = store.resolve_installed(name)
     if not lock:
-        found = lockfile.find_any(args.name)
-        if found is not None:
+        qualifier, _ = catalog.split_name(name)
+        found = lockfile.find_any(bare)
+        if found is not None and catalog.for_tap(found[1], qualifier) is not None:
             # Editing opens a skill's store dir; a rule/workflow has none — it
             # materializes into shared agent files (e.g. ~/.claude/CLAUDE.md).
             raise BoostError(
                 "%s is a %s — boost edit applies to skills"
-                % (args.name, found[0]),
+                % (name, found[0]),
                 hint="a %s materializes into shared agent files, not a store "
                      "dir you can open; read it with `boost cat %s`"
-                     % (found[0], args.name))
-        raise BoostError("%s is not installed" % args.name,
+                     % (found[0], name))
+        raise BoostError("%s is not installed" % name,
                         hint="install it first, or `boost cat %s` to read the tap copy"
-                        % args.name)
-    sdir = store.skill_store_dir(args.name)
+                        % name)
+    sdir = store.skill_store_dir(bare)
     path = sdir / "SKILL.md"
     if not path.exists():
         raise BoostError("SKILL.md missing from %s" % _tilde(sdir),
@@ -607,8 +595,8 @@ def cmd_edit(argv):
     sha = util.sha256_dir(sdir)
     if sha != lock.get("sha256"):
         lock["sha256"], lock["updated_at"] = sha, util.now_iso()
-        lockfile.set_skill(args.name, lock)
-        journal.log("edit", args.name)
+        lockfile.set_skill(bare, lock)
+        journal.log("edit", bare)
         out.warn("local edits diverge from the tap source — boost drift will flag this")
     else:
         out.ok("no changes")
@@ -1016,16 +1004,18 @@ def cmd_tag(argv):
     if not args.name:
         raise BoostError("skill name required",
                         hint="`boost tag NAME +tag -tag`, or `boost tag --list`")
-    entry = lockfile.get_skill(args.name)
+    name = args.name
+    bare, entry = store.resolve_installed(name)
     if not entry:
-        found = lockfile.find_any(args.name)
-        if found is not None:
+        qualifier, _ = catalog.split_name(name)
+        found = lockfile.find_any(bare)
+        if found is not None and catalog.for_tap(found[1], qualifier) is not None:
             raise BoostError(
                 "%s is a %s — boost tag applies to skills"
-                % (args.name, found[0]),
+                % (name, found[0]),
                 hint="tags are a skill-only label; rules and workflows are "
                      "governed by pin / quarantine / verify")
-        raise BoostError("%s is not installed" % args.name,
+        raise BoostError("%s is not installed" % name,
                         hint="see what is with `boost list`")
     tags = list(entry.get("tags") or [])
     changed = False
@@ -1045,11 +1035,11 @@ def cmd_tag(argv):
     if changed:
         entry["tags"] = sorted(tags)
         tags = entry["tags"]
-        lockfile.set_skill(args.name, entry)
-        journal.log("tag", args.name, tags=tags)
+        lockfile.set_skill(bare, entry)
+        journal.log("tag", bare, tags=tags)
     if args.json:
-        print(json.dumps({"name": args.name, "tags": tags}, indent=2))
+        print(json.dumps({"name": name, "tags": tags}, indent=2))
         return 0
     shown = " ".join(out.role("#" + t, "accent") for t in tags) or out.role("(no tags)", "muted")
-    (out.ok if changed else out.info)("%s  %s" % (args.name, shown))
+    (out.ok if changed else out.info)("%s  %s" % (name, shown))
     return 0
