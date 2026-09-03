@@ -444,6 +444,10 @@ class TestProtocol:
         assert "brainstorming" not in complete._cached_names()
         r = boost("protocol", "open", "boost://tap/owner/repo")
         assert "tapped owner/repo" in r.out
+        # "items", not "skills" — matches what `boost tap` itself prints for
+        # the same count (a tap can carry rules and workflows too).
+        assert "(5 items)" in r.out
+        assert "skills)" not in r.out
         assert "brainstorming" in complete._cached_names()
 
     def test_register_unregister_darwin(self, boost, sandbox, monkeypatch):

@@ -11874,8 +11874,9 @@ log.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-rules-workflows-reported-as-skills-uninstall-claims-a-store">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>Rules/workflows reported as 'skills': <code>uninstall</code> claims a store dir that never existed</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>All three kinds install by design, but five commands describe every kind as a skill — and
 <code>uninstall</code> goes further, narrating actions that never happened. Uninstalling the
 <em>rule</em> <code>benchmarking</code> prints <em>&ldquo;&#10003; unlinked &larr; claude-code &middot;
@@ -11907,7 +11908,7 @@ already does); count <code>_bundle_install</code> by <code>entry['kind']</code> 
 <code>(%d items)</code>; add a kind column to <code>trending</code> and fix its COMMANDS summary in
 <code>cli.py:73</code>. Docs: regenerate <code>docs/commands.html</code> (trending's summary changes in
 COMMANDS), and update README.md and <code>docs/index.html</code> where they show taps/bundle output.
-Found by the 2026-08 CLI audit (cluster <code>kinds-reported-as-skills</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>kinds-reported-as-skills</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>

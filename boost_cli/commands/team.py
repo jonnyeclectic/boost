@@ -469,7 +469,7 @@ def cmd_protocol(argv) -> int:
         entries = catalog.rebuild_tap(tap)
         complete.refresh_names()
         journal.log("tap", tap.name, via="protocol")
-        out.ok("tapped %s (%d skills)" % (tap.name, len(entries)))
+        out.ok("tapped %s (%d items)" % (tap.name, len(entries)))
         return 0
 
     if args.action == "register":

@@ -835,7 +835,7 @@ def uninstall_project(name: str, base=None) -> dict:
     unregistered = unregister_project_mcp(resolved_base, name)
     journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
     return {"name": name, "unlinked": removed, "entry": entry,
-            "mcp_unregistered": unregistered,
+            "mcp_unregistered": unregistered, "kind": "skill",
             "scope": scopes.SCOPE_PROJECT, "base": str(resolved_base)}
 
 
@@ -1041,7 +1041,7 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
             removed.append(m["agent"])
     lockfile.remove_rule(name)
     journal.log("uninstall", name)
-    return {"name": name, "unlinked": removed, "entry": rule}
+    return {"name": name, "unlinked": removed, "entry": rule, "kind": "rule"}
 
 
 def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
@@ -1258,7 +1258,7 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
             removed.append(m["agent"])
     lockfile.remove_workflow(name)
     journal.log("uninstall", name)
-    return {"name": name, "unlinked": removed, "entry": workflow}
+    return {"name": name, "unlinked": removed, "entry": workflow, "kind": "workflow"}
 
 
 def install_from_path(src_dir: Path, name: str | None = None,
@@ -1350,7 +1350,12 @@ def uninstall(name: str) -> dict:
     """Uninstall ``name`` whatever its kind (skill, rule, workflow).
 
     Reverses everything the install wrote and drops the lock entry;
-    returns {name, unlinked, entry}. Raises BoostError if not installed.
+    returns {name, unlinked, entry, kind}. Raises BoostError if not installed.
+    The ``kind`` is what tells a caller like ``cmd_uninstall`` whether
+    ``unlinked`` names agent *symlinks* (skill) or agent *materializations*
+    (rule/workflow) — those are removed from entirely different places, and a
+    caller that assumes "skill" for all three narrates a store directory that
+    a rule or workflow never had.
     """
     entry = lockfile.get_skill(name)
     if not entry:
@@ -1374,7 +1379,7 @@ def uninstall(name: str) -> dict:
         util.rmtree(dest)
     lockfile.remove_skill(name)
     journal.log("uninstall", name)
-    return {"name": name, "unlinked": removed_links, "entry": entry}
+    return {"name": name, "unlinked": removed_links, "entry": entry, "kind": "skill"}
 
 
 def strip_extended_prefix(text: str) -> str:
