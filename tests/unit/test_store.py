@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import ClassVar
 
@@ -2900,3 +2901,75 @@ class TestInterruptedQuarantine:
             "rule", "team-conventions", lockfile.get_rule("team-conventions"))
         assert not store.stale_quarantine_artifacts(
             "team-conventions", lockfile.get_rule("team-conventions"))
+
+
+def _rival_tap(tmp_path, name="rival-tap"):
+    """A second real tap shipping `brainstorming` at a louder version.
+
+    Mirrors ``tests/functional/test_cli_info.py``'s ``rival_tap`` fixture: a
+    genuine second clone is needed to reach the cross-tap branch of
+    ``resolve_lock_entry``, not a hand-written cache entry.
+    """
+    root = tmp_path / name
+    (root / "skills" / "brainstorming").mkdir(parents=True)
+    (root / "skills" / "brainstorming" / "SKILL.md").write_text(
+        "---\nname: brainstorming\ndescription: A rival ideation skill\n"
+        "version: 9.9.9\n---\n\n# Brainstorming\n\nThe other tap's copy.\n",
+        encoding="utf-8")
+    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "rival@boost.test")
+    run("git", "config", "user.name", "Rival Tap")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "rival skills")
+    tap = registry.add(str(root))
+    catalog.rebuild_tap(tap)
+    return tap
+
+
+class TestResolveLockEntry:
+    """``store.resolve_lock_entry`` — the shared tap-qualifier resolver behind
+    adapt/run/stats/edit/tag/export (docs/roadmap/items/
+    audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie.md)."""
+
+    def test_unknown_name_returns_no_kind_or_entry(self, tap):
+        bare, kind, entry = store.resolve_lock_entry("nope")
+        assert (bare, kind, entry) == ("nope", None, None)
+
+    def test_unqualified_installed_skill_resolves(self, brainstorming):
+        bare, kind, entry = store.resolve_lock_entry("brainstorming")
+        assert bare == "brainstorming"
+        assert kind == "skill"
+        assert entry == lockfile.get_skill("brainstorming")
+
+    def test_qualified_name_matching_the_installed_tap_resolves(self, brainstorming):
+        bare, kind, entry = store.resolve_lock_entry("fixture-tap:brainstorming")
+        assert bare == "brainstorming"
+        assert kind == "skill"
+        assert entry == lockfile.get_skill("brainstorming")
+
+    def test_qualifier_naming_a_different_tap_withholds_the_entry(
+            self, brainstorming, tmp_path):
+        _rival_tap(tmp_path)
+        bare, kind, entry = store.resolve_lock_entry("rival-tap:brainstorming")
+        # brainstorming IS installed, but from fixture-tap, not rival-tap —
+        # this qualifier's answer is "not installed", not fixture-tap's record.
+        assert (bare, kind, entry) == ("brainstorming", None, None)
+        # the unqualified/matching-tap forms are unaffected by the rival tap.
+        assert store.resolve_lock_entry("brainstorming")[1:] == (
+            "skill", lockfile.get_skill("brainstorming"))
+        assert store.resolve_lock_entry("fixture-tap:brainstorming")[1:] == (
+            "skill", lockfile.get_skill("brainstorming"))
+
+    def test_installed_rule_resolves_with_its_kind(self, tap):
+        store.install(_rule_entry(tap))
+        _bare, kind, entry = store.resolve_lock_entry("team-conventions")
+        assert kind == "rule"
+        assert entry == lockfile.get_rule("team-conventions")
+
+    def test_qualified_rule_matching_its_tap_resolves(self, tap):
+        store.install(_rule_entry(tap))
+        bare, kind, entry = store.resolve_lock_entry("fixture-tap:team-conventions")
+        assert bare == "team-conventions"
+        assert kind == "rule"
+        assert entry == lockfile.get_rule("team-conventions")

@@ -1050,6 +1050,24 @@ class TestExport:
         assert "exported 1 skill →" in r.out
         assert dest.is_file()
 
+    def test_qualified_name_matching_the_installed_tap_works(
+            self, boost, installed, rival_tap, tmp_path):
+        # The ambiguity hint recommends `owner/repo:skill`; typing exactly
+        # that must resolve, not "not installed" (docs/roadmap/items/
+        # audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie.md).
+        dest = tmp_path / "x.tar.gz"
+        r = boost("export", "fixture-tap:brainstorming", "-o", dest)
+        assert "exported 1 skill →" in r.out
+        with tarfile.open(str(dest)) as tf:
+            assert "brainstorming/SKILL.md" in tf.getnames()
+
+    def test_qualified_name_naming_a_different_tap_is_not_installed(
+            self, boost, installed, rival_tap, tmp_path):
+        dest = tmp_path / "x.tar.gz"
+        r = boost("export", "rival-tap:brainstorming", "-o", dest, expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
+        assert not dest.exists()
+
 
 # ── kind-aware surfaces ──────────────────────────────────────────────────
 
