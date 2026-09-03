@@ -116,6 +116,22 @@ class TestDoctor:
         assert "1 skill installed · 1 tap synced · 1 broken link" in r.out
         assert "1 issue needs attention" in r.out  # verdict flips on issues, singular verb
 
+    def test_a_sidelined_skill_is_not_reported_as_damage(self, boost, tapped):
+        # The bug, end to end. Verified live: `profile use` sidelines a skill
+        # by unlinking it, `doctor` used to read the lock's stale `agents`
+        # list and exit 1 with "not linked for <agent> — run `boost sync`",
+        # and following that remedy relinked everything, silently undoing the
+        # switch. A sideline has to read as intentional, not as rot.
+        boost("install", "brainstorming", "jira-integration", "--no-deps")
+        boost("focus", "brainstorming")
+        r = boost("doctor")
+        assert "● healthy" in r.out
+        assert "not linked for" not in r.out
+        r = boost("sync")
+        assert "everything in sync" in r.out
+        jira_link = paths.home() / ".claude" / "skills" / "jira-integration"
+        assert not jira_link.exists()               # sync must not have relinked it
+
     def test_a_foreign_broken_link_is_reported_but_not_an_issue(
             self, boost, installed):
         # `heal` deliberately will not fix this, so counting it would leave

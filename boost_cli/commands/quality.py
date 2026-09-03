@@ -472,6 +472,14 @@ def cmd_doctor(argv):
         if locked and util.sha256_dir(sdir) != locked:
             bad("skill %s modified since install — run `boost verify`" % name)
             skill_issues += 1
+        # A deliberate sideline (`focus`, `profile use`, `context apply`)
+        # unlinked this skill on purpose, and `sidelined_by` says so. Without
+        # this the per-agent loop below read the lock's stale `agents` list —
+        # what was linked before the sideline — and reported every missing
+        # link as damage, sending the reader to `boost sync`, which then
+        # undid the switch they had just made.
+        if entry.get("sidelined_by"):
+            continue
         for agent in entry.get("agents", []):
             adir = enabled.get(agent)
             if adir is None:

@@ -244,6 +244,49 @@ def unlink_agents(name: str) -> list[str]:
     return removed
 
 
+def sideline(name: str, by: str) -> list[str]:
+    """Unlink ``name`` and record *why*, so other commands stop fighting it.
+
+    ``focus``, ``profile use`` and ``context apply`` all set a skill's links
+    aside deliberately, and used to do it by calling :func:`unlink_agents`
+    alone — leaving the lock's ``agents`` field pointing at links that no
+    longer exist. Every reader of that field (``list``, ``doctor``,
+    ``sync_plan``) took the stale record at face value: ``doctor`` called the
+    gap damage and told the user to run ``boost sync``, and ``sync_apply``
+    obeyed, silently re-linking the very skill that was just set aside.
+
+    Recording ``sidelined_by`` closes the loop: it names the mechanism
+    responsible (``"focus"``, ``"profile"`` or ``"context"``) so a later
+    sideline overwrites an earlier one rather than stacking, and so
+    :func:`unsideline` and every consulting reader have one flag to check
+    instead of re-deriving "should this be linked" from a disk state that
+    lockfile.write() itself does not read.
+    """
+    removed = unlink_agents(name)
+    entry = lockfile.get_skill(name)
+    if entry is not None:
+        entry["sidelined_by"] = by
+        lockfile.set_skill(name, entry)
+    return removed
+
+
+def unsideline(name: str) -> InstallResult:
+    """Relink ``name`` and clear any recorded sideline.
+
+    The inverse of :func:`sideline`, used by ``focus --clear``, a skill
+    re-entering an active focus/profile/context selection, and ``context
+    disable``. Clears the flag regardless of which mechanism set it — only
+    one can be true of a skill at a time, and whichever command relinks it is
+    the one ending it.
+    """
+    res = link_agents(name)
+    entry = lockfile.get_skill(name)
+    if entry is not None and entry.get("sidelined_by"):
+        del entry["sidelined_by"]
+        lockfile.set_skill(name, entry)
+    return res
+
+
 def linked_agents(name: str) -> list[str]:
     """The linking agents that currently hold a symlink for ``name``.
 
@@ -1552,6 +1595,13 @@ def sync_plan() -> dict[str, list]:
             plan["missing_store"].append(name)
             continue
         if entry.get("quarantined"):
+            continue
+        # A deliberate sideline (`focus`, `profile use`, `context apply`)
+        # unlinks on purpose and records it in `sidelined_by` — so the missing
+        # links below are not damage to repair. Without this check `sync`
+        # relinked every sidelined skill, undoing the switch it was never told
+        # about.
+        if entry.get("sidelined_by"):
             continue
         # Only the agents this skill was installed for. Walking every enabled
         # agent made `boost sync` a second path to the scope leak that

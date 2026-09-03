@@ -104,6 +104,16 @@ class TestList:
         r = boost("list", "--tag", "#nosuch")
         assert "no skills installed with tag #nosuch" in r.out
 
+    def test_sidelined_flag(self, boost, tapped):
+        boost("install", "brainstorming", "jira-integration", "--no-deps")
+        boost("focus", "brainstorming")
+        r = boost("list")
+        assert "sidelined:focus" in r.out
+        r = boost("list", "--json")
+        data = json.loads(r.out)
+        assert data["skills"]["jira-integration"]["sidelined_by"] == "focus"
+        assert "sidelined_by" not in data["skills"]["brainstorming"]
+
     def test_empty_state_hint(self, boost, sandbox):
         r = boost("list")
         assert "no skills installed" in r.out
@@ -242,6 +252,17 @@ class TestInfo:
         # D17: identity-card badges beneath the name
         assert "[installed]" in r.out
         assert "[fixture-tap]" in r.out
+
+    def test_info_reports_sidelined_by(self, boost, tapped):
+        boost("install", "brainstorming", "jira-integration", "--no-deps")
+        boost("focus", "brainstorming")
+        r = boost("info", "jira-integration")
+        assert "[sidelined by focus]" in r.out
+        assert re.search(r"sidelined by\s+focus", r.out)
+        r = boost("info", "brainstorming")
+        assert "sidelined by" not in r.out
+        data = json.loads(boost("info", "jira-integration", "--json").out)
+        assert data["installed"]["sidelined_by"] == "focus"
 
     def test_tap_only_skill(self, boost, tapped):
         r = boost("info", "jira-integration")
