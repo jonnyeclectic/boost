@@ -317,6 +317,46 @@ class TestUnlinkAgents:
         assert not _link("gemini").exists()
 
 
+class TestSideline:
+    """``sideline``/``unsideline`` — unlink-and-record, relink-and-clear.
+
+    Used by ``focus``, ``profile use`` and ``context apply`` so a deliberate
+    unlink leaves a trail: `sync_plan`/`doctor`/`list` all read
+    ``sidelined_by`` rather than fighting a lock entry that still claims the
+    old links.
+    """
+
+    def test_unlinks_and_records(self, brainstorming):
+        removed = store.sideline("brainstorming", "focus")
+        assert removed == LINKED_AGENTS
+        for agent in LINKED_AGENTS:
+            assert not _link(agent).exists()
+        assert lockfile.get_skill("brainstorming")["sidelined_by"] == "focus"
+
+    def test_a_later_sideline_overwrites_the_earlier_one(self, brainstorming):
+        store.sideline("brainstorming", "focus")
+        store.sideline("brainstorming", "profile")
+        assert lockfile.get_skill("brainstorming")["sidelined_by"] == "profile"
+
+    def test_unsideline_relinks_and_clears_the_flag(self, brainstorming):
+        store.sideline("brainstorming", "focus")
+        res = store.unsideline("brainstorming")
+        assert res.linked == LINKED_AGENTS
+        for agent in LINKED_AGENTS:
+            assert _link(agent).is_symlink()
+        assert "sidelined_by" not in lockfile.get_skill("brainstorming")
+
+    def test_unsideline_on_a_never_sidelined_skill_is_a_noop_for_the_flag(
+            self, brainstorming):
+        store.unsideline("brainstorming")
+        assert "sidelined_by" not in lockfile.get_skill("brainstorming")
+
+    def test_sideline_on_an_uninstalled_name_does_not_raise(self, tap):
+        # No lock entry exists — unlink_agents finds nothing to remove and
+        # there is nothing to record a flag on.
+        assert store.sideline("nonexistent", "focus") == []
+
+
 class TestNativeStoreAgents:
     """A skill install must reach Gemini CLI without ever linking into it.
 
@@ -803,6 +843,10 @@ class TestSyncPlan:
         lockfile.set_skill("brainstorming", e)
         for agent in LINKED_AGENTS:
             _link(agent).unlink()
+        assert store.sync_plan() == self.EMPTY
+
+    def test_sidelined_excluded_from_missing_links(self, brainstorming):
+        store.sideline("brainstorming", "focus")
         assert store.sync_plan() == self.EMPTY
 
     def test_stale_dangling_symlink(self, brainstorming):

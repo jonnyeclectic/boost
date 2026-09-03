@@ -906,11 +906,17 @@ def cmd_context(argv: list[str]) -> int:
             return 0
         return _context_apply(state)
     if action == "disable":
+        # Count only skills `context apply` actually sidelined (`sidelined_by
+        # == "context"`), not every mapped skill with a linking agent enabled
+        # — the old `link_agents(name).linked` check relinks unconditionally
+        # and is truthy for any skill that was never sidelined at all, so a
+        # branch with no matched rule still reported "N skill(s) relinked".
         restored = 0
         inst = lockfile.installed()
         for name in sorted(_mentioned_skills(state)):
             entry = inst.get(name)
-            if entry and not entry.get("quarantined") and store.link_agents(name).linked:
+            if entry and entry.get("sidelined_by") == "context":
+                store.unsideline(name)
                 restored += 1
         state["enabled"] = False
         _save_state(_CONTEXT_STATE, state)
@@ -981,9 +987,9 @@ def _context_apply(state: dict) -> int:
         if entry.get("quarantined"):
             continue
         if name in active:
-            if store.link_agents(name).linked:
+            if store.unsideline(name).linked:
                 linked.append(name)
-        elif store.unlink_agents(name):
+        elif store.sideline(name, "context"):
             unlinked.append(name)
     out.kv("branch", branch)
     out.kv("matched", ", ".join(r["pattern"] for r in matched) or "(no patterns)")
@@ -1025,15 +1031,24 @@ def cmd_focus(argv: list[str]) -> int:
     if args.clear:
         if args.skills:
             raise BoostError("--clear takes no skill arguments")
+        # `link_agents(name).linked` used to drive both the loop and the
+        # count: it relinks unconditionally and is truthy for any skill with
+        # at least one enabled agent, so a `--clear` with no session at all
+        # still reported "N skill(s) restored". `sidelined_by == "focus"` is
+        # only true of skills THIS session actually unlinked.
+        had_session = state_path.exists()
         restored = 0
         for name, entry in sorted(lockfile.installed().items()):
-            if entry.get("quarantined"):
+            if entry.get("sidelined_by") != "focus":
                 continue
-            if store.link_agents(name).linked:
-                restored += 1
-        if state_path.exists():
+            store.unsideline(name)
+            restored += 1
+        if had_session:
             state_path.unlink()
         journal.log("focus", "clear", restored=restored)
+        if not had_session and not restored:
+            out.info("no focus session")
+            return 0
         out.ok("focus cleared — %d skill(s) restored" % restored)
         return 0
 
@@ -1073,10 +1088,10 @@ def cmd_focus(argv: list[str]) -> int:
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
             continue
-        if store.unlink_agents(name):
+        if store.sideline(name, "focus"):
             sidelined += 1
     for name in names:
-        store.link_agents(name)
+        store.unsideline(name)
     _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     journal.log("focus", ",".join(names))
     out.info("⌁ focus: %s %s"

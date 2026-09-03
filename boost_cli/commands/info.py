@@ -322,6 +322,8 @@ def cmd_list(argv):
             flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                     ([out.aurora("quarantined", "pink")] if e.get("quarantined")
                      else []) + \
+                    ([out.role("sidelined:" + e["sidelined_by"], "muted")]
+                     if e.get("sidelined_by") else []) + \
                     [out.role("#" + t, "muted") for t in e.get("tags") or []]
             rows.append((name, e.get("version", "?"), e.get("tap", "?"),
                          "·".join(a.split("-")[0] for a in e.get("agents") or []),
@@ -481,6 +483,8 @@ def cmd_info(argv):
             badges.append(out.badge("pinned", "yellow"))
         if lock.get("quarantined"):
             badges.append(out.badge("quarantined", "pink"))
+        if lock.get("sidelined_by"):
+            badges.append(out.badge("sidelined by %s" % lock["sidelined_by"], "cyan"))
         latest = str((cat or {}).get("version") or "")
         if cat and latest != str(lock.get("version", "?")):
             badges.append(out.badge("update available", "yellow"))
@@ -530,6 +534,8 @@ def cmd_info(argv):
         out.kv("agents", ", ".join(lock.get("agents") or []) or "(none)")
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         out.kv("quarantined", "yes" if lock.get("quarantined") else "no")
+        if lock.get("sidelined_by"):
+            out.kv("sidelined by", str(lock["sidelined_by"]))
         if lock.get("tags"):
             out.kv("tags", " ".join("#" + t for t in lock["tags"]))
     elif _as_list(meta.get("tags")):

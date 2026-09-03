@@ -5451,8 +5451,9 @@ pinned-tap paragraph (lines 176-178) and its <code>compact --reclone</code> line
       </article>
 
       <article class="cap rcard" id="audit-focus-profile-sideline-by-unlinking-without-recording-it-lis">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>focus/profile sideline by unlinking without recording it; list lies, doctor exits 1, and its own remedy (sync) undoes the switch</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>focus</code> and <code>profile use</code> both &ldquo;sideline&rdquo; skills by calling
 <code>store.unlink_agents</code> without writing anything into the lock &mdash; so every other command
 reads the lock as truth and fights the state. Verified live: <code>profile use daily</code> prints
@@ -5483,7 +5484,7 @@ doctor stops calling it damage, sync leaves it unlinked; have <code>profile use<
 record. Make <code>focus --clear</code>/<code>context disable</code> count only skills whose links were
 actually missing and say <em>no focus session</em> when <code>focus.json</code> is absent. Docs:
 regenerate <code>docs/commands.html</code> if summaries change. Found by the 2026-08 CLI audit
-(cluster <code>sideline-state-unrecorded</code>); repro in the audit log.</p>
+(cluster <code>sideline-state-unrecorded</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>

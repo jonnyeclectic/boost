@@ -546,12 +546,41 @@ class TestContext:
         # brainstorming was never mapped, so it keeps its links
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
 
+        from boost_cli.core import lockfile
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+
         r = boost("context", "apply")
         assert "nothing to change" in r.out
 
         r = boost("context", "disable")
         assert "branch-aware activation disabled — 1 skill(s) relinked" in r.out
         assert link.is_symlink()
+        assert "sidelined_by" not in lockfile.get_skill("tdd-workflow")
+
+    def test_disable_counts_only_skills_it_actually_relinks(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # `link_agents(name).linked` used to drive the count: it relinks
+        # unconditionally and is truthy for any mapped skill with an enabled
+        # agent, so a still-active skill that was never sidelined got counted
+        # as "relinked" right alongside the one `disable` actually restored.
+        boost("install", "tdd-workflow")
+        boost("install", "brainstorming")
+        repo = _git_repo(tmp_path / "work")
+        _git(repo, "checkout", "-qb", "feature/x")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        boost("context", "map", "chore/*", "brainstorming")
+
+        boost("context", "enable")
+        from boost_cli.core import lockfile
+        # tdd-workflow's pattern matches the current branch — never sidelined.
+        assert "sidelined_by" not in lockfile.get_skill("tdd-workflow")
+        # brainstorming's pattern does not — sidelined by context.
+        assert lockfile.get_skill("brainstorming")["sidelined_by"] == "context"
+
+        r = boost("context", "disable")
+        assert "branch-aware activation disabled — 1 skill(s) relinked" in r.out
+        assert "sidelined_by" not in lockfile.get_skill("brainstorming")
 
     def test_apply_outside_repo(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -584,6 +613,8 @@ class TestContext:
 
 class TestFocus:
     def test_focus_sidelines_others(self, boost, tapped):
+        from boost_cli.core import lockfile
+
         boost("install", "brainstorming")
         # --no-deps: this test wants exactly two installed skills; without it,
         # jira-integration would also pull in its `requires: commit-messages`.
@@ -605,11 +636,25 @@ class TestFocus:
         assert data["since"]
 
         r = boost("focus", "--clear")
-        assert "focus cleared — 2 skill(s) restored" in r.out
+        # Only jira-integration was actually sidelined by this session —
+        # brainstorming stayed linked throughout, so it must not be counted.
+        # The old count came from `link_agents(name).linked`, which relinks
+        # unconditionally and was truthy for every non-quarantined skill.
+        assert "focus cleared — 1 skill(s) restored" in r.out
         assert jira_link.is_symlink()
+        assert "sidelined_by" not in lockfile.get_skill("jira-integration")
         assert not (paths.state_dir() / "focus.json").exists()
         r = boost("focus")
         assert "no focus session — start one with `boost focus SKILL...`" in r.out
+
+    def test_clear_with_no_session_reports_no_session(self, boost, installed):
+        # Verified live: `focus --clear` with nothing focused used to say
+        # "focus cleared — 2 skill(s) restored" — the count of every
+        # non-quarantined skill with an enabled agent, not of anything this
+        # command actually changed.
+        r = boost("focus", "--clear")
+        assert "no focus session" in r.out
+        assert "restored" not in r.out
 
     def test_unknown_skill(self, boost, installed):
         r = boost("focus", "nope", expect=1)
