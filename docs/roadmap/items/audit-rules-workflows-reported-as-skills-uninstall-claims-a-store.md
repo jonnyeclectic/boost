@@ -2,7 +2,7 @@
 id: audit-rules-workflows-reported-as-skills-uninstall-claims-a-store
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 2
 note: rule uninstall prints 'removed ~/.agents/skills/…' for a dir that never existed
 order: 210
 owner: loop/audit-kinds-not-skills
-pr:
+pr: 730
 title: "Rules/workflows reported as 'skills': <code>uninstall</code> claims a store dir that never existed"
 ---
 All three kinds install by design, but five commands describe every kind as a skill — and
