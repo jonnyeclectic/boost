@@ -2,12 +2,12 @@
 id: audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: M
 impact: High
 wow: 2
-note: "PR 740 open: fix lands in full, but sandbox had no PyPI/apt egress to run make check"
+note: "PR 740: make check green in CI (lint, mutation, evals, patch-coverage all passed)"
 order: 216
 owner: loop/pinned-tap-reclone
 pr: 740

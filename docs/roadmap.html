@@ -5409,8 +5409,9 @@ test that installs a <code>--path</code> copy and reinstalls. No doc changes bey
       </article>
 
       <article class="cap rcard" id="audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3>Pinned taps silently moved to HEAD by <code>update</code> re-clone and <code>compact --reclone</code>, pin left stale</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The pin invariant &mdash; only <code>update --force</code> may move a pinned tap, and moving one is
 deciding to stop holding it still &mdash; is broken by three paths, all reproduced byte-for-byte.
 <b>1:</b> <code>compact minio/skills --reclone</code> against a tap pinned at <code>d543829&hellip;</code>
@@ -5440,12 +5441,12 @@ out <code>tap.pin</code> after <code>clone_shallow</code> (or refuse with a hint
 size-only report at <code>configuration.py:288-292</code> is what hid the move. Docs: README.md's
 pinned-tap paragraph (lines 176-178) and its <code>compact --reclone</code> line (274); regenerate
 <code>docs/commands.html</code> only if the <code>--force</code> help string changes. Found by the
-2026-08 CLI audit (cluster <code>pinned-tap-integrity</code>); repro in the audit log.</p>
+2026-08 CLI audit (cluster <code>pinned-tap-integrity</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">PR 740 open: fix lands in full, but sandbox had no PyPI/apt egress to run make check</span>
+          <span class="m">PR 740: make check green in CI (lint, mutation, evals, patch-coverage all passed)</span>
         </div>
       </article>
 
