@@ -855,8 +855,11 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
                 from . import catalog
                 matches = [e for e in catalog.find(name)
                            if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
-                if matches:
-                    install(matches[0], force=True, scope=scopes.SCOPE_PROJECT,
+                cat_entry, warning = catalog.select_lock_source(matches, entry)
+                if warning:
+                    actions.append(warning)
+                if cat_entry:
+                    install(cat_entry, force=True, scope=scopes.SCOPE_PROJECT,
                             base=resolved_base, only_agents=wanted[name])
                     actions.append("re-materialized %s from %s" % (name, tap_name))
                     continue
@@ -1753,14 +1756,17 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
                 from . import catalog
                 matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
-                if matches:
-                    if _pinned_repair_blocked(entry, _skill_source_sha(matches[0])):
+                cat_entry, warning = catalog.select_lock_source(matches, entry)
+                if warning:
+                    actions.append(warning)
+                if cat_entry:
+                    if _pinned_repair_blocked(entry, _skill_source_sha(cat_entry)):
                         actions.append(
                             "%s is pinned and its tap source has moved — repair "
                             "declined (unpin, or `boost reinstall %s` to accept "
                             "the new content)" % (name, name))
                         continue
-                    install(matches[0], force=True)
+                    install(cat_entry, force=True)
                     actions.append("reinstalled missing %s from %s" % (name, tap_name))
                     restored = True
             except BoostError:
@@ -1777,9 +1783,12 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
                 from . import catalog
                 matches = [e for e in catalog.find(name)
                            if e["tap"] == tap_name and e.get("kind", "skill") == kind]
-                if matches:
+                cat_entry, warning = catalog.select_lock_source(matches, entry)
+                if warning:
+                    actions.append(warning)
+                if cat_entry:
                     if _pinned_repair_blocked(
-                            entry, _source_text_sha(tap_name, matches[0])):
+                            entry, _source_text_sha(tap_name, cat_entry)):
                         actions.append(
                             "%s %s is pinned and its tap source has moved — "
                             "repair declined (unpin, or `boost reinstall %s` to "
@@ -1787,7 +1796,7 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
                         continue
                     # preserve the original scope/base so a project rule repairs
                     # into its repo, not wherever sync happens to run.
-                    install(matches[0], force=True,
+                    install(cat_entry, force=True,
                             scope=entry.get("scope", "user"), base=entry.get("base"))
                     actions.append("re-materialized %s %s from %s"
                                    % (kind, name, tap_name))

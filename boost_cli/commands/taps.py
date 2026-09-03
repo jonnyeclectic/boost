@@ -8,6 +8,7 @@ import hashlib
 import json
 from contextlib import suppress
 from pathlib import Path
+from typing import cast
 
 from .. import cliparse, spin
 from ..core import (
@@ -296,7 +297,8 @@ def cmd_outdated(argv) -> int:
         matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
         if not matches:
             continue
-        entry = matches[0]
+        entry, _warning = catalog.select_lock_source(matches, lk)
+        entry = cast(dict, entry)             # matches is non-empty above
         latest = str(entry.get("version") or "0.0.0")
         installed_v = str(lk.get("version") or "0.0.0")
         stale, latest_disp = False, latest
@@ -355,7 +357,8 @@ def cmd_outdated(argv) -> int:
             matches = [e for e in catalog.find(name)
                        if e["tap"] == tap_name
                        and e.get("kind", "skill") == kind]
-            latest = str(matches[0].get("version") or "?") if matches else "?"
+            entry, _warning = catalog.select_lock_source(matches, lk)
+            latest = str(entry.get("version") or "?") if entry else "?"
             if not util.semver_gt(latest, installed_v):
                 latest = "%s (content changed)" % latest
             results.append({"name": name, "kind": kind,

@@ -16,7 +16,7 @@ import time
 from contextlib import suppress
 from itertools import chain
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .. import cliparse
 from ..core import (
@@ -276,7 +276,8 @@ def _upstream_reason(name, lk, tap_name, head):
     matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
     if not matches:
         return None
-    entry = matches[0]
+    entry, _warning = catalog.select_lock_source(matches, lk)
+    entry = cast(dict, entry)                 # matches is non-empty above
     latest = str(entry.get("version") or "0.0.0")
     installed_v = str(lk.get("version") or "0.0.0")
     src_sha = None

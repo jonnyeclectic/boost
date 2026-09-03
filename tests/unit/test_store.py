@@ -983,6 +983,52 @@ class TestSyncApply:
         for agent in LINKED_AGENTS:
             assert _link(agent).is_symlink()
 
+    def test_missing_store_reinstall_prefers_the_lock_recorded_mirror(
+            self, tap, brainstorming):
+        # A tap can vendor the same skill into more than one directory. Sort
+        # order must not decide which copy a repair pulls from — the lock's
+        # own source_dir does, so the mirror (which sorts first) is ignored.
+        original_source = lockfile.get_skill("brainstorming")["source_dir"]
+        mirror = tap.path / "mirrors" / "brainstorming"
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: mirror copy\n"
+            "version: 9.9.9\n---\nmirror body\n", encoding="utf-8")
+        catalog.rebuild_tap(tap)
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert "reinstalled missing brainstorming from fixture-tap" in actions
+        assert not any("no longer at its installed source" in a for a in actions)
+        installed = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert "mirror body" not in installed
+        assert lockfile.get_skill("brainstorming")["source_dir"] == original_source
+
+    def test_missing_store_reinstall_falls_back_to_a_mirror_with_a_warning(
+            self, tap, brainstorming):
+        # The lock's own source directory is gone, but a same-named mirror
+        # still exists — repair should use it and say so, rather than
+        # silently reinstalling the wrong copy or dropping the skill.
+        mirror = tap.path / "mirrors" / "brainstorming"
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: mirror copy\n"
+            "version: 9.9.9\n---\nmirror body\n", encoding="utf-8")
+        shutil.rmtree(tap.path / "skills" / "brainstorming")
+        catalog.rebuild_tap(tap)
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert any("no longer at its installed source" in a for a in actions)
+        assert any(a.startswith("reinstalled missing brainstorming from")
+                  for a in actions)
+        installed = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert "mirror body" in installed
+
     def test_missing_store_reinstall_fails_falls_back_to_drop(self, tap, brainstorming):
         # catalog cache still lists the skill, but its source dir vanished
         # from the tap clone: the reinstall attempt raises and is swallowed,
@@ -1441,6 +1487,44 @@ class TestSyncMaterializations:
         assert any("re-materialized rule team-conventions" in a for a in actions)
         assert cur.is_file()
 
+    def test_apply_rematerializes_from_the_lock_recorded_mirror(self, tap):
+        # Two rule files can share one frontmatter `name` (a tap vendoring the
+        # same rule twice). The repair must re-materialize from the file that
+        # was actually installed, not whichever one the scan lists first.
+        self._install_rule(tap)
+        original_source = lockfile.get_rule("team-conventions")["source_file"]
+        mirror = tap.path / "rules" / "team-mirror.mdc"
+        mirror.write_text("---\nname: Team Conventions\n---\n\nMirror content.\n",
+                          encoding="utf-8")
+        catalog.rebuild_tap(tap)
+        cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        cur.unlink()
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert any("re-materialized rule team-conventions" in a for a in actions)
+        assert not any("no longer at its installed source" in a for a in actions)
+        assert "Mirror content" not in cur.read_text(encoding="utf-8")
+        assert lockfile.get_rule("team-conventions")["source_file"] == original_source
+
+    def test_apply_falls_back_to_a_rule_mirror_with_a_warning(self, tap):
+        # The lock's own source file is gone, but a same-named mirror still
+        # exists — repair should use it and say so.
+        self._install_rule(tap)
+        mirror = tap.path / "rules" / "team-mirror.mdc"
+        mirror.write_text("---\nname: Team Conventions\n---\n\nMirror content.\n",
+                          encoding="utf-8")
+        (tap.path / "rules" / "team.mdc").unlink()
+        catalog.rebuild_tap(tap)
+        cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        cur.unlink()
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert any("no longer at its installed source" in a for a in actions)
+        assert any("re-materialized rule team-conventions" in a for a in actions)
+        assert "Mirror content" in cur.read_text(encoding="utf-8")
+
     def test_flags_and_repairs_missing_workflow_file(self, tap):
         self._install_workflow(tap)
         f = paths.home() / ".claude" / "commands" / "ship-it.md"
@@ -1831,6 +1915,27 @@ class TestProjectSkills:
         actions = store.project_sync_apply(plan, base=str(repo))
         assert any("re-materialized brainstorming" in a for a in actions)
         assert (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md").is_file()
+
+    def test_sync_apply_prefers_the_lock_recorded_mirror(self, tap, entry, tmp_path):
+        # Same mirror-preference contract as the user-scope repair: a second
+        # tap directory sharing the name must not steal the repair.
+        repo, _ = self._install(entry, tmp_path)
+        mirror = tap.path / "mirrors" / "brainstorming"
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: mirror copy\n"
+            "version: 9.9.9\n---\nmirror body\n", encoding="utf-8")
+        catalog.rebuild_tap(tap)
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+
+        plan = store.project_sync_plan(base=str(repo))
+        actions = store.project_sync_apply(plan, base=str(repo))
+
+        assert any("re-materialized brainstorming from" in a for a in actions)
+        assert not any("no longer at its installed source" in a for a in actions)
+        installed = (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md"
+                    ).read_text(encoding="utf-8")
+        assert "mirror body" not in installed
 
     def test_sync_apply_never_deletes_an_unclaimed_dir(self, entry, tmp_path):
         repo, _ = self._install(entry, tmp_path)
