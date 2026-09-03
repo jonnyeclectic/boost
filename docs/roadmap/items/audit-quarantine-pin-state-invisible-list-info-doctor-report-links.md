@@ -2,12 +2,12 @@
 id: audit-quarantine-pin-state-invisible-list-info-doctor-report-links
 board: code
 section: health
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: Med
 wow: 2
-note: fix implemented and pushed; make check could not run in this sandbox (PyPI egress blocked) — awaiting CI
+note: could not run make check locally (PyPI egress blocked in-sandbox); CI validated it — all required checks green, mutation gate passed on all 6 shards
 order: 236
 owner: loop/quarantine-visibility
 pr: 736
