@@ -768,6 +768,7 @@ class TestUninstall:
     def test_uninstall_removes_everything(self, brainstorming):
         result = store.uninstall("brainstorming")
         assert result["name"] == "brainstorming"
+        assert result["kind"] == "skill"
         assert result["unlinked"] == LINKED_AGENTS
         assert result["entry"]["version"] == "1.4.0"
         assert not (paths.store_dir() / "brainstorming").exists()
@@ -1144,6 +1145,7 @@ class TestRuleInstall:
         claude_md.write_text("# My own standing notes\n\n" + claude_md.read_text(encoding="utf-8"), encoding="utf-8")
 
         info = store.uninstall("team-conventions")
+        assert info["kind"] == "rule"
         assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
                                          "gemini"}
         assert lockfile.get_rule("team-conventions") is None
@@ -1339,6 +1341,7 @@ class TestWorkflowInstall:
     def test_uninstall_removes_every_dropped_file(self, tap):
         store.install(_workflow_entry(tap))
         info = store.uninstall("ship-it")
+        assert info["kind"] == "workflow"
         assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
                                          "gemini"}
         assert lockfile.get_workflow("ship-it") is None
@@ -1767,6 +1770,7 @@ class TestProjectSkills:
         repo, _ = self._install(entry, tmp_path)
         info = store.uninstall_project("brainstorming", base=str(repo))
         assert info["scope"] == "project"
+        assert info["kind"] == "skill"
         assert sorted(info["unlinked"]) == ["claude-code", "cursor", "gemini",
                                             "windsurf"]
         assert info["base"] == str(repo)

@@ -252,11 +252,16 @@ def cmd_taps(argv) -> int:
     taps = []
     total = 0
     for tap in registry.list_taps():
-        skills = catalog.load_tap(tap)
-        total += len(skills)
+        items = catalog.load_tap(tap)
+        total += len(items)
         taps.append({"name": tap.name, "url": tap.url, "curated": tap.curated,
-                     "skills": len(skills), "updated": _tap_updated(tap),
-                     "pin": tap.pin})
+                     # "items", not "skills": a tap can carry rules and
+                     # workflows too (see `cmd_tap`, which already prints
+                     # "items" for the same count). "skills" stays as a
+                     # deprecated alias so an existing JSON consumer of
+                     # `boost taps --json` does not break.
+                     "items": len(items), "skills": len(items),
+                     "updated": _tap_updated(tap), "pin": tap.pin})
     if args.json:
         print(json.dumps(taps, indent=2))
         return 0
@@ -268,13 +273,13 @@ def cmd_taps(argv) -> int:
     # clone held still is not what the user needs to know about it, and a tap
     # that `boost update` deliberately skips should say why on the line the
     # user is already reading.
-    rows = [(t["name"], str(t["skills"]),
+    rows = [(t["name"], str(t["items"]),
              "@%s" % str(t["pin"])[:7] if t["pin"] else t["updated"],
              "★" if t["curated"] else "", out.role(_tilde(t["url"]), "muted"))
             for t in taps]
-    out.table(rows, headers=("NAME", "SKILLS", "UPDATED", "", "URL"))
+    out.table(rows, headers=("NAME", "ITEMS", "UPDATED", "", "URL"))
     print()
-    out.dim("%d taps · %d skills" % (len(taps), total))
+    out.dim("%d taps · %d items" % (len(taps), total))
     return 0
 
 

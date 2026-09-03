@@ -282,11 +282,14 @@ class TestTaps:
         second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
         boost("tap", second, "--curated")
         r = boost("taps")
-        assert "NAME" in r.out and "SKILLS" in r.out and "URL" in r.out
+        # "items", not "skills": a tap can carry rules and workflows too —
+        # `cmd_tap` already prints "items" for the same count.
+        assert "NAME" in r.out and "ITEMS" in r.out and "URL" in r.out
+        assert "SKILLS" not in r.out
         assert "fixture-tap" in r.out
         assert "second-tap" in r.out
         assert "★" in r.out                       # curated marker
-        assert "2 taps · 10 skills" in r.out      # footer counts
+        assert "2 taps · 10 items" in r.out       # footer counts
 
     def test_json_pure(self, boost, tapped, fixture_tap_src, tmp_path):
         second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
@@ -297,6 +300,10 @@ class TestTaps:
         assert data[0]["url"] == str(fixture_tap_src.resolve())
         assert data[0]["curated"] is False
         assert data[1]["curated"] is True
+        assert data[0]["items"] == 5
+        assert data[1]["items"] == 5
+        # "skills" stays as a deprecated alias so an existing JSON consumer
+        # of `boost taps --json` does not break.
         assert data[0]["skills"] == 5
         assert data[1]["skills"] == 5
         assert re.match(r"^\d{4}-\d{2}-\d{2}$", data[0]["updated"])
@@ -316,11 +323,11 @@ class TestTaps:
         util.rmtree(paths.repos_dir() / "fixture-tap")   # clone gone
         r = boost("taps")
         assert "ago" in r.out                    # cache 'generated' age
-        assert "1 taps · 5 skills" in r.out      # skills still from the cache
+        assert "1 taps · 5 items" in r.out       # items still from the cache
         (paths.cache_dir() / "fixture-tap.json").unlink()
         r = boost("taps")
         assert "?" in r.out                      # no clone, no cache
-        assert "1 taps · 0 skills" in r.out
+        assert "1 taps · 0 items" in r.out
 
 
 # ── outdated ─────────────────────────────────────────────────────────────

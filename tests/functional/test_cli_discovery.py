@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -1406,17 +1407,48 @@ class TestTrending:
         assert "jira-integration" in r.out
         assert "brainstorming" not in r.out
 
+    def test_curated_picks_show_a_kind_column(self, boost, fixture_tap_src):
+        boost("tap", fixture_tap_src, "--curated")
+        r = boost("trending", "--limit", "2")
+        assert "kind" in r.out                    # header
+        line = next(l for l in r.out.splitlines() if l.startswith("brainstorming"))
+        assert "skill" in line.split()
+
+    def test_ranked_rows_show_a_kind_column(self, boost, fixture_tap_src,
+                                            tmp_path):
+        tap_dir = tmp_path / "trend-tap"
+        shutil.copytree(fixture_tap_src, tap_dir)
+        (tap_dir / "rules").mkdir()
+        (tap_dir / "rules" / "house.mdc").write_text(
+            "---\nname: house-style\nversion: 1.0.0\n---\n\nUse tabs.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap_dir), "add", "-A"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap_dir), "commit", "-qm", "add rule"],
+                       check=True, capture_output=True)
+        boost("tap", tap_dir)
+        boost("install", "brainstorming")
+        boost("install", "house-style")
+        r = boost("trending")
+        assert "kind" in r.out                    # header, not a skill marker
+        brain = next(l for l in r.out.splitlines() if l.startswith("brainstorming"))
+        house = next(l for l in r.out.splitlines() if l.startswith("house-style"))
+        assert "skill" in brain.split()
+        assert "rule" in house.split()
+
     def test_long_description_is_clipped(self, boost, tapped, monkeypatch):
         # D23/D24: at a narrow width the table clips wide text columns to fit
         # one line rather than wrapping — a recognizable name prefix and an
-        # ellipsis survive, and no rendered row exceeds the terminal.
+        # ellipsis survive, and no rendered row exceeds the terminal. Widened
+        # from the pre-kind-column 40: with a kind column now reserved too,
+        # 40 clips the name column as well, which this test isn't about.
         boost("install", "brainstorming")
-        monkeypatch.setenv("COLUMNS", "40")
+        monkeypatch.setenv("COLUMNS", "50")
         r = boost("trending")
         assert "brainstor" in r.out
         assert "…" in r.out
         for line in r.out.splitlines():
-            assert output.visible_len(line) <= 40
+            assert output.visible_len(line) <= 50
 
 
 # ---------------------------------------------------------------- stats

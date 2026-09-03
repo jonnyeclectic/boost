@@ -70,7 +70,7 @@ COMMANDS = [
     ("recommend",   "find", "discovery", "Suggest skills based on your project's tech stack"),
     ("browse",      "find", "discovery", "Interactive full-screen TUI with fuzzy search"),
     ("index",       "find", "discovery", "Build the discovery registry via GitHub Code Search"),
-    ("trending",    "find", "discovery", "Show trending skills by install count"),
+    ("trending",    "find", "discovery", "Show trending items by install count"),
     ("stats",       "find", "discovery", "Install statistics & trend for a single skill"),
     ("count",       "find", "discovery", "Quick summary of installed / available / taps"),
     # Skill Information (10)

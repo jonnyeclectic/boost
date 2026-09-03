@@ -554,6 +554,7 @@ def cmd_uninstall(argv: list[str]) -> int:
             out.info("cancelled")
             return 1
     removed, failed = 0, 0
+    done_kinds: set[str] = set()
     for name in args.names:
         try:
             if args.scope == scopes.SCOPE_PROJECT:
@@ -566,24 +567,38 @@ def cmd_uninstall(argv: list[str]) -> int:
             out.warn("%s: %s" % (name, err.message))
             failed += 1
             continue
+        kind = info.get("kind", "skill")
+        is_project = info.get("scope") == scopes.SCOPE_PROJECT
         if info["unlinked"]:
-            verb = "removed from" if info.get("scope") == scopes.SCOPE_PROJECT \
-                else "unlinked ←"
+            # Only a user-scope *skill* unlinks agent symlinks — a rule is
+            # stripped out of each agent's context file and a workflow's
+            # rendered command is deleted, so "removed from" is what actually
+            # happened for either kind (and for a project-scope skill, whose
+            # per-agent copies are files, not links).
+            verb = "unlinked ←" if kind == "skill" and not is_project \
+                else "removed from"
             out.ok("%s %s" % (verb, " · ".join(info["unlinked"])))
-        # Report where it actually went, not where a user-scope install would
-        # have put it — a project skill never touches the canonical store.
-        if info.get("scope") == scopes.SCOPE_PROJECT:
+        if is_project:
+            # Report where it actually went, not where a user-scope install
+            # would have put it — a project skill never touches the
+            # canonical store.
             out.ok("removed from %s" % _tilde(info.get("base", "this repo")))
             unregistered = info.get("mcp_unregistered") or []
             if unregistered:
                 from ..core import mcpdecl
                 out.ok("removed %s from %s"
                        % (_plural(len(unregistered), "MCP server"), mcpdecl.SIDECAR))
-        else:
+        elif kind == "skill":
             out.ok("removed %s" % _tilde(store.skill_store_dir(name)))
+        # A rule/workflow never had a store dir to begin with — the
+        # materialization removal reported above via "unlinked" is the whole
+        # story, so there is nothing further to narrate here.
         removed += 1
+        done_kinds.add(kind)
     if removed:
-        lines = ["Uninstalled %s" % _plural(removed, "skill")]
+        # Name the kind when only one was touched; a mixed run says "items".
+        noun = next(iter(done_kinds)) if len(done_kinds) == 1 else "item"
+        lines = ["Uninstalled %s" % _plural(removed, noun)]
         if removed == 1 == len(args.names):
             lines.append(out.role("next: boost list", "muted"))
         print(out.panel(lines, title="removed", hue="pink"))
@@ -1275,6 +1290,7 @@ def _bundle_install(file: str | None) -> int:
         except OSError as e:
             raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e)) from e
     taps_added = installed_n = present = failed = 0
+    installed_kinds: set[str] = set()
     have_taps = {t.name for t in registry.list_taps()}
     # name -> kind across every lock section, so a `skill` line naming an
     # already-installed rule/workflow is counted present, not re-installed.
@@ -1338,7 +1354,9 @@ def _bundle_install(file: str | None) -> int:
                 continue
             out.ok("installed %s v%s (%s)" % (sname, entry.get("version"),
                                               entry["tap"]))
-            have_installed[sname] = entry.get("kind", "skill")
+            entry_kind = entry.get("kind", "skill")
+            have_installed[sname] = entry_kind
+            installed_kinds.add(entry_kind)
             installed_n += 1
         else:
             out.warn("line %d: unrecognised: %s" % (lineno, line))
@@ -1346,7 +1364,13 @@ def _bundle_install(file: str | None) -> int:
     if taps_added:
         complete.refresh_names()
     journal.log("bundle-install", label, taps=taps_added, skills=installed_n)
-    summary = "Installed %s" % _plural(installed_n, "skill")
+    # A "skill NAME" line can resolve to a rule or workflow (`catalog.find`
+    # searches every kind) — name the kind when only one was actually
+    # installed, the same call `cmd_reinstall` makes, so this summary agrees
+    # with what `bundle dump`'s own kind-aware sections would call it.
+    noun = next(iter(installed_kinds)) if len(installed_kinds) == 1 else (
+        "item" if installed_kinds else "skill")
+    summary = "Installed %s" % _plural(installed_n, noun)
     if taps_added:
         summary += ", added %s" % _plural(taps_added, "tap")
     if present:

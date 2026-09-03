@@ -320,6 +320,57 @@ class TestUninstall:
         assert "Uninstalled 1 skill" in r.out
         assert _lock() == {}
 
+    def test_rule_uninstall_says_removed_from_not_unlinked(
+            self, boost, fixture_tap_src, tmp_path):
+        # Verified live bug: uninstalling a rule used to print "unlinked ←"
+        # and "removed ~/.agents/skills/<name>" — a symlink and a store dir
+        # a rule never has, because a rule is materialized straight into
+        # each agent's own context file / rules dir, never copied into the
+        # canonical store or symlinked out of it.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "un-rule-tap")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\n"
+                        "Use tabs.\n", "add rule")
+        boost("tap", tap_dir)
+        boost("install", "house-style")
+        r = boost("uninstall", "house-style")
+        assert "removed from" in r.out
+        assert "claude-code" in r.out
+        assert "unlinked" not in r.out
+        assert "~/.agents/skills/house-style" not in r.out
+        assert "removed ~/.agents/skills" not in r.out
+        assert "Uninstalled 1 rule" in r.out
+        assert not (paths.home() / ".claude" / "CLAUDE.md").exists()
+        assert not (paths.store_dir() / "house-style").exists()
+
+    def test_workflow_uninstall_says_removed_from_not_unlinked(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "un-wf-tap")
+        _add_and_commit(tap_dir, "commands/ship.md",
+                        "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
+                        "allowed-tools: Bash\n---\n\ngo\n", "add wf")
+        boost("tap", tap_dir)
+        boost("install", "ship-it")
+        r = boost("uninstall", "ship-it")
+        assert "removed from" in r.out
+        assert "claude-code" in r.out
+        assert "unlinked" not in r.out
+        assert "~/.agents/skills/ship-it" not in r.out
+        assert "Uninstalled 1 workflow" in r.out
+        assert not (paths.home() / ".claude" / "commands" / "ship-it.md").exists()
+        assert not (paths.store_dir() / "ship-it").exists()
+
+    def test_mixed_kind_uninstall_says_items(self, boost, fixture_tap_src,
+                                             tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "un-mixed-tap")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\n"
+                        "Use tabs.\n", "add rule")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "house-style")
+        r = boost("uninstall", "brainstorming", "house-style")
+        assert "Uninstalled 2 items" in r.out
+
 
 # ── sync ─────────────────────────────────────────────────────────────────
 
@@ -1154,6 +1205,30 @@ class TestKindAwarePkgSurface:
         r = boost("bundle", "install", vf)
         assert "house-style is already installed as a rule — skipped" in r.out
         assert "Installed 0 skills, 1 already present" in r.out
+
+    def test_bundle_install_names_the_kind_it_actually_installed(
+            self, boost, fixture_tap_src, tmp_path):
+        # A "skill NAME" Boostfile line can resolve to a rule (`catalog.find`
+        # searches every kind) — the summary must agree with what actually
+        # happened, or a dump/install round trip contradicts itself: `bundle
+        # dump` would then say "1 rule not captured" about the very item
+        # `bundle install` just called a skill.
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "bik-tap"))
+        vf = tmp_path / "Boostfile"
+        vf.write_text("skill bik-tap:house-style@1.0.0\n", encoding="utf-8")
+        r = boost("bundle", "install", vf)
+        assert "Installed 1 rule" in r.out
+        assert "Installed 1 skill" not in r.out
+        assert lockfile.get_rule("house-style") is not None
+
+    def test_bundle_install_of_mixed_kinds_says_items(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "bim-tap"))
+        vf = tmp_path / "Boostfile"
+        vf.write_text("skill bim-tap:brainstorming@1.4.0\n"
+                      "skill bim-tap:house-style@1.0.0\n", encoding="utf-8")
+        r = boost("bundle", "install", vf)
+        assert "Installed 2 items" in r.out
 
     def test_dry_run_verb_is_upgrade_for_an_installed_rule(
             self, boost, fixture_tap_src, tmp_path):
