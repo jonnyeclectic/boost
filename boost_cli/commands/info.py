@@ -575,22 +575,24 @@ def cmd_edit(argv):
                                  description="Open a skill's SKILL.md in your editor")
     ap.add_argument("name")
     args = ap.parse_args(argv)
-    lock = lockfile.get_skill(args.name)
-    if not lock:
-        found = lockfile.find_any(args.name)
-        if found is not None:
-            # Editing opens a skill's store dir; a rule/workflow has none — it
-            # materializes into shared agent files (e.g. ~/.claude/CLAUDE.md).
-            raise BoostError(
-                "%s is a %s — boost edit applies to skills"
-                % (args.name, found[0]),
-                hint="a %s materializes into shared agent files, not a store "
-                     "dir you can open; read it with `boost cat %s`"
-                     % (found[0], args.name))
+    # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
+    # bare name the lock keys on, honoring the qualifier against the
+    # installed tap rather than rejecting the string as an invalid skill name.
+    name, kind, lock = store.resolve_lock_entry(args.name)
+    if kind is None:
         raise BoostError("%s is not installed" % args.name,
                         hint="install it first, or `boost cat %s` to read the tap copy"
                         % args.name)
-    sdir = store.skill_store_dir(args.name)
+    if kind != "skill":
+        # Editing opens a skill's store dir; a rule/workflow has none — it
+        # materializes into shared agent files (e.g. ~/.claude/CLAUDE.md).
+        raise BoostError(
+            "%s is a %s — boost edit applies to skills"
+            % (args.name, kind),
+            hint="a %s materializes into shared agent files, not a store "
+                 "dir you can open; read it with `boost cat %s`"
+                 % (kind, args.name))
+    sdir = store.skill_store_dir(name)
     path = sdir / "SKILL.md"
     if not path.exists():
         raise BoostError("SKILL.md missing from %s" % _tilde(sdir),
@@ -607,8 +609,8 @@ def cmd_edit(argv):
     sha = util.sha256_dir(sdir)
     if sha != lock.get("sha256"):
         lock["sha256"], lock["updated_at"] = sha, util.now_iso()
-        lockfile.set_skill(args.name, lock)
-        journal.log("edit", args.name)
+        lockfile.set_skill(name, lock)
+        journal.log("edit", name)
         out.warn("local edits diverge from the tap source — boost drift will flag this")
     else:
         out.ok("no changes")
@@ -1016,17 +1018,19 @@ def cmd_tag(argv):
     if not args.name:
         raise BoostError("skill name required",
                         hint="`boost tag NAME +tag -tag`, or `boost tag --list`")
-    entry = lockfile.get_skill(args.name)
-    if not entry:
-        found = lockfile.find_any(args.name)
-        if found is not None:
-            raise BoostError(
-                "%s is a %s — boost tag applies to skills"
-                % (args.name, found[0]),
-                hint="tags are a skill-only label; rules and workflows are "
-                     "governed by pin / quarantine / verify")
+    # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
+    # bare name the lock keys on, honoring the qualifier against the
+    # installed tap rather than rejecting the string as an invalid skill name.
+    name, kind, entry = store.resolve_lock_entry(args.name)
+    if kind is None:
         raise BoostError("%s is not installed" % args.name,
                         hint="see what is with `boost list`")
+    if kind != "skill":
+        raise BoostError(
+            "%s is a %s — boost tag applies to skills"
+            % (args.name, kind),
+            hint="tags are a skill-only label; rules and workflows are "
+                 "governed by pin / quarantine / verify")
     tags = list(entry.get("tags") or [])
     changed = False
     for tok in mods:
@@ -1045,11 +1049,11 @@ def cmd_tag(argv):
     if changed:
         entry["tags"] = sorted(tags)
         tags = entry["tags"]
-        lockfile.set_skill(args.name, entry)
-        journal.log("tag", args.name, tags=tags)
+        lockfile.set_skill(name, entry)
+        journal.log("tag", name, tags=tags)
     if args.json:
-        print(json.dumps({"name": args.name, "tags": tags}, indent=2))
+        print(json.dumps({"name": name, "tags": tags}, indent=2))
         return 0
     shown = " ".join(out.role("#" + t, "accent") for t in tags) or out.role("(no tags)", "muted")
-    (out.ok if changed else out.info)("%s  %s" % (args.name, shown))
+    (out.ok if changed else out.info)("%s  %s" % (name, shown))
     return 0

@@ -50,6 +50,38 @@ def test_unknown_skill_errors(boost, tapped):
     boost("adapt", "does-not-exist", "--to", "crewai", expect=1)
 
 
+class TestTapQualifier:
+    """The ambiguity hint recommends `owner/repo:skill` — typing exactly that
+    must resolve, not "invalid skill name" (docs/roadmap/items/
+    audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie.md)."""
+
+    def test_ambiguous_bare_name_recommends_qualifying(self, boost, rival_tap):
+        r = boost("adapt", "brainstorming", "--to", "crewai", expect=1)
+        assert "qualify" in r.err.lower()
+
+    def test_qualified_name_resolves_from_the_named_tap(self, boost, rival_tap):
+        r = boost("adapt", "rival-tap:brainstorming", "--to", "crewai")
+        assert "invalid skill name" not in r.err
+        assert 'role="brainstorming"' in r.out
+        compile(r.out, "<crewai>", "exec")
+
+    def test_qualified_name_prefers_the_installed_copy_of_that_tap(
+            self, boost, rival_tap):
+        # brainstorming installed from fixture-tap; the local store copy is
+        # what a qualifier naming fixture-tap must adapt, not the tap clone.
+        boost("install", "fixture-tap:brainstorming")
+        from boost_cli.core import paths
+        store_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        store_md.write_text(
+            store_md.read_text(encoding="utf-8") + "\nlocal edit marker\n",
+            encoding="utf-8")
+        r = boost("adapt", "fixture-tap:brainstorming", "--to", "crewai")
+        assert "local edit marker" in r.out
+        # rival-tap's copy is not installed -> served from its clone, unedited.
+        r = boost("adapt", "rival-tap:brainstorming", "--to", "crewai")
+        assert "local edit marker" not in r.out
+
+
 def test_default_model_wires_boost_ai_model(boost, installed):
     # By default the exported agent is pinned to boost's configured ai.model,
     # normalized to a LiteLLM provider/model id.

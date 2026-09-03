@@ -1801,14 +1801,19 @@ def cmd_stats(argv):
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
-    name = args.name
-    # find_any: a rule's lock facts are the answer, not "no skill named X".
-    found = lockfile.find_any(name)
-    kind, lock = found if found is not None else ("skill", None)
-    matches = catalog.find(name)
+    # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
+    # bare name the lock, journal and store dir key on, honoring the
+    # qualifier against the installed tap — `store.skill_store_dir` rejects
+    # the qualified string outright since ":" is not a safe path component.
+    # `find_any`-backed resolution: a rule's lock facts are the answer, not
+    # "no skill named X". `catalog.find` keeps the original string so a
+    # qualifier still narrows a not-yet-installed lookup.
+    name, kind, lock = store.resolve_lock_entry(args.name)
+    kind = kind or "skill"
+    matches = catalog.find(args.name)
     cat = matches[0] if matches else None
     if not lock and not cat:
-        raise BoostError("no skill named %r installed or in any tap" % name,
+        raise BoostError("no skill named %r installed or in any tap" % args.name,
                         hint="try `boost search %s`" % name)
     acts = {a: len(journal.events(action=a, subject=name))
             for a in ("install", "update", "uninstall")}

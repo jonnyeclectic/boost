@@ -59,6 +59,15 @@ def test_run_without_framework_degrades_cleanly(boost, installed):
     assert "--print" in blob                       # points at the offline path
 
 
+def test_run_qualified_name_does_not_say_invalid_skill_name(boost, rival_tap):
+    # `run` shares pkg._resolve_skill_source with `adapt`; the qualifier
+    # round-trip must work here too (docs/roadmap/items/
+    # audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie.md).
+    r = boost("run", "rival-tap:brainstorming", "--print")
+    assert "invalid skill name" not in r.err
+    assert "from agents import Agent" in r.out
+
+
 def test_run_unknown_skill_errors(boost, tapped):
     boost("run", "does-not-exist", "--print", expect=1)
 

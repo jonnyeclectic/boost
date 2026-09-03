@@ -248,3 +248,28 @@ def installed(boost, tapped):
     """Sandbox with brainstorming installed. Returns the skill name."""
     boost("install", "brainstorming")
     return "brainstorming"
+
+
+@pytest.fixture()
+def rival_tap(boost, tapped, tmp_path):
+    """A second real tap that also ships `brainstorming`, at a louder version.
+
+    Two taps carrying one name is the only way to reach the ambiguity error —
+    and its hint — so the qualified-name path needs a genuine second clone
+    rather than a hand-written cache. Shared across command test files (info,
+    adapt, run, discovery, pkg) that each exercise the `tap:name` qualifier.
+    """
+    root = tmp_path / "rival-tap"
+    (root / "skills" / "brainstorming").mkdir(parents=True)
+    (root / "skills" / "brainstorming" / "SKILL.md").write_text(
+        "---\nname: brainstorming\ndescription: A rival ideation skill\n"
+        "version: 9.9.9\n---\n\n# Brainstorming\n\nThe other tap's copy.\n",
+        encoding="utf-8")
+    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "rival@boost.test")
+    run("git", "config", "user.name", "Rival Tap")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "rival skills")
+    boost("tap", root)
+    return "rival-tap"

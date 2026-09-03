@@ -1519,6 +1519,28 @@ class TestStats:
         assert data["catalog"]["tap"] == "fixture-tap"
         assert data["size"] > 0
 
+    def test_qualified_name_installed_from_that_tap(self, boost, installed,
+                                                     rival_tap):
+        # The qualifier the ambiguity hint recommends must resolve, not
+        # "invalid skill name" (docs/roadmap/items/
+        # audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie.md).
+        r = boost("stats", "fixture-tap:brainstorming")
+        assert "invalid skill name" not in r.err
+        lines = {l.split()[0]: l for l in r.out.splitlines() if l.strip()}
+        assert "fixture-tap" in lines["tap"]
+        assert "1.4.0" in lines["version"]
+
+    def test_qualified_name_naming_a_different_tap_than_installed(
+            self, boost, installed, rival_tap):
+        # brainstorming is installed from fixture-tap; asking about
+        # rival-tap's copy must answer about rival-tap, not report
+        # fixture-tap's install under this qualifier.
+        r = boost("stats", "rival-tap:brainstorming")
+        lines = {l.split()[0]: l for l in r.out.splitlines() if l.strip()}
+        assert "9.9.9" in lines["version"]
+        assert "rival-tap" in lines["tap"]
+        assert "not installed" in r.out
+
 
 # ---------------------------------------------------------------- count
 

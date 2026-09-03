@@ -1684,23 +1684,26 @@ def cmd_export(argv: list[str]) -> int:
                               % others) if others
                              else "install some with `boost install`")
     chosen = {}
-    for name in names:
-        if name not in installed:
-            found = lockfile.find_any(name)
-            if found is not None:
-                # Same truth _iter_installed tells: it exists, as another kind
-                # — a rule/workflow has no store directory to package.
-                raise BoostError("%s is a %s — `boost export` applies to skills"
-                                % (name, found[0]),
-                                hint="rules and workflows materialize into "
-                                     "agent config files; reinstall them "
-                                     "from their tap")
-            raise BoostError("%s is not installed" % name,
+    for raw in names:
+        # `raw` may be tap-qualified (`owner/repo:skill`); resolve to the
+        # bare name the lock and the store key on, honoring the qualifier
+        # against the installed tap rather than rejecting it outright.
+        name, kind, entry = store.resolve_lock_entry(raw)
+        if kind is None:
+            raise BoostError("%s is not installed" % raw,
                             hint="see what is with `boost list`")
+        if kind != "skill":
+            # Same truth _iter_installed tells: it exists, as another kind
+            # — a rule/workflow has no store directory to package.
+            raise BoostError("%s is a %s — `boost export` applies to skills"
+                            % (name, kind),
+                            hint="rules and workflows materialize into "
+                                 "agent config files; reinstall them "
+                                 "from their tap")
         if not store.skill_store_dir(name).is_dir():
             raise BoostError("store dir for %s is missing" % name,
                             hint="repair with `boost sync`")
-        chosen[name] = installed[name]
+        chosen[name] = entry
     stamp = datetime.now(UTC).strftime("%Y%m%d")
     ext = ".zip" if args.zip else ".tar.gz"
     dest = paths.expand(args.out) if args.out else Path(
@@ -1748,16 +1751,28 @@ def _resolve_skill(name: str):
     that need the skill's directory (e.g. subagent discovery for multi-agent
     adaptation) don't re-resolve. Raises BoostError if the name resolves
     nowhere.
+
+    ``name`` may arrive tap-qualified (``owner/repo:skill``) — exactly what an
+    ambiguity hint recommends typing. ``store.skill_store_dir`` rejects that
+    string outright (":" is not a safe path component), so the store is
+    probed only once ``store.resolve_lock_entry`` confirms the bare name is
+    installed *from the named tap*; anything else falls through to
+    ``catalog.resolve_one``, which already parses the qualified grammar.
     """
-    p = store.skill_store_dir(name) / "SKILL.md"
-    if not p.exists():
+    bare, kind, _entry = store.resolve_lock_entry(name)
+    p = None
+    if kind == "skill":
+        candidate = store.skill_store_dir(bare) / "SKILL.md"
+        if candidate.exists():
+            p = candidate
+    if p is None:
         entry = catalog.resolve_one(name)   # raises BoostError if unknown
         p = registry.get(entry["tap"]).path / entry["skill_md"]
         if not p.exists():
-            raise BoostError("SKILL.md missing for %s" % name,
+            raise BoostError("SKILL.md missing for %s" % bare,
                             hint="refresh the tap with `boost update`")
     meta, body = frontmatter.parse(p.read_text(encoding="utf-8", errors="replace"))
-    display = str(meta.get("name") or name).strip() or name
+    display = str(meta.get("name") or bare).strip() or bare
     return display, str(meta.get("description") or "").strip(), body, p, meta
 
 

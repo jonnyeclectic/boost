@@ -17,6 +17,7 @@ from pathlib import Path
 from ..errors import BoostError
 from . import (
     agents,
+    catalog,
     config,
     gitutil,
     journal,
@@ -68,6 +69,38 @@ def skill_store_dir(name: str) -> Path:
     if not util.is_safe_component(name):
         raise BoostError("invalid skill name %r" % name)
     return paths.store_dir() / name
+
+
+def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
+    """(bare_name, kind, entry) for a possibly tap-qualified ``name``.
+
+    Splits an ``owner/repo:skill`` qualifier (:func:`catalog.split_name`) and
+    looks the *bare* name up across every lock section
+    (:func:`lockfile.find_any`) — the lock keys installed items by their bare
+    name, and :func:`skill_store_dir` rejects the qualified string outright
+    since ``:`` (and ``/``) is not a safe path component. A command that
+    probes the store or the lock with the still-qualified string before
+    splitting gets "invalid skill name" or "not installed" for the very
+    string an ambiguity hint just told it to type.
+
+    When a qualifier is given, it is checked against the entry's own ``tap``
+    (:func:`catalog.tap_matches`): an item installed from a *different* tap
+    is not this qualifier's answer, so ``kind``/``entry`` come back
+    ``(None, None)`` rather than reporting another tap's install under this
+    name — the same rule ``commands/info.py``'s ``_for_tap`` applies. A
+    caller that also accepts a not-yet-installed name falls through to
+    :func:`catalog.resolve_one` in that case, which already parses the
+    qualified grammar; a caller that only operates on installed items reports
+    "not installed", same as a bare miss.
+    """
+    qualifier, bare = catalog.split_name(name)
+    found = lockfile.find_any(bare)
+    if found is None:
+        return bare, None, None
+    kind, entry = found
+    if qualifier and not catalog.tap_matches(str(entry.get("tap") or ""), qualifier):
+        return bare, None, None
+    return bare, kind, entry
 
 
 def installed() -> dict:

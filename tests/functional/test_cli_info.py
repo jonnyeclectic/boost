@@ -6,36 +6,11 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 
 import pytest
 
 from boost_cli.core import paths
-
-
-@pytest.fixture()
-def rival_tap(boost, tapped, tmp_path):
-    """A second real tap that also ships `brainstorming`, at a louder version.
-
-    Two taps carrying one name is the only way to reach the ambiguity error —
-    and its hint — so the qualified-name path needs a genuine second clone
-    rather than a hand-written cache.
-    """
-    root = tmp_path / "rival-tap"
-    (root / "skills" / "brainstorming").mkdir(parents=True)
-    (root / "skills" / "brainstorming" / "SKILL.md").write_text(
-        "---\nname: brainstorming\ndescription: A rival ideation skill\n"
-        "version: 9.9.9\n---\n\n# Brainstorming\n\nThe other tap's copy.\n",
-        encoding="utf-8")
-    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
-    run("git", "init", "-q")
-    run("git", "config", "user.email", "rival@boost.test")
-    run("git", "config", "user.name", "Rival Tap")
-    run("git", "add", "-A")
-    run("git", "commit", "-qm", "rival skills")
-    boost("tap", root)
-    return "rival-tap"
 
 
 def _lock():
@@ -490,6 +465,24 @@ class TestEdit:
         r = boost("edit", "brainstorming", expect=1)
         assert "brainstorming is not installed" in r.err
 
+    def test_qualified_name_matching_the_installed_tap_works(
+            self, boost, installed, rival_tap, tmp_path, monkeypatch):
+        script = tmp_path / "true-editor.sh"
+        script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        script.chmod(0o755)
+        monkeypatch.setenv("EDITOR", str(script))
+        monkeypatch.delenv("VISUAL", raising=False)
+        r = boost("edit", "fixture-tap:brainstorming")
+        assert "is not installed" not in r.err
+        assert "no changes" in r.out
+
+    def test_qualified_name_naming_a_different_tap_is_not_installed(
+            self, boost, installed, rival_tap):
+        # brainstorming is installed from fixture-tap, not rival-tap — this
+        # qualifier's answer is "not installed", not fixture-tap's record.
+        r = boost("edit", "rival-tap:brainstorming", expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
+
 
 # ── preview ──────────────────────────────────────────────────────────────
 
@@ -758,6 +751,18 @@ class TestTag:
     def test_not_installed_rc1(self, boost, tapped):
         r = boost("tag", "brainstorming", "+x", expect=1)
         assert "brainstorming is not installed" in r.err
+
+    def test_qualified_name_matching_the_installed_tap_works(
+            self, boost, installed, rival_tap):
+        r = boost("tag", "fixture-tap:brainstorming", "+alpha")
+        assert "is not installed" not in r.err
+        assert "#alpha" in r.out
+        assert _lock()["brainstorming"]["tags"] == ["alpha"]
+
+    def test_qualified_name_naming_a_different_tap_is_not_installed(
+            self, boost, installed, rival_tap):
+        r = boost("tag", "rival-tap:brainstorming", "+x", expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
 
     def test_journal_records_tag_event(self, boost, installed):
         boost("tag", "brainstorming", "+kept")
