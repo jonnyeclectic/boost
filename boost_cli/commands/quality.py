@@ -458,6 +458,7 @@ def cmd_doctor(argv):
     skills = lockfile.installed()
     enabled = agents.enabled_agents()
     skill_issues = 0
+    quarantined_skills = 0
     for name, entry in sorted(skills.items()):
         sdir = store.skill_store_dir(name)
         if not sdir.is_dir():
@@ -465,6 +466,7 @@ def cmd_doctor(argv):
             skill_issues += 1
             continue
         if entry.get("quarantined"):
+            quarantined_skills += 1
             continue
         # tamper detection: the lock file records a sha256 at install time, but
         # only `boost verify` ever re-checked it — surface content drift here too.
@@ -512,9 +514,19 @@ def cmd_doctor(argv):
                 "run `boost sync --prune`"
                 % (name, ", ".join(stray), ", ".join(scope)))
             skill_issues += 1
+    active_skills = len(skills) - quarantined_skills
     if skills and not skill_issues:
-        out.ok("%d skill%s present in store with agent links"
-               % (len(skills), _s(len(skills))))
+        # A quarantined skill has no agent links — unlink_agents already
+        # removed them — so it must not inflate this count into a false
+        # "healthy, N skills with agent links" the way it used to.
+        if active_skills:
+            out.ok("%d skill%s present in store with agent links%s"
+                   % (active_skills, _s(active_skills),
+                      " (%d quarantined)" % quarantined_skills
+                      if quarantined_skills else ""))
+        else:
+            out.ok("%d skill%s quarantined, none active"
+                   % (quarantined_skills, _s(quarantined_skills)))
 
     # Project-scoped skills committed into THIS repo — the governance blind spot
     # #212 left open. They don't touch the user store, so the loop above never
@@ -542,10 +554,13 @@ def cmd_doctor(argv):
     # Quarantined = materializations removed on purpose; reporting them as rot
     # would send the user to `boost reinstall`, which re-arms the rule — and
     # counting them "fully materialized" would be the opposite lie.
-    rules = {n: e for n, e in lockfile.installed_rules().items()
-             if not e.get("quarantined")}
-    workflows = {n: e for n, e in lockfile.installed_workflows().items()
+    all_rules = lockfile.installed_rules()
+    all_workflows = lockfile.installed_workflows()
+    rules = {n: e for n, e in all_rules.items() if not e.get("quarantined")}
+    workflows = {n: e for n, e in all_workflows.items()
                  if not e.get("quarantined")}
+    quarantined_rules = len(all_rules) - len(rules)
+    quarantined_workflows = len(all_workflows) - len(workflows)
     mat_issues = 0
     for name, entry in sorted(rules.items()):
         for m in entry.get("materializations") or []:
@@ -568,9 +583,25 @@ def cmd_doctor(argv):
                 bad("workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
-    if (rules or workflows) and not mat_issues:
-        out.ok("%d rule%s and %d workflow%s fully materialized"
-               % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows))))
+    if (all_rules or all_workflows) and not mat_issues:
+        # Quarantined rules/workflows are excluded above so their stashed-but-
+        # removed materializations don't read as rot — but excluding them from
+        # `rules`/`workflows` entirely used to make this line vanish outright
+        # when everything installed happened to be quarantined, in place of
+        # ever saying so.
+        note = ""
+        if quarantined_rules or quarantined_workflows:
+            bits = []
+            if quarantined_rules:
+                bits.append("%d rule%s" % (quarantined_rules,
+                                           _s(quarantined_rules)))
+            if quarantined_workflows:
+                bits.append("%d workflow%s" % (quarantined_workflows,
+                                               _s(quarantined_workflows)))
+            note = " (%s quarantined)" % " and ".join(bits)
+        out.ok("%d rule%s and %d workflow%s fully materialized%s"
+               % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows)),
+                  note))
 
     root = paths.store_dir()
     orphans = [c.name for c in sorted(root.iterdir())

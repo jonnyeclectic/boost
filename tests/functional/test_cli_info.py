@@ -119,6 +119,29 @@ class TestList:
         assert "ship-it" in r.out and "commands" in r.out  # SLOT column
         assert "1 workflow installed" in r.out
 
+    def test_quarantined_rule_shows_flags_and_no_stale_agents(self, boost, sandbox):
+        # A quarantined rule's `materializations` still names the agents its
+        # stash would restore on release — but nothing is on disk right now,
+        # so the AGENTS column must not report them as if it were.
+        from boost_cli.core import lockfile
+        self._seed_rule()
+        entry = lockfile.get_rule("team-rules")
+        entry["quarantined"] = True
+        lockfile.set_rule("team-rules", entry)
+        r = boost("list")
+        assert "FLAGS" in r.out
+        assert "quarantined" in r.out
+        assert "claude·cursor" not in r.out
+
+    def test_pinned_rule_shows_flags(self, boost, sandbox):
+        # Before the FLAGS column, `pin dotnet-build` set "pinned": true in
+        # the lock but the table rendered a pinned rule byte-identical to an
+        # unpinned one — a reader had no way to see what `update` will skip.
+        self._seed_rule()
+        boost("pin", "team-rules")
+        r = boost("list")
+        assert "pinned" in r.out
+
     def test_rules_and_workflows_show_without_skills(self, boost, sandbox):
         # empty-state must not fire (and hide them) when only non-skills exist.
         self._seed_rule()
@@ -238,6 +261,19 @@ class TestInfo:
         assert "sidelined by" not in r.out
         data = json.loads(boost("info", "jira-integration", "--json").out)
         assert data["installed"]["sidelined_by"] == "focus"
+
+    def test_quarantined_skill_reports_no_agents(self, boost, installed):
+        # unlink_agents removes every symlink at quarantine time — the lock's
+        # `agents` field must follow, or info keeps claiming links that are
+        # gone (and `list`'s AGENTS column keeps showing them too).
+        boost("quarantine", "brainstorming")
+        r = boost("info", "brainstorming")
+        assert re.search(r"quarantined\s+yes", r.out)
+        assert re.search(r"agents\s+\(none\)", r.out)
+        assert "claude-code" not in r.out
+        r = boost("list")
+        assert "claude·windsurf·cursor" not in r.out
+        assert "quarantined" in r.out
 
     def test_tap_only_skill(self, boost, tapped):
         r = boost("info", "jira-integration")
@@ -893,6 +929,10 @@ class TestMaterializedKinds:
         r = boost("info", "house")
         assert re.search(r"pinned\s+yes", r.out)
         assert re.search(r"quarantined\s+yes", r.out)
+        # The materialization was just removed — claiming it is still on
+        # claude-code would be reporting a file that no longer exists.
+        assert re.search(r"materialized\s+\(removed", r.out)
+        assert not re.search(r"materialized\s+claude-code", r.out)
 
     def test_info_json_carries_kind_and_lock_entry(self, boost, sandbox):
         self._seed_claude_rule()

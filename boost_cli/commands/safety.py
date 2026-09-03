@@ -574,6 +574,10 @@ def cmd_quarantine(argv):
     if kind == "skill":
         store.unlink_agents(name)
         entry["quarantined"] = True
+        # unlink_agents just removed every linking-agent symlink, so the
+        # recorded agents are gone too — leaving the old list would have
+        # `list`/`info`/`doctor` keep reporting links that no longer exist.
+        entry["agents"] = []
         lockfile.set_skill(name, entry)
         journal.log("quarantine", name)
         out.ok("quarantined %s (store intact, links removed)" % name)
