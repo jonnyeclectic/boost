@@ -9,6 +9,9 @@ degradation when the framework is absent. They must NOT import/run the SDK.
 from __future__ import annotations
 
 import stat
+import sys
+
+import pytest
 
 from boost_cli.core import util
 
@@ -39,12 +42,16 @@ def test_run_print_writes_file_with_o(boost, installed, tmp_path):
     assert "wrote runner" in r.out.lower()
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows' st_mode doesn't preserve POSIX permission bits")
 def test_run_print_o_writes_umask_default_mode_not_owner_only(boost, installed, tmp_path):
     dest = tmp_path / "runner.py"
     boost("run", installed, "--print", "-o", str(dest))
     assert stat.S_IMODE(dest.stat().st_mode) == util.default_file_mode()
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="Windows' st_mode doesn't preserve POSIX permission bits")
 def test_run_print_o_rerender_does_not_downgrade_existing_mode(boost, installed, tmp_path):
     dest = tmp_path / "runner.py"
     dest.write_text("stale", encoding="utf-8")
