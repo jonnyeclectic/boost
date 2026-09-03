@@ -214,7 +214,7 @@
       <section class="cmd" id="cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">
         <h3><span class="cname">install</span><span class="gtag">pkg</span></h3>
         <p class="summary">Install a skill from a tap registry</p>
-        <pre class="syn">boost install [--force] [--path P] [--agent A] [--scope {user,project}] [--local] [--global] [--dry-run] [--no-deps] [--no-mcp] NAME [NAME ...]</pre>
+        <pre class="syn">boost install [--force] [--path P] [--agent A] [--scope {user,project} | --local | --global] [--dry-run] [--no-deps] [--no-mcp] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>skill name, optionally qualified as tap:skill</span></div>
@@ -235,7 +235,7 @@
       <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local -y, --yes name">
         <h3><span class="cname">uninstall</span><span class="gtag">pkg</span></h3>
         <p class="summary">Remove an installed skill, rule, workflow, or config</p>
-        <pre class="syn">boost uninstall [--local] [--yes] NAME [NAME ...]</pre>
+        <pre class="syn">boost uninstall [--local] [-y] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span></span></div>
@@ -260,7 +260,7 @@
       <section class="cmd" id="cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">
         <h3><span class="cname">update</span><span class="gtag">pkg</span></h3>
         <p class="summary">Sync taps or update installed skills</p>
-        <pre class="syn">boost update [--taps-only] [--yes] [--force] [--shards] [--json] [TAP]</pre>
+        <pre class="syn">boost update [--taps-only] [-y] [--force] [--shards] [--json] [TAP]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>TAP</code><span>refresh only this tap</span></div>
@@ -352,7 +352,7 @@
       <section class="cmd" id="cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">
         <h3><span class="cname">export</span><span class="gtag">pkg</span></h3>
         <p class="summary">Package skills as shareable zip/tar archives</p>
-        <pre class="syn">boost export [--out OUT] [--zip] [--force] [NAME ...]</pre>
+        <pre class="syn">boost export [-o OUT] [--zip] [--force] [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>skills to export (default: all installed)</span></div>
@@ -367,7 +367,7 @@
       <section class="cmd" id="cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">
         <h3><span class="cname">adapt</span><span class="gtag">pkg</span></h3>
         <p class="summary">Render a skill as another framework&#x27;s agent source (CrewAI, Agents SDK)</p>
-        <pre class="syn">boost adapt [--to FRAMEWORK] [--model M] [--out FILE] name</pre>
+        <pre class="syn">boost adapt --to FRAMEWORK [--model M] [-o FILE] name</pre>
         <p class="desc">Render a skill as another agent framework&#x27;s native source</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -383,7 +383,7 @@
       <section class="cmd" id="cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent --model m --print -o, --out file name target">
         <h3><span class="cname">run</span><span class="gtag">pkg</span></h3>
         <p class="summary">Adapt a skill, wire tools &amp; run it as a live agent</p>
-        <pre class="syn">boost run [--model M] [--print] [--out FILE] name [target]</pre>
+        <pre class="syn">boost run [--model M] [--print] [-o FILE] name [target]</pre>
         <p class="desc">Adapt a skill, wire default tools &amp; run it as a live agent</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -581,7 +581,7 @@
       <section class="cmd" id="cmd-log" data-search="log git log for a skill, or boost&#x27;s activity log  -n, --limit n --diagnostics --crashes name">
         <h3><span class="cname">log</span><span class="gtag">info</span></h3>
         <p class="summary">Git log for a skill, or boost&#x27;s activity log</p>
-        <pre class="syn">boost log [--limit N] [--diagnostics] [--crashes] [name]</pre>
+        <pre class="syn">boost log [-n N] [--diagnostics] [--crashes] [name]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>name</code><span>skill to show upstream history for</span></div>
@@ -660,7 +660,7 @@
       <section class="cmd" id="cmd-untap" data-search="untap remove a registry tap  -f, --force name">
         <h3><span class="cname">untap</span><span class="gtag">tap</span></h3>
         <p class="summary">Remove a registry tap</p>
-        <pre class="syn">boost untap [--force] name</pre>
+        <pre class="syn">boost untap [-f] name</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>name</code><span>tap name (owner/repo or short alias)</span></div>
@@ -691,7 +691,7 @@
       <section class="cmd" id="cmd-catalog" data-search="catalog share the tapped catalogue so others skip the clone  --export file --import file --show file --json">
         <h3><span class="cname">catalog</span><span class="gtag">tap</span></h3>
         <p class="summary">Share the tapped catalogue so others skip the clone</p>
-        <pre class="syn">boost catalog [--export FILE] [--import FILE] [--show FILE] [--json]</pre>
+        <pre class="syn">boost catalog (--export FILE | --import FILE | --show FILE) [--json]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--export FILE</code><span>write every tapped registry&#x27;s catalogue to FILE</span></div>
@@ -704,7 +704,7 @@
       <section class="cmd" id="cmd-chat" data-search="chat ask about skills in plain language (rag-grounded) ask about skills in plain language -k, --limit n --no-sources --json question">
         <h3><span class="cname">chat</span><span class="gtag">ai</span></h3>
         <p class="summary">Ask about skills in plain language (RAG-grounded)</p>
-        <pre class="syn">boost chat [--limit N] [--no-sources] [--json] [QUESTION ...]</pre>
+        <pre class="syn">boost chat [-k N] [--no-sources] [--json] [QUESTION ...]</pre>
         <p class="desc">Ask about skills in plain language</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -720,7 +720,7 @@
       <section class="cmd" id="cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  -o, --output newname --install name">
         <h3><span class="cname">distill</span><span class="gtag">ai</span></h3>
         <p class="summary">Merge multiple skills into one deduplicated skill</p>
-        <pre class="syn">boost distill [--output NEWNAME] [--install] NAME [NAME ...]</pre>
+        <pre class="syn">boost distill [-o NEWNAME] [--install] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>two or more skills to merge</span></div>
@@ -747,7 +747,7 @@
       <section class="cmd" id="cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install">
         <h3><span class="cname">infer</span><span class="gtag">ai</span></h3>
         <p class="summary">Generate a SKILL.md from your codebase patterns</p>
-        <pre class="syn">boost infer [--path DIR] [--name N] [--output FILE] [--install]</pre>
+        <pre class="syn">boost infer [--path DIR] [--name N] [-o FILE] [--install]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--path DIR</code><span>codebase to analyze (default: current directory)</span></div>
@@ -770,7 +770,7 @@
       <section class="cmd" id="cmd-evolve" data-search="evolve iteratively improve a skill from feedback  --feedback text --apply name">
         <h3><span class="cname">evolve</span><span class="gtag">ai</span></h3>
         <p class="summary">Iteratively improve a skill from feedback</p>
-        <pre class="syn">boost evolve [--feedback TEXT] [--apply] NAME</pre>
+        <pre class="syn">boost evolve --feedback TEXT [--apply] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span></span></div>
@@ -1067,7 +1067,7 @@
       <section class="cmd" id="cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run -f, --force">
         <h3><span class="cname">onboard</span><span class="gtag">cfg</span></h3>
         <p class="summary">Add skill-tracker telemetry to a repo &amp; open a PR</p>
-        <pre class="syn">boost onboard [--repo REPO] [--pr] [--dry-run] [--force]</pre>
+        <pre class="syn">boost onboard [--repo REPO] [--pr] [--dry-run] [-f]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--repo REPO</code><span>repository directory (default: .)</span></div>
@@ -1079,7 +1079,7 @@
       <section class="cmd" id="cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --dry-run --install --uninstall {bash,zsh,fish}">
         <h3><span class="cname">completions</span><span class="gtag">cfg</span></h3>
         <p class="summary">Generate shell tab-completion scripts</p>
-        <pre class="syn">boost completions [--eval] [--dry-run] [--install] [--uninstall] [{bash,zsh,fish}]</pre>
+        <pre class="syn">boost completions [--eval] [--dry-run] [--install | --uninstall] [{bash,zsh,fish}]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{bash,zsh,fish}</code><span>target shell (default: from $SHELL)</span></div>
@@ -1119,7 +1119,7 @@
       <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">
         <h3><span class="cname">mcp</span><span class="gtag">cfg</span></h3>
         <p class="summary">Register boost as an MCP server (Claude Code, Gemini CLI)</p>
-        <pre class="syn">boost mcp [--host H] [--stdio] [--seed] [--no-seed] [{register,unregister}]</pre>
+        <pre class="syn">boost mcp [--host H] [--stdio] [--seed | --no-seed] [{register,unregister}]</pre>
         <p class="desc">Register boost as an MCP server for your agent CLIs</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -1136,7 +1136,7 @@
       <section class="cmd" id="cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">
         <h3><span class="cname">hooks</span><span class="gtag">cfg</span></h3>
         <p class="summary">Manage agent hooks (Claude Code, Gemini CLI) in settings.json</p>
-        <pre class="syn">boost hooks [--host H] [--command COMMAND] [--name NAME] [--scope {global,project}] [--matcher MATCHER] [--timeout TIMEOUT] {add,remove,list} [event]</pre>
+        <pre class="syn">boost hooks [--host H] [-c COMMAND] [-n NAME] [-s {global,project}] [-m MATCHER] [--timeout TIMEOUT] {add,remove,list} [event]</pre>
         <p class="desc">Manage agent hooks (scope- and host-aware) in settings.json</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -1156,7 +1156,7 @@
       <section class="cmd" id="cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain action value">
         <h3><span class="cname">bmad</span><span class="gtag">cfg</span></h3>
         <p class="summary">BMAD Method autopilot — `bmad on` routes every task to a persona</p>
-        <pre class="syn">boost bmad [--scope {project,global}] [--modules MODULES] [--yes] [--startup] [--plain] ACTION [value]</pre>
+        <pre class="syn">boost bmad [-s {project,global}] [--modules MODULES] [-y] [--startup] [--plain] ACTION [value]</pre>
         <p class="desc">BMAD Method autopilot: personas, prompt routing, workflows</p>
         <div class="args-h">Arguments</div>
         <div class="args">

@@ -59,7 +59,7 @@ def cmd_run(argv: list[str]) -> int:
         if args.out:
             dest = paths.expand(args.out)
             try:
-                util.atomic_write_text(dest, runner)
+                util.atomic_write_text(dest, runner, mode=util.default_file_mode())
             except OSError as e:
                 raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                                 hint="check the output path exists and is writable") from e

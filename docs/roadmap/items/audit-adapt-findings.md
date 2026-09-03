@@ -2,14 +2,14 @@
 id: audit-adapt-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: a subagent named after a tool renders a crew that compiles but cannot run
 order: 247
-owner:
+owner: loop/adapt-audit-fixes
 pr:
 title: "boost adapt: CLI audit findings (2026-08)"
 ---

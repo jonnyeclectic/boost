@@ -117,7 +117,22 @@ def try_lock(path, stale_after: float = 300.0):
             path.unlink()
 
 
-def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+def default_file_mode() -> int:
+    """The permissions a normal file create would get under this umask.
+
+    ``os.umask`` has no read-only form — the only way to read it is to set a
+    new value and get the old one back — so this sets 0, reads the real mask,
+    and restores it immediately. Matches what a shell redirect (``>``) leaves
+    behind: 0o666 minus whatever bits the umask clears (0o644 under the
+    common 022).
+    """
+    current = os.umask(0)
+    os.umask(current)
+    return 0o666 & ~current
+
+
+def atomic_write_text(path: Path, text: str, encoding: str = "utf-8",
+                       mode: int | None = None) -> None:
     """Write ``text`` to ``path`` so a reader never sees a partial file.
 
     The bytes go to a temp file in the *same* directory (so the rename stays on
@@ -127,12 +142,21 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
     complete new one atomically replaces it. This is the corruption-safe
     substitute for a bare ``Path.write_text`` on any file boost must not lose —
     the lock file, the config, the pulse journal.
+
+    ``mode``, when given, ``fchmod``s the temp file before the rename —
+    ``mkstemp`` always creates it 0o600, right for boost's own lock/config/
+    state but wrong for source the user asked boost to write to disk (e.g.
+    ``boost adapt -o``): re-rendering over an existing 0o644 file would
+    otherwise silently downgrade it to owner-only, unlike a shell redirect.
+    The default (``None``) keeps mkstemp's 0o600.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent),
                                prefix="." + path.name + ".", suffix=".tmp")
     try:
+        if mode is not None:
+            os.fchmod(fd, mode)
         with os.fdopen(fd, "w", encoding=encoding) as f:
             f.write(text)
             f.flush()
