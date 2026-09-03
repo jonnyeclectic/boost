@@ -171,6 +171,54 @@ class TestCompactNarrowsInPlace:
         assert (registry.list_taps()[0].path / "skills" / "demo" / "SKILL.md").exists()
 
 
+class TestRecloneHonoursThePin:
+    """`--reclone` used to hand the tap's URL straight to `clone_shallow`
+    with no regard for `tap.pin`, so a pinned tap silently landed on HEAD:
+    config.json, the catalog cache and `boost taps` kept naming the old
+    commit while the clone on disk had moved.
+    """
+
+    def test_a_pinned_tap_reclones_back_onto_its_pin(self, boost, sandbox,
+                                                     tmp_path):
+        from boost_cli.core import gitutil, registry
+
+        src = _repo(tmp_path / "src")
+        pin_sha = gitutil.head_commit(src)
+        boost("tap", "--at", pin_sha, str(src))
+        # Move the upstream past the pinned commit, so a naive reclone would
+        # land on a different tree than the one boost is pinned to.
+        (src / "b.txt").write_text("two\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=src, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                        "commit", "-qm", "second"], cwd=src, check=True,
+                       capture_output=True)
+
+        boost("compact", "--reclone")
+
+        clone = registry.list_taps()[0].path
+        assert gitutil.head_commit(clone) == pin_sha
+        assert registry.list_taps()[0].pin == pin_sha
+        assert not (clone / "b.txt").exists()
+
+    def test_a_reclone_is_never_silently_folded_into_already_compact(
+            self, boost, sandbox, tmp_path):
+        """A pinned tap's reclone lands on an identical tree — before < after
+        never fires — so the report must not fall back to "already compact"
+        and hide that the clone moved and came back.
+        """
+        from boost_cli.core import gitutil
+
+        src = _repo(tmp_path / "src")
+        pin_sha = gitutil.head_commit(src)
+        boost("tap", "--at", pin_sha, str(src))
+
+        res = boost("compact", "--reclone")
+
+        assert "already compact" not in res.out.lower()
+        assert "freed" in res.out.lower()
+
+
 def os_utime(pth):
     import os
     st = pth.stat()

@@ -488,9 +488,12 @@ def update(name: str | None = None,
            force: bool = False) -> tuple[dict, dict]:
     """git-pull one tap (or all). Returns ``({name: summary}, {name: error})``.
 
-    **A pinned tap is skipped** unless ``force``, which also clears the pin —
-    an update that silently moved a pinned clone is what made `tap --at` a
-    suggestion rather than a guarantee.
+    **A pinned, already-cloned tap is skipped** unless ``force``, which also
+    clears the pin — an update that silently moved a pinned clone is what made
+    `tap --at` a suggestion rather than a guarantee. **A pinned tap with no
+    clone is not skipped**: there is no clone to hold still, so it is cloned
+    and checked out at its pin (reusing the same checkout path `add(at=...)`
+    uses), never left on HEAD with a pin that no longer describes it.
 
     **A named tap still raises.** ``boost update sometap`` is a request about
     that one tap, so its failure is the answer to the question asked.
@@ -510,14 +513,6 @@ def update(name: str | None = None,
     results: dict = {}
     failures: dict = {}
     for tap in targets:
-        if tap.pin and not force:
-            # A pinned tap is held at one commit on purpose: prebuilt vectors
-            # are keyed to it, and moving the clone would make them stale while
-            # still present — the failure that looks like nothing at all. Not
-            # an error, because "update everything" over 400 taps should not
-            # fail because three are pinned.
-            results[tap.name] = "pinned at %s (skipped)" % tap.pin[:7]
-            continue
         try:
             if tap.url.startswith(WHEEL_SCHEME):
                 # boost's own tap arrives with the wheel, so there is no remote
@@ -533,8 +528,35 @@ def update(name: str | None = None,
                 builtin.ensure_tap()
                 results[tap.name] = "refreshed from the installed package"
             elif not tap.is_cloned:
+                # A missing clone has nothing to hold still, so a pin here is
+                # a target to land on rather than a reason to skip — skipping
+                # used to report "pinned … (skipped)" while leaving nothing on
+                # disk at all. `force` means "stop holding this tap still", so
+                # it clones at HEAD and drops the pin instead.
                 gitutil.clone_shallow(tap.url, tap.path)
-                results[tap.name] = "cloned"
+                if tap.pin and not force:
+                    try:
+                        gitutil.checkout_commit(tap.path, tap.pin)
+                    except BoostError:
+                        # A pin that cannot be honoured must not leave a tap
+                        # on HEAD with a stale pin recorded beside it — the
+                        # next sweep would read `is_cloned` true and quietly
+                        # "skip" a tree that was never checked out.
+                        util.rmtree(tap.path)
+                        raise
+                    results[tap.name] = "cloned at %s" % tap.pin[:7]
+                else:
+                    if tap.pin:
+                        unpin(tap.name)
+                    results[tap.name] = "cloned"
+            elif tap.pin and not force:
+                # A pinned tap is held at one commit on purpose: prebuilt
+                # vectors are keyed to it, and moving the clone would make
+                # them stale while still present — the failure that looks
+                # like nothing at all. Not an error, because "update
+                # everything" over 400 taps should not fail because three are
+                # pinned.
+                results[tap.name] = "pinned at %s (skipped)" % tap.pin[:7]
             else:
                 results[tap.name] = gitutil.pull(tap.path)
                 if tap.pin:
