@@ -160,6 +160,20 @@ def commit_status(name: str, entry: dict | None = None) -> str | None:
     return STATUS_OK if entry.get("commit") == pin else STATUS_MODIFIED
 
 
+def verification_passed(status: str, missing_fields: list, commit_pin: str | None) -> bool:
+    """Whether a `boost verify` row actually passed, for both text and JSON.
+
+    A row can carry ``status == STATUS_OK`` and still be a failure: ``verify``
+    also flags missing lock fields and a drifted commit pin, and those must
+    move the row's displayed token and JSON ``passed`` bit together with the
+    failure count that already accounts for them — a green ``ok`` on a row
+    verify itself counts as failed is the bug this closes.
+    """
+    return (status in (STATUS_OK, STATUS_QUARANTINED)
+            and not missing_fields
+            and commit_pin != STATUS_MODIFIED)
+
+
 def enforcement_enabled() -> bool:
     """True when digest enforcement is switched on in config (default False)."""
     return bool(config.get(ENFORCE_KEY, False))

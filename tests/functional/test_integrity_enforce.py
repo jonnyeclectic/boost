@@ -96,3 +96,38 @@ def test_drifted_commit_pin_fails_verify(boost, installed):
     lockfile.set_skill(installed, entry)
     res = boost("verify", installed, expect=1)
     assert "DRIFTED" in res.out
+
+
+# ── a row counted as failed must not also carry a passing status ────────
+# (docs/roadmap/items/audit-verify-findings.md: verify used to color a row
+# "ok" — and, in --json, report status "ok" with no per-row signal at all —
+# on the exact row it counted among the failures.)
+
+def test_verify_json_marks_an_ok_status_row_with_missing_fields_as_failed(
+        boost, installed):
+    entry = lockfile.get_skill(installed)
+    del entry["version"]
+    entry["installed_at"] = ""
+    lockfile.set_skill(installed, entry)
+    data = json.loads(boost("verify", installed, "--json", expect=1).out)
+    row = data["skills"][0]
+    assert row["status"] == "ok"
+    assert row["passed"] is False
+    assert data["failed"] == 1
+
+
+def test_verify_json_marks_a_clean_row_as_passed(boost, installed):
+    data = json.loads(boost("verify", installed, "--json").out)
+    assert data["skills"][0]["passed"] is True
+
+
+def test_verify_text_does_not_report_ok_alone_as_the_final_verdict(boost,
+                                                                    installed):
+    # Two rows: one clean, one ok-but-missing-fields — the failure count must
+    # name exactly the broken one, not "lock file integrity OK".
+    entry = lockfile.get_skill(installed)
+    del entry["version"]
+    lockfile.set_skill(installed, entry)
+    res = boost("verify", expect=1)
+    assert "1 of 1 item failed verification" in res.out
+    assert "lock file integrity OK" not in res.out

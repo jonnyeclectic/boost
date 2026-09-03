@@ -655,7 +655,8 @@ class TestVerify:
         data = json.loads(boost("verify", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
                                     "status": "ok", "scope": "user",
-                                    "missing_fields": [], "commit_pin": None}],
+                                    "missing_fields": [], "commit_pin": None,
+                                    "passed": True}],
                         "failed": 0}
 
     def test_tampered_modified_rc1(self, boost, installed):
