@@ -10,7 +10,7 @@ wow: 1
 note: an untapped skill vanishes from outdated; the same untapped rule shows "source missing"
 order: 278
 owner: loop/outdated-untapped-skill
-pr:
+pr: 748
 title: "boost outdated: CLI audit findings (2026-08)"
 ---
 <code>boost outdated</code> handles the same condition two ways depending on item kind. With the skill
