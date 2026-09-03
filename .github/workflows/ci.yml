@@ -400,12 +400,20 @@ jobs:
       # pre/post-step noise) and check-run annotations aren't reachable
       # either, so this captures the raw pytest output as a downloadable
       # artifact instead. Remove before merge.
+      #
+      # actions/upload-artifact is a Node.js action, not a bash subprocess, so
+      # it doesn't understand MSYS bash's `/tmp` path translation on Windows —
+      # copy to a repo-relative path first, which resolves identically for
+      # both bash and Node from the job's working directory.
+      - name: TEMP copy pytest output to a Node-resolvable path
+        if: always() && matrix.os == 'windows-latest'
+        run: cp /tmp/pytest.out pytest-debug.out || true
       - name: TEMP debug windows pytest output
         if: always() && matrix.os == 'windows-latest'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pytest-out-windows-${{ matrix.python }}
-          path: /tmp/pytest.out
+          path: pytest-debug.out
           retention-days: 1
           if-no-files-found: warn
       - name: shell smoke suite (152 checks, sandboxed)
