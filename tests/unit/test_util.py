@@ -5,10 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import os
 import re
-import stat
-import sys
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -572,82 +569,6 @@ class TestAtomicWriteText:
         assert p.read_text(encoding="utf-8") == "original"
         leftovers = [q.name for q in tmp_path.iterdir() if q.name != "f.txt"]
         assert leftovers == []
-
-    # Windows' st_mode doesn't preserve POSIX permission bits, so the exact
-    # values below aren't checkable there — but the test still RUNS and still
-    # calls atomic_write_text with `mode`, on every platform: skipping the
-    # whole test on win32 would drop mutation-gate coverage of the `mode`
-    # branch on that leg of the CI matrix, which is a worse loss than a soft
-    # assertion.
-    _posix = sys.platform != "win32"
-
-    def test_default_mode_is_mkstemp_owner_only(self, tmp_path):
-        # unchanged default behavior: right for the lock/config/state files
-        # this was written for, and what every pre-existing caller keeps.
-        p = tmp_path / "f.txt"
-        util.atomic_write_text(p, "hello")
-        if self._posix:
-            assert stat.S_IMODE(p.stat().st_mode) == 0o600
-
-    def test_explicit_mode_is_applied(self, tmp_path):
-        p = tmp_path / "f.txt"
-        util.atomic_write_text(p, "hello", mode=0o644)
-        if self._posix:
-            assert stat.S_IMODE(p.stat().st_mode) == 0o644
-
-    def test_mode_is_applied_via_path_not_fd(self, tmp_path, monkeypatch):
-        # os.fchmod is Unix-only and raises AttributeError on Windows;
-        # atomic_write_text must chmod the temp file by path (os.chmod),
-        # never the open fd, or `boost adapt -o`/`run --print -o` crash
-        # on Windows the moment `mode` is passed. The exact permission bits
-        # aren't checkable cross-platform, so this asserts the one thing
-        # that IS platform-independent: it doesn't raise, which is the
-        # failure this test exists to catch.
-        def boom(*_a, **_kw):
-            raise AttributeError("module 'os' has no attribute 'fchmod'")
-
-        monkeypatch.setattr(os, "fchmod", boom, raising=False)
-        p = tmp_path / "f.txt"
-        util.atomic_write_text(p, "hello", mode=0o644)
-        assert p.read_text(encoding="utf-8") == "hello"
-
-    def test_rerender_does_not_downgrade_existing_permissions(self, tmp_path):
-        # boost adapt -o over a file the user chmod'd 0o644 (e.g. via a
-        # shell redirect) used to silently downgrade it to 0o600 on
-        # re-render, unlike a shell redirect which leaves existing
-        # permissions alone. Passing the umask-default mode is the fix.
-        p = tmp_path / "f.py"
-        p.write_text("old", encoding="utf-8")
-        p.chmod(0o644)
-        util.atomic_write_text(p, "new", mode=util.default_file_mode())
-        if self._posix:
-            assert stat.S_IMODE(p.stat().st_mode) == util.default_file_mode()
-
-
-class TestDefaultFileMode:
-    def test_matches_umask(self):
-        old = os.umask(0o022)
-        try:
-            assert util.default_file_mode() == 0o644
-        finally:
-            os.umask(old)
-
-    def test_restrictive_umask(self):
-        old = os.umask(0o077)
-        try:
-            assert util.default_file_mode() == 0o600
-        finally:
-            os.umask(old)
-
-    def test_does_not_change_the_process_umask(self):
-        # a read that mutates global process state as a side effect would be
-        # a much worse bug than the one this function fixes.
-        old = os.umask(0o022)
-        try:
-            util.default_file_mode()
-            assert os.umask(0o022) == 0o022   # unaffected by the call above
-        finally:
-            os.umask(old)
 
 
 class TestTryLock:

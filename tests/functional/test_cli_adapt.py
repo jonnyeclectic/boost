@@ -3,11 +3,7 @@
 """Functional tests: `boost adapt` — render a skill as framework source."""
 from __future__ import annotations
 
-import stat
 import subprocess
-import sys
-
-from boost_cli.core import util
 
 
 def test_adapt_installed_skill_to_crewai_stdout(boost, installed):
@@ -38,27 +34,6 @@ def test_adapt_writes_file_with_o(boost, installed, tmp_path):
     assert dest.exists()
     compile(dest.read_text(encoding="utf-8"), "<crewai>", "exec")
     assert "adapted" in r.out  # success line
-
-
-def test_adapt_o_writes_umask_default_mode_not_owner_only(boost, installed, tmp_path):
-    # a shell redirect (`boost adapt ... > f.py`) leaves the umask-default
-    # mode (0o644 under the common 022); atomic_write_text's own default is
-    # mkstemp's 0o600, wrong for source the user asked boost to write.
-    # Windows' st_mode doesn't preserve POSIX permission bits, so only the
-    # assertion is skipped there — the call itself still runs everywhere.
-    dest = tmp_path / "reviewer.py"
-    boost("adapt", installed, "--to", "crewai", "-o", str(dest))
-    if sys.platform != "win32":
-        assert stat.S_IMODE(dest.stat().st_mode) == util.default_file_mode()
-
-
-def test_adapt_o_rerender_does_not_downgrade_existing_mode(boost, installed, tmp_path):
-    dest = tmp_path / "reviewer.py"
-    dest.write_text("stale", encoding="utf-8")
-    dest.chmod(0o644)
-    boost("adapt", installed, "--to", "crewai", "-o", str(dest))
-    if sys.platform != "win32":
-        assert stat.S_IMODE(dest.stat().st_mode) == 0o644
 
 
 def test_unknown_framework_errors(boost, installed):

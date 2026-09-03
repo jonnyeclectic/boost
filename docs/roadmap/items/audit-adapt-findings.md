@@ -7,7 +7,7 @@ category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
-note: a subagent named after a tool renders a crew that compiles but cannot run
+note: PR #728 lands 3 of 4 findings; the file-mode fix (adapt -o writes 0600) is still open — see below
 order: 247
 owner: loop/adapt-audit-fixes
 pr: 728
@@ -52,7 +52,17 @@ redirect (<code>-rw-------</code> vs <code>-rw-r--r--</code> under umask 022).
 for the lock/config it was written for, wrong for source the user asked boost to write. Fix: add an
 optional <code>mode</code> parameter (fchmod the temp fd before <code>os.replace</code>), keep 0600
 the default, and have <code>cmd_adapt</code> (<code>pkg.py:1753-1761</code>) and <code>cmd_run</code>
-(<code>run.py:62</code>) pass the umask default.
+(<code>run.py:62</code>) pass the umask default. <b>Still open</b> — an implementation of exactly this
+shape (path-based <code>os.chmod</code>, not <code>os.fchmod</code>, learned the hard way: the latter
+raises on Windows) shipped and then was reverted from PR #728 after three rounds of Windows-only
+<code>windows-latest</code> CI failures in the "unit + functional (90% coverage gate)" step that
+neither pytest-cov nor a temporary diagnostic artifact-upload commit could surface a cause for —
+the session driving that PR could not read Windows job logs (capped and consumed by
+<code>harden-runner</code>'s own diagnostic noise) or download the diagnostic artifact
+(<code>productionresultssa*.blob.core.windows.net</code> blocked by that session's network egress
+policy) to see the actual failure. The other three findings landed clean on every platform. Whoever
+picks this back up needs either a session with working Windows CI log access, or to reproduce
+locally on a real Windows box.
 
 <br><br>Found by the 2026-08 CLI audit (clusters <code>adapt-ident-collision</code>,
 <code>docs-required-flag-synopsis</code>, <code>adapt-model-id-syntax</code>,
