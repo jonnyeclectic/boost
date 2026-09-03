@@ -16,6 +16,7 @@ import shutil
 from contextlib import suppress
 from typing import NamedTuple
 
+from ..errors import BoostError
 from . import paths, util
 
 SCHEMA_VERSION = 3
@@ -157,6 +158,35 @@ def set_skill(name: str, entry: dict) -> None:
     lock = read()
     lock["skills"][name] = entry
     write(lock)
+
+
+def apply_tag_mods(tags: list[str], mods: list[str]) -> tuple[list[str], bool]:
+    """Apply ``+tag``/``-tag`` tokens to ``tags``; return (new_tags, changed).
+
+    ``changed`` compares the resulting *set* to the starting one rather than
+    tracking a per-token flag: ``+x -x`` against a skill that never carried
+    ``x`` used to flip a token-level flag on both the add and the remove, so
+    a pure no-op still rewrote the lock and logged a journal event. Comparing
+    sorted before/after here is what makes a no-op read as one.
+    """
+    before = sorted(tags)
+    result = tags.copy()
+    for tok in mods:
+        if not tok or tok[0] not in "+-":
+            raise BoostError("cannot parse %r" % tok,
+                            hint="prefix tags with + to add or - to remove")
+        t = tok[1:].lstrip("#").strip()
+        if not t:
+            raise BoostError("empty tag in %r" % tok)
+        if any(c.isspace() for c in t):
+            raise BoostError("tag %r contains whitespace" % t,
+                            hint="use a single word, joined with - or _ if needed")
+        if tok[0] == "+" and t not in result:
+            result.append(t)
+        elif tok[0] == "-" and t in result:
+            result.remove(t)
+    result.sort()
+    return result, result != before
 
 
 def remove_skill(name: str) -> bool:

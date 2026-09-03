@@ -1007,12 +1007,27 @@ def cmd_tag(argv):
     # from `+x -x`.
     flag_strings = {"--list", "--json", "-h", "--help"}
     flags = [t for t in argv if t in flag_strings]
-    operands = [t for t in argv if t not in flag_strings]
+    # A long option this command does not know must not silently fall through
+    # as an operand: `tag brainstorming --verbose` used to read as removing
+    # the tag `-verbose`, and `tag --verbose` as `--verbose is not installed`
+    # — every sibling command instead rejects an unrecognized `--flag` with
+    # exit 2. Handing the untouched argv to argparse here raises that same
+    # "unrecognized arguments" error rather than the misleading ones above.
+    unknown_long = [t for t in argv if t.startswith("--") and t not in flag_strings]
+    if unknown_long:
+        ap.parse_args(argv)
+    operands = [t for t in argv if t not in flag_strings and not t.startswith("--")]
     args = ap.parse_args(flags)
     args.name = operands[0] if operands else None
     mods = operands[1:]
 
     if args.list_all:
+        if args.name:
+            # `tag brainstorming --list` used to silently drop the skill name
+            # and list every tag on every skill instead.
+            raise BoostError("--list does not take a skill name",
+                            hint="`boost tag --list` shows every tag; drop %r"
+                                 % args.name)
         mapping: dict[str, list[str]] = {}
         for name, e in sorted(lockfile.installed().items()):
             for t in e.get("tags") or []:
@@ -1044,24 +1059,9 @@ def cmd_tag(argv):
             % (args.name, kind),
             hint="tags are a skill-only label; rules and workflows are "
                  "governed by pin / quarantine / verify")
-    tags = list(entry.get("tags") or [])
-    changed = False
-    for tok in mods:
-        if not tok or tok[0] not in "+-":
-            raise BoostError("cannot parse %r" % tok,
-                            hint="prefix tags with + to add or - to remove")
-        t = tok[1:].lstrip("#").strip()
-        if not t:
-            raise BoostError("empty tag in %r" % tok)
-        if tok[0] == "+" and t not in tags:
-            tags.append(t)
-            changed = True
-        elif tok[0] == "-" and t in tags:
-            tags.remove(t)
-            changed = True
+    tags, changed = lockfile.apply_tag_mods(entry.get("tags") or [], mods)
     if changed:
-        entry["tags"] = sorted(tags)
-        tags = entry["tags"]
+        entry["tags"] = tags
         lockfile.set_skill(name, entry)
         journal.log("tag", name, tags=tags)
     if args.json:

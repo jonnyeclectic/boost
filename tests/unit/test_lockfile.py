@@ -195,6 +195,78 @@ class TestSkillAccessors:
         assert lockfile.installed() == {}
 
 
+class TestApplyTagMods:
+    """A pure function so `+x -x` and friends are testable without a lock
+    file at all — see the CLI-level tests in test_cli_info.py::TestTag for
+    the wiring through `boost tag`."""
+
+    def test_add_new_tag(self):
+        tags, changed = lockfile.apply_tag_mods([], ["+alpha"])
+        assert tags == ["alpha"]
+        assert changed is True
+
+    def test_remove_present_tag(self):
+        tags, changed = lockfile.apply_tag_mods(["alpha", "beta"], ["-alpha"])
+        assert tags == ["beta"]
+        assert changed is True
+
+    def test_removing_an_absent_tag_is_a_noop(self):
+        tags, changed = lockfile.apply_tag_mods(["beta"], ["-alpha"])
+        assert tags == ["beta"]
+        assert changed is False
+
+    def test_adding_an_already_present_tag_is_a_noop(self):
+        tags, changed = lockfile.apply_tag_mods(["alpha"], ["+alpha"])
+        assert tags == ["alpha"]
+        assert changed is False
+
+    def test_add_then_remove_the_same_tag_nets_no_change(self):
+        # The bug: a per-token flag saw both the add and the remove as
+        # mutations, so this used to report changed=True for a no-op.
+        tags, changed = lockfile.apply_tag_mods([], ["+x", "-x"])
+        assert tags == []
+        assert changed is False
+
+    def test_remove_then_add_the_same_tag_is_a_real_change(self):
+        tags, changed = lockfile.apply_tag_mods([], ["-x", "+x"])
+        assert tags == ["x"]
+        assert changed is True
+
+    def test_no_mods_is_a_noop(self):
+        tags, changed = lockfile.apply_tag_mods(["alpha"], [])
+        assert tags == ["alpha"]
+        assert changed is False
+
+    def test_result_is_sorted(self):
+        tags, _ = lockfile.apply_tag_mods([], ["+zeta", "+alpha"])
+        assert tags == ["alpha", "zeta"]
+
+    def test_hash_prefix_is_stripped(self):
+        tags, _ = lockfile.apply_tag_mods([], ["+#alpha"])
+        assert tags == ["alpha"]
+
+    def test_bad_prefix_raises(self):
+        with pytest.raises(BoostError) as ei:
+            lockfile.apply_tag_mods([], ["alpha"])
+        assert "cannot parse 'alpha'" in ei.value.message
+
+    def test_empty_tag_raises(self):
+        with pytest.raises(BoostError) as ei:
+            lockfile.apply_tag_mods([], ["+"])
+        assert "empty tag" in ei.value.message
+
+    def test_whitespace_in_tag_raises(self):
+        with pytest.raises(BoostError) as ei:
+            lockfile.apply_tag_mods([], ["+with space"])
+        assert "whitespace" in ei.value.message
+
+    def test_a_bad_token_raises_before_committing_earlier_ones(self):
+        # The caller only persists on a returned result, so a mid-list error
+        # must not leave a caller believing the earlier tokens landed.
+        with pytest.raises(BoostError):
+            lockfile.apply_tag_mods([], ["+alpha", "oops"])
+
+
 class TestHistory:
     def _seed_history(self):
         paths.ensure_dirs()
