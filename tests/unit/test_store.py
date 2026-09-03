@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import ClassVar
 
@@ -2909,8 +2910,6 @@ def _rival_tap(tmp_path, name="rival-tap"):
     genuine second clone is needed to reach the cross-tap branch of
     ``resolve_lock_entry``, not a hand-written cache entry.
     """
-    import subprocess
-
     root = tmp_path / name
     (root / "skills" / "brainstorming").mkdir(parents=True)
     (root / "skills" / "brainstorming" / "SKILL.md").write_text(
@@ -2964,7 +2963,7 @@ class TestResolveLockEntry:
 
     def test_installed_rule_resolves_with_its_kind(self, tap):
         store.install(_rule_entry(tap))
-        bare, kind, entry = store.resolve_lock_entry("team-conventions")
+        _bare, kind, entry = store.resolve_lock_entry("team-conventions")
         assert kind == "rule"
         assert entry == lockfile.get_rule("team-conventions")
 

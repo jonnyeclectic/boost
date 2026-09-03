@@ -1689,7 +1689,7 @@ def cmd_export(argv: list[str]) -> int:
         # bare name the lock and the store key on, honoring the qualifier
         # against the installed tap rather than rejecting it outright.
         name, kind, entry = store.resolve_lock_entry(raw)
-        if kind is None:
+        if entry is None:
             raise BoostError("%s is not installed" % raw,
                             hint="see what is with `boost list`")
         if kind != "skill":

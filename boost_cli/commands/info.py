@@ -579,7 +579,7 @@ def cmd_edit(argv):
     # bare name the lock keys on, honoring the qualifier against the
     # installed tap rather than rejecting the string as an invalid skill name.
     name, kind, lock = store.resolve_lock_entry(args.name)
-    if kind is None:
+    if lock is None:
         raise BoostError("%s is not installed" % args.name,
                         hint="install it first, or `boost cat %s` to read the tap copy"
                         % args.name)
@@ -1022,7 +1022,7 @@ def cmd_tag(argv):
     # bare name the lock keys on, honoring the qualifier against the
     # installed tap rather than rejecting the string as an invalid skill name.
     name, kind, entry = store.resolve_lock_entry(args.name)
-    if kind is None:
+    if entry is None:
         raise BoostError("%s is not installed" % args.name,
                         hint="see what is with `boost list`")
     if kind != "skill":
