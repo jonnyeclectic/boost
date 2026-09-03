@@ -758,10 +758,9 @@ def cmd_who(argv) -> int:
         # being installed would contradict `boost list`.
         found = lockfile.find_any(args.skill)
         kind, lk = found if found is not None else (None, None)
-        expertise = ("install", "edit", "evolve", "distill", "tag")
         rows = [(util.rel_time(e.get("ts", "")), e.get("user", "?"),
                  e.get("action", "?"))
-                for e in events if e.get("action") in expertise] or \
+                for e in events if journal.is_expertise_event(e)] or \
                [(util.rel_time(e.get("ts", "")), e.get("user", "?"),
                  e.get("action", "?")) for e in events]
         if args.json:
@@ -785,7 +784,7 @@ def cmd_who(argv) -> int:
         u = users.setdefault(e.get("user", "?"), {
             "events": 0, "skills": set(), "installs": 0, "last": e.get("ts", "")})
         u["events"] += 1
-        if e.get("subject"):
+        if e.get("subject") and journal.is_expertise_event(e):
             u["skills"].add(e["subject"])
         if e.get("action") == "install":
             u["installs"] += 1

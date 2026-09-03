@@ -700,7 +700,7 @@ class TestWho:
         cols = row.split()
         assert cols[0] == USER
         assert cols[1] == "2"   # events: tap + install
-        assert cols[2] == "2"   # distinct subjects
+        assert cols[2] == "1"   # distinct skills — tap isn't expertise
         assert cols[3] == "1"   # installs
         assert "USER" in r.out and "LAST ACTIVE" in r.out
         assert "based on the local journal" in r.out
@@ -711,8 +711,24 @@ class TestWho:
         assert set(data) == {USER}
         assert data[USER]["events"] == 2
         assert data[USER]["installs"] == 1
-        assert data[USER]["skills"] == ["brainstorming", "fixture-tap"]
+        # tap isn't an expertise action, so its subject isn't a "skill"
+        assert data[USER]["skills"] == ["brainstorming"]
         assert data[USER]["last_active"]
+
+    def test_aggregate_skills_excludes_cohort_and_reindex_subjects(
+            self, boost, installed):
+        # Repro from the audit: a cohort name and a reindex summary are
+        # journal subjects but not skills, and must not inflate SKILLS.
+        boost("cohort", "create", "pilot", "--skills", "brainstorming",
+              "--percent", "100")
+        journal.log("reindex", "10152 passages")
+        r = boost("who", "--json")
+        data = json.loads(r.out)
+        assert data[USER]["skills"] == ["brainstorming"]
+        assert data[USER]["events"] == 4   # tap + install + cohort + reindex
+        row = next(l for l in boost("who").out.splitlines()
+                   if l.startswith(USER))
+        assert row.split()[2] == "1"       # SKILLS column agrees
 
     def test_per_skill_view(self, boost, installed):
         r = boost("who", "brainstorming")

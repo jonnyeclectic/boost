@@ -2,14 +2,14 @@
 id: audit-who-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: 29 "skills" = 20 tap names + "10152 passages" + 5 cohort names + 3 real items
 order: 303
-owner:
+owner: loop/who-expertise
 pr:
 title: "<code>boost who</code>: CLI audit findings (2026-08)"
 ---
