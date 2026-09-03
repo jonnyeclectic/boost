@@ -1162,15 +1162,19 @@ def cmd_reinstall(argv: list[str]) -> int:
                          % (kind, name, lk.get("tap")))
                 failed += 1
                 continue
+            entry, warning = catalog.select_lock_source(matches, lk)
+            assert entry is not None          # matches is non-empty above
+            if warning:
+                out.warn(warning)
             try:
-                store.install(matches[0], force=True,
+                store.install(entry, force=True,
                               scope=lk.get("scope", "user"), base=lk.get("base"))
             except BoostError as err:
                 out.warn("%s: %s" % (name, err.message))
                 failed += 1
                 continue
             out.ok("reinstalled %s %s v%s"
-                   % (kind, name, matches[0].get("version", "0.0.0")))
+                   % (kind, name, entry.get("version", "0.0.0")))
             done += 1
             done_kinds.add(kind)
             continue
@@ -1201,13 +1205,17 @@ def cmd_reinstall(argv: list[str]) -> int:
                      % (name, lk.get("tap")))
             failed += 1
             continue
+        entry, warning = catalog.select_lock_source(matches, lk)
+        assert entry is not None              # matches is non-empty above
+        if warning:
+            out.warn(warning)
         try:
-            store.install(matches[0], force=True)
+            store.install(entry, force=True)
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             failed += 1
             continue
-        out.ok("reinstalled %s v%s" % (name, matches[0].get("version", "0.0.0")))
+        out.ok("reinstalled %s v%s" % (name, entry.get("version", "0.0.0")))
         done += 1
         done_kinds.add("skill")
     # Name the kind when only one was touched; a mixed run says "items".

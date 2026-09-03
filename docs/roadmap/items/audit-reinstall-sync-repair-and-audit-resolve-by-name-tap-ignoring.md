@@ -2,14 +2,14 @@
 id: audit-reinstall-sync-repair-and-audit-resolve-by-name-tap-ignoring
 board: code
 section: internals
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: M
 impact: High
 wow: 2
 note: reinstall after install --path swaps the installed bytes for a different mirror's
 order: 211
-owner:
+owner: loop/lock-source-resolve
 pr:
 title: "<code>reinstall</code>, sync repair and <code>audit</code> resolve by name+tap, ignoring the lock's source path"
 ---

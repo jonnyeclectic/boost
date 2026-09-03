@@ -496,6 +496,41 @@ def find(name: str, tap: str | None = None) -> list[dict]:
     return matches
 
 
+def select_lock_source(matches: list[dict], lk: dict) -> tuple[dict | None, str | None]:
+    """Pick the catalog entry a lock's recorded source refers to.
+
+    A registry can vendor the same name into more than one directory (three
+    ``brainstorming`` copies in one tap is a real case), so ``matches[0]`` — by
+    scan order, not by what got installed — silently swaps in whichever copy
+    sorts first. The lock records exactly which one was installed: a skill's
+    ``source_dir`` against ``rel_dir``, a rule/workflow's ``source_file``
+    against ``skill_md``. Returns ``(entry, warning)``: the matching entry when
+    found, else ``matches[0]`` with a warning naming the fallback. Falls back
+    silently (no warning) only when the lock recorded no source at all — an
+    old lock predating this field, or one boost never wrote (``local`` skills
+    skip catalog resolution entirely and never reach this).
+    """
+    if not matches:
+        return None, None
+    # Rules/workflows record `source_file` (a single defining file) and never
+    # `source_dir`; skills record `source_dir` and never `source_file` — so
+    # which key is present says which kind of lock entry this is, without
+    # depending on a `kind` field skill entries don't always carry.
+    if lk.get("source_file"):
+        key, field = "source_file", "skill_md"
+    else:
+        key, field = "source_dir", "rel_dir"
+    wanted = lk.get(key)
+    if not wanted:
+        return matches[0], None
+    for entry in matches:
+        if entry.get(field) == wanted:
+            return entry, None
+    fallback = matches[0]
+    return fallback, ("%s no longer at its installed source (%s) — using %s"
+                      % (fallback.get("name", "?"), wanted, fallback.get(field, "?")))
+
+
 def _identity(entry: dict) -> str:
     """What a user could actually use to tell two candidates apart.
 
