@@ -7,8 +7,6 @@ import stat
 import subprocess
 import sys
 
-import pytest
-
 from boost_cli.core import util
 
 
@@ -42,25 +40,25 @@ def test_adapt_writes_file_with_o(boost, installed, tmp_path):
     assert "adapted" in r.out  # success line
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="Windows' st_mode doesn't preserve POSIX permission bits")
 def test_adapt_o_writes_umask_default_mode_not_owner_only(boost, installed, tmp_path):
     # a shell redirect (`boost adapt ... > f.py`) leaves the umask-default
     # mode (0o644 under the common 022); atomic_write_text's own default is
     # mkstemp's 0o600, wrong for source the user asked boost to write.
+    # Windows' st_mode doesn't preserve POSIX permission bits, so only the
+    # assertion is skipped there — the call itself still runs everywhere.
     dest = tmp_path / "reviewer.py"
     boost("adapt", installed, "--to", "crewai", "-o", str(dest))
-    assert stat.S_IMODE(dest.stat().st_mode) == util.default_file_mode()
+    if sys.platform != "win32":
+        assert stat.S_IMODE(dest.stat().st_mode) == util.default_file_mode()
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="Windows' st_mode doesn't preserve POSIX permission bits")
 def test_adapt_o_rerender_does_not_downgrade_existing_mode(boost, installed, tmp_path):
     dest = tmp_path / "reviewer.py"
     dest.write_text("stale", encoding="utf-8")
     dest.chmod(0o644)
     boost("adapt", installed, "--to", "crewai", "-o", str(dest))
-    assert stat.S_IMODE(dest.stat().st_mode) == 0o644
+    if sys.platform != "win32":
+        assert stat.S_IMODE(dest.stat().st_mode) == 0o644
 
 
 def test_unknown_framework_errors(boost, installed):
