@@ -170,6 +170,39 @@ def test_commit_enforcement_off_by_default_does_not_block_drift(installed):
     integrity.enforce(installed)          # commit enforcement off — must not raise
 
 
+# ── verification_passed ──────────────────────────────────────────────────
+
+def test_verification_passed_true_for_a_clean_ok_row():
+    assert integrity.verification_passed(integrity.STATUS_OK, [], None) is True
+
+
+def test_verification_passed_true_for_a_clean_quarantined_row():
+    assert integrity.verification_passed(integrity.STATUS_QUARANTINED, [], None) is True
+
+
+def test_verification_passed_false_for_a_non_ok_status():
+    assert integrity.verification_passed(integrity.STATUS_MODIFIED, [], None) is False
+    assert integrity.verification_passed(integrity.STATUS_MISSING, [], None) is False
+    assert integrity.verification_passed(integrity.STATUS_UNLOCKED, [], None) is False
+
+
+def test_verification_passed_false_when_ok_but_missing_lock_fields():
+    # The bug this closes: `verify` counted this row among the failures while
+    # still rendering the "ok" status token in green.
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, ["version", "installed_at"], None) is False
+
+
+def test_verification_passed_false_when_ok_but_commit_pin_drifted():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_MODIFIED) is False
+
+
+def test_verification_passed_true_when_ok_and_commit_pin_holds():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_OK) is True
+
+
 class TestProjectScope:
     """integrity over project-scoped skills (committed into a repo, not the store)."""
 

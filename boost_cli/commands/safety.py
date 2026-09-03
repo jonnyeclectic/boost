@@ -448,9 +448,10 @@ def cmd_verify(argv):
                         "scope": "project", "missing_fields": missing_fields,
                         "commit_pin": None})
 
-    bad = [r for r in results
-           if r["status"] not in ("ok", "quarantined") or r["missing_fields"]
-           or r["commit_pin"] == integrity.STATUS_MODIFIED]
+    for r in results:
+        r["passed"] = integrity.verification_passed(
+            r["status"], r["missing_fields"], r["commit_pin"])
+    bad = [r for r in results if not r["passed"]]
     if args.json:
         print(json.dumps({"skills": results, "failed": len(bad)}))
         return 1 if bad else 0
@@ -475,8 +476,14 @@ def cmd_verify(argv):
         elif r["commit_pin"] == integrity.STATUS_MODIFIED:
             bits.append("commit pin DRIFTED")
         note = ("  " + " · ".join(bits)) if bits else ""
+        role = status_role.get(r["status"], "warn")
+        if not r["passed"] and role in ("success", "muted"):
+            # status alone reads as ok/quarantined, but a missing lock field
+            # or a drifted commit pin still failed the row — don't paint it
+            # green (see verification_passed).
+            role = "danger"
         print("  %s  %s%s" % (r["name"].ljust(width),
-                              out.role(r["status"], status_role.get(r["status"], "warn")),
+                              out.role(r["status"], role),
                               out.role(note, "muted")))
     if bad:
         out.warn("%d of %d item%s failed verification"
