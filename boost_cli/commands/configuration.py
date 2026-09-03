@@ -303,6 +303,19 @@ def cmd_compact(argv) -> int:
             if args.reclone:
                 util.rmtree(tap.path)
                 gitutil.clone_shallow(tap.url, tap.path)
+                if tap.pin:
+                    try:
+                        gitutil.checkout_commit(tap.path, tap.pin)
+                    except BoostError:
+                        # Leaving the re-clone on HEAD would silently move a
+                        # pinned tap exactly the way this fix exists to stop —
+                        # prebuilt vectors are keyed to the pin, and a clone
+                        # that quietly moved leaves them stale but present.
+                        # Remove it instead: no clone is a visible "not
+                        # cloned", not a wrong one nobody notices.
+                        util.rmtree(tap.path)
+                        raise
+                catalog.rebuild_tap(tap)
             else:
                 gitutil.narrow(tap.path)
             for rel in keep.get(tap.name, []):
@@ -311,9 +324,14 @@ def cmd_compact(argv) -> int:
             out.warn("could not compact %s: %s" % (tap.name, e))
             continue
         after = util.dir_size(tap.path)
-        if after < before:
+        # A re-clone always replaces the tap's on-disk objects, even when the
+        # result is not smaller — a blobless clone re-cloned blobless has
+        # nothing left to shrink. Gating the report on size alone is what let
+        # `--reclone` print "every tap is already compact" for a tap it had
+        # just silently moved off its pin.
+        if args.reclone or after < before:
             changed += 1
-            freed += before - after
+            freed += max(before - after, 0)
             out.info("%s  %s → %s" % (tap.name, util.human_size(before),
                                       util.human_size(after)))
 

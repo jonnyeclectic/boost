@@ -2,14 +2,14 @@
 id: audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co
 board: code
 section: internals
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: M
 impact: High
 wow: 2
-note: compact --reclone moved a pin to HEAD and printed "every tap is already compact"
+note: fix + tests landed (PR pending); make check not run in-session — sandbox has no PyPI egress for mutmut/coverage/vulture/xenon/etc; CI must confirm before merge
 order: 216
-owner:
+owner: loop/pinned-tap-integrity
 pr:
 title: "Pinned taps silently moved to HEAD by <code>update</code> re-clone and <code>compact --reclone</code>, pin left stale"
 ---

@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from boost_cli.core import config, gitutil, paths, policy, registry
+from boost_cli.core import config, gitutil, paths, policy, registry, util
 from boost_cli.errors import BoostError
 
 SHA = "a" * 40
@@ -105,6 +105,43 @@ class TestUpdateRespectsPins:
         registry.pin("o/a", SHA)
         assert registry.list_taps()[0].pin == SHA
         registry.unpin("o/a")
+        assert registry.list_taps()[0].pin == ""
+
+    def test_a_pinned_tap_with_no_clone_is_recloned_at_its_pin(self, sandbox,
+                                                                fake_clone):
+        """The regression: the pin skip ran before the is_cloned check, so a
+        pinned tap whose clone directory had vanished reported "pinned at
+        <sha> (skipped)" with nothing on disk — the pin vouching for a commit
+        that no longer existed anywhere.
+        """
+        tap = registry.add("o/a", at=SHA)
+        util.rmtree(tap.path)
+        fake_clone["checkouts"].clear()
+
+        results, failures = registry.update()
+
+        assert failures == {}
+        assert results["o/a"] == "cloned at %s" % SHA[:7]
+        assert fake_clone["checkouts"] == [("o__a", SHA)]
+        assert tap.is_cloned
+        assert registry.list_taps()[0].pin == SHA
+
+    def test_force_reclones_a_missing_pinned_tap_and_drops_the_pin(
+            self, sandbox, fake_clone):
+        """`--force` moving a pinned tap must drop the pin even when the
+        clone was already gone, or `--force`'s own promise ("move pinned taps
+        too, clearing their pin") is broken for exactly the taps most likely
+        to need it.
+        """
+        tap = registry.add("o/a", at=SHA)
+        util.rmtree(tap.path)
+        fake_clone["checkouts"].clear()
+
+        results, _ = registry.update(force=True)
+
+        assert results["o/a"] == "cloned"
+        assert fake_clone["checkouts"] == []
+        assert tap.is_cloned
         assert registry.list_taps()[0].pin == ""
 
 

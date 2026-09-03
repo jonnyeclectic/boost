@@ -23,6 +23,7 @@ from __future__ import annotations
 import subprocess
 
 from boost_cli.core import gitutil, paths, registry
+from boost_cli.errors import BoostError
 
 
 def _fat_clone(src, dest):
@@ -169,6 +170,78 @@ class TestCompactNarrowsInPlace:
 
         assert res.rc == 0
         assert (registry.list_taps()[0].path / "skills" / "demo" / "SKILL.md").exists()
+
+
+class TestReclonePreservesPins:
+    """`compact --reclone` deletes and re-clones a tap's directory outright,
+    which used to hand the clone straight back to `clone_shallow` with no
+    memory of a pin: a pinned tap re-cloned at HEAD, the config still saying
+    the old commit, and (since a blobless re-clone is rarely smaller than the
+    blobless clone it replaced) the run reporting "every tap is already
+    compact" instead of naming the move.
+    """
+
+    def test_reclone_restores_a_pinned_tap_to_its_pin(self, boost, sandbox,
+                                                       tmp_path):
+        src = _repo(tmp_path / "src")
+        pin = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=src, check=True,
+            capture_output=True, text=True).stdout.strip()
+        boost("tap", str(src), "--at", pin)
+        clone = registry.list_taps()[0].path
+
+        boost("compact", "--reclone")
+
+        assert gitutil.head_commit(clone) == pin
+        assert registry.list_taps()[0].pin == pin
+
+    def test_reclone_is_reported_even_when_size_does_not_shrink(
+            self, boost, sandbox, tmp_path):
+        """A freshly tapped clone is already blobless and sparse, so
+        `--reclone` cannot shrink it further — that must not read as "already
+        compact" for an operation that did, in fact, re-clone.
+        """
+        src = _repo(tmp_path / "src")
+        boost("tap", str(src))
+
+        res = boost("compact", "--reclone")
+
+        assert "already compact" not in res.out.lower()
+        assert "1 tap" in res.out
+
+    def test_reclone_rebuilds_the_catalog(self, boost, sandbox, tmp_path):
+        from boost_cli.core import catalog
+
+        src = _repo(tmp_path / "src")
+        boost("tap", str(src))
+        before = {(e["kind"], e["name"]) for e in catalog.all_entries()}
+
+        boost("compact", "--reclone")
+
+        assert {(e["kind"], e["name"]) for e in catalog.all_entries()} == before
+
+    def test_a_pin_reclone_cannot_honour_leaves_no_stale_clone(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        """If the pinned commit cannot be recovered, the tap must end up
+        un-cloned (a visible "not cloned") rather than silently moved to
+        HEAD — the exact failure this fix exists to close.
+        """
+        src = _repo(tmp_path / "src")
+        pin = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=src, check=True,
+            capture_output=True, text=True).stdout.strip()
+        boost("tap", str(src), "--at", pin)
+        clone = registry.list_taps()[0].path
+
+        def refuse(repo, sha):
+            raise BoostError("not our ref")
+
+        monkeypatch.setattr(gitutil, "checkout_commit", refuse)
+
+        res = boost("compact", "--reclone")
+
+        assert "could not compact" in res.out.lower()
+        assert not clone.exists()
 
 
 def os_utime(pth):
