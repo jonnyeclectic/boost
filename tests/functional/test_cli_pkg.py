@@ -360,6 +360,26 @@ class TestSync:
         assert "pruned ~/.agents/skills/orphan-x" in r.out
         assert not orphan.exists()
 
+    def test_prune_declined_does_not_tell_you_to_rerun_the_flag_you_just_ran(
+            self, boost, installed, monkeypatch):
+        # Bug: --prune declined told the user to run `boost sync --prune` —
+        # the command they had just run and said no to.
+        orphan = paths.store_dir() / "orphan-x"
+        orphan.mkdir()
+        (orphan / "SKILL.md").write_text("# orphan\n", encoding="utf-8")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("sync", "--prune")   # non-tty stdin declines
+        assert "1 orphaned store dir left in place (declined): orphan-x" in r.out
+        assert "boost sync --prune" not in r.out
+        assert orphan.is_dir()
+
+    def test_yes_flag_is_accepted_by_the_parser(self, boost, installed):
+        # Bug: argparse rejected --yes here ("unrecognized arguments"), so
+        # BOOST_ASSUME_YES/--yes could never both be true for this command's
+        # own flags even though out.confirm() itself already honours --yes.
+        r = boost("sync", "--prune", "--yes")
+        assert "unrecognized arguments" not in r.err
+
     def test_repairs_missing_rule_materialization(self, boost, fixture_tap_src,
                                                   tmp_path):
         tap_dir = _copy_tap(fixture_tap_src, tmp_path / "sync-rule-tap")
@@ -941,6 +961,15 @@ class TestImport:
 # ── snapshot ─────────────────────────────────────────────────────────────
 
 class TestSnapshot:
+    def test_restore_yes_flag_is_accepted_by_the_parser(self, boost, installed):
+        # Bug: `boost snapshot restore ID --yes` errored with "unrecognized
+        # arguments: --yes" (exit 2) before out.confirm() was ever reached.
+        r = boost("snapshot", "save", "before-wipe")
+        snap_id = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
+        r = boost("snapshot", "restore", snap_id, "--yes")
+        assert "unrecognized arguments" not in r.err
+        assert "restored %s" % snap_id in r.out
+
     def test_save_list_restore_roundtrip(self, boost, installed):
         r = boost("snapshot", "save", "before-wipe")
         m = re.search(r"saved (snap-[\w-]+) \(1 skill,", r.out)
@@ -1581,7 +1610,7 @@ class TestSnapshotEdges:
         r = boost("snapshot", "save")
         sid = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("snapshot", "restore", sid)    # non-tty stdin declines
+        r = boost("snapshot", "restore", sid, expect=1)    # non-tty stdin declines
         assert "cancelled" in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 

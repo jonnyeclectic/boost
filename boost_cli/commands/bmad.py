@@ -503,7 +503,7 @@ def _uninstall(scope, yes) -> int:
             "Remove BMAD (%s)? deletes bmad-* skills%s" % (
                 scope, " + _bmad/, _bmad-output/" if scope == "project" else ""))):
         out.info("aborted")
-        return 0
+        return 1
     _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK)
     removed = _rm_skills(_skills_dir(scope))
     removed += len(core.remove_personas(_agents_dir(scope)))

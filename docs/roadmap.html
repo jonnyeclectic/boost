@@ -12130,7 +12130,7 @@ Found by the 2026-08 CLI audit (cluster <code>ai-fallback-misattributed</code>);
       </article>
 
       <article class="cap rcard" id="audit-declined-confirms-never-name-y-boost-assume-yes-snapshot-cle">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
         <h3>Declined confirms never name <code>-y</code>/<code>BOOST_ASSUME_YES</code>; snapshot, clean, infer/distill/absorb and sync reject <code>--yes</code></h3>
         <p>One pattern across seven commands. <code>snapshot restore</code>, piped without <code>BOOST_ASSUME_YES</code>: output is exactly <code>&nbsp;&nbsp;cancelled</code>, exit 0 &mdash; no prompt shown, no reason, no bypass named &mdash; and <code>snapshot restore ID --yes</code> answers <code>Error: unrecognized arguments: --yes</code> (exit 2). <code>clean --deep --yes</code> hits the same error, and its declined path claims <code>&#10003; nothing to clean</code> when a snapshot was in fact kept. <code>sync --prune</code> declined tells the user to run <code>boost sync --prune</code> &mdash; the command just run. <code>untap</code> and <code>bmad uninstall</code> print bare <code>cancelled</code>/<code>aborted</code> lines (bmad exits 0 with nothing removed); <code>infer -o</code>/<code>distill</code> abort with no hint and reject <code>--yes</code>. <code>BOOST_ASSUME_YES</code> appears in zero command help texts.
 
@@ -12143,7 +12143,7 @@ Found by the 2026-08 CLI audit (cluster <code>confirm-bypass-hints</code>); repr
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">only 5 of the confirming parsers declare -y; BOOST_ASSUME_YES appears in 0 help texts</span>
+          <span class="m">implementation lands the full fix; make check's eval/mutation/smoke gates could not run in the claiming sandbox (no PyPI egress) — see PR for what did run</span>
         </div>
       </article>
 

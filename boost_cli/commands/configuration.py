@@ -145,6 +145,8 @@ def cmd_clean(argv) -> int:
                    help="show what would be removed without touching anything")
     p.add_argument("--deep", action="store_true",
                    help="also remove snapshots older than 90 days")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="skip the --deep confirmation prompt")
     args = p.parse_args(argv)
 
     items: list[tuple[Path, str, int]] = []  # (path, kind, bytes)
@@ -188,19 +190,26 @@ def cmd_clean(argv) -> int:
             elif pth.name == ".DS_Store" and pth.is_file():
                 items.append((pth, ".DS_Store", pth.stat().st_size))
 
+    declined = False
     if args.deep and paths.snapshots_dir().is_dir():
         cutoff = time.time() - 90 * 86400
         old_snaps = [s for s in sorted(paths.snapshots_dir().iterdir())
                      if s.lstat().st_mtime < cutoff]
-        if old_snaps and not args.dry_run and not out.confirm(
-                "remove %d snapshot(s) older than 90 days?" % len(old_snaps)):
+        if old_snaps and not args.dry_run and not (args.yes or out.confirm(
+                "remove %d snapshot(s) older than 90 days?" % len(old_snaps))):
             out.info("keeping old snapshots")
+            declined = True
             old_snaps = []
         for s in old_snaps:
             size = util.dir_size(s) if s.is_dir() else s.lstat().st_size
             items.append((s, "old snapshot", size))
 
     if not items:
+        # `declined` means the only candidate was the --deep snapshot purge
+        # and the user said no — "nothing to clean" would claim there was
+        # nothing to do when there was, and the user just declined doing it.
+        if declined:
+            return 1
         out.ok("nothing to clean")
         return 0
 

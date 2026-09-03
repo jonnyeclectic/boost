@@ -831,22 +831,34 @@ def table(rows, headers=None, stream=None) -> None:
               file=stream)
 
 
+_CONFIRM_BYPASS_HINT = "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt"
+
+
 def confirm(prompt: str, default: bool = False) -> bool:
     """Ask a yes/no question and return the answer as a bool.
 
     BOOST_ASSUME_YES or --yes/-y force True; non-TTY stdin and an empty
     answer return `default`; EOF or Ctrl-C returns False.
+
+    Every path that resolves to a decline (as opposed to `default` being
+    True) prints the bypass hint here, once, so callers inherit it instead
+    of each command growing its own reminder — see the confirm-bypass-hints
+    roadmap item.
     """
     if os.environ.get("BOOST_ASSUME_YES") or "--yes" in sys.argv or "-y" in sys.argv:
         return True
     if not sys.stdin.isatty():
+        if not default:
+            dim(_CONFIRM_BYPASS_HINT)
         return default
     suffix = " [Y/n] " if default else " [y/N] "
     try:
         answer = input(prompt + suffix).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
+        dim(_CONFIRM_BYPASS_HINT)
         return False
-    if not answer:
-        return default
-    return answer in ("y", "yes")
+    result = answer in ("y", "yes") if answer else default
+    if not result:
+        dim(_CONFIRM_BYPASS_HINT)
+    return result

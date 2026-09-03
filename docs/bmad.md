@@ -132,7 +132,8 @@ boost bmad install --scope global    # skills into ~/.claude/skills for every se
 boost bmad init                      # add the _bmad/ runtime to the current repo
 boost bmad startup on|off            # just the SessionStart briefing
 boost bmad disable / enable          # quarantine / restore skills (recoverable)
-boost bmad uninstall                 # delete skills + _bmad/ for a scope
+boost bmad uninstall                 # delete skills + _bmad/ for a scope; confirms
+                                      # unless you pass -y/--yes or set BOOST_ASSUME_YES=1
 ```
 
 The two compose. The autopilot routes at `bmad-build`, `bmad-prd` and friends

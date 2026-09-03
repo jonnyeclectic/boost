@@ -126,6 +126,14 @@ class TestDistill:
         assert entry["tap"] == "local"
         assert entry["version"] == "1.0.0"
 
+    def test_yes_flag_is_accepted_by_the_parser(self, boost, installed):
+        # Bug: `boost distill ... --install --yes` errored with "unrecognized
+        # arguments: --yes" before out.confirm() was ever reached.
+        r = boost("distill", "tdd-workflow", "commit-messages", "-o",
+                  "brainstorming", "--install", "--yes")
+        assert "unrecognized arguments" not in r.err
+        assert "replaced brainstorming" in r.out
+
     def test_install_declined_leaves_the_existing_skill_and_saves_the_generation(
             self, boost, installed, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -293,6 +301,18 @@ class TestInfer:
         evs = journal.events(action="infer")
         assert evs[0]["subject"] == "my-conventions"
 
+    def test_yes_flag_skips_the_overwrite_prompt(self, boost, sandbox, py_project,
+                                                  tmp_path, monkeypatch):
+        # Bug: `boost infer -o FILE --yes` errored with "unrecognized
+        # arguments: --yes" on the second (overwrite) run, before
+        # out.confirm() was ever reached.
+        out_file = tmp_path / "SKILL.md"
+        boost("infer", "--path", py_project, "-o", out_file)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("infer", "--path", py_project, "-o", out_file, "--yes")
+        assert "unrecognized arguments" not in r.err
+        assert "wrote" in r.out
+
     def test_install(self, boost, sandbox, py_project):
         r = boost("infer", "--path", py_project, "--install")
         assert "installed project-conventions" in r.out
@@ -396,6 +416,21 @@ class TestAbsorb:
         assert evs[0]["subject"] == "absorbed-patterns"
         assert evs[0]["patterns"] == 1
         assert evs[0]["files"] == 1
+
+    def test_yes_flag_skips_the_replace_prompt(self, boost, sandbox, tmp_path,
+                                                monkeypatch):
+        # Bug: `boost absorb --install --yes` errored with "unrecognized
+        # arguments: --yes" on the second (replace) run, before
+        # out.confirm() was ever reached.
+        monkeypatch.chdir(tmp_path)  # a declined replace would fall back to cwd
+        f = tmp_path / "h.jsonl"
+        f.write_text("\n".join(
+            [_history_line("please write docstrings for every function")] * 3), encoding="utf-8")
+        boost("absorb", "--history", f, "--install")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("absorb", "--history", f, "--install", "--yes")
+        assert "unrecognized arguments" not in r.err
+        assert "replaced absorbed-patterns" in r.out
 
     def test_stdout_journals_too(self, boost, sandbox, tmp_path):
         f = tmp_path / "h.jsonl"

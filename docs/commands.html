@@ -103,14 +103,14 @@
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">install</a>
       <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local -y, --yes name">uninstall</a>
-      <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json">sync</a>
+      <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">update</a>
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill or all skills (force) reinstall an installed skill, rule or workflow (force) --all name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  {dump,install} file">bundle</a>
       <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">import</a>
       <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill to its current version  --commit name">pin</a>
       <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill to update again  name">unpin</a>
-      <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json {save,list,restore} label|id">snapshot</a>
+      <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">snapshot</a>
       <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">export</a>
       <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">adapt</a>
       <a class="cmd-link" href="#cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent --model m --print -o, --out file name target">run</a>
@@ -151,10 +151,10 @@
     <div class="group" data-group="ai">
       <div class="group-h">AI-assisted</div>
       <a class="cmd-link" href="#cmd-chat" data-search="chat ask about skills in plain language (rag-grounded) ask about skills in plain language -k, --limit n --no-sources --json question">chat</a>
-      <a class="cmd-link" href="#cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  -o, --output newname --install name">distill</a>
+      <a class="cmd-link" href="#cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  -o, --output newname --install -y, --yes name">distill</a>
       <a class="cmd-link" href="#cmd-simulate" data-search="simulate preview how a skill would change claude&#x27;s behavior  --task text name">simulate</a>
-      <a class="cmd-link" href="#cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install">infer</a>
-      <a class="cmd-link" href="#cmd-absorb" data-search="absorb turn recurring chat-history patterns into a skill  --history path --limit n --install">absorb</a>
+      <a class="cmd-link" href="#cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install -y, --yes">infer</a>
+      <a class="cmd-link" href="#cmd-absorb" data-search="absorb turn recurring chat-history patterns into a skill  --history path --limit n --install -y, --yes">absorb</a>
       <a class="cmd-link" href="#cmd-evolve" data-search="evolve iteratively improve a skill from feedback  --feedback text --apply name">evolve</a>
       <a class="cmd-link" href="#cmd-context" data-search="context branch-aware skill activation  action">context</a>
       <a class="cmd-link" href="#cmd-focus" data-search="focus temporarily prioritize skills for a work session  --clear --status --json skill">focus</a>
@@ -182,7 +182,7 @@
       <div class="group-h">Config &amp; setup</div>
       <a class="cmd-link" href="#cmd-quickstart" data-search="quickstart tap the starter registries and load prebuilt vectors  --catalog --no-vectors --dry-run">quickstart</a>
       <a class="cmd-link" href="#cmd-config" data-search="config display or modify boost configuration  --json {list,get,set,unset} key value">config</a>
-      <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep">clean</a>
+      <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes">clean</a>
       <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone tap">compact</a>
       <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">create</a>
       <a class="cmd-link" href="#cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">policy</a>
@@ -246,15 +246,16 @@
           <div class="arg"><code>-y, --yes</code><span>skip the confirmation prompt</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json">
+      <section class="cmd" id="cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">
         <h3><span class="cname">sync</span><span class="gtag">pkg</span></h3>
         <p class="summary">Reconcile installed skills &amp; symlinks against the lock file</p>
-        <pre class="syn">boost sync [--diff] [--prune] [--json]</pre>
+        <pre class="syn">boost sync [--diff] [--prune] [--json] [-y]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--diff</code><span>show the plan without applying it</span></div>
           <div class="arg"><code>--prune</code><span>also delete orphaned store dirs and links outside a declared --agent scope</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the --prune confirmation prompts</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">
@@ -335,10 +336,10 @@
           <div class="arg"><code>NAME</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json {save,list,restore} label|id">
+      <section class="cmd" id="cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">
         <h3><span class="cname">snapshot</span><span class="gtag">pkg</span></h3>
         <p class="summary">Save &amp; restore whole skill environments</p>
-        <pre class="syn">boost snapshot [--json] {save,list,restore} [LABEL|ID]</pre>
+        <pre class="syn">boost snapshot [--json] [-y] {save,list,restore} [LABEL|ID]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{save,list,restore}</code><span></span></div>
@@ -347,6 +348,7 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--json</code><span>machine-readable output (list)</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the restore confirmation prompt</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">
@@ -717,10 +719,10 @@
           <div class="arg"><code>--json</code><span>machine-readable answer (implies one-shot)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  -o, --output newname --install name">
+      <section class="cmd" id="cmd-distill" data-search="distill merge multiple skills into one deduplicated skill  -o, --output newname --install -y, --yes name">
         <h3><span class="cname">distill</span><span class="gtag">ai</span></h3>
         <p class="summary">Merge multiple skills into one deduplicated skill</p>
-        <pre class="syn">boost distill [-o NEWNAME] [--install] NAME [NAME ...]</pre>
+        <pre class="syn">boost distill [-o NEWNAME] [--install] [-y] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span>two or more skills to merge</span></div>
@@ -729,6 +731,7 @@
         <div class="args">
           <div class="arg"><code>-o, --output NEWNAME</code><span>name for the merged skill (default: &lt;first&gt;-distilled)</span></div>
           <div class="arg"><code>--install</code><span>install the merged skill instead of writing a file</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the overwrite/replace confirmation prompt</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-simulate" data-search="simulate preview how a skill would change claude&#x27;s behavior  --task text name">
@@ -744,27 +747,29 @@
           <div class="arg"><code>--task TEXT</code><span>task to simulate (default: a typical coding task)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install">
+      <section class="cmd" id="cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install -y, --yes">
         <h3><span class="cname">infer</span><span class="gtag">ai</span></h3>
         <p class="summary">Generate a SKILL.md from your codebase patterns</p>
-        <pre class="syn">boost infer [--path DIR] [--name N] [-o FILE] [--install]</pre>
+        <pre class="syn">boost infer [--path DIR] [--name N] [-o FILE] [--install] [-y]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--path DIR</code><span>codebase to analyze (default: current directory)</span></div>
           <div class="arg"><code>--name N</code><span>skill name (default: project-conventions)</span></div>
           <div class="arg"><code>-o, --output FILE</code><span>write to a file</span></div>
           <div class="arg"><code>--install</code><span>install the generated skill</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the overwrite/replace confirmation prompt</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-absorb" data-search="absorb turn recurring chat-history patterns into a skill  --history path --limit n --install">
+      <section class="cmd" id="cmd-absorb" data-search="absorb turn recurring chat-history patterns into a skill  --history path --limit n --install -y, --yes">
         <h3><span class="cname">absorb</span><span class="gtag">ai</span></h3>
         <p class="summary">Turn recurring chat-history patterns into a skill</p>
-        <pre class="syn">boost absorb [--history PATH] [--limit N] [--install]</pre>
+        <pre class="syn">boost absorb [--history PATH] [--limit N] [--install] [-y]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--history PATH</code><span>history .jsonl file or directory of them</span></div>
           <div class="arg"><code>--limit N</code><span>max patterns to absorb (default: 5)</span></div>
           <div class="arg"><code>--install</code><span>install the generated skill</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the replace confirmation prompt</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-evolve" data-search="evolve iteratively improve a skill from feedback  --feedback text --apply name">
@@ -1011,14 +1016,15 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep">
+      <section class="cmd" id="cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes">
         <h3><span class="cname">clean</span><span class="gtag">cfg</span></h3>
         <p class="summary">Clear stale caches &amp; broken symlinks</p>
-        <pre class="syn">boost clean [--dry-run] [--deep]</pre>
+        <pre class="syn">boost clean [--dry-run] [--deep] [-y]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show what would be removed without touching anything</span></div>
           <div class="arg"><code>--deep</code><span>also remove snapshots older than 90 days</span></div>
+          <div class="arg"><code>-y, --yes</code><span>skip the --deep confirmation prompt</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone tap">
