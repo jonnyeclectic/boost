@@ -10,7 +10,7 @@ wow: 2
 note: "tag brainstorming --verbose exits 0 as a remove of '-verbose'; +x -x writes lock + journal"
 order: 294
 owner: loop/tag-arg-parsing
-pr:
+pr: 735
 title: "boost tag: CLI audit findings (2026-08)"
 ---
 <b><code>boost tag</code> swallows unknown flags and misreads them as operands.</b> <code>tag brainstorming --verbose</code> prints the current tags and exits 0 — the flag is consumed as a removal of the tag <code>-verbose</code>; <code>tag --verbose</code> gives <em>"Error: --verbose is not installed"</em> (the flag becomes a skill name); verification found a third hole: <code>tag brainstorming --list</code> silently discards the skill-name operand and lists <b>all</b> tags. Cause: <code>cmd_tag</code>'s manual split (<code>boost_cli/commands/info.py:988-993</code>) whitelists only <code>--list</code>/<code>--json</code>/<code>-h</code>/<code>--help</code>; every other <code>--x</code> token falls through as an operand. Every sibling command rejects unknown options with <em>"unrecognized arguments"</em> exit 2.
