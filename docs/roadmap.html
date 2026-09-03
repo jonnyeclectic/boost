@@ -5368,8 +5368,9 @@ Found by the 2026-08 CLI audit (cluster <code>adapt-subagent-misdetect</code>); 
       </article>
 
       <article class="cap rcard" id="audit-reinstall-sync-repair-and-audit-resolve-by-name-tap-ignoring">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3><code>reinstall</code>, sync repair and <code>audit</code> resolve by name+tap, ignoring the lock's source path</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The lock records exactly which copy of an item was installed
 (<code>source_dir</code>/<code>source_file</code>), and four code paths ignore it, resolving by
 name+tap and taking <code>catalog.find(name)[0]</code>. Verified live: install
@@ -5399,7 +5400,7 @@ Verified fix: wherever the lock records a source path, select the catalog entry 
 <code>matches[0]</code> only when the lock has none, with a warning naming the path chosen. Pin with a
 test that installs a <code>--path</code> copy and reinstalls. No doc changes beyond regenerating
 <code>docs/commands.html</code> if summaries move (none expected). Found by the 2026-08 CLI audit
-(cluster <code>lock-source-ignored-on-reinstall</code>); repro in the audit log.</p>
+(cluster <code>lock-source-ignored-on-reinstall</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -5409,7 +5410,7 @@ test that installs a <code>--path</code> copy and reinstalls. No doc changes bey
       </article>
 
       <article class="cap rcard" id="audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
         <h3>Pinned taps silently moved to HEAD by <code>update</code> re-clone and <code>compact --reclone</code>, pin left stale</h3>
         <p>The pin invariant &mdash; only <code>update --force</code> may move a pinned tap, and moving one is
 deciding to stop holding it still &mdash; is broken by three paths, all reproduced byte-for-byte.
@@ -5450,8 +5451,9 @@ pinned-tap paragraph (lines 176-178) and its <code>compact --reclone</code> line
       </article>
 
       <article class="cap rcard" id="audit-focus-profile-sideline-by-unlinking-without-recording-it-lis">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>focus/profile sideline by unlinking without recording it; list lies, doctor exits 1, and its own remedy (sync) undoes the switch</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>focus</code> and <code>profile use</code> both &ldquo;sideline&rdquo; skills by calling
 <code>store.unlink_agents</code> without writing anything into the lock &mdash; so every other command
 reads the lock as truth and fights the state. Verified live: <code>profile use daily</code> prints
@@ -5482,7 +5484,7 @@ doctor stops calling it damage, sync leaves it unlinked; have <code>profile use<
 record. Make <code>focus --clear</code>/<code>context disable</code> count only skills whose links were
 actually missing and say <em>no focus session</em> when <code>focus.json</code> is absent. Docs:
 regenerate <code>docs/commands.html</code> if summaries change. Found by the 2026-08 CLI audit
-(cluster <code>sideline-state-unrecorded</code>); repro in the audit log.</p>
+(cluster <code>sideline-state-unrecorded</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -6535,8 +6537,9 @@ really is. See PR #674.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-quarantine-pin-state-invisible-list-info-doctor-report-links">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3>Quarantine/pin state invisible: <code>list</code>/<code>info</code>/<code>doctor</code> report links and materializations that were removed</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Quarantine records its state but the reporting surfaces never consult it. After
 <code>boost quarantine brainstorming</code> removes all four agent links on disk,
 <code>boost doctor</code> still prints <em>&ldquo;&#10003; 1 skill present in store with agent
@@ -6567,18 +6570,19 @@ rules and workflows and render AGENTS as &mdash; when quarantined &middot; have
 exclude quarantined skills from &ldquo;with agent links&rdquo; &middot; optionally return
 &ldquo;quarantined&rdquo; from verify/drift for skills as they already do for rules. Docs:
 docs/carousel.html (doctor recording alt text, if the wording changes). Found by the 2026-08 CLI
-audit (cluster <code>quarantine-pin-invisible</code>); repro in the audit log.</p>
+audit (cluster <code>quarantine-pin-invisible</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">doctor says "healthy, 1 skill with agent links" when the only skill is quarantined</span>
+          <span class="m">could not run make check locally (PyPI egress blocked in-sandbox); CI validated it — all required checks green, mutation gate passed on all 6 shards</span>
         </div>
       </article>
 
       <article class="cap rcard" id="audit-audit-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3>boost audit: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Three honesty gaps in the trust scanner.</b> A seeded <code>rm -rf ~/</code> (and <code>rm -rf
 /*</code>) in SKILL.md produced <b>no finding</b> while <code>sudo rm -rf /</code> on the next file
 was flagged HIGH: the destructive regex's lookahead (<code>safety.py:46</code>) rejects a trailing
@@ -6622,7 +6626,7 @@ deps/drift/verify/lint/audit empties through <code>out.empty_state</code> with o
 
 <br><br>Found by the 2026-08 CLI audit (clusters <code>audit-scan-blindspots</code>,
 <code>tap-sync-age-mislabel</code>, <code>audit-finding-order</code>,
-<code>empty-state-hint-drift</code>); repro in the audit log.</p>
+<code>empty-state-hint-drift</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -11871,8 +11875,9 @@ log.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-rules-workflows-reported-as-skills-uninstall-claims-a-store">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>Rules/workflows reported as 'skills': <code>uninstall</code> claims a store dir that never existed</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>All three kinds install by design, but five commands describe every kind as a skill — and
 <code>uninstall</code> goes further, narrating actions that never happened. Uninstalling the
 <em>rule</em> <code>benchmarking</code> prints <em>&ldquo;&#10003; unlinked &larr; claude-code &middot;
@@ -11904,7 +11909,7 @@ already does); count <code>_bundle_install</code> by <code>entry['kind']</code> 
 <code>(%d items)</code>; add a kind column to <code>trending</code> and fix its COMMANDS summary in
 <code>cli.py:73</code>. Docs: regenerate <code>docs/commands.html</code> (trending's summary changes in
 COMMANDS), and update README.md and <code>docs/index.html</code> where they show taps/bundle output.
-Found by the 2026-08 CLI audit (cluster <code>kinds-reported-as-skills</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>kinds-reported-as-skills</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -12030,8 +12035,9 @@ entry's <code>kind</code> in the message so a workflow is called one. Docs: rege
       </article>
 
       <article class="cap rcard" id="audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>adapt/run/stats/edit/tag/export reject the <code>tap:name</code> qualifier that info/install accept and adapt's own hint recommends</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost adapt test-driven-development --to crewai</code> answers <em>&ldquo;exists in multiple
 taps &hellip; hint: qualify it, e.g.
 <code>NeoLabHQ/context-engineering-kit:test-driven-development</code>&rdquo;</em> &mdash; and typing
@@ -12061,7 +12067,7 @@ split with <code>catalog.split_name</code>, look the bare name up in the lock an
 matches. Route all six through one shared resolver helper so the next command cannot regress alone.
 Docs: <code>docs/adapters.html</code>; regenerate <code>docs/commands.html</code> if usage lines change
 (e.g. <code>stats</code>' positional becoming &ldquo;skill name or <code>owner/repo:name</code>&rdquo;).
-Found by the 2026-08 CLI audit (cluster <code>qualifier-rejected-elsewhere</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>qualifier-rejected-elsewhere</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -12126,7 +12132,7 @@ Found by the 2026-08 CLI audit (cluster <code>ai-fallback-misattributed</code>);
       </article>
 
       <article class="cap rcard" id="audit-declined-confirms-never-name-y-boost-assume-yes-snapshot-cle">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
         <h3>Declined confirms never name <code>-y</code>/<code>BOOST_ASSUME_YES</code>; snapshot, clean, infer/distill/absorb and sync reject <code>--yes</code></h3>
         <p>One pattern across seven commands. <code>snapshot restore</code>, piped without <code>BOOST_ASSUME_YES</code>: output is exactly <code>&nbsp;&nbsp;cancelled</code>, exit 0 &mdash; no prompt shown, no reason, no bypass named &mdash; and <code>snapshot restore ID --yes</code> answers <code>Error: unrecognized arguments: --yes</code> (exit 2). <code>clean --deep --yes</code> hits the same error, and its declined path claims <code>&#10003; nothing to clean</code> when a snapshot was in fact kept. <code>sync --prune</code> declined tells the user to run <code>boost sync --prune</code> &mdash; the command just run. <code>untap</code> and <code>bmad uninstall</code> print bare <code>cancelled</code>/<code>aborted</code> lines (bmad exits 0 with nothing removed); <code>infer -o</code>/<code>distill</code> abort with no hint and reject <code>--yes</code>. <code>BOOST_ASSUME_YES</code> appears in zero command help texts.
 
@@ -12139,7 +12145,7 @@ Found by the 2026-08 CLI audit (cluster <code>confirm-bypass-hints</code>); repr
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">only 5 of the confirming parsers declare -y; BOOST_ASSUME_YES appears in 0 help texts</span>
+          <span class="m">implementation lands the full fix; make check's eval/mutation/smoke gates could not run in the claiming sandbox (no PyPI egress) — see PR for what did run</span>
         </div>
       </article>
 
@@ -12678,8 +12684,9 @@ Found by the 2026-08 CLI audit (cluster <code>stray-args-ignored</code>); repro 
       </article>
 
       <article class="cap rcard" id="audit-out-table-clips-data-columns-to-an-assumed-80-columns-when-s">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>out.table</code> clips data columns to an assumed 80 columns when stdout is a pipe; narrow TTYs clip IDs/hashes</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>One root cause, twelve findings across ten commands: <code>out.table</code> always fits rows
 through <code>_fit_widths(term_width())</code>, and <code>term_width()</code> answers 80 when
 stdout is detached &mdash; so a pipe, where there is no pane to fit, gets data columns ellipsised.
@@ -12714,7 +12721,7 @@ Verified fix: in <code>out.table</code> skip <code>_fit_widths</code> when stdou
 ID, digests, hook commands) so narrow TTYs shrink chrome (WHO/WHEN/URL) first &middot; give
 <code>cli.print_help</code> its own not-a-TTY branch emitting full summaries &middot; unit-test a
 60-column render asserting full IDs survive. Found by the 2026-08 CLI audit (cluster
-<code>tables-clip-data-columns</code>); repro in the audit log.</p>
+<code>tables-clip-data-columns</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -12993,7 +13000,7 @@ placement. No doc changes.
       </article>
 
       <article class="cap rcard" id="audit-adapt-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost adapt: CLI audit findings (2026-08)</h3>
         <p><b>A subagent named after a declared tool renders modules that compile but cannot run.</b> With a
 subagent <code>grep</code> and tool <code>Grep</code>: crewai emits <code>@tool("grep") def
@@ -13034,7 +13041,17 @@ redirect (<code>-rw-------</code> vs <code>-rw-r--r--</code> under umask 022).
 for the lock/config it was written for, wrong for source the user asked boost to write. Fix: add an
 optional <code>mode</code> parameter (fchmod the temp fd before <code>os.replace</code>), keep 0600
 the default, and have <code>cmd_adapt</code> (<code>pkg.py:1753-1761</code>) and <code>cmd_run</code>
-(<code>run.py:62</code>) pass the umask default.
+(<code>run.py:62</code>) pass the umask default. <b>Still open</b> — an implementation of exactly this
+shape (path-based <code>os.chmod</code>, not <code>os.fchmod</code>, learned the hard way: the latter
+raises on Windows) shipped and then was reverted from PR #728 after three rounds of Windows-only
+<code>windows-latest</code> CI failures in the "unit + functional (90% coverage gate)" step that
+neither pytest-cov nor a temporary diagnostic artifact-upload commit could surface a cause for —
+the session driving that PR could not read Windows job logs (capped and consumed by
+<code>harden-runner</code>'s own diagnostic noise) or download the diagnostic artifact
+(<code>productionresultssa*.blob.core.windows.net</code> blocked by that session's network egress
+policy) to see the actual failure. The other three findings landed clean on every platform. Whoever
+picks this back up needs either a session with working Windows CI log access, or to reproduce
+locally on a real Windows box.
 
 <br><br>Found by the 2026-08 CLI audit (clusters <code>adapt-ident-collision</code>,
 <code>docs-required-flag-synopsis</code>, <code>adapt-model-id-syntax</code>,
@@ -13043,7 +13060,7 @@ the default, and have <code>cmd_adapt</code> (<code>pkg.py:1753-1761</code>) and
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">a subagent named after a tool renders a crew that compiles but cannot run</span>
+          <span class="m">PR</span>
         </div>
       </article>
 
@@ -14109,7 +14126,7 @@ Found by the 2026-08 CLI audit (clusters <code>sync-blocked-link-report</code>, 
       </article>
 
       <article class="cap rcard" id="audit-tag-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost tag: CLI audit findings (2026-08)</h3>
         <p><b><code>boost tag</code> swallows unknown flags and misreads them as operands.</b> <code>tag brainstorming --verbose</code> prints the current tags and exits 0 — the flag is consumed as a removal of the tag <code>-verbose</code>; <code>tag --verbose</code> gives <em>"Error: --verbose is not installed"</em> (the flag becomes a skill name); verification found a third hole: <code>tag brainstorming --list</code> silently discards the skill-name operand and lists <b>all</b> tags. Cause: <code>cmd_tag</code>'s manual split (<code>boost_cli/commands/info.py:988-993</code>) whitelists only <code>--list</code>/<code>--json</code>/<code>-h</code>/<code>--help</code>; every other <code>--x</code> token falls through as an operand. Every sibling command rejects unknown options with <em>"unrecognized arguments"</em> exit 2.
 

@@ -2,14 +2,14 @@
 id: audit-declined-confirms-never-name-y-boost-assume-yes-snapshot-cle
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: M
 impact: Med
 wow: 1
-note: only 5 of the confirming parsers declare -y; BOOST_ASSUME_YES appears in 0 help texts
+note: implementation lands the full fix; make check's eval/mutation/smoke gates could not run in the claiming sandbox (no PyPI egress) — see PR for what did run
 order: 224
-owner:
+owner: loop/confirm-bypass-hints
 pr:
 title: "Declined confirms never name <code>-y</code>/<code>BOOST_ASSUME_YES</code>; snapshot, clean, infer/distill/absorb and sync reject <code>--yes</code>"
 ---

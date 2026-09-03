@@ -17,6 +17,7 @@ from pathlib import Path
 from ..errors import BoostError
 from . import (
     agents,
+    catalog,
     config,
     gitutil,
     journal,
@@ -68,6 +69,38 @@ def skill_store_dir(name: str) -> Path:
     if not util.is_safe_component(name):
         raise BoostError("invalid skill name %r" % name)
     return paths.store_dir() / name
+
+
+def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
+    """(bare_name, kind, entry) for a possibly tap-qualified ``name``.
+
+    Splits an ``owner/repo:skill`` qualifier (:func:`catalog.split_name`) and
+    looks the *bare* name up across every lock section
+    (:func:`lockfile.find_any`) — the lock keys installed items by their bare
+    name, and :func:`skill_store_dir` rejects the qualified string outright
+    since ``:`` (and ``/``) is not a safe path component. A command that
+    probes the store or the lock with the still-qualified string before
+    splitting gets "invalid skill name" or "not installed" for the very
+    string an ambiguity hint just told it to type.
+
+    When a qualifier is given, it is checked against the entry's own ``tap``
+    (:func:`catalog.tap_matches`): an item installed from a *different* tap
+    is not this qualifier's answer, so ``kind``/``entry`` come back
+    ``(None, None)`` rather than reporting another tap's install under this
+    name — the same rule ``commands/info.py``'s ``_for_tap`` applies. A
+    caller that also accepts a not-yet-installed name falls through to
+    :func:`catalog.resolve_one` in that case, which already parses the
+    qualified grammar; a caller that only operates on installed items reports
+    "not installed", same as a bare miss.
+    """
+    qualifier, bare = catalog.split_name(name)
+    found = lockfile.find_any(bare)
+    if found is None:
+        return bare, None, None
+    kind, entry = found
+    if qualifier and not catalog.tap_matches(str(entry.get("tap") or ""), qualifier):
+        return bare, None, None
+    return bare, kind, entry
 
 
 def installed() -> dict:
@@ -242,6 +275,49 @@ def unlink_agents(name: str) -> list[str]:
             link.unlink()
             removed.append(agent)
     return removed
+
+
+def sideline(name: str, by: str) -> list[str]:
+    """Unlink ``name`` and record *why*, so other commands stop fighting it.
+
+    ``focus``, ``profile use`` and ``context apply`` all set a skill's links
+    aside deliberately, and used to do it by calling :func:`unlink_agents`
+    alone — leaving the lock's ``agents`` field pointing at links that no
+    longer exist. Every reader of that field (``list``, ``doctor``,
+    ``sync_plan``) took the stale record at face value: ``doctor`` called the
+    gap damage and told the user to run ``boost sync``, and ``sync_apply``
+    obeyed, silently re-linking the very skill that was just set aside.
+
+    Recording ``sidelined_by`` closes the loop: it names the mechanism
+    responsible (``"focus"``, ``"profile"`` or ``"context"``) so a later
+    sideline overwrites an earlier one rather than stacking, and so
+    :func:`unsideline` and every consulting reader have one flag to check
+    instead of re-deriving "should this be linked" from a disk state that
+    lockfile.write() itself does not read.
+    """
+    removed = unlink_agents(name)
+    entry = lockfile.get_skill(name)
+    if entry is not None:
+        entry["sidelined_by"] = by
+        lockfile.set_skill(name, entry)
+    return removed
+
+
+def unsideline(name: str) -> InstallResult:
+    """Relink ``name`` and clear any recorded sideline.
+
+    The inverse of :func:`sideline`, used by ``focus --clear``, a skill
+    re-entering an active focus/profile/context selection, and ``context
+    disable``. Clears the flag regardless of which mechanism set it — only
+    one can be true of a skill at a time, and whichever command relinks it is
+    the one ending it.
+    """
+    res = link_agents(name)
+    entry = lockfile.get_skill(name)
+    if entry is not None and entry.get("sidelined_by"):
+        del entry["sidelined_by"]
+        lockfile.set_skill(name, entry)
+    return res
 
 
 def linked_agents(name: str) -> list[str]:
@@ -759,7 +835,7 @@ def uninstall_project(name: str, base=None) -> dict:
     unregistered = unregister_project_mcp(resolved_base, name)
     journal.log("uninstall", name, scope=scopes.SCOPE_PROJECT)
     return {"name": name, "unlinked": removed, "entry": entry,
-            "mcp_unregistered": unregistered,
+            "mcp_unregistered": unregistered, "kind": "skill",
             "scope": scopes.SCOPE_PROJECT, "base": str(resolved_base)}
 
 
@@ -822,8 +898,11 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
                 from . import catalog
                 matches = [e for e in catalog.find(name)
                            if e["tap"] == tap_name and e.get("kind", "skill") == "skill"]
-                if matches:
-                    install(matches[0], force=True, scope=scopes.SCOPE_PROJECT,
+                cat_entry, warning = catalog.select_lock_source(matches, entry)
+                if warning:
+                    actions.append(warning)
+                if cat_entry:
+                    install(cat_entry, force=True, scope=scopes.SCOPE_PROJECT,
                             base=resolved_base, only_agents=wanted[name])
                     actions.append("re-materialized %s from %s" % (name, tap_name))
                     continue
@@ -962,7 +1041,7 @@ def _uninstall_rule(name: str, rule: dict) -> dict:
             removed.append(m["agent"])
     lockfile.remove_rule(name)
     journal.log("uninstall", name)
-    return {"name": name, "unlinked": removed, "entry": rule}
+    return {"name": name, "unlinked": removed, "entry": rule, "kind": "rule"}
 
 
 def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
@@ -1179,7 +1258,7 @@ def _uninstall_workflow(name: str, workflow: dict) -> dict:
             removed.append(m["agent"])
     lockfile.remove_workflow(name)
     journal.log("uninstall", name)
-    return {"name": name, "unlinked": removed, "entry": workflow}
+    return {"name": name, "unlinked": removed, "entry": workflow, "kind": "workflow"}
 
 
 def install_from_path(src_dir: Path, name: str | None = None,
@@ -1271,7 +1350,12 @@ def uninstall(name: str) -> dict:
     """Uninstall ``name`` whatever its kind (skill, rule, workflow).
 
     Reverses everything the install wrote and drops the lock entry;
-    returns {name, unlinked, entry}. Raises BoostError if not installed.
+    returns {name, unlinked, entry, kind}. Raises BoostError if not installed.
+    The ``kind`` is what tells a caller like ``cmd_uninstall`` whether
+    ``unlinked`` names agent *symlinks* (skill) or agent *materializations*
+    (rule/workflow) — those are removed from entirely different places, and a
+    caller that assumes "skill" for all three narrates a store directory that
+    a rule or workflow never had.
     """
     entry = lockfile.get_skill(name)
     if not entry:
@@ -1295,7 +1379,7 @@ def uninstall(name: str) -> dict:
         util.rmtree(dest)
     lockfile.remove_skill(name)
     journal.log("uninstall", name)
-    return {"name": name, "unlinked": removed_links, "entry": entry}
+    return {"name": name, "unlinked": removed_links, "entry": entry, "kind": "skill"}
 
 
 def strip_extended_prefix(text: str) -> str:
@@ -1553,6 +1637,13 @@ def sync_plan() -> dict[str, list]:
             continue
         if entry.get("quarantined"):
             continue
+        # A deliberate sideline (`focus`, `profile use`, `context apply`)
+        # unlinks on purpose and records it in `sidelined_by` — so the missing
+        # links below are not damage to repair. Without this check `sync`
+        # relinked every sidelined skill, undoing the switch it was never told
+        # about.
+        if entry.get("sidelined_by"):
+            continue
         # Only the agents this skill was installed for. Walking every enabled
         # agent made `boost sync` a second path to the scope leak that
         # `preserved_agent_scope` closed on the install side: it reported a
@@ -1720,14 +1811,17 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
                 from . import catalog
                 matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
-                if matches:
-                    if _pinned_repair_blocked(entry, _skill_source_sha(matches[0])):
+                cat_entry, warning = catalog.select_lock_source(matches, entry)
+                if warning:
+                    actions.append(warning)
+                if cat_entry:
+                    if _pinned_repair_blocked(entry, _skill_source_sha(cat_entry)):
                         actions.append(
                             "%s is pinned and its tap source has moved — repair "
                             "declined (unpin, or `boost reinstall %s` to accept "
                             "the new content)" % (name, name))
                         continue
-                    install(matches[0], force=True)
+                    install(cat_entry, force=True)
                     actions.append("reinstalled missing %s from %s" % (name, tap_name))
                     restored = True
             except BoostError:
@@ -1744,9 +1838,12 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
                 from . import catalog
                 matches = [e for e in catalog.find(name)
                            if e["tap"] == tap_name and e.get("kind", "skill") == kind]
-                if matches:
+                cat_entry, warning = catalog.select_lock_source(matches, entry)
+                if warning:
+                    actions.append(warning)
+                if cat_entry:
                     if _pinned_repair_blocked(
-                            entry, _source_text_sha(tap_name, matches[0])):
+                            entry, _source_text_sha(tap_name, cat_entry)):
                         actions.append(
                             "%s %s is pinned and its tap source has moved — "
                             "repair declined (unpin, or `boost reinstall %s` to "
@@ -1754,7 +1851,7 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
                         continue
                     # preserve the original scope/base so a project rule repairs
                     # into its repo, not wherever sync happens to run.
-                    install(matches[0], force=True,
+                    install(cat_entry, force=True,
                             scope=entry.get("scope", "user"), base=entry.get("base"))
                     actions.append("re-materialized %s %s from %s"
                                    % (kind, name, tap_name))

@@ -215,6 +215,30 @@ class TestClean:
         assert not pyc.exists() and not old_snap.exists()
         assert len(list(hist.glob("lock-*.json"))) == 50
 
+    def test_deep_clean_declined_does_not_claim_nothing_to_clean(
+            self, boost, installed, monkeypatch):
+        # Bug: an old snapshot was the only candidate, the user declined
+        # removing it ("keeping old snapshots"), and clean went on to print
+        # the unrelated "nothing to clean" — a contradiction, since there
+        # was something and the user had just said no to it.
+        import os
+        old_snap = paths.snapshots_dir() / "ancient"
+        old_snap.mkdir(parents=True)
+        (old_snap / "f").write_text("x", encoding="utf-8")
+        old = time.time() - 91 * 86400
+        os.utime(old_snap, (old, old))
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("clean", "--deep", expect=1)   # non-tty stdin declines
+        assert "keeping old snapshots" in r.out
+        assert "nothing to clean" not in r.out
+        assert old_snap.is_dir()
+
+    def test_deep_yes_flag_is_accepted_by_the_parser(self, boost, installed):
+        # Bug: `boost clean --deep --yes` errored with "unrecognized
+        # arguments: --yes" before out.confirm() was ever reached.
+        r = boost("clean", "--deep", "--yes")
+        assert "unrecognized arguments" not in r.err
+
 
 # ---------------------------------------------------------------- create
 

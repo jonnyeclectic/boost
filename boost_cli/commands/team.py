@@ -386,7 +386,11 @@ def cmd_profile(argv) -> int:
         out.ok("installed %s → %s" % (n, " · ".join(res.linked)))
     for n in sorted(want):
         if lockfile.get_skill(n) and not (lockfile.get_skill(n) or {}).get("quarantined"):
-            store.link_agents(n)
+            # unsideline, not link_agents: a skill this profile wants may have
+            # been sidelined by an earlier `profile use` (or by `focus` /
+            # `context`), and relinking without clearing `sidelined_by` left
+            # `list`/`doctor` still calling it set aside.
+            store.unsideline(n)
     if extras:
         if args.prune:
             if out.confirm("uninstall %d skill%s not in the profile (%s)?"
@@ -398,7 +402,7 @@ def cmd_profile(argv) -> int:
                 out.info("kept extras installed")
         else:
             for n in extras:
-                store.unlink_agents(n)
+                store.sideline(n, "profile")
             out.info("sidelined %d skill%s not in the profile (unlinked, still installed): %s"
                      % (len(extras), _s(len(extras)), ", ".join(extras)))
     journal.log("profile", args.name, op="use")
@@ -465,7 +469,7 @@ def cmd_protocol(argv) -> int:
         entries = catalog.rebuild_tap(tap)
         complete.refresh_names()
         journal.log("tap", tap.name, via="protocol")
-        out.ok("tapped %s (%d skills)" % (tap.name, len(entries)))
+        out.ok("tapped %s (%d items)" % (tap.name, len(entries)))
         return 0
 
     if args.action == "register":

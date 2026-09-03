@@ -1438,3 +1438,66 @@ class TestMatchesAndFilterByCategory:
     def test_filter_by_category_empty_is_a_no_op(self):
         entries = [_entry("a", "t"), _entry("b", "t")]
         assert catalog.filter_by_category(entries, "") == entries
+
+
+class TestSelectLockSource:
+    """A tap can vendor the same name into more than one directory — the lock
+    records exactly which copy was installed, and select_lock_source must
+    prefer it over matches[0]."""
+
+    def _skill_matches(self):
+        return [_entry("brainstorming", "t", rel_dir="mirror-a"),
+                _entry("brainstorming", "t", rel_dir="mirror-b"),
+                _entry("brainstorming", "t", rel_dir="mirror-c")]
+
+    def test_no_matches_returns_nothing(self):
+        entry, warning = catalog.select_lock_source([], {"source_dir": "mirror-b"})
+        assert entry is None
+        assert warning is None
+
+    def test_skill_picks_the_lock_recorded_source_dir(self):
+        matches = self._skill_matches()
+        entry, warning = catalog.select_lock_source(matches, {"source_dir": "mirror-b"})
+        assert entry["rel_dir"] == "mirror-b"
+        assert warning is None
+
+    def test_skill_falls_back_with_a_warning_when_source_dir_is_gone(self):
+        matches = self._skill_matches()
+        entry, warning = catalog.select_lock_source(matches, {"source_dir": "mirror-z"})
+        assert entry is matches[0]
+        assert warning is not None
+        assert "mirror-z" in warning
+
+    def test_skill_with_no_recorded_source_falls_back_silently(self):
+        # An old lock predating source_dir, or a synthesised entry — never
+        # this function's business to complain about.
+        matches = self._skill_matches()
+        entry, warning = catalog.select_lock_source(matches, {})
+        assert entry is matches[0]
+        assert warning is None
+
+    def test_rule_picks_the_lock_recorded_source_file(self):
+        matches = [{"name": "x", "skill_md": "one/x.mdc", "version": "1.0.0"},
+                  {"name": "x", "skill_md": "two/x.mdc", "version": "2.0.0"}]
+        entry, warning = catalog.select_lock_source(
+            matches, {"source_file": "two/x.mdc"})
+        assert entry["skill_md"] == "two/x.mdc"
+        assert warning is None
+
+    def test_rule_falls_back_with_a_warning_when_source_file_is_gone(self):
+        matches = [{"name": "x", "skill_md": "one/x.mdc", "version": "1.0.0"}]
+        entry, warning = catalog.select_lock_source(
+            matches, {"source_file": "gone/x.mdc"})
+        assert entry is matches[0]
+        assert warning is not None
+        assert "gone/x.mdc" in warning
+
+    def test_source_file_takes_priority_over_source_dir(self):
+        # A lock entry should carry exactly one of the two, but source_file
+        # (rule/workflow) must never be misread as a skill's source_dir.
+        matches = [{"name": "x", "skill_md": "one/x.mdc", "rel_dir": "one"},
+                  {"name": "x", "skill_md": "two/x.mdc", "rel_dir": "two"}]
+        entry, warning = catalog.select_lock_source(
+            matches, {"source_file": "two/x.mdc", "source_dir": "one"})
+        assert entry["skill_md"] == "two/x.mdc"
+        assert warning is None

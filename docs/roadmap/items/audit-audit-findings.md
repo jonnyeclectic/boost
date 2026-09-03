@@ -2,15 +2,15 @@
 id: audit-audit-findings
 board: code
 section: health
-status: planned
+status: shipped
 category: Safety · Bug
 complexity: M
 impact: Med
 wow: 2
 note: rm -rf ~/ passes clean, hidden.js is never scanned, and a missing dir counts as scanned
 order: 249
-owner:
-pr:
+owner: loop/audit-audit-findings
+pr: 737
 title: "boost audit: CLI audit findings (2026-08)"
 ---
 <b>Three honesty gaps in the trust scanner.</b> A seeded <code>rm -rf ~/</code> (and <code>rm -rf

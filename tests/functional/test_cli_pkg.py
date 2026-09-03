@@ -320,6 +320,57 @@ class TestUninstall:
         assert "Uninstalled 1 skill" in r.out
         assert _lock() == {}
 
+    def test_rule_uninstall_says_removed_from_not_unlinked(
+            self, boost, fixture_tap_src, tmp_path):
+        # Verified live bug: uninstalling a rule used to print "unlinked ←"
+        # and "removed ~/.agents/skills/<name>" — a symlink and a store dir
+        # a rule never has, because a rule is materialized straight into
+        # each agent's own context file / rules dir, never copied into the
+        # canonical store or symlinked out of it.
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "un-rule-tap")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\n"
+                        "Use tabs.\n", "add rule")
+        boost("tap", tap_dir)
+        boost("install", "house-style")
+        r = boost("uninstall", "house-style")
+        assert "removed from" in r.out
+        assert "claude-code" in r.out
+        assert "unlinked" not in r.out
+        assert "~/.agents/skills/house-style" not in r.out
+        assert "removed ~/.agents/skills" not in r.out
+        assert "Uninstalled 1 rule" in r.out
+        assert not (paths.home() / ".claude" / "CLAUDE.md").exists()
+        assert not (paths.store_dir() / "house-style").exists()
+
+    def test_workflow_uninstall_says_removed_from_not_unlinked(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "un-wf-tap")
+        _add_and_commit(tap_dir, "commands/ship.md",
+                        "---\nname: ship-it\nversion: 1.0.0\ndescription: d\n"
+                        "allowed-tools: Bash\n---\n\ngo\n", "add wf")
+        boost("tap", tap_dir)
+        boost("install", "ship-it")
+        r = boost("uninstall", "ship-it")
+        assert "removed from" in r.out
+        assert "claude-code" in r.out
+        assert "unlinked" not in r.out
+        assert "~/.agents/skills/ship-it" not in r.out
+        assert "Uninstalled 1 workflow" in r.out
+        assert not (paths.home() / ".claude" / "commands" / "ship-it.md").exists()
+        assert not (paths.store_dir() / "ship-it").exists()
+
+    def test_mixed_kind_uninstall_says_items(self, boost, fixture_tap_src,
+                                             tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "un-mixed-tap")
+        _add_and_commit(tap_dir, "rules/house.mdc",
+                        "---\nname: house-style\nversion: 1.0.0\n---\n\n"
+                        "Use tabs.\n", "add rule")
+        boost("tap", tap_dir)
+        boost("install", "brainstorming", "house-style")
+        r = boost("uninstall", "brainstorming", "house-style")
+        assert "Uninstalled 2 items" in r.out
+
 
 # ── sync ─────────────────────────────────────────────────────────────────
 
@@ -359,6 +410,26 @@ class TestSync:
         r = boost("sync", "--prune")       # BOOST_ASSUME_YES confirms
         assert "pruned ~/.agents/skills/orphan-x" in r.out
         assert not orphan.exists()
+
+    def test_prune_declined_does_not_tell_you_to_rerun_the_flag_you_just_ran(
+            self, boost, installed, monkeypatch):
+        # Bug: --prune declined told the user to run `boost sync --prune` —
+        # the command they had just run and said no to.
+        orphan = paths.store_dir() / "orphan-x"
+        orphan.mkdir()
+        (orphan / "SKILL.md").write_text("# orphan\n", encoding="utf-8")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("sync", "--prune")   # non-tty stdin declines
+        assert "1 orphaned store dir left in place (declined): orphan-x" in r.out
+        assert "boost sync --prune" not in r.out
+        assert orphan.is_dir()
+
+    def test_yes_flag_is_accepted_by_the_parser(self, boost, installed):
+        # Bug: argparse rejected --yes here ("unrecognized arguments"), so
+        # BOOST_ASSUME_YES/--yes could never both be true for this command's
+        # own flags even though out.confirm() itself already honours --yes.
+        r = boost("sync", "--prune", "--yes")
+        assert "unrecognized arguments" not in r.err
 
     def test_repairs_missing_rule_materialization(self, boost, fixture_tap_src,
                                                   tmp_path):
@@ -941,6 +1012,15 @@ class TestImport:
 # ── snapshot ─────────────────────────────────────────────────────────────
 
 class TestSnapshot:
+    def test_restore_yes_flag_is_accepted_by_the_parser(self, boost, installed):
+        # Bug: `boost snapshot restore ID --yes` errored with "unrecognized
+        # arguments: --yes" (exit 2) before out.confirm() was ever reached.
+        r = boost("snapshot", "save", "before-wipe")
+        snap_id = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
+        r = boost("snapshot", "restore", snap_id, "--yes")
+        assert "unrecognized arguments" not in r.err
+        assert "restored %s" % snap_id in r.out
+
     def test_save_list_restore_roundtrip(self, boost, installed):
         r = boost("snapshot", "save", "before-wipe")
         m = re.search(r"saved (snap-[\w-]+) \(1 skill,", r.out)
@@ -1050,6 +1130,24 @@ class TestExport:
         assert "exported 1 skill →" in r.out
         assert dest.is_file()
 
+    def test_qualified_name_matching_the_installed_tap_works(
+            self, boost, installed, rival_tap, tmp_path):
+        # The ambiguity hint recommends `owner/repo:skill`; typing exactly
+        # that must resolve, not "not installed" (docs/roadmap/items/
+        # audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie.md).
+        dest = tmp_path / "x.tar.gz"
+        r = boost("export", "fixture-tap:brainstorming", "-o", dest)
+        assert "exported 1 skill →" in r.out
+        with tarfile.open(str(dest)) as tf:
+            assert "brainstorming/SKILL.md" in tf.getnames()
+
+    def test_qualified_name_naming_a_different_tap_is_not_installed(
+            self, boost, installed, rival_tap, tmp_path):
+        dest = tmp_path / "x.tar.gz"
+        r = boost("export", "rival-tap:brainstorming", "-o", dest, expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
+        assert not dest.exists()
+
 
 # ── kind-aware surfaces ──────────────────────────────────────────────────
 
@@ -1154,6 +1252,30 @@ class TestKindAwarePkgSurface:
         r = boost("bundle", "install", vf)
         assert "house-style is already installed as a rule — skipped" in r.out
         assert "Installed 0 skills, 1 already present" in r.out
+
+    def test_bundle_install_names_the_kind_it_actually_installed(
+            self, boost, fixture_tap_src, tmp_path):
+        # A "skill NAME" Boostfile line can resolve to a rule (`catalog.find`
+        # searches every kind) — the summary must agree with what actually
+        # happened, or a dump/install round trip contradicts itself: `bundle
+        # dump` would then say "1 rule not captured" about the very item
+        # `bundle install` just called a skill.
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "bik-tap"))
+        vf = tmp_path / "Boostfile"
+        vf.write_text("skill bik-tap:house-style@1.0.0\n", encoding="utf-8")
+        r = boost("bundle", "install", vf)
+        assert "Installed 1 rule" in r.out
+        assert "Installed 1 skill" not in r.out
+        assert lockfile.get_rule("house-style") is not None
+
+    def test_bundle_install_of_mixed_kinds_says_items(
+            self, boost, fixture_tap_src, tmp_path):
+        boost("tap", self._tap_with_rule(fixture_tap_src, tmp_path, "bim-tap"))
+        vf = tmp_path / "Boostfile"
+        vf.write_text("skill bim-tap:brainstorming@1.4.0\n"
+                      "skill bim-tap:house-style@1.0.0\n", encoding="utf-8")
+        r = boost("bundle", "install", vf)
+        assert "Installed 2 items" in r.out
 
     def test_dry_run_verb_is_upgrade_for_an_installed_rule(
             self, boost, fixture_tap_src, tmp_path):
@@ -1563,7 +1685,7 @@ class TestSnapshotEdges:
         r = boost("snapshot", "save")
         sid = re.search(r"saved (snap-[\w-]+)", r.out).group(1)
         monkeypatch.delenv("BOOST_ASSUME_YES")
-        r = boost("snapshot", "restore", sid)    # non-tty stdin declines
+        r = boost("snapshot", "restore", sid, expect=1)    # non-tty stdin declines
         assert "cancelled" in r.out
         assert _lock()["brainstorming"]["version"] == "1.4.0"
 

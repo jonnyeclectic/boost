@@ -13,6 +13,7 @@ which only copies ``boost_cli/``).
 """
 from __future__ import annotations
 
+import argparse
 import importlib.util
 from pathlib import Path
 
@@ -74,3 +75,83 @@ def test_extract_captures_flags_and_synopsis():
     assert any(f.startswith("--force") for f in flags)
     assert any(f.startswith("--scope") for f in flags)
     assert rec["positionals"], "install should document its NAME positional"
+
+
+@_skip
+def test_required_option_is_unbracketed_in_synopsis():
+    # `adapt --help` prints an unbracketed `--to FRAMEWORK` and omitting it
+    # exits 2 — the generator used to bracket it as `[--to FRAMEWORK]`
+    # regardless, documenting it as optional when it is not.
+    builder = _load_builder()
+    rec = builder._extract("adapt", "pkg", "pkg",
+                           "Render a skill as another framework's agent source")
+    assert "--to FRAMEWORK" in rec["synopsis"]
+    assert "[--to FRAMEWORK]" not in rec["synopsis"]
+
+
+@_skip
+def test_required_mutex_group_renders_as_parenthesized_alternation():
+    # catalog's --export/--import/--show is a required mutually-exclusive
+    # group — none individually required, but exactly one must be given.
+    builder = _load_builder()
+    rec = builder._extract("catalog", "tap", "taps",
+                           "Share the tapped catalogue so others skip the clone")
+    assert "(--export FILE | --import FILE | --show FILE)" in rec["synopsis"]
+
+
+@_skip
+def test_non_required_option_stays_bracketed():
+    builder = _load_builder()
+    rec = builder._extract("install", "pkg", "pkg", "Install a skill from a tap registry")
+    assert "[--force]" in rec["synopsis"]
+
+
+class TestOptSynParts:
+    """Direct tests of the synopsis-token builder against synthetic parsers —
+    the generator has no unit tests of its own beyond the golden-HTML drift
+    check above, so a regression here would only ever surface as a diff in
+    generated HTML nobody reads closely."""
+
+    def test_required_solo_option_unbracketed(self):
+        builder = _load_builder()
+        p = argparse.ArgumentParser()
+        act = p.add_argument("--to", metavar="FRAMEWORK", required=True)
+        assert builder._opt_syn_parts(p, [act]) == ["--to FRAMEWORK"]
+
+    def test_optional_solo_option_bracketed(self):
+        builder = _load_builder()
+        p = argparse.ArgumentParser()
+        act = p.add_argument("--model", metavar="M")
+        assert builder._opt_syn_parts(p, [act]) == ["[--model M]"]
+
+    def test_flag_option_prefers_first_declared_string(self):
+        builder = _load_builder()
+        p = argparse.ArgumentParser()
+        act = p.add_argument("-y", "--yes", action="store_true")
+        assert builder._opt_syn_parts(p, [act]) == ["[-y]"]
+
+    def test_required_mutex_group_parenthesized(self):
+        builder = _load_builder()
+        p = argparse.ArgumentParser()
+        g = p.add_mutually_exclusive_group(required=True)
+        a = g.add_argument("--export", metavar="FILE")
+        b = g.add_argument("--import", metavar="FILE", dest="import_")
+        assert builder._opt_syn_parts(p, [a, b]) == ["(--export FILE | --import FILE)"]
+
+    def test_optional_mutex_group_bracketed(self):
+        builder = _load_builder()
+        p = argparse.ArgumentParser()
+        g = p.add_mutually_exclusive_group(required=False)
+        a = g.add_argument("--local", action="store_true")
+        b = g.add_argument("--global", action="store_true", dest="global_")
+        assert builder._opt_syn_parts(p, [a, b]) == ["[--local | --global]"]
+
+    def test_mutex_group_action_only_emitted_once(self):
+        builder = _load_builder()
+        p = argparse.ArgumentParser()
+        g = p.add_mutually_exclusive_group(required=True)
+        a = g.add_argument("--export", metavar="FILE")
+        b = g.add_argument("--import", metavar="FILE", dest="import_")
+        c = p.add_argument("--json", action="store_true")
+        assert builder._opt_syn_parts(p, [a, b, c]) == \
+            ["(--export FILE | --import FILE)", "[--json]"]

@@ -341,7 +341,10 @@ python3 -m venv /tmp/crew &amp;&amp; /tmp/crew/bin/pip install <span class="s">"
       <p class="sec-sub" style="margin-top:22px"><b>Runs on boost's model by default.</b> With no
         <code>--model</code>, the exported agent is wired to boost's configured <code>ai.model</code>
         (Claude) via each framework's LiteLLM path — so it runs on the same LLM boost uses, no OpenAI key.
-        Override with <code>--model openai/gpt-4o</code>, or <code>--model none</code> for the framework's
+        Override with <code>--model openai/gpt-4o</code> (LiteLLM's <code>provider/model</code>) or
+        <code>--model anthropic:claude-x</code> (LangGraph's <code>provider:model</code> — either form is
+        accepted for every target, normalized to whichever syntax the framework wants), or
+        <code>--model none</code> for the framework's
         own default. (The <code>[anthropic]</code>/<code>[litellm]</code> extras carry that provider.)</p>
       <p class="sec-sub" style="margin-top:14px">Supported targets today: <code>crewai</code>,
         <code>agents-sdk</code>. Adding another framework is one <code>render_*</code> function plus a row in

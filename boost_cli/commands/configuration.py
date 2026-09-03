@@ -145,6 +145,8 @@ def cmd_clean(argv) -> int:
                    help="show what would be removed without touching anything")
     p.add_argument("--deep", action="store_true",
                    help="also remove snapshots older than 90 days")
+    p.add_argument("-y", "--yes", action="store_true",
+                   help="skip the --deep confirmation prompt")
     args = p.parse_args(argv)
 
     items: list[tuple[Path, str, int]] = []  # (path, kind, bytes)
@@ -188,19 +190,26 @@ def cmd_clean(argv) -> int:
             elif pth.name == ".DS_Store" and pth.is_file():
                 items.append((pth, ".DS_Store", pth.stat().st_size))
 
+    declined = False
     if args.deep and paths.snapshots_dir().is_dir():
         cutoff = time.time() - 90 * 86400
         old_snaps = [s for s in sorted(paths.snapshots_dir().iterdir())
                      if s.lstat().st_mtime < cutoff]
-        if old_snaps and not args.dry_run and not out.confirm(
-                "remove %d snapshot(s) older than 90 days?" % len(old_snaps)):
+        if old_snaps and not args.dry_run and not (args.yes or out.confirm(
+                "remove %d snapshot(s) older than 90 days?" % len(old_snaps))):
             out.info("keeping old snapshots")
+            declined = True
             old_snaps = []
         for s in old_snaps:
             size = util.dir_size(s) if s.is_dir() else s.lstat().st_size
             items.append((s, "old snapshot", size))
 
     if not items:
+        # `declined` means the only candidate was the --deep snapshot purge
+        # and the user said no — "nothing to clean" would claim there was
+        # nothing to do when there was, and the user just declined doing it.
+        if declined:
+            return 1
         out.ok("nothing to clean")
         return 0
 
@@ -303,6 +312,18 @@ def cmd_compact(argv) -> int:
             if args.reclone:
                 util.rmtree(tap.path)
                 gitutil.clone_shallow(tap.url, tap.path)
+                if tap.pin:
+                    # A pinned tap re-clones at the default branch like any
+                    # other — nothing about `--reclone` consults the pin — so
+                    # without this the clone silently lands on HEAD while
+                    # config.json, the catalog cache and `boost taps` keep
+                    # naming the old commit. checkout_commit's own BoostError
+                    # (unresolvable pin) surfaces through the except below.
+                    gitutil.checkout_commit(tap.path, tap.pin)
+                # The re-clone can change what's on disk even when the byte
+                # count doesn't (a pinned tap's tree is identical, but the
+                # cache's recorded commit and mtime are now stale either way).
+                catalog.rebuild_tap(tap)
             else:
                 gitutil.narrow(tap.path)
             for rel in keep.get(tap.name, []):
@@ -311,9 +332,12 @@ def cmd_compact(argv) -> int:
             out.warn("could not compact %s: %s" % (tap.name, e))
             continue
         after = util.dir_size(tap.path)
-        if after < before:
+        # A re-clone did real work — refreshed the clone, possibly moved it
+        # back onto its pin — even when it doesn't shrink the tap, so it must
+        # never be silently absorbed into "every tap is already compact".
+        if args.reclone or after < before:
             changed += 1
-            freed += before - after
+            freed += max(before - after, 0)
             out.info("%s  %s → %s" % (tap.name, util.human_size(before),
                                       util.human_size(after)))
 

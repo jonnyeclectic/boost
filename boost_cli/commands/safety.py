@@ -16,7 +16,7 @@ import time
 from contextlib import suppress
 from itertools import chain
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .. import cliparse
 from ..core import (
@@ -51,7 +51,13 @@ from ._common import (
 _AUDIT_PATTERNS = [
     (re.compile(r"(?:curl|wget)[^|\n]*\|\s*(?:sudo\s+)?(?:ba|z|da)?sh\b"),
      "HIGH", "remote-exec"),
-    (re.compile(r"rm\s+-(?:rf|fr)\s+(?:/|~)(?=[\s'\";`)]|$)", re.MULTILINE),
+    # A trailing `/` (`rm -rf ~/`) or glob (`rm -rf /*`) is still "delete
+    # everything" and must not slip past the boundary check the way a real
+    # path (`rm -rf /home/user`) should. The optional `(?:/\*?|\*)?` group
+    # absorbs exactly one extra `/`, `/*` or `*` right after the root token
+    # before the same word-boundary lookahead applies.
+    (re.compile(r"rm\s+-(?:rf|fr)\s+(?:/|~)(?:/\*?|\*)?(?=[\s'\";`)]|$)",
+               re.MULTILINE),
      "HIGH", "destructive"),
     (re.compile(r"base64\s+(?:-d|-D|--decode)\b[^\n]*\|\s*(?:ba|z)?sh\b"),
      "HIGH", "obfuscated-exec"),
@@ -63,12 +69,23 @@ _AUDIT_PATTERNS = [
 _CRED_POST = re.compile(r"(?i)(?:curl\b[^\n]*\s(?:-d|--data)\b|POST\s+[^\n]*https?://)")
 _CRED_HINT = re.compile(r"(?i)secret|token|api[-_]?key|password|credential")
 _SEV_ROLE = {"HIGH": "danger", "MED": "warn", "LOW": "muted"}
+_SEV_RANK = {"HIGH": 0, "MED": 1, "LOW": 2}
+
+# Content scan file scope. SKILL.md is always included (added separately,
+# below); this is everything else worth reading for a shell-out, a fetched
+# script, or a prompt-injection string. Not "every UTF-8 file" — a vendored
+# data file or lockfile would just be noise — but wide enough that a NOTES.md
+# or a hidden .js helper is no longer invisible to the scan.
+_SCAN_SUFFIXES = frozenset({".sh", ".py", ".md", ".js", ".ts", ".rb", ".ps1"})
 
 
 def cmd_audit(argv):
     ap = cliparse.parser(
         prog="boost audit",
-        description="Check installed skills against a safety blocklist")
+        description="Check installed skills against a safety blocklist "
+                     "(scans SKILL.md plus %s files under each skill; "
+                     "materialized rules/workflows are scanned whole)"
+                     % "/".join(sorted(_SCAN_SUFFIXES)))
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--skills", action="store_true",
                     help="trust/staleness report for installed skills instead "
@@ -81,6 +98,7 @@ def cmd_audit(argv):
     pol = policy.load()
     installed = _iter_installed()
     findings: dict = {}
+    missing_store: list[str] = []
 
     def add(name, severity, label, where, snippet):
         findings.setdefault(name, []).append({
@@ -93,15 +111,22 @@ def cmd_audit(argv):
             add(name, "HIGH", "policy-blocked", "policy.json",
                 "skill is on the policy blocklist")
         sdir = store.skill_store_dir(name)
+        if not sdir.is_dir():
+            # Nothing to scan is not the same fact as "scanned and clean" —
+            # an installed skill whose store directory vanished is exactly
+            # what `verify` reports as STATUS_MISSING, and silently counting
+            # it here as a clean pass would hide that from `audit` output.
+            missing_store.append(name)
+            continue
         if min_score > 0:
             score, _n = util.score_skill(sdir)
             if score < min_score:
                 add(name, "MED", "quality-below-policy", "SKILL.md",
                     "score %d < policy minimum %d" % (score, min_score))
         files = [sdir / "SKILL.md"] if (sdir / "SKILL.md").exists() else []
-        if sdir.is_dir():
-            files += [p for p in sorted(sdir.rglob("*"))
-                      if p.is_file() and p.suffix in (".sh", ".py")]
+        files += [p for p in sorted(sdir.rglob("*"))
+                  if p.is_file() and p.suffix in _SCAN_SUFFIXES
+                  and p.name != "SKILL.md"]
         for f in files:
             try:
                 text = f.read_text(encoding="utf-8", errors="replace")
@@ -153,19 +178,32 @@ def cmd_audit(argv):
                             "%s:%d" % (where, i), line.strip()[:90])
                 break  # identical content per agent — one scan is the signal
 
+    # Deterministic, worst-first order: the scan above appends findings in
+    # pattern order (whichever regex happens to match first), so a HIGH could
+    # print after a LOW purely by pattern-list position. `--skills` already
+    # sorts via trustaudit.sort_findings, but that keys on `detail`, which
+    # these content findings do not have (KeyError) — sort on this shape here.
+    for fs in findings.values():
+        fs.sort(key=lambda f: (_SEV_RANK[f["severity"]], f["file"], f["label"]))
+
     counts = {"HIGH": 0, "MED": 0, "LOW": 0}
     for fs in findings.values():
         for f in fs:
             counts[f["severity"]] += 1
 
-    scanned = len(installed) + mat_scanned
+    scanned = len(installed) - len(missing_store) + mat_scanned
     if args.json:
-        print(json.dumps({"skills_scanned": len(installed),
+        print(json.dumps({"skills_scanned": len(installed) - len(missing_store),
                           "materialized_scanned": mat_scanned,
+                          "missing_store": sorted(missing_store),
                           "findings": findings, "counts": counts}))
         return 1 if counts["HIGH"] or counts["MED"] else 0
 
     out.heading("safety audit — %d item%s" % (scanned, _s(scanned)))
+    if missing_store:
+        out.warn("%d skill%s missing their store directory — nothing to scan: %s"
+                 % (len(missing_store), _s(len(missing_store)),
+                    ", ".join(sorted(missing_store))))
     if not findings:
         out.ok("no safety findings across %d item%s" % (scanned, _s(scanned)))
         return 0
@@ -209,21 +247,23 @@ def _tap_age_days(tap):
 
 
 def _tap_signals(tap_name, cache):
-    """``(provenance status, age in days, HEAD commit)`` for a tap, memoized.
+    """``(provenance status, age in days, HEAD commit, pinned)`` for a tap,
+    memoized.
 
     A tap boost cannot read — unknown name, never cloned — yields
-    ``(None, None, "")``, which ``trustaudit`` renders as "signature cannot be
-    checked" rather than silently passing.
+    ``(None, None, "", False)``, which ``trustaudit`` renders as "signature
+    cannot be checked" rather than silently passing.
     """
     if tap_name not in cache:
         try:
             tap = registry.get(tap_name)
         except BoostError:
-            cache[tap_name] = (None, None, "")
+            cache[tap_name] = (None, None, "", False)
         else:
             cache[tap_name] = ((provenance.verify_dir(tap.path).status,
-                                _tap_age_days(tap), gitutil.head_commit(tap.path))
-                               if tap.is_cloned else (None, None, ""))
+                                _tap_age_days(tap), gitutil.head_commit(tap.path),
+                                bool(tap.pin))
+                               if tap.is_cloned else (None, None, "", False))
     return cache[tap_name]
 
 
@@ -236,7 +276,8 @@ def _upstream_reason(name, lk, tap_name, head):
     matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
     if not matches:
         return None
-    entry = matches[0]
+    entry, _warning = catalog.select_lock_source(matches, lk)
+    entry = cast(dict, entry)                 # matches is non-empty above
     latest = str(entry.get("version") or "0.0.0")
     installed_v = str(lk.get("version") or "0.0.0")
     src_sha = None
@@ -291,21 +332,24 @@ def _trust_audit(as_json: bool) -> int:
     for name, lk in sorted(installed.items()):
         tap_name = str(lk.get("tap") or "local")
         is_local = tap_name == "local"
-        status, age, head = ((None, None, "") if is_local
-                             else _tap_signals(tap_name, taps))
+        status, age, head, pinned = ((None, None, "", False) if is_local
+                                     else _tap_signals(tap_name, taps))
         rows = trustaudit.skill_findings(
             is_local=is_local, provenance_status=status, tap_age_days=age,
             upstream_reason=(None if is_local
                              else _upstream_reason(name, lk, tap_name, head)),
-            conflicts_with=peers.get(name, ()))
+            conflicts_with=peers.get(name, ()), tap_pinned=pinned)
         if rows:
             findings[name] = rows
 
     counts = trustaudit.count_severities(findings)
     rc = trustaudit.exit_code(counts)
     if as_json:
+        # Single-line, matching cmd_audit's content-scan --json: the sibling
+        # `boost audit` (no --skills) never pretty-prints its JSON, and a
+        # scriptable command's shape should not depend on which half ran.
         print(json.dumps({"skills_scanned": len(installed),
-                          "findings": findings, "counts": counts}, indent=2))
+                          "findings": findings, "counts": counts}))
         return rc
     return _render_trust_audit(installed, findings, counts, rc)
 
@@ -315,7 +359,8 @@ def _render_trust_audit(installed, findings, counts, rc: int) -> int:
     total = len(installed)
     out.heading("trust audit — %d skill%s" % (total, _s(total)))
     if not total:
-        out.info("nothing installed yet — `boost install <skill>` to start")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return rc
     if not findings:
         out.ok("all %d installed skill%s signed, current and conflict-free"
@@ -411,7 +456,8 @@ def cmd_verify(argv):
         return 1 if bad else 0
 
     if not results:
-        out.info("nothing installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     width = max(len(r["name"]) for r in results)
     status_role = {"ok": "success", "modified": "warn", "missing": "danger",
@@ -528,6 +574,10 @@ def cmd_quarantine(argv):
     if kind == "skill":
         store.unlink_agents(name)
         entry["quarantined"] = True
+        # unlink_agents just removed every linking-agent symlink, so the
+        # recorded agents are gone too — leaving the old list would have
+        # `list`/`info`/`doctor` keep reporting links that no longer exist.
+        entry["agents"] = []
         lockfile.set_skill(name, entry)
         journal.log("quarantine", name)
         out.ok("quarantined %s (store intact, links removed)" % name)

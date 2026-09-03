@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from boost_cli.core import config, gitutil, paths, policy, registry
+from boost_cli.core import config, gitutil, paths, policy, registry, util
 from boost_cli.errors import BoostError
 
 SHA = "a" * 40
@@ -108,6 +108,57 @@ class TestUpdateRespectsPins:
         assert registry.list_taps()[0].pin == ""
 
 
+class TestUpdateReclonesAMissingPinnedTap:
+    """A pinned tap has nothing to hold still once its clone is gone, so
+    skipping it — the old behaviour — reported "pinned … (skipped)" while
+    leaving nothing on disk at all: `boost taps` kept naming a commit no
+    clone described.
+    """
+
+    def test_recloned_at_its_pin_not_skipped(self, sandbox, fake_clone):
+        registry.add("o/a", at=SHA)
+        util.rmtree(registry.list_taps()[0].path)
+
+        results, failures = registry.update()
+
+        assert failures == {}
+        assert results["o/a"] == "cloned at %s" % SHA[:7]
+        assert registry.list_taps()[0].is_cloned
+        # The pin survives — this is a reclone onto it, not a move off it.
+        assert registry.list_taps()[0].pin == SHA
+        assert fake_clone["checkouts"][-1] == ("o__a", SHA)
+
+    def test_force_clones_at_head_and_drops_the_pin(self, sandbox, fake_clone):
+        registry.add("o/a", at=SHA)
+        util.rmtree(registry.list_taps()[0].path)
+
+        results, failures = registry.update(force=True)
+
+        assert failures == {}
+        assert results["o/a"] == "cloned"
+        assert registry.list_taps()[0].pin == ""
+        # Only the checkout `add(at=SHA)` itself performed — force must not
+        # land the fresh clone back on the pin it just dropped.
+        assert fake_clone["checkouts"] == [("o__a", SHA)]
+
+    def test_an_unhonourable_pin_leaves_no_half_clone(self, sandbox,
+                                                      fake_clone, monkeypatch):
+        registry.add("o/a", at=SHA)
+        clone_path = registry.list_taps()[0].path
+        util.rmtree(clone_path)
+
+        def bad_checkout(repo, sha):
+            raise BoostError("not our ref")
+
+        monkeypatch.setattr(gitutil, "checkout_commit", bad_checkout)
+        with pytest.raises(BoostError):
+            registry.update("o/a")
+        # A clone left on HEAD with the old pin still recorded would read as
+        # cloned-and-current on the next sweep and never be retried.
+        assert not clone_path.exists()
+        assert registry.list_taps()[0].pin == SHA
+
+
 class TestRefreshMarker:
     """One `stat`, so the search path can afford to ask."""
 
@@ -149,6 +200,50 @@ class TestRefreshMarker:
 
         monkeypatch.setattr("pathlib.Path.stat", boom)
         assert registry.refresh_age_days() is None
+
+
+class TestLastRefreshAt:
+    """The ISO-string sibling of refresh_age_days, for `boost health`.
+
+    A tap clone's own git log is the upstream's clock and never moves on a
+    local sync — that mismatch is what made `boost health` claim a sync from
+    minutes ago was weeks old. This is the same marker, in the shape
+    ``util.rel_time`` expects, so a caller reporting "last tap sync" reads the
+    local action rather than the tap's newest commit.
+    """
+
+    def test_a_machine_that_never_refreshed_has_no_timestamp(self, sandbox):
+        assert registry.last_refresh_at() is None
+
+    def test_a_successful_sweep_stamps_a_recent_timestamp(self, sandbox,
+                                                           fake_clone):
+        import time as time_mod
+        from datetime import UTC, datetime
+
+        registry.add("o/a")
+        registry.update()
+        stamped = registry.last_refresh_at()
+        assert stamped is not None
+        then = datetime.strptime(stamped, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+        assert abs(time_mod.time() - then.timestamp()) < 5
+
+    def test_the_timestamp_tracks_the_markers_mtime(self, sandbox, fake_clone):
+        import os
+
+        registry.add("o/a")
+        registry.update()
+        marker = paths.tap_refresh_marker()
+        old = time.time() - 30 * 86400
+        os.utime(marker, (old, old))
+        stamped = registry.last_refresh_at()
+        assert stamped == time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(old))
+
+    def test_an_unreadable_marker_reads_as_unknown(self, sandbox, monkeypatch):
+        def boom(self):
+            raise OSError("nope")
+
+        monkeypatch.setattr("pathlib.Path.stat", boom)
+        assert registry.last_refresh_at() is None
 
 
 class TestPinFailureStillCleansUp:

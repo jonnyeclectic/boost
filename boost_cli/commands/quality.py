@@ -458,6 +458,7 @@ def cmd_doctor(argv):
     skills = lockfile.installed()
     enabled = agents.enabled_agents()
     skill_issues = 0
+    quarantined_skills = 0
     for name, entry in sorted(skills.items()):
         sdir = store.skill_store_dir(name)
         if not sdir.is_dir():
@@ -465,6 +466,7 @@ def cmd_doctor(argv):
             skill_issues += 1
             continue
         if entry.get("quarantined"):
+            quarantined_skills += 1
             continue
         # tamper detection: the lock file records a sha256 at install time, but
         # only `boost verify` ever re-checked it — surface content drift here too.
@@ -472,6 +474,14 @@ def cmd_doctor(argv):
         if locked and util.sha256_dir(sdir) != locked:
             bad("skill %s modified since install — run `boost verify`" % name)
             skill_issues += 1
+        # A deliberate sideline (`focus`, `profile use`, `context apply`)
+        # unlinked this skill on purpose, and `sidelined_by` says so. Without
+        # this the per-agent loop below read the lock's stale `agents` list —
+        # what was linked before the sideline — and reported every missing
+        # link as damage, sending the reader to `boost sync`, which then
+        # undid the switch they had just made.
+        if entry.get("sidelined_by"):
+            continue
         for agent in entry.get("agents", []):
             adir = enabled.get(agent)
             if adir is None:
@@ -504,9 +514,19 @@ def cmd_doctor(argv):
                 "run `boost sync --prune`"
                 % (name, ", ".join(stray), ", ".join(scope)))
             skill_issues += 1
+    active_skills = len(skills) - quarantined_skills
     if skills and not skill_issues:
-        out.ok("%d skill%s present in store with agent links"
-               % (len(skills), _s(len(skills))))
+        # A quarantined skill has no agent links — unlink_agents already
+        # removed them — so it must not inflate this count into a false
+        # "healthy, N skills with agent links" the way it used to.
+        if active_skills:
+            out.ok("%d skill%s present in store with agent links%s"
+                   % (active_skills, _s(active_skills),
+                      " (%d quarantined)" % quarantined_skills
+                      if quarantined_skills else ""))
+        else:
+            out.ok("%d skill%s quarantined, none active"
+                   % (quarantined_skills, _s(quarantined_skills)))
 
     # Project-scoped skills committed into THIS repo — the governance blind spot
     # #212 left open. They don't touch the user store, so the loop above never
@@ -534,10 +554,13 @@ def cmd_doctor(argv):
     # Quarantined = materializations removed on purpose; reporting them as rot
     # would send the user to `boost reinstall`, which re-arms the rule — and
     # counting them "fully materialized" would be the opposite lie.
-    rules = {n: e for n, e in lockfile.installed_rules().items()
-             if not e.get("quarantined")}
-    workflows = {n: e for n, e in lockfile.installed_workflows().items()
+    all_rules = lockfile.installed_rules()
+    all_workflows = lockfile.installed_workflows()
+    rules = {n: e for n, e in all_rules.items() if not e.get("quarantined")}
+    workflows = {n: e for n, e in all_workflows.items()
                  if not e.get("quarantined")}
+    quarantined_rules = len(all_rules) - len(rules)
+    quarantined_workflows = len(all_workflows) - len(workflows)
     mat_issues = 0
     for name, entry in sorted(rules.items()):
         for m in entry.get("materializations") or []:
@@ -560,9 +583,25 @@ def cmd_doctor(argv):
                 bad("workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
-    if (rules or workflows) and not mat_issues:
-        out.ok("%d rule%s and %d workflow%s fully materialized"
-               % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows))))
+    if (all_rules or all_workflows) and not mat_issues:
+        # Quarantined rules/workflows are excluded above so their stashed-but-
+        # removed materializations don't read as rot — but excluding them from
+        # `rules`/`workflows` entirely used to make this line vanish outright
+        # when everything installed happened to be quarantined, in place of
+        # ever saying so.
+        note = ""
+        if quarantined_rules or quarantined_workflows:
+            bits = []
+            if quarantined_rules:
+                bits.append("%d rule%s" % (quarantined_rules,
+                                           _s(quarantined_rules)))
+            if quarantined_workflows:
+                bits.append("%d workflow%s" % (quarantined_workflows,
+                                               _s(quarantined_workflows)))
+            note = " (%s quarantined)" % " and ".join(bits)
+        out.ok("%d rule%s and %d workflow%s fully materialized%s"
+               % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows)),
+                  note))
 
     root = paths.store_dir()
     orphans = [c.name for c in sorted(root.iterdir())
@@ -791,7 +830,14 @@ def cmd_lint(argv):
                               "skipped": skipped, "failed": 0}))
         else:
             _print_skipped(skipped)
-            out.info("nothing to lint")
+            if args.tap or args.names:
+                # A narrowed target set (--tap, or explicit names/paths) can
+                # legitimately come up empty while skills are installed —
+                # "no skills installed" would be false here.
+                out.info("nothing to lint")
+            else:
+                print(out.empty_state("no skills installed",
+                                      hint="boost install <skill> to start"))
         return 0
 
     results: list[dict[str, Any]] = []
@@ -869,7 +915,8 @@ def cmd_drift(argv):
         print(json.dumps({"skills": rows}))
         return 0
     if not rows:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     out.table([(r["name"] if r["kind"] == "skill"
                 else "%s (%s)" % (r["name"], r["kind"]),
@@ -938,8 +985,11 @@ def cmd_fingerprint(argv):
     print("  " + out.role(digest[:16], "accent", bold=True)
           + "  " + out.role(digest, "muted"))
     if args.verbose:
+        # A sha256 clipped to 38 chars cannot be compared by eye, which is
+        # the only reason --verbose lists the components at all.
         out.table([tuple(line.split(":", 1)) for line in comps],
-                  headers=("COMPONENT", "DIGEST/COMMIT"))
+                  headers=("COMPONENT", "DIGEST/COMMIT"),
+                  keep=("DIGEST/COMMIT",))
     for name in incomplete:
         out.warn("tap %s not cloned — fingerprint incomplete (boost update)"
                  % name, stream=sys.stderr)
@@ -1287,18 +1337,12 @@ def cmd_health(argv):
     out.kv("broken links", "%d%s" % (
         len(broken), " (+%d not ours)" % len(foreign) if foreign else ""))
 
-    last_sync = "never"
-    if cloned and gitutil.has_git():
-        stamps = []
-        for tap in cloned:
-            proc = gitutil.run(["-C", str(tap.path), "log", "-1", "--format=%ct"],
-                               check=False)
-            if proc.returncode == 0 and proc.stdout.strip().isdigit():
-                stamps.append(int(proc.stdout.strip()))
-        if stamps:
-            iso = datetime.fromtimestamp(max(stamps), tz=UTC
-                                         ).strftime("%Y-%m-%dT%H:%M:%SZ")
-            last_sync = util.rel_time(iso)
+    # `registry.last_refresh_at` reads the marker `boost update` stamps, not a
+    # tap clone's git log — a clone's newest commit is the *upstream's* clock,
+    # unmoved by a local sync, which is what made this line read "4w ago"
+    # twelve minutes after tapping every configured registry.
+    refreshed_at = registry.last_refresh_at()
+    last_sync = util.rel_time(refreshed_at) if refreshed_at else "never"
     out.kv("last tap sync", last_sync)
 
     week_ago = datetime.now(UTC) - timedelta(days=7)
@@ -1417,7 +1461,7 @@ def cmd_trust(argv) -> int:
     out.heading("trusted keys")
     if keys:
         out.table([(k["name"], k.get("fingerprint", "?")) for k in keys],
-                  headers=("NAME", "FINGERPRINT"))
+                  headers=("NAME", "FINGERPRINT"), keep=("FINGERPRINT",))
     else:
         out.dim("  none — add one with `boost trust add <name> <key>`")
     print()
@@ -1441,4 +1485,6 @@ def _print_provenance(results) -> None:
         note = r.key_name or r.detail or ""
         rows.append((name, out.role(r.status, _PROVENANCE_STYLE.get(r.status, "muted")),
                      note))
-    out.table(rows, headers=("TAP", "PROVENANCE", "KEY / DETAIL"))
+    # The detail cell is the only explanation an invalid status ever gets.
+    out.table(rows, headers=("TAP", "PROVENANCE", "KEY / DETAIL"),
+              keep=("KEY / DETAIL",))

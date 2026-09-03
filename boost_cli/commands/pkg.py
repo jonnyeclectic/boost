@@ -15,6 +15,7 @@ import zipfile
 from datetime import UTC, datetime
 from itertools import chain
 from pathlib import Path
+from typing import cast
 
 from .. import cliparse, spin
 from ..core import (
@@ -554,6 +555,7 @@ def cmd_uninstall(argv: list[str]) -> int:
             out.info("cancelled")
             return 1
     removed, failed = 0, 0
+    done_kinds: set[str] = set()
     for name in args.names:
         try:
             if args.scope == scopes.SCOPE_PROJECT:
@@ -566,24 +568,38 @@ def cmd_uninstall(argv: list[str]) -> int:
             out.warn("%s: %s" % (name, err.message))
             failed += 1
             continue
+        kind = info.get("kind", "skill")
+        is_project = info.get("scope") == scopes.SCOPE_PROJECT
         if info["unlinked"]:
-            verb = "removed from" if info.get("scope") == scopes.SCOPE_PROJECT \
-                else "unlinked ←"
+            # Only a user-scope *skill* unlinks agent symlinks — a rule is
+            # stripped out of each agent's context file and a workflow's
+            # rendered command is deleted, so "removed from" is what actually
+            # happened for either kind (and for a project-scope skill, whose
+            # per-agent copies are files, not links).
+            verb = "unlinked ←" if kind == "skill" and not is_project \
+                else "removed from"
             out.ok("%s %s" % (verb, " · ".join(info["unlinked"])))
-        # Report where it actually went, not where a user-scope install would
-        # have put it — a project skill never touches the canonical store.
-        if info.get("scope") == scopes.SCOPE_PROJECT:
+        if is_project:
+            # Report where it actually went, not where a user-scope install
+            # would have put it — a project skill never touches the
+            # canonical store.
             out.ok("removed from %s" % _tilde(info.get("base", "this repo")))
             unregistered = info.get("mcp_unregistered") or []
             if unregistered:
                 from ..core import mcpdecl
                 out.ok("removed %s from %s"
                        % (_plural(len(unregistered), "MCP server"), mcpdecl.SIDECAR))
-        else:
+        elif kind == "skill":
             out.ok("removed %s" % _tilde(store.skill_store_dir(name)))
+        # A rule/workflow never had a store dir to begin with — the
+        # materialization removal reported above via "unlinked" is the whole
+        # story, so there is nothing further to narrate here.
         removed += 1
+        done_kinds.add(kind)
     if removed:
-        lines = ["Uninstalled %s" % _plural(removed, "skill")]
+        # Name the kind when only one was touched; a mixed run says "items".
+        noun = next(iter(done_kinds)) if len(done_kinds) == 1 else "item"
+        lines = ["Uninstalled %s" % _plural(removed, noun)]
         if removed == 1 == len(args.names):
             lines.append(out.role("next: boost list", "muted"))
         print(out.panel(lines, title="removed", hue="pink"))
@@ -616,6 +632,8 @@ def cmd_sync(argv: list[str]) -> int:
                     help="also delete orphaned store dirs and links outside "
                          "a declared --agent scope")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the --prune confirmation prompts")
     args = ap.parse_args(argv)
     plan = store.sync_plan()
     # A checkout can be missing skills its project lock records — that is the
@@ -658,8 +676,8 @@ def cmd_sync(argv: list[str]) -> int:
     # are never approved as one.
     oos = plan["out_of_scope_links"]
     if args.prune and oos:
-        go = (bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
-              out.confirm("Remove %s outside their declared scope: %s?"
+        go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
+              args.yes or out.confirm("Remove %s outside their declared scope: %s?"
                           % (_plural(len(oos), "link"),
                              ", ".join("%s → %s" % (n, a) for n, a in oos))))
         if go:
@@ -668,8 +686,8 @@ def cmd_sync(argv: list[str]) -> int:
     orphans = plan["orphaned_store"]
     pruned = []
     if args.prune and orphans:
-        go = (bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
-              out.confirm("Delete %s: %s?" % (_plural(len(orphans), "orphaned store dir"),
+        go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
+              args.yes or out.confirm("Delete %s: %s?" % (_plural(len(orphans), "orphaned store dir"),
                                               ", ".join(orphans))))
         if go:
             for name in orphans:
@@ -690,14 +708,26 @@ def cmd_sync(argv: list[str]) -> int:
     for name in pruned:
         out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
     if left:
-        out.warn("%s left in place: %s — remove with `boost sync --prune`"
-                 % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
+        # args.prune true here means the user already ran --prune and
+        # declined the confirm — telling them to run the command they just
+        # ran is not a remedy, so name the decline instead.
+        if args.prune:
+            out.warn("%s left in place (declined): %s"
+                     % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
+        else:
+            out.warn("%s left in place: %s — remove with `boost sync --prune`"
+                     % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
     if oos:
-        out.warn("%s outside the declared scope: %s — remove with "
-                 "`boost sync --prune`, or widen the scope with "
-                 "`boost install <skill> --force` naming every `--agent`"
-                 % (_plural(len(oos), "link"),
-                    ", ".join("%s → %s" % (n, a) for n, a in oos)))
+        if args.prune:
+            out.warn("%s outside the declared scope (declined): %s"
+                     % (_plural(len(oos), "link"),
+                        ", ".join("%s → %s" % (n, a) for n, a in oos)))
+        else:
+            out.warn("%s outside the declared scope: %s — remove with "
+                     "`boost sync --prune`, or widen the scope with "
+                     "`boost install <skill> --force` naming every `--agent`"
+                     % (_plural(len(oos), "link"),
+                        ", ".join("%s → %s" % (n, a) for n, a in oos)))
     # Before this, a blocked link produced no action and no warning, so the
     # branch below reported "everything in sync" for a repair that had just
     # been refused — and `boost doctor` went on prescribing this command.
@@ -1162,15 +1192,19 @@ def cmd_reinstall(argv: list[str]) -> int:
                          % (kind, name, lk.get("tap")))
                 failed += 1
                 continue
+            entry, warning = catalog.select_lock_source(matches, lk)
+            entry = cast(dict, entry)         # matches is non-empty above
+            if warning:
+                out.warn(warning)
             try:
-                store.install(matches[0], force=True,
+                store.install(entry, force=True,
                               scope=lk.get("scope", "user"), base=lk.get("base"))
             except BoostError as err:
                 out.warn("%s: %s" % (name, err.message))
                 failed += 1
                 continue
             out.ok("reinstalled %s %s v%s"
-                   % (kind, name, matches[0].get("version", "0.0.0")))
+                   % (kind, name, entry.get("version", "0.0.0")))
             done += 1
             done_kinds.add(kind)
             continue
@@ -1201,13 +1235,17 @@ def cmd_reinstall(argv: list[str]) -> int:
                      % (name, lk.get("tap")))
             failed += 1
             continue
+        entry, warning = catalog.select_lock_source(matches, lk)
+        entry = cast(dict, entry)             # matches is non-empty above
+        if warning:
+            out.warn(warning)
         try:
-            store.install(matches[0], force=True)
+            store.install(entry, force=True)
         except BoostError as err:
             out.warn("%s: %s" % (name, err.message))
             failed += 1
             continue
-        out.ok("reinstalled %s v%s" % (name, matches[0].get("version", "0.0.0")))
+        out.ok("reinstalled %s v%s" % (name, entry.get("version", "0.0.0")))
         done += 1
         done_kinds.add("skill")
     # Name the kind when only one was touched; a mixed run says "items".
@@ -1275,6 +1313,7 @@ def _bundle_install(file: str | None) -> int:
         except OSError as e:
             raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e)) from e
     taps_added = installed_n = present = failed = 0
+    installed_kinds: set[str] = set()
     have_taps = {t.name for t in registry.list_taps()}
     # name -> kind across every lock section, so a `skill` line naming an
     # already-installed rule/workflow is counted present, not re-installed.
@@ -1338,7 +1377,9 @@ def _bundle_install(file: str | None) -> int:
                 continue
             out.ok("installed %s v%s (%s)" % (sname, entry.get("version"),
                                               entry["tap"]))
-            have_installed[sname] = entry.get("kind", "skill")
+            entry_kind = entry.get("kind", "skill")
+            have_installed[sname] = entry_kind
+            installed_kinds.add(entry_kind)
             installed_n += 1
         else:
             out.warn("line %d: unrecognised: %s" % (lineno, line))
@@ -1346,7 +1387,13 @@ def _bundle_install(file: str | None) -> int:
     if taps_added:
         complete.refresh_names()
     journal.log("bundle-install", label, taps=taps_added, skills=installed_n)
-    summary = "Installed %s" % _plural(installed_n, "skill")
+    # A "skill NAME" line can resolve to a rule or workflow (`catalog.find`
+    # searches every kind) — name the kind when only one was actually
+    # installed, the same call `cmd_reinstall` makes, so this summary agrees
+    # with what `bundle dump`'s own kind-aware sections would call it.
+    noun = next(iter(installed_kinds)) if len(installed_kinds) == 1 else (
+        "item" if installed_kinds else "skill")
+    summary = "Installed %s" % _plural(installed_n, noun)
     if taps_added:
         summary += ", added %s" % _plural(taps_added, "tap")
     if present:
@@ -1513,6 +1560,8 @@ def cmd_snapshot(argv: list[str]) -> int:
                     help="label for save, snapshot id for restore")
     ap.add_argument("--json", action="store_true",
                     help="machine-readable output (list)")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the restore confirmation prompt")
     args = ap.parse_args(argv)
     if args.action == "save":
         return _snapshot_save(args.arg)
@@ -1521,7 +1570,7 @@ def cmd_snapshot(argv: list[str]) -> int:
     if not args.arg:
         raise BoostError("restore needs a snapshot id",
                         hint="see `boost snapshot list`")
-    return _snapshot_restore(args.arg)
+    return _snapshot_restore(args.arg, args.yes)
 
 
 def _snapshot_save(label: str | None) -> int:
@@ -1584,11 +1633,15 @@ def _snapshot_list(as_json: bool) -> int:
     out.table([(s["id"], util.rel_time(s["created"]) if s["created"] else "?",
                 s["label"] or "—", s["skills"], util.human_size(s["size"]))
                for s in snaps],
-              headers=("ID", "WHEN", "LABEL", "SKILLS", "SIZE"))
+              headers=("ID", "WHEN", "LABEL", "SKILLS", "SIZE"),
+              # The id is the only argument `snapshot restore` accepts, and
+              # every id shares a prefix — clipped, they all render as the
+              # same unusable stub.
+              keep=("ID",))
     return 0
 
 
-def _snapshot_restore(snap_id: str) -> int:
+def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     if not snap_id.startswith("snap-"):
         snap_id = "snap-" + snap_id
     tar_path = paths.snapshots_dir() / (snap_id + ".tar.gz")
@@ -1596,10 +1649,10 @@ def _snapshot_restore(snap_id: str) -> int:
         raise BoostError("no snapshot %s" % snap_id,
                         hint="see `boost snapshot list`")
     root = paths.store_dir()
-    if not out.confirm("Restore %s? This replaces everything in %s"
-                       % (snap_id, _tilde(root))):
+    if not (yes or out.confirm("Restore %s? This replaces everything in %s"
+                               % (snap_id, _tilde(root)))):
         out.info("cancelled")
-        return 0
+        return 1
     paths.ensure_dirs()
     # Rules/workflows installed after this snapshot was saved: their lock
     # entries live in the same file the archive is about to replace, but
@@ -1684,23 +1737,26 @@ def cmd_export(argv: list[str]) -> int:
                               % others) if others
                              else "install some with `boost install`")
     chosen = {}
-    for name in names:
-        if name not in installed:
-            found = lockfile.find_any(name)
-            if found is not None:
-                # Same truth _iter_installed tells: it exists, as another kind
-                # — a rule/workflow has no store directory to package.
-                raise BoostError("%s is a %s — `boost export` applies to skills"
-                                % (name, found[0]),
-                                hint="rules and workflows materialize into "
-                                     "agent config files; reinstall them "
-                                     "from their tap")
-            raise BoostError("%s is not installed" % name,
+    for raw in names:
+        # `raw` may be tap-qualified (`owner/repo:skill`); resolve to the
+        # bare name the lock and the store key on, honoring the qualifier
+        # against the installed tap rather than rejecting it outright.
+        name, kind, entry = store.resolve_lock_entry(raw)
+        if entry is None:
+            raise BoostError("%s is not installed" % raw,
                             hint="see what is with `boost list`")
+        if kind != "skill":
+            # Same truth _iter_installed tells: it exists, as another kind
+            # — a rule/workflow has no store directory to package.
+            raise BoostError("%s is a %s — `boost export` applies to skills"
+                            % (name, kind),
+                            hint="rules and workflows materialize into "
+                                 "agent config files; reinstall them "
+                                 "from their tap")
         if not store.skill_store_dir(name).is_dir():
             raise BoostError("store dir for %s is missing" % name,
                             hint="repair with `boost sync`")
-        chosen[name] = installed[name]
+        chosen[name] = entry
     stamp = datetime.now(UTC).strftime("%Y%m%d")
     ext = ".zip" if args.zip else ".tar.gz"
     dest = paths.expand(args.out) if args.out else Path(
@@ -1748,16 +1804,28 @@ def _resolve_skill(name: str):
     that need the skill's directory (e.g. subagent discovery for multi-agent
     adaptation) don't re-resolve. Raises BoostError if the name resolves
     nowhere.
+
+    ``name`` may arrive tap-qualified (``owner/repo:skill``) — exactly what an
+    ambiguity hint recommends typing. ``store.skill_store_dir`` rejects that
+    string outright (":" is not a safe path component), so the store is
+    probed only once ``store.resolve_lock_entry`` confirms the bare name is
+    installed *from the named tap*; anything else falls through to
+    ``catalog.resolve_one``, which already parses the qualified grammar.
     """
-    p = store.skill_store_dir(name) / "SKILL.md"
-    if not p.exists():
+    bare, kind, _entry = store.resolve_lock_entry(name)
+    p = None
+    if kind == "skill":
+        candidate = store.skill_store_dir(bare) / "SKILL.md"
+        if candidate.exists():
+            p = candidate
+    if p is None:
         entry = catalog.resolve_one(name)   # raises BoostError if unknown
         p = registry.get(entry["tap"]).path / entry["skill_md"]
         if not p.exists():
-            raise BoostError("SKILL.md missing for %s" % name,
+            raise BoostError("SKILL.md missing for %s" % bare,
                             hint="refresh the tap with `boost update`")
     meta, body = frontmatter.parse(p.read_text(encoding="utf-8", errors="replace"))
-    display = str(meta.get("name") or name).strip() or name
+    display = str(meta.get("name") or bare).strip() or bare
     return display, str(meta.get("description") or "").strip(), body, p, meta
 
 

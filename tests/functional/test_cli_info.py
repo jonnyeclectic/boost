@@ -6,36 +6,11 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 
 import pytest
 
 from boost_cli.core import paths
-
-
-@pytest.fixture()
-def rival_tap(boost, tapped, tmp_path):
-    """A second real tap that also ships `brainstorming`, at a louder version.
-
-    Two taps carrying one name is the only way to reach the ambiguity error —
-    and its hint — so the qualified-name path needs a genuine second clone
-    rather than a hand-written cache.
-    """
-    root = tmp_path / "rival-tap"
-    (root / "skills" / "brainstorming").mkdir(parents=True)
-    (root / "skills" / "brainstorming" / "SKILL.md").write_text(
-        "---\nname: brainstorming\ndescription: A rival ideation skill\n"
-        "version: 9.9.9\n---\n\n# Brainstorming\n\nThe other tap's copy.\n",
-        encoding="utf-8")
-    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
-    run("git", "init", "-q")
-    run("git", "config", "user.email", "rival@boost.test")
-    run("git", "config", "user.name", "Rival Tap")
-    run("git", "add", "-A")
-    run("git", "commit", "-qm", "rival skills")
-    boost("tap", root)
-    return "rival-tap"
 
 
 def _lock():
@@ -104,6 +79,16 @@ class TestList:
         r = boost("list", "--tag", "#nosuch")
         assert "no skills installed with tag #nosuch" in r.out
 
+    def test_sidelined_flag(self, boost, tapped):
+        boost("install", "brainstorming", "jira-integration", "--no-deps")
+        boost("focus", "brainstorming")
+        r = boost("list")
+        assert "sidelined:focus" in r.out
+        r = boost("list", "--json")
+        data = json.loads(r.out)
+        assert data["skills"]["jira-integration"]["sidelined_by"] == "focus"
+        assert "sidelined_by" not in data["skills"]["brainstorming"]
+
     def test_empty_state_hint(self, boost, sandbox):
         r = boost("list")
         assert "no skills installed" in r.out
@@ -133,6 +118,29 @@ class TestList:
         assert "installed workflows" in r.out
         assert "ship-it" in r.out and "commands" in r.out  # SLOT column
         assert "1 workflow installed" in r.out
+
+    def test_quarantined_rule_shows_flags_and_no_stale_agents(self, boost, sandbox):
+        # A quarantined rule's `materializations` still names the agents its
+        # stash would restore on release — but nothing is on disk right now,
+        # so the AGENTS column must not report them as if it were.
+        from boost_cli.core import lockfile
+        self._seed_rule()
+        entry = lockfile.get_rule("team-rules")
+        entry["quarantined"] = True
+        lockfile.set_rule("team-rules", entry)
+        r = boost("list")
+        assert "FLAGS" in r.out
+        assert "quarantined" in r.out
+        assert "claude·cursor" not in r.out
+
+    def test_pinned_rule_shows_flags(self, boost, sandbox):
+        # Before the FLAGS column, `pin dotnet-build` set "pinned": true in
+        # the lock but the table rendered a pinned rule byte-identical to an
+        # unpinned one — a reader had no way to see what `update` will skip.
+        self._seed_rule()
+        boost("pin", "team-rules")
+        r = boost("list")
+        assert "pinned" in r.out
 
     def test_rules_and_workflows_show_without_skills(self, boost, sandbox):
         # empty-state must not fire (and hide them) when only non-skills exist.
@@ -242,6 +250,30 @@ class TestInfo:
         # D17: identity-card badges beneath the name
         assert "[installed]" in r.out
         assert "[fixture-tap]" in r.out
+
+    def test_info_reports_sidelined_by(self, boost, tapped):
+        boost("install", "brainstorming", "jira-integration", "--no-deps")
+        boost("focus", "brainstorming")
+        r = boost("info", "jira-integration")
+        assert "[sidelined by focus]" in r.out
+        assert re.search(r"sidelined by\s+focus", r.out)
+        r = boost("info", "brainstorming")
+        assert "sidelined by" not in r.out
+        data = json.loads(boost("info", "jira-integration", "--json").out)
+        assert data["installed"]["sidelined_by"] == "focus"
+
+    def test_quarantined_skill_reports_no_agents(self, boost, installed):
+        # unlink_agents removes every symlink at quarantine time — the lock's
+        # `agents` field must follow, or info keeps claiming links that are
+        # gone (and `list`'s AGENTS column keeps showing them too).
+        boost("quarantine", "brainstorming")
+        r = boost("info", "brainstorming")
+        assert re.search(r"quarantined\s+yes", r.out)
+        assert re.search(r"agents\s+\(none\)", r.out)
+        assert "claude-code" not in r.out
+        r = boost("list")
+        assert "claude·windsurf·cursor" not in r.out
+        assert "quarantined" in r.out
 
     def test_tap_only_skill(self, boost, tapped):
         r = boost("info", "jira-integration")
@@ -489,6 +521,26 @@ class TestEdit:
     def test_not_installed_rc1(self, boost, tapped):
         r = boost("edit", "brainstorming", expect=1)
         assert "brainstorming is not installed" in r.err
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX shebang script isn't directly executable on Windows")
+    def test_qualified_name_matching_the_installed_tap_works(
+            self, boost, installed, rival_tap, tmp_path, monkeypatch):
+        script = tmp_path / "true-editor.sh"
+        script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        script.chmod(0o755)
+        monkeypatch.setenv("EDITOR", str(script))
+        monkeypatch.delenv("VISUAL", raising=False)
+        r = boost("edit", "fixture-tap:brainstorming")
+        assert "is not installed" not in r.err
+        assert "no changes" in r.out
+
+    def test_qualified_name_naming_a_different_tap_is_not_installed(
+            self, boost, installed, rival_tap):
+        # brainstorming is installed from fixture-tap, not rival-tap — this
+        # qualifier's answer is "not installed", not fixture-tap's record.
+        r = boost("edit", "rival-tap:brainstorming", expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
 
 
 # ── preview ──────────────────────────────────────────────────────────────
@@ -759,6 +811,18 @@ class TestTag:
         r = boost("tag", "brainstorming", "+x", expect=1)
         assert "brainstorming is not installed" in r.err
 
+    def test_qualified_name_matching_the_installed_tap_works(
+            self, boost, installed, rival_tap):
+        r = boost("tag", "fixture-tap:brainstorming", "+alpha")
+        assert "is not installed" not in r.err
+        assert "#alpha" in r.out
+        assert _lock()["brainstorming"]["tags"] == ["alpha"]
+
+    def test_qualified_name_naming_a_different_tap_is_not_installed(
+            self, boost, installed, rival_tap):
+        r = boost("tag", "rival-tap:brainstorming", "+x", expect=1)
+        assert "rival-tap:brainstorming is not installed" in r.err
+
     def test_journal_records_tag_event(self, boost, installed):
         boost("tag", "brainstorming", "+kept")
         events = _journal_events("tag")
@@ -789,6 +853,40 @@ class TestTag:
         boost("tag", "brainstorming", "+shared")
         r = boost("tag", "--list")
         assert "#shared" in r.out
+
+    def test_unknown_long_flag_is_rejected_not_read_as_a_removal(
+            self, boost, installed):
+        # Used to be silently consumed as removing the tag "-verbose".
+        r = boost("tag", "brainstorming", "--verbose", expect=2)
+        assert "unrecognized arguments" in r.err
+        assert "brainstorming" not in _lock() or \
+            "verbose" not in _lock()["brainstorming"].get("tags", [])
+
+    def test_unknown_long_flag_alone_is_rejected_not_a_bad_skill_name(
+            self, boost, tapped):
+        # Used to read as `--verbose is not installed`.
+        r = boost("tag", "--verbose", expect=2)
+        assert "unrecognized arguments" in r.err
+        assert "is not installed" not in r.err
+
+    def test_list_with_a_skill_name_is_an_error(self, boost, installed):
+        # Used to silently drop the name and list every tag on every skill.
+        r = boost("tag", "brainstorming", "--list", expect=1)
+        assert "--list" in r.err
+
+    def test_a_net_noop_writes_no_lock_change_or_journal_event(
+            self, boost, installed):
+        # `+x -x` against a skill that never carried "x" must not rewrite the
+        # lock or log a journal event for a mutation that changed nothing.
+        r = boost("tag", "brainstorming", "+x", "-x")
+        assert _lock()["brainstorming"].get("tags", []) == []
+        assert _journal_events("tag") == []
+        assert "brainstorming" in r.out  # still shows the (empty) tag set
+
+    def test_whitespace_in_a_tag_is_rejected(self, boost, installed):
+        r = boost("tag", "brainstorming", "+with space", expect=1)
+        assert "whitespace" in r.err
+        assert _lock()["brainstorming"].get("tags", []) == []
 
 
 # ── installed rules & workflows ──────────────────────────────────────────
@@ -831,6 +929,10 @@ class TestMaterializedKinds:
         r = boost("info", "house")
         assert re.search(r"pinned\s+yes", r.out)
         assert re.search(r"quarantined\s+yes", r.out)
+        # The materialization was just removed — claiming it is still on
+        # claude-code would be reporting a file that no longer exists.
+        assert re.search(r"materialized\s+\(removed", r.out)
+        assert not re.search(r"materialized\s+claude-code", r.out)
 
     def test_info_json_carries_kind_and_lock_entry(self, boost, sandbox):
         self._seed_claude_rule()

@@ -8,6 +8,7 @@ import hashlib
 import json
 from contextlib import suppress
 from pathlib import Path
+from typing import cast
 
 from .. import cliparse, spin
 from ..core import (
@@ -252,11 +253,16 @@ def cmd_taps(argv) -> int:
     taps = []
     total = 0
     for tap in registry.list_taps():
-        skills = catalog.load_tap(tap)
-        total += len(skills)
+        items = catalog.load_tap(tap)
+        total += len(items)
         taps.append({"name": tap.name, "url": tap.url, "curated": tap.curated,
-                     "skills": len(skills), "updated": _tap_updated(tap),
-                     "pin": tap.pin})
+                     # "items", not "skills": a tap can carry rules and
+                     # workflows too (see `cmd_tap`, which already prints
+                     # "items" for the same count). "skills" stays as a
+                     # deprecated alias so an existing JSON consumer of
+                     # `boost taps --json` does not break.
+                     "items": len(items), "skills": len(items),
+                     "updated": _tap_updated(tap), "pin": tap.pin})
     if args.json:
         print(json.dumps(taps, indent=2))
         return 0
@@ -268,13 +274,16 @@ def cmd_taps(argv) -> int:
     # clone held still is not what the user needs to know about it, and a tap
     # that `boost update` deliberately skips should say why on the line the
     # user is already reading.
-    rows = [(t["name"], str(t["skills"]),
+    rows = [(t["name"], str(t["items"]),
              "@%s" % str(t["pin"])[:7] if t["pin"] else t["updated"],
              "★" if t["curated"] else "", out.role(_tilde(t["url"]), "muted"))
             for t in taps]
-    out.table(rows, headers=("NAME", "SKILLS", "UPDATED", "", "URL"))
+    # NAME is the argument `untap`/`update` take; the URL beside it is chrome
+    # that every row repeats, so it is what a narrow pane should spend.
+    out.table(rows, headers=("NAME", "ITEMS", "UPDATED", "", "URL"),
+              keep=("NAME",))
     print()
-    out.dim("%d taps · %d skills" % (len(taps), total))
+    out.dim("%d taps · %d items" % (len(taps), total))
     return 0
 
 
@@ -296,7 +305,8 @@ def cmd_outdated(argv) -> int:
         matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
         if not matches:
             continue
-        entry = matches[0]
+        entry, _warning = catalog.select_lock_source(matches, lk)
+        entry = cast(dict, entry)             # matches is non-empty above
         latest = str(entry.get("version") or "0.0.0")
         installed_v = str(lk.get("version") or "0.0.0")
         stale, latest_disp = False, latest
@@ -355,7 +365,8 @@ def cmd_outdated(argv) -> int:
             matches = [e for e in catalog.find(name)
                        if e["tap"] == tap_name
                        and e.get("kind", "skill") == kind]
-            latest = str(matches[0].get("version") or "?") if matches else "?"
+            entry, _warning = catalog.select_lock_source(matches, lk)
+            latest = str(entry.get("version") or "?") if entry else "?"
             if not util.semver_gt(latest, installed_v):
                 latest = "%s (content changed)" % latest
             results.append({"name": name, "kind": kind,

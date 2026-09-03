@@ -126,6 +126,14 @@ class TestDistill:
         assert entry["tap"] == "local"
         assert entry["version"] == "1.0.0"
 
+    def test_yes_flag_is_accepted_by_the_parser(self, boost, installed):
+        # Bug: `boost distill ... --install --yes` errored with "unrecognized
+        # arguments: --yes" before out.confirm() was ever reached.
+        r = boost("distill", "tdd-workflow", "commit-messages", "-o",
+                  "brainstorming", "--install", "--yes")
+        assert "unrecognized arguments" not in r.err
+        assert "replaced brainstorming" in r.out
+
     def test_install_declined_leaves_the_existing_skill_and_saves_the_generation(
             self, boost, installed, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -293,6 +301,18 @@ class TestInfer:
         evs = journal.events(action="infer")
         assert evs[0]["subject"] == "my-conventions"
 
+    def test_yes_flag_skips_the_overwrite_prompt(self, boost, sandbox, py_project,
+                                                  tmp_path, monkeypatch):
+        # Bug: `boost infer -o FILE --yes` errored with "unrecognized
+        # arguments: --yes" on the second (overwrite) run, before
+        # out.confirm() was ever reached.
+        out_file = tmp_path / "SKILL.md"
+        boost("infer", "--path", py_project, "-o", out_file)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("infer", "--path", py_project, "-o", out_file, "--yes")
+        assert "unrecognized arguments" not in r.err
+        assert "wrote" in r.out
+
     def test_install(self, boost, sandbox, py_project):
         r = boost("infer", "--path", py_project, "--install")
         assert "installed project-conventions" in r.out
@@ -396,6 +416,21 @@ class TestAbsorb:
         assert evs[0]["subject"] == "absorbed-patterns"
         assert evs[0]["patterns"] == 1
         assert evs[0]["files"] == 1
+
+    def test_yes_flag_skips_the_replace_prompt(self, boost, sandbox, tmp_path,
+                                                monkeypatch):
+        # Bug: `boost absorb --install --yes` errored with "unrecognized
+        # arguments: --yes" on the second (replace) run, before
+        # out.confirm() was ever reached.
+        monkeypatch.chdir(tmp_path)  # a declined replace would fall back to cwd
+        f = tmp_path / "h.jsonl"
+        f.write_text("\n".join(
+            [_history_line("please write docstrings for every function")] * 3), encoding="utf-8")
+        boost("absorb", "--history", f, "--install")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("absorb", "--history", f, "--install", "--yes")
+        assert "unrecognized arguments" not in r.err
+        assert "replaced absorbed-patterns" in r.out
 
     def test_stdout_journals_too(self, boost, sandbox, tmp_path):
         f = tmp_path / "h.jsonl"
@@ -546,12 +581,41 @@ class TestContext:
         # brainstorming was never mapped, so it keeps its links
         assert (paths.home() / ".claude" / "skills" / "brainstorming").is_symlink()
 
+        from boost_cli.core import lockfile
+        assert lockfile.get_skill("tdd-workflow")["sidelined_by"] == "context"
+
         r = boost("context", "apply")
         assert "nothing to change" in r.out
 
         r = boost("context", "disable")
         assert "branch-aware activation disabled — 1 skill(s) relinked" in r.out
         assert link.is_symlink()
+        assert "sidelined_by" not in lockfile.get_skill("tdd-workflow")
+
+    def test_disable_counts_only_skills_it_actually_relinks(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # `link_agents(name).linked` used to drive the count: it relinks
+        # unconditionally and is truthy for any mapped skill with an enabled
+        # agent, so a still-active skill that was never sidelined got counted
+        # as "relinked" right alongside the one `disable` actually restored.
+        boost("install", "tdd-workflow")
+        boost("install", "brainstorming")
+        repo = _git_repo(tmp_path / "work")
+        _git(repo, "checkout", "-qb", "feature/x")
+        monkeypatch.chdir(repo)
+        boost("context", "map", "feature/*", "tdd-workflow")
+        boost("context", "map", "chore/*", "brainstorming")
+
+        boost("context", "enable")
+        from boost_cli.core import lockfile
+        # tdd-workflow's pattern matches the current branch — never sidelined.
+        assert "sidelined_by" not in lockfile.get_skill("tdd-workflow")
+        # brainstorming's pattern does not — sidelined by context.
+        assert lockfile.get_skill("brainstorming")["sidelined_by"] == "context"
+
+        r = boost("context", "disable")
+        assert "branch-aware activation disabled — 1 skill(s) relinked" in r.out
+        assert "sidelined_by" not in lockfile.get_skill("brainstorming")
 
     def test_apply_outside_repo(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -584,6 +648,8 @@ class TestContext:
 
 class TestFocus:
     def test_focus_sidelines_others(self, boost, tapped):
+        from boost_cli.core import lockfile
+
         boost("install", "brainstorming")
         # --no-deps: this test wants exactly two installed skills; without it,
         # jira-integration would also pull in its `requires: commit-messages`.
@@ -605,11 +671,25 @@ class TestFocus:
         assert data["since"]
 
         r = boost("focus", "--clear")
-        assert "focus cleared — 2 skill(s) restored" in r.out
+        # Only jira-integration was actually sidelined by this session —
+        # brainstorming stayed linked throughout, so it must not be counted.
+        # The old count came from `link_agents(name).linked`, which relinks
+        # unconditionally and was truthy for every non-quarantined skill.
+        assert "focus cleared — 1 skill(s) restored" in r.out
         assert jira_link.is_symlink()
+        assert "sidelined_by" not in lockfile.get_skill("jira-integration")
         assert not (paths.state_dir() / "focus.json").exists()
         r = boost("focus")
         assert "no focus session — start one with `boost focus SKILL...`" in r.out
+
+    def test_clear_with_no_session_reports_no_session(self, boost, installed):
+        # Verified live: `focus --clear` with nothing focused used to say
+        # "focus cleared — 2 skill(s) restored" — the count of every
+        # non-quarantined skill with an enabled agent, not of anything this
+        # command actually changed.
+        r = boost("focus", "--clear")
+        assert "no focus session" in r.out
+        assert "restored" not in r.out
 
     def test_unknown_skill(self, boost, installed):
         r = boost("focus", "nope", expect=1)

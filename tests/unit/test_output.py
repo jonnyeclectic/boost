@@ -3,6 +3,7 @@
 """Unit tests: boost_cli/core/output.py — colors, symbols, tables, confirm."""
 from __future__ import annotations
 
+import io
 import os
 import sys
 import time
@@ -847,14 +848,12 @@ class TestTableColor:
         assert out == "X   Y\na   b\ncc  d\n"       # byte-identical to before
 
     def test_separator_width_counts_in_fit_budget(self, capsys, monkeypatch):
-        import os as _os
         import re
         # 3 columns of visible width 4 + two 3-wide separators = 18 > 17,
         # so exactly one text column must shrink; with the old 2-wide gutter
         # (total 16) nothing would shrink. Proves sep=3 reaches _fit_widths.
         monkeypatch.setenv("CLICOLOR_FORCE", "1")
-        monkeypatch.setattr(output.shutil, "get_terminal_size",
-                            lambda fb: _os.terminal_size((17, 24)))
+        monkeypatch.setenv("COLUMNS", "17")
         output.table([("aaaa", "bbbb", "cccc")])
         vis = re.sub(r"\x1b\[[0-9;]*m", "",
                      capsys.readouterr().out.splitlines()[0])
@@ -1012,6 +1011,126 @@ class TestFitWidths:
     def test_empty_widths_returns_empty(self):
         assert output._fit_widths([], [], avail=80) == []
 
+    def test_protected_column_is_not_shrunk(self):
+        # col 0 is an identifier, so the shrinking is spent on col 1 alone.
+        assert output._fit_widths([10, 10], [False, False], avail=14,
+                                  protected=[0]) == [10, 2]
+
+    def test_everything_protected_overflows_rather_than_clipping(self):
+        # Nothing left to shrink: the row overflows whole, the same way a
+        # token wider than the pane does — it is not silently falsified.
+        assert output._fit_widths([10, 10], [False, False], avail=4,
+                                  protected=[0, 1]) == [10, 10]
+
+
+class TestPaneWidth:
+    """`term_width` always answers; `pane_width` answers None when there is no
+    pane, which is what keeps a pipe's data columns unclipped."""
+
+    def test_none_when_stdout_is_not_a_tty_and_columns_unset(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        assert output.pane_width(io.StringIO()) is None
+
+    def test_columns_wins_even_without_a_tty(self, monkeypatch):
+        monkeypatch.setenv("COLUMNS", "44")
+        assert output.pane_width(io.StringIO()) == 44
+
+    def test_a_tty_reports_its_width(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output, "term_width", lambda: 91)
+
+        class Tty(io.StringIO):
+            def isatty(self):
+                return True
+
+        assert output.pane_width(Tty()) == 91
+
+    def test_zero_and_garbage_columns_are_not_a_pane(self, monkeypatch):
+        for value in ("0", "wide", "-10", ""):
+            monkeypatch.setenv("COLUMNS", value)
+            assert output.pane_width(io.StringIO()) is None
+
+    def test_defaults_to_stdout(self, monkeypatch):
+        monkeypatch.delenv("COLUMNS", raising=False)
+        monkeypatch.setattr(output.sys, "stdout", io.StringIO())
+        assert output.pane_width() is None
+
+
+class TestKeepIndexes:
+    def test_resolves_names_and_indexes(self):
+        assert output._keep_indexes(["B", 0], ("A", "B"), 2) == {0, 1}
+
+    def test_unknown_name_and_out_of_range_index_are_ignored(self):
+        assert output._keep_indexes(["NOPE", 7, -1], ("A", "B"), 2) == set()
+
+    def test_bools_are_not_indexes(self):
+        # `True == 1` in Python; a bool must not silently protect column 1.
+        assert output._keep_indexes([True], ("A", "B"), 2) == set()
+
+    def test_no_headers_still_takes_indexes(self):
+        assert output._keep_indexes([1], None, 2) == {1}
+
+    def test_headers_are_matched_as_the_strings_table_renders(self):
+        # `table` stringifies its headers before printing, so a name is
+        # matched against the rendered text rather than the raw object.
+        assert output._keep_indexes(["7"], ("A", 7), 2) == {1}
+
+
+class TestTableDataSurvivesAPipe:
+    """The pipe half of the fix: no pane, no fitting."""
+
+    @pytest.fixture(autouse=True)
+    def plain(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.delenv("COLUMNS", raising=False)
+
+    def test_piped_name_is_whole_so_grep_matches(self, capsys):
+        name = "NeoLabHQ/context-engineering-for-agents-and-humans"
+        output.table([(name, "0.0.0")], headers=("NAME", "VERSION"))
+        printed = capsys.readouterr().out
+        assert name in printed          # `boost list | grep <name>` matches
+        assert "…" not in printed
+
+    def test_columns_still_fits_a_pipe_when_the_caller_asks(self, monkeypatch,
+                                                           capsys):
+        monkeypatch.setenv("COLUMNS", "20")
+        output.table([("NeoLabHQ/context-engineering", "0.0.0")],
+                     headers=("NAME", "VERSION"))
+        assert "…" in capsys.readouterr().out
+
+
+class TestTableKeepsIdentifierColumns:
+    """The narrow-TTY half: chrome shrinks before identifiers do."""
+
+    @pytest.fixture(autouse=True)
+    def plain(self, monkeypatch):
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setenv("COLUMNS", "60")
+
+    ROWS = (("snap-20260831-120000", "2 hours ago",
+             "before installing the whole design corpus", "12", "4.1 MB"),
+            ("snap-20260831-235959", "3 hours ago",
+             "before installing the whole design corpus", "9", "3.7 MB"))
+    HEADERS = ("ID", "WHEN", "LABEL", "SKILLS", "SIZE")
+
+    def test_ids_survive_a_sixty_column_pane(self, capsys):
+        output.table(self.ROWS, headers=self.HEADERS, keep=("ID",))
+        printed = capsys.readouterr().out
+        for row in self.ROWS:
+            # the id is the only argument `snapshot restore` accepts, so two
+            # ids must not render as the same stub.
+            assert row[0] in printed
+        assert "…" in printed           # the label paid for it instead
+
+    def test_without_the_marker_the_ids_collapse(self, capsys):
+        output.table(self.ROWS, headers=self.HEADERS)
+        printed = capsys.readouterr().out
+        assert self.ROWS[0][0] not in printed
+
+    def test_index_form_protects_the_same_column(self, capsys):
+        output.table(self.ROWS, headers=self.HEADERS, keep=(0,))
+        assert self.ROWS[1][0] in capsys.readouterr().out
+
 
 class TestTableWidthAware:
     @pytest.fixture(autouse=True)
@@ -1040,7 +1159,7 @@ class TestTableWidthAware:
             "cc     100\n")
 
     def test_overflow_shrinks_text_not_numeric(self, capsys, monkeypatch):
-        monkeypatch.setattr(output, "term_width", lambda: 24)
+        monkeypatch.setenv("COLUMNS", "24")
         long = "K-Dense-AI/claude-scientific-skills"
         output.table([(long, "3")], headers=("NAME", "N"))
         line = capsys.readouterr().out.splitlines()[1]
@@ -1049,7 +1168,7 @@ class TestTableWidthAware:
         assert output.visible_len(line) <= 24
 
     def test_wide_table_stays_within_terminal(self, capsys, monkeypatch):
-        monkeypatch.setattr(output, "term_width", lambda: 40)
+        monkeypatch.setenv("COLUMNS", "40")
         rows = [("a-really-long-repository-name-here", "9",
                  "https://example.com/some/deep/path")]
         output.table(rows, headers=("NAME", "N", "URL"))
@@ -1088,6 +1207,28 @@ class TestConfirm:
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
         assert output.confirm("delete everything?") is False
 
+    def test_bypass_hint_names_both_flag_and_env(self):
+        assert "-y" in output._CONFIRM_BYPASS_HINT
+        assert "BOOST_ASSUME_YES" in output._CONFIRM_BYPASS_HINT
+
+    def test_non_tty_declined_prints_bypass_hint(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        output.confirm("go?", default=False)
+        assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
+
+    def test_non_tty_proceeding_default_true_prints_no_hint(self, monkeypatch, capsys):
+        # default=True means the command proceeds — nothing was declined, so
+        # naming a bypass for a prompt that never blocked would be noise.
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        output.confirm("go?", default=True)
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
+
+    def test_assume_yes_prints_no_hint(self, monkeypatch, capsys):
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        output.confirm("go?", default=False)
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
+
     def _tty(self, monkeypatch, answer):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
         prompts = []
@@ -1109,27 +1250,38 @@ class TestConfirm:
         self._tty(monkeypatch, "YES")
         assert output.confirm("go?") is True
 
-    def test_tty_n(self, monkeypatch):
+    def test_tty_n(self, monkeypatch, capsys):
         self._tty(monkeypatch, "n")
         assert output.confirm("go?", default=True) is False
+        assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
 
     def test_tty_gibberish_is_no(self, monkeypatch):
         self._tty(monkeypatch, "maybe")
         assert output.confirm("go?", default=True) is False
 
-    def test_tty_empty_returns_default(self, monkeypatch):
+    def test_tty_empty_returns_default(self, monkeypatch, capsys):
         self._tty(monkeypatch, "")
         assert output.confirm("go?", default=True) is True
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
         assert output.confirm("go?", default=False) is False
+        assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
+
+    def test_tty_y_prints_no_hint(self, monkeypatch, capsys):
+        self._tty(monkeypatch, "y")
+        output.confirm("go?", default=False)
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
 
     def test_tty_eof_is_false(self, monkeypatch, capsys):
         self._tty(monkeypatch, EOFError())
         assert output.confirm("go?", default=True) is False
-        assert capsys.readouterr().out == "\n"  # prints a newline after ^D
+        out = capsys.readouterr().out
+        assert out.startswith("\n")  # prints a newline after ^D
+        assert output._CONFIRM_BYPASS_HINT in out
 
-    def test_tty_keyboard_interrupt_is_false(self, monkeypatch):
+    def test_tty_keyboard_interrupt_is_false(self, monkeypatch, capsys):
         self._tty(monkeypatch, KeyboardInterrupt())
         assert output.confirm("go?", default=True) is False
+        assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
 
     def test_prompt_suffix_reflects_default(self, monkeypatch):
         prompts = self._tty(monkeypatch, "y")

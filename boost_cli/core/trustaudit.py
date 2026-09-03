@@ -99,6 +99,7 @@ def skill_findings(*, is_local: bool, provenance_status: str | None,
                    tap_age_days: int | None,
                    upstream_reason: str | None,
                    conflicts_with: Sequence[str] = (),
+                   tap_pinned: bool = False,
                    stale_after: int = STALE_TAP_DAYS) -> list[dict]:
     """Every trust finding for one installed skill, worst severity first.
 
@@ -108,10 +109,17 @@ def skill_findings(*, is_local: bool, provenance_status: str | None,
     * ``is_local``          — imported from a path (no tap).
     * ``provenance_status`` — a :mod:`boost_cli.core.provenance` status for the
       skill's tap clone, or ``None`` when it could not be read.
-    * ``tap_age_days``      — days since the tap clone last synced, or ``None``.
+    * ``tap_age_days``      — days since the tap's clone last committed
+      upstream, or ``None``. This is the *upstream's* clock, not a local sync
+      time — see the ``STALE_TAP`` detail text below.
     * ``upstream_reason``   — :func:`staleness.upstream_reason`'s verdict.
     * ``conflicts_with``    — peer skills this one declares a ``conflicts:``
       against, already filtered to skills that are actually installed.
+    * ``tap_pinned``        — the tap is held at a fixed commit
+      (``registry.Tap.pin``). A pinned tap's age only grows, by design — that
+      is what pinning means — so it is never reported as :data:`STALE_TAP`;
+      flagging an intentionally frozen tap the same way as a neglected one
+      would be a false positive on every pinned install.
 
     A locally-imported skill is deliberately not checked for tap staleness or
     upstream drift: it has no upstream, so those axes are not signals about it.
@@ -124,9 +132,16 @@ def skill_findings(*, is_local: bool, provenance_status: str | None,
     if not is_local:
         # The `is not None` guard is what stale_tap_label already encodes, but
         # spelling it here keeps the %d interpolation below provably non-None.
-        if tap_age_days is not None and stale_tap_label(tap_age_days, stale_after):
+        if (not tap_pinned and tap_age_days is not None
+                and stale_tap_label(tap_age_days, stale_after)):
+            # "commit is old", not "synced N days ago": this reads git log on
+            # the tap's clone, which is the upstream's timestamp and does not
+            # move when the local clone is refreshed. Calling it "synced" is
+            # what made the number unactionable for a healthy, current tap
+            # that simply has not seen an upstream push.
             found.append({"severity": SEVERITY[STALE_TAP], "label": STALE_TAP,
-                          "detail": "tap last synced %d days ago" % tap_age_days})
+                          "detail": "tap's newest commit is %d days old"
+                                    % tap_age_days})
         if upstream_reason:
             found.append({"severity": SEVERITY[BEHIND_TAP], "label": BEHIND_TAP,
                           "detail": "tap has a newer copy (%s)" % upstream_reason})

@@ -89,6 +89,42 @@ def _metavar(act) -> str:
     return act.dest.upper() if act.option_strings else act.dest
 
 
+def _opt_token(act) -> str:
+    """The unbracketed synopsis token for one option action.
+
+    Prefers the *first* declared option string (argparse's own usage
+    formatter does the same — ``-o, --out`` renders as ``-o OUT`` in a
+    synopsis, the long form only in the per-flag description below it).
+    """
+    flag = act.option_strings[0]
+    return flag if act.nargs == 0 else "%s %s" % (flag, _metavar(act))
+
+
+def _opt_syn_parts(parser, opt) -> list[str]:
+    """Synopsis tokens for every visible option action, required ones
+    unbracketed and a required mutually-exclusive group collapsed to one
+    ``(--a | --b)`` token — mirroring argparse's own usage line, which is
+    what makes a bare ``--to FRAMEWORK`` on the actual ``--help`` output a
+    generator bug rather than a documented optional flag when this renders
+    it ``[--to FRAMEWORK]``.
+    """
+    groups = getattr(parser, "_mutually_exclusive_groups", [])
+    done: set[int] = set()
+    parts: list[str] = []
+    for act in opt:
+        if id(act) in done:
+            continue
+        group = next((g for g in groups if act in g._group_actions), None)
+        if group is not None:
+            done.update(id(a) for a in group._group_actions)
+            token = " | ".join(_opt_token(a) for a in group._group_actions)
+            parts.append("(%s)" % token if group.required else "[%s]" % token)
+        else:
+            token = _opt_token(act)
+            parts.append(token if act.required else "[%s]" % token)
+    return parts
+
+
 def _positional_syn(act) -> str:
     mv = _metavar(act)
     n = act.nargs
@@ -119,10 +155,7 @@ def _extract(name: str, group: str, module: str, summary: str) -> dict:
     description = (parser.description or "").strip() if parser else ""
     pos, opt = _visible_actions(parser) if parser else ([], [])
 
-    syn = [prog]
-    for act in opt:
-        flag = act.option_strings[-1]
-        syn.append("[%s]" % (flag if act.nargs == 0 else "%s %s" % (flag, _metavar(act))))
+    syn = [prog, *_opt_syn_parts(parser, opt)]
     syn.extend(_positional_syn(act) for act in pos)
 
     def rows(actions, is_opt):

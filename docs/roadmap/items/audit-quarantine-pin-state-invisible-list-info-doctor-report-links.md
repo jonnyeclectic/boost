@@ -2,15 +2,15 @@
 id: audit-quarantine-pin-state-invisible-list-info-doctor-report-links
 board: code
 section: health
-status: planned
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: Med
 wow: 2
-note: doctor says "healthy, 1 skill with agent links" when the only skill is quarantined
+note: could not run make check locally (PyPI egress blocked in-sandbox); CI validated it — all required checks green, mutation gate passed on all 6 shards
 order: 236
-owner:
-pr:
+owner: loop/quarantine-visibility
+pr: 736
 title: "Quarantine/pin state invisible: <code>list</code>/<code>info</code>/<code>doctor</code> report links and materializations that were removed"
 ---
 Quarantine records its state but the reporting surfaces never consult it. After

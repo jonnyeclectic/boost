@@ -1757,10 +1757,11 @@ def cmd_browse(argv):
 
 
 def cmd_trending(argv):
-    """Rank skills by local install events from the journal."""
+    """Rank items (skills, rules, workflows) by local install events from
+    the journal."""
     p = cliparse.parser(
         prog="boost trending",
-        description="Show trending skills by install count")
+        description="Show trending items by install count")
     p.add_argument("--limit", type=util.positive_int, default=10,
                    help="max rows (default 10)")
     args = p.parse_args(argv)
@@ -1772,10 +1773,12 @@ def cmd_trending(argv):
         if not curated:
             out.info("no curated skills available — add taps with `boost tap --defaults`")
             return 0
-        descw = max(out.term_width() - 24, 24)  # reserve name + version columns
-        out.table([(e["name"], "v" + e["version"],
+        # reserve name/version/kind columns
+        descw = max(out.term_width() - 34, 24)
+        out.table([(e["name"], "v" + e["version"], e.get("kind", "skill"),
                     out.truncate(e["description"], descw))
-                   for e in sorted(curated, key=operator.itemgetter("name"))[:args.limit]])
+                   for e in sorted(curated, key=operator.itemgetter("name"))[:args.limit]],
+                  headers=("name", "version", "kind", "description"))
         return 0
     agg: dict[str, Any] = {}
     for ev in evs:  # most-recent-first, so first ts per subject is the latest
@@ -1783,11 +1786,13 @@ def cmd_trending(argv):
         rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})
         rec["count"] += 1
     ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
-    descw = max(out.term_width() - 44, 24)  # reserve name/installs/last columns
+    # reserve name/installs/last/kind columns
+    descw = max(out.term_width() - 54, 24)
     out.table([(name, str(rec["count"]), util.rel_time(rec["last"]),
+                by_name.get(name, {}).get("kind", "skill"),
                 out.truncate(by_name.get(name, {}).get("description", ""), descw))
                for name, rec in ranked[:args.limit]],
-              headers=("name", "installs", "last", "description"))
+              headers=("name", "installs", "last", "kind", "description"))
     out.info(out.role("based on local install activity", "muted"))
     return 0
 
@@ -1801,14 +1806,19 @@ def cmd_stats(argv):
     p.add_argument("--json", action="store_true", dest="as_json",
                    help="machine-readable output")
     args = p.parse_args(argv)
-    name = args.name
-    # find_any: a rule's lock facts are the answer, not "no skill named X".
-    found = lockfile.find_any(name)
-    kind, lock = found if found is not None else ("skill", None)
-    matches = catalog.find(name)
+    # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
+    # bare name the lock, journal and store dir key on, honoring the
+    # qualifier against the installed tap — `store.skill_store_dir` rejects
+    # the qualified string outright since ":" is not a safe path component.
+    # `find_any`-backed resolution: a rule's lock facts are the answer, not
+    # "no skill named X". `catalog.find` keeps the original string so a
+    # qualifier still narrows a not-yet-installed lookup.
+    name, kind, lock = store.resolve_lock_entry(args.name)
+    kind = kind or "skill"
+    matches = catalog.find(args.name)
     cat = matches[0] if matches else None
     if not lock and not cat:
-        raise BoostError("no skill named %r installed or in any tap" % name,
+        raise BoostError("no skill named %r installed or in any tap" % args.name,
                         hint="try `boost search %s`" % name)
     acts = {a: len(journal.events(action=a, subject=name))
             for a in ("install", "update", "uninstall")}

@@ -125,7 +125,7 @@ def _save_generated_fallback(name: str, text: str, reason: str) -> None:
     out.info("generated skill saved to %s" % _tilde(fallback))
 
 
-def _install_generated(name: str, text: str) -> None:
+def _install_generated(name: str, text: str, yes: bool = False) -> None:
     """Write a generated SKILL.md to a tempdir and install it as `name`.
 
     The tempdir is the only copy of a just-generated skill, so a refused install
@@ -138,10 +138,16 @@ def _install_generated(name: str, text: str) -> None:
     ``boost import``/``reinstall`` path. Ask before doing that here, so
     ``distill``/``infer``/``absorb --install`` don't quietly destroy an
     existing install and relabel its lock provenance ``local``.
+
+    ``yes`` mirrors each caller's own ``-y``/``--yes`` flag: out.confirm()
+    already honours ``--yes``/``-y`` off ``sys.argv`` for a real invocation,
+    but that check can't see an ``argv`` list handed straight to
+    :func:`boost_cli.cli.main` rather than the process's own argv, so the
+    parsed flag is passed through explicitly rather than relied on twice.
     """
     owner = store.existing_skill_owner(name)
-    if owner and not out.confirm(
-            "%s is already installed from %s — replace it?" % (name, owner)):
+    if owner and not (yes or out.confirm(
+            "%s is already installed from %s — replace it?" % (name, owner))):
         _save_generated_fallback(
             name, text, "%s is already installed from %s" % (name, owner))
         return
@@ -159,9 +165,12 @@ def _install_generated(name: str, text: str) -> None:
         out.info(out.role("linked into: %s" % ", ".join(res.linked), "muted"))
 
 
-def _write_generated(dest: Path, text: str) -> bool:
-    """Write a generated file, confirming before overwriting. False = declined."""
-    if dest.exists() and not out.confirm("overwrite %s?" % _tilde(dest)):
+def _write_generated(dest: Path, text: str, yes: bool = False) -> bool:
+    """Write a generated file, confirming before overwriting. False = declined.
+
+    ``yes`` — see :func:`_install_generated`.
+    """
+    if dest.exists() and not (yes or out.confirm("overwrite %s?" % _tilde(dest))):
         out.info("aborted — %s left untouched" % _tilde(dest))
         return False
     try:
@@ -190,6 +199,8 @@ def cmd_distill(argv: list[str]) -> int:
                     help="name for the merged skill (default: <first>-distilled)")
     ap.add_argument("--install", action="store_true",
                     help="install the merged skill instead of writing a file")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the overwrite/replace confirmation prompt")
     args = ap.parse_args(argv)
 
     names = list(dict.fromkeys(args.names))
@@ -211,10 +222,10 @@ def cmd_distill(argv: list[str]) -> int:
         merged = _distill_merge(new, sources)
 
     if args.install:
-        _install_generated(new, merged)
+        _install_generated(new, merged, yes=args.yes)
     else:
         dest = Path.cwd() / new / "SKILL.md"
-        if not _write_generated(dest, merged):
+        if not _write_generated(dest, merged, yes=args.yes):
             return 1
         out.info(out.role("install it with `boost import ./%s`" % new, "muted"))
     journal.log("distill", new, sources=names)
@@ -366,6 +377,8 @@ def cmd_infer(argv: list[str]) -> int:
     ap.add_argument("-o", "--output", metavar="FILE", help="write to a file")
     ap.add_argument("--install", action="store_true",
                     help="install the generated skill")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the overwrite/replace confirmation prompt")
     args = ap.parse_args(argv)
 
     root = paths.expand(args.path).resolve()
@@ -380,10 +393,10 @@ def cmd_infer(argv: list[str]) -> int:
         text = _infer_template(name, facts)
 
     if args.install:
-        _install_generated(name, text)
+        _install_generated(name, text, yes=args.yes)
         journal.log("infer", name, path=str(root))
     elif args.output:
-        if not _write_generated(paths.expand(args.output), text):
+        if not _write_generated(paths.expand(args.output), text, yes=args.yes):
             return 1
         journal.log("infer", name, path=str(root))
     else:
@@ -593,6 +606,8 @@ def cmd_absorb(argv: list[str]) -> int:
                     help="max patterns to absorb (default: 5)")
     ap.add_argument("--install", action="store_true",
                     help="install the generated skill")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the replace confirmation prompt")
     args = ap.parse_args(argv)
 
     if args.history:
@@ -634,7 +649,7 @@ def cmd_absorb(argv: list[str]) -> int:
         _note_fallback()
         text = _absorb_template(name, patterns)
     if args.install:
-        _install_generated(name, text)
+        _install_generated(name, text, yes=args.yes)
     else:
         print(text, end="" if text.endswith("\n") else "\n")
     journal.log("absorb", name, patterns=len(patterns), files=len(files))
@@ -906,11 +921,17 @@ def cmd_context(argv: list[str]) -> int:
             return 0
         return _context_apply(state)
     if action == "disable":
+        # Count only skills `context apply` actually sidelined (`sidelined_by
+        # == "context"`), not every mapped skill with a linking agent enabled
+        # — the old `link_agents(name).linked` check relinks unconditionally
+        # and is truthy for any skill that was never sidelined at all, so a
+        # branch with no matched rule still reported "N skill(s) relinked".
         restored = 0
         inst = lockfile.installed()
         for name in sorted(_mentioned_skills(state)):
             entry = inst.get(name)
-            if entry and not entry.get("quarantined") and store.link_agents(name).linked:
+            if entry and entry.get("sidelined_by") == "context":
+                store.unsideline(name)
                 restored += 1
         state["enabled"] = False
         _save_state(_CONTEXT_STATE, state)
@@ -981,9 +1002,9 @@ def _context_apply(state: dict) -> int:
         if entry.get("quarantined"):
             continue
         if name in active:
-            if store.link_agents(name).linked:
+            if store.unsideline(name).linked:
                 linked.append(name)
-        elif store.unlink_agents(name):
+        elif store.sideline(name, "context"):
             unlinked.append(name)
     out.kv("branch", branch)
     out.kv("matched", ", ".join(r["pattern"] for r in matched) or "(no patterns)")
@@ -1025,15 +1046,24 @@ def cmd_focus(argv: list[str]) -> int:
     if args.clear:
         if args.skills:
             raise BoostError("--clear takes no skill arguments")
+        # `link_agents(name).linked` used to drive both the loop and the
+        # count: it relinks unconditionally and is truthy for any skill with
+        # at least one enabled agent, so a `--clear` with no session at all
+        # still reported "N skill(s) restored". `sidelined_by == "focus"` is
+        # only true of skills THIS session actually unlinked.
+        had_session = state_path.exists()
         restored = 0
         for name, entry in sorted(lockfile.installed().items()):
-            if entry.get("quarantined"):
+            if entry.get("sidelined_by") != "focus":
                 continue
-            if store.link_agents(name).linked:
-                restored += 1
-        if state_path.exists():
+            store.unsideline(name)
+            restored += 1
+        if had_session:
             state_path.unlink()
         journal.log("focus", "clear", restored=restored)
+        if not had_session and not restored:
+            out.info("no focus session")
+            return 0
         out.ok("focus cleared — %d skill(s) restored" % restored)
         return 0
 
@@ -1073,10 +1103,10 @@ def cmd_focus(argv: list[str]) -> int:
     for name, entry in sorted(inst.items()):
         if name in names or entry.get("quarantined"):
             continue
-        if store.unlink_agents(name):
+        if store.sideline(name, "focus"):
             sidelined += 1
     for name in names:
-        store.link_agents(name)
+        store.unsideline(name)
     _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     journal.log("focus", ",".join(names))
     out.info("⌁ focus: %s %s"

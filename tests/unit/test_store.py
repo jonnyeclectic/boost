@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import ClassVar
 
@@ -314,6 +315,46 @@ class TestUnlinkAgents:
         assert not _link("claude-code").exists()
         assert not _link("windsurf").exists()
         assert not _link("gemini").exists()
+
+
+class TestSideline:
+    """``sideline``/``unsideline`` — unlink-and-record, relink-and-clear.
+
+    Used by ``focus``, ``profile use`` and ``context apply`` so a deliberate
+    unlink leaves a trail: `sync_plan`/`doctor`/`list` all read
+    ``sidelined_by`` rather than fighting a lock entry that still claims the
+    old links.
+    """
+
+    def test_unlinks_and_records(self, brainstorming):
+        removed = store.sideline("brainstorming", "focus")
+        assert removed == LINKED_AGENTS
+        for agent in LINKED_AGENTS:
+            assert not _link(agent).exists()
+        assert lockfile.get_skill("brainstorming")["sidelined_by"] == "focus"
+
+    def test_a_later_sideline_overwrites_the_earlier_one(self, brainstorming):
+        store.sideline("brainstorming", "focus")
+        store.sideline("brainstorming", "profile")
+        assert lockfile.get_skill("brainstorming")["sidelined_by"] == "profile"
+
+    def test_unsideline_relinks_and_clears_the_flag(self, brainstorming):
+        store.sideline("brainstorming", "focus")
+        res = store.unsideline("brainstorming")
+        assert res.linked == LINKED_AGENTS
+        for agent in LINKED_AGENTS:
+            assert _link(agent).is_symlink()
+        assert "sidelined_by" not in lockfile.get_skill("brainstorming")
+
+    def test_unsideline_on_a_never_sidelined_skill_is_a_noop_for_the_flag(
+            self, brainstorming):
+        store.unsideline("brainstorming")
+        assert "sidelined_by" not in lockfile.get_skill("brainstorming")
+
+    def test_sideline_on_an_uninstalled_name_does_not_raise(self, tap):
+        # No lock entry exists — unlink_agents finds nothing to remove and
+        # there is nothing to record a flag on.
+        assert store.sideline("nonexistent", "focus") == []
 
 
 class TestNativeStoreAgents:
@@ -768,6 +809,7 @@ class TestUninstall:
     def test_uninstall_removes_everything(self, brainstorming):
         result = store.uninstall("brainstorming")
         assert result["name"] == "brainstorming"
+        assert result["kind"] == "skill"
         assert result["unlinked"] == LINKED_AGENTS
         assert result["entry"]["version"] == "1.4.0"
         assert not (paths.store_dir() / "brainstorming").exists()
@@ -802,6 +844,10 @@ class TestSyncPlan:
         lockfile.set_skill("brainstorming", e)
         for agent in LINKED_AGENTS:
             _link(agent).unlink()
+        assert store.sync_plan() == self.EMPTY
+
+    def test_sidelined_excluded_from_missing_links(self, brainstorming):
+        store.sideline("brainstorming", "focus")
         assert store.sync_plan() == self.EMPTY
 
     def test_stale_dangling_symlink(self, brainstorming):
@@ -982,6 +1028,52 @@ class TestSyncApply:
         for agent in LINKED_AGENTS:
             assert _link(agent).is_symlink()
 
+    def test_missing_store_reinstall_prefers_the_lock_recorded_mirror(
+            self, tap, brainstorming):
+        # A tap can vendor the same skill into more than one directory. Sort
+        # order must not decide which copy a repair pulls from — the lock's
+        # own source_dir does, so the mirror (which sorts first) is ignored.
+        original_source = lockfile.get_skill("brainstorming")["source_dir"]
+        mirror = tap.path / "mirrors" / "brainstorming"
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: mirror copy\n"
+            "version: 9.9.9\n---\nmirror body\n", encoding="utf-8")
+        catalog.rebuild_tap(tap)
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert "reinstalled missing brainstorming from fixture-tap" in actions
+        assert not any("no longer at its installed source" in a for a in actions)
+        installed = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert "mirror body" not in installed
+        assert lockfile.get_skill("brainstorming")["source_dir"] == original_source
+
+    def test_missing_store_reinstall_falls_back_to_a_mirror_with_a_warning(
+            self, tap, brainstorming):
+        # The lock's own source directory is gone, but a same-named mirror
+        # still exists — repair should use it and say so, rather than
+        # silently reinstalling the wrong copy or dropping the skill.
+        mirror = tap.path / "mirrors" / "brainstorming"
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: mirror copy\n"
+            "version: 9.9.9\n---\nmirror body\n", encoding="utf-8")
+        shutil.rmtree(tap.path / "skills" / "brainstorming")
+        catalog.rebuild_tap(tap)
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert any("no longer at its installed source" in a for a in actions)
+        assert any(a.startswith("reinstalled missing brainstorming from")
+                  for a in actions)
+        installed = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        assert "mirror body" in installed
+
     def test_missing_store_reinstall_fails_falls_back_to_drop(self, tap, brainstorming):
         # catalog cache still lists the skill, but its source dir vanished
         # from the tap clone: the reinstall attempt raises and is swallowed,
@@ -1144,6 +1236,7 @@ class TestRuleInstall:
         claude_md.write_text("# My own standing notes\n\n" + claude_md.read_text(encoding="utf-8"), encoding="utf-8")
 
         info = store.uninstall("team-conventions")
+        assert info["kind"] == "rule"
         assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
                                          "gemini"}
         assert lockfile.get_rule("team-conventions") is None
@@ -1339,6 +1432,7 @@ class TestWorkflowInstall:
     def test_uninstall_removes_every_dropped_file(self, tap):
         store.install(_workflow_entry(tap))
         info = store.uninstall("ship-it")
+        assert info["kind"] == "workflow"
         assert set(info["unlinked"]) == {"claude-code", "windsurf", "cursor",
                                          "gemini"}
         assert lockfile.get_workflow("ship-it") is None
@@ -1439,6 +1533,44 @@ class TestSyncMaterializations:
         actions = store.sync_apply(store.sync_plan())
         assert any("re-materialized rule team-conventions" in a for a in actions)
         assert cur.is_file()
+
+    def test_apply_rematerializes_from_the_lock_recorded_mirror(self, tap):
+        # Two rule files can share one frontmatter `name` (a tap vendoring the
+        # same rule twice). The repair must re-materialize from the file that
+        # was actually installed, not whichever one the scan lists first.
+        self._install_rule(tap)
+        original_source = lockfile.get_rule("team-conventions")["source_file"]
+        mirror = tap.path / "rules" / "team-mirror.mdc"
+        mirror.write_text("---\nname: Team Conventions\n---\n\nMirror content.\n",
+                          encoding="utf-8")
+        catalog.rebuild_tap(tap)
+        cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        cur.unlink()
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert any("re-materialized rule team-conventions" in a for a in actions)
+        assert not any("no longer at its installed source" in a for a in actions)
+        assert "Mirror content" not in cur.read_text(encoding="utf-8")
+        assert lockfile.get_rule("team-conventions")["source_file"] == original_source
+
+    def test_apply_falls_back_to_a_rule_mirror_with_a_warning(self, tap):
+        # The lock's own source file is gone, but a same-named mirror still
+        # exists — repair should use it and say so.
+        self._install_rule(tap)
+        mirror = tap.path / "rules" / "team-mirror.mdc"
+        mirror.write_text("---\nname: Team Conventions\n---\n\nMirror content.\n",
+                          encoding="utf-8")
+        (tap.path / "rules" / "team.mdc").unlink()
+        catalog.rebuild_tap(tap)
+        cur = paths.home() / ".cursor" / "rules" / "team-conventions.mdc"
+        cur.unlink()
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert any("no longer at its installed source" in a for a in actions)
+        assert any("re-materialized rule team-conventions" in a for a in actions)
+        assert "Mirror content" in cur.read_text(encoding="utf-8")
 
     def test_flags_and_repairs_missing_workflow_file(self, tap):
         self._install_workflow(tap)
@@ -1767,6 +1899,7 @@ class TestProjectSkills:
         repo, _ = self._install(entry, tmp_path)
         info = store.uninstall_project("brainstorming", base=str(repo))
         assert info["scope"] == "project"
+        assert info["kind"] == "skill"
         assert sorted(info["unlinked"]) == ["claude-code", "cursor", "gemini",
                                             "windsurf"]
         assert info["base"] == str(repo)
@@ -1830,6 +1963,27 @@ class TestProjectSkills:
         actions = store.project_sync_apply(plan, base=str(repo))
         assert any("re-materialized brainstorming" in a for a in actions)
         assert (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md").is_file()
+
+    def test_sync_apply_prefers_the_lock_recorded_mirror(self, tap, entry, tmp_path):
+        # Same mirror-preference contract as the user-scope repair: a second
+        # tap directory sharing the name must not steal the repair.
+        repo, _ = self._install(entry, tmp_path)
+        mirror = tap.path / "mirrors" / "brainstorming"
+        mirror.mkdir(parents=True)
+        (mirror / "SKILL.md").write_text(
+            "---\nname: brainstorming\ndescription: mirror copy\n"
+            "version: 9.9.9\n---\nmirror body\n", encoding="utf-8")
+        catalog.rebuild_tap(tap)
+        shutil.rmtree(repo / ".claude" / "skills" / "brainstorming")
+
+        plan = store.project_sync_plan(base=str(repo))
+        actions = store.project_sync_apply(plan, base=str(repo))
+
+        assert any("re-materialized brainstorming from" in a for a in actions)
+        assert not any("no longer at its installed source" in a for a in actions)
+        installed = (repo / ".claude" / "skills" / "brainstorming" / "SKILL.md"
+                    ).read_text(encoding="utf-8")
+        assert "mirror body" not in installed
 
     def test_sync_apply_never_deletes_an_unclaimed_dir(self, entry, tmp_path):
         repo, _ = self._install(entry, tmp_path)
@@ -2900,3 +3054,75 @@ class TestInterruptedQuarantine:
             "rule", "team-conventions", lockfile.get_rule("team-conventions"))
         assert not store.stale_quarantine_artifacts(
             "team-conventions", lockfile.get_rule("team-conventions"))
+
+
+def _rival_tap(tmp_path, name="rival-tap"):
+    """A second real tap shipping `brainstorming` at a louder version.
+
+    Mirrors ``tests/functional/test_cli_info.py``'s ``rival_tap`` fixture: a
+    genuine second clone is needed to reach the cross-tap branch of
+    ``resolve_lock_entry``, not a hand-written cache entry.
+    """
+    root = tmp_path / name
+    (root / "skills" / "brainstorming").mkdir(parents=True)
+    (root / "skills" / "brainstorming" / "SKILL.md").write_text(
+        "---\nname: brainstorming\ndescription: A rival ideation skill\n"
+        "version: 9.9.9\n---\n\n# Brainstorming\n\nThe other tap's copy.\n",
+        encoding="utf-8")
+    run = lambda *a: subprocess.run(a, cwd=root, check=True, capture_output=True)
+    run("git", "init", "-q")
+    run("git", "config", "user.email", "rival@boost.test")
+    run("git", "config", "user.name", "Rival Tap")
+    run("git", "add", "-A")
+    run("git", "commit", "-qm", "rival skills")
+    tap = registry.add(str(root))
+    catalog.rebuild_tap(tap)
+    return tap
+
+
+class TestResolveLockEntry:
+    """``store.resolve_lock_entry`` — the shared tap-qualifier resolver behind
+    adapt/run/stats/edit/tag/export (docs/roadmap/items/
+    audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie.md)."""
+
+    def test_unknown_name_returns_no_kind_or_entry(self, tap):
+        bare, kind, entry = store.resolve_lock_entry("nope")
+        assert (bare, kind, entry) == ("nope", None, None)
+
+    def test_unqualified_installed_skill_resolves(self, brainstorming):
+        bare, kind, entry = store.resolve_lock_entry("brainstorming")
+        assert bare == "brainstorming"
+        assert kind == "skill"
+        assert entry == lockfile.get_skill("brainstorming")
+
+    def test_qualified_name_matching_the_installed_tap_resolves(self, brainstorming):
+        bare, kind, entry = store.resolve_lock_entry("fixture-tap:brainstorming")
+        assert bare == "brainstorming"
+        assert kind == "skill"
+        assert entry == lockfile.get_skill("brainstorming")
+
+    def test_qualifier_naming_a_different_tap_withholds_the_entry(
+            self, brainstorming, tmp_path):
+        _rival_tap(tmp_path)
+        bare, kind, entry = store.resolve_lock_entry("rival-tap:brainstorming")
+        # brainstorming IS installed, but from fixture-tap, not rival-tap —
+        # this qualifier's answer is "not installed", not fixture-tap's record.
+        assert (bare, kind, entry) == ("brainstorming", None, None)
+        # the unqualified/matching-tap forms are unaffected by the rival tap.
+        assert store.resolve_lock_entry("brainstorming")[1:] == (
+            "skill", lockfile.get_skill("brainstorming"))
+        assert store.resolve_lock_entry("fixture-tap:brainstorming")[1:] == (
+            "skill", lockfile.get_skill("brainstorming"))
+
+    def test_installed_rule_resolves_with_its_kind(self, tap):
+        store.install(_rule_entry(tap))
+        _bare, kind, entry = store.resolve_lock_entry("team-conventions")
+        assert kind == "rule"
+        assert entry == lockfile.get_rule("team-conventions")
+
+    def test_qualified_rule_matching_its_tap_resolves(self, tap):
+        store.install(_rule_entry(tap))
+        bare, kind, entry = store.resolve_lock_entry("fixture-tap:team-conventions")
+        assert bare == "team-conventions"
+        assert kind == "rule"
+        assert entry == lockfile.get_rule("team-conventions")

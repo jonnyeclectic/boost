@@ -275,6 +275,24 @@ class TestProfile:
         assert "cowboy-coding" not in json.loads(
             paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
+    def test_use_records_the_sideline_and_clears_it_on_return(self, boost, tapped):
+        # `sidelined_by` is what stops `doctor`/`sync` from reading a
+        # deliberate switch as damage — and `profile use` has to clear it
+        # again when a skill it once sidelined comes back into scope, or the
+        # flag would outlive the reason it was set.
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        boost("profile", "save", "duo")
+
+        boost("profile", "use", "solo")
+        assert lockfile.get_skill("cowboy-coding")["sidelined_by"] == "profile"
+
+        r = boost("profile", "use", "duo")
+        assert "switched to profile duo" in r.out
+        assert "sidelined_by" not in lockfile.get_skill("cowboy-coding")
+        assert (paths.home() / ".claude" / "skills" / "cowboy-coding").is_symlink()
+
     def test_version_drift_shows_changed(self, boost, installed):
         boost("profile", "save", "pin")
         p = paths.lockfile_path()
@@ -426,6 +444,10 @@ class TestProtocol:
         assert "brainstorming" not in complete._cached_names()
         r = boost("protocol", "open", "boost://tap/owner/repo")
         assert "tapped owner/repo" in r.out
+        # "items", not "skills" — matches what `boost tap` itself prints for
+        # the same count (a tap can carry rules and workflows too).
+        assert "(5 items)" in r.out
+        assert "skills)" not in r.out
         assert "brainstorming" in complete._cached_names()
 
     def test_register_unregister_darwin(self, boost, sandbox, monkeypatch):

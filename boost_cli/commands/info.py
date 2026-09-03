@@ -234,17 +234,26 @@ def _kind_table(heading, items, extra=None):
     ``(column, key)`` pair for a per-kind column (e.g. a workflow's slot); the
     count line reuses the heading's trailing noun (`installed rules` -> `rule`)."""
     out.heading(heading)
-    headers: tuple = ("NAME", "VERSION", "TAP", "AGENTS")  # `extra` adds a 5th
-    rows: list[tuple] = []   # 4 columns, or 5 when `extra` adds one
+    # FLAGS mirrors the skills table so a quarantined or pinned rule/workflow
+    # doesn't render byte-identical to a healthy one — `update`/`cat` treat
+    # them differently and a reader needs to see that here, not just in --json.
+    headers: tuple = ("NAME", "VERSION", "TAP", "AGENTS", "FLAGS")
+    rows: list[tuple] = []
     for name in sorted(items):
         e = items[name]
+        quarantined = bool(e.get("quarantined"))
+        agents_cell = "—" if quarantined else _materialized_agents(e)
+        flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
+                ([out.aurora("quarantined", "pink")] if quarantined else [])
         row = [name, e.get("version", "?"), e.get("tap", "?"),
-               _materialized_agents(e)]
+               agents_cell]
         if extra:
             row.append(str(e.get(extra[1], "") or ""))
+        row.append(" ".join(flags))
         rows.append(tuple(row))
     if extra:
-        headers = (*headers, extra[0])
+        headers = (headers[0], headers[1], headers[2], headers[3], extra[0],
+                   headers[4])
     out.table(rows, headers=headers)
     noun = heading.split()[-1][:-1]  # "installed rules" -> "rule"
     print("  " + out.aurora("%d %s%s installed"
@@ -302,10 +311,14 @@ def cmd_list(argv):
     if not skills and not rules and not workflows and not project:
         # Name the kind that was asked for. "no skills installed" in answer to
         # `--kind rule` sends you looking for a skill that was never the point.
+        # The `boost tap --defaults` half of the hint is itself only useful
+        # when there is nothing tapped yet — with registries already
+        # configured, the fix is `search`+`install`, not tapping more of them.
         print(out.empty_state(
             "no %ss installed" % (args.kind or "skill")
             + (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""),
-            hint="boost tap --defaults && boost search <topic>"))
+            hint=("boost search <topic>" if registry.list_taps()
+                 else "boost tap --defaults && boost search <topic>")))
         return 0
     if skills:
         out.heading("installed skills")
@@ -318,13 +331,17 @@ def cmd_list(argv):
             flags = ([out.aurora("pinned", "yellow")] if e.get("pinned") else []) + \
                     ([out.aurora("quarantined", "pink")] if e.get("quarantined")
                      else []) + \
+                    ([out.role("sidelined:" + e["sidelined_by"], "muted")]
+                     if e.get("sidelined_by") else []) + \
                     [out.role("#" + t, "muted") for t in e.get("tags") or []]
             rows.append((name, e.get("version", "?"), e.get("tap", "?"),
                          "·".join(a.split("-")[0] for a in e.get("agents") or []),
                          " ".join(flags)))
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"))
-        print("  " + out.aurora("%d skill%s installed"
-                                % (len(rows), "" if len(rows) == 1 else "s"), "cyan"))
+        print("  " + out.aurora("%d skill%s installed%s"
+                                % (len(rows), "" if len(rows) == 1 else "s",
+                                   " with tag #%s" % args.tag.lstrip("#")
+                                   if args.tag else ""), "cyan"))
     if project:
         out.heading("project skills (%s)" % paths.tilde(pbase))
         rows = [(name, e.get("version", "?"), e.get("tap", "?"),
@@ -379,8 +396,15 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         out.kv("installed", "%s (%s)" % (ia, util.rel_time(ia)))
     if ua and ua != ia:
         out.kv("updated", "%s (%s)" % (ua, util.rel_time(ua)))
-    agents = [m.get("agent", "?") for m in entry.get("materializations") or []]
-    out.kv("materialized", ", ".join(agents) or "(none)")
+    if entry.get("quarantined"):
+        # `materializations` still names what quarantine stashed and would
+        # restore on release — it is not what's on disk right now, which is
+        # nothing. Printing the stale agent list here reads as a lie about
+        # files that were just removed.
+        out.kv("materialized", "(removed — quarantined)")
+    else:
+        agents = [m.get("agent", "?") for m in entry.get("materializations") or []]
+        out.kv("materialized", ", ".join(agents) or "(none)")
     out.kv("pinned", "yes" if entry.get("pinned") else "no")
     out.kv("quarantined", "yes" if entry.get("quarantined") else "no")
     return 0
@@ -475,6 +499,8 @@ def cmd_info(argv):
             badges.append(out.badge("pinned", "yellow"))
         if lock.get("quarantined"):
             badges.append(out.badge("quarantined", "pink"))
+        if lock.get("sidelined_by"):
+            badges.append(out.badge("sidelined by %s" % lock["sidelined_by"], "cyan"))
         latest = str((cat or {}).get("version") or "")
         if cat and latest != str(lock.get("version", "?")):
             badges.append(out.badge("update available", "yellow"))
@@ -524,6 +550,8 @@ def cmd_info(argv):
         out.kv("agents", ", ".join(lock.get("agents") or []) or "(none)")
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
         out.kv("quarantined", "yes" if lock.get("quarantined") else "no")
+        if lock.get("sidelined_by"):
+            out.kv("sidelined by", str(lock["sidelined_by"]))
         if lock.get("tags"):
             out.kv("tags", " ".join("#" + t for t in lock["tags"]))
     elif _as_list(meta.get("tags")):
@@ -575,22 +603,24 @@ def cmd_edit(argv):
                                  description="Open a skill's SKILL.md in your editor")
     ap.add_argument("name")
     args = ap.parse_args(argv)
-    lock = lockfile.get_skill(args.name)
-    if not lock:
-        found = lockfile.find_any(args.name)
-        if found is not None:
-            # Editing opens a skill's store dir; a rule/workflow has none — it
-            # materializes into shared agent files (e.g. ~/.claude/CLAUDE.md).
-            raise BoostError(
-                "%s is a %s — boost edit applies to skills"
-                % (args.name, found[0]),
-                hint="a %s materializes into shared agent files, not a store "
-                     "dir you can open; read it with `boost cat %s`"
-                     % (found[0], args.name))
+    # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
+    # bare name the lock keys on, honoring the qualifier against the
+    # installed tap rather than rejecting the string as an invalid skill name.
+    name, kind, lock = store.resolve_lock_entry(args.name)
+    if lock is None:
         raise BoostError("%s is not installed" % args.name,
                         hint="install it first, or `boost cat %s` to read the tap copy"
                         % args.name)
-    sdir = store.skill_store_dir(args.name)
+    if kind != "skill":
+        # Editing opens a skill's store dir; a rule/workflow has none — it
+        # materializes into shared agent files (e.g. ~/.claude/CLAUDE.md).
+        raise BoostError(
+            "%s is a %s — boost edit applies to skills"
+            % (args.name, kind),
+            hint="a %s materializes into shared agent files, not a store "
+                 "dir you can open; read it with `boost cat %s`"
+                 % (kind, args.name))
+    sdir = store.skill_store_dir(name)
     path = sdir / "SKILL.md"
     if not path.exists():
         raise BoostError("SKILL.md missing from %s" % _tilde(sdir),
@@ -607,8 +637,8 @@ def cmd_edit(argv):
     sha = util.sha256_dir(sdir)
     if sha != lock.get("sha256"):
         lock["sha256"], lock["updated_at"] = sha, util.now_iso()
-        lockfile.set_skill(args.name, lock)
-        journal.log("edit", args.name)
+        lockfile.set_skill(name, lock)
+        journal.log("edit", name)
         out.warn("local edits diverge from the tap source — boost drift will flag this")
     else:
         out.ok("no changes")
@@ -962,7 +992,8 @@ def cmd_deps(argv):
         print(json.dumps({"unmet": unmet, "conflicts": pairs}, indent=2))
         return 1 if unmet or pairs else 0
     if not inst:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     for u in unmet:
         out.info("%s requires %s %s"
@@ -992,12 +1023,27 @@ def cmd_tag(argv):
     # from `+x -x`.
     flag_strings = {"--list", "--json", "-h", "--help"}
     flags = [t for t in argv if t in flag_strings]
-    operands = [t for t in argv if t not in flag_strings]
+    # A long option this command does not know must not silently fall through
+    # as an operand: `tag brainstorming --verbose` used to read as removing
+    # the tag `-verbose`, and `tag --verbose` as `--verbose is not installed`
+    # — every sibling command instead rejects an unrecognized `--flag` with
+    # exit 2. Handing the untouched argv to argparse here raises that same
+    # "unrecognized arguments" error rather than the misleading ones above.
+    unknown_long = [t for t in argv if t.startswith("--") and t not in flag_strings]
+    if unknown_long:
+        ap.parse_args(argv)
+    operands = [t for t in argv if t not in flag_strings and not t.startswith("--")]
     args = ap.parse_args(flags)
     args.name = operands[0] if operands else None
     mods = operands[1:]
 
     if args.list_all:
+        if args.name:
+            # `tag brainstorming --list` used to silently drop the skill name
+            # and list every tag on every skill instead.
+            raise BoostError("--list does not take a skill name",
+                            hint="`boost tag --list` shows every tag; drop %r"
+                                 % args.name)
         mapping: dict[str, list[str]] = {}
         for name, e in sorted(lockfile.installed().items()):
             for t in e.get("tags") or []:
@@ -1016,40 +1062,27 @@ def cmd_tag(argv):
     if not args.name:
         raise BoostError("skill name required",
                         hint="`boost tag NAME +tag -tag`, or `boost tag --list`")
-    entry = lockfile.get_skill(args.name)
-    if not entry:
-        found = lockfile.find_any(args.name)
-        if found is not None:
-            raise BoostError(
-                "%s is a %s — boost tag applies to skills"
-                % (args.name, found[0]),
-                hint="tags are a skill-only label; rules and workflows are "
-                     "governed by pin / quarantine / verify")
+    # `args.name` may be tap-qualified (`owner/repo:skill`); resolve to the
+    # bare name the lock keys on, honoring the qualifier against the
+    # installed tap rather than rejecting the string as an invalid skill name.
+    name, kind, entry = store.resolve_lock_entry(args.name)
+    if entry is None:
         raise BoostError("%s is not installed" % args.name,
                         hint="see what is with `boost list`")
-    tags = list(entry.get("tags") or [])
-    changed = False
-    for tok in mods:
-        if not tok or tok[0] not in "+-":
-            raise BoostError("cannot parse %r" % tok,
-                            hint="prefix tags with + to add or - to remove")
-        t = tok[1:].lstrip("#").strip()
-        if not t:
-            raise BoostError("empty tag in %r" % tok)
-        if tok[0] == "+" and t not in tags:
-            tags.append(t)
-            changed = True
-        elif tok[0] == "-" and t in tags:
-            tags.remove(t)
-            changed = True
+    if kind != "skill":
+        raise BoostError(
+            "%s is a %s — boost tag applies to skills"
+            % (args.name, kind),
+            hint="tags are a skill-only label; rules and workflows are "
+                 "governed by pin / quarantine / verify")
+    tags, changed = lockfile.apply_tag_mods(entry.get("tags") or [], mods)
     if changed:
-        entry["tags"] = sorted(tags)
-        tags = entry["tags"]
-        lockfile.set_skill(args.name, entry)
-        journal.log("tag", args.name, tags=tags)
+        entry["tags"] = tags
+        lockfile.set_skill(name, entry)
+        journal.log("tag", name, tags=tags)
     if args.json:
-        print(json.dumps({"name": args.name, "tags": tags}, indent=2))
+        print(json.dumps({"name": name, "tags": tags}, indent=2))
         return 0
     shown = " ".join(out.role("#" + t, "accent") for t in tags) or out.role("(no tags)", "muted")
-    (out.ok if changed else out.info)("%s  %s" % (args.name, shown))
+    (out.ok if changed else out.info)("%s  %s" % (name, shown))
     return 0

@@ -315,6 +315,25 @@ def term_width(default: int = 80) -> int:
     return shutil.get_terminal_size((default, 20)).columns
 
 
+def pane_width(stream=None) -> int | None:
+    """The pane to fit *data* to, or None when there is no pane.
+
+    :func:`term_width` always answers a number — 80 when stdout is detached —
+    which is right for chrome and wrong for data. A pipe has no pane, so
+    fitting a table to an assumed 80 columns clips the NAME column that
+    ``boost list | grep`` is matching on and that `untap`/`update` take as an
+    argument. An explicit ``COLUMNS`` is a deliberate answer about width and is
+    honored either way, TTY or not.
+    """
+    columns = os.environ.get("COLUMNS", "").strip()
+    if columns.isdigit() and int(columns) > 0:
+        return int(columns)
+    stream = stream or sys.stdout
+    if hasattr(stream, "isatty") and stream.isatty():
+        return term_width()
+    return None
+
+
 def truncate(text: str, width: int, ellipsis: str = "…") -> str:
     """Collapse whitespace (including literal \\n / \\t escapes) to single
     spaces, then clip to at most `width` columns with a trailing ellipsis.
@@ -764,14 +783,20 @@ def _clip_visible(s: str, width: int, ellipsis: str = "…") -> str:
     return result
 
 
-def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1):
+def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1,
+                protected=()):
     """Shrink the widest non-numeric column one step at a time until the row
     fits `avail` columns (or nothing text-like is left to shrink). Numeric
-    columns are never squeezed — a truncated number is a wrong number."""
+    columns are never squeezed — a truncated number is a wrong number — and
+    neither are the `protected` indexes, whose cells are identifiers rather
+    than prose (see :func:`table`'s ``keep``), so a narrow pane spends its
+    shrinking on chrome first."""
     widths = list(widths)
     if not widths:
         return widths
-    text_cols = [i for i, is_num in enumerate(numeric) if not is_num]
+    protected = set(protected)
+    text_cols = [i for i, is_num in enumerate(numeric)
+                 if not is_num and i not in protected]
 
     def total():
         return sum(widths) + sep * (len(widths) - 1)
@@ -784,7 +809,23 @@ def _fit_widths(widths, numeric, avail: int, sep: int = 2, floor: int = 1):
     return widths
 
 
-def table(rows, headers=None, stream=None) -> None:
+def _keep_indexes(keep, headers, ncols) -> set[int]:
+    """Resolve `table`'s ``keep`` — column indexes, header names, or a mix —
+    to indexes. An unknown name is ignored rather than raising: a call site
+    naming a header it no longer emits should lose the protection, not the
+    table."""
+    names = {str(h): i for i, h in enumerate(headers or ())}
+    out_idx = set()
+    for item in keep:
+        if isinstance(item, int) and not isinstance(item, bool):
+            if 0 <= item < ncols:
+                out_idx.add(item)
+        elif item in names:
+            out_idx.add(names[item])
+    return out_idx
+
+
+def table(rows, headers=None, stream=None, keep=()) -> None:
     """Print an aligned table. rows: list of tuples of strings.
 
     Column widths are measured by visible width (ignoring ANSI color codes),
@@ -801,6 +842,12 @@ def table(rows, headers=None, stream=None) -> None:
     ``stream`` as in :func:`warn` — a report a caller needs off stdout (e.g.
     a table printed alongside generated content on stdout) can be redirected
     as a whole.
+
+    Fitting only happens when there is a pane to fit (:func:`pane_width`):
+    piped output is emitted whole, because a clipped NAME is not the name.
+    ``keep`` names the columns — by index or header — whose cells are
+    identifiers rather than prose (a snapshot ID, a digest, a hook command),
+    so a narrow pane shrinks the chrome beside them instead.
     """
     rows = [[str(x) for x in r] for r in rows]
     all_rows = ([list(map(str, headers))] if headers else []) + rows
@@ -815,7 +862,10 @@ def table(rows, headers=None, stream=None) -> None:
         sep, sep_w = " " + DIM + "│" + RESET + " ", 3
     else:
         sep, sep_w = "  ", 2
-    widths = _fit_widths(widths, numeric, term_width(), sep=sep_w)
+    avail = pane_width(stream)
+    if avail is not None:
+        widths = _fit_widths(widths, numeric, avail, sep=sep_w,
+                             protected=_keep_indexes(keep, headers, ncols))
 
     def fmt(cell: str, i: int) -> str:
         cell = _clip_visible(cell, widths[i])
@@ -831,22 +881,34 @@ def table(rows, headers=None, stream=None) -> None:
               file=stream)
 
 
+_CONFIRM_BYPASS_HINT = "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt"
+
+
 def confirm(prompt: str, default: bool = False) -> bool:
     """Ask a yes/no question and return the answer as a bool.
 
     BOOST_ASSUME_YES or --yes/-y force True; non-TTY stdin and an empty
     answer return `default`; EOF or Ctrl-C returns False.
+
+    Every path that resolves to a decline (as opposed to `default` being
+    True) prints the bypass hint here, once, so callers inherit it instead
+    of each command growing its own reminder — see the confirm-bypass-hints
+    roadmap item.
     """
     if os.environ.get("BOOST_ASSUME_YES") or "--yes" in sys.argv or "-y" in sys.argv:
         return True
     if not sys.stdin.isatty():
+        if not default:
+            dim(_CONFIRM_BYPASS_HINT)
         return default
     suffix = " [Y/n] " if default else " [y/N] "
     try:
         answer = input(prompt + suffix).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
+        dim(_CONFIRM_BYPASS_HINT)
         return False
-    if not answer:
-        return default
-    return answer in ("y", "yes")
+    result = answer in ("y", "yes") if answer else default
+    if not result:
+        dim(_CONFIRM_BYPASS_HINT)
+    return result
