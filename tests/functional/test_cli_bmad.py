@@ -239,7 +239,7 @@ class TestUninstallGlobalAndAbort:
             self, boost, sandbox, monkeypatch, proj):
         (proj / ".claude" / "skills" / "bmad-help").mkdir(parents=True)
         monkeypatch.delenv("BOOST_ASSUME_YES", raising=False)  # stdin not a tty -> No
-        r = boost("bmad", "uninstall")
+        r = boost("bmad", "uninstall", expect=1)
         assert "aborted" in r.out
         assert (proj / ".claude" / "skills" / "bmad-help").exists()
 

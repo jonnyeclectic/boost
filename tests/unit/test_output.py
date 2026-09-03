@@ -1088,6 +1088,28 @@ class TestConfirm:
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
         assert output.confirm("delete everything?") is False
 
+    def test_bypass_hint_names_both_flag_and_env(self):
+        assert "-y" in output._CONFIRM_BYPASS_HINT
+        assert "BOOST_ASSUME_YES" in output._CONFIRM_BYPASS_HINT
+
+    def test_non_tty_declined_prints_bypass_hint(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        output.confirm("go?", default=False)
+        assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
+
+    def test_non_tty_proceeding_default_true_prints_no_hint(self, monkeypatch, capsys):
+        # default=True means the command proceeds — nothing was declined, so
+        # naming a bypass for a prompt that never blocked would be noise.
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        output.confirm("go?", default=True)
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
+
+    def test_assume_yes_prints_no_hint(self, monkeypatch, capsys):
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        output.confirm("go?", default=False)
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
+
     def _tty(self, monkeypatch, answer):
         monkeypatch.setattr(sys, "stdin", FakeStream(tty=True))
         prompts = []
@@ -1109,27 +1131,38 @@ class TestConfirm:
         self._tty(monkeypatch, "YES")
         assert output.confirm("go?") is True
 
-    def test_tty_n(self, monkeypatch):
+    def test_tty_n(self, monkeypatch, capsys):
         self._tty(monkeypatch, "n")
         assert output.confirm("go?", default=True) is False
+        assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
 
     def test_tty_gibberish_is_no(self, monkeypatch):
         self._tty(monkeypatch, "maybe")
         assert output.confirm("go?", default=True) is False
 
-    def test_tty_empty_returns_default(self, monkeypatch):
+    def test_tty_empty_returns_default(self, monkeypatch, capsys):
         self._tty(monkeypatch, "")
         assert output.confirm("go?", default=True) is True
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
         assert output.confirm("go?", default=False) is False
+        assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
+
+    def test_tty_y_prints_no_hint(self, monkeypatch, capsys):
+        self._tty(monkeypatch, "y")
+        output.confirm("go?", default=False)
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
 
     def test_tty_eof_is_false(self, monkeypatch, capsys):
         self._tty(monkeypatch, EOFError())
         assert output.confirm("go?", default=True) is False
-        assert capsys.readouterr().out == "\n"  # prints a newline after ^D
+        out = capsys.readouterr().out
+        assert out.startswith("\n")  # prints a newline after ^D
+        assert output._CONFIRM_BYPASS_HINT in out
 
-    def test_tty_keyboard_interrupt_is_false(self, monkeypatch):
+    def test_tty_keyboard_interrupt_is_false(self, monkeypatch, capsys):
         self._tty(monkeypatch, KeyboardInterrupt())
         assert output.confirm("go?", default=True) is False
+        assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
 
     def test_prompt_suffix_reflects_default(self, monkeypatch):
         prompts = self._tty(monkeypatch, "y")

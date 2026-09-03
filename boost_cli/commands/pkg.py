@@ -616,6 +616,8 @@ def cmd_sync(argv: list[str]) -> int:
                     help="also delete orphaned store dirs and links outside "
                          "a declared --agent scope")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the --prune confirmation prompts")
     args = ap.parse_args(argv)
     plan = store.sync_plan()
     # A checkout can be missing skills its project lock records — that is the
@@ -658,8 +660,8 @@ def cmd_sync(argv: list[str]) -> int:
     # are never approved as one.
     oos = plan["out_of_scope_links"]
     if args.prune and oos:
-        go = (bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
-              out.confirm("Remove %s outside their declared scope: %s?"
+        go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
+              args.yes or out.confirm("Remove %s outside their declared scope: %s?"
                           % (_plural(len(oos), "link"),
                              ", ".join("%s → %s" % (n, a) for n, a in oos))))
         if go:
@@ -668,8 +670,8 @@ def cmd_sync(argv: list[str]) -> int:
     orphans = plan["orphaned_store"]
     pruned = []
     if args.prune and orphans:
-        go = (bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
-              out.confirm("Delete %s: %s?" % (_plural(len(orphans), "orphaned store dir"),
+        go = (args.yes or bool(os.environ.get("BOOST_ASSUME_YES")) if args.json else
+              args.yes or out.confirm("Delete %s: %s?" % (_plural(len(orphans), "orphaned store dir"),
                                               ", ".join(orphans))))
         if go:
             for name in orphans:
@@ -690,14 +692,26 @@ def cmd_sync(argv: list[str]) -> int:
     for name in pruned:
         out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
     if left:
-        out.warn("%s left in place: %s — remove with `boost sync --prune`"
-                 % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
+        # args.prune true here means the user already ran --prune and
+        # declined the confirm — telling them to run the command they just
+        # ran is not a remedy, so name the decline instead.
+        if args.prune:
+            out.warn("%s left in place (declined): %s"
+                     % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
+        else:
+            out.warn("%s left in place: %s — remove with `boost sync --prune`"
+                     % (_plural(len(left), "orphaned store dir"), ", ".join(left)))
     if oos:
-        out.warn("%s outside the declared scope: %s — remove with "
-                 "`boost sync --prune`, or widen the scope with "
-                 "`boost install <skill> --force` naming every `--agent`"
-                 % (_plural(len(oos), "link"),
-                    ", ".join("%s → %s" % (n, a) for n, a in oos)))
+        if args.prune:
+            out.warn("%s outside the declared scope (declined): %s"
+                     % (_plural(len(oos), "link"),
+                        ", ".join("%s → %s" % (n, a) for n, a in oos)))
+        else:
+            out.warn("%s outside the declared scope: %s — remove with "
+                     "`boost sync --prune`, or widen the scope with "
+                     "`boost install <skill> --force` naming every `--agent`"
+                     % (_plural(len(oos), "link"),
+                        ", ".join("%s → %s" % (n, a) for n, a in oos)))
     # Before this, a blocked link produced no action and no warning, so the
     # branch below reported "everything in sync" for a repair that had just
     # been refused — and `boost doctor` went on prescribing this command.
@@ -1513,6 +1527,8 @@ def cmd_snapshot(argv: list[str]) -> int:
                     help="label for save, snapshot id for restore")
     ap.add_argument("--json", action="store_true",
                     help="machine-readable output (list)")
+    ap.add_argument("-y", "--yes", action="store_true",
+                    help="skip the restore confirmation prompt")
     args = ap.parse_args(argv)
     if args.action == "save":
         return _snapshot_save(args.arg)
@@ -1521,7 +1537,7 @@ def cmd_snapshot(argv: list[str]) -> int:
     if not args.arg:
         raise BoostError("restore needs a snapshot id",
                         hint="see `boost snapshot list`")
-    return _snapshot_restore(args.arg)
+    return _snapshot_restore(args.arg, args.yes)
 
 
 def _snapshot_save(label: str | None) -> int:
@@ -1588,7 +1604,7 @@ def _snapshot_list(as_json: bool) -> int:
     return 0
 
 
-def _snapshot_restore(snap_id: str) -> int:
+def _snapshot_restore(snap_id: str, yes: bool = False) -> int:
     if not snap_id.startswith("snap-"):
         snap_id = "snap-" + snap_id
     tar_path = paths.snapshots_dir() / (snap_id + ".tar.gz")
@@ -1596,10 +1612,10 @@ def _snapshot_restore(snap_id: str) -> int:
         raise BoostError("no snapshot %s" % snap_id,
                         hint="see `boost snapshot list`")
     root = paths.store_dir()
-    if not out.confirm("Restore %s? This replaces everything in %s"
-                       % (snap_id, _tilde(root))):
+    if not (yes or out.confirm("Restore %s? This replaces everything in %s"
+                               % (snap_id, _tilde(root)))):
         out.info("cancelled")
-        return 0
+        return 1
     paths.ensure_dirs()
     # Rules/workflows installed after this snapshot was saved: their lock
     # entries live in the same file the archive is about to replace, but
