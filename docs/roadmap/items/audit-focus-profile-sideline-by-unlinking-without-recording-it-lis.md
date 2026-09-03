@@ -2,14 +2,14 @@
 id: audit-focus-profile-sideline-by-unlinking-without-recording-it-lis
 board: code
 section: internals
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: High
 wow: 2
 note: doctor's remedy for a sideline is `boost sync` — which silently undoes the sideline
 order: 218
-owner:
+owner: loop/sideline-visibility
 pr:
 title: "focus/profile sideline by unlinking without recording it; list lies, doctor exits 1, and its own remedy (sync) undoes the switch"
 ---
