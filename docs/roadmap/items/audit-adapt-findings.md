@@ -10,7 +10,7 @@ wow: 2
 note: a subagent named after a tool renders a crew that compiles but cannot run
 order: 247
 owner: loop/adapt-audit-fixes
-pr:
+pr: 728
 title: "boost adapt: CLI audit findings (2026-08)"
 ---
 <b>A subagent named after a declared tool renders modules that compile but cannot run.</b> With a
