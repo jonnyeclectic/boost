@@ -19,10 +19,11 @@ import time
 
 import pytest
 
-from boost_cli.core import config, gitutil, paths, policy, registry
+from boost_cli.core import config, gitutil, paths, policy, registry, util
 from boost_cli.errors import BoostError
 
 SHA = "a" * 40
+HEAD_SHA = "b" * 40
 
 
 @pytest.fixture()
@@ -44,6 +45,7 @@ def fake_clone(monkeypatch):
     monkeypatch.setattr(gitutil, "clone_shallow", clone)
     monkeypatch.setattr(gitutil, "checkout_commit", checkout)
     monkeypatch.setattr(gitutil, "pull", pull)
+    monkeypatch.setattr(gitutil, "head_commit", lambda repo: HEAD_SHA)
     monkeypatch.setattr(policy, "check_tap_signing", lambda path: [])
     return state
 
@@ -105,6 +107,36 @@ class TestUpdateRespectsPins:
         registry.pin("o/a", SHA)
         assert registry.list_taps()[0].pin == SHA
         registry.unpin("o/a")
+        assert registry.list_taps()[0].pin == ""
+
+    def test_a_pinned_tap_with_no_clone_is_recloned_at_the_pin(
+            self, sandbox, fake_clone):
+        # A deleted clone directory (fresh machine, wiped ~/.boost/repos) used
+        # to report "pinned ... (skipped)" and leave nothing on disk — the pin
+        # check ran before the missing-clone check ever fired.
+        registry.add("o/a", at=SHA)
+        util.rmtree(registry.get("o/a").path)
+        results, failures = registry.update()
+        assert failures == {}
+        assert results["o/a"] == "cloned at %s" % SHA[:7]
+        # One checkout from `add`'s own pin, one from the re-clone `update`
+        # just performed — both onto the same pinned commit.
+        assert fake_clone["checkouts"] == [("o__a", SHA), ("o__a", SHA)]
+        assert registry.get("o/a").is_cloned
+        assert registry.list_taps()[0].pin == SHA
+
+    def test_force_reclones_a_missing_pinned_tap_at_head_and_drops_the_pin(
+            self, sandbox, fake_clone):
+        # `--force`'s own help says "move pinned taps too, clearing their
+        # pin" — that must hold even when the clone to move was gone, not
+        # just when it existed to be pulled.
+        registry.add("o/a", at=SHA)
+        util.rmtree(registry.get("o/a").path)
+        results, _ = registry.update(force=True)
+        assert results["o/a"] == "cloned at %s" % HEAD_SHA[:7]
+        # Only `add`'s own initial pin checkout — `--force` clones straight
+        # to HEAD and must not check out the (now-dropped) pin again.
+        assert fake_clone["checkouts"] == [("o__a", SHA)]
         assert registry.list_taps()[0].pin == ""
 
 

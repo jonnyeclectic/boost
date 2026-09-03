@@ -303,17 +303,31 @@ def cmd_compact(argv) -> int:
             if args.reclone:
                 util.rmtree(tap.path)
                 gitutil.clone_shallow(tap.url, tap.path)
+                if tap.pin:
+                    # A re-clone must land back on the pin it started at —
+                    # `clone_shallow` always takes the default branch, so
+                    # skipping this silently moves a tap `update` itself
+                    # refuses to move, leaving `config.json`'s pin, the
+                    # catalog cache and `boost taps` all vouching for a
+                    # commit the clone no longer holds.
+                    gitutil.checkout_commit(tap.path, tap.pin)
             else:
                 gitutil.narrow(tap.path)
             for rel in keep.get(tap.name, []):
                 gitutil.materialize(tap.path, rel)
+            if args.reclone:
+                catalog.rebuild_tap(tap)
         except BoostError as e:
             out.warn("could not compact %s: %s" % (tap.name, e))
             continue
         after = util.dir_size(tap.path)
-        if after < before:
+        # A re-clone always did real work — fetched fresh objects, possibly
+        # re-applied a pin — even when the blobless result is not smaller
+        # than a clone that was already sparse; reporting "already compact"
+        # in that case is what let a moved pin go unnoticed.
+        if after < before or args.reclone:
             changed += 1
-            freed += before - after
+            freed += max(before - after, 0)
             out.info("%s  %s → %s" % (tap.name, util.human_size(before),
                                       util.human_size(after)))
 

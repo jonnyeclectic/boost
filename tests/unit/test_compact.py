@@ -20,6 +20,7 @@ success. `compact` refreshes the index first.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 
 from boost_cli.core import gitutil, paths, registry
@@ -169,6 +170,52 @@ class TestCompactNarrowsInPlace:
 
         assert res.rc == 0
         assert (registry.list_taps()[0].path / "skills" / "demo" / "SKILL.md").exists()
+
+
+def _advance(repo, path_to_touch, text):
+    path_to_touch.write_text(text, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-qm", "move on"], cwd=repo, check=True,
+                   capture_output=True)
+
+
+class TestCompactRecloneRespectsPins:
+    """`--reclone` used to always take the default branch, silently moving a
+    pinned tap while reporting nothing changed — see registry.update's own
+    pin handling, which this mirrors."""
+
+    def test_reclone_keeps_a_pinned_tap_on_its_commit(self, boost, sandbox,
+                                                       tmp_path):
+        src = _repo(tmp_path / "src")
+        pinned_at = gitutil.head_commit(src)
+        boost("tap", str(src), "--at", pinned_at)
+        # Move the source repo's default branch forward; a plain re-clone
+        # would land there if the pin were not honoured.
+        _advance(src, src / "skills" / "demo" / "SKILL.md",
+                 "---\nname: demo\ndescription: d2\n---\n\nBody two.\n")
+
+        res = boost("compact", "--reclone")
+
+        clone = registry.list_taps()[0].path
+        assert gitutil.head_commit(clone) == pinned_at
+        assert registry.list_taps()[0].pin == pinned_at
+        assert "already compact" not in res.out.lower()
+
+    def test_reclone_rebuilds_the_catalog_cache_commit(self, boost, sandbox,
+                                                        tmp_path):
+        src = _repo(tmp_path / "src")
+        boost("tap", str(src))
+        tap = registry.list_taps()[0]
+        stale = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        _advance(src, src / "skills" / "demo" / "SKILL.md",
+                 "---\nname: demo\ndescription: d2\n---\n\nBody two.\n")
+
+        boost("compact", "--reclone")
+
+        fresh = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert fresh["commit"] != stale["commit"]
+        assert fresh["commit"] == gitutil.head_commit(tap.path)
 
 
 def os_utime(pth):
