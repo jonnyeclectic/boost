@@ -38,9 +38,14 @@ def _widest(text: str) -> int:
 
 @pytest.fixture
 def pane(monkeypatch):
-    """Pin the reported terminal width."""
+    """Pin the reported terminal width.
+
+    Through ``COLUMNS`` rather than a patched `term_width`, because that is
+    the pane a caller declares: tables fit only when there is a pane to fit
+    (`output.pane_width`), and pytest's captured stdout is not a TTY.
+    """
     def use(cols):
-        monkeypatch.setattr(output, "term_width", lambda: cols)
+        monkeypatch.setenv("COLUMNS", str(cols))
         return cols
     return use
 

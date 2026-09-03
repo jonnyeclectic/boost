@@ -2,14 +2,14 @@
 id: audit-out-table-clips-data-columns-to-an-assumed-80-columns-when-s
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: boost list | grep NAME matches nothing — piped tables clip to an assumed 80 columns
 order: 239
-owner:
+owner: loop/table-pipe-clip
 pr:
 title: "<code>out.table</code> clips data columns to an assumed 80 columns when stdout is a pipe; narrow TTYs clip IDs/hashes"
 ---

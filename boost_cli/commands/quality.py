@@ -938,8 +938,11 @@ def cmd_fingerprint(argv):
     print("  " + out.role(digest[:16], "accent", bold=True)
           + "  " + out.role(digest, "muted"))
     if args.verbose:
+        # A sha256 clipped to 38 chars cannot be compared by eye, which is
+        # the only reason --verbose lists the components at all.
         out.table([tuple(line.split(":", 1)) for line in comps],
-                  headers=("COMPONENT", "DIGEST/COMMIT"))
+                  headers=("COMPONENT", "DIGEST/COMMIT"),
+                  keep=("DIGEST/COMMIT",))
     for name in incomplete:
         out.warn("tap %s not cloned — fingerprint incomplete (boost update)"
                  % name, stream=sys.stderr)
@@ -1417,7 +1420,7 @@ def cmd_trust(argv) -> int:
     out.heading("trusted keys")
     if keys:
         out.table([(k["name"], k.get("fingerprint", "?")) for k in keys],
-                  headers=("NAME", "FINGERPRINT"))
+                  headers=("NAME", "FINGERPRINT"), keep=("FINGERPRINT",))
     else:
         out.dim("  none — add one with `boost trust add <name> <key>`")
     print()
@@ -1441,4 +1444,6 @@ def _print_provenance(results) -> None:
         note = r.key_name or r.detail or ""
         rows.append((name, out.role(r.status, _PROVENANCE_STYLE.get(r.status, "muted")),
                      note))
-    out.table(rows, headers=("TAP", "PROVENANCE", "KEY / DETAIL"))
+    # The detail cell is the only explanation an invalid status ever gets.
+    out.table(rows, headers=("TAP", "PROVENANCE", "KEY / DETAIL"),
+              keep=("KEY / DETAIL",))
