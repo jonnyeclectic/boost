@@ -302,10 +302,14 @@ def cmd_list(argv):
     if not skills and not rules and not workflows and not project:
         # Name the kind that was asked for. "no skills installed" in answer to
         # `--kind rule` sends you looking for a skill that was never the point.
+        # The `boost tap --defaults` half of the hint is itself only useful
+        # when there is nothing tapped yet — with registries already
+        # configured, the fix is `search`+`install`, not tapping more of them.
         print(out.empty_state(
             "no %ss installed" % (args.kind or "skill")
             + (" with tag #%s" % args.tag.lstrip("#") if args.tag else ""),
-            hint="boost tap --defaults && boost search <topic>"))
+            hint=("boost search <topic>" if registry.list_taps()
+                 else "boost tap --defaults && boost search <topic>")))
         return 0
     if skills:
         out.heading("installed skills")
@@ -323,8 +327,10 @@ def cmd_list(argv):
                          "·".join(a.split("-")[0] for a in e.get("agents") or []),
                          " ".join(flags)))
         out.table(rows, headers=("NAME", "VERSION", "TAP", "AGENTS", "FLAGS"))
-        print("  " + out.aurora("%d skill%s installed"
-                                % (len(rows), "" if len(rows) == 1 else "s"), "cyan"))
+        print("  " + out.aurora("%d skill%s installed%s"
+                                % (len(rows), "" if len(rows) == 1 else "s",
+                                   " with tag #%s" % args.tag.lstrip("#")
+                                   if args.tag else ""), "cyan"))
     if project:
         out.heading("project skills (%s)" % paths.tilde(pbase))
         rows = [(name, e.get("version", "?"), e.get("tap", "?"),
@@ -962,7 +968,8 @@ def cmd_deps(argv):
         print(json.dumps({"unmet": unmet, "conflicts": pairs}, indent=2))
         return 1 if unmet or pairs else 0
     if not inst:
-        out.info("no skills installed")
+        print(out.empty_state("no skills installed",
+                              hint="boost install <skill> to start"))
         return 0
     for u in unmet:
         out.info("%s requires %s %s"

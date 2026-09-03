@@ -2,14 +2,14 @@
 id: audit-audit-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: M
 impact: Med
 wow: 2
 note: rm -rf ~/ passes clean, hidden.js is never scanned, and a missing dir counts as scanned
 order: 249
-owner:
+owner: loop/audit-audit-findings
 pr:
 title: "boost audit: CLI audit findings (2026-08)"
 ---
