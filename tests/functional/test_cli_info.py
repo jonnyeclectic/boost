@@ -790,6 +790,40 @@ class TestTag:
         r = boost("tag", "--list")
         assert "#shared" in r.out
 
+    def test_unknown_long_flag_is_rejected_not_read_as_a_removal(
+            self, boost, installed):
+        # Used to be silently consumed as removing the tag "-verbose".
+        r = boost("tag", "brainstorming", "--verbose", expect=2)
+        assert "unrecognized arguments" in r.err
+        assert "brainstorming" not in _lock() or \
+            "verbose" not in _lock()["brainstorming"].get("tags", [])
+
+    def test_unknown_long_flag_alone_is_rejected_not_a_bad_skill_name(
+            self, boost, tapped):
+        # Used to read as `--verbose is not installed`.
+        r = boost("tag", "--verbose", expect=2)
+        assert "unrecognized arguments" in r.err
+        assert "is not installed" not in r.err
+
+    def test_list_with_a_skill_name_is_an_error(self, boost, installed):
+        # Used to silently drop the name and list every tag on every skill.
+        r = boost("tag", "brainstorming", "--list", expect=1)
+        assert "--list" in r.err
+
+    def test_a_net_noop_writes_no_lock_change_or_journal_event(
+            self, boost, installed):
+        # `+x -x` against a skill that never carried "x" must not rewrite the
+        # lock or log a journal event for a mutation that changed nothing.
+        r = boost("tag", "brainstorming", "+x", "-x")
+        assert _lock()["brainstorming"].get("tags", []) == []
+        assert _journal_events("tag") == []
+        assert "brainstorming" in r.out  # still shows the (empty) tag set
+
+    def test_whitespace_in_a_tag_is_rejected(self, boost, installed):
+        r = boost("tag", "brainstorming", "+with space", expect=1)
+        assert "whitespace" in r.err
+        assert _lock()["brainstorming"].get("tags", []) == []
+
 
 # ── installed rules & workflows ──────────────────────────────────────────
 
