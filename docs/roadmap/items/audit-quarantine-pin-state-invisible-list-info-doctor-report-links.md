@@ -10,7 +10,7 @@ wow: 2
 note: fix implemented and pushed; make check could not run in this sandbox (PyPI egress blocked) — awaiting CI
 order: 236
 owner: loop/quarantine-visibility
-pr:
+pr: 736
 title: "Quarantine/pin state invisible: <code>list</code>/<code>info</code>/<code>doctor</code> report links and materializations that were removed"
 ---
 Quarantine records its state but the reporting surfaces never consult it. After
