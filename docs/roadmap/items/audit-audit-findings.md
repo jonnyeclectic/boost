@@ -10,7 +10,7 @@ wow: 2
 note: rm -rf ~/ passes clean, hidden.js is never scanned, and a missing dir counts as scanned
 order: 249
 owner: loop/audit-audit-findings
-pr:
+pr: 737
 title: "boost audit: CLI audit findings (2026-08)"
 ---
 <b>Three honesty gaps in the trust scanner.</b> A seeded <code>rm -rf ~/</code> (and <code>rm -rf
