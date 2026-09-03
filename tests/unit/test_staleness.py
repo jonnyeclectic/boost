@@ -102,3 +102,35 @@ class TestDriftState:
         assert staleness.SOURCE_MISSING == "source-missing"
         assert staleness.STORE_MISSING == "store-missing"
         assert staleness.NA == "n/a"
+
+
+class TestOutdatedFooter:
+    def test_marker_constant_value(self):
+        # pins the literal both loops in cmd_outdated key off of
+        assert staleness.OUTDATED_SOURCE_MISSING == "source missing"
+
+    def test_no_source_missing_keeps_the_original_wording(self):
+        assert staleness.outdated_footer(3, 0) == (
+            "3 outdated · `boost update` upgrades (pinned items stay put)")
+
+    def test_all_source_missing_never_mentions_update(self):
+        footer = staleness.outdated_footer(2, 2)
+        assert "2 outdated" in footer
+        assert "source missing" in footer
+        assert "boost update` upgrades" not in footer
+
+    def test_mixed_reports_both_counts_distinctly(self):
+        footer = staleness.outdated_footer(3, 1)
+        assert "3 outdated" in footer
+        assert "2 upstream" in footer
+        assert "1 source missing" in footer
+
+    def test_total_and_source_missing_counts_are_not_swapped(self):
+        # A total/source_missing argument-order mutant would still produce a
+        # plausible-looking string, so check the exact numbers land right.
+        footer = staleness.outdated_footer(5, 2)
+        assert "5 outdated" in footer
+        assert "3 upstream" in footer
+        assert "2 source missing" in footer
+        assert "5 upstream" not in footer
+        assert "5 source missing" not in footer

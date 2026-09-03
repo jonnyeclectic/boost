@@ -75,3 +75,31 @@ def drift_state(store_sha: str | None, lock_sha: str,
     if source_sha is None:
         return SOURCE_MISSING
     return IN_SYNC if source_sha == lock_sha else UPSTREAM_MOVED
+
+
+# ── outdated_footer: the one-line summary `cmd_outdated` prints ────────────
+
+#: The exact "latest" value `cmd_outdated` uses for a row whose tap source is
+#: gone (untapped, or the file/entry vanished upstream). Shared by both the
+#: skill loop and the rule/workflow loop so a row is identified consistently
+#: rather than by kind-specific logic, and reused here to count them.
+OUTDATED_SOURCE_MISSING = "source missing"
+
+
+def outdated_footer(total: int, source_missing: int) -> str:
+    """Summary line for `boost outdated`, worded so it never promises
+    `boost update` can fix a row whose source is gone.
+
+    ``source_missing`` counts rows carrying ``OUTDATED_SOURCE_MISSING`` as
+    their "latest" value — those need a re-tap (or removal), not an update.
+    """
+    if source_missing == 0:
+        return ("%d outdated · `boost update` upgrades "
+                "(pinned items stay put)" % total)
+    updatable = total - source_missing
+    if updatable == 0:
+        return ("%d outdated · source missing — `boost update` can't "
+                "restore a deleted tap; re-tap or `boost uninstall`" % total)
+    return ("%d outdated · %d upstream (`boost update` upgrades, pinned "
+            "items stay put) · %d source missing (re-tap or `boost "
+            "uninstall`)" % (total, updatable, source_missing))
