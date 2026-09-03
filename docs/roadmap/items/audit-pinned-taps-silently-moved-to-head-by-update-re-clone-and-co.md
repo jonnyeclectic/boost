@@ -7,10 +7,10 @@ category: Safety · Bug
 complexity: M
 impact: High
 wow: 2
-note: compact --reclone moved a pin to HEAD and printed "every tap is already compact"
+note: "PR 740 open: fix lands in full, but sandbox had no PyPI/apt egress to run make check"
 order: 216
 owner: loop/pinned-tap-reclone
-pr:
+pr: 740
 title: "Pinned taps silently moved to HEAD by <code>update</code> re-clone and <code>compact --reclone</code>, pin left stale"
 ---
 The pin invariant &mdash; only <code>update --force</code> may move a pinned tap, and moving one is
