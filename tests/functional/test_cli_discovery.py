@@ -1553,6 +1553,23 @@ class TestCount:
                                      "workflows": 0, "available": 0,
                                      "taps": 0, "discovery": None}
 
+    def test_list_shaped_discovery_json_counts_as_missing(self, boost, sandbox):
+        # Valid JSON, wrong top-level shape: the old code called .get("items")
+        # straight off the parsed value, so a top-level list crashed with
+        # AttributeError instead of degrading like the corrupt-JSON case above.
+        paths.ensure_dirs()
+        (paths.cache_dir() / "discovery.json").write_text("[1, 2, 3]", encoding="utf-8")
+        r = boost("count", "--json")
+        assert json.loads(r.out)["discovery"] is None
+
+    def test_non_list_items_field_counts_as_missing(self, boost, sandbox):
+        # {"items": 3}: "3 or []" evaluates truthy, so len(3) raised TypeError.
+        paths.ensure_dirs()
+        (paths.cache_dir() / "discovery.json").write_text(
+            json.dumps({"items": 3}), encoding="utf-8")
+        r = boost("count", "--json")
+        assert json.loads(r.out)["discovery"] is None
+
     def test_counts_rules_and_workflows_with_labels(self, boost, installed):
         # "installed 1" with a rule in the lock was a false total; the
         # breakdown appears once a non-skill kind is present.

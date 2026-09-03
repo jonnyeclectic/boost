@@ -6666,8 +6666,9 @@ excerpts at <code>:159-164</code>) to match. Found by the 2026-08 CLI audit (clu
       </article>
 
       <article class="cap rcard" id="audit-drift-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost drift: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>drift hints <code>boost update</code> for source-missing items whose tap was untapped — a
 guaranteed no-op.</b> After <code>untap Aaronontheweb/dotnet-cursor-rules</code>, drift reports
 <em>"dotnet-build (rule)&nbsp; source-missing&nbsp; boost update"</em>; running
@@ -6685,12 +6686,12 @@ entry's tap into <code>_drift_hint</code> (<code>quality.py:255-258</code>) and 
 <code>boost tap &lt;tap&gt;</code> when that tap is not among the configured registries, keeping
 <code>boost update</code> only for a configured-but-uncloned tap. No flag changes, so
 <code>docs/commands.html</code> is untouched. Found by the 2026-08 CLI audit (cluster
-<code>drift-source-missing-hint</code>); repro in the audit log.</p>
+<code>drift-source-missing-hint</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">fix up in</span>
+          <span class="m">fixed in</span>
         </div>
       </article>
 
@@ -11658,15 +11659,16 @@ Found by the 2026-08 CLI audit (cluster <code>corrupt-json-clobbered</code>); re
       </article>
 
       <article class="cap rcard" id="audit-five-exit-70-crashes-on-bad-paths-data-catalog-export-serve">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>Five exit-70 crashes on bad paths/data: <code>catalog --export</code>, <code>serve --port</code>, <code>count</code>, <code>replay</code>, <code>infer -o</code></h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Five user-reachable conditions escape their guards and become <em>&ldquo;Error: boost hit an unexpected error: &hellip;&rdquo;</em> + <em>&ldquo;a crash report was written to &hellip;&rdquo;</em>, exit 70, where a framed BoostError belongs &mdash; the same class as the shipped two-crashes-that-should-have-been-messages item, five new sites, all verified. <code>catalog --export /nonexistent-dir-zz/b.tgz</code> &rarr; PermissionError (the <code>mkdir</code> at <code>boost_cli/core/catalogbundle.py:119</code> sits <em>before</em> the <code>except OSError</code> at <code>:127</code>). <code>serve --port 99999</code> (or <code>-1</code>) &rarr; <em>&ldquo;OverflowError: bind(): port must be 0-65535.&rdquo;</em> (<code>serve.py:931</code> catches OSError, and OverflowError is not one). <code>count</code> with a list-shaped <code>cache/discovery.json</code> &rarr; <em>&ldquo;AttributeError: 'list' object has no attribute 'get'&rdquo;</em> (<code>commands/discovery.py:1839-1841</code> guards JSONDecodeError/OSError only &mdash; and the verifier's probe <code>{"items": 3}</code> also crashes with a TypeError, so both container levels need validating). <code>replay show</code>/<code>rollback</code> on an unparseable snapshot &rarr; JSONDecodeError from <code>lockfile.py:254</code>, while <code>replay list</code> silently skips the file (<code>:226-233</code>) so the user cannot see why an id vanished. <code>infer -o /dev/null/nope/SKILL.md</code> &rarr; NotADirectoryError from the unguarded mkdir/write in <code>commands/intelligence.py:128-136</code>.
 
 Why it matters: each is an expected condition &mdash; a typo'd path, an out-of-range flag, one stale derived cache file &mdash; and each currently costs a crash log and exit 70. <code>count</code> is the quick always-safe summary and must not crash on one derived cache; a corrupt <code>discovery.json</code> that is invalid JSON already degrades correctly to <code>discovery: null</code>, so valid-JSON-wrong-shape crashing is pure guard-shape accident.
 
 Fix as one hardening sweep, per the verified recommendation: move the mkdir inside catalogbundle's OSError guard; validate <code>--port</code> in argparse (an ArgumentTypeError converter, exit 2) or catch OverflowError beside OSError in <code>serve_http</code>; in <code>cmd_count</code> check <code>isinstance(data, dict)</code> and <code>isinstance(items, list)</code> &rarr; discovery None; wrap <code>history_read</code>'s <code>json.loads</code> in a BoostError (<em>&ldquo;lock history entry &hellip; is unreadable&rdquo;</em>) and have <code>replay list</code> print one dim <em>&ldquo;N unreadable snapshot(s) skipped&rdquo;</em> line; wrap <code>_write_generated</code>'s mkdir/write_text in <code>except OSError</code> &rarr; BoostError. Unit-test each site. Docs: regenerate <code>docs/commands.html</code> (no flag/summary change).
 
-Found by the 2026-08 CLI audit (cluster <code>crashes-should-be-messages</code>); repro in the audit log. Verified 2026-08-31: all five reproduced with exit 70 and a crash report.</p>
+Found by the 2026-08 CLI audit (cluster <code>crashes-should-be-messages</code>); repro in the audit log. Verified 2026-08-31: all five reproduced with exit 70 and a crash report.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
@@ -13813,8 +13815,9 @@ covers three distinct look-alikes. Found by the 2026-08 CLI audit (cluster
       </article>
 
       <article class="cap rcard" id="audit-log-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost log: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The diagnostic trail journals a crash code for exits that were fine. After
 <code>boost edit --help</code> (real exit 0) and <code>boost edit</code> (a usage error, real exit 2),
 <code>boost log --diagnostics</code> shows <em>&ldquo;WARNING boost: done: boost edit --help -&gt; rc=70 in
@@ -13831,12 +13834,12 @@ journal for real crashes wades through a WARNING per <code>--help</code>. Fix: i
 <code>_run</code>, add <code>except SystemExit as e: rc = e.code if isinstance(e.code, int) else 1;
 raise</code> before the <code>finally</code>, so completion logs the real exit and WARNING stays meaningful.
 Update <code>docs/DEBUGGING.md</code> where it describes the trail. Found by the 2026-08 CLI audit
-(cluster <code>log-records-rc70</code>); repro in the audit log.</p>
+(cluster <code>log-records-rc70</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">every --help and usage error is journaled as rc=70 at WARNING — real exits 0 and 2</span>
+          <span class="m">fixed — cli.main() now catches SystemExit and journals the real rc for --help/usage exits</span>
         </div>
       </article>
 

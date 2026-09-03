@@ -2,15 +2,15 @@
 id: audit-log-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
-note: every --help and usage error is journaled as rc=70 at WARNING — real exits 0 and 2
+note: fixed — cli.main() now catches SystemExit and journals the real rc for --help/usage exits
 order: 275
-owner:
-pr:
+owner: loop/cli-log-rc70
+pr: 723
 title: "boost log: CLI audit findings (2026-08)"
 ---
 The diagnostic trail journals a crash code for exits that were fine. After

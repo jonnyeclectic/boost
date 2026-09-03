@@ -134,8 +134,8 @@ def export_bundle(dest: Path) -> dict:
         "entries": entries,
     }
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
     try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(dest, "w:gz") as tar:
             _add_bytes(tar, MANIFEST_NAME,
                        json.dumps(manifest, indent=1).encode("utf-8"))

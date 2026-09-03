@@ -53,6 +53,10 @@ line at `WARNING`, so it stands out when you scan the log:
 … WARNING boost: done: boost install missing -> rc=1 in 48ms
 ```
 
+This applies to `--help` and usage errors too, which argparse raises as a
+`SystemExit` rather than returning normally: the trail logs their *real* exit
+code (`0` for `--help`, `2` for a usage error), not a placeholder.
+
 ### Turning up console verbosity
 
 Global flags go **before** the command name (`boost --debug install foo`); a
