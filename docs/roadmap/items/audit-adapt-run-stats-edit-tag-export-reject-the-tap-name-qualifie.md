@@ -2,7 +2,7 @@
 id: audit-adapt-run-stats-edit-tag-export-reject-the-tap-name-qualifie
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 1
 note: adapt's hint says type tap:name; typing exactly that string is "invalid skill name"
 order: 217
 owner: loop/tap-name-qualifier
-pr:
+pr: 732
 title: "adapt/run/stats/edit/tag/export reject the <code>tap:name</code> qualifier that info/install accept and adapt's own hint recommends"
 ---
 <code>boost adapt test-driven-development --to crewai</code> answers <em>&ldquo;exists in multiple
