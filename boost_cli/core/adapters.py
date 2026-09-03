@@ -21,7 +21,7 @@ import collections
 import json
 import keyword
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from . import frontmatter
@@ -96,11 +96,16 @@ def _litellm_model(model: str) -> str:
 
     boost's AI bridge is Anthropic (the `claude` CLI / Anthropic API), so a bare
     Claude id like `claude-haiku-4-5-20251001` gets an `anthropic/` prefix.
-    A value that already names a provider (`anthropic/…`, `openai/gpt-4o`) is
-    passed through unchanged. Both CrewAI and the Agents SDK route through
-    LiteLLM, so this one form serves both.
+    A value that already names a provider is passed through unchanged — either
+    LiteLLM's own `provider/model` form, or LangGraph's `provider:model` form
+    (the id `--model` accepts and `_langchain_model` emits), normalized to a
+    slash so a round trip through both adapters can't double-prefix a colon
+    form into `anthropic/anthropic:claude-x`. Both CrewAI and the Agents SDK
+    route through LiteLLM, so this one form serves both.
     """
     m = model.strip()
+    if ":" in m:
+        m = m.replace(":", "/", 1)
     return m if "/" in m else "anthropic/" + m
 
 
@@ -189,11 +194,17 @@ def discover_subagents(skill_dir: Path, own_file: Path | None = None) -> list[Ag
     return specs
 
 
-def _unique_idents(specs: list[AgentSpec]) -> list[str]:
+def _unique_idents(specs: list[AgentSpec],
+                    reserved: Iterable[str] = ()) -> list[str]:
     """A unique Python identifier per spec, in order — two agents whose names
     normalize to the same ident get numeric suffixes so emitted assignments and
-    node names never collide."""
-    counts: dict[str, int] = {}
+    node names never collide with each other or with `reserved` (tool stub
+    names, which the caller emits first: a subagent literally named after a
+    declared tool, e.g. a subagent ``grep`` alongside tool ``Grep``, would
+    otherwise get the same ident as the ``grep`` tool stub and rebind or
+    shadow it — a module that compiles but raises `TypeError` or
+    `UnboundLocalError` at run time)."""
+    counts: dict[str, int] = dict.fromkeys(reserved, 0)
     idents: list[str] = []
     for spec in specs:
         base = _ident(spec.name)
@@ -372,8 +383,8 @@ def render_crew(workflow: str, description: str, specs: list[AgentSpec],
     pins every agent's LLM via ``crewai.LLM``; without it CrewAI's default
     provider is used. ``description`` documents the crew as a whole.
     """
-    idents = _unique_idents(specs)
     tools = _unique_tools(specs)
+    idents = _unique_idents(specs, reserved=tools)
     imports = ["from crewai import Agent, Crew, Process, Task" + (", LLM" if model else "")]
     if tools:
         imports.append("from crewai.tools import tool")
@@ -424,8 +435,8 @@ def render_graph(workflow: str, description: str, specs: list[AgentSpec],
     id; without it the caller must supply one (LangGraph has no default
     provider). ``description`` documents the graph.
     """
-    idents = _unique_idents(specs)
     tools = _unique_tools(specs)
+    idents = _unique_idents(specs, reserved=tools)
     imports = ["from langgraph.graph import END, START, MessagesState, StateGraph",
                "from langgraph.prebuilt import create_react_agent"]
     if tools:

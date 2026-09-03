@@ -285,6 +285,14 @@ class TestLitellmModel:
     def test_strips_whitespace(self):
         assert adapters._litellm_model("  claude-x  ") == "anthropic/claude-x"
 
+    def test_colon_form_normalized_not_double_prefixed(self):
+        # `--model anthropic:claude-x` is the form LangGraph accepts *and*
+        # emits (_langchain_model's own output). Before the fix this only
+        # matched the bare "/" check, so it fell through to the anthropic/
+        # prefix branch and rendered "anthropic/anthropic:claude-x".
+        assert adapters._litellm_model("anthropic:claude-x") == "anthropic/claude-x"
+        assert adapters._litellm_model("openai:gpt-4o") == "openai/gpt-4o"
+
 
 class TestLangchainModel:
     def test_bare_id_gets_anthropic_colon(self):
@@ -317,6 +325,12 @@ class TestCrewaiWithModel:
 
     def test_wires_llm_kwarg_with_normalized_model(self):
         assert 'llm=LLM(model="anthropic/claude-haiku-4-5-20251001")' in self.src
+
+    def test_colon_form_model_not_double_prefixed(self):
+        # `--model anthropic:claude-x` (LangGraph's own accepted/emitted form)
+        # must render "anthropic/claude-x", not "anthropic/anthropic:claude-x".
+        src = adapters.render_crewai("s", "d", "b", "anthropic:claude-x")
+        assert 'llm=LLM(model="anthropic/claude-x")' in src
 
     def test_exact_output(self):
         assert self.src == (

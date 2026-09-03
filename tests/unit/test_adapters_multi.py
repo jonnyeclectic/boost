@@ -8,9 +8,36 @@ structure, prove the output is valid Python (`compile`), and prove escaped
 literals round-trip, so any template mutation (dropped field, swapped kwarg,
 broken edge wiring) fails a test.
 """
+import sys
+import types
+
 import pytest
 
 from boost_cli.core import adapters
+
+
+def _exec_generated(src, monkeypatch, module_stubs):
+    """Compile and run generated adapter source against fake `sys.modules`
+    entries, so a golden execution test needs neither crewai nor langgraph
+    installed. `module_stubs` maps a dotted module name to the attributes it
+    exposes (e.g. {"crewai": {"Agent": _Agent, ...}})."""
+    for dotted, attrs in module_stubs.items():
+        mod = types.ModuleType(dotted)
+        for key, val in attrs.items():
+            setattr(mod, key, val)
+        monkeypatch.setitem(sys.modules, dotted, mod)
+        if "." in dotted:
+            # `from pkg.sub import x` imports `pkg` first, then looks up
+            # `sub` as one of its attributes — both must be in sys.modules.
+            parent_name, _, child_name = dotted.rpartition(".")
+            parent = sys.modules.get(parent_name)
+            if parent is None:
+                parent = types.ModuleType(parent_name)
+                monkeypatch.setitem(sys.modules, parent_name, parent)
+            setattr(parent, child_name, mod)
+    ns: dict = {}
+    exec(compile(src, "<generated>", "exec"), ns)  # noqa: S102  (running the generated module is the point)
+    return ns
 
 
 def _spec(name, description="d", instructions="body", tools=()):
@@ -197,6 +224,21 @@ class TestUniqueHelpers:
         specs = [_spec("worker"), _spec("dedup-judge")]
         assert adapters._unique_idents(specs) == ["worker", "dedup_judge"]
 
+    def test_idents_avoid_reserved_tool_names(self):
+        # A subagent literally named "grep" alongside a declared tool "Grep"
+        # (-> ident "grep") must not get the same ident as the tool stub, or
+        # whichever binding executes last silently rebinds the other's name.
+        specs = [_spec("grep")]
+        assert adapters._unique_idents(specs, reserved=["grep"]) == ["grep_1"]
+
+    def test_idents_reserved_default_is_empty(self):
+        assert adapters._unique_idents([_spec("grep")]) == ["grep"]
+
+    def test_idents_reserved_and_agent_collision_both_avoided(self):
+        specs = [_spec("grep"), _spec("grep")]
+        assert adapters._unique_idents(specs, reserved=["grep"]) == \
+            ["grep_1", "grep_2"]
+
     def test_tools_union_ordered_deduped(self):
         specs = [_spec("a", tools=["read", "grep"]),
                  _spec("b", tools=["grep", "bash"])]
@@ -309,6 +351,54 @@ class TestRenderCrew:
         assert "judge = Agent(" in src and "judge_1 = Agent(" in src
         compile(src, "<coll>", "exec")
 
+    def test_subagent_named_after_a_tool_stays_runnable(self, monkeypatch):
+        # A subagent named "grep" alongside a declared tool "Grep" normalizes
+        # (via parse_tools' _ident call) to the same "grep" ident by the time
+        # it reaches an AgentSpec — reproduced directly here since AgentSpec
+        # itself takes already-normalized tool idents. That used to bind the
+        # same name twice: the tool stub function, then the "grep" Agent
+        # overwrote it, so any *other* agent's tools=[..., grep] handed the
+        # Agent object where a callable belonged (crewai: TypeError at Agent
+        # construction). Executing the generated module against minimal
+        # stubs is the golden check that it no longer does.
+        specs = [
+            adapters.AgentSpec("reviewer", "Reviews", "R.", ["grep", "read_file"]),
+            adapters.AgentSpec("grep", "Searches", "G.", []),
+        ]
+        src = adapters.render_crew("wf", "d", specs)
+        assert "grep_1 = Agent(" in src   # the agent, disambiguated
+        assert "def grep(argument: str)" in src   # the tool stub, untouched
+
+        class _Agent:
+            def __init__(self, **kw):
+                self.kw = kw
+
+        class _Task:
+            def __init__(self, **kw):
+                self.kw = kw
+
+        class _Crew:
+            def __init__(self, **kw):
+                self.kw = kw
+
+        class _Process:
+            sequential = "sequential"
+
+        def _tool(_name):
+            def deco(fn):
+                return fn
+            return deco
+
+        ns = _exec_generated(src, monkeypatch, {
+            "crewai": {"Agent": _Agent, "Task": _Task, "Crew": _Crew, "Process": _Process},
+            "crewai.tools": {"tool": _tool},
+        })
+        reviewer = ns["reviewer"]
+        assert isinstance(reviewer, _Agent)
+        # the tool passed through is the callable stub, never the Agent object
+        assert all(callable(t) and not isinstance(t, _Agent)
+                   for t in reviewer.kw["tools"])
+
     @pytest.mark.parametrize("nasty", ['say "hi"', "a\nb", 'triple """ quote', "🚀"])
     def test_escaping_round_trips(self, nasty):
         spec = [adapters.AgentSpec("x", nasty, nasty, [])]
@@ -380,6 +470,50 @@ class TestRenderGraph:
     def test_langchain_model_colon_form(self):
         assert 'model="anthropic:x"' in adapters.render_graph("wf", "d", CREW, "x")
         assert 'model="anthropic:y"' in adapters.render_graph("wf", "d", CREW, "anthropic/y")
+
+    def test_subagent_named_after_a_tool_stays_runnable(self, monkeypatch):
+        # LangGraph's failure mode differs from crewai's: `grep = create_react_
+        # agent(...)` assigned inside `build_wf` makes `grep` local to that
+        # function, so an *earlier* `tools=[grep]` referencing the module-level
+        # tool stub raises UnboundLocalError instead of merely getting the
+        # wrong value. Actually calling the generated factory is the golden
+        # check that the ident collision no longer exists.
+        specs = [
+            adapters.AgentSpec("reviewer", "Reviews", "R.", ["grep"]),
+            adapters.AgentSpec("grep", "Searches", "G.", []),
+        ]
+        src = adapters.render_graph("wf", "d", specs)
+        assert "grep_1 = create_react_agent(" in src
+        assert "@tool\ndef grep(argument: str)" in src
+
+        class _StateGraph:
+            def __init__(self, _state):
+                self.nodes: dict = {}
+                self.edges: list = []
+
+            def add_node(self, name, fn):
+                self.nodes[name] = fn
+
+            def add_edge(self, a, b):
+                self.edges.append((a, b))
+
+            def compile(self):
+                return self
+
+        def _create_react_agent(_model, tools, prompt):
+            return {"tools": tools, "prompt": prompt}
+
+        def _tool(fn):
+            return fn
+
+        ns = _exec_generated(src, monkeypatch, {
+            "langgraph.graph": {"END": "END", "START": "START",
+                                "MessagesState": object, "StateGraph": _StateGraph},
+            "langgraph.prebuilt": {"create_react_agent": _create_react_agent},
+            "langchain_core.tools": {"tool": _tool},
+        })
+        graph = ns["build_wf"]("fake-model")   # would raise UnboundLocalError pre-fix
+        assert isinstance(graph, _StateGraph)
 
 
 # --- dispatch -------------------------------------------------------------
