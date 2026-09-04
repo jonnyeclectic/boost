@@ -340,7 +340,8 @@ class TestPolicy:
         r = boost("policy", "check", "--json")
         assert json.loads(r.out) == {
             "skills": 1, "counts": {"skill": 1, "rule": 0, "workflow": 0},
-            "total": 1, "violations": [], "pin_only": False, "unpinned": []}
+            "total": 1, "violations": [], "pin_only": False, "unpinned": [],
+            "enforce": True, "not_checked": []}
         boost("policy", "set", "blocked_skills", "brainstorming")
         r = boost("policy", "check", expect=1)
         assert "on the blocklist" in r.out
@@ -355,9 +356,60 @@ class TestPolicy:
         boost("policy", "set", "min_quality_score", "101")
         boost("policy", "set", "pin_only", "true")
         r = boost("policy", "check", expect=1)
-        assert "pin-only mode is on — installs/updates are frozen" in r.out
+        assert "pin-only mode is on — new installs and skill updates are frozen" in r.out
         assert "1 unpinned item(s): brainstorming" in r.out
         assert "quality score %d < required 101" % score in r.out
+
+    def test_check_catches_what_install_would_have_blocked(self, boost, installed):
+        """The coverage gap the audit found: require_version, max_skills and
+        denied_capabilities all passed silently under `policy check` even
+        though `install` enforces every one of them
+        (docs/roadmap/items/audit-policy-findings.md)."""
+        boost("policy", "set", "require_version", "true")
+        boost("policy", "set", "max_skills", "0")
+        boost("policy", "set", "denied_capabilities", "network")
+        r = boost("policy", "check", expect=1)
+        assert "max_skills limit (0) exceeded (1 installed)" in r.out
+        r = boost("policy", "check", "--json", expect=1)
+        violations = {v["violation"] for v in json.loads(r.out)["violations"]}
+        assert "max_skills limit (0) exceeded (1 installed)" in violations
+
+    def test_check_flags_missing_description(self, boost, installed):
+        boost("policy", "set", "require_description", "true")
+        r = boost("policy", "check")  # brainstorming's fixture has one
+        assert "policy check passed" in r.out
+        from boost_cli.core import store
+        (store.skill_store_dir("brainstorming") / "SKILL.md").write_text(
+            "---\nname: brainstorming\nversion: 1.4.0\n---\nbody",
+            encoding="utf-8")
+        r = boost("policy", "check", expect=1)
+        assert "skill has no description (required by policy)" in r.out
+
+    def test_check_not_checked_when_store_copy_missing(self, boost, installed):
+        from boost_cli.core import store
+        util.rmtree(store.skill_store_dir("brainstorming"))
+        boost("policy", "set", "require_description", "true")
+        r = boost("policy", "check")
+        assert "not checked: require_description/denied_capabilities " \
+               "(store copy unreadable)" in r.out
+        r = boost("policy", "check", "--json")
+        assert json.loads(r.out)["not_checked"] == [
+            "require_description/denied_capabilities (store copy unreadable)"]
+
+    def test_check_names_enforcement_being_off(self, boost, installed):
+        boost("policy", "set", "blocked_skills", "brainstorming")
+        boost("config", "set", "policy_enforce", "false")
+        r = boost("policy", "check", expect=1)
+        assert "policy_enforce is off" in r.out
+        assert "does not enforce" in r.out
+        # Still reports what WOULD be blocked, so the gap stays visible.
+        assert "on the blocklist" in r.out
+
+    def test_check_enforce_true_by_default_has_no_off_note(self, boost, installed):
+        r = boost("policy", "check")
+        assert "policy_enforce is off" not in r.out
+        assert json.loads(
+            boost("policy", "check", "--json").out)["enforce"] is True
 
 
 # ---------------------------------------------------------------- onboard
