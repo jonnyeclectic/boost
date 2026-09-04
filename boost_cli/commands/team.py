@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import operator
 import platform
 import shutil
 import stat
@@ -277,7 +278,7 @@ def cmd_profile(argv) -> int:
         # Sort by the name shown on screen, not the slugged filename that put
         # them there — glob order otherwise prints rows in an order that
         # matches nothing a reader sees (`daily, mixed, !!!, Work Profile`).
-        profiles.sort(key=lambda pr: pr["name"])
+        profiles.sort(key=operator.itemgetter("name"))
         if args.json:
             print(json.dumps(profiles, indent=2))
             return 0
