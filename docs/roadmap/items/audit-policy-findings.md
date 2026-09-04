@@ -2,7 +2,7 @@
 id: audit-policy-findings
 board: code
 section: health
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
