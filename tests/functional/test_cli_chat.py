@@ -103,6 +103,17 @@ class TestRejectedRepliesAreReported:
         assert payload["grounded"] is False
         assert payload["source"] == "extractive"
 
+    def test_a_failed_ai_call_is_reported_not_silent(self, boost, tapped, monkeypatch):
+        # The audit bug this card fixes: AI was available and was tried, the
+        # call itself returned nothing, and one-shot chat said nothing about
+        # it — indistinguishable from the deliberate extractive answer every
+        # keyless install gets.
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **kw: None)
+        r = boost("chat", "brainstorming ideas")
+        assert "AI" in r.err and "heuristic fallback" in r.err
+
 
 class TestLimit:
     def test_limit_bounds_the_candidates(self, boost, tapped):

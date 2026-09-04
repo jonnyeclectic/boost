@@ -1343,6 +1343,16 @@ class TestConflict:
         assert "(ai-confirmed)" in r.out
         assert "using the heuristic fallback" not in " ".join(r.out.split())
 
+    def test_a_failed_ai_call_still_warns(self, boost, tapped, monkeypatch):
+        # Previously silent: AI was available, the call was made, and it came
+        # back empty — the pairs stayed "(heuristic)" with no note at all.
+        boost("install", "tdd-workflow", "cowboy-coding")
+        monkeypatch.delenv("BOOST_NO_AI")
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: None)
+        r = boost("conflict", expect=1)
+        assert "using the heuristic fallback" in " ".join(r.out.split())
+
 
 # ── changelog ────────────────────────────────────────────────────────────
 

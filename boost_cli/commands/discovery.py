@@ -164,12 +164,16 @@ def cmd_search(argv):
     # is pinned in tests/eval/baseline.json. Map instead of moving either.
     ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else "heuristic relevance"
     if args.smart:
+        reranked = None
         if ai.available():
             with spin.Spinner("ranking %d matches with Claude" % len(scored)):
                 reranked = _ai_rank(query, scored)
-            if reranked:
-                scored, ranker = reranked, "Claude Haiku relevance"
+        if reranked:
+            scored, ranker = reranked, "Claude Haiku relevance"
         else:
+            # Fires whether AI was never available or was tried and failed —
+            # a silent unranked list otherwise looks identical to a
+            # deliberate BM25-only result.
             out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     shown = scored[:args.limit]
     # The dot marks "a skill by this name is installed" — a name match, with
