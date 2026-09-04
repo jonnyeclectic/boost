@@ -10,7 +10,7 @@ wow: 1
 note: health calls a drifted machine "● healthy" and scores gemini 1/1 with the store dir gone
 order: 270
 owner: loop/health-dashboard-coverage
-pr:
+pr: 761
 title: "<code>boost health</code>: CLI audit findings (2026-08)"
 ---
 <b>The dashboard counts skills only, so it calls a drifted machine healthy.</b> With 1 skill, 2 rules
