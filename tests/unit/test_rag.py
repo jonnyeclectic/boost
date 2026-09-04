@@ -621,11 +621,28 @@ class TestIncremental:
         first = rag.build(entries=entries, force=True)
         # same commit -> the tap is reused, nothing reindexed
         second = rag.build(entries=entries)
-        assert second["reused"] == ["acme__skills"]
+        # "reused" must name taps the same way "reindexed" does (real tap
+        # name, not the safe/cache-key spelling) or the two lists can never
+        # be unioned into the full tap-name set.
+        assert second["reused"] == ["acme/skills"]
         assert second["reindexed"] == []
         assert second["docs"] == first["docs"]
         # index still queryable after a reuse-only rebuild
         assert rag.retrieve("python fixtures", entries=entries)
+
+    def test_reused_and_reindexed_share_one_naming(self, corpus):
+        """set(reindexed) | set(reused) must equal the tap-name set entries carry.
+
+        Regression: `reused` used to hold safe names ("acme__skills") while
+        `reindexed` held real tap names ("acme/skills") in the same object,
+        so a caller diffing the two saw every reused tap as changed.
+        """
+        _root, entries = corpus
+        rag.build(entries=entries, force=True)
+        stats = rag.build(entries=entries)
+        tap_names = {e["tap"] for e in entries}
+        assert set(stats["reindexed"]) | set(stats["reused"]) == tap_names
+        assert all("__" not in name for name in stats["reused"])
 
     def test_commit_change_forces_reindex(self, corpus, monkeypatch):
         _root, entries = corpus

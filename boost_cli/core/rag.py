@@ -310,12 +310,22 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
 
     _save(docs, commits)
     reindexed = sorted({e["tap"] for e in fresh})
+    # `reindexed` names taps by their real name ("owner/repo"); `reused_safe`
+    # is keyed by the safe name ("owner__repo") that `_tap_commits` uses to
+    # index the cache. Returning `reused_safe` as-is put both spellings in one
+    # object, so `set(reindexed) | set(reused)` never equalled the tap-name
+    # set a caller would diff against `taps --json`. Map back to real names
+    # using `entries` itself (every reused tap still has entries in the full
+    # list, just not in `fresh`) rather than `registry.list_taps()`, so the
+    # mapping can't drift from what this build actually saw.
+    safe_to_name = {e["tap"].replace("/", "__"): e["tap"] for e in entries}
+    reused = sorted(safe_to_name.get(safe, safe) for safe in reused_safe)
     return {
         "entries": len({entry_key(e) for e in entries}),
         "docs": len(docs),
         "taps": len(commits),
         "reindexed": reindexed,
-        "reused": sorted(reused_safe),
+        "reused": reused,
     }
 
 

@@ -5575,18 +5575,18 @@ CLI audit (cluster <code>frontmatter-roundtrip</code>); repro in the audit log.<
       </article>
 
       <article class="cap rcard" id="audit-reindex-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost reindex: CLI audit findings (2026-08)</h3>
-        <p><b>A truncated manifest download is reported as a broken manifest.</b> 3 of 6 <code>reindex --fetch-shards</code> runs (and the same fraction of <code>update --shards</code>) failed with <code>Error: shard manifest at &hellip;/shards-latest/manifest.json is not valid JSON: Unterminated string starting at: &hellip; (char 113774)</code> &mdash; the offset differing per run. The published file is fine: curl fetches all 166,210 bytes. <code>shards.fetch_manifest</code> does one <code>resp.read(MAX_MANIFEST_BYTES + 1)</code> (<code>boost_cli/core/shards.py:97-114</code>) and feeds whatever arrived to <code>json.loads</code>; a probe against the same URL showed Content-Length 166,210 with the single read returning exactly 131,072 bytes (128 KiB). Fix: read in a loop until EOF or Content-Length is satisfied (or catch <code>http.client.IncompleteRead</code>), and on a short read raise a BoostError naming the truncation &mdash; <code>download cut short (131,072 of 166,210 bytes) &mdash; retry</code> &mdash; retrying once; keep the JSON error only for a genuinely malformed body. Mention the transient-failure/retry behaviour in README.md's <code>--shards</code> cron section (~lines 158-185).
+        <p><b>A truncated manifest download is reported as a broken manifest.</b> Already fixed &mdash; landed in <code>f77a04c</code> (#626, <em>fix(shards): stop reporting network and format problems as bad data</em>), which added the read-until-EOF loop and short-read error <code>shards.py</code>'s <code>_read_capped</code>/<code>_verify_complete</code> now describe. No further work needed here.
 
-<b><code>reindex --json</code> names taps two ways in one object.</b> <code>"reused"</code> holds cache stems &mdash; <code>0xfurai__claude-code-subagents</code> (<code>rag.py:293-298</code>, <code>:313</code>) &mdash; while <code>"reindexed"</code> holds tap names &mdash; <code>0xfurai/claude-code-subagents</code> (<code>rag.py:307</code>), so a script that set-differences the two lists sees every tap as changed. Fix: in <code>rag.build</code> map reused safe names back to tap names via <code>registry.list_taps()</code>, and add a unit test asserting <code>set(reindexed) | set(reused)</code> equals the tap-name set from <code>taps --json</code>. No flag text changes, so docs/commands.html needs no regeneration.
+<b><code>reindex --json</code> names taps two ways in one object.</b> Still open as of this item's claim. <code>"reused"</code> held cache stems &mdash; <code>0xfurai__claude-code-subagents</code> (<code>rag.py:293-298</code>, <code>:313</code>) &mdash; while <code>"reindexed"</code> held tap names &mdash; <code>0xfurai/claude-code-subagents</code> (<code>rag.py:307</code>), so a script that set-differences the two lists saw every tap as changed. Fixed: <code>rag.build</code> now maps each reused safe name back to its tap name using the full <code>entries</code> list it already has in hand (every reused tap still has entries there, just not in <code>fresh</code>) rather than reaching for <code>registry.list_taps()</code>, so the mapping can't drift from what the build actually saw. A unit test asserts <code>set(reindexed) | set(reused)</code> equals the tap-name set entries carry. No flag text changes, so docs/commands.html needs no regeneration.
 
 Found by the 2026-08 CLI audit (clusters <code>manifest-truncated-read</code>, <code>reindex-json-tap-names</code>); repro in the audit log.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">3 of 6 manifest fetches read 131,072 of 166,210 bytes and blame the JSON</span>
+          <span class="m">reindex --json names taps two ways in one object (reused vs reindexed)</span>
         </div>
       </article>
 
