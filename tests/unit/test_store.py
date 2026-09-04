@@ -2836,6 +2836,22 @@ class TestMaterializedGovernance:
         assert lk["quarantined"] is False
         assert "quarantine_stash" not in lk
 
+    def test_release_reinserts_the_block_at_its_original_position(self, tap):
+        # The card's repro: the user's own lines sit AFTER the managed block.
+        # A quarantine/release round trip must restore the block where it
+        # was, not append it below the user's text — which would silently
+        # reorder CLAUDE.md every time a rule cycles through quarantine.
+        store.install(_rule_entry(tap))
+        p = self._claude_md()
+        p.write_text(p.read_text(encoding="utf-8") + "\n# my own notes\n",
+                     encoding="utf-8")
+        before = p.read_text(encoding="utf-8")
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        store.release_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        assert p.read_text(encoding="utf-8") == before
+
     def test_release_merges_into_a_user_edited_claude_md(self, tap):
         # The user's own additions between quarantine and release must survive:
         # release merges the block back, it does not overwrite the file.

@@ -538,7 +538,11 @@ def cmd_quarantine(argv):
             out.warn("%s is not quarantined" % name)
             return 0
         if kind == "skill":
-            res = store.link_agents(name)
+            # link_agents must see the narrowed scope the skill was installed
+            # with — an unscoped call re-links into every enabled agent,
+            # widening `only_agents: [claude-code]` back out to all four and
+            # leaving `doctor` to flag the links release itself just created.
+            res = store.link_agents(name, only=entry.get("only_agents"))
             entry["quarantined"] = False
             entry["agents"] = res.linked
             lockfile.set_skill(name, entry)

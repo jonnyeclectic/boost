@@ -223,6 +223,54 @@ class TestStripBlock:
         assert rules.strip_block(merged, "r") == original
 
 
+class TestBlockSpan:
+    def test_absent_block_is_none(self):
+        assert rules.block_span("# notes\n", "r") is None
+
+    def test_malformed_missing_end_marker_is_none(self):
+        assert rules.block_span(
+            "<!-- boost:rule:r start -->\nB\n", "r") is None
+
+    def test_span_brackets_exactly_the_block(self):
+        text = "before\n\n" + rules.merge_block("", "r", "B") + "after\n"
+        i, j = rules.block_span(text, "r")
+        assert text[i:j] == "<!-- boost:rule:r start -->\nB\n<!-- boost:rule:r end -->"
+        assert text[:i] == "before\n\n"
+        assert text[j:] == "\nafter\n"
+
+
+class TestReinsertBlock:
+    def test_reinserts_at_the_recorded_position_when_unchanged(self):
+        # Block sat between "before" and "after" — release must put it back
+        # there, not at the end of the file.
+        merged = rules.merge_block("before\n", "r", "OLD")
+        i, j = rules.block_span(merged, "r")
+        prefix, suffix = merged[:i], merged[j:]
+        current = rules.strip_block(merged, "r")
+        out = rules.reinsert_block(current, "r", "NEW", prefix, suffix)
+        assert out == rules.merge_block("before\n", "r", "NEW")
+
+    def test_block_originally_first_stays_first(self):
+        # The audit repro: the block was installed into an empty file and the
+        # user's own lines were appended after it.
+        merged = rules.merge_block("", "r", "OLD") + "\n# my own notes\n"
+        i, j = rules.block_span(merged, "r")
+        prefix, suffix = merged[:i], merged[j:]
+        current = rules.strip_block(merged, "r")
+        assert current == "# my own notes\n"
+        out = rules.reinsert_block(current, "r", "OLD", prefix, suffix)
+        assert out == merged
+
+    def test_falls_back_to_append_when_surrounding_text_changed(self):
+        merged = rules.merge_block("before\n", "r", "OLD")
+        i, j = rules.block_span(merged, "r")
+        prefix, suffix = merged[:i], merged[j:]
+        current = rules.strip_block(merged, "r") + "new line\n"
+        out = rules.reinsert_block(current, "r", "NEW", prefix, suffix)
+        assert out == rules.merge_block(current, "r", "NEW")
+        assert out.index("new line") < out.index("NEW")
+
+
 class TestRuleNameTraversal:
     """A tap controls its rule frontmatter, so `name` reaches rule_target as
     attacker input. Before the guard, `../../../../.ssh/authorized_keys`

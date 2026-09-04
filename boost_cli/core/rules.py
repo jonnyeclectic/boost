@@ -153,6 +153,32 @@ def read_block(text: str, name: str) -> str | None:
     return text[i + len(start):j].strip("\n")
 
 
+def block_span(text: str, name: str) -> tuple[int, int] | None:
+    """Character offsets of rule ``name``'s block in ``text``, or None.
+
+    ``(i, j)``: ``i`` is where the start marker begins, ``j`` is right after
+    the end marker — so ``text[:i]`` / ``text[j:]`` are exactly what
+    surrounds the block. None covers both "no block" and a start marker with
+    no end (malformed).
+    """
+    start, end = markers(name)
+    i = text.find(start)
+    if i == -1:
+        return None
+    j = text.find(end, i)
+    if j == -1:
+        return None
+    return i, j + len(end)
+
+
+def _stripped(before: str, after: str) -> str:
+    """Join the text either side of a removed block, collapsing the gap."""
+    before = before.rstrip("\n")
+    after = after.strip("\n")
+    parts = [p for p in (before, after) if p]
+    return "\n\n".join(parts) + "\n" if parts else ""
+
+
 def strip_block(text: str, name: str) -> str:
     """Return ``text`` with rule ``name``'s managed block removed.
 
@@ -160,15 +186,28 @@ def strip_block(text: str, name: str) -> str:
     blank-line gap it introduced is collapsed, and a file that becomes empty
     collapses to ``""`` rather than a lone newline.
     """
-    start, end = markers(name)
-    i = text.find(start)
-    if i == -1:
-        return text
-    j = text.find(end, i)
-    if j == -1:
-        return text  # no end marker: malformed, leave the file untouched
-    j += len(end)
-    before = text[:i].rstrip("\n")
-    after = text[j:].strip("\n")
-    parts = [p for p in (before, after) if p]
-    return "\n\n".join(parts) + "\n" if parts else ""
+    span = block_span(text, name)
+    if span is None:
+        return text  # no block, or malformed (start with no end): untouched
+    i, j = span
+    return _stripped(text[:i], text[j:])
+
+
+def reinsert_block(current: str, name: str, body: str,
+                    prefix: str, suffix: str) -> str:
+    """Restore rule ``name``'s block at the position it was quarantined from.
+
+    ``prefix``/``suffix`` are the raw text either side of the block as it
+    stood right before quarantine stripped it (see :func:`block_span`). When
+    ``current`` still equals what stripping that exact split would produce —
+    i.e. nothing else touched the file while the rule sat quarantined — the
+    block is spliced back at that same position, byte-for-byte. Otherwise the
+    recorded position can't be trusted (the surrounding text changed), so
+    this falls back to :func:`merge_block`'s append behavior.
+    """
+    if current == _stripped(prefix, suffix):
+        start, end = markers(name)
+        block = "%s\n%s\n%s" % (start, body.strip("\n"), end)
+        merged = prefix + block + suffix
+        return merged.rstrip("\n") + "\n"
+    return merge_block(current, name, body)
