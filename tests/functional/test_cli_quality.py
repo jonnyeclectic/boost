@@ -1032,6 +1032,21 @@ class TestGovernedIntegritySurface:
         assert "house-style (rule)" in r.out
         assert "attestation OK" in r.out
 
+    def test_attest_names_a_missing_materialized_rule(
+            self, boost, installed, fixture_tap_src, tmp_path):
+        # The rule/workflow branch folded a missing materialized artifact
+        # into the same "content no longer matches" wording as an edited
+        # one; it must say "missing" instead, same as the skill branch.
+        self._install_rule(boost, fixture_tap_src, tmp_path,
+                           "attest-missing-tap")
+        (paths.home() / ".claude" / "CLAUDE.md").unlink()
+        r = boost("attest", "house-style", "--verify", expect=1)
+        assert "house-style: materialized file missing" in r.out
+        assert "no longer matches the lock sha" not in r.out
+        data = json.loads(boost("attest", "house-style", "--verify",
+                                "--json", expect=1).out)
+        assert data["skills"][0]["reason"] == "missing"
+
     def test_drift_reports_quarantined_not_missing(self, boost, installed,
                                                    fixture_tap_src, tmp_path):
         self._install_rule(boost, fixture_tap_src, tmp_path, "drift-tap")
@@ -1394,6 +1409,22 @@ class TestAttest:
         assert data["failed"] == 1
         assert data["skills"][0]["sha_ok"] is False
         assert data["skills"][0]["journal"] is True
+        assert data["skills"][0]["reason"] == "modified"
+
+    def test_missing_store_dir_verify_names_it_missing_not_modified(
+            self, boost, installed):
+        # A deleted store dir used to be reported identically to tampered
+        # content ("content no longer matches the lock sha"), sending the
+        # user hunting for tampering when the remedy is `boost heal` — the
+        # same state `boost drift` already names correctly as store-missing.
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+        r = boost("attest", "--verify", expect=1)
+        assert "brainstorming: store directory missing (boost heal)" in r.out
+        assert "no longer matches the lock sha" not in r.out
+        data = json.loads(boost("attest", "--verify", "--json",
+                                expect=1).out)
+        assert data["skills"][0]["sha_ok"] is False
+        assert data["skills"][0]["reason"] == "missing"
 
 
 # ── health ───────────────────────────────────────────────────────────────

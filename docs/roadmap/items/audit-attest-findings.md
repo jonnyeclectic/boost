@@ -2,7 +2,7 @@
 id: audit-attest-findings
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Trust · UX
 complexity: S
 impact: Low
@@ -10,7 +10,7 @@ wow: 1
 note: a deleted store dir is reported as a sha mismatch; drift names the same state correctly
 order: 248
 owner: loop/attest-missing-vs-modified
-pr:
+pr: 757
 title: "boost attest: CLI audit findings (2026-08)"
 ---
 <b><code>attest --verify</code> misdiagnoses a missing artifact as a content change.</b> After
