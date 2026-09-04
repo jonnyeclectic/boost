@@ -14060,7 +14060,7 @@ Found by the 2026-08 CLI audit (clusters <code>replay-id-time-semantics</code>, 
       </article>
 
       <article class="cap rcard" id="audit-schedule-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost schedule: CLI audit findings (2026-08)</h3>
         <p>With a launchd plist that lacks a <code>StartInterval</code> key, <code>boost schedule status</code> prints <em>"platform darwin (launchd) &middot; scheduled yes &middot; interval every None &middot; next run unknown"</em> — the kv line interpolates a bare <code>None</code> (the <code>--json</code> output is fine: <code>"interval": null</code>). Verification found the same unguarded parse is worse than cosmetic: with <code>&lt;integer&gt;0&lt;/integer&gt;</code> as the interval, the next-run loop <code>while nxt &lt; now: nxt += timedelta(seconds=secs)</code> never advances and <code>schedule status</code> hangs forever — the repro run was killed at 30&nbsp;s (exit 124). The control case <code>43200</code> renders correctly as "every 12h".
 

@@ -2,14 +2,14 @@
 id: audit-schedule-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 2
 note: "'interval every None' without StartInterval — and StartInterval 0 hangs status forever"
 order: 290
-owner:
+owner: loop/schedule-interval-guard
 pr:
 title: "boost schedule: CLI audit findings (2026-08)"
 ---
