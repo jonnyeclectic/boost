@@ -35,6 +35,14 @@ API_URL = "https://api.anthropic.com/v1/messages"
 # for the one-line reason ("Invalid API key"), never a whole stack dump.
 STDERR_LOG_CHARS = 200
 
+# Set by `_log_failure` when a backend call runs and fails; consulted by
+# `unavailable_reason()` so a degrade note can blame the actual attempt
+# instead of guessing. `ask()` resets this to None at the start of each call,
+# so it always reflects that call's own outcome — a fresh CLI invocation
+# starts with `None` regardless, and a test's autouse fixture resets it
+# between tests too (see `tests/conftest.py`).
+_last_failure: str | None = None
+
 
 def enabled() -> bool:
     """Return True when `ai.enabled` is on and BOOST_NO_AI is unset."""
@@ -59,16 +67,39 @@ def has_cli() -> bool:
     return cli_backend() is not None
 
 
-def fallback_note() -> str:
-    """Return the one-line hint shown when a command degrades to heuristics.
-
-    Names every CLI that would work, not just Claude's — telling a Gemini user
-    to install Claude is a worse answer than telling them boost could not find
-    either.
-    """
+def _no_backend_hint() -> str:
+    """Names every CLI that would work, not just Claude's — telling a Gemini
+    user to install Claude is a worse answer than telling them boost could
+    not find either."""
     clis = " or ".join("`%s`" % aihost.cli(n) for n in aihost.backends())
-    return ("AI features need one of %s on PATH, or ANTHROPIC_API_KEY set "
-            "— using the heuristic fallback" % clis)
+    return "AI features need one of %s on PATH, or ANTHROPIC_API_KEY set" % clis
+
+
+def unavailable_reason() -> str | None:
+    """Why `ask()` would not produce a reply right now, or None if it might.
+
+    Three causes, checked in the order a caller can rule them out — each was
+    a real misdiagnosis before this existed, all reported as the same static
+    PATH/key message: `BOOST_NO_AI`/`ai.enabled=false` blame a knob someone
+    set, not an absent backend; no CLI and no key blames absence; and, when a
+    backend exists but the most recent call still failed, the reason
+    `_log_failure` recorded blames the backend itself, pointing at the log
+    that has the detail rather than at PATH.
+    """
+    if os.environ.get("BOOST_NO_AI"):
+        return "AI disabled (BOOST_NO_AI is set)"
+    if not bool(config.get("ai.enabled", True)):
+        return "AI disabled (ai.enabled is false)"
+    if not (has_cli() or os.environ.get("ANTHROPIC_API_KEY")):
+        return _no_backend_hint()
+    if _last_failure:
+        return "%s — see ~/.boost/logs/boost.log" % _last_failure
+    return None
+
+
+def fallback_note() -> str:
+    """Return the one-line hint shown when a command degrades to heuristics."""
+    return "%s — using the heuristic fallback" % (unavailable_reason() or _no_backend_hint())
 
 
 def ask(prompt: str, system: str | None = None, model: str | None = None,
@@ -76,6 +107,8 @@ def ask(prompt: str, system: str | None = None, model: str | None = None,
     """Ask Claude. Returns the text reply, or None if AI is unavailable/fails."""
     if not enabled():
         return None
+    global _last_failure
+    _last_failure = None  # this call's own outcome replaces any earlier one
     model = model or str(config.get("ai.model"))
     backend = cli_backend()
     if backend:
@@ -101,8 +134,12 @@ def _log_failure(route: str, reason: str) -> None:
     degrade quietly, which is the right UX but leaves a user with an expired
     key or a flaky network no way to tell *why* every AI command went
     heuristic. DEBUG keeps it out of normal runs: the rotating log file always
-    records it, and ``--debug`` surfaces it on stderr.
+    records it, and ``--debug`` surfaces it on stderr. It also stamps
+    `_last_failure`, which `unavailable_reason()` reads back so a degrade note
+    can name this failure instead of guessing at PATH or API keys.
     """
+    global _last_failure
+    _last_failure = "%s failed (%s)" % (route, reason)
     logs.get_logger().debug("ai: %s call failed: %s", route, reason)
 
 

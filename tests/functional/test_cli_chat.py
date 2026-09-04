@@ -103,6 +103,17 @@ class TestRejectedRepliesAreReported:
         assert payload["grounded"] is False
         assert payload["source"] == "extractive"
 
+    def test_failed_call_warns_rather_than_looking_like_a_terse_ai_reply(
+            self, boost, tapped, monkeypatch):
+        # ai.available() True but ask() returns None — the call itself
+        # failed. This used to fall straight to the extractive answer with no
+        # note at all, indistinguishable from a working AI path.
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **kw: None)
+        r = boost("chat", "brainstorming ideas")
+        assert "using the heuristic fallback" in r.out
+
 
 class TestLimit:
     def test_limit_bounds_the_candidates(self, boost, tapped):

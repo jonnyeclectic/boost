@@ -669,6 +669,20 @@ class TestExplain:
         assert "Key rules:" in r.out
         assert "• Never critique during the diverge phase." in r.out
 
+    def test_ai_available_but_call_failed_warns_before_extractive(
+            self, boost, installed, monkeypatch):
+        # ai.available() is True but ask() returns None (the call itself
+        # failed) — this used to fall through to the extractive summary with
+        # no note at all, looking identical to a working AI path that chose
+        # brevity. It must now warn like the "AI unavailable" case does.
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **k: None)
+        r = boost("explain", "brainstorming")
+        assert "using the heuristic fallback" not in " ".join(r.out.split())
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+        assert "Key rules:" in r.out
+
     def test_threshold_config_can_relax_the_guardrail(self, boost, installed,
                                                       monkeypatch):
         from boost_cli.core import ai

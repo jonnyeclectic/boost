@@ -2,14 +2,14 @@
 id: audit-ai-degrade-note-blames-path-api-keys-regardless-of-cause-sev
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: M
 impact: Med
 wow: 2
 note: one static string blames PATH/keys while boost.log records "claude CLI call failed: exit 1"
 order: 223
-owner:
+owner: loop/ai-degrade-note-blame
 pr:
 title: "AI degrade note blames PATH/API keys regardless of cause; several commands fall back with no note at all"
 ---

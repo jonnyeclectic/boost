@@ -757,6 +757,11 @@ def cmd_explain(argv):
                      "extractive summary instead"
                      % ", ".join(faithfulness.ungrounded_terms(reply, text)[:4]),
                      stream=sys.stderr)
+        else:
+            # ai.available() was True but the call itself produced nothing —
+            # without this, the fall-through to the extractive summary below
+            # looks identical to a working AI path that just chose brevity.
+            out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     else:
         out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     meta, body = frontmatter.parse(text)

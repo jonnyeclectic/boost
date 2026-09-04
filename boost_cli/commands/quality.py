@@ -1233,6 +1233,8 @@ def cmd_conflict(argv):
             for i, p in enumerate(heuristic, 1):
                 if i in confirmed:
                     p["kind"] = "ai-confirmed"
+        elif not args.json:
+            out.warn(ai.fallback_note(), wrap=True)
     elif heuristic and not args.json:
         out.warn(ai.fallback_note(), wrap=True)
 
