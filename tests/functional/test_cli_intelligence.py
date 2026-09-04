@@ -251,8 +251,11 @@ class TestSimulate:
         # BOOST_NO_AI=1 (the sandbox default) with a real backend on PATH: the
         # old static note blamed PATH/API keys regardless of cause, which told
         # a user who had just disabled AI to go install something.
-        monkeypatch.setattr("boost_cli.core.ai.shutil.which",
-                            lambda n: "/fake/bin/claude" if n == "claude" else None)
+        # `ai.has_cli`, not `shutil.which` directly — the latter is the real
+        # global `shutil` module (`ai.py` just imports it), so patching it
+        # there also blinds `gitutil`'s own `git`-on-PATH check and breaks
+        # every git-backed fixture-tap fetch in the same test.
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
         r = boost("simulate", "tdd-workflow")
         assert "BOOST_NO_AI" in flat(r.err)
         assert "on PATH" not in flat(r.err)
