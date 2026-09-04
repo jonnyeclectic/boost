@@ -2,14 +2,14 @@
 id: audit-quarantine-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: Med
 wow: 2
 note: a quarantine/release round trip widens 1 agent to 4 and turns doctor red
 order: 284
-owner:
+owner: loop/quarantine-release-scope
 pr:
 title: "<code>boost quarantine --release</code>: CLI audit findings (2026-08)"
 ---
