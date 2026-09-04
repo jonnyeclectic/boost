@@ -160,6 +160,21 @@ def commit_status(name: str, entry: dict | None = None) -> str | None:
     return STATUS_OK if entry.get("commit") == pin else STATUS_MODIFIED
 
 
+def verification_passed(status: str, missing_fields: list[str], commit_pin: str | None) -> bool:
+    """True when a ``boost verify`` row should render and count as a pass.
+
+    A single predicate for both the pass/fail tally and the per-row pass token,
+    so the two can never disagree the way they used to: ``cmd_verify`` computed
+    ``bad`` from status-or-missing-fields-or-drifted-pin, but the row's color
+    was keyed on ``status`` alone, so a row with missing lock fields (or a
+    drifted commit pin) landed in the failure count while still rendering the
+    green ``ok`` token.
+    """
+    return (status in (STATUS_OK, STATUS_QUARANTINED)
+            and not missing_fields
+            and commit_pin != STATUS_MODIFIED)
+
+
 def enforcement_enabled() -> bool:
     """True when digest enforcement is switched on in config (default False)."""
     return bool(config.get(ENFORCE_KEY, False))

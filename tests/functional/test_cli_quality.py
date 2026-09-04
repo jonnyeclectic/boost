@@ -655,7 +655,8 @@ class TestVerify:
         data = json.loads(boost("verify", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
                                     "status": "ok", "scope": "user",
-                                    "missing_fields": [], "commit_pin": None}],
+                                    "missing_fields": [], "commit_pin": None,
+                                    "passed": True}],
                         "failed": 0}
 
     def test_tampered_modified_rc1(self, boost, installed):
@@ -663,6 +664,35 @@ class TestVerify:
         r = boost("verify", expect=1)
         assert "modified" in r.out
         assert "1 of 1 item failed verification" in r.out
+
+    def test_missing_lock_fields_fail_despite_ok_status(self, boost, installed):
+        # The bug: a row whose content still matches the lock (status "ok")
+        # but whose lock entry is missing required fields was counted among
+        # the failures while still rendering the "ok" pass token. `passed`
+        # must agree with the failure count for every row, not just the tally.
+        from boost_cli.core import lockfile
+        entry = lockfile.get_skill("brainstorming")
+        del entry["version"]
+        entry["installed_at"] = ""
+        lockfile.set_skill("brainstorming", entry)
+        r = boost("verify", expect=1)
+        assert "missing lock fields: version, installed_at" in r.out
+        assert "1 of 1 item failed verification" in r.out
+        data = json.loads(boost("verify", "--json").out)
+        row = data["skills"][0]
+        assert row["status"] == "ok"
+        assert row["passed"] is False
+
+    def test_drifted_commit_pin_marks_row_unpassed(self, boost, installed):
+        from boost_cli.core import lockfile
+        boost("pin", "brainstorming", "--commit")
+        entry = lockfile.get_skill("brainstorming")
+        entry["commit"] = "f" * 40
+        lockfile.set_skill("brainstorming", entry)
+        data = json.loads(boost("verify", "--json", expect=1).out)
+        row = data["skills"][0]
+        assert row["status"] == "ok"
+        assert row["passed"] is False
 
     def test_deleted_missing_rc1(self, boost, installed):
         shutil.rmtree(paths.store_dir() / "brainstorming")
