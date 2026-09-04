@@ -13895,8 +13895,9 @@ the 2026-08 CLI audit (cluster <code>mcp-command-truthfulness</code>); repro in 
       </article>
 
       <article class="cap rcard" id="audit-onboard-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3>boost onboard: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost onboard</code> commits the machine's <em>global</em> lock file into the repo verbatim:
 <code>cmd_onboard</code> (<code>boost_cli/commands/configuration.py:593-675</code>) writes
 <code>json.dumps(lockfile.read(), &hellip;)</code> as the repo's <code>.skill-lock.json</code>
@@ -13912,7 +13913,7 @@ every teammate who runs onboard afterwards would churn the file with their own p
 <code>cmd_onboard</code>, project the lock before writing &mdash; strip
 <code>materializations[].path</code> or rewrite it <code>~</code>-relative &mdash; so the committed file is
 portable. <code>docs/carousel.html</code> (line 362) describes the onboard flow and must match. Found by
-the 2026-08 CLI audit (cluster <code>onboard-lock-path-leak</code>); repro in the audit log.</p>
+the 2026-08 CLI audit (cluster <code>onboard-lock-path-leak</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
