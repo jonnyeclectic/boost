@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import operator
 import platform
 import shutil
 import stat
@@ -278,7 +279,7 @@ def cmd_profile(argv) -> int:
         # filename order — those diverge whenever a profile's display name
         # isn't already its own slug, and the filename order matches nothing
         # a reader can see.
-        profiles.sort(key=lambda pr: pr["name"])
+        profiles.sort(key=operator.itemgetter("name"))
         if args.json:
             print(json.dumps(profiles, indent=2))
             return 0
