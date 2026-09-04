@@ -2,7 +2,7 @@
 id: audit-attest-findings
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Trust · UX
 complexity: S
 impact: Low
@@ -33,7 +33,11 @@ wording for the genuinely modified case, and in <code>--json</code> add a <code>
 <br><br>Found by the 2026-08 CLI audit (cluster <code>attest-missing-store-dir</code>); repro in the
 audit log.
 
-<br><br><b>Status.</b> Fix and tests are up in <a href="https://github.com/jonnyeclectic/boost/pull/765">PR
-#765</a>, verified with pytest/ruff/mypy and <code>smoke.sh</code> — but the session that wrote it ran
-in a sandboxed environment with no PyPI/npm egress, so <code>make check</code> (mutation gate
-included) could not be run locally. Staying <code>inflight</code> until CI confirms the full gate.
+<br><br><b>Status.</b> Fix and tests are in <a href="https://github.com/jonnyeclectic/boost/pull/765">PR
+#765</a>. The authoring session ran in a sandboxed environment with no PyPI/npm egress and could only
+verify locally with pytest/ruff/mypy and <code>smoke.sh</code>; CI has since run the full gate on the
+PR's head (<code>lint</code>, the full OS/Python test matrix, <code>evals</code>, and every
+<code>mutation-shard</code> plus the aggregating <code>mutation</code> check) and it is green. The
+unrelated <code>lighthouse</code> check is red on <code>docs/roadmap.html</code>'s performance score,
+reproduced identically on two other PRs the same day — not part of CLAUDE.md's required gate and not
+this PR's regression (see PR comments). Awaiting human review and merge.

@@ -16940,8 +16940,9 @@ Found by the 2026-08 CLI audit (cluster <code>trust-tampered-manifest</code>); r
       </article>
 
       <article class="cap rcard" id="audit-attest-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Trust · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Trust · UX</span></div>
         <h3>boost attest: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>attest --verify</code> misdiagnoses a missing artifact as a content change.</b> After
 deleting <code>~/.agents/skills/brainstorming</code>, <code>boost attest --verify brainstorming</code>
 prints <em>&ldquo;! brainstorming: store content no longer matches the lock sha&rdquo;</em> (exit 1)
@@ -16962,10 +16963,14 @@ wording for the genuinely modified case, and in <code>--json</code> add a <code>
 <br><br>Found by the 2026-08 CLI audit (cluster <code>attest-missing-store-dir</code>); repro in the
 audit log.
 
-<br><br><b>Status.</b> Fix and tests are up in <a href="https://github.com/jonnyeclectic/boost/pull/765">PR
-#765</a>, verified with pytest/ruff/mypy and <code>smoke.sh</code> — but the session that wrote it ran
-in a sandboxed environment with no PyPI/npm egress, so <code>make check</code> (mutation gate
-included) could not be run locally. Staying <code>inflight</code> until CI confirms the full gate.</p>
+<br><br><b>Status.</b> Fix and tests are in <a href="https://github.com/jonnyeclectic/boost/pull/765">PR
+#765</a>. The authoring session ran in a sandboxed environment with no PyPI/npm egress and could only
+verify locally with pytest/ruff/mypy and <code>smoke.sh</code>; CI has since run the full gate on the
+PR's head (<code>lint</code>, the full OS/Python test matrix, <code>evals</code>, and every
+<code>mutation-shard</code> plus the aggregating <code>mutation</code> check) and it is green. The
+unrelated <code>lighthouse</code> check is red on <code>docs/roadmap.html</code>'s performance score,
+reproduced identically on two other PRs the same day — not part of CLAUDE.md's required gate and not
+this PR's regression (see PR comments). Awaiting human review and merge.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
