@@ -2,7 +2,7 @@
 id: audit-ai-degrade-note-blames-path-api-keys-regardless-of-cause-sev
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · UX
 complexity: M
 impact: Med
