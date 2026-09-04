@@ -1181,6 +1181,8 @@ def cmd_impact(argv: list[str]) -> int:
             if reply:
                 print()
                 print(textwrap.indent(textwrap.fill(reply, width=76), "  "))
+            else:
+                out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
         else:
             _note_fallback()
     out.dim("  " + note)
@@ -1245,6 +1247,11 @@ def _print_reply(reply: chat_engine.Reply, show_sources: bool) -> None:
         # a downgraded answer that looks identical to a confident one.
         out.warn("the AI reply named something outside the retrieved skills — "
                  "showing the grounded matches instead")
+    elif reply.source == "extractive" and reply.skills and ai.available():
+        # There were candidates to send and AI was available, so an
+        # extractive answer here means the call itself failed rather than
+        # AI never having been in the picture — worth saying, not silence.
+        out.warn(ai.fallback_note(), wrap=True)
 
 
 def cmd_chat(argv: list[str]) -> int:

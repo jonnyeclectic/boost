@@ -1343,6 +1343,26 @@ class TestConflict:
         assert "(ai-confirmed)" in r.out
         assert "using the heuristic fallback" not in " ".join(r.out.split())
 
+    def test_ai_available_but_call_failed_still_warns(self, boost, tapped, monkeypatch):
+        # ai.available() True but ask() returns None — the call itself
+        # failed, not "no AI at all", and this branch used to say nothing.
+        boost("install", "tdd-workflow", "cowboy-coding")
+        monkeypatch.delenv("BOOST_NO_AI")
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: None)
+        r = boost("conflict", expect=1)
+        assert "(ai-confirmed)" not in r.out
+        assert "using the heuristic fallback" in " ".join(r.out.split())
+
+    def test_ai_available_but_call_failed_is_quiet_under_json(self, boost, tapped,
+                                                              monkeypatch):
+        boost("install", "tdd-workflow", "cowboy-coding")
+        monkeypatch.delenv("BOOST_NO_AI")
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: None)
+        r = boost("conflict", "--json", expect=1)
+        json.loads(r.out)   # --json output must stay clean JSON, no warning mixed in
+
 
 # ── changelog ────────────────────────────────────────────────────────────
 

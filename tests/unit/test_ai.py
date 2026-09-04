@@ -109,9 +109,64 @@ class TestAvailable:
         monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
         assert ai.available() is False
 
-    def test_fallback_note_mentions_both_routes(self):
+    def test_fallback_note_mentions_both_routes_with_no_backend(self, ai_on, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
         note = ai.fallback_note()
         assert "claude" in note and "ANTHROPIC_API_KEY" in note
+
+
+class TestUnavailableReason:
+    """`ai.unavailable_reason()` names the actual cause, not a static guess."""
+
+    def test_none_when_available_and_no_recorded_failure(self, ai_on, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which",
+                            lambda n: "/fake/bin/claude")
+        assert ai.unavailable_reason() is None
+
+    def test_boost_no_ai_env_blames_the_env_var(self, sandbox, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which",
+                            lambda n: "/fake/bin/claude")
+        assert "BOOST_NO_AI" in ai.unavailable_reason()
+
+    def test_config_disabled_blames_the_config_key(self, ai_on, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which",
+                            lambda n: "/fake/bin/claude")
+        config.set_value("ai.enabled", "false")
+        assert "ai.enabled" in ai.unavailable_reason()
+
+    def test_no_backend_names_both_routes(self, ai_on, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
+        reason = ai.unavailable_reason()
+        assert "claude" in reason and "ANTHROPIC_API_KEY" in reason
+
+    def test_env_disabled_takes_priority_over_missing_backend(self, sandbox, monkeypatch):
+        # BOOST_NO_AI is set (via `sandbox`) *and* there is no backend either —
+        # the env knob is still the reported cause, since flipping it is the
+        # user's own fix and a PATH hint would send them somewhere useless.
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
+        assert "BOOST_NO_AI" in ai.unavailable_reason()
+
+    def test_backend_failed_names_the_logged_reason(self, ai_on, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stderr="workspace has not been trusted")
+        assert ai.ask("hi") is None
+        reason = ai.unavailable_reason()
+        assert "claude CLI failed" in reason
+        assert "boost.log" in reason
+
+    def test_fallback_note_blames_backend_failure_not_path(self, ai_on, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stderr="workspace has not been trusted")
+        assert ai.ask("hi") is None
+        note = ai.fallback_note()
+        assert "claude CLI failed" in note
+        assert "PATH" not in note
+
+    def test_successful_call_clears_a_prior_failure(self, ai_on, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stderr="boom")
+        assert ai.ask("hi") is None
+        assert ai.unavailable_reason() is not None
+        _with_cli(monkeypatch, rc=0, stdout="ok")
+        assert ai.ask("hi") == "ok"
+        assert ai.unavailable_reason() is None
 
 
 class TestAskCli:

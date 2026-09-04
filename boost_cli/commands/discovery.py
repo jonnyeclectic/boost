@@ -169,6 +169,8 @@ def cmd_search(argv):
                 reranked = _ai_rank(query, scored)
             if reranked:
                 scored, ranker = reranked, "Claude Haiku relevance"
+            else:
+                out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
         else:
             out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     shown = scored[:args.limit]

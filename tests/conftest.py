@@ -79,6 +79,22 @@ def _reset_logging():
     logs.reset()
 
 
+@pytest.fixture(autouse=True)
+def _reset_ai_last_failure():
+    """Clear `ai._last_failure` between tests.
+
+    A real invocation is one process per command, so the module global set by
+    `ai._log_failure` naturally starts unset each run. The test suite is one
+    process for many tests, so without this a failure logged in one test's
+    fake CLI would leak into `unavailable_reason()`/`fallback_note()` in an
+    unrelated later test.
+    """
+    from boost_cli.core import ai
+    ai._last_failure = None
+    yield
+    ai._last_failure = None
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A fresh fake $HOME; returns its Path."""

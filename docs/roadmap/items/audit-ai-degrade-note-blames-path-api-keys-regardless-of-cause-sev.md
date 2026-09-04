@@ -2,15 +2,15 @@
 id: audit-ai-degrade-note-blames-path-api-keys-regardless-of-cause-sev
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · UX
 complexity: M
 impact: Med
 wow: 2
 note: one static string blames PATH/keys while boost.log records "claude CLI call failed: exit 1"
 order: 223
-owner:
-pr:
+owner: loop/ai-degrade-note-blame
+pr: 749
 title: "AI degrade note blames PATH/API keys regardless of cause; several commands fall back with no note at all"
 ---
 <code>boost simulate</code> prints <code>! AI features need one of `claude` or `gemini` on PATH, or ANTHROPIC_API_KEY set &mdash; using the heuristic fallback</code> in two situations where that diagnosis is false: under <code>BOOST_NO_AI=1</code> with <code>claude</code> on PATH (AI was disabled by env, not missing), and with AI enabled while <code>~/.boost/logs/boost.log</code> records <code>ai: claude CLI call failed: exit 1: &hellip;workspace has not been trusted&hellip;</code> &mdash; the backend ran and failed. A controlled fake <code>claude</code> exiting 3 reproduces the same misblame for <code>evolve</code>. Meanwhile a second group degrades with <b>no note at all</b> when the call was attempted and failed: <code>explain</code> shows the extractive summary with stderr empty, <code>conflict</code> lists pairs as <code>(heuristic)</code> silently, <code>impact</code> and one-shot <code>chat</code> say nothing, and <code>search --smart</code> spent 4.62&nbsp;s then reported <code>60 matches &middot; ranked by full-content BM25</code> with no rerank-failed warning.

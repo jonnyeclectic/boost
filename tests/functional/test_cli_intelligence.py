@@ -247,6 +247,32 @@ class TestSimulate:
         assert "Without it: default behavior" not in r.out
         assert FALLBACK not in flat(r.out)
 
+    def test_fallback_note_blames_boost_no_ai_not_path(self, boost, tapped, monkeypatch):
+        # BOOST_NO_AI=1 (the sandbox default) with a real backend on PATH: the
+        # old static note blamed PATH/API keys regardless of cause, which told
+        # a user who had just disabled AI to go install something.
+        # `ai.has_cli`, not `shutil.which` directly — the latter is the real
+        # global `shutil` module (`ai.py` just imports it), so patching it
+        # there also blinds `gitutil`'s own `git`-on-PATH check and breaks
+        # every git-backed fixture-tap fetch in the same test.
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
+        r = boost("simulate", "tdd-workflow")
+        assert "BOOST_NO_AI" in flat(r.err)
+        assert "on PATH" not in flat(r.err)
+
+    def test_fallback_note_blames_the_backend_failure_not_path(
+            self, boost, tapped, monkeypatch, ai_on):
+        # A backend exists and was tried, but the call itself failed — the old
+        # note still blamed PATH/API keys even though neither was the problem.
+        ai_on(ask=None)
+        monkeypatch.setattr("boost_cli.core.ai.has_cli", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai._last_failure",
+                            "claude CLI failed (exit 3)")
+        r = boost("simulate", "tdd-workflow")
+        assert "claude CLI failed (exit 3)" in flat(r.err)
+        assert "boost.log" in flat(r.err)
+        assert "on PATH" not in flat(r.err)
+
 
 # ---------------------------------------------------------------- infer
 
@@ -771,6 +797,17 @@ class TestImpact:
         r = boost("impact", "brainstorming")
         assert "This data is correlational only." in r.out
         assert FALLBACK not in flat(r.out)
+
+    def test_ai_available_but_call_failed_warns(self, boost, installed, tmp_path,
+                                                monkeypatch, ai_on):
+        # ai.available() True but ask() returns None: the call itself failed,
+        # which used to print nothing at all — indistinguishable from AI
+        # having concluded there was nothing worth adding.
+        monkeypatch.chdir(tmp_path)
+        ai_on(ask=None)
+        r = boost("impact", "brainstorming")
+        assert FALLBACK not in flat(r.out)
+        assert FALLBACK in flat(r.err)
 
 
 # ---------------------------------------------------------------- kind declines

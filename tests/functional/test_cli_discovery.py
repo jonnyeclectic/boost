@@ -249,6 +249,10 @@ class TestSearch:
         # junk reply → keep the base BM25 order (tdd-workflow ranks first)
         assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
         assert "ranked by full-content BM25" in r.out
+        # AI was available and was tried — a junk/empty reply is a failed
+        # rerank, not a silent no-op, so it gets the same stderr note as the
+        # "AI unavailable" case rather than looking like a clean BM25 run.
+        assert "using the heuristic fallback" in " ".join(r.err.split())
 
     def test_index_build_failure_degrades_to_heuristic(self, boost, tapped,
                                                        monkeypatch):
