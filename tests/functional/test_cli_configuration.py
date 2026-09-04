@@ -828,6 +828,34 @@ class TestScheduleDarwin:
         r = boost("schedule", "disable")
         assert "no schedule was configured" in r.out
 
+    def test_status_missing_start_interval(self, boost, sandbox):
+        plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        plist.write_text(
+            "<?xml version=\"1.0\"?><plist><dict>"
+            "<key>Label</key><string>com.boost.sync</string>"
+            "</dict></plist>", encoding="utf-8")
+        r = boost("schedule", "status")
+        assert "unknown (plist has no usable StartInterval)" in r.out
+        assert "next run" in r.out and "unknown" in r.out
+        r = boost("schedule", "status", "--json")
+        data = json.loads(r.out)
+        assert data["interval"] is None
+        assert data["next_run"] is None
+
+    def test_status_zero_start_interval_does_not_hang(self, boost, sandbox):
+        # A StartInterval of 0 used to spin the next-run loop forever: it
+        # advanced `nxt` by zero seconds every pass and never caught up to
+        # `now`. This must return promptly instead.
+        plist = sandbox / "Library" / "LaunchAgents" / "com.boost.sync.plist"
+        plist.parent.mkdir(parents=True, exist_ok=True)
+        plist.write_text(
+            "<?xml version=\"1.0\"?><plist><dict>"
+            "<key>StartInterval</key><integer>0</integer>"
+            "</dict></plist>", encoding="utf-8")
+        r = boost("schedule", "status")
+        assert "unknown (plist has no usable StartInterval)" in r.out
+
 
 class TestScheduleCron:
     """Non-darwin branches, with sys.platform and crontab faked."""
