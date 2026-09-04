@@ -61,6 +61,23 @@ def test_status_accepts_a_supplied_entry(installed):
     assert integrity.status(installed, entry) == integrity.STATUS_OK
 
 
+# ── verify_reason ────────────────────────────────────────────────────────
+
+def test_verify_reason_missing():
+    assert integrity.verify_reason(integrity.STATUS_MISSING) == "missing"
+
+
+def test_verify_reason_modified():
+    assert integrity.verify_reason(integrity.STATUS_MODIFIED) == "modified"
+
+
+@pytest.mark.parametrize("status", [
+    integrity.STATUS_OK, integrity.STATUS_UNLOCKED, integrity.STATUS_QUARANTINED,
+])
+def test_verify_reason_none_for_non_failure_statuses(status):
+    assert integrity.verify_reason(status) is None
+
+
 # ── enforcement toggle ───────────────────────────────────────────────────
 
 def test_enforcement_is_off_by_default(installed):

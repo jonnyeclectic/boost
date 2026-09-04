@@ -616,15 +616,10 @@ def cmd_attest(argv):
                "commit": (entry.get("commit") or "")[:9],
                "sha256": (entry.get("sha256") or "")[:12]}
         if args.verify:
-            if kind == "skill":
-                sdir = store.skill_store_dir(name)
-                rec["sha_ok"] = (sdir.is_dir()
-                                 and util.sha256_dir(sdir) == entry.get("sha256"))
-            else:
-                # The artifact the agent loads, against the hash recorded when
-                # it was written. UNLOCKED (a pre-hash entry) never fails.
-                rec["sha_ok"] = integrity.materialized_status(name, entry) not in (
-                    integrity.STATUS_MODIFIED, integrity.STATUS_MISSING)
+            st = (integrity.status(name, entry) if kind == "skill"
+                  else integrity.materialized_status(name, entry))
+            rec["reason"] = integrity.verify_reason(st)
+            rec["sha_ok"] = rec["reason"] is None
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
                 failures += 1
@@ -646,9 +641,13 @@ def cmd_attest(argv):
     if args.verify:
         for r in records:
             if not r["sha_ok"]:
-                out.warn("%s: %s content no longer matches the lock sha"
-                         % (r["name"], "store" if r["kind"] == "skill"
-                            else "materialized"))
+                if r["reason"] == "missing":
+                    reason = ("store directory missing (boost heal)"
+                              if r["kind"] == "skill" else "materialized file missing")
+                else:
+                    reason = ("%s content no longer matches the lock sha"
+                              % ("store" if r["kind"] == "skill" else "materialized"))
+                out.warn("%s: %s" % (r["name"], reason))
             elif not r["journal"]:
                 out.warn("%s: no journal record (installed before journaling?)" % r["name"])
             else:

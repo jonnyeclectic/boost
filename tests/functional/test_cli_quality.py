@@ -1393,7 +1393,19 @@ class TestAttest:
                                 expect=1).out)
         assert data["failed"] == 1
         assert data["skills"][0]["sha_ok"] is False
+        assert data["skills"][0]["reason"] == "modified"
         assert data["skills"][0]["journal"] is True
+
+    def test_missing_store_dir_verify_rc1(self, boost, installed):
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+        r = boost("attest", "--verify", expect=1)
+        assert "brainstorming: store directory missing (boost heal)" in r.out
+        assert "no longer matches the lock sha" not in r.out
+        data = json.loads(boost("attest", "--verify", "--json",
+                                expect=1).out)
+        assert data["failed"] == 1
+        assert data["skills"][0]["sha_ok"] is False
+        assert data["skills"][0]["reason"] == "missing"
 
 
 # ── health ───────────────────────────────────────────────────────────────
