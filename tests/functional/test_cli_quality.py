@@ -1032,6 +1032,23 @@ class TestGovernedIntegritySurface:
         assert "house-style (rule)" in r.out
         assert "attestation OK" in r.out
 
+    def test_attest_reports_missing_materialized_rule(self, boost, installed,
+                                                       fixture_tap_src, tmp_path):
+        # Deleting the CLAUDE.md the rule was merged into used to attest the
+        # same "materialized content no longer matches" wording as an edited
+        # block — collapsing STATUS_MISSING into STATUS_MODIFIED the same way
+        # the skill branch did.
+        self._install_rule(boost, fixture_tap_src, tmp_path, "attest-missing-tap")
+        (paths.home() / ".claude" / "CLAUDE.md").unlink()
+        r = boost("attest", "house-style", "--verify", expect=1)
+        assert "house-style (rule)" in r.out
+        assert "house-style: materialized file missing" in r.out
+        assert "content no longer matches the lock sha" not in r.out
+        data = json.loads(boost("attest", "house-style", "--verify", "--json",
+                                expect=1).out)
+        assert data["skills"][0]["sha_ok"] is False
+        assert data["skills"][0]["reason"] == "missing"
+
     def test_drift_reports_quarantined_not_missing(self, boost, installed,
                                                    fixture_tap_src, tmp_path):
         self._install_rule(boost, fixture_tap_src, tmp_path, "drift-tap")
@@ -1393,7 +1410,29 @@ class TestAttest:
                                 expect=1).out)
         assert data["failed"] == 1
         assert data["skills"][0]["sha_ok"] is False
+        assert data["skills"][0]["reason"] == "modified"
         assert data["skills"][0]["journal"] is True
+
+    def test_missing_store_reports_missing_not_modified(self, boost, installed):
+        # A deleted store dir used to word its way through "content no longer
+        # matches the lock sha" — the same message a genuinely tampered skill
+        # gets — sending the user hunting for tampering when the remedy is
+        # `boost heal`. `boost drift` on the same state already says
+        # store-missing; attest --verify must agree.
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+        r = boost("attest", "--verify", expect=1)
+        assert "brainstorming: store directory missing (boost heal)" in r.out
+        assert "content no longer matches the lock sha" not in r.out
+        data = json.loads(boost("attest", "--verify", "--json",
+                                expect=1).out)
+        assert data["failed"] == 1
+        assert data["skills"][0]["sha_ok"] is False
+        assert data["skills"][0]["reason"] == "missing"
+
+    def test_ok_verify_reports_no_reason(self, boost, installed):
+        data = json.loads(boost("attest", "--verify", "--json").out)
+        assert data["skills"][0]["sha_ok"] is True
+        assert data["skills"][0]["reason"] is None
 
 
 # ── health ───────────────────────────────────────────────────────────────

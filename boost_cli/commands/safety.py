@@ -616,16 +616,24 @@ def cmd_attest(argv):
                "commit": (entry.get("commit") or "")[:9],
                "sha256": (entry.get("sha256") or "")[:12]}
         if args.verify:
+            reason = None
             if kind == "skill":
                 sdir = store.skill_store_dir(name)
-                rec["sha_ok"] = (sdir.is_dir()
+                store_present = sdir.is_dir()
+                rec["sha_ok"] = (store_present
                                  and util.sha256_dir(sdir) == entry.get("sha256"))
+                if not rec["sha_ok"]:
+                    reason = "missing" if not store_present else "modified"
             else:
                 # The artifact the agent loads, against the hash recorded when
                 # it was written. UNLOCKED (a pre-hash entry) never fails.
-                rec["sha_ok"] = integrity.materialized_status(name, entry) not in (
+                mstatus = integrity.materialized_status(name, entry)
+                rec["sha_ok"] = mstatus not in (
                     integrity.STATUS_MODIFIED, integrity.STATUS_MISSING)
+                if not rec["sha_ok"]:
+                    reason = "missing" if mstatus == integrity.STATUS_MISSING else "modified"
             rec["journal"] = ev is not None
+            rec["reason"] = reason
             if not rec["sha_ok"]:
                 failures += 1
         records.append(rec)
@@ -646,9 +654,15 @@ def cmd_attest(argv):
     if args.verify:
         for r in records:
             if not r["sha_ok"]:
-                out.warn("%s: %s content no longer matches the lock sha"
-                         % (r["name"], "store" if r["kind"] == "skill"
-                            else "materialized"))
+                if r["reason"] == "missing":
+                    out.warn("%s: %s" % (
+                        r["name"],
+                        "store directory missing (boost heal)"
+                        if r["kind"] == "skill" else "materialized file missing"))
+                else:
+                    out.warn("%s: %s content no longer matches the lock sha"
+                             % (r["name"], "store" if r["kind"] == "skill"
+                                else "materialized"))
             elif not r["journal"]:
                 out.warn("%s: no journal record (installed before journaling?)" % r["name"])
             else:
