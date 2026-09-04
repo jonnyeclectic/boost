@@ -2,14 +2,14 @@
 id: audit-health-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: health calls a drifted machine "● healthy" and scores gemini 1/1 with the store dir gone
 order: 270
-owner:
+owner: loop/health-dashboard-coverage
 pr:
 title: "<code>boost health</code>: CLI audit findings (2026-08)"
 ---

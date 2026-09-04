@@ -1294,15 +1294,27 @@ def cmd_health(argv):
         prog="boost health", description="Dashboard of skill-environment health")
     ap.parse_args(argv)
 
-    installed = _iter_installed()
-    quarantined = sum(1 for _n, e in installed if e.get("quarantined"))
-    pinned = sum(1 for _n, e in installed if e.get("pinned"))
+    # Skills-only used to be the whole dashboard, so a rule or workflow could
+    # drift — or vanish from the store entirely — invisibly: the skills line
+    # and the drift row below both only ever saw `_iter_installed()`. Walking
+    # every kind here is what lets the drift row match `boost drift` on the
+    # same lock file instead of silently under-reporting it.
+    all_installed = _iter_installed_all()
+    by_kind: dict[str, list[tuple[str, dict]]] = {}
+    for kind, name, entry in all_installed:
+        by_kind.setdefault(kind, []).append((name, entry))
+    installed = by_kind.get("skill", [])
     taps = registry.list_taps()
     cloned = [t for t in taps if t.is_cloned]
 
     out.heading("boost health")
-    out.kv("skills", "%d installed · %d quarantined · %d pinned"
-           % (len(installed), quarantined, pinned))
+    for kind, label in (("skill", "skills"), ("rule", "rules"),
+                        ("workflow", "workflows")):
+        items = by_kind.get(kind, [])
+        q = sum(1 for _n, e in items if e.get("quarantined"))
+        p = sum(1 for _n, e in items if e.get("pinned"))
+        out.kv(label, "%d installed · %d quarantined · %d pinned"
+               % (len(items), q, p))
     out.kv("taps", "%d configured · %d cloned" % (len(taps), len(cloned)))
 
     expected = [n for n, e in installed if not e.get("quarantined")]
@@ -1315,17 +1327,25 @@ def cmd_health(argv):
         out.kv(agent, "%d/%d %s" % (linked, len(expected),
                                     out.role("✓", "success") if full
                                     else out.role("!", "warn")))
-    # Agents that read the canonical store have no links to count — scoring
-    # them 0/N would report a healthy setup as broken. They are listed anyway,
-    # because an agent silently absent from a health report reads as "boost is
-    # not wired up for it".
+    # Agents that read the canonical store have no links to count, so they
+    # used to be scored an unconditional len(expected)/len(expected) — green
+    # even with a skill's store directory gone, in the same report `drift`
+    # called store-missing. Stat the store instead. They are listed even when
+    # full, because an agent silently absent from a health report reads as
+    # "boost is not wired up for it".
+    store_present = sum(1 for n in expected if store.skill_store_dir(n).is_dir())
+    store_full = store_present == len(expected)
     for agent in agents.native_store_agents():
+        coverage_ok = coverage_ok and store_full
         out.kv(agent, "%d/%d %s (reads the store directly)"
-               % (len(expected), len(expected), out.role("✓", "success")))
+               % (store_present, len(expected),
+                  out.role("✓", "success") if store_full
+                  else out.role("!", "warn")))
 
     drift_counts: dict = {}
-    for name, entry in installed:
-        st = _drift_status(name, entry)
+    for kind, name, entry in all_installed:
+        st = (_drift_status(name, entry) if kind == "skill"
+              else _drift_status_materialized(kind, name, entry))
         drift_counts[st] = drift_counts.get(st, 0) + 1
     out.kv("drift", " · ".join("%d %s" % (n, s)
                                for s, n in sorted(drift_counts.items())) or "—")

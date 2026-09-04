@@ -1419,6 +1419,20 @@ class TestHealth:
         assert re.search(r"fingerprint\s+[0-9a-f]{16}", r.out)
         assert "● healthy" in r.out
 
+    def test_native_store_row_reflects_a_missing_store_dir(self, boost, installed):
+        # The bug: the native-store row was an unconditional
+        # len(expected)/len(expected) with a hard-coded ✓, never statting the
+        # store — so it kept claiming full coverage in the same report where
+        # the claude-code row (and drift) both saw the skill was gone.
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+        r = boost("health")
+        assert "1/1 ✓ (reads the store directly)" not in r.out
+        line = next(ln for ln in r.out.splitlines()
+                    if "(reads the store directly)" in ln)
+        assert "0/1" in line
+        assert "✓" not in line
+        assert "1 store-missing" in r.out
+
     def test_last_tap_sync_reads_the_refresh_marker_not_git_log(
             self, boost, installed):
         # The bug: twelve minutes after tapping, health read the tap clone's
