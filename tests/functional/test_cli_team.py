@@ -136,6 +136,49 @@ class TestCohort:
         assert "brainstorming already installed" in r.out
         assert "applied: 0 installed, 1 already present" in r.out
 
+    def test_apply_reports_missing_members_and_exits_nonzero_when_nothing_landed(
+            self, boost, tapped):
+        # The bug: a cohort whose only member is nowhere to be found reported
+        # "0 installed, 0 already present" — the member accounted for nowhere
+        # — and exited 0 as if the rollout had nothing to do.
+        boost("cohort", "create", "ghost-only", "--skills", "nosuchskill-zzz",
+             "--percent", "100")
+        r = boost("cohort", "apply", "ghost-only", expect=1)
+        assert "nosuchskill-zzz not found in any tap — skipped" in r.out
+        assert "applied: 0 installed, 0 already present, 1 not found" in r.out
+
+    def test_apply_mixed_cohort_counts_the_missing_member(self, boost, tapped):
+        boost("cohort", "create", "mixed",
+             "--skills", "brainstorming,nosuchskill-zzz", "--percent", "100")
+        r = boost("cohort", "apply", "mixed")
+        assert "applied: 1 installed, 0 already present, 1 not found" in r.out
+        assert r.rc == 0  # something did land, so this is not a no-op failure
+
+    def test_apply_journals_one_event_per_applied_cohort(self, boost, tapped):
+        boost("cohort", "create", "pilot", "--skills",
+             "brainstorming,nosuchskill-zzz", "--percent", "100")
+        boost("cohort", "create", "zero", "--skills", "brainstorming",
+             "--percent", "0")
+        boost("cohort", "apply")
+        events = journal.events(action="cohort", subject="pilot")
+        applied = [e for e in events if e.get("op") == "apply"]
+        assert len(applied) == 1
+        assert applied[0]["installed"] == 1
+        assert applied[0]["present"] == 0
+        assert applied[0]["missing"] == 1
+        # "zero" is never in the rollout, so applying it must not journal.
+        assert not [e for e in journal.events(action="cohort", subject="zero")
+                   if e.get("op") == "apply"]
+
+    def test_apply_skills_flag_can_be_repeated(self, boost, tapped):
+        # --skills a --skills b used to replace rather than append, so only
+        # the last occurrence's skills survived.
+        r = boost("cohort", "create", "pilot", "--skills", "brainstorming",
+                 "--skills", "commit-messages", "--percent", "100")
+        assert "2 skills" in r.out
+        data = json.loads(boost("cohort", "list", "--json").out)
+        assert sorted(data[0]["skills"]) == ["brainstorming", "commit-messages"]
+
     def test_apply_does_not_reinstall_an_installed_rule(self, boost, tapped):
         # Membership checks the whole lock: a cohort item installed as a RULE
         # used to fail the skills-section check and get re-installed per apply.
