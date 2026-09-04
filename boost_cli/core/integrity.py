@@ -64,6 +64,22 @@ def status(name: str, entry: dict | None = None) -> str:
     return STATUS_OK if util.sha256_dir(sdir) == recorded else STATUS_MODIFIED
 
 
+def verify_reason(status: str) -> str | None:
+    """Map a ``STATUS_*`` value to an attestation-failure reason, or ``None``.
+
+    ``"missing"`` means the artifact is gone outright; ``"modified"`` means it
+    is present but no longer hashes to what the lock recorded. Both read as
+    tampering if collapsed into one boolean, but the remedy differs — missing
+    wants ``boost heal``, modified wants investigation. Anything else (OK,
+    UNLOCKED, QUARANTINED) is not a verification failure.
+    """
+    if status == STATUS_MISSING:
+        return "missing"
+    if status == STATUS_MODIFIED:
+        return "modified"
+    return None
+
+
 def materialized_status(name: str, entry: dict) -> str:
     """Classify a rule/workflow's integrity against its lock entry.
 
