@@ -2852,6 +2852,40 @@ class TestMaterializedGovernance:
         assert "# my own notes" in text
         assert "Always write tests first." in text
 
+    def test_release_restores_block_position_not_just_append(self, tap):
+        # Regression: a rule release used to hand the post-quarantine file to
+        # merge_block, which finds no block and unconditionally appends —
+        # reordering any user text that sat *after* the block back above it.
+        store.install(_rule_entry(tap))
+        p = self._claude_md()
+        original = p.read_text(encoding="utf-8")
+        p.write_text(original + "\n# my notes after the block\n",
+                     encoding="utf-8")
+        full_before = p.read_text(encoding="utf-8")
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        store.release_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        assert p.read_text(encoding="utf-8") == full_before
+
+    def test_release_falls_back_to_append_when_surrounding_text_changed(
+            self, tap):
+        # If the surrounding text moved between quarantine and release (the
+        # user edited the file), reinserting at the stashed position would be
+        # guessing — merge_block's append is the honest fallback, same as
+        # before this fix.
+        store.install(_rule_entry(tap))
+        store.quarantine_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        p = self._claude_md()
+        base = p.read_text(encoding="utf-8") if p.exists() else ""
+        p.write_text(base + "\n# added after quarantine\n", encoding="utf-8")
+        store.release_materialized(
+            "rule", "team-conventions", lockfile.get_rule("team-conventions"))
+        text = p.read_text(encoding="utf-8")
+        assert "# added after quarantine" in text
+        assert "Always write tests first." in text
+
     def test_workflow_quarantine_removes_files_and_release_restores(self, tap):
         store.install(_workflow_entry(tap))
         lk = lockfile.get_workflow("ship-it")

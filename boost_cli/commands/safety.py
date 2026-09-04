@@ -538,7 +538,7 @@ def cmd_quarantine(argv):
             out.warn("%s is not quarantined" % name)
             return 0
         if kind == "skill":
-            res = store.link_agents(name)
+            res = store.link_agents(name, only=entry.get("only_agents"))
             entry["quarantined"] = False
             entry["agents"] = res.linked
             lockfile.set_skill(name, entry)

@@ -921,6 +921,25 @@ class TestQuarantine:
         r = boost("quarantine", "--list")
         assert "nothing in quarantine" in r.out
 
+    def test_release_preserves_narrowed_agent_scope(self, boost, tapped):
+        # A quarantine/release round trip on a skill installed with --agent
+        # must be a no-op on the agent set: release used to re-link every
+        # enabled agent regardless of the scope the install declared, which
+        # doctor then flagged as out-of-scope.
+        boost("install", "brainstorming", "--agent", "claude-code")
+        boost("quarantine", "brainstorming")
+        r = boost("quarantine", "--release", "brainstorming")
+        assert "released brainstorming (linked: claude-code)" in r.out
+        home = paths.home()
+        assert (home / ".claude" / "skills" / "brainstorming").is_symlink()
+        assert not (home / ".windsurf" / "skills" / "brainstorming").exists()
+        assert not (home / ".cursor" / "skills" / "brainstorming").exists()
+        entry = _lock()["brainstorming"]
+        assert entry["agents"] == ["claude-code"]
+        r = boost("doctor")
+        assert r.rc == 0
+        assert "outside its declared scope" not in r.out
+
 
 class TestQuarantineMaterialized:
     """The CLI round trip for the kinds quarantine used to deny existed."""
