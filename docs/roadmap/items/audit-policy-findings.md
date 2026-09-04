@@ -2,14 +2,14 @@
 id: audit-policy-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: policy check evaluates 4 of the 7 rules install enforces — a refused env "passes"
 order: 279
-owner:
+owner: loop/policy-check-coverage
 pr:
 title: "boost policy: CLI audit findings (2026-08)"
 ---
