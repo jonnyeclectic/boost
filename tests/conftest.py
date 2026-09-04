@@ -79,6 +79,20 @@ def _reset_logging():
     logs.reset()
 
 
+@pytest.fixture(autouse=True)
+def _reset_ai_last_failure():
+    """Clear `ai._last_failure` so one test's AI failure can't leak into the
+    next. Most tests never touch it (`sandbox` sets BOOST_NO_AI=1, which
+    `unavailable_reason()` checks before ever reading it), but any test using
+    `ai_on` that exercises a failing `ai.ask()` sets this module global with
+    nothing to unset it afterward.
+    """
+    from boost_cli.core import ai
+    ai._last_failure = None
+    yield
+    ai._last_failure = None
+
+
 @pytest.fixture()
 def sandbox(tmp_path, monkeypatch):
     """A fresh fake $HOME; returns its Path."""

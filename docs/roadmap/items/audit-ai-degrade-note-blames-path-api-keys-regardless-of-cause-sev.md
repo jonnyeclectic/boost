@@ -7,7 +7,7 @@ category: CLI · UX
 complexity: M
 impact: Med
 wow: 2
-note: one static string blames PATH/keys while boost.log records "claude CLI call failed: exit 1"
+note: fix implemented and unit/functional/smoke-tested locally; mutation/eval/full-lint gates unverified — this session had no PyPI/network egress to run them, PR relies on CI
 order: 223
 owner: loop/ai-fallback-attribution
 pr:

@@ -100,10 +100,29 @@ class TestRefusesUngroundedProse:
     def test_an_empty_model_reply_degrades_quietly(
             self, sandbox, retrieved, monkeypatch):
         # Nothing was claimed, so nothing was rejected — grounded stays True.
+        # But AI *was* tried and produced nothing, which is a distinct cause
+        # from "no backend" — ai_failed is how the caller tells them apart.
         _with_ai(monkeypatch, "")
         reply = chat.answer("review my diff")
         assert reply.source == "extractive"
         assert reply.grounded is True
+        assert reply.ai_failed is True
+
+    def test_an_invented_name_is_a_rejection_not_a_failure(
+            self, sandbox, retrieved, monkeypatch):
+        # The model answered — it was rejected, not silent. Conflating the two
+        # would print "AI call failed" about a call that plainly succeeded.
+        _with_ai(monkeypatch, "You want docker-compose-expert for that.")
+        reply = chat.answer("how do I debug containers?")
+        assert reply.ai_failed is False
+
+    def test_a_grounded_ai_reply_is_not_marked_failed(
+            self, sandbox, retrieved, monkeypatch):
+        _with_ai(monkeypatch,
+                 "Use code-reviewer to check the diff for bugs and style, and "
+                 "security-auditor to find injection flaws and leaked secrets.")
+        reply = chat.answer("review my diff")
+        assert reply.ai_failed is False
 
 
 class TestWorksWithoutAI:
@@ -114,6 +133,14 @@ class TestWorksWithoutAI:
         assert reply.source == "extractive"
         assert "code-reviewer" in reply.text
         assert "Reviews a diff for bugs and style" in reply.text
+
+    def test_no_backend_is_not_reported_as_a_failed_call(
+            self, sandbox, retrieved, no_ai):
+        # AI was never tried here — distinct from ai_failed, which means it
+        # was tried and came back empty. Conflating them would tell a keyless
+        # user their (nonexistent) AI call failed.
+        reply = chat.answer("review my diff")
+        assert reply.ai_failed is False
 
     def test_it_names_the_next_command(self, sandbox, retrieved, no_ai):
         assert "boost install" in chat.answer("review my diff").text

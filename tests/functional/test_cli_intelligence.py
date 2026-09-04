@@ -772,6 +772,15 @@ class TestImpact:
         assert "This data is correlational only." in r.out
         assert FALLBACK not in flat(r.out)
 
+    def test_a_failed_ai_call_still_warns(self, boost, installed, tmp_path,
+                                          monkeypatch, ai_on):
+        # Previously silent: AI was available, the call was made, and it came
+        # back empty — impact printed the table and said nothing about it.
+        monkeypatch.chdir(tmp_path)
+        ai_on(ask=None)
+        r = boost("impact", "brainstorming")
+        assert FALLBACK in flat(r.err)
+
 
 # ---------------------------------------------------------------- kind declines
 
