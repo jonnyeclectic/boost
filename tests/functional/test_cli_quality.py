@@ -678,7 +678,7 @@ class TestVerify:
         r = boost("verify", expect=1)
         assert "missing lock fields: version, installed_at" in r.out
         assert "1 of 1 item failed verification" in r.out
-        data = json.loads(boost("verify", "--json").out)
+        data = json.loads(boost("verify", "--json", expect=1).out)
         row = data["skills"][0]
         assert row["status"] == "ok"
         assert row["passed"] is False
