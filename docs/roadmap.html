@@ -12193,8 +12193,9 @@ the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-skill-profile-name-slugging-is-inconsistent-distill-o-accept">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>Name slugging is inconsistent: <code>distill -o</code> accepts what <code>import</code> rejects; <code>create</code>/<code>profile</code> slug silently</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Three commands treat the same problem &mdash; a user-typed name that is not a valid slug &mdash; three
 different ways, and one of them contradicts itself. <code>distill -o "Bad Name!!"</code> writes
 <code>&hellip;/Bad Name!!/SKILL.md</code> and hints <em>&ldquo;install it with <code>boost import ./Bad
@@ -12220,12 +12221,12 @@ slug (<em>&ldquo;name has no letters or digits&rdquo;</em>), and print the slug 
 was typed. Apply it to <code>distill -o</code> (plus <code>shlex.quote</code> in the import hint),
 <code>create</code>, and <code>profile save</code>; sort <code>profile list</code> by the displayed name.
 Regenerate docs/commands.html if create/distill help text changes. Found by the 2026-08 CLI audit
-(cluster generated-name-slugging); repro in the audit log.</p>
+(cluster generated-name-slugging); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">fix implemented + tested; CI must confirm full make check (sandbox had no PyPI network / py3.12 toolchain)</span>
+          <span class="m">distill accepts "Bad Name!!", then its own import hint rejects it</span>
         </div>
       </article>
 

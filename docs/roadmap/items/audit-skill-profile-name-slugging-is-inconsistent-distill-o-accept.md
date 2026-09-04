@@ -2,12 +2,12 @@
 id: audit-skill-profile-name-slugging-is-inconsistent-distill-o-accept
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · UX
 complexity: S
 impact: Med
 wow: 1
-note: "fix implemented + tested; CI must confirm full make check (sandbox had no PyPI network / py3.12 toolchain)"
+note: distill accepts "Bad Name!!", then its own import hint rejects it
 order: 226
 owner: loop/name-slugging
 pr: 752
