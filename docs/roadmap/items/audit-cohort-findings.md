@@ -7,10 +7,10 @@ category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
-note: apply counts a mixed cohort as 1 of 2, exits 0 when nothing applied, journals no event
+note: "fix in PR #767, pending CI's full gate (this session had no PyPI egress for make check)"
 order: 256
 owner: loop/cohort-apply-reporting
-pr:
+pr: 767
 title: "boost cohort: CLI audit findings (2026-08)"
 ---
 <b><code>cohort apply</code> drops not-found members from its summary, exits 0 even when nothing
