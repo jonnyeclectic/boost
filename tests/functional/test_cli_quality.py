@@ -1358,6 +1358,11 @@ class TestChangelog:
         r = boost("changelog", "local-one")
         assert "no upstream history — local-one was imported locally" in r.out
 
+    def test_qualified_name_shows_bare_name_once_not_twice(self, boost, rival_tap):
+        r = boost("changelog", "rival-tap:brainstorming")
+        assert "changelog for brainstorming (rival-tap)" in r.out
+        assert "rival-tap:brainstorming" not in r.out
+
     def test_n_must_be_positive_int(self, boost, installed):
         # -n 0 used to print no log lines and claim "no history found" even
         # when history exists; -n -1 is passed straight to `git log -n -1`,
