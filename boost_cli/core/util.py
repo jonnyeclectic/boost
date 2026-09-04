@@ -15,6 +15,9 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..errors import BoostError
+from . import output as out
+
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
 
@@ -246,9 +249,34 @@ def human_size(n: int) -> str:
     return str(size)
 
 
+def _slug_or_none(name: str) -> str | None:
+    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or None
+
+
 def slugify(name: str) -> str:
     """Lowercase ``name`` into a ``[a-z0-9-]`` slug; empty result -> ``'skill'``."""
-    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or "skill"
+    return _slug_or_none(name) or "skill"
+
+
+def resolve_slug(raw: str, *, what: str = "name") -> str:
+    """Slugify a user-typed ``raw``, refusing one with nothing to slug.
+
+    The one shared helper for a user-typed name that must become a slug:
+    unlike :func:`slugify` (used where indexing must never fail on a hostile
+    entry), this never falls back to a placeholder — an empty or
+    punctuation-only name is the user's mistake to report, not boost's name
+    to invent. It also prints a note whenever the slug differs from what was
+    typed, so a name is never silently swapped for another without the user
+    seeing it — the same silent swap that let ``boost distill -o`` write a
+    path its own install hint then refused, and let two differently-typed
+    profile names collide on one file.
+    """
+    slug = _slug_or_none(raw)
+    if slug is None:
+        raise BoostError("%s has no letters or digits: %r" % (what, raw))
+    if slug != raw:
+        out.info("using %s %r (from %r)" % (what, slug, raw))
+    return slug
 
 
 # A catalog name becomes a path component (a rule file, a workflow file, a store
