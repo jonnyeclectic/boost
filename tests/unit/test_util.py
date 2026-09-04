@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.core import util
+from boost_cli.errors import BoostError
 
 ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -189,6 +190,44 @@ class TestSlugify:
 
     def test_digits_and_dashes_kept(self):
         assert util.slugify("tdd-workflow-3") == "tdd-workflow-3"
+
+
+class TestResolveSlug:
+    """The shared helper for a user-typed name: slugify, refuse when there is
+    nothing to slug, and never swap the name for another without saying so."""
+
+    def test_already_a_slug_is_returned_unchanged_and_silent(self, capsys):
+        assert util.resolve_slug("tdd-workflow-3") == "tdd-workflow-3"
+        assert capsys.readouterr().out == ""
+
+    def test_differing_slug_is_printed_as_a_note(self, capsys):
+        assert util.resolve_slug("My Great Skill") == "my-great-skill"
+        out = capsys.readouterr().out
+        assert "my-great-skill" in out
+        assert "My Great Skill" in out
+
+    def test_what_names_the_field_in_the_note_and_the_error(self, capsys):
+        util.resolve_slug("Bad Name!!", what="profile name")
+        assert "profile name" in capsys.readouterr().out
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("!!!", what="profile name")
+        assert "profile name" in exc.value.message
+
+    def test_empty_raises_instead_of_falling_back_to_skill(self):
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("")
+        assert "no letters or digits" in exc.value.message
+
+    def test_punctuation_only_raises_instead_of_falling_back_to_skill(self):
+        # Unlike slugify("!!!") == "skill", a user-typed name with nothing to
+        # slug is a mistake to report, not a name to invent.
+        with pytest.raises(BoostError):
+            util.resolve_slug("!!!")
+
+    def test_literal_skill_is_not_mistaken_for_the_fallback(self):
+        # "skill" slugifies to itself, so it must not raise even though it is
+        # the same string slugify() falls back to for punctuation-only input.
+        assert util.resolve_slug("skill") == "skill"
 
 
 class TestSha256Dir:

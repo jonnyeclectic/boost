@@ -205,7 +205,7 @@ def cmd_cohort(argv) -> int:
 # ---------------------------------------------------------------- profile
 
 def _profile_path(name: str):
-    return paths.profiles_dir() / (util.slugify(name) + ".json")
+    return paths.profiles_dir() / (util.resolve_slug(name, what="profile name") + ".json")
 
 
 def _load_profile(name: str) -> dict:
@@ -274,6 +274,10 @@ def cmd_profile(argv) -> int:
                              "skills": len(data.get("skills", {})),
                              "saved": data.get("saved", "?"),
                              "unreadable": False})
+        # Sort by the name shown on screen, not the slugged filename that put
+        # them there — glob order otherwise prints rows in an order that
+        # matches nothing a reader sees (`daily, mixed, !!!, Work Profile`).
+        profiles.sort(key=lambda pr: pr["name"])
         if args.json:
             print(json.dumps(profiles, indent=2))
             return 0
@@ -291,18 +295,19 @@ def cmd_profile(argv) -> int:
 
     if args.action == "save":
         installed = lockfile.installed()
+        path = _profile_path(args.name)
         was = None
-        if _profile_path(args.name).exists():
+        if path.exists():
             try:
-                was = len(_load_profile(args.name).get("skills", {}))
-            except BoostError:
+                was = len(json.loads(path.read_text(encoding="utf-8")).get("skills", {}))
+            except (json.JSONDecodeError, OSError):
                 was = None   # unreadable old profile: still fine to replace
         profile = {"name": args.name, "saved": util.now_iso(), "user": util.user(),
                    "skills": {n: {"tap": e.get("tap", "local"),
                                   "version": e.get("version", "0.0.0")}
                               for n, e in installed.items()}}
         paths.ensure_dirs()
-        _profile_path(args.name).write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         journal.log("profile", args.name, op="save", skills=len(installed))
         if was is not None:
             out.ok("updated profile %s (was %d skill%s, now %d skill%s)"
@@ -357,13 +362,14 @@ def cmd_profile(argv) -> int:
         return 0
 
     if args.action == "delete":
-        if not _profile_path(args.name).exists():
+        path = _profile_path(args.name)
+        if not path.exists():
             raise BoostError("no profile named %s" % args.name,
                             hint="list profiles with `boost profile list`")
         if not out.confirm("delete profile %s?" % args.name):
             out.info("cancelled")
             return 1
-        _profile_path(args.name).unlink()
+        path.unlink()
         journal.log("profile", args.name, op="delete")
         out.ok("deleted profile %s" % args.name)
         return 0
