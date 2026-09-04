@@ -160,6 +160,40 @@ def commit_status(name: str, entry: dict | None = None) -> str | None:
     return STATUS_OK if entry.get("commit") == pin else STATUS_MODIFIED
 
 
+def verification_passed(status: str, missing_fields: list, commit_pin: str | None) -> bool:
+    """Whether a `boost verify` row is genuinely OK, not just wearing an OK status.
+
+    A row can carry STATUS_OK or STATUS_QUARANTINED and still be broken — missing
+    lock fields, or a drifted commit pin — so `status` alone is not "passed". This
+    is the single source of truth `cmd_verify` uses both to count failures and to
+    color the rendered status token, so the two can never disagree again.
+    """
+    return (status in (STATUS_OK, STATUS_QUARANTINED)
+            and not missing_fields
+            and commit_pin != STATUS_MODIFIED)
+
+
+_VERIFY_ROLE_BY_STATUS = {
+    STATUS_OK: "success", STATUS_MODIFIED: "warn", STATUS_MISSING: "danger",
+    STATUS_UNLOCKED: "warn", STATUS_QUARANTINED: "muted",
+}
+
+
+def verification_role(status: str, passed: bool) -> str:
+    """The color role `cmd_verify` paints a row's status token with.
+
+    Mirrors `verification_passed`: STATUS_OK/STATUS_QUARANTINED only keep their
+    normal success/muted role when the row actually passed. A row that fails
+    for a reason the status text doesn't show — missing lock fields, a drifted
+    commit pin — wears the failing color instead, so the token always agrees
+    with whether the row is counted in `bad`.
+    """
+    role = _VERIFY_ROLE_BY_STATUS.get(status, "warn")
+    if not passed and role in ("success", "muted"):
+        return "danger"
+    return role
+
+
 def enforcement_enabled() -> bool:
     """True when digest enforcement is switched on in config (default False)."""
     return bool(config.get(ENFORCE_KEY, False))
