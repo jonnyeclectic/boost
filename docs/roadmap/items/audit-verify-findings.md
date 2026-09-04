@@ -2,14 +2,14 @@
 id: audit-verify-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: Low
 wow: 1
 note: a row counted among the N failed still renders the green ok token
 order: 302
-owner:
+owner: loop/audit-verify-findings
 pr:
 title: "<code>boost verify</code>: CLI audit findings (2026-08)"
 ---

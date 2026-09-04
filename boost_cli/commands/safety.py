@@ -431,7 +431,9 @@ def cmd_verify(argv):
         commit_pin = integrity.commit_status(name, entry)
         results.append({"name": name, "kind": kind, "status": status,
                         "scope": "user", "missing_fields": missing_fields,
-                        "commit_pin": commit_pin})
+                        "commit_pin": commit_pin,
+                        "passed": integrity.row_passed(status, missing_fields,
+                                                       commit_pin)})
 
     # Vendored, project-scoped skills live in the repo's own lock, not the user's
     # — and they are exactly the ones worth verifying, since they arrive by PR
@@ -446,11 +448,11 @@ def cmd_verify(argv):
             missing_fields.append("sha256")
         results.append({"name": name, "kind": "skill", "status": status,
                         "scope": "project", "missing_fields": missing_fields,
-                        "commit_pin": None})
+                        "commit_pin": None,
+                        "passed": integrity.row_passed(status, missing_fields,
+                                                       None)})
 
-    bad = [r for r in results
-           if r["status"] not in ("ok", "quarantined") or r["missing_fields"]
-           or r["commit_pin"] == integrity.STATUS_MODIFIED]
+    bad = [r for r in results if not r["passed"]]
     if args.json:
         print(json.dumps({"skills": results, "failed": len(bad)}))
         return 1 if bad else 0
@@ -475,8 +477,9 @@ def cmd_verify(argv):
         elif r["commit_pin"] == integrity.STATUS_MODIFIED:
             bits.append("commit pin DRIFTED")
         note = ("  " + " · ".join(bits)) if bits else ""
+        role = status_role.get(r["status"], "warn") if r["passed"] else "danger"
         print("  %s  %s%s" % (r["name"].ljust(width),
-                              out.role(r["status"], status_role.get(r["status"], "warn")),
+                              out.role(r["status"], role),
                               out.role(note, "muted")))
     if bad:
         out.warn("%d of %d item%s failed verification"

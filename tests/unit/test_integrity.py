@@ -170,6 +170,41 @@ def test_commit_enforcement_off_by_default_does_not_block_drift(installed):
     integrity.enforce(installed)          # commit enforcement off — must not raise
 
 
+# ── row_passed ───────────────────────────────────────────────────────────
+# `boost verify` colors a row's status token and counts it toward "N of M
+# failed" from this single predicate, so the two can never disagree the way
+# a bare status-string check let them: an "ok" row with missing lock fields
+# used to render green while landing in the failure count.
+
+def test_row_passed_true_for_a_clean_ok_row():
+    assert integrity.row_passed(integrity.STATUS_OK, [], None) is True
+
+
+def test_row_passed_true_for_a_clean_quarantined_row():
+    assert integrity.row_passed(integrity.STATUS_QUARANTINED, [], None) is True
+
+
+def test_row_passed_false_for_ok_status_with_missing_lock_fields():
+    # The reported bug: status text says "ok" but the row still fails.
+    assert integrity.row_passed(integrity.STATUS_OK, ["version"], None) is False
+
+
+def test_row_passed_false_for_quarantined_status_with_missing_lock_fields():
+    assert integrity.row_passed(integrity.STATUS_QUARANTINED, ["sha256"],
+                                None) is False
+
+
+def test_row_passed_false_for_a_drifted_commit_pin():
+    assert integrity.row_passed(integrity.STATUS_OK, [],
+                                integrity.STATUS_MODIFIED) is False
+
+
+def test_row_passed_false_for_modified_missing_or_unlocked_status():
+    for status in (integrity.STATUS_MODIFIED, integrity.STATUS_MISSING,
+                  integrity.STATUS_UNLOCKED):
+        assert integrity.row_passed(status, [], None) is False
+
+
 class TestProjectScope:
     """integrity over project-scoped skills (committed into a repo, not the store)."""
 
