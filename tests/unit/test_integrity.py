@@ -170,6 +170,66 @@ def test_commit_enforcement_off_by_default_does_not_block_drift(installed):
     integrity.enforce(installed)          # commit enforcement off — must not raise
 
 
+# ── verify row pass/role ─────────────────────────────────────────────────
+# A `boost verify` row can carry status "ok"/"quarantined" and still be a
+# failure — missing lock fields, a drifted commit pin. These pin the single
+# source of truth `cmd_verify` uses for both the failure count and the
+# rendered color, so the two can never disagree again (audit-verify-findings).
+
+def test_verification_passed_true_for_clean_ok():
+    assert integrity.verification_passed(integrity.STATUS_OK, [], None) is True
+
+
+def test_verification_passed_false_for_ok_with_missing_fields():
+    # The exact repro: status "ok" but lock fields stripped — must not pass.
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, ["version", "installed_at"], None) is False
+
+
+def test_verification_passed_false_for_quarantined_with_missing_fields():
+    assert integrity.verification_passed(
+        integrity.STATUS_QUARANTINED, ["sha256"], None) is False
+
+
+def test_verification_passed_true_for_clean_quarantined():
+    assert integrity.verification_passed(integrity.STATUS_QUARANTINED, [], None) is True
+
+
+def test_verification_passed_false_for_ok_with_drifted_commit_pin():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_MODIFIED) is False
+
+
+def test_verification_passed_false_for_modified_status_even_if_fields_present():
+    assert integrity.verification_passed(integrity.STATUS_MODIFIED, [], None) is False
+
+
+def test_verification_role_success_when_ok_and_passed():
+    assert integrity.verification_role(integrity.STATUS_OK, True) == "success"
+
+
+def test_verification_role_danger_when_ok_but_not_passed():
+    # The bug: an "ok" status token must not render success-green once the
+    # row is a failure for another reason.
+    assert integrity.verification_role(integrity.STATUS_OK, False) == "danger"
+
+
+def test_verification_role_danger_when_quarantined_but_not_passed():
+    assert integrity.verification_role(integrity.STATUS_QUARANTINED, False) == "danger"
+
+
+def test_verification_role_muted_when_quarantined_and_passed():
+    assert integrity.verification_role(integrity.STATUS_QUARANTINED, True) == "muted"
+
+
+def test_verification_role_unaffected_for_already_failing_statuses():
+    # modified/missing/unlocked already render a failing color regardless of
+    # `passed` — only the success/muted (ok/quarantined) roles get overridden.
+    assert integrity.verification_role(integrity.STATUS_MODIFIED, False) == "warn"
+    assert integrity.verification_role(integrity.STATUS_MISSING, False) == "danger"
+    assert integrity.verification_role(integrity.STATUS_UNLOCKED, False) == "warn"
+
+
 class TestProjectScope:
     """integrity over project-scoped skills (committed into a repo, not the store)."""
 

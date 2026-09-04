@@ -655,7 +655,8 @@ class TestVerify:
         data = json.loads(boost("verify", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
                                     "status": "ok", "scope": "user",
-                                    "missing_fields": [], "commit_pin": None}],
+                                    "missing_fields": [], "commit_pin": None,
+                                    "passed": True}],
                         "failed": 0}
 
     def test_tampered_modified_rc1(self, boost, installed):
@@ -1003,6 +1004,29 @@ class TestGovernedIntegritySurface:
         assert "lock file integrity OK" in r.out
         r = boost("verify", "house-style")
         assert "house-style" in r.out and "ok" in r.out
+
+    def test_verify_ok_status_with_missing_fields_still_counts_as_failed(
+            self, boost, installed, fixture_tap_src, tmp_path):
+        # audit-verify-findings repro: a rule entry stripped of `version` and
+        # given an empty `installed_at` still hashes clean, so `status` stays
+        # "ok" — but the row must count toward "failed" and, in JSON, must
+        # not claim `"passed": true` alongside a non-empty `missing_fields`.
+        from boost_cli.core import lockfile
+        self._install_rule(boost, fixture_tap_src, tmp_path, "stripped-tap")
+        entry = lockfile.get_rule("house-style")
+        del entry["version"]
+        entry["installed_at"] = ""
+        lockfile.set_rule("house-style", entry)
+
+        data = json.loads(boost("verify", "--json", expect=1).out)
+        row = next(r for r in data["skills"] if r["name"] == "house-style")
+        assert row["status"] == "ok"
+        assert sorted(row["missing_fields"]) == ["installed_at", "version"]
+        assert row["passed"] is False
+        assert data["failed"] == 1
+
+        r = boost("verify", expect=1)
+        assert "1 of" in r.out and "failed verification" in r.out
 
     def test_verify_flags_a_tampered_claude_block(self, boost, installed,
                                                   fixture_tap_src, tmp_path):
