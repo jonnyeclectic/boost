@@ -2,14 +2,14 @@
 id: audit-attest-findings
 board: code
 section: trust
-status: planned
+status: inflight
 category: Trust · UX
 complexity: S
 impact: Low
 wow: 1
 note: a deleted store dir is reported as a sha mismatch; drift names the same state correctly
 order: 248
-owner:
+owner: loop/attest-missing-store-reason
 pr:
 title: "boost attest: CLI audit findings (2026-08)"
 ---
