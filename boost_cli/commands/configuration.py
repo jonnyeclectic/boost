@@ -931,6 +931,21 @@ def _interval_label(seconds) -> str:
     return "%ss" % seconds
 
 
+def _plist_interval_seconds(text: str) -> int | None:
+    """Parse a usable ``StartInterval`` out of plist ``text``.
+
+    None for both "no ``StartInterval`` key" and "``StartInterval`` present
+    but not positive" — a zero or negative interval can never fire, and
+    treating it as usable is what let the next-run loop in ``cmd_schedule``
+    spin forever advancing ``nxt`` by zero seconds each pass.
+    """
+    m = re.search(r"<key>StartInterval</key>\s*<integer>(-?\d+)</integer>", text)
+    if not m:
+        return None
+    secs = int(m.group(1))
+    return secs if secs > 0 else None
+
+
 def cmd_schedule(argv) -> int:
     """boost schedule [status|enable [--interval 6h|12h|daily]|disable]"""
     p = cliparse.parser(
@@ -954,10 +969,8 @@ def cmd_schedule(argv) -> int:
             plist = _plist_path()
             if plist.exists():
                 present = True
-                m = re.search(r"<key>StartInterval</key>\s*<integer>(\d+)</integer>",
-                              plist.read_text(encoding="utf-8"))
-                if m:
-                    secs = int(m.group(1))
+                secs = _plist_interval_seconds(plist.read_text(encoding="utf-8"))
+                if secs is not None:
                     interval = _interval_label(secs)
                     nxt = datetime.fromtimestamp(plist.stat().st_mtime + secs)
                     while nxt < datetime.now():
@@ -984,7 +997,8 @@ def cmd_schedule(argv) -> int:
         out.kv("platform", "%s (%s)" % (sys.platform, "launchd" if darwin else "cron"))
         out.kv("scheduled", "yes" if present else "no")
         if present:
-            out.kv("interval", "every %s" % interval)
+            out.kv("interval", "every %s" % interval if interval is not None
+                   else "unknown (plist has no usable StartInterval)")
             out.kv("next run", next_run.strftime("%Y-%m-%d %H:%M (approx)")
                    if next_run else "unknown")
         else:
