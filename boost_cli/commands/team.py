@@ -274,6 +274,11 @@ def cmd_profile(argv) -> int:
                              "skills": len(data.get("skills", {})),
                              "saved": data.get("saved", "?"),
                              "unreadable": False})
+        # Sorted by the name printed on screen, not by the glob's slugged
+        # filename order — those diverge whenever a profile's display name
+        # isn't already its own slug, and the filename order matches nothing
+        # a reader can see.
+        profiles.sort(key=lambda pr: pr["name"])
         if args.json:
             print(json.dumps(profiles, indent=2))
             return 0
@@ -290,6 +295,10 @@ def cmd_profile(argv) -> int:
         return 0
 
     if args.action == "save":
+        slug, changed = util.require_slug(args.name)
+        if changed:
+            out.dim("  using %r (%r has characters that aren't valid in a "
+                    "profile filename)" % (slug, args.name))
         installed = lockfile.installed()
         was = None
         if _profile_path(args.name).exists():

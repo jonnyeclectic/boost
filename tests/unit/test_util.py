@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.core import util
+from boost_cli.errors import BoostError
 
 ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -189,6 +190,39 @@ class TestSlugify:
 
     def test_digits_and_dashes_kept(self):
         assert util.slugify("tdd-workflow-3") == "tdd-workflow-3"
+
+
+class TestRequireSlug:
+    def test_unchanged_name_reports_no_change(self):
+        slug, changed = util.require_slug("tdd-workflow")
+        assert slug == "tdd-workflow"
+        assert changed is False
+
+    def test_mangled_name_reports_changed_and_slug(self):
+        slug, changed = util.require_slug("My Conventions!!")
+        assert slug == "my-conventions"
+        assert changed is True
+
+    def test_case_only_difference_reports_changed(self):
+        slug, changed = util.require_slug("TDD-Workflow")
+        assert slug == "tdd-workflow"
+        assert changed is True
+
+    def test_empty_name_raises(self):
+        with pytest.raises(BoostError, match="has no letters or digits"):
+            util.require_slug("")
+
+    def test_all_specials_raises(self):
+        with pytest.raises(BoostError, match="has no letters or digits"):
+            util.require_slug("!!!")
+
+    def test_underscores_only_raises(self):
+        with pytest.raises(BoostError, match="has no letters or digits"):
+            util.require_slug("___")
+
+    def test_raised_error_names_the_original_input(self):
+        with pytest.raises(BoostError, match=r"'!!!'"):
+            util.require_slug("!!!")
 
 
 class TestSha256Dir:

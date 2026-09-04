@@ -241,6 +241,32 @@ class TestProfile:
         assert "tdd-workflow" in json.loads(
             paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
+    def test_save_mangled_name_notes_the_slug_used(self, boost, tapped):
+        boost("install", "brainstorming")
+        r = boost("profile", "save", "My Daily!!")
+        assert "using 'my-daily'" in r.out
+        assert (paths.profiles_dir() / "my-daily.json").is_file()
+
+    def test_save_clean_name_prints_no_slug_note(self, boost, tapped):
+        boost("install", "brainstorming")
+        r = boost("profile", "save", "daily")
+        assert "using " not in r.out
+
+    def test_save_fallback_only_name_refused(self, boost, tapped):
+        boost("install", "brainstorming")
+        r = boost("profile", "save", "!!!", expect=1)
+        assert "has no letters or digits" in r.err
+        assert not list(paths.profiles_dir().glob("*.json"))
+
+    def test_list_sorts_by_displayed_name_not_filename(self, boost, tapped):
+        # "Zed" slugs to "zed" (last alphabetically by filename) but its
+        # display name sorts before "alpha" — list must sort on what it prints.
+        boost("install", "brainstorming")
+        boost("profile", "save", "Zed")
+        boost("profile", "save", "alpha")
+        r = boost("profile", "list")
+        assert r.out.index("Zed") < r.out.index("alpha")
+
     def test_save_over_existing_reports_the_update_and_replaces(
             self, boost, tapped):
         boost("install", "brainstorming")

@@ -105,6 +105,20 @@ class TestDistill:
         fences = [ln for ln in text.splitlines() if ln.strip().startswith("```")]
         assert len(fences) == 4 and len(fences) % 2 == 0
 
+    def test_bad_output_name_is_slugged_and_noted(self, boost, tapped, tmp_path,
+                                                  monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "brainstorming", "commit-messages", "-o", "Bad Name!!")
+        assert "using 'bad-name'" in r.out
+        assert (tmp_path / "bad-name" / "SKILL.md").is_file()
+        assert not (tmp_path / "Bad Name!!").exists()
+        assert "install it with `boost import ./bad-name`" in r.out
+
+    def test_fallback_only_output_name_refused(self, boost, tapped):
+        r = boost("distill", "brainstorming", "commit-messages", "-o", "!!!",
+                  expect=1)
+        assert "has no letters or digits" in r.err
+
     def test_install_lands_in_store_as_local(self, boost, tapped):
         r = boost("distill", "tdd-workflow", "commit-messages", "--install")
         assert "installed tdd-workflow-distilled" in r.out
@@ -300,6 +314,20 @@ class TestInfer:
         assert meta["name"] == "my-conventions"
         evs = journal.events(action="infer")
         assert evs[0]["subject"] == "my-conventions"
+
+    def test_mangled_name_notes_the_slug_on_stderr(self, boost, sandbox,
+                                                   py_project):
+        # Without --install/-o the generated SKILL.md prints to stdout, so
+        # the slug note must land on stderr or it corrupts a piped write.
+        r = boost("infer", "--path", py_project, "--name", "My Conventions!!")
+        assert "using 'my-conventions'" in r.err
+        assert "using 'my-conventions'" not in r.out
+        meta, _ = frontmatter.parse(r.out)
+        assert meta["name"] == "my-conventions"
+
+    def test_fallback_only_name_refused(self, boost, sandbox, py_project):
+        r = boost("infer", "--path", py_project, "--name", "!!!", expect=1)
+        assert "has no letters or digits" in r.err
 
     def test_yes_flag_skips_the_overwrite_prompt(self, boost, sandbox, py_project,
                                                   tmp_path, monkeypatch):

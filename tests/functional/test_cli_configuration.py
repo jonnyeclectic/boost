@@ -271,6 +271,26 @@ class TestCreate:
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
 
+    def test_mangled_name_prints_the_slug_used(self, boost, sandbox, tmp_path,
+                                               monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("create", "My Fancy Skill")
+        assert "using 'my-fancy-skill'" in r.out
+        assert (tmp_path / "my-fancy-skill" / "SKILL.md").is_file()
+
+    def test_clean_name_prints_no_slug_note(self, boost, sandbox, tmp_path,
+                                            monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("create", "my-skill")
+        assert "using " not in r.out
+
+    def test_fallback_only_name_refused(self, boost, sandbox, tmp_path,
+                                        monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("create", "___", expect=1)
+        assert "has no letters or digits" in r.err
+        assert not (tmp_path / "skill").exists()
+
     def test_install_flag(self, boost, sandbox, tmp_path):
         r = boost("create", "inst-skill", "--dir", tmp_path, "--install")
         assert "installed inst-skill" in r.out

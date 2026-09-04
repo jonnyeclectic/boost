@@ -14,6 +14,7 @@ import difflib
 import fnmatch
 import json
 import re
+import shlex
 import sys
 import tempfile
 import textwrap
@@ -213,7 +214,12 @@ def cmd_distill(argv: list[str]) -> int:
         meta, body = frontmatter.parse(text)
         sources.append({"name": name, "origin": origin, "text": text,
                         "meta": meta, "body": body})
-    new = args.output or (names[0] + "-distilled")
+    if args.output:
+        new, changed = util.require_slug(args.output)
+        if changed:
+            out.dim("  using %r (%r isn't a valid skill name)" % (new, args.output))
+    else:
+        new = names[0] + "-distilled"
 
     out.heading("distilling %s → %s" % (", ".join(names), new))
     merged = _distill_ai(new, sources) if ai.available() else None
@@ -227,7 +233,8 @@ def cmd_distill(argv: list[str]) -> int:
         dest = Path.cwd() / new / "SKILL.md"
         if not _write_generated(dest, merged, yes=args.yes):
             return 1
-        out.info(out.role("install it with `boost import ./%s`" % new, "muted"))
+        out.info(out.role("install it with `boost import %s`"
+                          % shlex.quote("./" + new), "muted"))
     journal.log("distill", new, sources=names)
     return 0
 
@@ -384,7 +391,14 @@ def cmd_infer(argv: list[str]) -> int:
     root = paths.expand(args.path).resolve()
     if not root.is_dir():
         raise BoostError("%s is not a directory" % _tilde(root))
-    name = util.slugify(args.name)
+    name, changed = util.require_slug(args.name)
+    if changed:
+        # stderr, never stdout: with neither --install nor -o, the generated
+        # SKILL.md prints to stdout below and a note ahead of it would
+        # corrupt `boost infer > SKILL.md` the same way the AI-fallback
+        # note once did (see _note_fallback).
+        out.info(out.role("using %r (%r isn't a valid skill name)"
+                          % (name, args.name), "muted"), stream=sys.stderr)
     facts = _probe_repo(root)
 
     text = _infer_ai(name, root, facts) if ai.available() else None

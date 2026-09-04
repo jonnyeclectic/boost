@@ -15,6 +15,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..errors import BoostError
+
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
 
@@ -246,9 +248,30 @@ def human_size(n: int) -> str:
     return str(size)
 
 
+_SLUG_RE = re.compile(r"[^a-z0-9-]+")
+
+
 def slugify(name: str) -> str:
     """Lowercase ``name`` into a ``[a-z0-9-]`` slug; empty result -> ``'skill'``."""
-    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or "skill"
+    return _SLUG_RE.sub("-", name.strip().lower()).strip("-") or "skill"
+
+
+def require_slug(name: str) -> tuple[str, bool]:
+    """Slugify a user-typed ``name``; refuse one with no letters or digits.
+
+    Returns ``(slug, changed)`` where ``changed`` is True when the slug
+    differs from what the user typed, so a caller can tell them. Unlike bare
+    :func:`slugify`, this never falls back to the literal string ``"skill"``
+    for hostile input — that fallback exists for code that must not fail on
+    an untrusted name (a hostile catalog entry), which is the wrong behavior
+    for a name a person just typed at the CLI: silently discarding it and
+    substituting an unrelated word is a worse failure than a clear error.
+    """
+    slug = _SLUG_RE.sub("-", name.strip().lower()).strip("-")
+    if not slug:
+        raise BoostError("%r has no letters or digits" % name,
+                        hint="pick a name with at least one letter or a digit")
+    return slug, slug != name
 
 
 # A catalog name becomes a path component (a rule file, a workflow file, a store
