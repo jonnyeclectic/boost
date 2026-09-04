@@ -10,7 +10,7 @@ wow: 1
 note: "fix implemented + tested; CI must confirm full make check (sandbox had no PyPI network / py3.12 toolchain)"
 order: 226
 owner: loop/name-slugging
-pr:
+pr: 752
 title: "Name slugging is inconsistent: <code>distill -o</code> accepts what <code>import</code> rejects; <code>create</code>/<code>profile</code> slug silently"
 ---
 Three commands treat the same problem &mdash; a user-typed name that is not a valid slug &mdash; three
