@@ -16960,7 +16960,12 @@ wording for the genuinely modified case, and in <code>--json</code> add a <code>
 (<code>missing</code>/<code>modified</code>) rather than repurposing the boolean. No doc changes.
 
 <br><br>Found by the 2026-08 CLI audit (cluster <code>attest-missing-store-dir</code>); repro in the
-audit log.</p>
+audit log.
+
+<br><br><b>Status.</b> Fix and tests are up in <a href="https://github.com/jonnyeclectic/boost/pull/765">PR
+#765</a>, verified with pytest/ruff/mypy and <code>smoke.sh</code> — but the session that wrote it ran
+in a sandboxed environment with no PyPI/npm egress, so <code>make check</code> (mutation gate
+included) could not be run locally. Staying <code>inflight</code> until CI confirms the full gate.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>

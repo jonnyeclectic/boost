@@ -10,7 +10,7 @@ wow: 1
 note: a deleted store dir is reported as a sha mismatch; drift names the same state correctly
 order: 248
 owner: loop/attest-verify-reason
-pr:
+pr: 765
 title: "boost attest: CLI audit findings (2026-08)"
 ---
 <b><code>attest --verify</code> misdiagnoses a missing artifact as a content change.</b> After
@@ -32,3 +32,8 @@ wording for the genuinely modified case, and in <code>--json</code> add a <code>
 
 <br><br>Found by the 2026-08 CLI audit (cluster <code>attest-missing-store-dir</code>); repro in the
 audit log.
+
+<br><br><b>Status.</b> Fix and tests are up in <a href="https://github.com/jonnyeclectic/boost/pull/765">PR
+#765</a>, verified with pytest/ruff/mypy and <code>smoke.sh</code> — but the session that wrote it ran
+in a sandboxed environment with no PyPI/npm egress, so <code>make check</code> (mutation gate
+included) could not be run locally. Staying <code>inflight</code> until CI confirms the full gate.
