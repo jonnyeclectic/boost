@@ -1058,25 +1058,39 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
     agents whose artifacts were removed.
     """
     from . import rules
-    # Prior stash contents win over a fresh None: re-running after an
-    # interrupted quarantine must never overwrite a saved copy with "the
-    # artifact was already gone".
-    prior = {m.get("path"): m.get("content")
-             for m in entry.get("quarantine_stash") or []}
+    # Prior stash entries win over a fresh None: re-running after an
+    # interrupted quarantine must never overwrite a saved copy — content or
+    # position — with "the artifact was already gone".
+    prior = {m.get("path"): m for m in entry.get("quarantine_stash") or []}
     stash: list[dict] = []
     affected: list[str] = []
     for m in entry.get("materializations") or []:
         path = Path(m.get("path", ""))
         content: str | None = None
+        prefix: str | None = None
+        suffix: str | None = None
         if m.get("mode") == rules.MODE_CLAUDE:
             if path.exists():
-                content = rules.read_block(
-                    path.read_text(encoding="utf-8"), name)
+                text = path.read_text(encoding="utf-8")
+                content = rules.read_block(text, name)
+                # Record exactly where the block sat so release can restore
+                # it there instead of always appending to the end.
+                span = rules.block_span(text, name)
+                if span is not None:
+                    i, j = span
+                    prefix, suffix = text[:i], text[j:]
         elif path.is_file():
             content = path.read_text(encoding="utf-8")
         if content is None:
-            content = prior.get(m.get("path"))
-        stash.append({**m, "content": content})
+            prev = prior.get(m.get("path")) or {}
+            content = prev.get("content")
+            prefix = prev.get("prefix")
+            suffix = prev.get("suffix")
+        entry_stash = {**m, "content": content}
+        if prefix is not None or suffix is not None:
+            entry_stash["prefix"] = prefix
+            entry_stash["suffix"] = suffix
+        stash.append(entry_stash)
         if m.get("agent"):
             affected.append(m["agent"])
     # Persist the stash BEFORE removing anything. A crash mid-removal then
@@ -1126,7 +1140,12 @@ def stale_quarantine_artifacts(name: str, entry: dict) -> bool:
 
 
 def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
-    """Restore what :func:`quarantine_materialized` removed, byte-for-byte.
+    """Restore what :func:`quarantine_materialized` removed.
+
+    A file-drop materialization restores byte-for-byte. A CLAUDE.md-style
+    managed block restores at its original position when nothing else in the
+    file changed while it sat quarantined (see :func:`rules.reinsert_block`),
+    and falls back to appending like a fresh install otherwise.
 
     A stash record whose ``content`` is None (the artifact was already gone at
     quarantine time) is skipped — there is nothing truthful to restore.
@@ -1142,7 +1161,14 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
             current = path.read_text(encoding="utf-8") if path.exists() else ""
-            util.atomic_write_text(path, rules.merge_block(current, name, content))
+            prefix, suffix = m.get("prefix"), m.get("suffix")
+            if prefix is not None and suffix is not None:
+                merged = rules.reinsert_block(current, name, content, prefix, suffix)
+            else:
+                # No recorded position (stash from before this existed, or a
+                # non-MODE_CLAUDE materialization): append, same as before.
+                merged = rules.merge_block(current, name, content)
+            util.atomic_write_text(path, merged)
         else:
             util.atomic_write_text(path, content)
         if m.get("agent"):

@@ -894,6 +894,26 @@ class TestQuarantine:
         assert entry["agents"] == ["claude-code", "windsurf", "cursor",
                                    "antigravity"]
 
+    def test_release_preserves_the_installed_agent_scope(self, boost, tapped):
+        # A quarantine/release round trip on a skill installed with --agent
+        # must be a no-op on the agent set — release used to call
+        # link_agents with no scope at all, which widened one linked agent
+        # back out to every enabled one and left doctor red.
+        boost("install", "brainstorming", "--agent", "claude-code")
+        boost("quarantine", "brainstorming")
+        r = boost("quarantine", "--release", "brainstorming")
+        assert "released brainstorming (linked: claude-code)" in r.out
+        entry = _lock()["brainstorming"]
+        assert entry["agents"] == ["claude-code"]
+        link = paths.home() / ".claude" / "skills" / "brainstorming"
+        assert link.is_symlink() and link.exists()
+        for adir in (".windsurf", ".cursor"):
+            assert not (paths.home() / adir / "skills" / "brainstorming"
+                        ).is_symlink()
+        r = boost("doctor")
+        assert r.rc == 0
+        assert "outside its declared scope" not in r.out
+
     def test_doctor_separates_active_from_quarantined_skills(self, boost, tapped):
         boost("install", "brainstorming")
         boost("install", "commit-messages")
