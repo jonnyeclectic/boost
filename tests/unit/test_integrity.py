@@ -61,6 +61,53 @@ def test_status_accepts_a_supplied_entry(installed):
     assert integrity.status(installed, entry) == integrity.STATUS_OK
 
 
+# ── verification_passed ──────────────────────────────────────────────────
+# `boost verify` used to compute its pass/fail tally from one predicate while
+# coloring each row's status token from a different one (`status` alone), so
+# a row with missing lock fields or a drifted commit pin was counted as
+# failed while still rendering the green "ok" token. This is the single
+# predicate both the tally and the per-row token must now agree on.
+
+def test_verification_passed_true_for_a_clean_ok_row():
+    assert integrity.verification_passed(integrity.STATUS_OK, [], None) is True
+
+
+def test_verification_passed_true_for_a_clean_quarantined_row():
+    assert integrity.verification_passed(integrity.STATUS_QUARANTINED, [], None) is True
+
+
+def test_verification_passed_false_for_modified_status():
+    assert integrity.verification_passed(integrity.STATUS_MODIFIED, [], None) is False
+
+
+def test_verification_passed_false_for_missing_status():
+    assert integrity.verification_passed(integrity.STATUS_MISSING, [], None) is False
+
+
+def test_verification_passed_false_for_unlocked_status():
+    assert integrity.verification_passed(integrity.STATUS_UNLOCKED, [], None) is False
+
+
+def test_verification_passed_false_for_ok_status_with_missing_fields():
+    # The exact bug: status is "ok" but the lock entry is missing fields.
+    assert integrity.verification_passed(integrity.STATUS_OK, ["version"], None) is False
+
+
+def test_verification_passed_false_for_quarantined_with_missing_fields():
+    assert integrity.verification_passed(
+        integrity.STATUS_QUARANTINED, ["installed_at"], None) is False
+
+
+def test_verification_passed_false_for_a_drifted_commit_pin():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_MODIFIED) is False
+
+
+def test_verification_passed_true_for_a_matching_commit_pin():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_OK) is True
+
+
 # ── enforcement toggle ───────────────────────────────────────────────────
 
 def test_enforcement_is_off_by_default(installed):
