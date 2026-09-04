@@ -2,12 +2,12 @@
 id: audit-cohort-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
-note: "fix in PR #767, pending CI's full gate (this session had no PyPI egress for make check)"
+note: "fixed in PR #767 — all 41 CI checks green, including mutation, evals, and the full test matrix"
 order: 256
 owner: loop/cohort-apply-reporting
 pr: 767

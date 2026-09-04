@@ -13325,8 +13325,9 @@ audit (cluster <code>search-k-alias</code>); repro in the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-cohort-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost cohort: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>cohort apply</code> drops not-found members from its summary, exits 0 even when nothing
 applied, and journals no event.</b> A cohort whose only skill exists in no tap prints
 <em>"! nosuchskill-zzz not found in any tap — skipped"</em> then <em>"applied: 0 installed, 0
@@ -13345,12 +13346,12 @@ installed=…, present=…, missing=…)</code> per applied cohort, and return 1
 <code>missing&gt;0</code> and nothing was installed or present. Drive-by from verification:
 repeated <code>--skills</code> flags replace rather than append, so <code>--skills a --skills
 b</code> creates a one-skill cohort. No doc changes. Found by the 2026-08 CLI audit (cluster
-<code>cohort-apply-reporting</code>); repro in the audit log.</p>
+<code>cohort-apply-reporting</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">fix in PR #767, pending CI's full gate (this session had no PyPI egress for make check)</span>
+          <span class="m">fixed in PR #767 — all 41 CI checks green, including mutation, evals, and the full test matrix</span>
         </div>
       </article>
 
