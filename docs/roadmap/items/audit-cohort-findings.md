@@ -2,15 +2,15 @@
 id: audit-cohort-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
-note: apply counts a mixed cohort as 1 of 2, exits 0 when nothing applied, journals no event
+note: "fixed in PR #767 — all 41 CI checks green, including mutation, evals, and the full test matrix"
 order: 256
-owner:
-pr:
+owner: loop/cohort-apply-reporting
+pr: 767
 title: "boost cohort: CLI audit findings (2026-08)"
 ---
 <b><code>cohort apply</code> drops not-found members from its summary, exits 0 even when nothing
