@@ -30,6 +30,25 @@ def test_verify_json_carries_status_and_commit_pin(boost, installed):
     data = json.loads(boost("verify", installed, "--json").out)
     row = data["skills"][0]
     assert row["status"] == "ok" and row["commit_pin"] is None
+    assert row["passed"] is True
+
+
+def test_verify_a_row_with_missing_lock_fields_is_not_marked_passed(boost, installed):
+    # A row can carry status "ok" while still being counted as failed (missing
+    # lock fields, or a drifted commit pin) — `passed` must agree with the
+    # failure count instead of echoing the bare status string.
+    entry = lockfile.get_skill(installed)
+    del entry["version"]
+    lockfile.set_skill(installed, entry)
+    res = boost("verify", installed, expect=1)
+    assert "missing lock fields: version" in res.out
+    assert "1 of 1 item failed verification" in res.out
+
+    data = json.loads(boost("verify", installed, "--json", expect=1).out)
+    row = data["skills"][0]
+    assert row["status"] == "ok"
+    assert row["passed"] is False
+    assert data["failed"] == 1
 
 
 # ── enforcement gates the read commands ──────────────────────────────────
@@ -96,3 +115,5 @@ def test_drifted_commit_pin_fails_verify(boost, installed):
     lockfile.set_skill(installed, entry)
     res = boost("verify", installed, expect=1)
     assert "DRIFTED" in res.out
+    data = json.loads(boost("verify", installed, "--json", expect=1).out)
+    assert data["skills"][0]["passed"] is False

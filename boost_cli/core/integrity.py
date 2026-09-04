@@ -43,6 +43,18 @@ def _store_dir(name: str) -> Path:
     return paths.store_dir() / name
 
 
+def row_passed(status: str, missing_fields: list, commit_pin: str | None) -> bool:
+    """Whether a `boost verify` row should count as passing.
+
+    Centralizes the same predicate `cmd_verify` uses to build its failure
+    count, so the status token's color and the JSON `passed` field can never
+    show a row as OK while the summary counts it among the failures.
+    """
+    return (status in (STATUS_OK, STATUS_QUARANTINED)
+            and not missing_fields
+            and commit_pin != STATUS_MODIFIED)
+
+
 def status(name: str, entry: dict | None = None) -> str:
     """Classify an installed skill's integrity against its lock entry.
 
