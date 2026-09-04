@@ -2,14 +2,14 @@
 id: audit-log-simulate-changelog-headings-echo-the-raw-qualified-argum
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Polish
 complexity: S
 impact: Low
 wow: 1
 note: "changelog for anthropics/skills:pdf (anthropics/skills) — the tap printed twice"
 order: 243
-owner:
+owner: loop/qualified-name-headings
 pr:
 title: "<code>log</code>/<code>simulate</code>/<code>changelog</code> headings echo the raw qualified argument, printing the tap twice"
 ---

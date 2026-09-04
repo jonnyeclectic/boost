@@ -854,6 +854,7 @@ def cmd_log(argv):
     if args.diagnostics:
         return _show_diagnostics(args.limit)
     if args.name:
+        _, bare = catalog.split_name(args.name)
         found = lockfile.find_any(args.name)
         if found:
             # A skill records its source dir; rules/workflows record a source
@@ -874,9 +875,9 @@ def cmd_log(argv):
                             hint="run `boost update %s`" % tap.name)
         lines = gitutil.log_for_path(tap.path, rel, args.limit)
         if not lines:
-            out.info("no commits touch %s in %s" % (args.name, tap.name))
+            out.info("no commits touch %s in %s" % (bare, tap.name))
             return 0
-        out.heading("%s — history in %s" % (args.name, tap.name))
+        out.heading("%s — history in %s" % (bare, tap.name))
         for line in lines:
             out.info(line)
         return 0
@@ -884,6 +885,7 @@ def cmd_log(argv):
     if not events:
         out.info("no activity yet")
         return 0
+    out.heading("activity")
     action_roles = {"install": "success", "uninstall": "danger"}
     w_time = max(len(util.rel_time(e.get("ts", ""))) for e in events)
     w_user = max(len(e.get("user", "?")) for e in events)
