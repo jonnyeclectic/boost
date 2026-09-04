@@ -2,7 +2,7 @@
 id: audit-reindex-findings
 board: code
 section: internals
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 2
 note: reindex --json names taps two ways in one object (reused vs reindexed)
 order: 287
 owner: loop/reindex-json-tap-names
-pr:
+pr: 750
 title: "boost reindex: CLI audit findings (2026-08)"
 ---
 <b>A truncated manifest download is reported as a broken manifest.</b> Already fixed &mdash; landed in <code>f77a04c</code> (#626, <em>fix(shards): stop reporting network and format problems as bad data</em>), which added the read-until-EOF loop and short-read error <code>shards.py</code>'s <code>_read_capped</code>/<code>_verify_complete</code> now describe. No further work needed here.
