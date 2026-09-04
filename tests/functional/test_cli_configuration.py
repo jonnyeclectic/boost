@@ -391,6 +391,29 @@ class TestOnboard:
         assert lock["version"] == 3 and "brainstorming" in lock["skills"]
         assert journal.events(action="onboard")
 
+    def test_committed_lock_has_no_absolute_home_paths(self, boost, installed,
+                                                        tmp_path):
+        # A rule/workflow's materialization path is absolute on this machine
+        # ($HOME/.claude/CLAUDE.md); onboard commits a lock snapshot into a
+        # shared repo, so the raw path — and the username inside it — must
+        # not leak into what --pr pushes to GitHub.
+        from boost_cli.core import lockfile
+        home = paths.home()
+        rule_path = home / ".cursor" / "rules" / "house.mdc"
+        lockfile.set_rule("house-style", {
+            "kind": "rule", "version": "1.0.0", "tap": "rule-tap",
+            "materializations": [
+                {"agent": "cursor", "mode": "file", "path": str(rule_path),
+                 "sha256": "abc"}]})
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        boost("onboard", "--repo", repo)
+        raw = (repo / ".skill-lock.json").read_text(encoding="utf-8")
+        assert str(home) not in raw
+        lock = json.loads(raw)
+        path = lock["rules"]["house-style"]["materializations"][0]["path"]
+        assert path == "~/.cursor/rules/house.mdc"
+
     def test_pr_without_gh_fails_before_writing(self, boost, sandbox, tmp_path,
                                                 monkeypatch):
         repo = _mk_repo(tmp_path / "repo")

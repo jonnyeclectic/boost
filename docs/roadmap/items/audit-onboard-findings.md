@@ -2,14 +2,14 @@
 id: audit-onboard-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: Safety · Bug
 complexity: S
 impact: Med
 wow: 1
 note: onboard --pr pushes absolute /Users/… paths from the global lock file to GitHub
 order: 277
-owner:
+owner: loop/onboard-lock-path-leak
 pr:
 title: "boost onboard: CLI audit findings (2026-08)"
 ---
