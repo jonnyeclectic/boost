@@ -2,14 +2,14 @@
 id: audit-untap-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: S
 impact: Low
 wow: 1
 note: tap takes several SPECs in parallel; untap still errors on a second name
 order: 300
-owner:
+owner: loop/untap-multi-name
 pr:
 title: "<code>boost untap</code>: CLI audit findings (2026-08)"
 ---

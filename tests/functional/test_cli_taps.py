@@ -224,8 +224,7 @@ class TestTapCatalog:
 class TestUntap:
     def test_unknown_rc1(self, boost, sandbox):
         r = boost("untap", "nope", expect=1)
-        assert "no such tap: nope" in r.err
-        assert "boost taps" in r.err
+        assert "could not untap nope: no such tap: nope" in r.out
 
     def test_dependents_declined_keeps_tap(self, boost, installed, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
@@ -272,6 +271,37 @@ class TestUntap:
         assert "1 installed item(s) from fixture-tap: house-style (rule)" in r.out
         assert "cancelled" in r.out
         assert "fixture-tap" in boost("taps").out
+
+    def test_several_names_untap_in_one_invocation(self, boost, fixture_tap_src,
+                                                    tmp_path):
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        boost("tap", fixture_tap_src)
+        boost("tap", second)
+        r = boost("untap", "fixture-tap", "second-tap")
+        assert "untapped fixture-tap" in r.out
+        assert "untapped second-tap" in r.out
+        assert json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"] == []
+        assert "no taps configured" in boost("taps").out
+
+    def test_one_unknown_name_does_not_cost_the_others(self, boost, tapped):
+        r = boost("untap", "fixture-tap", "nope", expect=1)
+        assert "untapped fixture-tap" in r.out
+        assert "could not untap nope" in r.out + r.err
+        assert "no such tap: nope" in r.out + r.err
+        assert json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"] == []
+
+    def test_declined_dependent_does_not_cost_a_clean_tap(
+            self, boost, installed, fixture_tap_src, tmp_path, monkeypatch):
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        boost("tap", second)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("untap", "fixture-tap", "second-tap", expect=1)
+        assert "1 installed item(s) from fixture-tap: brainstorming" in r.out
+        assert "cancelled" in r.out
+        assert "untapped second-tap" in r.out
+        names = [t["name"] for t in
+                 json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"]]
+        assert names == ["fixture-tap"]   # declined tap survives, clean one gone
 
 
 # ── taps ─────────────────────────────────────────────────────────────────
