@@ -669,7 +669,7 @@ def cmd_onboard(argv) -> int:
     """boost onboard [--repo DIR] [--pr] [--dry-run] [--force]"""
     p = cliparse.parser(
         prog="boost onboard",
-        description="Add skill-tracker telemetry to a repo & open a PR")
+        description="Add skill-tracker telemetry to a repo (optionally open a PR with --pr)")
     p.add_argument("--repo", default=".", help="repository directory (default: .)")
     p.add_argument("--pr", action="store_true",
                    help="commit on a branch and open a PR with `gh`")
@@ -1763,8 +1763,9 @@ def cmd_mcp(argv) -> int:
                    choices=("register", "unregister"),
                    help="what to do (default: register)")
     p.add_argument("--host", metavar="H", default="auto",
-                   help="agent CLI to (un)register with: %s, or `auto` "
-                        "(default) for every one that is installed"
+                   help="agent CLI to (un)register with: %s, `auto` "
+                        "(default) for every one that is installed, or "
+                        "`all` for every known host regardless of install"
                         % ", ".join(mcphost.hosts()))
     p.add_argument("--stdio", action="store_true",
                    help="run the MCP server on stdin/stdout (used by the agent)")

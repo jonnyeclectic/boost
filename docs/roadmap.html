@@ -12265,8 +12265,9 @@ in the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-cli-py-commands-summaries-and-parser-help-contradict-behavio">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Docs · Drift</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Docs · Drift</span></div>
         <h3>cli.py COMMANDS summaries and parser help contradict behavior across ~11 commands</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The one-line summaries in <code>boost_cli/cli.py</code>'s <code>COMMANDS</code> table &mdash; the strings
 <code>boost --help</code> shows and <code>docs/commands.html</code> is generated from &mdash; contradict what
 the commands do, in four recurring ways. <b>Wrong default:</b> <code>search</code> says
@@ -12304,7 +12305,7 @@ name all three hosts and document <code>--host all</code>; pin/unpin/reinstall/q
 with --pr)&rdquo;</em>. Then regenerate <code>docs/commands.html</code> (<code>make generate</code>) and
 update <code>docs/adapters.html</code>, the <code>docs/index.html</code> command table, and README.md
 (search example, mcp section). Found by the 2026-08 CLI audit (cluster help-claims-wrong); repro in
-the audit log.</p>
+the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

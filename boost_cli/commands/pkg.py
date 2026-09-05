@@ -534,7 +534,7 @@ def cmd_install(argv: list[str]) -> int:
 def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
-        description="Remove an installed skill, rule, workflow, or config")
+        description="Remove an installed skill, rule, or workflow")
     ap.add_argument("names", nargs="+", metavar="NAME")
     ap.add_argument("--local", dest="scope", action="store_const",
                     const=scopes.SCOPE_PROJECT, default=None,
@@ -1493,7 +1493,7 @@ def _import_root(root: Path, name: str | None, do_all: bool,
 
 def cmd_pin(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost pin",
-                                 description="Pin a skill to its current version")
+                                 description="Pin a skill, rule or workflow to its current version")
     ap.add_argument("name", metavar="NAME")
     ap.add_argument("--commit", action="store_true",
                     help="also freeze the exact source commit (integrity pin)")
@@ -1511,7 +1511,7 @@ def cmd_pin(argv: list[str]) -> int:
 
 def cmd_unpin(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost unpin",
-                                 description="Allow a pinned skill to update again")
+                                 description="Allow a pinned skill, rule or workflow to update again")
     ap.add_argument("name", metavar="NAME")
     args = ap.parse_args(argv)
     # Releasing the version pin releases the commit pin with it — a commit pin

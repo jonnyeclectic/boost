@@ -489,7 +489,7 @@ def cmd_verify(argv):
 def cmd_quarantine(argv):
     ap = cliparse.parser(
         prog="boost quarantine",
-        description="Isolate a problematic skill without uninstalling")
+        description="Isolate a problematic skill, rule or workflow without uninstalling")
     ap.add_argument("name", nargs="?", metavar="NAME")
     ap.add_argument("--release", metavar="NAME",
                     help="re-link a quarantined skill")
