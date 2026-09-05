@@ -691,10 +691,47 @@ def write_personas(agents_dir: Path) -> tuple[list[str], list[str]]:
 
 
 def installed_personas(agents_dir: Path) -> list[str]:
-    """The personas on disk that boost still owns (stamp digest still matches)."""
+    """The personas on disk that boost still owns (stamp digest still matches).
+
+    This is the *deletion* set — :func:`remove_personas` must only ever touch
+    files boost still owns. It is the wrong set for a user-facing count: an
+    edited persona file is still on disk and Claude Code still loads it, so
+    counting only the managed ones understates what is actually installed.
+    Use :func:`present_personas` for that.
+    """
     agents_dir = Path(agents_dir)
     return sorted(p.slug for p in PERSONAS
                   if is_managed(_read(agents_dir / ("%s.md" % p.slug))))
+
+
+def persona_state(agents_dir: Path, persona: Persona) -> str:
+    """One of ``"managed"``, ``"edited"`` or ``"absent"`` for one persona file.
+
+    The three states used to collapse to a boolean — "does boost still own
+    this file" — which is right for deciding what `bmad off` may delete and
+    wrong for reporting what is installed: an edited file is not boost's to
+    delete, but it is still on disk and Claude Code loads it same as any
+    other subagent definition.
+    """
+    path = Path(agents_dir) / ("%s.md" % persona.slug)
+    text = _read(path)
+    if not text and not path.is_file():
+        return "absent"
+    return "managed" if is_managed(text) else "edited"
+
+
+def persona_states(agents_dir: Path) -> dict[str, str]:
+    """``{slug: state}`` for every known persona, per :func:`persona_state`."""
+    agents_dir = Path(agents_dir)
+    return {p.slug: persona_state(agents_dir, p) for p in PERSONAS}
+
+
+def present_personas(agents_dir: Path) -> list[str]:
+    """Slugs whose file exists — managed *or* edited — both are real, working
+    subagents from Claude Code's point of view; only "absent" is not installed.
+    """
+    return sorted(slug for slug, state in persona_states(agents_dir).items()
+                  if state != "absent")
 
 
 def remove_personas(agents_dir: Path) -> list[str]:
