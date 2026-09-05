@@ -10,7 +10,7 @@ wow: 1
 note: editor fails → green "✓ no changes", exit 0; drift calls a local edit upstream-moved
 order: 265
 owner: loop/edit-drift-classification
-pr:
+pr: 775
 title: "<code>boost edit</code>: CLI audit findings (2026-08)"
 ---
 <b>edit rewrites the lock sha, so drift misclassifies a local edit as upstream-moved.</b> After an
