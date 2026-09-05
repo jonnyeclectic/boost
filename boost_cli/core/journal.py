@@ -6,12 +6,18 @@ Powers `boost pulse`, `boost trending`, `boost stats`, and `boost who`.
 """
 from __future__ import annotations
 
+import difflib
 import json
+from collections.abc import Sequence
 
 from . import paths, util
 
 ROTATE_AT = 5000
 ROTATE_KEEP = 2500
+
+PULSE_EMPTY = "no activity yet — events appear as you install and manage skills"
+WHO_EMPTY = ("no journal activity yet — expertise builds as people install, "
+             "edit, and evolve skills")
 
 
 def log(action: str, subject: str = "", **fields) -> None:
@@ -56,6 +62,49 @@ def events(n: int | None = None, action: str | None = None,
         out.append(e)
     out.reverse()
     return out if n is None else out[:n]
+
+
+def pulse_empty_state(action: str | None, all_events: Sequence[dict]) -> str:
+    """The empty-state line for ``boost pulse --action X`` matching nothing.
+
+    ``all_events`` is the *unfiltered* journal, so a filter that matches
+    nothing can be told apart from a genuinely empty journal — before this,
+    both printed the identical "no activity yet" line, which asserts a false
+    state ("nothing has happened on this machine") when 35 events exist for
+    other actions. Pure function: the caller reads the journal once and
+    hands the list in, so this needs no file I/O to test.
+    """
+    if not action or not all_events:
+        return PULSE_EMPTY
+    actions = sorted({e.get("action", "?") for e in all_events})
+    return ("no events with action %r (%d event%s in the journal: %s)"
+            % (action, len(all_events), "" if len(all_events) == 1 else "s",
+               ", ".join(actions)))
+
+
+def who_empty_state(skill: str | None, all_events: Sequence[dict],
+                    is_installed: bool, known_subjects: Sequence[str] = ()) -> str:
+    """The empty-state line for ``boost who SKILL`` with no matching events.
+
+    Distinguishes three cases the old single message collapsed into one:
+    a truly empty journal; a skill that IS installed but has no journal
+    history (predates journaling, or was installed by a hand-edited lock);
+    and a skill that is not installed at all, where a name one typo away
+    from something that actually appears in the journal is worth a guess
+    rather than a flat "no activity".
+    """
+    if not skill or not all_events:
+        return WHO_EMPTY
+    total = len(all_events)
+    plural = "" if total == 1 else "s"
+    if is_installed:
+        return ("%r is installed but has no journal activity "
+                "(%d event%s in the journal)" % (skill, total, plural))
+    close = difflib.get_close_matches(skill, sorted(set(known_subjects)), n=1)
+    if close:
+        return "%r is not installed — did you mean %r?" % (skill, close[0])
+    return ("%r is not installed (%d event%s in the journal, none for it)"
+            % (skill, total, plural))
 
 
 def _line_count(p) -> int:

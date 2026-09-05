@@ -279,3 +279,87 @@ class TestEventsLimitGuard:
     def test_n_larger_than_feed_returns_all(self, sandbox):
         journal.log("install", "only")
         assert [e["subject"] for e in journal.events(9)] == ["only"]
+
+
+class TestPulseEmptyState:
+    """`pulse --action X` matching nothing used to print the identical
+
+    "no activity yet" line a truly empty journal gets — see the roadmap item
+    audit-pulse-findings.md.
+    """
+
+    def test_no_action_and_no_events_is_the_generic_message(self):
+        assert journal.pulse_empty_state(None, []) == journal.PULSE_EMPTY
+
+    def test_action_but_no_events_is_still_generic(self):
+        # A filter is meaningless against a journal with nothing in it at all.
+        assert journal.pulse_empty_state("install", []) == journal.PULSE_EMPTY
+
+    def test_no_action_with_events_is_generic(self):
+        # events() without an action filter never returns empty when
+        # all_events is non-empty in the caller's own logic, but the
+        # function must still degrade safely if it ever is.
+        assert journal.pulse_empty_state(
+            None, [{"action": "install"}]) == journal.PULSE_EMPTY
+
+    def test_action_with_events_names_the_filter_and_total(self):
+        events = [{"action": "install"}, {"action": "tap"}]
+        msg = journal.pulse_empty_state("nosuch", events)
+        assert "nosuch" in msg
+        assert "2 events in the journal" in msg
+        assert "install" in msg and "tap" in msg
+
+    def test_singular_event_count(self):
+        msg = journal.pulse_empty_state("nosuch", [{"action": "install"}])
+        assert "1 event in the journal" in msg
+        assert "1 events" not in msg
+
+    def test_actions_listed_sorted_and_deduplicated(self):
+        events = [{"action": "tap"}, {"action": "install"}, {"action": "tap"}]
+        msg = journal.pulse_empty_state("nosuch", events)
+        assert "install, tap" in msg
+
+
+class TestWhoEmptyState:
+    """`who SKILL` matching nothing used to print the identical generic
+
+    line whether the journal was empty or the name just didn't match — see
+    audit-pulse-findings.md.
+    """
+
+    def test_no_skill_and_no_events_is_generic(self):
+        assert journal.who_empty_state(None, [], False) == journal.WHO_EMPTY
+
+    def test_skill_but_no_events_is_still_generic(self):
+        assert journal.who_empty_state(
+            "brainstorming", [], False) == journal.WHO_EMPTY
+
+    def test_installed_skill_with_no_history_names_the_event_count(self):
+        events = [{"action": "install", "subject": "other"}]
+        msg = journal.who_empty_state("brainstorming", events, True)
+        assert "brainstorming" in msg
+        assert "installed but has no journal activity" in msg
+        assert "1 event in the journal" in msg
+
+    def test_uninstalled_skill_with_no_close_match(self):
+        events = [{"action": "install", "subject": "other"}]
+        msg = journal.who_empty_state(
+            "nosuchskill-zzz", events, False, ["other"])
+        assert "nosuchskill-zzz" in msg
+        assert "not installed" in msg
+        assert "did you mean" not in msg
+        assert "1 event in the journal, none for it" in msg
+
+    def test_uninstalled_skill_with_a_close_match_suggests_it(self):
+        events = [{"action": "install", "subject": "brainstorming"}]
+        msg = journal.who_empty_state(
+            "brainstormin", events, False, ["brainstorming"])
+        assert "did you mean 'brainstorming'?" in msg
+
+    def test_close_match_pool_is_known_subjects_not_all_events(self):
+        # A name close to something the caller did NOT pass as a known
+        # subject must not be guessed — the pool is exactly what the caller
+        # hands in.
+        events = [{"action": "install", "subject": "brainstorming"}]
+        msg = journal.who_empty_state("zzznope", events, False, ["brainstorming"])
+        assert "did you mean" not in msg
