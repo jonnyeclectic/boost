@@ -191,38 +191,48 @@ def cmd_tap(argv) -> int:
 
 
 def cmd_untap(argv) -> int:
-    """boost untap NAME [--force]"""
+    """boost untap NAME... [--force]"""
     p = cliparse.parser(
         prog="boost untap",
         description="Remove a registry tap")
-    p.add_argument("name", help="tap name (owner/repo or short alias)")
+    p.add_argument("name", nargs="+",
+                   help="tap name(s) (owner/repo or short alias) — several "
+                        "at once remove one invocation at a time")
     p.add_argument("-f", "--force", action="store_true",
                    help="skip the confirmation prompt")
     p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args(argv)
 
-    tap = registry.get(args.name)
-    # All three lock sections: untapping the source of a live CLAUDE.md rule
-    # deserves the same warning as untapping the source of a skill.
-    dependent = [(kind, n)
-                 for kind, section in lockfile.all_installed().items()
-                 for n, e in sorted(section.items())
-                 if e.get("tap") == tap.name]
-    if dependent:
-        labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
-                  for kind, n in dependent]
-        out.warn("%d installed item(s) from %s: %s"
-                 % (len(dependent), tap.name, ", ".join(labels)))
-        out.warn("installed items keep working but lose their update source")
-        if not (args.force or args.yes) and not out.confirm(
-                "untap %s anyway?" % tap.name):
-            out.info("cancelled")
-            return 1
-    registry.remove(tap.name)
+    rc = 0
+    for name in args.name:
+        try:
+            tap = registry.get(name)
+        except BoostError as err:
+            out.err(err.message, hint=err.hint)
+            rc = 1
+            continue
+        # All three lock sections: untapping the source of a live CLAUDE.md rule
+        # deserves the same warning as untapping the source of a skill.
+        dependent = [(kind, n)
+                     for kind, section in lockfile.all_installed().items()
+                     for n, e in sorted(section.items())
+                     if e.get("tap") == tap.name]
+        if dependent:
+            labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
+                      for kind, n in dependent]
+            out.warn("%d installed item(s) from %s: %s"
+                     % (len(dependent), tap.name, ", ".join(labels)))
+            out.warn("installed items keep working but lose their update source")
+            if not (args.force or args.yes) and not out.confirm(
+                    "untap %s anyway?" % tap.name):
+                out.info("cancelled")
+                rc = 1
+                continue
+        registry.remove(tap.name)
+        journal.log("untap", tap.name)
+        out.ok("untapped %s" % tap.name)
     complete.refresh_names()
-    journal.log("untap", tap.name)
-    out.ok("untapped %s" % tap.name)
-    return 0
+    return rc
 
 
 def _tap_updated(tap: registry.Tap) -> str:
