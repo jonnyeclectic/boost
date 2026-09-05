@@ -13065,8 +13065,9 @@ locally on a real Windows box.
       </article>
 
       <article class="cap rcard" id="audit-bmad-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost bmad: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>An edited persona is reported as not installed</b> (cluster <code>bmad-edited-persona</code>, med).
 After appending one line to <code>~/.claude/agents/bmad-ux.md</code>, <code>bmad on</code> says
 <em>&ldquo;&#10003; BMAD autopilot ON (global) &mdash; 6 persona subagent(s)&rdquo;</em> and
@@ -13103,7 +13104,7 @@ per host.
 
 <br><br>Found by the 2026-08 CLI audit; repro in the audit log. Behaviour-only fixes &mdash;
 regenerate <code>docs/commands.html</code> only if a summary changes; <code>docs/bmad.md</code>
-must document the edited-persona state.</p>
+must document the edited-persona state.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
