@@ -2,14 +2,14 @@
 id: audit-tap-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: a missing local dir is cloned as https://github.com//private/tmp/… before any check
 order: 295
-owner:
+owner: loop/tap-findings
 pr:
 title: "boost tap: CLI audit findings (2026-08)"
 ---
