@@ -2,14 +2,14 @@
 id: audit-explain-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: Safety · Bug
 complexity: M
 impact: Med
 wow: 2
 note: fabricated Kubernetes/Flyway summary scores faithfulness 1.0 and prints verbatim
 order: 267
-owner:
+owner: loop/explain-faithfulness-scope
 pr:
 title: "<code>boost explain</code>: CLI audit findings (2026-08)"
 ---

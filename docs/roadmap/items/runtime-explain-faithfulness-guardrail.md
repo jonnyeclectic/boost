@@ -23,3 +23,12 @@ for the no-AI case (description + outline + key rules) — or append a
 low-confidence caveat. Turns "a human notices the drift next week" into "the
 tool refuses to show an ungrounded explanation," closing the gap between
 detecting hallucinations and preventing them.
+
+<br><br><b>Scope limit found and closed (2026-09, <code>audit-explain-findings</code>).</b>
+The shipped <code>salient_terms()</code> only recognized backtick spans, code-shaped
+tokens, and ALL-CAPS acronyms as checkable — a fabrication stated as plain,
+grammatical English (<em>"provisions Kubernetes clusters with Terraform"</em>) had
+nothing for it to catch and scored 1.0. It now also treats a capitalized word that
+is not the first word of its sentence as salient, which is the shape a fabricated
+technology or product name actually takes. See <code>boost_cli/core/faithfulness.py</code>
+and <code>tests/unit/test_faithfulness.py</code>.

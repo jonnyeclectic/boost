@@ -13617,8 +13617,9 @@ naive-version-comparison); repro in the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-explain-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3><code>boost explain</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The faithfulness guardrail scores a fully fabricated summary 1.0 when the fabrications are proper
 nouns.</b> With a canned <code>claude</code> replying <em>&ldquo;This skill provisions Kubernetes
 clusters with Terraform and migrates PostgreSQL schemas through Flyway. It triggers whenever the
@@ -13639,7 +13640,7 @@ absent from a small stop-list, and pin a test that the Kubernetes/Terraform repl
 never mistaken for source text. Update
 <code>docs/roadmap/items/runtime-explain-faithfulness-guardrail.md</code> (the shipped guardrail this
 follows up) to record the scope limit. Found by the 2026-08 CLI audit (cluster
-explain-faithfulness-gap); repro in the audit log.</p>
+explain-faithfulness-gap); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -16273,7 +16274,16 @@ to the deterministic extractive summary <code>cmd_explain</code> already ships
 for the no-AI case (description + outline + key rules) — or append a
 low-confidence caveat. Turns "a human notices the drift next week" into "the
 tool refuses to show an ungrounded explanation," closing the gap between
-detecting hallucinations and preventing them.</p></details>
+detecting hallucinations and preventing them.
+
+<br><br><b>Scope limit found and closed (2026-09, <code>audit-explain-findings</code>).</b>
+The shipped <code>salient_terms()</code> only recognized backtick spans, code-shaped
+tokens, and ALL-CAPS acronyms as checkable — a fabrication stated as plain,
+grammatical English (<em>"provisions Kubernetes clusters with Terraform"</em>) had
+nothing for it to catch and scored 1.0. It now also treats a capitalized word that
+is not the first word of its sentence as salient, which is the shape a fabricated
+technology or product name actually takes. See <code>boost_cli/core/faithfulness.py</code>
+and <code>tests/unit/test_faithfulness.py</code>.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
