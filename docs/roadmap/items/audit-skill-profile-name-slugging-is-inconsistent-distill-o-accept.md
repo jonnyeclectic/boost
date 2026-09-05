@@ -10,7 +10,7 @@ wow: 1
 note: fix implemented and tested; full `make check` unverified — see below
 order: 226
 owner: loop/name-slugging-consistency
-pr:
+pr: 779
 title: "Name slugging is inconsistent: <code>distill -o</code> accepts what <code>import</code> rejects; <code>create</code>/<code>profile</code> slug silently"
 ---
 Three commands treat the same problem &mdash; a user-typed name that is not a valid slug &mdash; three
