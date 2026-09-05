@@ -2,15 +2,15 @@
 id: audit-cohort-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
-note: fix implemented + tested in PR; make check's lint(tool-install)/mutation gates could not run in the claiming sandbox (PyPI egress blocked) — eval, full test suite (py3.12) and smoke all verified green manually, see PR
+note: fix implemented + tested; all five make check gates (lint, eval, test, smoke, mutation) passed in CI on PR #773
 order: 256
 owner: loop/cohort-apply-fixes
-pr:
+pr: 773
 title: "boost cohort: CLI audit findings (2026-08)"
 ---
 <b><code>cohort apply</code> drops not-found members from its summary, exits 0 even when nothing
