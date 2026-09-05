@@ -35,6 +35,18 @@ def _skill_dir(tmp_path, name):
     return d
 
 
+def _skill_dir_extra(tmp_path, name, extra_frontmatter):
+    """Like ``_skill_dir`` but with extra raw frontmatter lines (e.g. a
+    ``requires:`` block) spliced in before the closing ``---``."""
+    d = tmp_path / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: %s\ndescription: locally imported test skill\n"
+        "version: 0.1.0\n%s---\n\n# %s\n\nBody.\n"
+        % (name, extra_frontmatter, name), encoding="utf-8")
+    return d
+
+
 # ── list ─────────────────────────────────────────────────────────────────
 
 class TestList:
@@ -765,6 +777,7 @@ class TestDeps:
         assert data == {"name": "jira-integration",
                         "requires": [{"name": "commit-messages",
                                       "installed": True, "requires": []}],
+                        "mcp": [],
                         "conflicts": []}
 
     def test_scan_all_installed(self, boost, tapped):
@@ -774,6 +787,48 @@ class TestDeps:
         boost("uninstall", "commit-messages")
         r = boost("deps", expect=1)
         assert "jira-integration requires commit-messages ✗ not installed" in r.out
+        assert "boost install commit-messages" in r.out
+
+    def test_transitive_unmet_requirement_flips_exit_code(self, boost, sandbox,
+                                                          tmp_path):
+        # The bug: `chain-parent` directly requires `chain-child`, which IS
+        # installed, so the top-level check passed — but `chain-child` itself
+        # requires `phantom-dep`, which is installed nowhere. The renderer
+        # already showed that as a "✗ not installed" nested line; only the
+        # exit code (and --json) failed to count it.
+        boost("import", _skill_dir_extra(tmp_path, "chain-child",
+                                         "requires: [phantom-dep]\n"))
+        boost("import", _skill_dir_extra(tmp_path, "chain-parent",
+                                         "requires: [chain-child]\n"))
+        r = boost("deps", "chain-parent", expect=1)
+        assert "requires: chain-child ✓ installed" in r.out
+        assert "↳ phantom-dep ✗ not installed" in r.out
+        assert "boost install phantom-dep" in r.out
+        data = json.loads(boost("deps", "chain-parent", "--json", expect=1).out)
+        assert data["requires"] == [
+            {"name": "chain-child", "installed": True,
+             "requires": [{"name": "phantom-dep", "installed": False,
+                          "requires": []}]}]
+
+    def test_mcp_only_requirement_shown_not_none(self, boost, sandbox, tmp_path):
+        # A real shipped shape (seismic-automation-style): `requires:` nested
+        # under a `mcp:` mapping. boost's frontmatter parser has no nested-
+        # mapping support, so it hoists `mcp:` to the top level and leaves the
+        # parsed `requires` an empty string — which used to render as a flat
+        # lie, "requires: (none)", for a skill that plainly needs an MCP
+        # server. No bundled .mcp.json here, so the server is declared by
+        # name only and boost cannot register it — "(not registered)".
+        boost("import", _skill_dir_extra(
+            tmp_path, "mcp-consumer", "requires:\n  mcp: [rube]\n"))
+        r = boost("deps", "mcp-consumer")
+        assert "requires: (none)" not in r.out
+        assert "requires: mcp rube" in r.out
+        assert "not registered" in r.out
+        data = json.loads(boost("deps", "mcp-consumer", "--json").out)
+        assert data["mcp"] == [{"name": "rube", "registrable": False}]
+        # A name-only MCP declaration is informational, not a satisfiable
+        # requirement — it must not by itself flip the exit code.
+        assert boost("deps", "mcp-consumer", expect=0)
 
 
 # ── tag ──────────────────────────────────────────────────────────────────

@@ -2,15 +2,15 @@
 id: audit-deps-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 2
 note: deps shows ✗ not installed yet exits 0; the only real-world requires: shape reads as (none)
 order: 261
-owner:
-pr:
+owner: loop/deps-findings
+pr: 768
 title: "boost deps: CLI audit findings (2026-08)"
 ---
 <b>A transitive unmet requirement is shown as ✗ but exits 0, and the two JSON modes disagree on
@@ -42,3 +42,18 @@ forms. Fix: when <code>meta["requires"]</code> is a mapping, surface its <code>m
 <code>mcp</code> key in <code>--json</code>; keep plain name lists unchanged. No flag changes, so
 <code>docs/commands.html</code> is untouched. Found by the 2026-08 CLI audit (clusters
 <code>deps-exit-and-json</code>, <code>deps-requires-mcp</code>); repro in the audit log.
+<br><br>
+<b>Shipped, with one correction to this card's own technical claim.</b>
+<code>meta["requires"]</code> is never actually a mapping by the time <code>cmd_deps</code> sees
+it — boost's stdlib-only frontmatter parser has no nested-mapping support, so a
+<code>requires:</code> block nesting <code>mcp: [rube]</code> underneath it gets <b>hoisted</b>:
+the parser lifts the nested <code>mcp:</code> key to the top level and leaves the parsed
+<code>requires</code> an empty string (see <code>core/mcpdecl.py</code>'s own module docstring, and
+<code>core/deps.py::requirement_names</code>'s docstring/test pinning it). The fix therefore reads
+the already-hoisted top-level <code>mcp</code> key via <code>mcpdecl</code>, not a mapping under
+<code>requires</code>. Also: "(not registered)" reports <code>mcpdecl.registrable()</code> — whether
+boost has a runnable spec it could wire up — not a live check against any host's actual MCP
+config, which no code in this repo reads generically. Landed as
+<code>core/deps.py</code> (new, pure, unit-tested) plus <code>cmd_deps</code> wiring in
+<code>info.py</code>; the two JSON envelopes now both emit <code>{name, installed[, requires]}</code>
+requirement rows and <code>{name, installed}</code>/<code>{a, b}</code> conflict rows.

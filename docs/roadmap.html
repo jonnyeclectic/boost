@@ -13458,8 +13458,9 @@ distinguish <code>has_git()==False</code> — print <em>"(git not found on PATH)
       </article>
 
       <article class="cap rcard" id="audit-deps-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost deps: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>A transitive unmet requirement is shown as ✗ but exits 0, and the two JSON modes disagree on
 shape.</b> <code>deps dep-child</code> prints <code>&#8627; ghost-skill ✗ not installed</code> yet
 exits 0, while <code>deps</code> (all-installed mode) exits 1 for the same fact — in
@@ -13488,7 +13489,22 @@ forms. Fix: when <code>meta["requires"]</code> is a mapping, surface its <code>m
 <code>info.py:448</code>) as e.g. <code>requires: mcp rube (not registered)</code> and emit an
 <code>mcp</code> key in <code>--json</code>; keep plain name lists unchanged. No flag changes, so
 <code>docs/commands.html</code> is untouched. Found by the 2026-08 CLI audit (clusters
-<code>deps-exit-and-json</code>, <code>deps-requires-mcp</code>); repro in the audit log.</p>
+<code>deps-exit-and-json</code>, <code>deps-requires-mcp</code>); repro in the audit log.
+<br><br>
+<b>Shipped, with one correction to this card's own technical claim.</b>
+<code>meta["requires"]</code> is never actually a mapping by the time <code>cmd_deps</code> sees
+it — boost's stdlib-only frontmatter parser has no nested-mapping support, so a
+<code>requires:</code> block nesting <code>mcp: [rube]</code> underneath it gets <b>hoisted</b>:
+the parser lifts the nested <code>mcp:</code> key to the top level and leaves the parsed
+<code>requires</code> an empty string (see <code>core/mcpdecl.py</code>'s own module docstring, and
+<code>core/deps.py::requirement_names</code>'s docstring/test pinning it). The fix therefore reads
+the already-hoisted top-level <code>mcp</code> key via <code>mcpdecl</code>, not a mapping under
+<code>requires</code>. Also: "(not registered)" reports <code>mcpdecl.registrable()</code> — whether
+boost has a runnable spec it could wire up — not a live check against any host's actual MCP
+config, which no code in this repo reads generically. Landed as
+<code>core/deps.py</code> (new, pure, unit-tested) plus <code>cmd_deps</code> wiring in
+<code>info.py</code>; the two JSON envelopes now both emit <code>{name, installed[, requires]}</code>
+requirement rows and <code>{name, installed}</code>/<code>{a, b}</code> conflict rows.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

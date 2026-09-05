@@ -23,6 +23,7 @@ from ..core import (
     capabilities,
     catalog,
     config,
+    deps,
     faithfulness,
     frontmatter,
     gitutil,
@@ -31,6 +32,7 @@ from ..core import (
     journal,
     lockfile,
     logs,
+    mcpdecl,
     paths,
     projectlock,
     registry,
@@ -929,6 +931,46 @@ def cmd_home(argv):
     return 0
 
 
+def _skill_dir_for_deps(name: str):
+    """Best-effort on-disk skill directory for reading a bundled ``.mcp.json``
+    sidecar — the installed store copy preferred, a materialized tap source
+    otherwise. ``None`` when neither resolves (not a skill, or unknown
+    everywhere) — an MCP declaration is a skill-only concept.
+    """
+    sdir = store.skill_store_dir(name)
+    if sdir.is_dir():
+        return sdir
+    try:
+        cat = catalog.resolve_one(name)
+    except BoostError:
+        return None
+    try:
+        return store.source_dir_for(cat)
+    except BoostError:
+        return None
+
+
+def _mcp_requirement_rows(skill_dir) -> list[dict]:
+    """Declared MCP servers a skill needs -> ``{name, registrable}`` rows.
+
+    ``registrable`` is whether boost has an actual runnable spec for the
+    server (a bundled ``.mcp.json`` command) — a name-only frontmatter
+    declaration never is, since boost will not invent a launch command on an
+    author's behalf (:func:`mcpdecl.registrable`). This is the fact
+    ``requires: mcp <name> (not registered)`` reports: not a live check
+    against any host's actual configuration (boost has no generic reader for
+    that), only whether boost itself could wire the server up.
+    """
+    if skill_dir is None:
+        return []
+    declared = store.declared_mcp_servers(skill_dir)
+    if not declared:
+        return []
+    registrable = {r["name"] for r in mcpdecl.registrable(declared)}
+    return [{"name": r["name"], "registrable": r["name"] in registrable}
+            for r in declared]
+
+
 def cmd_deps(argv):
     ap = cliparse.parser(prog="boost deps",
                                  description="Show dependency & conflict relationships")
@@ -944,50 +986,66 @@ def cmd_deps(argv):
     if args.name:
         text, _kind, _lock, _cat = _resolve_text(args.name)
         meta = frontmatter.parse(text)[0]
-        requires = _as_list(meta.get("requires"))
-        conflicts = _as_list(meta.get("conflicts"))
-        problems = (any(r not in have for r in requires)
-                    or any(c in have for c in conflicts))
+        requires = deps.requirement_names(meta)
+        conflicts = deps.conflict_names(meta)
+        req_rows = [deps.requirement_row(
+                        r, have, deps.requirement_names(_skill_meta(r) or {}))
+                    for r in requires]
+        conflict_rows = [deps.conflict_row(c, have) for c in conflicts]
+        _qualifier, bare = catalog.split_name(args.name)
+        mcp_rows = _mcp_requirement_rows(_skill_dir_for_deps(bare))
+        # A transitively unmet requirement used to print a "✗ not installed"
+        # line the exit code never counted — `has_unmet` walks the same
+        # nesting the renderer does, so the two can never disagree again.
+        problems = deps.has_unmet(req_rows) or deps.active_conflicts(conflict_rows)
         if args.json:
             print(json.dumps({
                 "name": args.name,
-                "requires": [{"name": r, "installed": r in have,
-                              "requires": _as_list((_skill_meta(r) or {}).get("requires"))}
-                             for r in requires],
-                "conflicts": [{"name": c, "installed": c in have} for c in conflicts],
+                "requires": req_rows,
+                "mcp": mcp_rows,
+                "conflicts": conflict_rows,
             }, indent=2))
             return 1 if problems else 0
         out.info(out.c(args.name, out.BOLD))
-        if not requires:
+        if not requires and not mcp_rows:
             out.info("  requires: " + out.role("(none)", "muted"))
-        for r in requires:
-            out.info("  requires: %s %s" % (r, _mark(r in have)))
-            for sub in _as_list((_skill_meta(r) or {}).get("requires")):
-                out.info("      ↳ %s %s" % (sub, _mark(sub in have)))
+        for row in req_rows:
+            out.info("  requires: %s %s" % (row["name"], _mark(row["installed"])))
+            for sub in row["requires"]:
+                out.info("      ↳ %s %s" % (sub["name"], _mark(sub["installed"])))
+        for r in mcp_rows:
+            note = "" if r["registrable"] else out.role(" (not registered)", "muted")
+            out.info("  requires: mcp %s%s" % (r["name"], note))
         if not conflicts:
             out.info("  conflicts: " + out.role("(none)", "muted"))
-        for c_name in conflicts:
-            state = (out.role("✗ installed (conflict!)", "danger") if c_name in have
+        for row in conflict_rows:
+            state = (out.role("✗ installed (conflict!)", "danger") if row["installed"]
                      else out.role("not installed", "muted"))
-            out.info("  conflicts: %s %s" % (c_name, state))
+            out.info("  conflicts: %s %s" % (row["name"], state))
+        if problems:
+            missing = deps.unmet_names(req_rows)
+            if missing:
+                out.warn("`boost install %s` to satisfy %d unmet requirement%s"
+                         % (" ".join(missing), len(missing),
+                            "" if len(missing) == 1 else "s"))
         return 1 if problems else 0
 
     unmet: list[dict] = []
-    pairs: list[list] = []   # JSON-dumped, so lists rather than tuples
+    pairs: list[dict] = []
     seen: set = set()
     for name in sorted(inst):
         meta = _skill_meta(name) or {}
         unmet.extend(
-            {"skill": name, "requires": r}
-            for r in _as_list(meta.get("requires"))
+            {"skill": name, "requires": deps.requirement_row(r, have)}
+            for r in deps.requirement_names(meta)
             if r not in have
         )
-        for c_name in _as_list(meta.get("conflicts")):
+        for c_name in deps.conflict_names(meta):
             if c_name in have:
                 key = tuple(sorted((name, c_name)))
                 if key not in seen:
                     seen.add(key)
-                    pairs.append(list(key))
+                    pairs.append({"a": key[0], "b": key[1]})
     if args.json:
         print(json.dumps({"unmet": unmet, "conflicts": pairs}, indent=2))
         return 1 if unmet or pairs else 0
@@ -997,14 +1055,20 @@ def cmd_deps(argv):
         return 0
     for u in unmet:
         out.info("%s requires %s %s"
-                 % (out.c(u["skill"], out.BOLD), u["requires"], _mark(False)))
-    for a, b in pairs:
-        out.info("%s %s %s" % (out.c(a, out.BOLD),
-                               out.role("conflicts with", "danger"), out.c(b, out.BOLD)))
+                 % (out.c(u["skill"], out.BOLD), u["requires"]["name"],
+                    _mark(u["requires"]["installed"])))
+    for pair in pairs:
+        out.info("%s %s %s" % (out.c(pair["a"], out.BOLD),
+                               out.role("conflicts with", "danger"), out.c(pair["b"], out.BOLD)))
     if not unmet and not pairs:
         out.ok("no unmet requirements or conflicts across %d skill%s"
                % (len(inst), "" if len(inst) == 1 else "s"))
         return 0
+    if unmet:
+        missing = sorted({u["requires"]["name"] for u in unmet})
+        out.warn("`boost install %s` to satisfy %d unmet requirement%s"
+                 % (" ".join(missing), len(missing),
+                    "" if len(missing) == 1 else "s"))
     return 1
 
 
