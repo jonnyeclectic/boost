@@ -2,15 +2,15 @@
 id: audit-search-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: "CJK rows 72 cells in a 60 pane; --json drops --smart; '60 matches' is the cap, not the count"
 order: 291
-owner:
-pr:
+owner: loop/search-audit-cjk-json-footer
+pr: 770
 title: "boost search: CLI audit findings (2026-08)"
 ---
 <b>Truncation counts code points, so CJK rows overflow the pane.</b> At <code>COLUMNS=60</code>, 14 search rows measure exactly 60 cells but <code>prompt-optimizer [skill] 分析原始提示，识别意图和…</code> measures <b>72 cells</b> (60 codepoints, East-Asian-width W/F = 2). <code>out.truncate</code> (<code>core/output.py:313-329</code>) clips with <code>len()</code> and slicing while the same module already owns <code>_char_width</code>/<code>visible_len</code> (<code>output.py:341-364</code>) — and the defect is wider than search: <code>truncate</code> also budgets columns in list/preview/browse (<code>discovery.py:202,913,1572,1590,1716,1727</code>) and <code>search_layout</code> sizes the name column with <code>len(n)</code> (<code>output.py:576-616</code>). Fix once in <code>truncate</code> — walk chars accumulating cell width, reserve the ellipsis — and size columns with <code>visible_len</code>; pin with a W-width fixture at <code>COLUMNS=60</code>.

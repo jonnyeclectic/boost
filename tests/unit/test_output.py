@@ -395,6 +395,21 @@ class TestTruncate:
     def test_width_at_or_below_ellipsis_returns_ellipsis(self):
         assert output.truncate("abcdef", 1) == "…"
 
+    def test_clips_cjk_text_by_display_width_not_codepoint_count(self):
+        # A codepoint-counted clip lets each double-width char through as if
+        # it cost one column, so a 60-codepoint CJK string measured 72 cells
+        # on a 60-column pane — the bug this pins.
+        text = "分析原始提示，识别意图和目标，" * 3     # far more than 60 cells
+        clipped = output.truncate(text, 60)
+        assert output.visible_len(clipped) <= 60
+
+    def test_cjk_clip_never_cuts_a_wide_char_in_half(self):
+        clipped = output.truncate("名" * 10, 5)
+        # 5 columns: two whole "名" (4 cols) + a 1-col ellipsis, never a lone
+        # half-character.
+        assert clipped == "名名…"
+        assert output.visible_len(clipped) == 5
+
 
 class TestBadge:
     def test_plain_when_no_color(self, monkeypatch):
@@ -1439,6 +1454,25 @@ class TestSearchLayout:
         # a 16-wide name leaves 44 - 2 - 7 - 16 - 2 = 17 cells of prose.
         lay = output.search_layout(44, ["x" * 16], ["skill"], [])
         assert (lay.name_w, lay.kind_w, lay.tap_w, lay.desc_w) == (16, 0, 0, 17)
+
+    def test_name_column_sizes_by_display_width_not_codepoints(self):
+        # A codepoint-counted name_w undersizes the column for a CJK name (each
+        # char is 2 display cells), which then shrinks the description budget
+        # by less than the name column actually costs on screen.
+        cjk_name = "翻译助手"                          # 4 codepoints, 8 cells
+        lay = output.search_layout(100, [cjk_name], ["skill"], ["a/b"])
+        assert lay.name_w == output.visible_len(cjk_name)
+
+    def test_cjk_heavy_row_still_fits_a_60_column_pane(self):
+        # The audit's own repro: a CJK description measured 72 cells at
+        # COLUMNS=60 because `truncate` clipped by codepoint count.
+        lay = output.search_layout(60, ["prompt-optimizer"], ["skill"],
+                                   ["fixture-tap"])
+        row = output.format_search_row(
+            "prompt-optimizer", "分析原始提示，识别意图和目标，制定详细的执行计划",
+            "skill", "fixture-tap", 1.0, curated=False, installed=False,
+            lay=lay)
+        assert output.visible_len(row) + 2 <= 60
 
     def test_every_assembled_row_fits_the_terminal(self):
         """The property behind the pinned COLUMNS=60 clamp test: whatever the
