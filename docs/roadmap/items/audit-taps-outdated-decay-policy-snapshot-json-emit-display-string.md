@@ -10,7 +10,7 @@ wow: 1
 note: one array holds "updated":"2026-07-24" and "updated":"11h ago" — same key, two formats
 order: 230
 owner: loop/json-display-strings
-pr:
+pr: 769
 title: "<code>taps</code>/<code>outdated</code>/<code>decay</code>/<code>policy</code>/<code>snapshot</code> --json emit display strings as machine fields"
 ---
 Five <code>--json</code> outputs leak the table renderer's strings into the machine-readable
