@@ -2,14 +2,14 @@
 id: audit-untap-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: S
 impact: Low
 wow: 1
-note: tap takes several SPECs in parallel; untap still errors on a second name
+note: implementation lands the full fix + regression tests; make check's eval/mutation/smoke gates could not run in the claiming sandbox (no PyPI egress) — see PR for what did run
 order: 300
-owner:
+owner: loop/untap-multi
 pr:
 title: "<code>boost untap</code>: CLI audit findings (2026-08)"
 ---

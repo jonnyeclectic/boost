@@ -273,6 +273,43 @@ class TestUntap:
         assert "cancelled" in r.out
         assert "fixture-tap" in boost("taps").out
 
+    def test_several_names_untap_in_one_invocation(self, boost, tapped,
+                                                    fixture_tap_src, tmp_path):
+        # The reverse of `tap a b c`: untap needs one invocation per tap
+        # today, which is the asymmetry this test pins closed.
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        boost("tap", str(second))
+        r = boost("untap", "fixture-tap", "second-tap", "--force")
+        assert "untapped fixture-tap" in r.out
+        assert "untapped second-tap" in r.out
+        assert json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"] == []
+        assert "no taps configured" in boost("taps").out
+
+    def test_one_bad_name_does_not_cost_the_others(self, boost, tapped,
+                                                    fixture_tap_src, tmp_path):
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        boost("tap", str(second))
+        r = boost("untap", "fixture-tap", "nope", "second-tap", "--force",
+                  expect=1)
+        assert "untapped fixture-tap" in r.out
+        assert "untapped second-tap" in r.out
+        assert "no such tap: nope" in r.err
+        assert json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"] == []
+
+    def test_declined_dependent_does_not_cost_the_others(self, boost,
+                                                          installed,
+                                                          fixture_tap_src,
+                                                          tmp_path,
+                                                          monkeypatch):
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        boost("tap", str(second))
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("untap", "fixture-tap", "second-tap", expect=1)
+        assert "cancelled" in r.out       # fixture-tap has a dependent
+        assert "untapped second-tap" in r.out
+        cfg = json.loads(paths.config_path().read_text(encoding="utf-8"))
+        assert [t["name"] for t in cfg["taps"]] == ["fixture-tap"]
+
 
 # ── taps ─────────────────────────────────────────────────────────────────
 
