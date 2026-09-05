@@ -174,6 +174,7 @@ class TestAnOverlongSpecIsRejected:
             deep = deep / ("segment-" + "x" * 30)
         deep = deep / "my-tap"
         deep.mkdir(parents=True)
+        (deep / ".git").mkdir()
         assert len(str(deep)) > 255
         name, url = registry.parse_spec(str(deep))
         assert name == "my-tap"
@@ -205,6 +206,7 @@ class TestOrdinarySpecsStillParse:
     def test_a_local_directory(self, tmp_path):
         target = tmp_path / "my-skills"
         target.mkdir()
+        (target / ".git").mkdir()
         name, url = registry.parse_spec(str(target))
         assert name == "my-skills" and url == str(target.resolve())
 

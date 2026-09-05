@@ -2,15 +2,15 @@
 id: audit-tap-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: a missing local dir is cloned as https://github.com//private/tmp/… before any check
 order: 295
-owner:
-pr:
+owner: loop/tap-findings
+pr: 772
 title: "boost tap: CLI audit findings (2026-08)"
 ---
 <b>tap misdiagnoses local paths</b> (med). A path-shaped SPEC that is not an existing directory falls

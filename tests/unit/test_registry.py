@@ -78,15 +78,18 @@ class TestParseSpec:
     def test_existing_local_dir(self, tmp_path):
         d = tmp_path / "my-tap"
         d.mkdir()
+        (d / ".git").mkdir()
         assert registry.parse_spec(str(d)) == ("my-tap", str(d.resolve()))
 
     def test_local_dir_trailing_slash(self, tmp_path):
         d = tmp_path / "my-tap"
         d.mkdir()
+        (d / ".git").mkdir()
         assert registry.parse_spec(str(d) + "/") == ("my-tap", str(d.resolve()))
 
     def test_tilde_expansion_uses_sandbox_home(self, sandbox):
         (sandbox / "hometap").mkdir()
+        (sandbox / "hometap" / ".git").mkdir()
         name, url = registry.parse_spec("~/hometap")
         assert name == "hometap"
         assert url == str((sandbox / "hometap").resolve())
@@ -97,6 +100,29 @@ class TestParseSpec:
             registry.parse_spec(bad)
         assert ei.value.message == "cannot parse tap spec %r" % bad
         assert ei.value.hint == "use owner/repo, a git URL, or a local directory"
+
+    def test_path_shaped_missing_dir_raises_no_such_directory(self, tmp_path):
+        missing = tmp_path / "nope"
+        with pytest.raises(BoostError) as ei:
+            registry.parse_spec(str(missing))
+        assert ei.value.message == "no such directory: %s" % missing
+        assert "existing local git repository" in ei.value.hint
+
+    def test_relative_path_shaped_missing_dir_raises(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(BoostError) as ei:
+            registry.parse_spec("./nope")
+        assert ei.value.message == "no such directory: nope"
+
+    def test_existing_dir_without_git_raises(self, tmp_path):
+        d = tmp_path / "plain-skill-dir"
+        d.mkdir()
+        (d / "SKILL.md").write_text("---\nname: x\n---\nbody\n", encoding="utf-8")
+        with pytest.raises(BoostError) as ei:
+            registry.parse_spec(str(d))
+        assert ei.value.message == "%s is not a git repository" % d
+        assert "git init" in ei.value.hint
+        assert "boost import %s" % d in ei.value.hint
 
 
 class TestParseSpecs:
@@ -290,6 +316,29 @@ class TestAddRemove:
             registry.add(str(fixture_tap_src))
         assert ei.value.message == "tap fixture-tap is already configured"
         assert ei.value.hint == "`boost update fixture-tap` to refresh it"
+
+    def test_add_at_rejects_a_short_sha_before_cloning(
+            self, sandbox, fixture_tap_src, monkeypatch):
+        """An abbreviated --at used to cost one full clone before
+        `checkout_commit` ever ran its own `_is_sha` check; validating it
+        first turns a wasted network round trip into an immediate error."""
+
+        def boom(url, dest):
+            raise AssertionError("must not clone before validating --at")
+
+        monkeypatch.setattr(gitutil, "clone_shallow", boom)
+        with pytest.raises(BoostError) as ei:
+            registry.add(str(fixture_tap_src), at="deadbeef")
+        assert ei.value.message == "'deadbeef' is not a full commit SHA"
+
+    def test_add_at_with_a_full_sha_still_clones(
+            self, sandbox, fixture_tap_src, monkeypatch):
+        """The validation must not reject a legitimate 40-char pin."""
+        calls = []
+        monkeypatch.setattr(gitutil, "checkout_commit",
+                            lambda repo, sha: calls.append(sha))
+        registry.add(str(fixture_tap_src), at="a" * 40)
+        assert calls == ["a" * 40]
 
     def test_remove_deletes_clone_cache_and_config(self, sandbox, fixture_tap_src):
         tap = registry.add(str(fixture_tap_src))

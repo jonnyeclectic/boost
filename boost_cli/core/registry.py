@@ -97,7 +97,24 @@ def parse_spec(spec: str):
     # override the whole test suite (and BOOST_HOME sandboxing) relies on.
     p = paths.expand(spec)
     if _looks_like_a_directory(p):
+        if not gitutil.is_repo(p):
+            # The dir exists, so git's own "repository '...' does not exist"
+            # (which is what `clone_shallow` would raise next) is a false
+            # statement about the very thing this branch just confirmed.
+            raise BoostError(
+                "%s is not a git repository" % p,
+                hint="`git init` it, or `boost import %s` to copy it in "
+                     "without a tap" % spec)
         return _checked(p.resolve().name, str(p.resolve()), spec)
+    # A spec shaped like a path (starts with ./, ../ or ~, or is absolute —
+    # `p.is_absolute()` rather than a literal "/" prefix so a Windows
+    # `C:\...` spec is caught too, not just a POSIX `/...` one) that is not an
+    # actual directory must not fall through to the owner/repo branch below —
+    # that branch prepends "https://github.com/" to *anything* containing a
+    # "/", so a typo'd local path was silently cloned as a bogus GitHub URL.
+    if spec.startswith(("./", "../", "~")) or p.is_absolute():
+        raise BoostError("no such directory: %s" % p,
+                        hint="boost tap needs an existing local git repository")
     if spec.startswith(("http://", "https://", "git@", "ssh://")):
         tail = spec.split(":")[-1] if spec.startswith("git@") else spec
         parts = [x for x in tail.replace(".git", "").split("/") if x][-2:]
@@ -210,6 +227,12 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         if existing.name == name:
             raise BoostError("tap %s is already configured" % name,
                             hint="`boost update %s` to refresh it" % name)
+    # Validated here, before the clone, not only inside `checkout_commit`:
+    # that check runs after `clone_shallow` below, so a malformed --at used to
+    # cost one full clone (~1.6s) before reporting a typo.
+    if at and not gitutil._is_sha(at):
+        raise BoostError("%r is not a full commit SHA" % at,
+                         hint="pin with the 40-character hash a manifest names")
     tap = Tap(name=name, url=url, curated=curated)
     paths.ensure_dirs()
     if tap.path.exists():
