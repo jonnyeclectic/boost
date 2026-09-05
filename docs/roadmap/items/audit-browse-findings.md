@@ -10,7 +10,7 @@ wow: 1
 note: curses init failure = exit-70 crash + hosed terminal; piped fallback dumps 765 KB
 order: 251
 owner: loop/browse-curses-fallback
-pr:
+pr: 782
 title: "boost browse: CLI audit findings (2026-08)"
 ---
 <b>A curses init failure crashes with a report instead of falling back</b> (cluster
