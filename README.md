@@ -380,8 +380,9 @@ Identity is the description and never the name: `code-reviewer` appears 75 times
 with 42 different descriptions, and those are 42 real skills.
 
 Without a real terminal — piped output, no `curses` on this Python, or a
-terminal `curses` can't drive — `boost browse` falls back to a plain,
-deduplicated table of the same catalog instead of the full-screen picker.
+terminal `curses` can't drive — `boost browse` falls back to a plain table of
+the same catalog, duplicates collapsed the same way, instead of the
+full-screen picker.
 
 ## 81 commands, organized into 8 groups
 
