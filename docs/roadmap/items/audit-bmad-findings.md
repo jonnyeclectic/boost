@@ -2,14 +2,14 @@
 id: audit-bmad-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: M
 impact: Med
 wow: 1
 note: an edited persona reads "not installed"; each no-op bmad on burns 4 of 50 history slots
 order: 250
-owner:
+owner: loop/bmad-audit-findings
 pr:
 title: "boost bmad: CLI audit findings (2026-08)"
 ---
