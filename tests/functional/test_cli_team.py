@@ -73,6 +73,30 @@ class TestCohort:
         assert ("created cohort solo (100% rollout, 1 skill) — "
                 "you are IN") in r.out
 
+    def test_repeated_skills_flag_appends_rather_than_replaces(
+            self, boost, tapped):
+        # Each --skills is a normal argparse option: without action="append"
+        # a second occurrence silently drops the first instead of adding to
+        # it, so "--skills a --skills b" used to create a one-skill cohort.
+        boost("cohort", "create", "pilot", "--skills", "brainstorming",
+             "--skills", "tdd-workflow", "--percent", "100")
+        data = json.loads(boost("cohort", "list", "--json").out)[0]
+        assert data["skills"] == ["brainstorming", "tdd-workflow"]
+
+        # A single flag with a comma list must still split into the same
+        # two-element list, unchanged from before this fix.
+        boost("cohort", "create", "solo", "--skills",
+             "brainstorming,tdd-workflow", "--percent", "100")
+        data = json.loads(boost("cohort", "list", "--json").out)[1]
+        assert data["skills"] == ["brainstorming", "tdd-workflow"]
+
+        # And the two forms compose: a comma list inside a repeated flag
+        # still flattens and splits every group.
+        boost("cohort", "create", "mixed", "--skills", "brainstorming,ghost-skill",
+             "--skills", "tdd-workflow", "--percent", "100")
+        data = json.loads(boost("cohort", "list", "--json").out)[0]
+        assert data["skills"] == ["brainstorming", "ghost-skill", "tdd-workflow"]
+
     def test_list_membership_column_and_json_determinism(self, boost, tapped):
         boost("cohort", "create", "pilot", "--skills", "brainstorming",
              "--percent", "100")
@@ -129,12 +153,34 @@ class TestCohort:
         assert "cohort pilot" in r.out
         assert "installed brainstorming → claude-code · windsurf · cursor" in r.out
         assert "ghost-skill not found in any tap — skipped" in r.out
-        assert "applied: 1 installed, 0 already present" in r.out
+        # mixed cohort: one real install + one missing member — the missing
+        # count must surface in the summary (not silently dropped), and exit
+        # is still 0 because something was installed.
+        assert "applied: 1 installed, 0 already present, 1 not found" in r.out
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        ev = journal.events(action="cohort", subject="pilot")[0]
+        assert ev["op"] == "apply"
+        assert ev["installed"] == 1 and ev["present"] == 0 and ev["missing"] == 1
 
         r = boost("cohort", "apply")  # no name -> all cohorts
         assert "brainstorming already installed" in r.out
-        assert "applied: 0 installed, 1 already present" in r.out
+        assert "applied: 0 installed, 1 already present, 1 not found" in r.out
+        ev = journal.events(action="cohort", subject="pilot")[0]
+        assert ev["op"] == "apply"
+        assert ev["installed"] == 0 and ev["present"] == 1 and ev["missing"] == 1
+
+    def test_apply_all_members_missing_reports_and_fails(self, boost, tapped):
+        # A cohort whose only skill exists in no tap must not be silently
+        # dropped: the summary counts it and the whole invocation, having
+        # installed or found nothing, exits non-zero.
+        boost("cohort", "create", "ghosts", "--skills", "nosuchskill-zzz",
+             "--percent", "100")
+        r = boost("cohort", "apply", "ghosts", expect=1)
+        assert "nosuchskill-zzz not found in any tap — skipped" in r.out
+        assert "applied: 0 installed, 0 already present, 1 not found" in r.out
+        ev = journal.events(action="cohort", subject="ghosts")[0]
+        assert ev["op"] == "apply"
+        assert ev["installed"] == 0 and ev["present"] == 0 and ev["missing"] == 1
 
     def test_apply_does_not_reinstall_an_installed_rule(self, boost, tapped):
         # Membership checks the whole lock: a cohort item installed as a RULE
