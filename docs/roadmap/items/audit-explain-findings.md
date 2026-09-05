@@ -10,7 +10,7 @@ wow: 2
 note: fabricated Kubernetes/Flyway summary scores faithfulness 1.0 and prints verbatim
 order: 267
 owner: loop/explain-faithfulness-scope
-pr:
+pr: 774
 title: "<code>boost explain</code>: CLI audit findings (2026-08)"
 ---
 <b>The faithfulness guardrail scores a fully fabricated summary 1.0 when the fabrications are proper
