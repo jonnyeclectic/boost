@@ -2,14 +2,14 @@
 id: audit-cohort-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: apply counts a mixed cohort as 1 of 2, exits 0 when nothing applied, journals no event
 order: 256
-owner:
+owner: loop/cohort-apply-fixes
 pr:
 title: "boost cohort: CLI audit findings (2026-08)"
 ---
