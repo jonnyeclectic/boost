@@ -45,11 +45,15 @@ numeric-or-null counts in snapshot list. Sites: <code>boost_cli/commands/taps.py
 No flag or summary changes, so no doc regeneration needed. Found by the 2026-08 CLI audit
 (cluster <code>json-display-strings</code>); repro in the audit log.
 
-<b>Status (this branch).</b> All five sites fixed with updated functional-test coverage; ruff and
-mypy pass on the changed files, and the full `test_cli_taps.py`/`test_cli_quality.py`/
-`test_cli_configuration.py`/`test_cli_pkg.py` suites show identical (pre-existing, environment-only)
-failures on this branch and on unmodified <code>main</code> — no regressions from this change. The
-implementing sandbox's network policy blocks PyPI, so the pinned `make check` toolchain
-(coverage/mutation/vulture/xenon/etc.) could not be installed or run in-session; CI runs the real
-gate on the PR. Left <code>inflight</code> rather than <code>shipped</code> until that gate is
-confirmed green.
+<b>Status (this branch).</b> All five sites fixed with updated functional-test coverage. The
+implementing sandbox's network policy blocked PyPI, so the pinned <code>make check</code> toolchain
+could not be installed or run in-session; local substitutes (ruff, mypy, a byte-for-byte functional/
+unit-suite comparison against unmodified <code>main</code>, <code>tests/smoke.sh</code>) all came back
+clean. PR #769's own CI — which does have network access — has since run the real gate to completion:
+lint, mypy, pyright, import-linter, vulture, xenon, interrogate, refurb (caught and fixed one
+<code>{**base, ...}</code> pattern the sandbox's tools couldn't check), tests on every supported
+Python across three OSes, and all 6 mutation shards are green. The one red check
+(<code>lighthouse</code>, a <code>docs/roadmap.html</code> performance-budget assertion) is a
+pre-existing flake independent of this diff — it fails intermittently on <code>main</code> itself
+across unrelated commits — and is documented on the PR. Left <code>inflight</code> rather than
+<code>shipped</code> because merging is a human's call, not this branch's.
