@@ -13113,8 +13113,9 @@ must document the edited-persona state.</p>
       </article>
 
       <article class="cap rcard" id="audit-browse-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost browse: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>A curses init failure crashes with a report instead of falling back</b> (cluster
 <code>browse-curses-fallback</code>, med). On fds that claim <code>isatty</code> but are not a pty
 (IDE run consoles, <code>script</code>, <code>TERM=dumb</code>), <code>browse</code> emits raw
@@ -13142,7 +13143,7 @@ a kind column, drop the curated column when nothing is curated, and word the foo
 
 <br><br>Found by the 2026-08 CLI audit (clusters <code>browse-curses-fallback</code>,
 <code>browse-plain-dump</code>); repro in the audit log. Docs: <code>README.md</code> browse section
-(~line 343); <code>docs/commands.html</code> regenerates only if the summary changes.</p>
+(~line 343); <code>docs/commands.html</code> regenerates only if the summary changes.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
