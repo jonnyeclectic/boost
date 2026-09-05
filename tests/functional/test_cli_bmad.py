@@ -124,6 +124,22 @@ class TestStartupToggle:
         boost("bmad", "startup", "on", "--scope", "global")
         assert cs.has_hook("global", "SessionStart", "bmad")
 
+    def test_bogus_value_errors_instead_of_silently_reading_as_status(
+            self, boost, sandbox, proj):
+        """Help promises `on | off | status`; anything else must not be a
+        silent alias for `status` — that hides a typo as a no-op."""
+        r = boost("bmad", "startup", "bogus", expect=1)
+        assert "bogus" in r.err
+
+    def test_on_installs_a_hook_that_cannot_report_failure(
+            self, boost, sandbox, proj):
+        """`bmad on`'s orient hook always carries `|| true`; the same-purpose
+        hook installed by `bmad startup on` must too, or a stale/downgraded
+        boost on the router path can erase the user's next prompt."""
+        boost("bmad", "startup", "on")
+        assert _hook_cmd("project", "SessionStart", "bmad",
+                         project_dir=proj).endswith("|| true")
+
 
 class TestOrient:
     def test_prints_only_when_enabled(self, boost, sandbox, proj):
@@ -289,6 +305,25 @@ class TestDoctor:
         r = boost("bmad", "doctor")
         assert r.rc == 0 and "MISSING" in r.out
 
+    def test_persona_count_includes_edited_files(self, boost, sandbox, proj):
+        """An edited persona is still on disk and still loaded by Claude Code
+        — the bug this closes counted managed files only, so the very persona
+        a user had just customised silently dropped out of the count."""
+        boost("bmad", "on")
+        mine = sandbox / ".claude" / "agents" / "bmad-ux.md"
+        mine.write_text(
+            mine.read_text(encoding="utf-8") + "\nmy own note\n", encoding="utf-8")
+        r = boost("bmad", "doctor")
+        assert "%d personas" % len(core_bmad.PERSONAS) in r.out
+
+    def test_installed_field_uses_the_same_on_off_vocabulary(
+            self, boost, sandbox, proj):
+        """`installed=False` used to sit right beside `autopilot=off` — two
+        booleans, two different renderings, in the same block of output."""
+        r = boost("bmad", "doctor")
+        assert "installed=False" not in r.out and "installed=True" not in r.out
+        assert "installed=off" in r.out
+
 
 class TestHelpFitsNarrowPane:
     """`boost bmad --help`'s action list is 13 choices long — spelled out as
@@ -389,6 +424,18 @@ class TestAutopilotOff:
         r = boost("bmad", "off")
         assert r.rc == 0
 
+    def test_reports_the_real_hook_count_not_a_hardcoded_one(
+            self, boost, sandbox, proj):
+        """A second `off` used to still claim "both hooks" removed, even
+        though there was nothing left to remove the second time."""
+        boost("bmad", "on")
+        first = boost("bmad", "off")
+        assert "removed %d persona(s) and 2 hook(s)" % len(
+            core_bmad.PERSONAS) in first.out
+
+        second = boost("bmad", "off")
+        assert "removed 0 persona(s) and 0 hook(s)" in second.out
+
     def test_hand_edited_personas_survive(self, boost, sandbox, proj):
         boost("bmad", "on")
         mine = sandbox / ".claude" / "agents" / "bmad-dev.md"
@@ -409,6 +456,8 @@ class TestAutopilotOff:
         r = boost("bmad", "on")               # re-running must not clobber it
         assert "kept your edits" in r.out and "bmad-dev" in r.out
         assert mine.read_text(encoding="utf-8") == edited
+        # the edited file is still a real, working subagent — it must count
+        assert "%d persona subagent(s)" % len(core_bmad.PERSONAS) in r.out
 
         boost("bmad", "off")                  # ...nor must tearing down
         assert mine.read_text(encoding="utf-8") == edited
@@ -533,4 +582,23 @@ class TestPersonas:
     def test_reports_installed_after_on(self, boost, sandbox, proj):
         boost("bmad", "on")
         r = boost("bmad", "personas")
+        assert "not installed" not in r.out
+
+    def test_an_edited_persona_reads_installed_edited_not_not_installed(
+            self, boost, sandbox, proj):
+        """The bug: an edited-but-present file used to read exactly the same
+        as a file that was never installed at all."""
+        boost("bmad", "on")
+        mine = sandbox / ".claude" / "agents" / "bmad-ux.md"
+        mine.write_text(
+            mine.read_text(encoding="utf-8") + "\nmy own note\n", encoding="utf-8")
+
+        r = boost("bmad", "personas")
+        assert "bmad-ux" in r.out
+        for line in r.out.splitlines():
+            if line.strip().startswith("bmad-ux"):
+                assert "installed (edited)" in line
+                break
+        else:
+            pytest.fail("bmad-ux row not found in `boost bmad personas` output")
         assert "not installed" not in r.out

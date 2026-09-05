@@ -138,6 +138,17 @@ def cmd_bmad(argv) -> int:
 
 # ------------------------------------------------------------------- autopilot
 
+def _on_off(value) -> str:
+    """Render any truthy/falsy value as ``"on"``/``"off"``.
+
+    `doctor` used to format some booleans as ``on``/``off`` and others as
+    Python's ``True``/``False`` in the same block of output — "installed=False"
+    printed right beside "autopilot=off". One helper keeps every boolean field
+    in one vocabulary.
+    """
+    return "on" if value else "off"
+
+
 def _agents_dir(scope) -> Path:
     """Where Claude Code reads subagent definitions for a scope."""
     base = paths.home() if scope == "global" else Path.cwd()
@@ -216,18 +227,22 @@ def _add_hook_everywhere(scope: str, spec: tuple, command: str) -> list[str]:
     return written
 
 
-def _remove_hook_everywhere(scope: str, *specs: tuple) -> None:
-    """Remove hooks from every host, installed or not.
+def _remove_hook_everywhere(scope: str, *specs: tuple) -> int:
+    """Remove hooks from every host, installed or not. Returns how many were.
 
     Unlike install this does not filter on `shutil.which`: someone who removed
     an agent CLI still wants boost's hooks gone from its settings.json, and
-    `remove_hook` against a file that was never written is a no-op.
+    `remove_hook` against a file that was never written is a no-op — which is
+    exactly why the count matters: a caller that hardcodes "both hooks" in its
+    report is claiming work that a second, no-op `off` never did.
     """
+    removed = 0
     for host in hookhost.hosts():
         for event, name, _matcher in specs:
             target = hookhost.translate(host, event)
             if target is not None:
-                cs.remove_hook(scope, target, name, host=host)
+                removed += cs.remove_hook(scope, target, name, host=host)
+    return removed
 
 
 def _autopilot_on(scope) -> int:
@@ -239,7 +254,12 @@ def _autopilot_on(scope) -> int:
     """
     scope = scope or "global"
     agents = _agents_dir(scope)
-    slugs, skipped = core.write_personas(agents)
+    _written, skipped = core.write_personas(agents)
+    # A skipped (edited) persona file is still on disk and Claude Code still
+    # loads it — only the ones neither written nor present at all are truly
+    # "not installed", so the reported count is managed + edited, not just
+    # what this run happened to (re)write.
+    present = len(core.present_personas(agents))
 
     launcher = shlex.quote(str(paths.launcher()))
     hosts = _add_hook_everywhere(
@@ -247,12 +267,12 @@ def _autopilot_on(scope) -> int:
         _never_fails("%s bmad orient --scope %s" % (launcher, scope)))
     _add_hook_everywhere(scope, _ROUTE_HOOK,
                          _never_fails("%s bmad route" % launcher))
-    _set_scope_state(scope, autopilot=True, startup=True, personas=len(slugs),
+    _set_scope_state(scope, autopilot=True, startup=True, personas=present,
                      enabled_at=util.now_iso())
-    journal.log("bmad-autopilot", "on", scope=scope, personas=len(slugs))
+    journal.log("bmad-autopilot", "on", scope=scope, personas=present)
 
     out.ok("BMAD autopilot ON (%s) — %d persona subagent(s) + prompt router"
-           % (scope, len(slugs)))
+           % (scope, present))
     if skipped:
         out.warn("kept your edits to %d persona(s): %s"
                  % (len(skipped), ", ".join(skipped)))
@@ -274,12 +294,12 @@ def _autopilot_on(scope) -> int:
 
 def _autopilot_off(scope) -> int:
     scope = scope or "global"
-    _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK)
+    hooks_removed = _remove_hook_everywhere(scope, _ORIENT_HOOK, _ROUTE_HOOK)
     removed = core.remove_personas(_agents_dir(scope))
     _set_scope_state(scope, autopilot=False, startup=False, personas=0)
     journal.log("bmad-autopilot", "off", scope=scope, personas=len(removed))
-    out.ok("BMAD autopilot OFF (%s) — removed %d persona(s) and both hooks"
-           % (scope, len(removed)))
+    out.ok("BMAD autopilot OFF (%s) — removed %d persona(s) and %d hook(s)"
+           % (scope, len(removed), hooks_removed))
     out.dim("  hand-edited personas were left in place")
     return 0
 
@@ -335,19 +355,26 @@ def _route(prompt, plain) -> int:
     return 0
 
 
+_PERSONA_STATE_LABEL = {
+    "managed": "installed",
+    "edited": "installed (edited)",
+    "absent": "not installed",
+}
+
+
 def _personas(scope) -> int:
     scope = scope or "global"
     agents = _agents_dir(scope)
-    live = set(core.installed_personas(agents))
+    states = core.persona_states(agents)
     out.heading("BMAD personas — %s" % scope)
     for p in core.PERSONAS:
-        mark = "installed" if p.slug in live else "not installed"
+        mark = _PERSONA_STATE_LABEL[states[p.slug]]
         # width 16: `bmad-architect` is exactly the default 14, which leaves no
         # gap between the key and the value.
         out.kv(p.slug, "%s, %s (%s) — %s"
                % (p.character, p.title, p.module, mark), width=16)
     out.dim("  → %s" % paths.tilde(agents))
-    if not live:
+    if all(state == "absent" for state in states.values()):
         out.dim("  install them with `boost bmad on`")
     return 0
 
@@ -456,8 +483,8 @@ def _copy_global_skills(modules) -> int:
 def _startup(value, scope) -> int:
     scope = scope or "project"
     if value == "on":
-        cmd = "%s bmad orient --scope %s" % (
-            shlex.quote(str(paths.launcher())), scope)
+        cmd = _never_fails("%s bmad orient --scope %s" % (
+            shlex.quote(str(paths.launcher())), scope))
         started = _add_hook_everywhere(scope, _ORIENT_HOOK, cmd)
         _set_scope_state(scope, startup=True)
         journal.log("bmad-startup", "on", scope=scope)
@@ -471,7 +498,10 @@ def _startup(value, scope) -> int:
         journal.log("bmad-startup", "off", scope=scope)
         out.ok("BMAD startup OFF (%s) — skills stay installed" % scope)
         return 0
-    return _status(scope)
+    if value == "status":
+        return _status(scope)
+    raise BoostError("unknown startup value %r" % value,
+                     hint="use 'on', 'off' or 'status'")
 
 
 def _orient(scope) -> int:
@@ -570,15 +600,16 @@ def _doctor() -> int:
     for scope in ("global", "project"):
         st = _get_scope_state(scope)
         agents = _agents_dir(scope)
-        personas = len(core.installed_personas(agents))
+        # managed + edited: an edited persona file is still on disk and
+        # Claude Code still loads it, same as core.present_personas().
+        personas = len(core.present_personas(agents))
         router = cs.has_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
         live = bool(st.get("autopilot")) and router
         out.kv(scope, "autopilot=%s  %d personas  router=%s  briefing=%s"
-               % ("on" if live else "off", personas,
-                  "on" if router else "off",
-                  "on" if cs.has_hook(scope, "SessionStart", HOOK_NAME) else "off"))
+               % (_on_off(live), personas, _on_off(router),
+                  _on_off(cs.has_hook(scope, "SessionStart", HOOK_NAME))))
         out.kv("  workflows", "skills=%d  installed=%s"
-               % (_count_skills(_skills_dir(scope)), bool(st.get("installed"))))
+               % (_count_skills(_skills_dir(scope)), _on_off(st.get("installed"))))
     out.dim("  project = %s" % Path.cwd())
     if not any(_get_scope_state(s).get("autopilot") for s in ("global", "project")):
         out.dim("  turn it on with `boost bmad on`")
