@@ -2,14 +2,14 @@
 id: audit-browse-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: curses init failure = exit-70 crash + hosed terminal; piped fallback dumps 765 KB
 order: 251
-owner:
+owner: loop/browse-curses-fallback
 pr:
 title: "boost browse: CLI audit findings (2026-08)"
 ---

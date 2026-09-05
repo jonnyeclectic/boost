@@ -1000,7 +1000,8 @@ class TestBrowse:
         for name in ("brainstorming", "commit-messages", "cowboy-coding",
                      "jira-integration", "tdd-workflow"):
             assert name in r.out
-        assert "5 skills · install with `boost install <name>`" in r.out
+        assert ("5 items: 5 skills · 0 rules · 0 workflows · install with "
+                "`boost install <name>` (or narrow it down with `boost search`)") in r.out
 
     def test_no_skills(self, boost, sandbox):
         r = boost("browse", expect=1)
@@ -1068,6 +1069,34 @@ class TestBrowse:
         assert "vanished from tap" in r.out       # friendly message, not Error:
         assert "boost update" in r.out            # the hint is shown
         assert "installed AGENT-playbook" not in r.out
+
+    def test_curses_init_failure_falls_back_to_plain_catalog(
+            self, boost, tapped, monkeypatch):
+        # Some fds pass `isatty()` while not backing a real pty (an IDE run
+        # console, `script`, TERM=dumb): curses.wrapper()'s own setup then
+        # raises curses.error (e.g. "nocbreak() returned ERR") uncaught,
+        # which used to reach boost's top-level handler as a crash report
+        # (exit 70) with the terminal left in the alternate screen instead of
+        # degrading to the plain fallback the way the no-TTY/no-curses cases
+        # already do.
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
+        import curses
+
+        from boost_cli.commands import discovery
+        tty = types.SimpleNamespace(isatty=lambda: True)
+        monkeypatch.setattr(discovery, "sys",
+                            types.SimpleNamespace(stdin=tty, stdout=tty))
+
+        def _boom(curses_mod, entries):
+            raise curses.error("nocbreak() returned ERR")
+        monkeypatch.setattr(discovery, "_browse_tui", _boom)
+        r = boost("browse")                       # default expect=0 → no crash
+        assert "boost hit an unexpected error" not in r.out
+        assert "boost hit an unexpected error" not in r.err
+        assert ("the terminal does not support curses (nocbreak() returned "
+                "ERR) — showing the full catalog") in r.out
+        assert "brainstorming" in r.out
 
     def test_tui_loop_with_fake_curses(self, boost, tapped):
         from boost_cli.commands import discovery
@@ -1178,6 +1207,50 @@ class TestBrowse:
         fake = _FakeCurses([], size=(24, 80))
         discovery._browse_tui(fake, entries)
         assert any("fixture-tap" in s for s in fake.drawn)
+
+
+class TestBrowsePlainFallback:
+    """`_browse_plain` is the TUI's own presentation, not a lesser stand-in —
+    it must dedupe like the TUI and describe the catalog it actually shows."""
+
+    def _entries(self):
+        # "dup" is one skill mirrored into two agent dotdirs (same content
+        # digest, so browse.dedupe collapses it); "solo-rule" is a distinct
+        # rule that must survive dedupe and get its own kind badge.
+        return [
+            {"name": "dup", "version": "1.0.0", "tap": "t1", "kind": "skill",
+             "content": "same-digest"},
+            {"name": "dup", "version": "1.0.0", "tap": "t1", "kind": "skill",
+             "content": "same-digest"},
+            {"name": "solo-rule", "version": "2.0.0", "tap": "t2", "kind": "rule",
+             "content": "other-digest"},
+        ]
+
+    def test_dedupes_and_labels_kind_and_totals(self, capsys):
+        from boost_cli.commands import discovery
+        rc = discovery._browse_plain(self._entries(), "testing")
+        assert rc == 0
+        text = capsys.readouterr().out
+        assert text.count("dup") == 1          # collapsed, not printed twice
+        assert "[skill]" in text and "[rule]" in text
+        assert ("2 items: 1 skill · 1 rule · 0 workflows · install with "
+                "`boost install <name>` (or narrow it down with "
+                "`boost search`)") in text
+
+    def test_curated_column_dropped_when_nothing_curated(self, capsys):
+        from boost_cli.commands import discovery
+        discovery._browse_plain(self._entries(), "testing")
+        text = capsys.readouterr().out
+        assert "★" not in text
+
+    def test_curated_column_kept_when_something_is_curated(self, capsys):
+        from boost_cli.commands import discovery
+        entries = self._entries()
+        entries[0]["curated"] = True
+        entries[1]["curated"] = True
+        discovery._browse_plain(entries, "testing")
+        text = capsys.readouterr().out
+        assert "★" in text
 
 
 class TestBrowseAurora:

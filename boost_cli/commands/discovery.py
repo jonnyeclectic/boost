@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -971,12 +972,28 @@ def cmd_recommend(argv):
 
 
 def _browse_plain(entries, why: str):
+    """The no-TTY / no-curses fallback: a plain table of the same catalog.
+
+    Reuses ``browse.dedupe`` so a skill mirrored into several agent dotdirs
+    doesn't print once per mirror here while the TUI (which already dedupes)
+    shows it once — the two views of "the catalog" must agree on its size.
+    """
     out.warn(why + " — showing the full catalog")
-    out.table([(e["name"], "v" + e["version"], e["tap"],
-                "★" if e.get("curated") else "") for e in entries],
-              headers=("name", "version", "tap", ""))
-    out.info(out.role("%d skills · install with `boost install <name>`"
-                   % len(entries), "muted"))
+    deduped = [e for e, _n in browse.dedupe(entries)]
+    any_curated = any(e.get("curated") for e in deduped)
+    headers = ("name", "kind", "version", "tap") + (("",) if any_curated else ())
+    rows = [(e["name"], out.kind_label(e.get("kind", "skill")), "v" + e["version"],
+             e["tap"]) + (("★" if e.get("curated") else "",) if any_curated else ())
+            for e in deduped]
+    out.table(rows, headers=headers)
+    by_kind = Counter(e.get("kind", "skill") for e in deduped)
+    out.info(out.role(
+        "%d item%s: %d skill%s · %d rule%s · %d workflow%s · "
+        "install with `boost install <name>` (or narrow it down with `boost search`)"
+        % (len(deduped), _s(len(deduped)),
+           by_kind["skill"], _s(by_kind["skill"]),
+           by_kind["rule"], _s(by_kind["rule"]),
+           by_kind["workflow"], _s(by_kind["workflow"])), "muted"))
     return 0
 
 
@@ -1725,7 +1742,23 @@ def cmd_browse(argv):
         import curses
     except ImportError:
         return _browse_plain(entries, "curses is unavailable on this Python")
-    picked = _browse_tui(curses, entries)
+    try:
+        picked = _browse_tui(curses, entries)
+    except curses.error as exc:
+        # A file descriptor can pass `isatty()` while not backing a real pty
+        # (an IDE run console, `script`, TERM=dumb) — curses.wrapper()'s own
+        # setup then fails (e.g. "nocbreak() returned ERR") and that error
+        # escapes uncaught, which used to reach boost's top-level handler as
+        # an unexpected-error crash report with the terminal left in the
+        # alternate screen. Worse, `curses.wrapper`'s `finally` block calls
+        # keypad/echo/nocbreak/endwin in sequence and stops at the first one
+        # that raises — the same broken state that caused the original error
+        # can make nocbreak() fail too, which then skips endwin() entirely.
+        # So the fallback restores the terminal itself rather than trusting
+        # that curses.wrapper() already did.
+        with contextlib.suppress(curses.error):
+            curses.endwin()
+        return _browse_plain(entries, "the terminal does not support curses (%s)" % exc)
     if not picked:
         return 0
     # The browser installs in place now, so anything it hands back is usually
