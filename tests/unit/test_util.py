@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.core import util
+from boost_cli.errors import BoostError
 
 ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -189,6 +190,31 @@ class TestSlugify:
 
     def test_digits_and_dashes_kept(self):
         assert util.slugify("tdd-workflow-3") == "tdd-workflow-3"
+
+
+class TestSlugifyOrRaise:
+    def test_valid_name_passes_through_slugify(self):
+        assert util.slugify_or_raise("My Great Skill") == "my-great-skill"
+
+    def test_literal_skill_is_not_refused(self):
+        # "skill" has letters of its own — indistinguishable from the
+        # fallback only in the *output*, not in what the user typed.
+        assert util.slugify_or_raise("skill") == "skill"
+
+    def test_empty_string_is_refused(self):
+        with pytest.raises(BoostError, match="no letters or digits"):
+            util.slugify_or_raise("")
+
+    def test_punctuation_only_is_refused(self):
+        with pytest.raises(BoostError, match="no letters or digits"):
+            util.slugify_or_raise("!!!")
+
+    def test_underscores_only_is_refused(self):
+        with pytest.raises(BoostError, match="no letters or digits"):
+            util.slugify_or_raise("___")
+
+    def test_digits_alone_are_accepted(self):
+        assert util.slugify_or_raise("42") == "42"
 
 
 class TestSha256Dir:

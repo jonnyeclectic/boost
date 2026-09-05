@@ -261,7 +261,7 @@ def cmd_profile(argv) -> int:
 
     if args.action == "list":
         profiles: list[dict[str, Any]] = []
-        for f in sorted(paths.profiles_dir().glob("*.json")):
+        for f in paths.profiles_dir().glob("*.json"):
             data, _err = jsonstate.read_object(f)
             if data is None:
                 # Surfaced rather than skipped: a corrupt profile used to be
@@ -274,6 +274,11 @@ def cmd_profile(argv) -> int:
                              "skills": len(data.get("skills", {})),
                              "saved": data.get("saved", "?"),
                              "unreadable": False})
+        # Sorted by the displayed name (case-insensitively, so casing alone
+        # doesn't reorder the list), not the slugged filename glob order — a
+        # raw name and its slug can differ, and rows must read in the order
+        # they're shown, not the order their files happen to sort in.
+        profiles.sort(key=lambda p: p["name"].casefold())
         if args.json:
             print(json.dumps(profiles, indent=2))
             return 0
@@ -291,10 +296,21 @@ def cmd_profile(argv) -> int:
 
     if args.action == "save":
         installed = lockfile.installed()
+        slug = util.slugify_or_raise(args.name)
+        if slug != args.name:
+            out.info(out.role("saved as profile name: %s" % slug, "muted"))
         was = None
         if _profile_path(args.name).exists():
             try:
-                was = len(_load_profile(args.name).get("skills", {}))
+                old = _load_profile(args.name)
+                was = len(old.get("skills", {}))
+                old_name = old.get("name")
+                if old_name and old_name != args.name:
+                    # Two different typed names sharing one slug (`My Daily`,
+                    # `my-daily`) would otherwise overwrite each other with
+                    # no indication anything but a version bump happened.
+                    out.warn("replacing profile saved as %r (same slug: %s)"
+                            % (old_name, slug))
             except BoostError:
                 was = None   # unreadable old profile: still fine to replace
         profile = {"name": args.name, "saved": util.now_iso(), "user": util.user(),
