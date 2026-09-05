@@ -204,6 +204,21 @@ class TestDistill:
         r = boost("distill", "brainstorming", "ghost", expect=1)
         assert "no skill named 'ghost' in any tap" in r.err
 
+    def test_output_name_is_slugified_and_noted(self, boost, tapped, tmp_path,
+                                                monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "tdd-workflow", "commit-messages", "-o", "Bad Name!!")
+        assert "using name: bad-name" in r.out
+        assert "distilling tdd-workflow, commit-messages → bad-name" in r.out
+        text = (tmp_path / "bad-name" / "SKILL.md").read_text(encoding="utf-8")
+        assert frontmatter.parse(text)[0]["name"] == "bad-name"
+        assert "install it with `boost import ./bad-name`" in r.out
+
+    def test_output_name_with_no_letters_or_digits_is_refused(self, boost, tapped):
+        r = boost("distill", "tdd-workflow", "commit-messages", "-o", "!!!",
+                  expect=1)
+        assert "has no letters or digits" in r.err
+
     def test_declined_overwrite_leaves_file(self, boost, tapped, tmp_path,
                                             monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -330,6 +345,21 @@ class TestInfer:
     def test_bad_path(self, boost, sandbox):
         r = boost("infer", "--path", "/nope/nowhere", expect=1)
         assert "is not a directory" in r.err
+
+    def test_bad_name_is_refused(self, boost, sandbox, py_project):
+        r = boost("infer", "--path", py_project, "--name", "!!!", expect=1)
+        assert "has no letters or digits" in r.err
+
+    def test_slugified_name_note_goes_to_stderr_not_stdout(
+            self, boost, sandbox, py_project):
+        # stdout here IS the generated SKILL.md (`boost infer > FILE`), so
+        # the "using name" note must never land ahead of the frontmatter —
+        # the same rule the AI-fallback note follows.
+        r = boost("infer", "--path", py_project, "--name", "My Conventions!!")
+        assert "using name" not in r.out
+        assert "using name: my-conventions" in r.err
+        meta, _ = frontmatter.parse(r.out)
+        assert meta["name"] == "my-conventions"
 
     def test_unwritable_output_path_is_framed_not_a_crash(
             self, boost, sandbox, py_project, tmp_path):

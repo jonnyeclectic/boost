@@ -14,6 +14,7 @@ import difflib
 import fnmatch
 import json
 import re
+import shlex
 import sys
 import tempfile
 import textwrap
@@ -213,7 +214,12 @@ def cmd_distill(argv: list[str]) -> int:
         meta, body = frontmatter.parse(text)
         sources.append({"name": name, "origin": origin, "text": text,
                         "meta": meta, "body": body})
-    new = args.output or (names[0] + "-distilled")
+    if args.output:
+        new = util.slugify_or_raise(args.output)
+        if new != args.output:
+            out.info(out.role("using name: %s" % new, "muted"))
+    else:
+        new = names[0] + "-distilled"
 
     out.heading("distilling %s → %s" % (", ".join(names), new))
     merged = _distill_ai(new, sources) if ai.available() else None
@@ -227,7 +233,8 @@ def cmd_distill(argv: list[str]) -> int:
         dest = Path.cwd() / new / "SKILL.md"
         if not _write_generated(dest, merged, yes=args.yes):
             return 1
-        out.info(out.role("install it with `boost import ./%s`" % new, "muted"))
+        out.info(out.role(
+            "install it with `boost import ./%s`" % shlex.quote(new), "muted"))
     journal.log("distill", new, sources=names)
     return 0
 
@@ -384,7 +391,12 @@ def cmd_infer(argv: list[str]) -> int:
     root = paths.expand(args.path).resolve()
     if not root.is_dir():
         raise BoostError("%s is not a directory" % _tilde(root))
-    name = util.slugify(args.name)
+    name = util.slugify_or_raise(args.name)
+    if name != args.name:
+        # stderr, not stdout: with neither --install nor --output this
+        # command's stdout IS the generated SKILL.md (`boost infer > FILE`),
+        # same reason `_note_fallback` below is routed off stdout.
+        out.info(out.role("using name: %s" % name, "muted"), stream=sys.stderr)
     facts = _probe_repo(root)
 
     text = _infer_ai(name, root, facts) if ai.available() else None

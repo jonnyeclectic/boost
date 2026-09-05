@@ -254,6 +254,42 @@ class TestProfile:
         assert json.loads(boost("profile", "show", "daily", "--json").out)[
             "skills"].keys() == {"brainstorming", "tdd-workflow"}
 
+    def test_save_refuses_a_name_with_no_letters_or_digits(self, boost, tapped):
+        boost("install", "brainstorming")
+        r = boost("profile", "save", "!!!", expect=1)
+        assert "has no letters or digits" in r.err
+        assert not (paths.profiles_dir() / "skill.json").exists()
+
+    def test_save_notes_the_slug_when_it_differs_from_the_typed_name(
+            self, boost, tapped):
+        boost("install", "brainstorming")
+        r = boost("profile", "save", "My Daily")
+        assert "saved as profile name: my-daily" in r.out
+        assert (paths.profiles_dir() / "my-daily.json").is_file()
+
+    def test_save_warns_when_a_differently_typed_name_shares_the_slug(
+            self, boost, tapped):
+        # "My Daily" and "my-daily" resolve to the same file — replacing one
+        # with the other must say so, not silently overwrite it.
+        boost("install", "brainstorming")
+        boost("profile", "save", "My Daily")
+        boost("install", "tdd-workflow")
+        r = boost("profile", "save", "my-daily")
+        assert "replacing profile saved as 'My Daily' (same slug: my-daily)" in r.out
+
+    def test_list_is_sorted_by_displayed_name_case_insensitively(
+            self, boost, tapped):
+        # A raw name that starts uppercase sorts by codepoint ahead of every
+        # lowercase name under a naive string sort — casefold is what keeps
+        # the list in the order a reader actually expects.
+        boost("install", "brainstorming")
+        boost("profile", "save", "Zulu")
+        boost("profile", "save", "alpha")
+        r = boost("profile", "list")
+        zulu_pos = r.out.index("Zulu")
+        alpha_pos = r.out.index("alpha")
+        assert alpha_pos < zulu_pos
+
     def test_use_sidelines_then_prune_uninstalls_extras(self, boost, tapped):
         boost("install", "brainstorming")
         boost("profile", "save", "solo")

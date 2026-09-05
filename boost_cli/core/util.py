@@ -15,6 +15,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..errors import BoostError
+
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
 
@@ -249,6 +251,23 @@ def human_size(n: int) -> str:
 def slugify(name: str) -> str:
     """Lowercase ``name`` into a ``[a-z0-9-]`` slug; empty result -> ``'skill'``."""
     return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or "skill"
+
+
+def slugify_or_raise(name: str) -> str:
+    """Slugify ``name``, refusing input with no letters or digits.
+
+    ``slugify("")`` and ``slugify("!!!")`` both fall back to ``"skill"`` —
+    fine as a documented default, but indistinguishable on disk from a user
+    who actually typed "skill". Call sites that turn typed input directly
+    into a stored identity (a new skill, a merged output, a saved profile)
+    use this instead, so punctuation typed by mistake is refused rather than
+    silently landing on the fallback and colliding with it.
+    """
+    if not any(c.isalnum() for c in name):
+        raise BoostError(
+            "%r has no letters or digits" % name,
+            hint="pick a name with at least one letter or digit")
+    return slugify(name)
 
 
 # A catalog name becomes a path component (a rule file, a workflow file, a store
