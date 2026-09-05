@@ -2,14 +2,14 @@
 id: audit-deps-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 2
 note: deps shows ✗ not installed yet exits 0; the only real-world requires: shape reads as (none)
 order: 261
-owner:
+owner: loop/deps-findings
 pr:
 title: "boost deps: CLI audit findings (2026-08)"
 ---
