@@ -2,7 +2,7 @@
 id: audit-edit-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
