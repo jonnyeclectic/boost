@@ -7,7 +7,7 @@ category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
-note: apply counts a mixed cohort as 1 of 2, exits 0 when nothing applied, journals no event
+note: fix implemented + tested in PR; make check's lint(tool-install)/mutation gates could not run in the claiming sandbox (PyPI egress blocked) — eval, full test suite (py3.12) and smoke all verified green manually, see PR
 order: 256
 owner: loop/cohort-apply-fixes
 pr:
