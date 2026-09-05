@@ -359,21 +359,21 @@ def cmd_outdated(argv) -> int:
         base = {"name": name, "kind": "skill", "installed": installed_v,
                 "tap": tap_name, "pinned": bool(lk.get("pinned"))}
         if src_missing:
-            results.append({**base, "latest": None,
-                            "reason": staleness.SOURCE_MISSING,
-                            "latest_commit": None})
+            results.append(base | {"latest": None,
+                                   "reason": staleness.SOURCE_MISSING,
+                                   "latest_commit": None})
         else:
             reason = staleness.upstream_reason(
                 installed_v, latest, lk.get("commit", ""), head,
                 lk.get("sha256", ""), src_sha)
             if reason == staleness.VERSION:
-                results.append({**base, "latest": latest,
-                                "reason": staleness.VERSION,
-                                "latest_commit": None})
+                results.append(base | {"latest": latest,
+                                       "reason": staleness.VERSION,
+                                       "latest_commit": None})
             elif reason == staleness.CONTENT:
-                results.append({**base, "latest": latest,
-                                "reason": staleness.CONTENT,
-                                "latest_commit": head[:7]})
+                results.append(base | {"latest": latest,
+                                       "reason": staleness.CONTENT,
+                                       "latest_commit": head[:7]})
 
     # Rules/workflows have no store dir — their staleness signal is the lock's
     # source sha256 against the tap's current source file (the comparison
@@ -391,9 +391,9 @@ def cmd_outdated(argv) -> int:
                 raw = (registry.get(tap_name).path / lk.get("source_file", "")
                        ).read_text(encoding="utf-8", errors="replace")
             except (OSError, BoostError):
-                results.append({**base, "latest": None,
-                                "reason": staleness.SOURCE_MISSING,
-                                "latest_commit": None})
+                results.append(base | {"latest": None,
+                                       "reason": staleness.SOURCE_MISSING,
+                                       "latest_commit": None})
                 continue
             if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
                 continue
@@ -410,8 +410,8 @@ def cmd_outdated(argv) -> int:
             # sha comparison), so `latest_commit` stays unset — `_outdated_display`
             # falls back to the same "(content changed)" wording skills used to
             # spell out by hand, rather than a second ad-hoc string.
-            results.append({**base, "latest": r_latest, "reason": reason,
-                            "latest_commit": None})
+            results.append(base | {"latest": r_latest, "reason": reason,
+                                   "latest_commit": None})
 
     if args.json:
         print(json.dumps(results, indent=2))
