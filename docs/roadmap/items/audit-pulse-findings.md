@@ -2,14 +2,14 @@
 id: audit-pulse-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: S
 impact: Med
 wow: 1
 note: a filter matching 0 of 35 events prints the same line as an empty journal
 order: 283
-owner:
+owner: loop/pulse-who-filtered-empty
 pr:
 title: "<code>boost pulse</code>: CLI audit findings (2026-08)"
 ---
