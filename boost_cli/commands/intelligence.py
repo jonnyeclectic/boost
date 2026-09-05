@@ -1120,7 +1120,7 @@ def cmd_focus(argv: list[str]) -> int:
 def cmd_impact(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost impact",
-        description="Measure a skill's influence on code quality")
+        description="Correlate a skill's install date with repo activity")
     ap.add_argument("name", nargs="?", metavar="NAME",
                     help="one skill (default: all installed)")
     ap.add_argument("--json", action="store_true")

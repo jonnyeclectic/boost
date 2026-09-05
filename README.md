@@ -430,6 +430,7 @@ purely local operation, for CI images and air-gapped machines.
 |------|-----|---------------|
 | Claude Code | `claude` | `claude mcp add` → its user-scope MCP config |
 | Gemini CLI | `gemini` | `gemini mcp add -s user` → `~/.gemini/settings.json` |
+| Antigravity CLI | `agy` | `agy mcp add` → `~/.gemini/config/mcp_config.json` |
 
 Seven tools are exposed: `boost_search`, `boost_list`, `boost_info`,
 `boost_read`, `boost_install`, `boost_doctor` and
