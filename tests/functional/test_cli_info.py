@@ -496,12 +496,34 @@ class TestEdit:
         r = boost("edit", "brainstorming")
         assert ("local edits diverge from the tap source — "
                 "boost drift will flag this") in r.out
+        # The lock sha stays the tap-pinned value — rewriting it here would
+        # make the store always match its own lock, which is exactly what
+        # hid the edit from `boost drift` (see the drift-classification fix).
         sha_after = _lock()["brainstorming"]["sha256"]
-        assert sha_after != sha_before
+        assert sha_after == sha_before
         assert "- extra line" in (paths.store_dir() / "brainstorming" /
                                   "SKILL.md").read_text(encoding="utf-8")
         assert any(e["subject"] == "brainstorming"
                    for e in _journal_events("edit"))
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX shebang script isn't directly executable on Windows")
+    def test_editor_change_is_reported_as_local_edits_not_upstream_moved(
+            self, boost, installed, tmp_path, monkeypatch):
+        # The bug this pins: cmd_edit used to rewrite the lock sha to the
+        # post-edit hash, so `boost drift` fell through to UPSTREAM_MOVED
+        # (or IN_SYNC) instead of ever reporting LOCAL_EDITS for an edit made
+        # through `boost edit` itself.
+        script = tmp_path / "fake-editor.sh"
+        script.write_text('#!/bin/sh\necho "- extra line" >> "$1"\n', encoding="utf-8")
+        script.chmod(0o755)
+        monkeypatch.setenv("EDITOR", str(script))
+        monkeypatch.delenv("VISUAL", raising=False)
+        boost("edit", "brainstorming")
+        r = boost("drift")
+        assert "local-edits" in r.out
+        assert "upstream-moved" not in r.out
+        assert "1 local-edits" in r.out
 
     @pytest.mark.skipif(sys.platform == "win32",
                         reason="POSIX shebang script isn't directly executable on Windows")
@@ -513,9 +535,9 @@ class TestEdit:
         monkeypatch.setenv("EDITOR", str(script))
         monkeypatch.delenv("VISUAL", raising=False)
         sha_before = _lock()["brainstorming"]["sha256"]
-        r = boost("edit", "brainstorming")
+        r = boost("edit", "brainstorming", expect=1)
         assert "editor exited with status 1" in r.out
-        assert "no changes" in r.out
+        assert "no changes" not in r.out
         assert _lock()["brainstorming"]["sha256"] == sha_before
 
     def test_not_installed_rc1(self, boost, tapped):

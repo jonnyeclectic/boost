@@ -634,9 +634,16 @@ def cmd_edit(argv):
                         hint="set $VISUAL or $EDITOR to a valid command") from e
     if rc != 0:
         out.warn("editor exited with status %d" % rc)
+        return 1
     sha = util.sha256_dir(sdir)
     if sha != lock.get("sha256"):
-        lock["sha256"], lock["updated_at"] = sha, util.now_iso()
+        # Deliberately does NOT rewrite lock["sha256"] to the post-edit hash:
+        # that field is also what drift_state compares the store against, and
+        # overwriting it here would make an edited store always match its own
+        # lock, hiding the edit from `boost drift` (which would then fall
+        # through to UPSTREAM_MOVED instead of LOCAL_EDITS). The journal is
+        # the record of the edit; drift/attest compare honestly instead.
+        lock["updated_at"] = util.now_iso()
         lockfile.set_skill(name, lock)
         journal.log("edit", name)
         out.warn("local edits diverge from the tap source — boost drift will flag this")

@@ -2,14 +2,14 @@
 id: audit-edit-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: editor fails → green "✓ no changes", exit 0; drift calls a local edit upstream-moved
 order: 265
-owner:
+owner: loop/edit-drift-classification
 pr:
 title: "<code>boost edit</code>: CLI audit findings (2026-08)"
 ---
