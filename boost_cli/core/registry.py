@@ -106,11 +106,13 @@ def parse_spec(spec: str):
                 hint="`git init` it, or `boost import %s` to copy it in "
                      "without a tap" % spec)
         return _checked(p.resolve().name, str(p.resolve()), spec)
-    # A spec shaped like a path (starts with /, ./, ../ or ~) that is not an
+    # A spec shaped like a path (starts with ./, ../ or ~, or is absolute —
+    # `p.is_absolute()` rather than a literal "/" prefix so a Windows
+    # `C:\...` spec is caught too, not just a POSIX `/...` one) that is not an
     # actual directory must not fall through to the owner/repo branch below —
     # that branch prepends "https://github.com/" to *anything* containing a
     # "/", so a typo'd local path was silently cloned as a bogus GitHub URL.
-    if spec.startswith(("/", "./", "../", "~")):
+    if spec.startswith(("./", "../", "~")) or p.is_absolute():
         raise BoostError("no such directory: %s" % p,
                         hint="boost tap needs an existing local git repository")
     if spec.startswith(("http://", "https://", "git@", "ssh://")):
