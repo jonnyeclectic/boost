@@ -347,7 +347,8 @@ class TestPolicy:
         assert "1 policy violation(s) across 1 installed item(s)" in r.err
         r = boost("policy", "check", "--json", expect=1)
         assert json.loads(r.out)["violations"] == [
-            {"skill": "brainstorming", "violation": "on the blocklist"}]
+            {"name": "brainstorming", "kind": "skill",
+             "skill": "brainstorming", "violation": "on the blocklist"}]
 
     def test_check_min_quality_and_pin_only_note(self, boost, installed):
         from boost_cli.core import store

@@ -1620,9 +1620,12 @@ def _snapshot_list(as_json: bool) -> int:
                 meta = json.loads(side.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 meta = {}
+        # `skills` is a count when the sidecar has one, `None` when it does
+        # not — never the placeholder string "?" a JSON consumer of a numeric
+        # field would have to special-case.
         snaps.append({"id": snap_id, "created": meta.get("created", ""),
                       "label": meta.get("label", ""),
-                      "skills": meta.get("skills", "?"),
+                      "skills": meta.get("skills"),
                       "size": tar_path.stat().st_size})
     if as_json:
         print(json.dumps(snaps, indent=2))
@@ -1631,7 +1634,9 @@ def _snapshot_list(as_json: bool) -> int:
         out.info("no snapshots yet — create one with `boost snapshot save`")
         return 0
     out.table([(s["id"], util.rel_time(s["created"]) if s["created"] else "?",
-                s["label"] or "—", s["skills"], util.human_size(s["size"]))
+                s["label"] or "—",
+                s["skills"] if s["skills"] is not None else "?",
+                util.human_size(s["size"]))
                for s in snaps],
               headers=("ID", "WHEN", "LABEL", "SKILLS", "SIZE"),
               # The id is the only argument `snapshot restore` accepts, and

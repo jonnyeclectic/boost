@@ -519,7 +519,7 @@ def cmd_policy(argv) -> int:
     pol = policy.load()
     everything = lockfile.all_installed()
     min_score = int(pol.get("min_quality_score") or 0)
-    violations = []  # (name, problem)
+    violations = []  # (name, kind, label, problem)
     total = 0
     for kind, section in everything.items():
         for name, entry in sorted(section.items()):
@@ -527,17 +527,17 @@ def cmd_policy(argv) -> int:
             label = name if kind == "skill" else "%s (%s)" % (name, kind)
             tap = entry.get("tap", "local")
             if name in pol["blocked_skills"]:
-                violations.append((label, "on the blocklist"))
+                violations.append((name, kind, label, "on the blocklist"))
             if tap in pol["blocked_taps"]:
-                violations.append((label, "tap %s is blocked" % tap))
+                violations.append((name, kind, label, "tap %s is blocked" % tap))
             if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
-                violations.append((label, "tap %s is not on the allowlist" % tap))
+                violations.append((name, kind, label, "tap %s is not on the allowlist" % tap))
             # Quality scoring reads a store directory, which only skills have.
             if min_score and kind == "skill":
                 score, _notes = util.score_skill(store.skill_store_dir(name))
                 if score < min_score:
                     violations.append(
-                        (label, "quality score %d < required %d" % (score, min_score)))
+                        (name, kind, label, "quality score %d < required %d" % (score, min_score)))
     unpinned = sorted(
         n if k == "skill" else "%s (%s)" % (n, k)
         for k, section in everything.items()
@@ -558,7 +558,11 @@ def cmd_policy(argv) -> int:
             "skills": counts["skill"],
             "counts": counts,
             "total": total,
-            "violations": [{"skill": s, "violation": v} for s, v in violations],
+            # "skill" keeps the pre-fix shape (name+kind folded together) as a
+            # deprecated alias for an existing JSON consumer; "name"/"kind"
+            # are the machine-clean fields a new consumer should read.
+            "violations": [{"name": n, "kind": k, "skill": label,
+                            "violation": v} for n, k, label, v in violations],
             "pin_only": bool(pol["pin_only"]),
             "unpinned": unpinned if pol["pin_only"] else [],
         }, indent=2))
@@ -570,7 +574,8 @@ def cmd_policy(argv) -> int:
                  + (" (%d unpinned item(s): %s)"
                     % (len(unpinned), ", ".join(unpinned)) if unpinned else ""))
     if violations:
-        out.table(violations, headers=("ITEM", "VIOLATION"))
+        out.table([(label, v) for _n, _k, label, v in violations],
+                  headers=("ITEM", "VIOLATION"))
         print()
         out.err("%d policy violation(s) across %d installed item(s)"
                 % (len(violations), total),

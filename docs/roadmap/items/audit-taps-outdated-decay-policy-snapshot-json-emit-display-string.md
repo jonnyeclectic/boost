@@ -2,15 +2,15 @@
 id: audit-taps-outdated-decay-policy-snapshot-json-emit-display-string
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: one array holds "updated":"2026-07-24" and "updated":"11h ago" — same key, two formats
 order: 230
-owner:
-pr:
+owner: loop/json-display-strings
+pr: 769
 title: "<code>taps</code>/<code>outdated</code>/<code>decay</code>/<code>policy</code>/<code>snapshot</code> --json emit display strings as machine fields"
 ---
 Five <code>--json</code> outputs leak the table renderer's strings into the machine-readable
@@ -44,3 +44,16 @@ numeric-or-null counts in snapshot list. Sites: <code>boost_cli/commands/taps.py
 <code>taps.py:331</code>, <code>taps.py:341-347</code>, plus the decay/policy/snapshot row builders.
 No flag or summary changes, so no doc regeneration needed. Found by the 2026-08 CLI audit
 (cluster <code>json-display-strings</code>); repro in the audit log.
+
+<b>Status (this branch).</b> All five sites fixed with updated functional-test coverage. The
+implementing sandbox's network policy blocked PyPI, so the pinned <code>make check</code> toolchain
+could not be installed or run in-session; local substitutes (ruff, mypy, a byte-for-byte functional/
+unit-suite comparison against unmodified <code>main</code>, <code>tests/smoke.sh</code>) all came back
+clean. PR #769's own CI — which does have network access — has since run the real gate to completion:
+lint, mypy, pyright, import-linter, vulture, xenon, interrogate, refurb (caught and fixed one
+<code>{**base, ...}</code> pattern the sandbox's tools couldn't check), tests on every supported
+Python across three OSes, and all 6 mutation shards are green. The one red check
+(<code>lighthouse</code>, a <code>docs/roadmap.html</code> performance-budget assertion) is a
+pre-existing flake independent of this diff — it fails intermittently on <code>main</code> itself
+across unrelated commits — and is documented on the PR. Left <code>inflight</code> rather than
+<code>shipped</code> because merging is a human's call, not this branch's.

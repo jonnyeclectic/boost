@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime
 
 from boost_cli.core import paths
 
@@ -1206,7 +1207,22 @@ class TestDecay:
         assert data["skills"][0]["name"] == "brainstorming"
         assert data["skills"][0]["relevance"] == "none"
         assert data["skills"][0]["verdict"] == "review"
-        assert data["skills"][0]["last_activity"].endswith("ago")
+        # Machine field is an ISO timestamp, not the table's humanized
+        # "Xh ago" — parsing it back confirms the shape without pinning the
+        # exact age, which would make the test flake on host load.
+        datetime.strptime(data["skills"][0]["last_activity"],
+                          "%Y-%m-%dT%H:%M:%SZ")
+
+    def test_json_last_activity_is_null_without_journal_history(
+            self, boost, installed, tmp_path, monkeypatch):
+        empty = tmp_path / "empty-project"
+        empty.mkdir()
+        monkeypatch.chdir(empty)
+        paths.pulse_path().unlink()  # drop the install event `installed` just logged
+        data = json.loads(boost("decay", "--json").out)
+        assert data["skills"][0]["last_activity"] is None
+        r = boost("decay")
+        assert "never" in r.out
 
 
 # ── heal ─────────────────────────────────────────────────────────────────

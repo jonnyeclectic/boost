@@ -307,6 +307,9 @@ class TestTaps:
         assert data[0]["skills"] == 5
         assert data[1]["skills"] == 5
         assert re.match(r"^\d{4}-\d{2}-\d{2}$", data[0]["updated"])
+        # An unpinned tap reports null, not the empty-string sentinel a
+        # machine consumer would have to know to treat as "unset".
+        assert data[0]["pin"] is None
 
     def test_empty_state_hint(self, boost, sandbox):
         r = boost("taps")
@@ -324,10 +327,15 @@ class TestTaps:
         r = boost("taps")
         assert "ago" in r.out                    # cache 'generated' age
         assert "1 taps · 5 items" in r.out       # items still from the cache
+        # The table humanizes; the JSON `updated` field stays the raw ISO
+        # timestamp the cache actually recorded, not the same relative string.
+        data = json.loads(boost("taps", "--json").out)
+        assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", data[0]["updated"])
         (paths.cache_dir() / "fixture-tap.json").unlink()
         r = boost("taps")
         assert "?" in r.out                      # no clone, no cache
         assert "1 taps · 0 items" in r.out
+        assert json.loads(boost("taps", "--json").out)[0]["updated"] is None
 
 
 # ── outdated ─────────────────────────────────────────────────────────────
@@ -363,6 +371,8 @@ class TestOutdated:
                                       "kind": "skill",
                                       "installed": "1.4.0",
                                       "latest": "1.5.0",
+                                      "reason": "version",
+                                      "latest_commit": None,
                                       "tap": "bumped-tap",
                                       "pinned": True}]
 
@@ -389,8 +399,8 @@ class TestOutdated:
         assert "1 outdated" in r.out
         data = json.loads(boost("outdated", "--json").out)
         assert data == [{"name": "brainstorming", "kind": "skill",
-                         "installed": "1.4.0",
-                         "latest": "1.4.0 (%s)" % head[:7],
+                         "installed": "1.4.0", "latest": "1.4.0",
+                         "reason": "content", "latest_commit": head[:7],
                          "tap": "fixture-tap", "pinned": False}]
 
     def test_source_vanished_marker(self, boost, installed):
@@ -400,6 +410,11 @@ class TestOutdated:
         r = boost("outdated")
         assert "source missing" in r.out
         assert "1 outdated" in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert data == [{"name": "brainstorming", "kind": "skill",
+                         "installed": "1.4.0", "latest": None,
+                         "reason": "source-missing", "latest_commit": None,
+                         "tap": "fixture-tap", "pinned": False}]
 
     def test_changed_rule_source_is_listed_with_kind(self, boost,
                                                      fixture_tap_src, tmp_path):
@@ -426,8 +441,8 @@ class TestOutdated:
         assert "content changed" in r.out
         data = json.loads(boost("outdated", "--json").out)
         assert data == [{"name": "house-style", "kind": "rule",
-                         "installed": "1.0.0",
-                         "latest": "1.0.0 (content changed)",
+                         "installed": "1.0.0", "latest": "1.0.0",
+                         "reason": "content", "latest_commit": None,
                          "tap": "rule-tap", "pinned": False}]
 
 
