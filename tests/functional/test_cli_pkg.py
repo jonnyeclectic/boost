@@ -1678,7 +1678,11 @@ class TestSnapshotEdges:
         assert snaps[0]["id"] == sid
         assert snaps[0]["created"] == ""
         assert snaps[0]["label"] == ""
-        assert snaps[0]["skills"] == "?"
+        # A numeric field stays numeric-or-null even with a broken sidecar —
+        # "?" is a table-only placeholder, not a machine value.
+        assert snaps[0]["skills"] is None
+        r = boost("snapshot", "list")
+        assert "?" in r.out
 
     def test_restore_declined_without_assume_yes(self, boost, installed,
                                                  monkeypatch):

@@ -2,14 +2,14 @@
 id: audit-taps-outdated-decay-policy-snapshot-json-emit-display-string
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: one array holds "updated":"2026-07-24" and "updated":"11h ago" — same key, two formats
 order: 230
-owner:
+owner: loop/json-display-strings
 pr:
 title: "<code>taps</code>/<code>outdated</code>/<code>decay</code>/<code>policy</code>/<code>snapshot</code> --json emit display strings as machine fields"
 ---
@@ -44,3 +44,12 @@ numeric-or-null counts in snapshot list. Sites: <code>boost_cli/commands/taps.py
 <code>taps.py:331</code>, <code>taps.py:341-347</code>, plus the decay/policy/snapshot row builders.
 No flag or summary changes, so no doc regeneration needed. Found by the 2026-08 CLI audit
 (cluster <code>json-display-strings</code>); repro in the audit log.
+
+<b>Status (this branch).</b> All five sites fixed with updated functional-test coverage; ruff and
+mypy pass on the changed files, and the full `test_cli_taps.py`/`test_cli_quality.py`/
+`test_cli_configuration.py`/`test_cli_pkg.py` suites show identical (pre-existing, environment-only)
+failures on this branch and on unmodified <code>main</code> — no regressions from this change. The
+implementing sandbox's network policy blocks PyPI, so the pinned `make check` toolchain
+(coverage/mutation/vulture/xenon/etc.) could not be installed or run in-session; CI runs the real
+gate on the PR. Left <code>inflight</code> rather than <code>shipped</code> until that gate is
+confirmed green.

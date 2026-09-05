@@ -373,7 +373,10 @@ def _decay_rows(cwd: Path) -> list[dict]:
         relevance = "ok" if overlap >= 2 else ("low" if overlap == 1 else "none")
         ts = last_by.get(name)
         recent = ts is not None and ts >= cutoff
-        last = util.rel_time(ts.strftime("%Y-%m-%dT%H:%M:%SZ")) if ts else "never"
+        # Machine value: an ISO timestamp, or None when there is no journal
+        # entry — humanizing (`rel_time`, the "never" placeholder) is a
+        # display concern the table branch applies, not this shared row.
+        last_iso = ts.strftime("%Y-%m-%dT%H:%M:%SZ") if ts else None
         if relevance == "none" and not recent:
             verdict = "decay"
         elif relevance in ("none", "low"):
@@ -381,7 +384,7 @@ def _decay_rows(cwd: Path) -> list[dict]:
         else:
             verdict = "ok"
         rows.append({"name": name, "relevance": relevance,
-                     "last_activity": last, "verdict": verdict})
+                     "last_activity": last_iso, "verdict": verdict})
     return rows
 
 
@@ -1015,7 +1018,8 @@ def cmd_decay(argv):
                 "review": out.role("review", "warn"),
                 "ok": out.role("ok", "success")}
     out.table([(r["name"], out.role(r["relevance"], rel_role[r["relevance"]]),
-                r["last_activity"], verdicts[r["verdict"]]) for r in rows],
+                util.rel_time(r["last_activity"]) if r["last_activity"] else "never",
+                verdicts[r["verdict"]]) for r in rows],
               headers=("SKILL", "RELEVANCE", "LAST ACTIVITY", "VERDICT"))
     n_decay = sum(1 for r in rows if r["verdict"] == "decay")
     n_review = sum(1 for r in rows if r["verdict"] == "review")
