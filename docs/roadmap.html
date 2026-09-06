@@ -12314,8 +12314,9 @@ the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-info-stats-explain-render-a-different-smaller-shape-for-rule">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>info</code>/<code>stats</code>/<code>explain</code> render a smaller shape for rules and workflows than for skills</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>All three item kinds install, but the reporting commands treat two of them as second-class.
 <code>info dotnet-build --json</code> (a rule) returns
 <code>{"name","kind":"rule","installed":{&hellip;}}</code> &mdash; three keys &mdash; while
@@ -12345,7 +12346,7 @@ envelope symmetrically; use <code>cat['skill_md']</code> for a not-installed rul
 one (sorted) agents ordering; and have <code>cmd_explain</code> fall back to
 <code>cat['description']</code>/the lock's description and strip the <code>#&nbsp;&lt;name&gt;</code> block
 header before the heading scan. Found by the 2026-08 CLI audit (cluster info-kind-parity); repro in
-the audit log.</p>
+the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>

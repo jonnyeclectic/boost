@@ -2,7 +2,7 @@
 id: audit-info-stats-explain-render-a-different-smaller-shape-for-rule
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 1
 note: info --json is 13 keys for a skill, 3 for a rule — and only the rule says its kind
 order: 229
 owner: loop/info-stats-explain-parity
-pr:
+pr: 789
 title: "<code>info</code>/<code>stats</code>/<code>explain</code> render a smaller shape for rules and workflows than for skills"
 ---
 All three item kinds install, but the reporting commands treat two of them as second-class.
