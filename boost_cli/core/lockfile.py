@@ -258,6 +258,23 @@ def installed_workflows() -> dict:
     return read()["workflows"]
 
 
+def agent_names(kind: str, entry: dict | None) -> list[str]:
+    """Sorted, deduplicated agent names an installed item of ``kind`` reaches.
+
+    A skill's lock entry records a flat ``agents`` list; a rule or workflow
+    instead records one ``materializations`` entry per agent, so the name
+    lives at ``m["agent"]``. Sorting both the same way is the point: before
+    this helper existed, `boost stats`' rule/workflow branch sorted its
+    agents line while the skill branch printed raw lock/install order —
+    two presentations of the same fact that happened to disagree.
+    """
+    if not entry:
+        return []
+    if kind == "skill":
+        return sorted(entry.get("agents") or [])
+    return sorted({m.get("agent", "?") for m in entry.get("materializations") or []})
+
+
 def find_any(name: str) -> tuple[str, dict] | None:
     """Resolve ``name`` across all three sections: ``(kind, entry)`` or None.
 

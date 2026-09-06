@@ -6,11 +6,36 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 
 import pytest
 
 from boost_cli.core import paths
+
+
+def _git_rule_tap(fixture_tap_src, dest, name="dep-mgmt",
+                  description="Keep dependency manifests in sync with lockfiles.",
+                  heading="Pin transitive versions",
+                  body="Always pin transitive dependency versions."):
+    """A real, tappable git repo carrying one rule with real frontmatter.
+
+    Copied from the shared fixture tap rather than built from scratch so the
+    result taps and scans exactly like a normal registry; the one rule added
+    on top is what a test actually wants to install.
+    """
+    shutil.copytree(fixture_tap_src, dest)
+    (dest / "rules").mkdir()
+    (dest / "rules" / (name + ".mdc")).write_text(
+        "---\nname: %s\nversion: 1.0.0\ndescription: %s\n---\n\n"
+        "## %s\n\n%s\n" % (name, description, heading, body),
+        encoding="utf-8")
+    subprocess.run(["git", "-C", str(dest), "add", "-A"],
+                   check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(dest), "commit", "-qm", "add rule"],
+                   check=True, capture_output=True)
+    return dest
 
 
 def _lock():
@@ -1003,3 +1028,50 @@ class TestMaterializedKinds:
         assert "requires: commit-messages ✓ installed" in r.out
         r = boost("deps")
         assert "no unmet requirements or conflicts" in r.out
+
+    def test_info_json_carries_description_from_the_tap(
+            self, boost, fixture_tap_src, tmp_path):
+        # docs/roadmap/items/audit-info-stats-explain-render-a-different-
+        # smaller-shape-for-rule.md: the materialized JSON envelope had
+        # "name"/"kind"/"installed" only — three keys against a skill's
+        # thirteen, and no description even though the tap still has one.
+        tap = _git_rule_tap(fixture_tap_src, tmp_path / "rule-tap")
+        boost("tap", str(tap))
+        boost("install", "dep-mgmt", "--agent", "claude-code")
+        r = boost("info", "dep-mgmt")
+        assert re.search(r"description\s+Keep dependency manifests", r.out)
+        data = json.loads(boost("info", "dep-mgmt", "--json").out)
+        assert data["kind"] == "rule"
+        assert data["description"] == \
+            "Keep dependency manifests in sync with lockfiles."
+
+    def test_info_not_installed_rule_shows_kind_badge_and_file_source(
+            self, boost, fixture_tap_src, tmp_path):
+        # Before this fix a not-installed rule/workflow showed no kind badge
+        # or line at all, and its "source" was `cat['rel_dir']` — the tap's
+        # whole rules/ directory, not the one file this item actually is.
+        tap = _git_rule_tap(fixture_tap_src, tmp_path / "rule-tap")
+        boost("tap", str(tap))
+        r = boost("info", "dep-mgmt")
+        assert "not installed" in r.out and "rule" in r.out
+        assert re.search(r"kind\s+rule", r.out)
+        assert re.search(r"source\s+rules/dep-mgmt\.mdc", r.out)
+        assert not re.search(r"source\s+rules\s*$", r.out, re.MULTILINE)
+        data = json.loads(boost("info", "dep-mgmt", "--json").out)
+        assert data["kind"] == "rule"
+
+    def test_explain_installed_rule_keeps_description_and_a_real_outline(
+            self, boost, fixture_tap_src, tmp_path):
+        # After install, `explain` used to lose the description entirely
+        # (the materialized CLAUDE.md block carries no frontmatter) and its
+        # "Outline:" started at the block's own "# dep-mgmt" managed-block
+        # header instead of the rule's real first heading.
+        tap = _git_rule_tap(fixture_tap_src, tmp_path / "rule-tap")
+        boost("tap", str(tap))
+        boost("install", "dep-mgmt", "--agent", "claude-code")
+        r = boost("explain", "dep-mgmt")
+        assert "Keep dependency manifests in sync with lockfiles." in r.out
+        assert "Outline:" in r.out
+        outline = r.out.split("Outline:", 1)[1]
+        assert "dep-mgmt" not in outline
+        assert "Pin transitive versions" in outline

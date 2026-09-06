@@ -358,16 +358,31 @@ def cmd_list(argv):
     return 0
 
 
+def _catalog_description(name: str, tap: str | None) -> str:
+    """The tap's description for ``name``, preferring an entry from ``tap``.
+
+    A rule/workflow's lock entry carries no description of its own (unlike a
+    skill's SKILL.md frontmatter, nothing about a materialized block is
+    self-describing), so the catalog is the only place left to ask — same
+    source `cmd_stats` already reads for a not-installed item's description.
+    """
+    matches = catalog.find(name)
+    same_tap = [e for e in matches if e.get("tap") == tap]
+    cat = (same_tap or matches)[0] if (same_tap or matches) else None
+    return str((cat or {}).get("description") or "")
+
+
 def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
-    """The identity card for an installed rule/workflow — the lock facts.
+    """The identity card for an installed rule/workflow — the lock facts,
+    plus the catalog description when a tap still carries this entry.
 
     No store dir, quality score or file counts here: those describe a skill's
-    directory, which these kinds do not have. What matters is what the lock
-    records — where it came from and which agent files carry it.
+    directory, which these kinds do not have.
     """
+    desc = _catalog_description(name, entry.get("tap"))
     if as_json:
-        print(json.dumps({"name": name, "kind": kind, "installed": entry},
-                         indent=2))
+        print(json.dumps({"name": name, "kind": kind, "description": desc,
+                         "installed": entry}, indent=2))
         return 0
     out.heading(name)
     badges = [out.badge("installed %s" % kind, "green")]
@@ -379,6 +394,8 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         badges.append(out.badge(str(entry["tap"]), "violet"))
     out.info(" ".join(badges))
     out.kv("kind", kind)
+    if desc:
+        out.kv("description", desc, wrap=True)
     out.kv("version", str(entry.get("version", "?")))
     out.kv("tap", entry.get("tap", "?"))
     if kind == "workflow" and entry.get("slot"):
@@ -403,8 +420,8 @@ def _info_materialized(name: str, kind: str, entry: dict, as_json: bool) -> int:
         # files that were just removed.
         out.kv("materialized", "(removed — quarantined)")
     else:
-        agents = [m.get("agent", "?") for m in entry.get("materializations") or []]
-        out.kv("materialized", ", ".join(agents) or "(none)")
+        out.kv("materialized",
+               ", ".join(lockfile.agent_names(kind, entry)) or "(none)")
     out.kv("pinned", "yes" if entry.get("pinned") else "no")
     out.kv("quarantined", "yes" if entry.get("quarantined") else "no")
     return 0
@@ -445,6 +462,12 @@ def cmd_info(argv):
         cat = candidates[0] if candidates else None
     else:
         cat = catalog.resolve_one(args.name)   # raises if unknown anywhere
+    # `lock`/`plock` only ever hold a *skill* lock entry (they read the
+    # lock's "skills" section specifically) — an installed rule or workflow
+    # was already answered above via `_info_materialized`. So the only way
+    # `kind` is anything but "skill" here is a not-yet-installed catalog
+    # entry, and `cat["kind"]` is where that lives.
+    kind = (cat or {}).get("kind") or "skill"
 
     sdir = store.skill_store_dir(name)
     skill_dir = sdir if lock and sdir.is_dir() else None
@@ -477,7 +500,7 @@ def cmd_info(argv):
 
     if args.json:
         print(json.dumps({
-            "name": name, "description": desc,
+            "name": name, "kind": kind, "description": desc,
             "installed": lock, "project": plock,
             "capabilities": declared_caps, "detected_capabilities": detected_extra,
             "mcp_servers": [r["name"] for r in mcp_servers],
@@ -507,12 +530,19 @@ def cmd_info(argv):
     elif plock:
         badges.append(out.badge("installed in this project", "green"))
     else:
-        badges.append(out.badge("not installed", "cyan"))
+        # A not-installed rule/workflow says so in its own badge — previously
+        # this printed the same bare "not installed" a not-yet-tapped skill
+        # gets, with no sign anywhere that the item is not a skill at all.
+        badges.append(out.badge(
+            "not installed" if kind == "skill" else "not installed %s" % kind,
+            "cyan"))
     tapname = (lock or cat or {}).get("tap")
     if tapname:
         badges.append(out.badge(str(tapname), "violet"))
     if badges:
         out.info(" ".join(badges))
+    if kind != "skill":
+        out.kv("kind", kind)
     if desc:
         # kv's own wrap=True already folds to the real terminal width and
         # aligns continuations under the value — the hand-rolled version this
@@ -534,7 +564,13 @@ def cmd_info(argv):
         out.kv("category", category)
     if lock and sdir.is_dir():
         out.kv("store", _tilde(sdir))
-    src = lock.get("source_dir") if lock else (cat or {}).get("rel_dir")
+    # A skill's catalog `rel_dir` is its own directory — the right thing to
+    # show as "source". A rule/workflow's `rel_dir` is the tap's whole
+    # commands/rules directory shared by every item of that kind; `skill_md`
+    # (despite the name, the generic per-entry relative file path) is the
+    # one file this item actually is.
+    src = lock.get("source_dir") if lock else (
+        (cat or {}).get("skill_md") if kind != "skill" else (cat or {}).get("rel_dir"))
     if src:
         out.kv("source", _tilde(src))
     if lock:
@@ -739,6 +775,7 @@ def cmd_explain(argv):
                                  description="Explain what a skill does in plain English")
     ap.add_argument("name")
     args = ap.parse_args(argv)
+    _qualifier, _bare = catalog.split_name(args.name)
     text, _kind, _lock, _cat = _resolve_text(args.name)
     if ai.available():
         reply = ai.ask(
@@ -760,7 +797,20 @@ def cmd_explain(argv):
     else:
         out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     meta, body = frontmatter.parse(text)
+    if _kind != "skill":
+        # A materialized claude-mode rule/workflow's block body is the
+        # synthetic "# <name>\n\n<body>" header `rules.render_claude_body`
+        # writes — not a real heading from the item's own content. Strip it
+        # before the outline scan below, or every installed rule's outline
+        # starts at the CLAUDE.md managed-block header instead of a real one.
+        body = re.sub(r"\A#[ \t]+%s[ \t]*\n+" % re.escape(_bare), "",
+                      body, count=1)
     desc = str(meta.get("description") or "").strip()
+    if not desc and _lock:
+        # The lock has no description field of its own for a rule/workflow
+        # (unlike a skill's SKILL.md frontmatter), and its materialized text
+        # carries none either — the catalog is the only place left to ask.
+        desc = _catalog_description(_bare, _lock.get("tap"))
     if desc:
         _print_wrapped(desc)
     headings = re.findall(r"^(#{1,6})\s+(.*)$", body, re.MULTILINE)
