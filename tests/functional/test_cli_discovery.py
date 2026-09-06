@@ -1000,7 +1000,50 @@ class TestBrowse:
         for name in ("brainstorming", "commit-messages", "cowboy-coding",
                      "jira-integration", "tdd-workflow"):
             assert name in r.out
-        assert "5 skills · install with `boost install <name>`" in r.out
+        assert "5 items: 5 skills · install with `boost install <name>`" in r.out
+        assert "narrow with `boost search <query>`" in r.out
+        # every fixture entry is a skill and none are curated: the kind
+        # column carries the (redundant but honest) [skill] badge, and the
+        # curated column is dropped rather than rendered as an empty header.
+        assert "[skill]" in r.out
+        assert "★" not in r.out
+
+    def test_non_tty_dedupes_mirrored_rows(self, boost, tapped, monkeypatch):
+        # A registry rendering one skill into multiple agent dirs used to list
+        # every mirror in the plain fallback with nothing to tell them apart.
+        from boost_cli.core import catalog
+        entries = catalog.all_entries()
+        mirror = dict(entries[0])
+        monkeypatch.setattr(catalog, "all_entries", lambda: entries + [mirror])
+        r = boost("browse")
+        assert r.out.count(mirror["name"]) == 1
+
+    def test_non_tty_shows_curated_column_when_curated(self, boost, tapped, monkeypatch):
+        from boost_cli.core import catalog
+        entries = catalog.all_entries()
+        entries[0]["curated"] = True
+        monkeypatch.setattr(catalog, "all_entries", lambda: entries)
+        r = boost("browse")
+        assert "★" in r.out
+
+    def test_curses_init_failure_falls_back_to_plain(self, boost, tapped, monkeypatch):
+        # An fd that claims isatty() but isn't a real pty (IDE consoles,
+        # `script`, TERM=dumb) can fail deep inside curses.wrapper rather than
+        # at the isatty() check — regression: this used to crash with an
+        # "unexpected error" and leave the terminal in raw mode.
+        import curses as real_curses
+        from boost_cli.commands import discovery
+        tty = types.SimpleNamespace(isatty=lambda: True)
+        monkeypatch.setattr(discovery, "sys",
+                            types.SimpleNamespace(stdin=tty, stdout=tty))
+
+        def boom(curses, entries):
+            raise real_curses.error("nocbreak() returned ERR")
+
+        monkeypatch.setattr(discovery, "_browse_tui", boom)
+        r = boost("browse")
+        assert "the terminal does not support curses (nocbreak() returned ERR)" in r.out
+        assert "showing the full catalog" in r.out
 
     def test_no_skills(self, boost, sandbox):
         r = boost("browse", expect=1)
