@@ -10,7 +10,7 @@ wow: 1
 note: unpin prints 'released the commit pin too' before the unpinned line it qualifies
 order: 299
 owner: loop/unpin-trailer-order
-pr:
+pr: 792
 title: "boost unpin: CLI audit findings (2026-08)"
 ---
 <b><code>unpin</code> prints its trailer before the line it qualifies</b> (low). After
