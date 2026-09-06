@@ -16940,8 +16940,9 @@ Found by the 2026-08 CLI audit (cluster <code>trust-tampered-manifest</code>); r
       </article>
 
       <article class="cap rcard" id="audit-attest-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Trust · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Trust · UX</span></div>
         <h3>boost attest: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>attest --verify</code> misdiagnoses a missing artifact as a content change.</b> After
 deleting <code>~/.agents/skills/brainstorming</code>, <code>boost attest --verify brainstorming</code>
 prints <em>&ldquo;! brainstorming: store content no longer matches the lock sha&rdquo;</em> (exit 1)
@@ -16960,7 +16961,7 @@ wording for the genuinely modified case, and in <code>--json</code> add a <code>
 (<code>missing</code>/<code>modified</code>) rather than repurposing the boolean. No doc changes.
 
 <br><br>Found by the 2026-08 CLI audit (cluster <code>attest-missing-store-dir</code>); repro in the
-audit log.</p>
+audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
