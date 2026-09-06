@@ -1014,7 +1014,7 @@ class TestBrowse:
         from boost_cli.core import catalog
         entries = catalog.all_entries()
         mirror = dict(entries[0])
-        monkeypatch.setattr(catalog, "all_entries", lambda: entries + [mirror])
+        monkeypatch.setattr(catalog, "all_entries", lambda: [*entries, mirror])
         r = boost("browse")
         assert r.out.count(mirror["name"]) == 1
 
@@ -1032,6 +1032,7 @@ class TestBrowse:
         # at the isatty() check — regression: this used to crash with an
         # "unexpected error" and leave the terminal in raw mode.
         import curses as real_curses
+
         from boost_cli.commands import discovery
         tty = types.SimpleNamespace(isatty=lambda: True)
         monkeypatch.setattr(discovery, "sys",

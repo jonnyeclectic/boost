@@ -37,6 +37,8 @@ CRM
 cron
 crontab
 cyclomatic
+dedupe
+deduped
 Dependabot
 deps
 deserialization
