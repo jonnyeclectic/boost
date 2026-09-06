@@ -2,14 +2,14 @@
 id: audit-info-stats-explain-render-a-different-smaller-shape-for-rule
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
 note: info --json is 13 keys for a skill, 3 for a rule — and only the rule says its kind
 order: 229
-owner:
+owner: loop/info-stats-explain-parity
 pr:
 title: "<code>info</code>/<code>stats</code>/<code>explain</code> render a smaller shape for rules and workflows than for skills"
 ---
