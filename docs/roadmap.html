@@ -14219,8 +14219,9 @@ Found by the 2026-08 CLI audit (cluster <code>taps-updated-column</code>); repro
       </article>
 
       <article class="cap rcard" id="audit-unpin-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost unpin: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>unpin</code> prints its trailer before the line it qualifies</b> (low). After
 <code>pin brainstorming --commit</code>, <code>unpin brainstorming</code> prints
 <em>&ldquo;released the commit pin too&rdquo;</em> first and then
@@ -14236,7 +14237,7 @@ mirroring <code>cmd_pin</code>'s order (<code>pkg.py:1421-1436</code>) &mdash;
 <code>clear_commit_pin</code> can still run before; only the <code>out.dim</code> is deferred. No
 doc changes.
 
-Found by the 2026-08 CLI audit (cluster <code>unpin-trailer-order</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>unpin-trailer-order</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>

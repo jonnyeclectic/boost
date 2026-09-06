@@ -2,14 +2,14 @@
 id: audit-unpin-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · UX
 complexity: S
 impact: Low
 wow: 1
 note: unpin prints 'released the commit pin too' before the unpinned line it qualifies
 order: 299
-owner:
+owner: loop/unpin-trailer-order
 pr:
 title: "boost unpin: CLI audit findings (2026-08)"
 ---
