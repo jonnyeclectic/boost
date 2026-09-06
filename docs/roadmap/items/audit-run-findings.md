@@ -2,14 +2,14 @@
 id: audit-run-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: the 55-line runner's banner names a command that produces a 9-line file
 order: 289
-owner:
+owner: loop/run-print-banner
 pr:
 title: "boost run: CLI audit findings (2026-08)"
 ---
