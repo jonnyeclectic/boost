@@ -616,15 +616,23 @@ def cmd_attest(argv):
                "commit": (entry.get("commit") or "")[:9],
                "sha256": (entry.get("sha256") or "")[:12]}
         if args.verify:
+            reason = None
             if kind == "skill":
                 sdir = store.skill_store_dir(name)
-                rec["sha_ok"] = (sdir.is_dir()
-                                 and util.sha256_dir(sdir) == entry.get("sha256"))
+                if not sdir.is_dir():
+                    reason = "missing"
+                elif util.sha256_dir(sdir) != entry.get("sha256"):
+                    reason = "modified"
             else:
                 # The artifact the agent loads, against the hash recorded when
                 # it was written. UNLOCKED (a pre-hash entry) never fails.
-                rec["sha_ok"] = integrity.materialized_status(name, entry) not in (
-                    integrity.STATUS_MODIFIED, integrity.STATUS_MISSING)
+                st = integrity.materialized_status(name, entry)
+                if st == integrity.STATUS_MISSING:
+                    reason = "missing"
+                elif st == integrity.STATUS_MODIFIED:
+                    reason = "modified"
+            rec["sha_ok"] = reason is None
+            rec["reason"] = reason
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
                 failures += 1
@@ -645,7 +653,12 @@ def cmd_attest(argv):
               headers=("NAME", "WHO", "WHEN", "TAP", "COMMIT", "SHA"))
     if args.verify:
         for r in records:
-            if not r["sha_ok"]:
+            if r["reason"] == "missing":
+                if r["kind"] == "skill":
+                    out.warn("%s: store directory missing (boost heal)" % r["name"])
+                else:
+                    out.warn("%s: materialized file missing" % r["name"])
+            elif r["reason"] == "modified":
                 out.warn("%s: %s content no longer matches the lock sha"
                          % (r["name"], "store" if r["kind"] == "skill"
                             else "materialized"))
