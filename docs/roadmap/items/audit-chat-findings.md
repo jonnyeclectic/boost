@@ -2,14 +2,14 @@
 id: audit-chat-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: chat's own printed suggestion retrieves the wrong skill; its "&gt; " prompt leaks into piped stdout
 order: 255
-owner:
+owner: loop/chat-audit-findings
 pr:
 title: "boost chat: CLI audit findings (2026-08)"
 ---
