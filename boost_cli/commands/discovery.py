@@ -1822,28 +1822,6 @@ def cmd_stats(argv):
                         hint="try `boost search %s`" % name)
     acts = {a: len(journal.events(action=a, subject=name))
             for a in ("install", "update", "uninstall")}
-    if lock is not None and kind != "skill":
-        # Materialized kinds have no store dir or agent symlinks; the lock
-        # facts and journal activity are their whole stats surface.
-        if args.as_json:
-            print(json.dumps({"name": name, "kind": kind, "installed": True,
-                              "lock": lock, "activity": acts}))
-            return 0
-        out.heading("%s (%s)" % (name, kind))
-        out.kv("version", lock.get("version", "?"))
-        out.kv("tap", lock.get("tap", "?"))
-        out.kv("installed", util.rel_time(lock.get("installed_at", "")))
-        out.kv("updated", util.rel_time(lock.get("updated_at", "")))
-        out.kv("agents", ", ".join(sorted(
-            {m.get("agent", "?") for m in lock.get("materializations") or []}))
-            or "none")
-        out.kv("pinned", "yes" if lock.get("pinned") else "no")
-        if lock.get("quarantined"):
-            out.kv("quarantined", "yes")
-        out.kv("sha256", str(lock.get("sha256", ""))[:12])
-        out.kv("activity", "%d installs · %d updates · %d uninstalls"
-               % (acts["install"], acts["update"], acts["uninstall"]))
-        return 0
     latest = cat["version"] if cat else None
     upstream = None
     if cat:
@@ -1852,31 +1830,43 @@ def cmd_stats(argv):
             if tap.is_cloned:
                 lines = gitutil.log_for_path(tap.path, cat["rel_dir"], n=1)
                 upstream = lines[0] if lines else None
-    sdir = store.skill_store_dir(name)
-    size = util.dir_size(sdir) if lock and sdir.is_dir() else None
+    # Only a skill has a canonical store dir — a rule/workflow materializes
+    # into shared agent files instead of a directory boost owns, so `sdir`
+    # is never even looked up for those and `size` stays None rather than
+    # needing its own kind check below.
+    sdir = store.skill_store_dir(name) if kind == "skill" else None
+    size = util.dir_size(sdir) if sdir and lock and sdir.is_dir() else None
     if args.as_json:
         print(json.dumps({
-            "name": name, "installed": bool(lock), "lock": lock, "size": size,
-            "activity": acts,
+            "name": name, "kind": kind, "installed": bool(lock), "lock": lock,
+            "size": size, "activity": acts,
             "catalog": ({"latest": latest, "tap": cat["tap"],
                          "description": cat["description"],
                          "upstream": upstream} if cat else None)}))
         return 0
-    out.heading(name)
+    out.heading(name if kind == "skill" else "%s (%s)" % (name, kind))
     if lock:
         out.kv("version", lock.get("version", "?"))
         out.kv("tap", lock.get("tap", "?"))
         out.kv("installed", util.rel_time(lock.get("installed_at", "")))
         out.kv("updated", util.rel_time(lock.get("updated_at", "")))
-        out.kv("agents", ", ".join(lock.get("agents") or []) or "none")
+        # Sorted for both kinds — before this, a rule/workflow's agents line
+        # was sorted and a skill's printed raw lock/install order, which read
+        # like two commands disagreeing about the same fact rather than one
+        # command describing two kinds of item.
+        out.kv("agents", ", ".join(lockfile.agent_names(kind, lock)) or "none")
         out.kv("pinned", "yes" if lock.get("pinned") else "no")
+        if lock.get("quarantined"):
+            out.kv("quarantined", "yes")
         out.kv("sha256", str(lock.get("sha256", ""))[:12])
         if size is not None:
             out.kv("size", util.human_size(size))
+        if cat and cat.get("description"):
+            out.kv("description", cat["description"], wrap=True)
     elif cat:   # no lock means the guard above found a catalog entry
         out.kv("version", cat["version"])
         out.kv("tap", cat["tap"])
-        out.kv("description", cat["description"])
+        out.kv("description", cat["description"], wrap=True)
         out.info(out.role("not installed — `boost install %s`" % name, "muted"))
     out.kv("activity", "%d installs · %d updates · %d uninstalls"
            % (acts["install"], acts["update"], acts["uninstall"]))

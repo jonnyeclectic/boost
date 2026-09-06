@@ -1462,7 +1462,10 @@ class TestStats:
         assert "1.4.0" in lines["version"]
         assert "fixture-tap" in lines["tap"]
         assert entry["sha256"][:12] in lines["sha256"]
-        assert "claude-code, windsurf, cursor" in lines["agents"]
+        # Sorted, not lock/install order — `lockfile.agent_names` is what
+        # both `stats` and the installed-rule/workflow card now share, so a
+        # rule's agents line and a skill's read the same way.
+        assert "claude-code, cursor, windsurf" in lines["agents"]
         assert "no" in lines["pinned"]
         sdir = paths.store_dir() / "brainstorming"
         assert util.human_size(util.dir_size(sdir)) in lines["size"]
@@ -1538,6 +1541,37 @@ class TestStats:
         assert data["kind"] == "rule"
         assert data["installed"] is True
         assert data["lock"]["version"] == "1.2.0"
+
+    def test_installed_rule_shows_latest_description_and_upstream(
+            self, boost, fixture_tap_src, tmp_path):
+        # docs/roadmap/items/audit-info-stats-explain-render-a-different-
+        # smaller-shape-for-rule.md: the `kind != skill` branch used to
+        # `return` right after its own activity line, before the shared
+        # latest/description/upstream section below ever ran — even though
+        # `catalog.find` found the entry just like it does for a skill.
+        tap = tmp_path / "rule-tap"
+        shutil.copytree(fixture_tap_src, tap)
+        (tap / "rules").mkdir()
+        (tap / "rules" / "dep-mgmt.mdc").write_text(
+            "---\nname: dep-mgmt\nversion: 1.0.0\n"
+            "description: Keep dependency manifests in sync with lockfiles.\n"
+            "---\n\nAlways pin transitive dependency versions.\n",
+            encoding="utf-8")
+        subprocess.run(["git", "-C", str(tap), "add", "-A"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tap), "commit", "-qm", "add rule"],
+                       check=True, capture_output=True)
+        boost("tap", str(tap))
+        boost("install", "dep-mgmt", "--agent", "claude-code")
+        r = boost("stats", "dep-mgmt")
+        assert "1.0.0 (up to date)" in r.out
+        assert "Keep dependency manifests in sync with lockfiles." in r.out
+        assert "add rule" in r.out          # fixture commit subject, upstream
+        data = json.loads(boost("stats", "dep-mgmt", "--json").out)
+        assert data["kind"] == "rule"
+        assert data["catalog"]["description"] == \
+            "Keep dependency manifests in sync with lockfiles."
+        assert data["size"] is None          # no store dir for a rule
 
     def test_json_purity(self, boost, installed):
         r = boost("stats", "brainstorming", "--json")
