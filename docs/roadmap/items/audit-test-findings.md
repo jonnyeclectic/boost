@@ -2,14 +2,14 @@
 id: audit-test-findings
 board: code
 section: health
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 2
 note: a skill boost lint fails (exit 1) passes boost test outright (exit 0)
 order: 297
-owner:
+owner: loop/test-lint-consistency
 pr:
 title: "boost test: CLI audit findings (2026-08)"
 ---
