@@ -972,11 +972,23 @@ def cmd_recommend(argv):
 
 def _browse_plain(entries, why: str):
     out.warn(why + " — showing the full catalog")
-    out.table([(e["name"], "v" + e["version"], e["tap"],
-                "★" if e.get("curated") else "") for e in entries],
-              headers=("name", "version", "tap", ""))
-    out.info(out.role("%d skills · install with `boost install <name>`"
-                   % len(entries), "muted"))
+    # Same collapse the TUI does: a registry renders one skill into
+    # .claude/, .cursor/, .gemini/ and a plugin root, and this fallback used
+    # to list every copy with nothing to tell them apart.
+    unique = [e for e, _n in browse.dedupe(entries)]
+    show_curated = any(e.get("curated") for e in unique)
+    headers = ["name", "version", "tap", "kind"]
+    rows = [[e["name"], "v" + e["version"], e["tap"],
+             out.kind_label(e.get("kind", "skill"))]
+            for e in unique]
+    if show_curated:
+        headers.append("")
+        for row, e in zip(rows, unique, strict=True):
+            row.append("★" if e.get("curated") else "")
+    out.table([tuple(row) for row in rows], headers=tuple(headers))
+    out.info(out.role(
+        "%s · install with `boost install <name>` · narrow with `boost search <query>`"
+        % browse.plain_footer(unique), "muted"))
     return 0
 
 
@@ -1725,7 +1737,17 @@ def cmd_browse(argv):
         import curses
     except ImportError:
         return _browse_plain(entries, "curses is unavailable on this Python")
-    picked = _browse_tui(curses, entries)
+    try:
+        picked = _browse_tui(curses, entries)
+    except curses.error as e:
+        # An fd that claims isatty() but isn't a real pty (IDE run consoles,
+        # `script`, TERM=dumb) can fail deep inside curses.wrapper's own
+        # setup/teardown rather than at the isatty() check above. wrapper
+        # already ran its finally block (endwin() included), so the screen is
+        # restored by the time this is caught — printing here lands on a
+        # normal terminal, not a hosed one.
+        return _browse_plain(entries,
+                             "the terminal does not support curses (%s)" % e)
     if not picked:
         return 0
     # The browser installs in place now, so anything it hands back is usually

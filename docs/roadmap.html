@@ -13113,7 +13113,7 @@ must document the edited-persona state.</p>
       </article>
 
       <article class="cap rcard" id="audit-browse-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost browse: CLI audit findings (2026-08)</h3>
         <p><b>A curses init failure crashes with a report instead of falling back</b> (cluster
 <code>browse-curses-fallback</code>, med). On fds that claim <code>isatty</code> but are not a pty
@@ -13147,7 +13147,7 @@ a kind column, drop the curated column when nothing is curated, and word the foo
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">curses init failure = exit-70 crash + hosed terminal; piped fallback dumps 765 KB</span>
+          <span class="m">both findings fixed in PR; make check unrunnable in the sandbox (no PyPI/apt egress) — CI is the real gate</span>
         </div>
       </article>
 

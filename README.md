@@ -379,6 +379,13 @@ at least 95% alike, fold into one badged `×5`, with `^D` to show them again.
 Identity is the description and never the name: `code-reviewer` appears 75 times
 with 42 different descriptions, and those are 42 real skills.
 
+Without a real TTY (a pipe, an IDE run console, a terminal curses can't drive)
+`browse` falls back to a plain, deduped table — name, version, tap, kind — with
+a footer breaking the total down by kind and pointing at `boost search` to
+narrow it. The same fallback covers a curses initialization failure, so a
+terminal that merely *claims* `isatty()` degrades gracefully instead of
+crashing mid-draw.
+
 ## 81 commands, organized into 8 groups
 
 `boost --help` prints the full grouped list. For every flag of every command see

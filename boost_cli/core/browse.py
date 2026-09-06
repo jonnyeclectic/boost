@@ -265,6 +265,38 @@ def _similar(a: str, b: str, threshold: float) -> bool:
             and sm.ratio() >= threshold)
 
 
+#: Kinds broken out by name in :func:`plain_footer`, in the order they're
+#: listed. Anything else (there is no fourth kind today, but a cache entry
+#: can carry a stale or missing one) still counts toward the total.
+_PLAIN_KINDS = ("skill", "rule", "workflow")
+
+
+def plain_footer(entries) -> str:
+    """Footer text for the non-interactive browse fallback: total row count,
+    broken down by kind — e.g. ``"128 items: 100 skills · 20 rules · 8
+    workflows"``.
+
+    ``entries`` is what the caller is actually about to show (already
+    deduped, already filtered): this describes the rows on screen, not the
+    catalog behind them. A kind outside :data:`_PLAIN_KINDS` still counts
+    toward the total under "other" rather than silently vanishing from it —
+    the same "never let a count go unexplained" rule the TUI's own footer
+    (:func:`count_tail`) follows.
+    """
+    counts: dict[str, int] = {}
+    for e in entries:
+        kind = str(e.get("kind") or "skill")
+        counts[kind] = counts.get(kind, 0) + 1
+    parts = ["%d %s%s" % (counts[k], k, "" if counts[k] == 1 else "s")
+             for k in _PLAIN_KINDS if counts.get(k)]
+    other = sum(n for k, n in counts.items() if k not in _PLAIN_KINDS)
+    if other:
+        parts.append("%d other%s" % (other, "" if other == 1 else "s"))
+    n = len(entries)
+    return "%d item%s: %s" % (n, "" if n == 1 else "s",
+                              " · ".join(parts) if parts else "none")
+
+
 # --------------------------------------------------------------- focus
 
 #: Panes the focus ring can hold, top to bottom as the user reads them.
