@@ -396,6 +396,34 @@ class TestTruncate:
         assert output.truncate("abcdef", 1) == "…"
 
 
+class TestTruncateWideChars:
+    """CJK/emoji cost 2 display columns each; truncate() must clip by that
+    rendered width, not by codepoint count, or a row that measures under
+    budget in len() still overflows the terminal pane."""
+
+    def test_short_cjk_text_is_not_clipped(self):
+        # "名称" is 4 columns / 2 codepoints — well under budget either way.
+        assert output.truncate("名称", 10) == "名称"
+
+    def test_cjk_text_within_codepoint_count_but_over_column_budget_is_clipped(self):
+        # 6 codepoints, all wide -> 12 display columns. A codepoint-counting
+        # truncate (`len(text) <= width`) would wave this through at width=8;
+        # a column-counting one must not.
+        text = "名称测试内容"
+        clipped = output.truncate(text, 8)
+        assert output.visible_len(clipped) <= 8
+        assert clipped != text
+
+    def test_never_splits_a_wide_character(self):
+        clipped = output.truncate("名称测试", 5)
+        assert output.visible_len(clipped) <= 5
+        assert set(clipped) - {"…"} <= set("名称测试")
+
+    def test_clipped_width_never_exceeds_target_across_widths(self):
+        for w in range(1, 14):
+            assert output.visible_len(output.truncate("名称测试abcdef", w)) <= w
+
+
 class TestBadge:
     def test_plain_when_no_color(self, monkeypatch):
         monkeypatch.setenv("NO_COLOR", "1")
@@ -1380,6 +1408,13 @@ class TestSearchLayout:
         lay = output.search_layout(120, ["x" * 60], ["skill"], ["a/b"])
         assert lay.name_w == 32
 
+    def test_name_column_sized_by_display_width_not_codepoints(self):
+        # A 6-codepoint CJK name renders 12 columns wide; sizing the column
+        # off len() (6) leaves format_search_row's truncate() clipping a name
+        # that was never actually too wide for the column it was given.
+        lay = output.search_layout(100, ["名称测试内容"], ["skill"], ["a/b"])
+        assert lay.name_w == 12
+
     def test_kind_column_fits_the_widest_kind_shown(self):
         lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)
         assert lay.kind_w == len("[workflow]")
@@ -1552,6 +1587,18 @@ class TestFormatSearchRow:
                     + output.truncate(self.DESC, lay.desc_w))
         assert row == expected.rstrip()
 
+    def test_cjk_name_row_fits_a_60_column_pane(self):
+        # The reported bug: a CJK name/description measured 72 display
+        # columns at COLUMNS=60 because both the layout and truncate() sized
+        # by codepoint count. The plan and the row must now agree on cells.
+        name = "prompt-optimizer"
+        desc = "分析原始提示，识别意图和上下文，重构为结构化、精确的提示以提高模型效果"
+        lay = output.search_layout(60, [name], ["skill"], ["fixture-tap"])
+        row = output.format_search_row(
+            name, desc, "skill", "fixture-tap", 1.0,
+            curated=False, installed=False, lay=lay)
+        assert output.visible_len(row) <= 60
+
     def test_wide_color_row_strips_back_to_the_plain_row(self, monkeypatch):
         # Runs every colored cell (meter, mark, name, kind, tap) through its
         # role for real — a misnamed role raises here instead of shipping.
@@ -1602,6 +1649,35 @@ class TestFormatSearchRow:
             "a", "d", "skill", "", 0.1, curated=False, installed=False, lay=lay)
         assert top.startswith(output.rgb(*output.TOKENS["cyan"]))
         assert low.startswith(output.rgb(*output.TOKENS["pink"]))
+
+
+class TestSearchFooter:
+    """`boost search`'s trailing "N matches · ranked by X" line. Below the
+    retrieval cap the count is exact; at the cap it is a lower bound only —
+    reporting it as an exact count states something that was never measured."""
+
+    def test_true_count_below_the_cap(self):
+        assert (output.search_footer(2, "full-content BM25")
+                == "2 matches · ranked by full-content BM25")
+
+    def test_singular_match(self):
+        assert (output.search_footer(1, "full-content BM25")
+                == "1 match · ranked by full-content BM25")
+
+    def test_zero_matches(self):
+        assert (output.search_footer(0, "full-content BM25")
+                == "0 matches · ranked by full-content BM25")
+
+    def test_capped_reports_a_lower_bound_not_an_exact_count(self):
+        footer = output.search_footer(60, "full-content BM25",
+                                      capped=True, shown=15)
+        assert footer == "top 15 of 60+ retrieved · ranked by full-content BM25"
+        assert "matches" not in footer
+
+    def test_ranker_label_survives_capping_unchanged(self):
+        footer = output.search_footer(4000, "Claude Haiku relevance",
+                                      capped=True, shown=15)
+        assert footer.endswith("ranked by Claude Haiku relevance")
 
 
 class TestWrap:

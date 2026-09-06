@@ -2,14 +2,14 @@
 id: audit-search-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: "CJK rows 72 cells in a 60 pane; --json drops --smart; '60 matches' is the cap, not the count"
 order: 291
-owner:
+owner: loop/audit-search-findings
 pr:
 title: "boost search: CLI audit findings (2026-08)"
 ---
