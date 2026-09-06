@@ -80,6 +80,7 @@ def _iter_installed(names: list[str] | None = None) -> list[tuple[str, dict]]:
     """
     skills = lockfile.installed()
     if names:
+        names = list(dict.fromkeys(names))  # order-preserving dedupe
         missing, other_kind = [], []
         for n in names:
             if n in skills:
@@ -118,6 +119,7 @@ def _iter_installed_all(
         names: list[str] | None = None) -> list[tuple[str, str, dict]]:
     """[(kind, name, lock_entry)] across every section, or the given names."""
     if names:
+        names = list(dict.fromkeys(names))  # order-preserving dedupe
         out, missing = [], []
         for n in names:
             found = lockfile.find_any(n)

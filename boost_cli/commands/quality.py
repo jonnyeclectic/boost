@@ -843,23 +843,7 @@ def cmd_lint(argv):
     results: list[dict[str, Any]] = []
     for name, sdir in targets:
         score, notes = util.score_skill(sdir)
-        meta, _ = _read_skill(sdir)
-        errors = []
-        md = sdir / "SKILL.md"
-        if not md.exists():
-            errors.append("missing SKILL.md")
-        elif not meta and frontmatter.unclosed(
-                md.read_text(encoding="utf-8", errors="replace")):
-            # An open `---` with no closing fence parses as no frontmatter at
-            # all, so `name`/`description` both read absent — the same
-            # symptom three separate checks would otherwise each report on
-            # their own. One diagnosis for one cause.
-            errors.append(frontmatter.UNCLOSED_NOTE)
-        else:
-            if not meta.get("name"):
-                errors.append("missing required field: name")
-            if not meta.get("description"):
-                errors.append("missing required field: description")
+        errors = util.lint_errors(sdir)
         notes = [n for n in notes
                  if "missing `name`" not in n and "missing `description`" not in n
                  and n != "missing SKILL.md" and n != frontmatter.UNCLOSED_NOTE]
@@ -946,7 +930,7 @@ def cmd_test(argv):
         if not (md.exists() and meta.get("name")):
             failed.append("parses")
         score, _notes = util.score_skill(sdir)
-        if score < 40:
+        if util.lint_failed(sdir, score, min_score=40):
             failed.append("lint")
         if not sdir.is_dir() or util.sha256_dir(sdir) != entry.get("sha256"):
             failed.append("verify")
