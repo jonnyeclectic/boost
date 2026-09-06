@@ -2,15 +2,15 @@
 id: audit-test-findings
 board: code
 section: health
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 2
 note: a skill boost lint fails (exit 1) passes boost test outright (exit 0)
 order: 297
-owner:
-pr:
+owner: loop/test-lint-consistency
+pr: 786
 title: "boost test: CLI audit findings (2026-08)"
 ---
 <b><code>boost test</code>'s lint check passes skills that <code>boost lint</code> fails</b> (med).

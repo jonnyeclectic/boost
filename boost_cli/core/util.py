@@ -390,3 +390,40 @@ def score_skill(skill_dir: Path) -> tuple[int, list[str]]:
         score -= 10
         notes.append("very large SKILL.md (>48KB) — consider splitting")
     return max(0, min(100, score)), notes
+
+
+def lint_errors(skill_dir: Path) -> list[str]:
+    """Hard-failure reasons for a skill dir, independent of `score_skill`'s score.
+
+    A missing SKILL.md, an unclosed frontmatter fence, or a missing required
+    field (`name`/`description`) fails a skill regardless of how high its
+    heuristic score lands. Split out so `boost lint` and `boost test` can
+    share one predicate instead of drifting — a skill scoring 85 with no
+    `description` used to pass `test` and fail `lint`.
+    """
+    from . import frontmatter
+
+    skill_md = Path(skill_dir) / "SKILL.md"
+    if not skill_md.exists():
+        return ["missing SKILL.md"]
+    text = skill_md.read_text(encoding="utf-8", errors="replace")
+    if frontmatter.unclosed(text):
+        return [frontmatter.UNCLOSED_NOTE]
+    meta, _body = frontmatter.parse(text)
+    errors = []
+    if not meta.get("name"):
+        errors.append("missing required field: name")
+    if not meta.get("description"):
+        errors.append("missing required field: description")
+    return errors
+
+
+def lint_failed(skill_dir: Path, score: int, min_score: int = 40) -> bool:
+    """True when `boost lint` would fail this skill dir.
+
+    A skill fails lint when its score is under `min_score` *or* it has any
+    hard error from `lint_errors` — the second clause is what keeps a
+    high-scoring-but-incomplete skill (missing `name`/`description`, an
+    unclosed frontmatter fence, no SKILL.md) from passing on score alone.
+    """
+    return score < min_score or bool(lint_errors(skill_dir))
