@@ -6864,8 +6864,9 @@ sentence to name only installs and skill updates, not tap refreshes. Behavior-on
       </article>
 
       <article class="cap rcard" id="audit-test-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost test: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>boost test</code>'s lint check passes skills that <code>boost lint</code> fails</b> (med).
 The two commands use different predicates: <code>cmd_test</code> fails its <em>lint</em> check only on
 <code>score &lt; 40</code> (<code>quality.py:829-831</code>) while <code>cmd_lint</code> fails on
@@ -6891,7 +6892,7 @@ Fix: order-preserving <code>names = list(dict.fromkeys(names))</code> in
 changes for either finding.
 
 Found by the 2026-08 CLI audit (clusters <code>test-vs-lint-predicate</code>,
-<code>repeated-name-args</code>); repro in the audit log.</p>
+<code>repeated-name-args</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
