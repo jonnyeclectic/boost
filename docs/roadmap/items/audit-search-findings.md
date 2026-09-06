@@ -2,12 +2,12 @@
 id: audit-search-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
-note: "PR #785 fixes all three findings; make check (eval/coverage/mutation/smoke) unverifiable in the authoring sandbox (no PyPI network) — inflight pending CI"
+note: "PR #785 fixes all three findings; CI (lint, all mutation shards, evals, tests) went green after the authoring sandbox couldn't run it (no PyPI network there)"
 order: 291
 owner: loop/audit-search-findings
 pr: 785
