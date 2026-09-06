@@ -336,20 +336,35 @@ def pane_width(stream=None) -> int | None:
 
 def truncate(text: str, width: int, ellipsis: str = "…") -> str:
     """Collapse whitespace (including literal \\n / \\t escapes) to single
-    spaces, then clip to at most `width` columns with a trailing ellipsis.
+    spaces, then clip to at most `width` *display columns* (not codepoints)
+    with a trailing ellipsis.
 
     Keeps list output to one tidy line each — a 2,000-char blob becomes a
-    scannable snippet instead of blowing up the pane.
+    scannable snippet instead of blowing up the pane. Measured in columns via
+    :func:`_char_width` rather than ``len()``, so a CJK/emoji string whose
+    codepoint count fits the budget but whose *rendered* width does not (a
+    wide character costs 2 columns) is still clipped — a raw ``len()``
+    comparison let a 60-codepoint / 72-column row overflow a 60-column pane.
     """
     text = text.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")
     text = " ".join(text.split())
     if width <= 0:
         return ""
-    if len(text) <= width:
+    if visible_len(text) <= width:
         return text
-    if width <= len(ellipsis):
+    ellipsis_w = visible_len(ellipsis)
+    if width <= ellipsis_w:
         return ellipsis[:width]
-    return text[:width - len(ellipsis)] + ellipsis
+    keep = width - ellipsis_w
+    kept_chars: list[str] = []
+    vis = 0
+    for ch in text:
+        w = _char_width(ch)
+        if vis + w > keep:
+            break  # a wide character never gets cut in half for the ellipsis
+        kept_chars.append(ch)
+        vis += w
+    return "".join(kept_chars) + ellipsis
 
 
 def badge(label: str, hue: str = "cyan") -> str:
@@ -644,13 +659,17 @@ def search_layout(cols: int, names: Sequence[str], kinds: Sequence[str],
     or more.
     """
     avail = cols - _SEARCH_INDENT - _SEARCH_FIXED
-    name_w = min(max((len(n) for n in names), default=1), 32)
+    # visible_len, not len(): a CJK/emoji name's rendered width can exceed its
+    # codepoint count, and sizing the column off the codepoint count leaves
+    # truncate() (which clips by column) with a budget narrower than the
+    # column actually reserves, or the column too narrow for the name.
+    name_w = min(max((visible_len(n) for n in names), default=1), 32)
     kind_w = 0
     if cols >= 48:
-        kind_w = min(max((len(kind_label(k)) for k in kinds), default=0), 10)
+        kind_w = min(max((visible_len(kind_label(k)) for k in kinds), default=0), 10)
     tap_w = 0
     if cols >= 84:
-        tap_w = min(max((len(t) for t in taps), default=0), 20)
+        tap_w = min(max((visible_len(t) for t in taps), default=0), 20)
 
     def desc_room(nw: int) -> int:
         return (avail - nw - 2 - (kind_w + 2 if kind_w else 0)
@@ -696,6 +715,25 @@ def format_search_row(name: str, desc: str, kind: str, tap: str, frac: float,
         lead = "  " if clipped or lay.desc_w >= _CURATED_TAIL_W - 1 else " "
         row += lead + role("★ curated", "warn")
     return row.rstrip()
+
+
+def search_footer(retrieved: int, ranker: str, *, capped: bool = False,
+                  shown: int = 0) -> str:
+    """The "N matches · ranked by X" line search prints after its rows.
+
+    ``retrieved`` is how many hits the caller actually holds — capped at the
+    retrieval limit ``k`` a search command passes to ``rag.retrieve_any``,
+    which is unrelated to ``--limit`` (how many of those are *displayed*).
+    When ``retrieved`` lands exactly on that cap, the true corpus total is
+    unknown — it could be exactly ``retrieved`` or far more — so reporting it
+    as "N matches" states a fact that was never measured (one real query
+    showed "2648 matches" while at least 4000 existed). ``capped=True`` says
+    only what is known: at least ``retrieved`` hits exist, and ``shown`` of
+    them are on screen.
+    """
+    label = ("top %d of %d+ retrieved" % (shown, retrieved) if capped else
+             "%d match%s" % (retrieved, "" if retrieved == 1 else "es"))
+    return "%s · ranked by %s" % (label, ranker)
 
 
 def kv(key: str, value: str, width: int = 14, wrap: bool = False) -> None:

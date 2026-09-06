@@ -119,6 +119,34 @@ class TestSearch:
         assert "1 match · ranked by full-content BM25" in r.out
         assert "1 matches" not in r.out
 
+    def test_footer_reports_a_lower_bound_when_retrieval_hits_its_cap(
+            self, boost, tapped, monkeypatch):
+        # cmd_search asks rag.retrieve_any for k=max(60, limit*4) hits; rag.py
+        # never returns more than k. Landing exactly on that cap means the
+        # real corpus total was never measured, so "N matches" (an exact
+        # claim) must become "top S of N+ retrieved" (a stated lower bound).
+        entry = {"tap": "fixture-tap", "kind": "skill", "version": "1.0.0",
+                "description": "d"}
+        hits = [{"entry": {**entry, "name": "skill-%d" % i}, "score": 60 - i,
+                "snippet": ""} for i in range(60)]
+        monkeypatch.setattr("boost_cli.core.rag.retrieve_any",
+                            lambda *a, **k: (hits, "BM25 full-content"))
+        r = boost("search", "anything")
+        assert "top 15 of 60+ retrieved · ranked by full-content BM25" in r.out
+        assert "60 matches" not in r.out
+
+    def test_footer_stays_an_exact_count_below_the_cap(
+            self, boost, tapped, monkeypatch):
+        entry = {"tap": "fixture-tap", "kind": "skill", "version": "1.0.0",
+                "description": "d"}
+        hits = [{"entry": {**entry, "name": "skill-%d" % i}, "score": 59 - i,
+                "snippet": ""} for i in range(59)]
+        monkeypatch.setattr("boost_cli.core.rag.retrieve_any",
+                            lambda *a, **k: (hits, "BM25 full-content"))
+        r = boost("search", "anything")
+        assert "59 matches · ranked by full-content BM25" in r.out
+        assert "retrieved" not in r.out
+
     def test_json_is_pure_and_scored(self, boost, tapped):
         r = boost("search", "brainstorming", "--json")
         data = json.loads(r.out)  # whole stdout is one JSON document
@@ -130,6 +158,35 @@ class TestSearch:
         # BM25 (the default engine) scores are positive floats, not the old
         # integer heuristic score — assert the shape, not a magic constant.
         assert isinstance(data[0]["score"], float) and data[0]["score"] > 0
+        assert data[0]["ranker"] == "full-content BM25"
+
+    def test_json_smart_is_no_longer_dropped_silently(self, boost, tapped,
+                                                       monkeypatch):
+        # `search --json` and `search --json --smart` used to be
+        # byte-identical: the JSON branch returned before the --smart rerank
+        # ever ran, with nothing on stderr saying the flag was ignored.
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr(
+            "boost_cli.core.ai.ask",
+            lambda *a, **k: '["jira-integration", "tdd-workflow"]')
+        r = boost("search", "workflow", "--json", "--smart")
+        data = json.loads(r.out)
+        assert [e["name"] for e in data] == ["jira-integration", "tdd-workflow"]
+        assert {e["ranker"] for e in data} == {"Claude Haiku relevance"}
+
+    def test_json_smart_without_ai_warns_on_stderr_but_stdout_stays_json(
+            self, boost, tapped):
+        # BOOST_NO_AI=1 (the sandbox default) means --smart can't run; the
+        # drop must be visible on stderr, and stdout must stay one clean
+        # JSON document rather than silently keeping --smart's effect a
+        # secret from a script parsing it.
+        r = boost("search", "workflow", "--json", "--smart")
+        assert r.out.count("\n") == 1
+        data = json.loads(r.out)
+        assert {e["name"] for e in data} == {"tdd-workflow", "jira-integration"}
+        assert {e["ranker"] for e in data} == {"full-content BM25"}
+        assert "using the heuristic fallback" in r.err
 
     def test_a_stem_query_reaches_the_inflected_skill_and_says_so(
             self, boost, tapped):
