@@ -277,6 +277,58 @@ class TestSearch:
         without_flag = boost("search", "commit", "messages")
         assert with_flag.out == without_flag.out
 
+    def test_json_carries_the_ranker_label(self, boost, tapped):
+        r = boost("search", "brainstorming", "--json")
+        data = json.loads(r.out)
+        assert data[0]["ranker"] == "full-content BM25"
+
+    def test_json_smart_reranks_and_reports_the_ai_ranker(
+            self, boost, tapped, monkeypatch):
+        # `--json --smart` used to silently print the un-reranked BM25 order:
+        # the JSON branch returned before the --smart rerank ever ran.
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask",
+                            lambda *a, **k: '["jira-integration", "tdd-workflow"]')
+        r = boost("search", "workflow", "--json", "--smart")
+        data = json.loads(r.out)
+        assert [d["name"] for d in data] == ["jira-integration", "tdd-workflow"]
+        assert all(d["ranker"] == "Claude Haiku relevance" for d in data)
+
+    def test_json_smart_without_ai_warns_on_stderr_but_stdout_stays_valid_json(
+            self, boost, tapped):
+        # BOOST_NO_AI=1 (the sandbox default) means ai.available() is False —
+        # --smart must warn on stderr and still leave stdout pure JSON, rather
+        # than dropping the flag with no signal anywhere.
+        r = boost("search", "workflow", "--json", "--smart")
+        assert r.out.count("\n") == 1
+        data = json.loads(r.out)
+        assert data and data[0]["ranker"] == "full-content BM25"
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+
+    def test_footer_says_plus_when_retrieval_hits_the_cap(
+            self, boost, tapped, monkeypatch):
+        # retrieve_any never returns more than k_requested hits, so landing on
+        # that count exactly does not mean it is the true total — the old
+        # footer reported the cap itself as an exact match count.
+        from boost_cli.core import catalog
+        base = next(e for e in catalog.all_entries()
+                    if e["name"] == "brainstorming")
+        hits = [{"entry": base, "score": 1.0} for _ in range(60)]
+        monkeypatch.setattr("boost_cli.core.rag.retrieve_any",
+                            lambda *a, **k: (hits, "BM25 full-content"))
+        r = boost("search", "brainstorming", "--limit", "1")
+        assert "top 1 of 60+ matches · ranked by full-content BM25" in r.out
+        assert "60 matches" not in r.out
+
+    def test_footer_reports_true_count_when_below_the_cap(self, boost, tapped):
+        # Sanity check the un-capped path still reports an exact count — this
+        # is the existing `test_limit_caps_rows_but_footer_counts_all` shape,
+        # pinned again here beside the capped case for contrast.
+        r = boost("search", "workflow", "--limit", "1")
+        assert "2 matches · ranked by full-content BM25" in r.out
+        assert "+" not in r.out
+
 
 class TestSearchCategoryFilter:
     """Every fixture skill's `category` (see catalog.CACHE_FORMAT 2) is its

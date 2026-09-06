@@ -336,20 +336,20 @@ def pane_width(stream=None) -> int | None:
 
 def truncate(text: str, width: int, ellipsis: str = "…") -> str:
     """Collapse whitespace (including literal \\n / \\t escapes) to single
-    spaces, then clip to at most `width` columns with a trailing ellipsis.
+    spaces, then clip to at most `width` *visible columns* with a trailing
+    ellipsis.
 
     Keeps list output to one tidy line each — a 2,000-char blob becomes a
-    scannable snippet instead of blowing up the pane.
+    scannable snippet instead of blowing up the pane. Clipping by
+    :func:`_clip_visible` rather than codepoint count matters once the text
+    can hold CJK/emoji: a codepoint-sliced 60-char CJK string measures ~120
+    display columns and overflows a 60-column pane by 2x.
     """
     text = text.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")
     text = " ".join(text.split())
     if width <= 0:
         return ""
-    if len(text) <= width:
-        return text
-    if width <= len(ellipsis):
-        return ellipsis[:width]
-    return text[:width - len(ellipsis)] + ellipsis
+    return _clip_visible(text, width, ellipsis)
 
 
 def badge(label: str, hue: str = "cyan") -> str:
@@ -644,13 +644,13 @@ def search_layout(cols: int, names: Sequence[str], kinds: Sequence[str],
     or more.
     """
     avail = cols - _SEARCH_INDENT - _SEARCH_FIXED
-    name_w = min(max((len(n) for n in names), default=1), 32)
+    name_w = min(max((visible_len(n) for n in names), default=1), 32)
     kind_w = 0
     if cols >= 48:
-        kind_w = min(max((len(kind_label(k)) for k in kinds), default=0), 10)
+        kind_w = min(max((visible_len(kind_label(k)) for k in kinds), default=0), 10)
     tap_w = 0
     if cols >= 84:
-        tap_w = min(max((len(t) for t in taps), default=0), 20)
+        tap_w = min(max((visible_len(t) for t in taps), default=0), 20)
 
     def desc_room(nw: int) -> int:
         return (avail - nw - 2 - (kind_w + 2 if kind_w else 0)
