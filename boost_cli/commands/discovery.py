@@ -978,7 +978,8 @@ def _browse_plain(entries, why: str):
     unique = [e for e, _n in browse.dedupe(entries)]
     show_curated = any(e.get("curated") for e in unique)
     headers = ["name", "version", "tap", "kind"]
-    rows = [[e["name"], "v" + e["version"], e["tap"], out.kind_label(e.get("kind"))]
+    rows = [[e["name"], "v" + e["version"], e["tap"],
+             out.kind_label(e.get("kind", "skill"))]
             for e in unique]
     if show_curated:
         headers.append("")
