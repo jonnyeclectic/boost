@@ -1031,6 +1031,8 @@ class TestBrowse:
         # `script`, TERM=dumb) can fail deep inside curses.wrapper rather than
         # at the isatty() check — regression: this used to crash with an
         # "unexpected error" and leave the terminal in raw mode.
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
         import curses as real_curses
 
         from boost_cli.commands import discovery
