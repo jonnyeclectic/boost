@@ -132,21 +132,51 @@ def cmd_search(argv):
                           "building the search index (first run)"):
             use_rag = rag.ensure()
     engine = ""
+    k_requested = 0
     if use_rag:
         # retrieve_any, not retrieve: this picks the dense backend when one is
         # built and floors to BM25 otherwise, so the CLI and the MCP server
         # answer from the same engine instead of the CLI being BM25-only.
+        k_requested = max(60, args.limit * 4)
         hits, engine = rag.retrieve_any(
-            query, k=max(60, args.limit * 4),
+            query, k=k_requested,
             collapse_near_duplicates=args.collapse_dupes)
         scored = [(h["entry"], h["score"]) for h in (hits or [])]
     else:
         scored = catalog.search(query)
+    # retrieve_any never returns more than k_requested hits, so landing on
+    # that count exactly means more may exist past the cut — the footer must
+    # say "K+", not claim K is the total. Measured: --limit 1 (k=60) and
+    # --limit 16 (k=64) both hit the cap and print it as an exact count, while
+    # a query with genuinely fewer than k matches prints the true number
+    # either way. A --category filter is applied after this cap was measured,
+    # so the "at least k_requested" reasoning would no longer describe the
+    # (smaller) filtered count — only trust the cap unfiltered.
+    capped_at = (k_requested if use_rag and len(scored) >= k_requested
+                and not args.category else None)
     if args.category:
         scored = [(e, s) for e, s in scored
                  if catalog.matches_category(e, args.category)]
+    # The CLI's long-standing wording for the BM25 engine differs from the label
+    # rag/eval use ("BM25 full-content"), and both are load-bearing: the latter
+    # is pinned in tests/eval/baseline.json. Map instead of moving either.
+    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else "heuristic relevance"
+    # Rerank before the JSON branch, not after: `--json --smart` used to fall
+    # into `if args.as_json: ... return 0` above this block and silently print
+    # the un-reranked order with no sign on stdout or stderr that --smart was
+    # dropped. `and scored` mirrors the old control flow, where the empty-
+    # results return below meant --smart on zero hits never reached this far.
+    if args.smart and scored:
+        if ai.available():
+            with spin.Spinner("ranking %d matches with Claude" % len(scored)):
+                reranked = _ai_rank(query, scored)
+            if reranked:
+                scored, ranker = reranked, "Claude Haiku relevance"
+        else:
+            out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     if args.as_json:
-        print(json.dumps([e | {"score": s} for e, s in scored[:args.limit]]))
+        print(json.dumps([e | {"score": s, "ranker": ranker}
+                          for e, s in scored[:args.limit]]))
         return 0
     if not scored:
         # The standardized ○/→ empty state, so "nothing here" reads the same
@@ -159,18 +189,6 @@ def cmd_search(argv):
         # tap set produces, and the user has no other way to suspect it.
         _hint_stale_taps()
         return 0
-    # The CLI's long-standing wording for the BM25 engine differs from the label
-    # rag/eval use ("BM25 full-content"), and both are load-bearing: the latter
-    # is pinned in tests/eval/baseline.json. Map instead of moving either.
-    ranker = _ENGINE_LABEL.get(engine, engine) if use_rag else "heuristic relevance"
-    if args.smart:
-        if ai.available():
-            with spin.Spinner("ranking %d matches with Claude" % len(scored)):
-                reranked = _ai_rank(query, scored)
-            if reranked:
-                scored, ranker = reranked, "Claude Haiku relevance"
-        else:
-            out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     shown = scored[:args.limit]
     # The dot marks "a skill by this name is installed" — a name match, with
     # the known homonym caveat (13 real skills share `code-reviewer`). A lock
@@ -192,8 +210,14 @@ def cmd_search(argv):
             str(e.get("kind") or "skill"), str(e.get("tap") or ""), sc / top,
             curated=bool(e.get("curated")),
             installed=e["name"] in installed, lay=lay))
-    out.info(out.role("%d match%s · ranked by %s"
-                   % (len(scored), "" if len(scored) == 1 else "es", ranker), "muted"))
+    if capped_at is not None:
+        # len(scored) here is the retrieval cap, not the true match count —
+        # say so rather than reporting k as though it were exact.
+        out.info(out.role("top %d of %d+ matches · ranked by %s"
+                       % (len(shown), capped_at, ranker), "muted"))
+    else:
+        out.info(out.role("%d match%s · ranked by %s"
+                       % (len(scored), "" if len(scored) == 1 else "es", ranker), "muted"))
     if use_rag:
         _note_stem_expansions(query)
     _hint_semantic_search(engine)

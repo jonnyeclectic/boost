@@ -395,6 +395,26 @@ class TestTruncate:
     def test_width_at_or_below_ellipsis_returns_ellipsis(self):
         assert output.truncate("abcdef", 1) == "…"
 
+    def test_cjk_text_clips_by_cell_width_not_codepoints(self):
+        # Each CJK char measures 2 display columns, so 10 of them are 20
+        # columns wide — codepoint slicing to width=10 would keep all 10
+        # chars (10 <= 10) and render as 20 columns, overflowing the pane.
+        text = "分" * 10
+        result = output.truncate(text, 10)
+        assert output.visible_len(result) <= 10
+
+    def test_cjk_text_never_exceeds_requested_width(self):
+        text = "分析原始提示，识别意图和背景信息"
+        for w in range(1, 30):
+            assert output.visible_len(output.truncate(text, w)) <= w
+
+    def test_cjk_wide_char_never_split_for_the_ellipsis(self):
+        # A wide char that would land half-in/half-out of the budget is
+        # dropped whole rather than rendered as a single visual column.
+        result = output.truncate("分" * 5, 5)
+        assert output.visible_len(result) <= 5
+        assert "…" in result
+
 
 class TestBadge:
     def test_plain_when_no_color(self, monkeypatch):
@@ -1379,6 +1399,12 @@ class TestSearchLayout:
     def test_name_column_caps_at_32(self):
         lay = output.search_layout(120, ["x" * 60], ["skill"], ["a/b"])
         assert lay.name_w == 32
+
+    def test_name_column_sizes_cjk_by_cell_width_not_codepoints(self):
+        # 10 CJK codepoints measure 20 display columns; sizing by len() would
+        # plan a 10-wide column and every rendered row would overflow it by 2x.
+        lay = output.search_layout(100, ["分" * 10], ["skill"], ["a/b"])
+        assert lay.name_w == 20
 
     def test_kind_column_fits_the_widest_kind_shown(self):
         lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)
