@@ -216,6 +216,21 @@ def rel_time(iso: str) -> str:
     return then.strftime("%Y-%m-%d")
 
 
+def iso_date(iso: str) -> str:
+    """'2026-07-16T01:00:00Z' -> '2026-07-16', matching git's `--date=short`.
+
+    Same parse and same fallback (`iso` itself, or "?" when empty) as
+    `rel_time` — a caller that mixes a git-log short date with this on
+    different rows gets one format either way, not "3h ago" beside
+    "2026-07-16".
+    """
+    try:
+        then = datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")
+    except (ValueError, TypeError):
+        return iso or "?"
+    return then.strftime("%Y-%m-%d")
+
+
 def human_duration(seconds: float) -> str:
     """A short, honest duration: ``'45s'``, ``'12m'``, ``'2h 5m'``.
 

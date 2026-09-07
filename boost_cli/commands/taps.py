@@ -226,7 +226,13 @@ def cmd_untap(argv) -> int:
 
 
 def _tap_updated(tap: registry.Tap) -> str:
-    """Last-commit date of a tap clone, else the cache's generated age."""
+    """Last-commit date of a tap clone, else the cache's generated date.
+
+    Both branches return the same `YYYY-MM-DD` shape (`util.iso_date`
+    mirrors git's `--date=short`) — the two-format mix this used to produce
+    (git dates for cloned taps, "3h ago" for cache-only ones) is exactly the
+    UPDATED-column inconsistency this function exists to not reintroduce.
+    """
     if tap.is_cloned:
         with suppress(BoostError):
             # --date=short --format=%cd == %cs, but works on git < 2.21 too
@@ -236,7 +242,7 @@ def _tap_updated(tap: registry.Tap) -> str:
                 return proc.stdout.strip()
     try:
         data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
-        return util.rel_time(data.get("generated", ""))
+        return util.iso_date(data.get("generated", ""))
     except (OSError, ValueError):
         return "?"
 
@@ -284,6 +290,8 @@ def cmd_taps(argv) -> int:
               keep=("NAME",))
     print()
     out.dim("%d taps · %d items" % (len(taps), total))
+    if any(t["pin"] for t in taps):
+        out.dim("@sha = pinned; `boost update` skips it")
     return 0
 
 
