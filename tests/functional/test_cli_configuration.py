@@ -2214,6 +2214,13 @@ class TestTypedValues:
             assert ("using the default; fix it with "
                     "`boost policy set max_skills <int-or-null>`") in r.out
 
+    def test_policy_set_and_unset_json(self, boost, sandbox):
+        r = boost("policy", "set", "pin_only", "no", "--json")
+        assert json.loads(r.out) == {"key": "pin_only", "value": False}
+        r = boost("policy", "unset", "pin_only", "--json")
+        assert json.loads(r.out) == {"key": "pin_only",
+                                     "value": policy.DEFAULTS["pin_only"]}
+
     def test_policy_json_output_stays_machine_readable(self, boost, sandbox):
         # The warning is chrome, so --json must not gain a line.
         paths.ensure_dirs()
@@ -2257,6 +2264,19 @@ class TestTypedValues:
         # integrations that already write their own.
         boost("config", "set", "custom.flag", "true")
         assert boost("config", "get", "custom.flag", "--json").out.strip() == "true"
+
+    def test_config_set_json(self, boost, sandbox):
+        r = boost("config", "set", "telemetry", "no", "--json")
+        assert json.loads(r.out) == {"key": "telemetry", "value": False}
+        r = boost("config", "set", "ai.enabled", "true", "--json")
+        assert json.loads(r.out) == {"key": "ai.enabled", "value": True}
+
+    def test_config_unset_json(self, boost, sandbox):
+        boost("config", "set", "telemetry", "no")
+        r = boost("config", "unset", "telemetry", "--json")
+        assert json.loads(r.out) == {"key": "telemetry", "unset": True}
+        r = boost("config", "unset", "telemetry", "--json")
+        assert json.loads(r.out) == {"key": "telemetry", "unset": False}
 
     def test_serve_help_survives_a_hand_edited_port(self, boost, sandbox):
         # `serve --help` used to die with a bare ValueError and exit 70,

@@ -884,7 +884,7 @@ def table(rows, headers=None, stream=None, keep=()) -> None:
 _CONFIRM_BYPASS_HINT = "pass -y or set BOOST_ASSUME_YES=1 to skip this prompt"
 
 
-def confirm(prompt: str, default: bool = False) -> bool:
+def confirm(prompt: str, default: bool = False, quiet: bool = False) -> bool:
     """Ask a yes/no question and return the answer as a bool.
 
     BOOST_ASSUME_YES or --yes/-y force True; non-TTY stdin and an empty
@@ -893,12 +893,14 @@ def confirm(prompt: str, default: bool = False) -> bool:
     Every path that resolves to a decline (as opposed to `default` being
     True) prints the bypass hint here, once, so callers inherit it instead
     of each command growing its own reminder — see the confirm-bypass-hints
-    roadmap item.
+    roadmap item. ``quiet`` suppresses that hint — for a caller that is about
+    to print its own machine-readable (``--json``) result on a decline, where
+    the hint would land as a stray prose line ahead of it.
     """
     if os.environ.get("BOOST_ASSUME_YES") or "--yes" in sys.argv or "-y" in sys.argv:
         return True
     if not sys.stdin.isatty():
-        if not default:
+        if not default and not quiet:
             dim(_CONFIRM_BYPASS_HINT)
         return default
     suffix = " [Y/n] " if default else " [y/N] "
@@ -906,9 +908,10 @@ def confirm(prompt: str, default: bool = False) -> bool:
         answer = input(prompt + suffix).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        dim(_CONFIRM_BYPASS_HINT)
+        if not quiet:
+            dim(_CONFIRM_BYPASS_HINT)
         return False
     result = answer in ("y", "yes") if answer else default
-    if not result:
+    if not result and not quiet:
         dim(_CONFIRM_BYPASS_HINT)
     return result

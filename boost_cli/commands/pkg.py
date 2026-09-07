@@ -1051,6 +1051,8 @@ def cmd_update(argv: list[str]) -> int:
     ap.add_argument("--json", dest="as_json", action="store_true",
                     help="with --shards: print the per-tap result as JSON")
     args = ap.parse_args(argv)
+    if args.as_json and not args.shards:
+        ap.error("--json is only supported with --shards")
     if args.shards:
         if args.taps_only:
             ap.error("--shards and --taps-only move taps to different commits")

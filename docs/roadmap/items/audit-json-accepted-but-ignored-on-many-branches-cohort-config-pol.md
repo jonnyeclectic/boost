@@ -7,10 +7,14 @@ category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
-note: seven commands take --json, then print "✓ set ai.enabled = true" prose with exit 0
+note: fix landed in PR #804 — all seven sites now emit JSON (or reject --json
+  as a usage error, for `update` without `--shards`); tests pass locally
+  (ruff, pyright, unit+functional, smoke) but the sandbox this ran in has no
+  PyPI egress, so `eval`/`mutation` and the pinned mypy/lint toolchain could
+  not run here — CI is the gate of record, watched via the PR subscription
 order: 231
 owner: loop/json-flag-fixes
-pr:
+pr: 804
 title: "--json accepted but ignored: <code>cohort</code>/<code>config</code>/<code>policy</code> set, <code>focus</code>, <code>profile</code>, <code>replay rollback</code>, <code>who</code> empty state"
 ---
 The mirror image of the missing-<code>--json</code> sweep: these parsers <em>accept</em>

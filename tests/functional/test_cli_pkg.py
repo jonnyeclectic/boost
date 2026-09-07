@@ -464,6 +464,12 @@ class TestUpdate:
         assert "fixture-tap: already up to date" in r.out
         assert "everything up to date" in r.out
 
+    def test_json_without_shards_is_rejected(self, boost, sandbox):
+        # --json's help says "with --shards": accept-and-ignore would be a
+        # silent lie, so the parser refuses the combination outright.
+        r = boost("update", "--json", expect=2)
+        assert "--json is only supported with --shards" in r.err
+
     def test_a_dead_upstream_does_not_take_the_other_taps_down(
             self, boost, fixture_tap_src, tmp_path):
         """One deleted upstream must cost you that tap, not the whole command.

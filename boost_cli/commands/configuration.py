@@ -121,13 +121,21 @@ def cmd_config(argv) -> int:
                                  "`boost config unset` it first") from e
         val = config.get(args.key)
         journal.log("config", args.key, op="set")
+        if args.json:
+            print(json.dumps({"key": args.key, "value": val}))
+            return 0
         out.ok("set %s = %s"
                % (args.key, val if isinstance(val, str) else json.dumps(val)))
         return 0
 
     # unset
-    if config.unset(args.key):
+    was_set = config.unset(args.key)
+    if was_set:
         journal.log("config", args.key, op="unset")
+    if args.json:
+        print(json.dumps({"key": args.key, "unset": was_set}))
+        return 0
+    if was_set:
         out.ok("unset %s" % args.key)
     else:
         out.info("%s not set" % args.key)
@@ -503,6 +511,9 @@ def cmd_policy(argv) -> int:
         pol[args.key] = _parse_policy_value(args.key, args.value)
         policy.save(pol)
         journal.log("policy", args.key, op="set")
+        if args.json:
+            print(json.dumps({"key": args.key, "value": pol[args.key]}))
+            return 0
         out.ok("set %s = %s" % (args.key, json.dumps(pol[args.key])))
         return 0
 
@@ -511,6 +522,9 @@ def cmd_policy(argv) -> int:
         pol[args.key] = policy.DEFAULTS[args.key]
         policy.save(pol)
         journal.log("policy", args.key, op="unset")
+        if args.json:
+            print(json.dumps({"key": args.key, "value": policy.DEFAULTS[args.key]}))
+            return 0
         out.ok("reset %s to default (%s)"
                % (args.key, json.dumps(policy.DEFAULTS[args.key])))
         return 0
