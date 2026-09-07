@@ -448,9 +448,13 @@ def cmd_verify(argv):
                         "scope": "project", "missing_fields": missing_fields,
                         "commit_pin": None})
 
-    bad = [r for r in results
-           if r["status"] not in ("ok", "quarantined") or r["missing_fields"]
-           or r["commit_pin"] == integrity.STATUS_MODIFIED]
+    # A single predicate decides both the fail count and the rendered token's
+    # color, so a row that is counted among the failures can never also wear
+    # the green "ok" token (integrity.verification_passed/verify_role).
+    for r in results:
+        r["passed"] = integrity.verification_passed(
+            r["status"], r["missing_fields"], r["commit_pin"])
+    bad = [r for r in results if not r["passed"]]
     if args.json:
         print(json.dumps({"skills": results, "failed": len(bad)}))
         return 1 if bad else 0
@@ -460,8 +464,6 @@ def cmd_verify(argv):
                               hint="boost install <skill> to start"))
         return 0
     width = max(len(r["name"]) for r in results)
-    status_role = {"ok": "success", "modified": "warn", "missing": "danger",
-                   "unlocked": "warn", "quarantined": "muted"}
     for r in results:
         bits = []
         if r.get("kind") not in (None, "skill"):
@@ -476,7 +478,8 @@ def cmd_verify(argv):
             bits.append("commit pin DRIFTED")
         note = ("  " + " · ".join(bits)) if bits else ""
         print("  %s  %s%s" % (r["name"].ljust(width),
-                              out.role(r["status"], status_role.get(r["status"], "warn")),
+                              out.role(r["status"],
+                                       integrity.verify_role(r["status"], r["passed"])),
                               out.role(note, "muted")))
     if bad:
         out.warn("%d of %d item%s failed verification"

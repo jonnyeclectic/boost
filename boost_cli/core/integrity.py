@@ -160,6 +160,37 @@ def commit_status(name: str, entry: dict | None = None) -> str | None:
     return STATUS_OK if entry.get("commit") == pin else STATUS_MODIFIED
 
 
+def verification_passed(status: str, missing_fields: list,
+                         commit_pin: str | None) -> bool:
+    """Whether a ``boost verify`` row should count and render as passing.
+
+    ``status`` alone is not enough: a row can carry ``STATUS_OK`` while its
+    lock entry is missing fields, or while a commit pin has drifted, and
+    ``boost verify`` must still fail it. This is the single predicate both
+    the pass/fail count and the rendered status token key off of, so the two
+    can never again disagree about the same row.
+    """
+    return (status in (STATUS_OK, STATUS_QUARANTINED)
+            and not missing_fields
+            and commit_pin != STATUS_MODIFIED)
+
+
+def verify_role(status: str, passed: bool) -> str:
+    """The display role for a ``boost verify`` row's status token.
+
+    Keyed on ``passed`` first: a row that failed verification never wears the
+    "success" color, even when its raw ``status`` is ``STATUS_OK`` (missing
+    lock fields or a drifted commit pin can fail an otherwise-ok row). Failing
+    rows fall back to the status-specific role, or "danger" for a status this
+    table has no softer answer for (chiefly STATUS_OK failed on fields/pin).
+    """
+    if passed:
+        return "success"
+    return {STATUS_MODIFIED: "warn", STATUS_MISSING: "danger",
+            STATUS_UNLOCKED: "warn", STATUS_QUARANTINED: "muted"}.get(
+                status, "danger")
+
+
 def enforcement_enabled() -> bool:
     """True when digest enforcement is switched on in config (default False)."""
     return bool(config.get(ENFORCE_KEY, False))

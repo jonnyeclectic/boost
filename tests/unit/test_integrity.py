@@ -170,6 +170,59 @@ def test_commit_enforcement_off_by_default_does_not_block_drift(installed):
     integrity.enforce(installed)          # commit enforcement off — must not raise
 
 
+# ── verify pass/fail predicate ─────────────────────────────────────────
+# `boost verify` renders a per-row status token and separately counts rows as
+# failed; verification_passed is the one predicate both sides key off of, so
+# a row can never wear a green token while also being counted as failed
+# (docs/roadmap/items/audit-verify-findings.md).
+
+def test_verification_passed_true_for_a_clean_ok_row():
+    assert integrity.verification_passed(integrity.STATUS_OK, [], None) is True
+
+
+def test_verification_passed_true_for_a_clean_quarantined_row():
+    assert integrity.verification_passed(integrity.STATUS_QUARANTINED, [], None) is True
+
+
+def test_verification_passed_false_when_status_ok_but_fields_missing():
+    # The exact bug this closes: an "ok" status must not pass when the lock
+    # entry is missing fields verify itself flags in the same row.
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, ["version", "installed_at"], None) is False
+
+
+def test_verification_passed_false_when_commit_pin_drifted():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_MODIFIED) is False
+
+
+def test_verification_passed_false_for_modified_or_missing_status():
+    assert integrity.verification_passed(integrity.STATUS_MODIFIED, [], None) is False
+    assert integrity.verification_passed(integrity.STATUS_MISSING, [], None) is False
+
+
+def test_verification_passed_true_when_commit_pin_ok():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_OK) is True
+
+
+def test_verify_role_is_success_only_when_passed():
+    assert integrity.verify_role(integrity.STATUS_OK, True) == "success"
+    assert integrity.verify_role(integrity.STATUS_OK, False) != "success"
+
+
+def test_verify_role_ok_but_failed_is_danger_not_green():
+    # Same repro as above, one level up: the rendered token's role.
+    assert integrity.verify_role(integrity.STATUS_OK, False) == "danger"
+
+
+def test_verify_role_keeps_status_specific_colors_when_failing():
+    assert integrity.verify_role(integrity.STATUS_MODIFIED, False) == "warn"
+    assert integrity.verify_role(integrity.STATUS_MISSING, False) == "danger"
+    assert integrity.verify_role(integrity.STATUS_UNLOCKED, False) == "warn"
+    assert integrity.verify_role(integrity.STATUS_QUARANTINED, False) == "muted"
+
+
 class TestProjectScope:
     """integrity over project-scoped skills (committed into a repo, not the store)."""
 

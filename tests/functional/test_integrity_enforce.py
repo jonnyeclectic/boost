@@ -30,6 +30,22 @@ def test_verify_json_carries_status_and_commit_pin(boost, installed):
     data = json.loads(boost("verify", installed, "--json").out)
     row = data["skills"][0]
     assert row["status"] == "ok" and row["commit_pin"] is None
+    assert row["passed"] is True
+
+
+def test_verify_json_fails_an_ok_row_missing_lock_fields(boost, installed):
+    # docs/roadmap/items/audit-verify-findings.md: an "ok" status with a
+    # stripped lock field must not read as passed, in the JSON row or the
+    # top-level failed count.
+    entry = lockfile.get_skill(installed)
+    del entry["version"]
+    entry["installed_at"] = ""
+    lockfile.set_skill(installed, entry)
+    data = json.loads(boost("verify", installed, "--json", expect=1).out)
+    row = data["skills"][0]
+    assert row["status"] == "ok"
+    assert row["passed"] is False
+    assert data["failed"] == 1
 
 
 # ── enforcement gates the read commands ──────────────────────────────────
