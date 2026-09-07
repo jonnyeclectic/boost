@@ -10,7 +10,7 @@ wow: 2
 note: manifest-truncation finding was already fixed (#626); this ships the reused/reindexed tap-name parity fix
 order: 287
 owner: loop/reindex-audit-findings
-pr:
+pr: 808
 title: "boost reindex: CLI audit findings (2026-08)"
 ---
 <b>A truncated manifest download is reported as a broken manifest.</b> 3 of 6 <code>reindex --fetch-shards</code> runs (and the same fraction of <code>update --shards</code>) failed with <code>Error: shard manifest at &hellip;/shards-latest/manifest.json is not valid JSON: Unterminated string starting at: &hellip; (char 113774)</code> &mdash; the offset differing per run. The published file is fine: curl fetches all 166,210 bytes. <code>shards.fetch_manifest</code> does one <code>resp.read(MAX_MANIFEST_BYTES + 1)</code> (<code>boost_cli/core/shards.py:97-114</code>) and feeds whatever arrived to <code>json.loads</code>; a probe against the same URL showed Content-Length 166,210 with the single read returning exactly 131,072 bytes (128 KiB). Fix: read in a loop until EOF or Content-Length is satisfied (or catch <code>http.client.IncompleteRead</code>), and on a short read raise a BoostError naming the truncation &mdash; <code>download cut short (131,072 of 166,210 bytes) &mdash; retry</code> &mdash; retrying once; keep the JSON error only for a genuinely malformed body. Mention the transient-failure/retry behaviour in README.md's <code>--shards</code> cron section (~lines 158-185).
