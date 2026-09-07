@@ -37,6 +37,7 @@ from ..core import (
     store,
     util,
 )
+from ..core import discovery as discovery_core
 from ..core import output as out
 from ..core.stackprobe import detect_stack  # re-exported: shared with Quality
 from ..errors import BoostError
@@ -62,6 +63,17 @@ def _json_array(text):
 
 def _discovery_path() -> Path:
     return paths.cache_dir() / "discovery.json"
+
+
+def _index_item_count(path: Path) -> int:
+    """Item count of an existing discovery.json, or 0 if absent/unreadable."""
+    if not path.exists():
+        return 0
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    return len(data.get("items") or [])
 
 
 def _ai_rank(query: str, scored):
@@ -626,19 +638,21 @@ def cmd_index(argv):
                  % (urllib.parse.quote(q, safe=":"), page)],
                 capture_output=True, text=True, timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
+            spin.progress_clear()
             raise BoostError("gh api timed out on page %d" % page, hint=str(e)) from e
         if proc.returncode != 0:
-            tail = "\n".join((proc.stderr or proc.stdout or "").strip()
-                             .splitlines()[-3:])
+            spin.progress_clear()
             if not items:
                 raise BoostError("GitHub code search failed",
-                                hint=tail or "check `gh auth status`")
+                                hint=discovery_core.gh_failure_hint(
+                                    proc.stderr or proc.stdout or ""))
             out.warn("page %d failed — keeping the %d items fetched so far"
                      % (page, len(items)))
             break
         try:
             data = json.loads(proc.stdout)
         except json.JSONDecodeError:
+            spin.progress_clear()
             raise BoostError("gh api returned unparseable JSON",
                             hint="try `boost index` again, or `gh auth status`") from None
         if page == 1:
@@ -656,8 +670,14 @@ def cmd_index(argv):
                 break
         if len(items) >= args.limit or len(batch) < 100:
             break
+    dpath = _discovery_path()
+    if not discovery_core.should_write_index(len(items), dpath.exists()):
+        prev = _index_item_count(dpath)
+        out.warn("no SKILL.md files match %s — keeping the previous index "
+                 "of %d entries" % (query or "your query", prev))
+        return 0
     paths.ensure_dirs()
-    _discovery_path().write_text(json.dumps(
+    dpath.write_text(json.dumps(
         {"generated": util.now_iso(), "github_total": total, "query": query,
          "items": items}, indent=1), encoding="utf-8")
     repos = len({it["repo"] for it in items})

@@ -722,6 +722,17 @@ class TestHelpers:
         output.err("boom", hint="try again")
         assert capsys.readouterr().err == "Error: boom\n  hint: try again\n"
 
+    def test_err_with_multiline_hint_indents_continuation_lines(self, capsys):
+        # A hint carrying its own newlines (raw gh stderr, say) used to print
+        # its continuation lines flush at column 0, disconnected from the
+        # "hint:" label on the first line.
+        output.err("boom", hint="line one\nline two\nline three")
+        assert capsys.readouterr().err == (
+            "Error: boom\n"
+            "  hint: line one\n"
+            "        line two\n"
+            "        line three\n")
+
     def test_info(self, capsys):
         output.info("msg")
         assert capsys.readouterr().out == "  msg\n"
