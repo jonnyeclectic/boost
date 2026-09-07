@@ -10,7 +10,7 @@ wow: 1
 note: footer blames the network when gh is missing; --json prints [] silently with no index
 order: 262
 owner: loop/discover-audit-findings-v2
-pr:
+pr: 795
 title: "boost discover: CLI audit findings (2026-08)"
 ---
 <b>The empty-result footer says "GitHub could not be reached" whatever the real reason.</b>
