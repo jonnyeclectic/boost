@@ -825,7 +825,7 @@ def _keep_indexes(keep, headers, ncols) -> set[int]:
     return out_idx
 
 
-def table(rows, headers=None, stream=None, keep=()) -> None:
+def table(rows, headers=None, stream=None, keep=(), text=()) -> None:
     """Print an aligned table. rows: list of tuples of strings.
 
     Column widths are measured by visible width (ignoring ANSI color codes),
@@ -848,6 +848,12 @@ def table(rows, headers=None, stream=None, keep=()) -> None:
     ``keep`` names the columns — by index or header — whose cells are
     identifiers rather than prose (a snapshot ID, a digest, a hook command),
     so a narrow pane shrinks the chrome beside them instead.
+
+    ``text`` names columns (same index-or-header resolution as ``keep``) that
+    must never right-align as numeric, however their cells look: an all-digit
+    minisign fingerprint or a purely numeric version string is an identifier,
+    not a count, and :func:`_numeric_col`'s content sniff cannot tell the two
+    apart on its own.
     """
     rows = [[str(x) for x in r] for r in rows]
     all_rows = ([list(map(str, headers))] if headers else []) + rows
@@ -856,7 +862,8 @@ def table(rows, headers=None, stream=None, keep=()) -> None:
     ncols = max(len(r) for r in all_rows)
     widths = [max(visible_len(r[i]) for r in all_rows if i < len(r))
               for i in range(ncols)]
-    numeric = [_numeric_col([r[i] for r in rows if i < len(r)])
+    forced_text = _keep_indexes(text, headers, ncols)
+    numeric = [_numeric_col([r[i] for r in rows if i < len(r)]) and i not in forced_text
                for i in range(ncols)]
     if use_color(stream):
         sep, sep_w = " " + DIM + "│" + RESET + " ", 3

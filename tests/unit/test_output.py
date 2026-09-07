@@ -1175,6 +1175,36 @@ class TestTableWidthAware:
         for line in capsys.readouterr().out.splitlines():
             assert output.visible_len(line) <= 40
 
+    def test_all_digit_column_right_aligns_by_default(self, capsys, monkeypatch):
+        # An all-decimal fingerprint is content-indistinguishable from a count
+        # column, which is exactly the defect `text=` exists to override below.
+        monkeypatch.setattr(output, "term_width", lambda: 80)
+        output.table([("acme", "1122334455667788")],
+                     headers=("NAME", "FINGERPRINT"))
+        lines = capsys.readouterr().out.splitlines()
+        assert lines[0] == "NAME       FINGERPRINT"   # header right-aligned
+        assert lines[1] == "acme  1122334455667788"
+
+    def test_text_column_stays_left_aligned_even_when_all_digit(
+            self, capsys, monkeypatch):
+        monkeypatch.setattr(output, "term_width", lambda: 80)
+        output.table([("acme", "1122334455667788"), ("bb", "22")],
+                     headers=("NAME", "FINGERPRINT"), text=("FINGERPRINT",))
+        lines = capsys.readouterr().out.splitlines()
+        # Left-aligned: the header no longer gets right-padded, and the
+        # shorter fingerprint no longer shares a right edge with the longer
+        # one — both start at the same column instead.
+        assert lines[0] == "NAME  FINGERPRINT"
+        assert lines[1] == "acme  1122334455667788"
+        assert lines[2] == "bb    22"
+
+    def test_text_resolves_by_header_name_or_index_like_keep(
+            self, capsys, monkeypatch):
+        monkeypatch.setattr(output, "term_width", lambda: 80)
+        output.table([("a", "10")], headers=("NAME", "N"), text=(1,))
+        line = capsys.readouterr().out.splitlines()[1]
+        assert line == "a     10"  # left-aligned via numeric column index too
+
 
 class TestConfirm:
     def test_assume_yes_env_wins(self, monkeypatch):
