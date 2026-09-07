@@ -2,16 +2,14 @@
 id: audit-json-accepted-but-ignored-on-many-branches-cohort-config-pol
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
-note: fix landed in PR #804 — all seven sites now emit JSON (or reject --json
-  as a usage error, for `update` without `--shards`); tests pass locally
-  (ruff, pyright, unit+functional, smoke) but the sandbox this ran in has no
-  PyPI egress, so `eval`/`mutation` and the pinned mypy/lint toolchain could
-  not run here — CI is the gate of record, watched via the PR subscription
+note: shipped in PR #804 — all seven sites now emit JSON (or reject --json as
+  a usage error, for `update` without `--shards`); CI's full check suite
+  (lint, evals, tests, smoke, mutation) is green on the merge-ready head
 order: 231
 owner: loop/json-flag-fixes
 pr: 804

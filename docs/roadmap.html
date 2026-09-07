@@ -12397,8 +12397,9 @@ No flag or summary changes, so no doc regeneration needed. Found by the 2026-08 
       </article>
 
       <article class="cap rcard" id="audit-json-accepted-but-ignored-on-many-branches-cohort-config-pol">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>--json accepted but ignored: <code>cohort</code>/<code>config</code>/<code>policy</code> set, <code>focus</code>, <code>profile</code>, <code>replay rollback</code>, <code>who</code> empty state</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The mirror image of the missing-<code>--json</code> sweep: these parsers <em>accept</em>
 <code>--json</code>, then whole branches print human text to stdout and exit 0 &mdash; a script
 that asked for JSON gets unparseable prose and no error. Verified live on every member:
@@ -12425,12 +12426,12 @@ supports &mdash; and each <code>--json</code> help string gets qualified the way
 <code>boost_cli/commands/team.py:69-300</code>, <code>intelligence.py:945-1050</code>,
 <code>configuration.py</code>, <code>pkg.py</code>. Help strings change, so regenerate
 <code>docs/commands.html</code>. Found by the 2026-08 CLI audit (cluster
-<code>json-flag-ignored</code>); repro in the audit log.</p>
+<code>json-flag-ignored</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">fix landed in PR as a usage error, for `update` without `--shards`); tests pass locally (ruff, pyright, unit+functional, smoke) but the sandbox this ran in has no PyPI egress, so `eval`/`mutation` and the pinned mypy/lint toolchain could not run here — CI is the gate of record, watched via the PR subscription</span>
+          <span class="m">shipped in PR a usage error, for `update` without `--shards`); CI's full check suite (lint, evals, tests, smoke, mutation) is green on the merge-ready head</span>
         </div>
       </article>
 
