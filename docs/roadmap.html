@@ -16940,7 +16940,7 @@ Found by the 2026-08 CLI audit (cluster <code>trust-tampered-manifest</code>); r
       </article>
 
       <article class="cap rcard" id="audit-attest-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Trust · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Trust · UX</span></div>
         <h3>boost attest: CLI audit findings (2026-08)</h3>
         <p><b><code>attest --verify</code> misdiagnoses a missing artifact as a content change.</b> After
 deleting <code>~/.agents/skills/brainstorming</code>, <code>boost attest --verify brainstorming</code>
@@ -16965,7 +16965,7 @@ audit log.</p>
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">a deleted store dir is reported as a sha mismatch; drift names the same state correctly</span>
+          <span class="m">fix implemented and manually verified against the real CLI; make check could not run in the sandbox (no pypi/apt egress) — CI must confirm before merge</span>
         </div>
       </article>
 

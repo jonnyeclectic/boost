@@ -2,14 +2,14 @@
 id: audit-attest-findings
 board: code
 section: trust
-status: planned
+status: inflight
 category: Trust · UX
 complexity: S
 impact: Low
 wow: 1
-note: a deleted store dir is reported as a sha mismatch; drift names the same state correctly
+note: fix implemented and manually verified against the real CLI; make check could not run in the sandbox (no pypi/apt egress) — CI must confirm before merge
 order: 248
-owner:
+owner: loop/audit-attest-findings
 pr:
 title: "boost attest: CLI audit findings (2026-08)"
 ---

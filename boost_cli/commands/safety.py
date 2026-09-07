@@ -616,15 +616,27 @@ def cmd_attest(argv):
                "commit": (entry.get("commit") or "")[:9],
                "sha256": (entry.get("sha256") or "")[:12]}
         if args.verify:
+            # `reason` distinguishes a missing artifact (nothing to compare —
+            # `boost heal` is the remedy) from a genuine sha mismatch, the same
+            # split `boost drift` already makes. Collapsing them into one
+            # `sha_ok` boolean, as this used to do, made a deleted store dir
+            # print as "content no longer matches the lock sha" — the user
+            # goes hunting for tampering when the fix is `boost heal`.
             if kind == "skill":
                 sdir = store.skill_store_dir(name)
-                rec["sha_ok"] = (sdir.is_dir()
-                                 and util.sha256_dir(sdir) == entry.get("sha256"))
+                if not sdir.is_dir():
+                    rec["reason"] = integrity.STATUS_MISSING
+                elif util.sha256_dir(sdir) != entry.get("sha256"):
+                    rec["reason"] = integrity.STATUS_MODIFIED
+                else:
+                    rec["reason"] = None
             else:
                 # The artifact the agent loads, against the hash recorded when
                 # it was written. UNLOCKED (a pre-hash entry) never fails.
-                rec["sha_ok"] = integrity.materialized_status(name, entry) not in (
-                    integrity.STATUS_MODIFIED, integrity.STATUS_MISSING)
+                mstatus = integrity.materialized_status(name, entry)
+                rec["reason"] = mstatus if mstatus in (
+                    integrity.STATUS_MODIFIED, integrity.STATUS_MISSING) else None
+            rec["sha_ok"] = rec["reason"] is None
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
                 failures += 1
@@ -646,9 +658,14 @@ def cmd_attest(argv):
     if args.verify:
         for r in records:
             if not r["sha_ok"]:
-                out.warn("%s: %s content no longer matches the lock sha"
-                         % (r["name"], "store" if r["kind"] == "skill"
-                            else "materialized"))
+                if r["reason"] == integrity.STATUS_MISSING:
+                    out.warn("%s: %s missing (boost heal)"
+                             % (r["name"], "store directory" if r["kind"] == "skill"
+                                else "materialized file"))
+                else:
+                    out.warn("%s: %s content no longer matches the lock sha"
+                             % (r["name"], "store" if r["kind"] == "skill"
+                                else "materialized"))
             elif not r["journal"]:
                 out.warn("%s: no journal record (installed before journaling?)" % r["name"])
             else:
