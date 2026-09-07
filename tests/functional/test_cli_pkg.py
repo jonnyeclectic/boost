@@ -1016,7 +1016,7 @@ class TestImport:
         _skill_dir(root, "beta")
         r = boost("import", root, "--all", "--name", "alpha", expect=2)
         assert "not allowed with argument --all" in r.err
-        assert set(_lock()) == set()
+        assert not paths.lockfile_path().exists()
 
 
 # ── snapshot ─────────────────────────────────────────────────────────────
