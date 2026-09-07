@@ -2,14 +2,14 @@
 id: mutation-shards-rerun-full-set-every-push
 board: code
 section: pipeline
-status: planned
+status: inflight
 category: CI · Performance
 complexity: M
 impact: Med
 wow: 2
 note: a re-push repays six ~20-min shards from zero; mutmut's .meta already holds the answers
 order: 307
-owner:
+owner: loop/mutation-shard-cache
 pr:
 title: "Mutation shards re-run <em>every</em> mutant on every push of the same PR"
 ---
