@@ -2,14 +2,14 @@
 id: audit-index-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: "index: errors glue onto the live progress bar, and 0 results overwrites a 150-entry index"
 order: 272
-owner:
+owner: loop/index-progress-and-empty-write
 pr:
 title: "<code>boost index</code>: CLI audit findings (2026-08)"
 ---
