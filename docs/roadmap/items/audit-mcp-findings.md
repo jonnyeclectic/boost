@@ -2,14 +2,14 @@
 id: audit-mcp-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
 note: no --dry-run; a named missing host exits 0; unregister claims success Gemini denies
 order: 276
-owner:
+owner: loop/mcp-truthfulness
 pr:
 title: "boost mcp: CLI audit findings (2026-08)"
 ---
