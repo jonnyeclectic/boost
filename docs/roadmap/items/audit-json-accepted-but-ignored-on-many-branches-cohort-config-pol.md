@@ -7,7 +7,7 @@ category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
-note: shipped in PR #804 — all seven sites now emit JSON (or reject --json as
+note: shipped in PR 804 — all seven sites now emit JSON (or reject --json as
   a usage error, for `update` without `--shards`); CI's full check suite
   (lint, evals, tests, smoke, mutation) is green on the merge-ready head
 order: 231
