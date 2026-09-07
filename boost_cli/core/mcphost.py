@@ -257,7 +257,7 @@ def classify_result(action: str, returncode: int, stdout: str, stderr: str) -> t
     in the command layer, which is what makes every branch here reachable
     without a real ``claude``/``gemini``/``agy`` on PATH.
     """
-    blob = ((stderr or "") + (stdout or "")).lower()
+    blob = (stderr + stdout).lower()
     if action == "unregister" and returncode == 0 and any(
             k in blob for k in _NOT_REGISTERED):
         return "not_registered", ""
@@ -265,5 +265,5 @@ def classify_result(action: str, returncode: int, stdout: str, stderr: str) -> t
         return "ran", ""
     if action == "register" and any(k in blob for k in _ALREADY):
         return "already", ""
-    tail = (stderr or "").strip().splitlines()
+    tail = stderr.strip().splitlines()
     return "failed", tail[-1] if tail else "unknown error"
