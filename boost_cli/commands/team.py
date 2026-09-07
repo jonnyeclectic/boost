@@ -26,6 +26,7 @@ from ..core import (
 from ..core import output as out
 from ..errors import BoostError
 from ._common import _s
+from .pkg import _report_result
 
 _tilde = paths.tilde
 
@@ -456,10 +457,10 @@ def cmd_protocol(argv) -> int:
             if not out.confirm("install %s from %s?" % (entry["name"], entry["tap"])):
                 out.info("cancelled")
                 return 1
-            res = store.install(entry)
-            out.ok("copied to %s" % _tilde(res.dest))
-            out.ok("linked → %s" % " · ".join(res.linked))
-            out.ok("lock updated (.skill-lock.json)")
+            res = store.install(entry, via="protocol")
+            _report_result(res)
+            if res.kind == "skill":
+                out.ok("quality score %d/100" % res.score)
             return 0
         # tap
         if not out.confirm("tap %s?" % arg):
@@ -523,8 +524,20 @@ def cmd_protocol(argv) -> int:
 
     # status
     out.kv("platform", system)
-    out.kv("handler", _tilde(_handler_script())
-           if _handler_script().exists() else "not registered")
+    if system == "Darwin":
+        # `register` on Darwin only ever writes the handler script and prints
+        # manual Automator steps (macOS routes URL schemes through app
+        # bundles, not a CLI call) — it never touches Launch Services. A
+        # single "handler" key that shows the script path once written reads
+        # as "registered", which is false until the user finishes building
+        # Boost.app. Splitting the path from the yes/no keeps that path from
+        # answering a question it can't.
+        out.kv("script", _tilde(_handler_script())
+               if _handler_script().exists() else "not written")
+        out.kv("registered", "no — build Boost.app (see `boost protocol register`)")
+    else:
+        out.kv("handler", _tilde(_handler_script())
+               if _handler_script().exists() else "not registered")
     if system == "Linux":
         out.kv("desktop", _tilde(_desktop_file())
                if _desktop_file().exists() else "not registered")
