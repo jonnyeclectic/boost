@@ -556,6 +556,41 @@ jobs:
         run: |
           git config --global user.email ci@boost.test
           git config --global user.name "Boost CI"
+      # A re-push of the same PR re-pays this shard's whole ~20 minutes from
+      # zero even when only tests/ changed one assertion, because nothing
+      # carries mutmut's recorded exit codes to the next push. The hash names
+      # everything that decides what those exit codes MEAN -- tests/, the
+      # gate's own scripts, setup.cfg, pyproject.toml,
+      # requirements/mutation-tools.txt -- and deliberately excludes
+      # boost_cli/ itself: mutmut already reuses one source file's own
+      # results by its content hash (scripts/mutation_shards.py's "cache key"
+      # section), so folding boost_cli/ in here too would evict every mutant
+      # in the cache on a one-file core edit instead of just that file's.
+      - name: mutation cache key
+        id: cachekey
+        run: |
+          HASH="$(python3 scripts/mutation_shards.py cache-key)"
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+      # Keyed on shard + Python version + that hash, with NO restore-keys on
+      # purpose, same reasoning as the eval corpus cache above: a near-miss
+      # restore would resurrect exit codes recorded under different tests or a
+      # different mutmut/pytest pin, and mutmut trusts a recorded result
+      # rather than re-proving it -- an inexact match must miss and pay the
+      # full run.
+      #
+      # Reuse rests on mutmut 3's own documented behaviour (skip a mutant with
+      # a recorded exit code; regenerate a file's mutants when its source
+      # changes), which is described in scripts/mutation_shards.py's module
+      # docstring as NOT independently re-verified against the 3.7.0 pin here
+      # -- mutmut isn't installed outside CI. If that description is wrong the
+      # failure mode is a warm cache buying nothing: mutmut still runs every
+      # mutant it does not recognise, so a bad restore can only cost time, not
+      # correctness of the gate itself.
+      - name: restore mutation results
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: mutants/boost_cli/core
+          key: mutation-shard-${{ matrix.index }}-py314-${{ steps.cachekey.outputs.hash }}
       - name: install test deps
         run: |
           python -m venv .venv
