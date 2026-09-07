@@ -10,7 +10,7 @@ wow: 1
 note: fix implemented and manually verified against the real CLI; make check could not run in the sandbox (no pypi/apt egress) — CI must confirm before merge
 order: 248
 owner: loop/audit-attest-findings
-pr:
+pr: 803
 title: "boost attest: CLI audit findings (2026-08)"
 ---
 <b><code>attest --verify</code> misdiagnoses a missing artifact as a content change.</b> After
