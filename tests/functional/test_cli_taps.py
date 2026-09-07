@@ -322,12 +322,29 @@ class TestTaps:
     def test_updated_from_cache_then_unknown(self, boost, tapped):
         util.rmtree(paths.repos_dir() / "fixture-tap")   # clone gone
         r = boost("taps")
-        assert "ago" in r.out                    # cache 'generated' age
+        # Same YYYY-MM-DD shape as a cloned tap's git-log date — not a
+        # relative "Xh ago", which used to be the cache-only format.
+        assert re.search(r"\d{4}-\d{2}-\d{2}", r.out)
+        assert "ago" not in r.out
         assert "1 taps · 5 items" in r.out       # items still from the cache
         (paths.cache_dir() / "fixture-tap.json").unlink()
         r = boost("taps")
         assert "?" in r.out                      # no clone, no cache
         assert "1 taps · 0 items" in r.out
+
+    def test_pinned_footer_hints_boost_update_skips_it(
+            self, boost, fixture_tap_src):
+        from boost_cli.core import gitutil
+        head = gitutil.head_commit(fixture_tap_src)
+        boost("tap", str(fixture_tap_src), "--at", head)
+        r = boost("taps")
+        assert "@%s" % head[:7] in r.out
+        assert "@sha = pinned" in r.out
+        assert "boost update` skips it" in r.out
+
+    def test_no_pinned_footer_when_nothing_pinned(self, boost, tapped):
+        r = boost("taps")
+        assert "@sha = pinned" not in r.out
 
 
 # ── outdated ─────────────────────────────────────────────────────────────
