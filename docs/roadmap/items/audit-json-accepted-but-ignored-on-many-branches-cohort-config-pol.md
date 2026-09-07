@@ -2,14 +2,14 @@
 id: audit-json-accepted-but-ignored-on-many-branches-cohort-config-pol
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
 note: seven commands take --json, then print "✓ set ai.enabled = true" prose with exit 0
 order: 231
-owner:
+owner: loop/json-flag-fixes
 pr:
 title: "--json accepted but ignored: <code>cohort</code>/<code>config</code>/<code>policy</code> set, <code>focus</code>, <code>profile</code>, <code>replay rollback</code>, <code>who</code> empty state"
 ---
