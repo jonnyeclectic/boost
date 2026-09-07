@@ -2,14 +2,14 @@
 id: audit-discover-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: S
 impact: Low
 wow: 1
 note: footer blames the network when gh is missing; --json prints [] silently with no index
 order: 262
-owner:
+owner: loop/discover-audit-findings
 pr:
 title: "boost discover: CLI audit findings (2026-08)"
 ---
