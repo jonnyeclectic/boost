@@ -10,7 +10,7 @@ wow: 1
 note: no --dry-run; a named missing host exits 0; unregister claims success Gemini denies
 order: 276
 owner: loop/mcp-truthfulness
-pr:
+pr: 810
 title: "boost mcp: CLI audit findings (2026-08)"
 ---
 Three truthfulness gaps in one command, all verified against the real CLIs.
