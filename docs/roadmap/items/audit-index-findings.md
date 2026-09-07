@@ -7,10 +7,10 @@ category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
-note: "index: errors glue onto the live progress bar, and 0 results overwrites a 150-entry index"
+note: "PR #802 open: all three fixes land and pass ruff/mypy/pyright + full test+smoke under py3.12; make check's eval/mutation gates unverified locally — no PyPI network in this sandbox to install mutmut/tox — pending CI"
 order: 272
 owner: loop/index-progress-and-empty-write
-pr:
+pr: 802
 title: "<code>boost index</code>: CLI audit findings (2026-08)"
 ---
 <b>The live progress bar is never cleared before an error</b> <em>(med)</em>. On a TTY a failed
