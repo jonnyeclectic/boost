@@ -2,14 +2,14 @@
 id: audit-preview-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: S
 impact: Med
 wow: 1
-note: piped preview strips ** with no substitute; at 60 cols 10 lines leak raw markers
+note: fix + tests landed (PR pending); make check not run locally — this sandbox has no PyPI network for the lint/mutation toolchain, CI is the authority
 order: 280
-owner:
+owner: loop/preview-audit-fixes
 pr:
 title: "<code>boost preview</code>: CLI audit findings (2026-08)"
 ---

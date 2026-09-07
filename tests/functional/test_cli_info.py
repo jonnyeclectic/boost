@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import types
 
 import pytest
 
@@ -33,6 +34,32 @@ def _skill_dir(tmp_path, name):
         "---\nname: %s\ndescription: locally imported test skill\n"
         "version: 0.1.0\n---\n\n# %s\n\nBody.\n" % (name, name), encoding="utf-8")
     return d
+
+
+def _skill_dir_raw(tmp_path, name, frontmatter, body):
+    """Like ``_skill_dir`` but with caller-supplied frontmatter and body, for
+    tests that need control over fields ``_skill_dir`` always fills in (e.g.
+    an absent ``version:``) or over the body's markdown shape."""
+    d = tmp_path / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\n%s\n---\n\n%s" % (frontmatter, body), encoding="utf-8")
+    return d
+
+
+def _force_tty(monkeypatch):
+    """Make `sys.stdout.isatty()` read True inside boost_cli.commands.info,
+    without touching the real (capsys-captured) stdout other modules use.
+
+    Swaps the module's ``sys`` name for a stand-in whose ``stdout`` only
+    answers ``isatty()`` — `print()` still resolves the real global
+    `sys.stdout` regardless of what this module's `sys` name points at, so
+    capsys keeps capturing normally.
+    """
+    from boost_cli.commands import info
+    monkeypatch.setattr(
+        info, "sys",
+        types.SimpleNamespace(stdout=types.SimpleNamespace(isatty=lambda: True)))
 
 
 # ── list ─────────────────────────────────────────────────────────────────
@@ -546,7 +573,12 @@ class TestEdit:
 # ── preview ──────────────────────────────────────────────────────────────
 
 class TestPreview:
-    def test_renders_headings_and_fences(self, boost, installed):
+    """Rendering (headings stripped, prose wrapped, bold colorized) only
+    happens on a TTY — these tests force one via `_force_tty`. The default,
+    piped shape is covered separately below by `TestPreviewPiped`."""
+
+    def test_renders_headings_and_fences(self, boost, installed, monkeypatch):
+        _force_tty(monkeypatch)
         r = boost("preview", "brainstorming")
         assert "brainstorming · v1.4.0 · fixture-tap" in r.out
         assert "# Brainstorming" not in r.out      # hashes stripped
@@ -561,6 +593,7 @@ class TestPreview:
         # divergent thinking:" (82 cols with its 2-space indent) printed
         # verbatim regardless of terminal width — preview's whole job is to
         # *render* the markdown, not dump it.
+        _force_tty(monkeypatch)
         monkeypatch.setenv("COLUMNS", "60")
         r = boost("preview", "brainstorming")
         for ln in r.out.split("\n"):
@@ -574,6 +607,7 @@ class TestPreview:
                                                     monkeypatch):
         # code inside a ``` fence is data, not prose — it must never be
         # reflowed even when it would overflow a narrow pane.
+        _force_tty(monkeypatch)
         monkeypatch.setenv("COLUMNS", "60")
         r = boost("preview", "brainstorming")
         assert "diverge -> cluster -> converge" in r.out
@@ -587,6 +621,7 @@ class TestPreview:
         # section onward: the titlebar line above it (out.titlebar()) is a
         # separate, pre-existing, never-wrapped decorative element this fix
         # did not touch and is not claimed to be narrow-pane-safe.
+        _force_tty(monkeypatch)
         monkeypatch.setenv("COLUMNS", "40")
         r = boost("preview", "brainstorming")
         lines = r.out.split("\n")
@@ -599,6 +634,61 @@ class TestPreview:
         # text (prefix = " • ", 3 columns), not flush to column 0
         assert lines[idx + 1].startswith("  ")
         assert "clustering." in lines[idx + 1]
+
+    def test_bold_span_does_not_leak_asterisks_at_narrow_width(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # Regression: `_render_markdown` used to wrap the raw markdown line
+        # first and colorize each wrapped chunk after, so a `**bold**` span
+        # whose closing `**` fell on the far side of the wrap point split
+        # into two chunks neither of which matched `_inline`'s per-chunk
+        # regex — both halves leaked their raw `**` markers instead of
+        # rendering as emphasis.
+        d = _skill_dir_raw(
+            tmp_path, "bold-wrap",
+            "name: bold-wrap\ndescription: test\nversion: 1.0.0",
+            "# Bold Wrap\n\n"
+            "This line must stay **entirely bold from here to there** "
+            "even when the pane is much narrower than the sentence.\n")
+        boost("import", d)
+        _force_tty(monkeypatch)
+        monkeypatch.setenv("COLUMNS", "60")
+        r = boost("preview", "bold-wrap")
+        assert "**" not in r.out
+        for ln in r.out.split("\n"):
+            assert len(ln) <= 60, ln
+        assert "entirely bold from here to there" in r.out
+
+    def test_missing_version_falls_back_to_the_normalized_catalog_version(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        # Every other view (info/list/search) normalizes a missing
+        # `version:` to "0.0.0" via catalog.scan_dir; preview used to read
+        # raw frontmatter and show "v?" instead, disagreeing with them for
+        # every skill that omits the field.
+        d = _skill_dir_raw(
+            tmp_path, "no-version",
+            "name: no-version\ndescription: test",
+            "# No Version\n\nBody.\n")
+        boost("import", d)
+        r = boost("preview", "no-version")
+        assert "no-version · v0.0.0 ·" in r.out
+        assert "v? ·" not in r.out
+
+
+class TestPreviewPiped:
+    """Piped (non-tty) `boost preview` mirrors `boost cat`: the raw body,
+    not a partial render with no color to carry what it stripped."""
+
+    def test_piped_output_is_the_raw_body(self, boost, installed):
+        r = boost("preview", "brainstorming")
+        assert "brainstorming · v1.4.0 · fixture-tap" in r.out
+        assert "# Brainstorming" in r.out          # markers intact, unrendered
+        assert "## Rules" in r.out
+        assert "```text" in r.out
+        assert "diverge -> cluster -> converge" in r.out
+        # the body appears byte-for-byte, not reflowed to the terminal width
+        for ln in ("# Brainstorming", "## Rules",
+                   "- Never critique during the diverge phase."):
+            assert ln in r.out.split("\n")
 
 
 # ── explain (no AI) ──────────────────────────────────────────────────────

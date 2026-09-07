@@ -387,25 +387,32 @@ def visible_len(s: str) -> int:
     return sum(_char_width(ch) for ch in _ANSI_RE.sub("", s))
 
 
-_CODE_SPAN_RE = re.compile(r"`[^`]*`")
+_ATOMIC_SPAN_RE = re.compile(r"`[^`]*`|\*\*[^*]+\*\*")
 
 
 def _glued(text: str, i: int) -> bool:
-    """True when `text[i]` exists, is not whitespace, and is not a backtick."""
-    return i < len(text) and not text[i].isspace() and text[i] != "`"
+    """True when `text[i]` exists, is not whitespace, and does not start
+    another span delimiter (a backtick or an asterisk)."""
+    return i < len(text) and not text[i].isspace() and text[i] not in "`*"
 
 
 def _wrap_tokens(text: str) -> list[str]:
-    """Split text into wrap units, keeping each `code span` whole.
+    """Split text into wrap units, keeping each `code span` or `**bold**`
+    span whole.
 
     A backtick span is one token even though it contains spaces, because the
     spans in boost's hints are shell commands the user is meant to select and
     paste — `pip install 'boost-skill-cli[rag]'`. Everything outside a span is
     split on whitespace, which collapses runs and newlines the way
     :func:`truncate` does; the span itself is copied verbatim, so a command
-    that legitimately holds two spaces survives.
+    that legitimately holds two spaces survives. A `**bold**` span gets the
+    same treatment for the same reason `_render_markdown` wraps raw markdown
+    before colorizing it (`boost_cli/commands/info.py`): splitting a bold
+    span across two wrapped lines leaves each half missing one of its `**`
+    delimiters, so `_inline`'s per-chunk regex can't match either half and
+    both leak the raw markers instead of rendering as emphasis.
 
-    The span also absorbs punctuation glued directly against its backticks
+    The span also absorbs punctuation glued directly against its delimiters
     with no whitespace between, so a source string like ``(see `x y`)``
     stays one token and `wrap()` never manufactures a space the source never
     had. That absorption is a pair of plain index scans (`_glued`), not a
@@ -415,19 +422,18 @@ def _wrap_tokens(text: str) -> list[str]:
     unterminated glued run — worth avoiding even though nothing here reads
     from outside the process, since these are still user-composed strings
     (a skill name, a tap path) flowing into `out.warn`/`out.info`. The scan
-    stops at a backtick on either side for the same reason the regex
-    excluded one: an adjacent ``` `beta` ``` must start its own span, not
-    fold into the one before it, or two spans separated only by ordinary
-    prose (` `alpha` between `beta` `) would bridge into one unbreakable
-    token.
+    stops at a backtick or asterisk on either side for the same reason the
+    regex excluded them: an adjacent ``` `beta` ``` or `**beta**` must start
+    its own span, not fold into the one before it, or two spans separated
+    only by ordinary prose would bridge into one unbreakable token.
 
-    An unterminated backtick simply never matches, and its text wraps as
-    ordinary words. That is the right failure: a half-open span is a typo in
-    the message, not a reason to refuse to render it.
+    An unterminated backtick or `**` simply never matches, and its text wraps
+    as ordinary words. That is the right failure: a half-open span is a typo
+    in the message, not a reason to refuse to render it.
     """
     parts: list[str] = []
     pos = 0
-    for m in _CODE_SPAN_RE.finditer(text):
+    for m in _ATOMIC_SPAN_RE.finditer(text):
         start, end = m.start(), m.end()
         if start < pos:
             continue  # already absorbed into the previous span's suffix

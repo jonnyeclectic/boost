@@ -703,10 +703,19 @@ def cmd_preview(argv):
     args = ap.parse_args(argv)
     text, _kind, lock, cat = _resolve_text(args.name)
     meta, body = frontmatter.parse(text)
-    print(out.titlebar("%s · v%s · %s" % (meta.get("name") or args.name,
-                                          meta.get("version") or "?",
-                                          (lock or cat or {}).get("tap", "local"))))
+    print(out.titlebar("%s · v%s · %s" % (
+        meta.get("name") or args.name,
+        meta.get("version") or (lock or cat or {}).get("version") or "?",
+        (lock or cat or {}).get("tap", "local"))))
     print()
+    if not sys.stdout.isatty():
+        # Piped output: the ANSI renderer strips markdown markers with no
+        # substitute (no colour to carry the emphasis) and mangles constructs
+        # it doesn't model, like a wrapped `> quote` losing its `>`. Mirror
+        # `boost cat`'s non-tty branch instead — the raw body is both more
+        # useful to a pipeline and a faithful copy of the source.
+        sys.stdout.write(body if body.endswith("\n") else body + "\n")
+        return 0
     _render_markdown(body)
     return 0
 
