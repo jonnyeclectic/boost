@@ -1008,6 +1008,16 @@ class TestImport:
         r = boost("import", tmp_path / "missing", expect=1)
         assert "no such directory" in r.err
 
+    def test_all_and_name_together_is_a_usage_error(self, boost, sandbox, tmp_path):
+        # --all --name used to silently drop --name and import everything —
+        # a real "Imported 3 skills" with no hint the flag was ignored.
+        root = tmp_path / "many"
+        _skill_dir(root, "alpha")
+        _skill_dir(root, "beta")
+        r = boost("import", root, "--all", "--name", "alpha", expect=2)
+        assert "not allowed with argument --name" in r.err
+        assert set(_lock()) == set()
+
 
 # ── snapshot ─────────────────────────────────────────────────────────────
 
@@ -1665,6 +1675,11 @@ class TestSnapshotEdges:
     def test_list_empty(self, boost, sandbox):
         r = boost("snapshot", "list")
         assert "no snapshots yet — create one with `boost snapshot save`" in r.out
+
+    def test_list_with_stray_positional_is_a_usage_error(self, boost, sandbox):
+        # `snapshot list extra-arg` used to silently ignore the extra word.
+        r = boost("snapshot", "list", "extra-arg", expect=2)
+        assert "snapshot list takes no LABEL|ID" in r.err
 
     def test_list_json_and_corrupt_sidecar(self, boost, installed):
         boost("snapshot", "save", "lbl")

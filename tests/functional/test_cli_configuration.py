@@ -121,6 +121,18 @@ class TestConfig:
         assert "telemetry not set" in r.out
         assert not paths.config_path().exists()
 
+    def test_stray_positionals_are_usage_errors(self, boost, sandbox):
+        # `config list KEY`, `config get KEY VALUE` and `config unset KEY VALUE`
+        # used to silently ignore the extra word — the sharpest case being
+        # `config get ai.enabled false`, a typo for `set`, reading as a
+        # confirmed set with exit 0.
+        r = boost("config", "list", "extra", expect=2)
+        assert "config list takes no KEY/VALUE" in r.err
+        r = boost("config", "get", "ai.enabled", "false", expect=2)
+        assert "config get takes no VALUE" in r.err
+        r = boost("config", "unset", "ai.enabled", "false", expect=2)
+        assert "config unset takes no VALUE" in r.err
+
 
 # ---------------------------------------------------------------- clean
 
@@ -358,6 +370,16 @@ class TestPolicy:
         assert "pin-only mode is on — installs/updates are frozen" in r.out
         assert "1 unpinned item(s): brainstorming" in r.out
         assert "quality score %d < required 101" % score in r.out
+
+    def test_stray_positionals_are_usage_errors(self, boost, sandbox):
+        # `policy list KEY VALUE` and `policy check KEY` used to be silently
+        # accepted and ignored, same for a stray VALUE on `policy unset`.
+        r = boost("policy", "list", "extra", "positional", expect=2)
+        assert "policy list takes no KEY/VALUE" in r.err
+        r = boost("policy", "check", "extra", expect=2)
+        assert "policy check takes no KEY/VALUE" in r.err
+        r = boost("policy", "unset", "pin_only", "true", expect=2)
+        assert "policy unset takes no VALUE" in r.err
 
 
 # ---------------------------------------------------------------- onboard
@@ -847,6 +869,14 @@ class TestScheduleCron:
                         "scheduled": True, "interval": "6h",
                         "next_run": data["next_run"]}
         assert data["next_run"]
+
+    def test_interval_outside_enable_is_a_usage_error(self, boost, sandbox):
+        # `schedule status --interval daily` used to silently accept and
+        # discard the flag it never reads.
+        r = boost("schedule", "status", "--interval", "daily", expect=2)
+        assert "--interval only applies to `schedule enable`" in r.err
+        r = boost("schedule", "disable", "--interval", "daily", expect=2)
+        assert "--interval only applies to `schedule enable`" in r.err
 
     def test_status_custom_spec(self, boost, sandbox, monkeypatch):
         line = "30 6 * * * /x/boost update # boost-sync"
