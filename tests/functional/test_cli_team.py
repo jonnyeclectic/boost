@@ -254,6 +254,34 @@ class TestProfile:
         assert json.loads(boost("profile", "show", "daily", "--json").out)[
             "skills"].keys() == {"brainstorming", "tdd-workflow"}
 
+    def test_save_slugs_the_name_and_reports_it(self, boost, tapped, tmp_path):
+        boost("install", "brainstorming")
+        r = boost("profile", "save", "My Daily")
+        assert "using slug: my-daily" in r.out
+        assert "saved profile My Daily (1 skill)" in r.out
+        assert (paths.profiles_dir() / "my-daily.json").is_file()
+        r = boost("profile", "show", "My Daily")
+        assert "profile My Daily" in r.out
+
+    def test_save_refuses_a_name_with_no_letters_or_digits(self, boost, tapped):
+        boost("install", "brainstorming")
+        r = boost("profile", "save", "!!!", expect=1)
+        assert "name has no letters or digits" in r.err
+        assert not list(paths.profiles_dir().glob("*.json"))
+
+    def test_list_sorts_by_the_displayed_name_not_the_slug(self, boost, tapped):
+        # Filenames sort as daily, mixed, skill, work-profile — but the
+        # displayed names must sort as daily, mixed, Work Profile, !!! would
+        # be refused now, so use names whose slug order differs from theirs.
+        boost("install", "brainstorming")
+        boost("profile", "save", "Work Profile")
+        boost("profile", "save", "daily")
+        boost("profile", "save", "mixed")
+        r = boost("profile", "list")
+        order = [ln.split()[0] for ln in r.out.splitlines()
+                 if ln.split() and ln.split()[0] in ("daily", "mixed", "Work")]
+        assert order == ["daily", "mixed", "Work"]
+
     def test_use_sidelines_then_prune_uninstalls_extras(self, boost, tapped):
         boost("install", "brainstorming")
         boost("profile", "save", "solo")

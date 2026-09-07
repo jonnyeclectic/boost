@@ -14,6 +14,7 @@ import difflib
 import fnmatch
 import json
 import re
+import shlex
 import sys
 import tempfile
 import textwrap
@@ -213,7 +214,9 @@ def cmd_distill(argv: list[str]) -> int:
         meta, body = frontmatter.parse(text)
         sources.append({"name": name, "origin": origin, "text": text,
                         "meta": meta, "body": body})
-    new = args.output or (names[0] + "-distilled")
+    new, changed = util.named_slug(args.output or (names[0] + "-distilled"))
+    if changed:
+        out.dim("using slug: %s" % new)
 
     out.heading("distilling %s → %s" % (", ".join(names), new))
     merged = _distill_ai(new, sources) if ai.available() else None
@@ -227,7 +230,7 @@ def cmd_distill(argv: list[str]) -> int:
         dest = Path.cwd() / new / "SKILL.md"
         if not _write_generated(dest, merged, yes=args.yes):
             return 1
-        out.info(out.role("install it with `boost import ./%s`" % new, "muted"))
+        out.info(out.role("install it with `boost import ./%s`" % shlex.quote(new), "muted"))
     journal.log("distill", new, sources=names)
     return 0
 
@@ -384,7 +387,11 @@ def cmd_infer(argv: list[str]) -> int:
     root = paths.expand(args.path).resolve()
     if not root.is_dir():
         raise BoostError("%s is not a directory" % _tilde(root))
-    name = util.slugify(args.name)
+    name, changed = util.named_slug(args.name)
+    if changed:
+        # Routed to stderr like `_note_fallback`: with neither `--install`
+        # nor `-o`, the generated SKILL.md goes to stdout verbatim.
+        out.info(out.role("using slug: %s" % name, "muted"), stream=sys.stderr)
     facts = _probe_repo(root)
 
     text = _infer_ai(name, root, facts) if ai.available() else None

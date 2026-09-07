@@ -15,6 +15,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from ..errors import BoostError
+
 IGNORED = {".git", "__pycache__", ".DS_Store"}
 
 
@@ -246,9 +248,30 @@ def human_size(n: int) -> str:
     return str(size)
 
 
+def _slug_core(name: str) -> str:
+    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-")
+
+
 def slugify(name: str) -> str:
     """Lowercase ``name`` into a ``[a-z0-9-]`` slug; empty result -> ``'skill'``."""
-    return re.sub(r"[^a-z0-9-]+", "-", name.strip().lower()).strip("-") or "skill"
+    return _slug_core(name) or "skill"
+
+
+def named_slug(name: str) -> tuple[str, bool]:
+    """Slugify a user-typed ``name``, refusing input with no letters or digits.
+
+    Returns ``(slug, changed)`` — ``changed`` is True when ``slug`` differs
+    from what was typed, so a caller can tell the user which name actually got
+    used. Where :func:`slugify` quietly falls back to ``'skill'`` for input
+    like ``''`` or ``'!!!'``, this raises instead: a name the user can later
+    look up (a skill, a saved profile) should never silently become a name
+    they never typed.
+    """
+    slug = _slug_core(name)
+    if not slug:
+        raise BoostError("name has no letters or digits",
+                        hint="pick a name with at least one letter or digit")
+    return slug, slug != name
 
 
 # A catalog name becomes a path component (a rule file, a workflow file, a store

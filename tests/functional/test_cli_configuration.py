@@ -267,9 +267,23 @@ class TestCreate:
 
     def test_description_and_slug(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        boost("create", "My Fancy Skill", "--description", "Does a thing")
+        r = boost("create", "My Fancy Skill", "--description", "Does a thing")
+        assert "using slug: my-fancy-skill" in r.out
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
+
+    def test_already_a_slug_prints_no_slug_note(self, boost, sandbox, tmp_path,
+                                                 monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("create", "already-a-slug")
+        assert "using slug:" not in r.out
+
+    def test_refuses_a_name_with_no_letters_or_digits(self, boost, sandbox,
+                                                        tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("create", "___", expect=1)
+        assert "name has no letters or digits" in r.err
+        assert not (tmp_path / "skill").exists()
 
     def test_install_flag(self, boost, sandbox, tmp_path):
         r = boost("create", "inst-skill", "--dir", tmp_path, "--install")

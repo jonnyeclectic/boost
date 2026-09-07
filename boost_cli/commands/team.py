@@ -205,7 +205,8 @@ def cmd_cohort(argv) -> int:
 # ---------------------------------------------------------------- profile
 
 def _profile_path(name: str):
-    return paths.profiles_dir() / (util.slugify(name) + ".json")
+    slug, _changed = util.named_slug(name)
+    return paths.profiles_dir() / (slug + ".json")
 
 
 def _load_profile(name: str) -> dict:
@@ -274,6 +275,10 @@ def cmd_profile(argv) -> int:
                              "skills": len(data.get("skills", {})),
                              "saved": data.get("saved", "?"),
                              "unreadable": False})
+        # Sorted by the name each row actually displays, not by the slugged
+        # filename it happens to be sorted from above — those diverge for any
+        # profile whose name isn't already its own slug.
+        profiles.sort(key=lambda pr: pr["name"].lower())
         if args.json:
             print(json.dumps(profiles, indent=2))
             return 0
@@ -290,6 +295,9 @@ def cmd_profile(argv) -> int:
         return 0
 
     if args.action == "save":
+        slug, changed = util.named_slug(args.name)
+        if changed:
+            out.dim("using slug: %s" % slug)
         installed = lockfile.installed()
         was = None
         if _profile_path(args.name).exists():

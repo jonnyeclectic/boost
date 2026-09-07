@@ -90,6 +90,25 @@ class TestDistill:
         assert evs[0]["subject"] == "tdd-workflow-distilled"
         assert evs[0]["sources"] == ["tdd-workflow", "cowboy-coding"]
 
+    def test_output_name_is_slugged_and_the_import_hint_matches_the_dir(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # A user-typed -o name that isn't a valid slug used to be written
+        # verbatim, then hinted with an import command that failed against
+        # that same directory — see `audit-skill-profile-name-slugging-…`.
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "brainstorming", "commit-messages", "-o", "Bad Name!!")
+        assert "using slug: bad-name" in r.out
+        assert (tmp_path / "bad-name" / "SKILL.md").is_file()
+        assert not (tmp_path / "Bad Name!!").exists()
+        assert "install it with `boost import ./bad-name`" in r.out
+
+    def test_refuses_an_output_name_with_no_letters_or_digits(
+            self, boost, tapped, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "brainstorming", "commit-messages", "-o", "!!!",
+                  expect=1)
+        assert "name has no letters or digits" in r.err
+
     def test_dedupes_repeated_lines_and_honors_output_name(self, boost, tapped,
                                                            tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -296,10 +315,26 @@ class TestInfer:
         r = boost("infer", "--path", py_project, "--name", "My Conventions",
                  "-o", out_file)
         assert "wrote" in r.out
+        assert "using slug: my-conventions" in r.err
         meta, _ = frontmatter.parse(out_file.read_text(encoding="utf-8"))
         assert meta["name"] == "my-conventions"
         evs = journal.events(action="infer")
         assert evs[0]["subject"] == "my-conventions"
+
+    def test_slug_note_never_lands_on_stdout(self, boost, sandbox, py_project):
+        # Without --install or -o, the generated SKILL.md is stdout's whole
+        # body: `boost infer --name "My Conv" > SKILL.md` must not corrupt
+        # it with a slug note the way the AI-fallback note used to.
+        r = boost("infer", "--path", py_project, "--name", "My Conv")
+        assert "using slug:" not in flat(r.out)
+        assert "using slug: my-conv" in flat(r.err)
+        meta, _ = frontmatter.parse(r.out)
+        assert meta["name"] == "my-conv"
+
+    def test_refuses_a_name_with_no_letters_or_digits(self, boost, sandbox,
+                                                       py_project):
+        r = boost("infer", "--path", py_project, "--name", "!!!", expect=1)
+        assert "name has no letters or digits" in r.err
 
     def test_yes_flag_skips_the_overwrite_prompt(self, boost, sandbox, py_project,
                                                   tmp_path, monkeypatch):

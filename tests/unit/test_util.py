@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.core import util
+from boost_cli.errors import BoostError
 
 ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -189,6 +190,37 @@ class TestSlugify:
 
     def test_digits_and_dashes_kept(self):
         assert util.slugify("tdd-workflow-3") == "tdd-workflow-3"
+
+
+class TestNamedSlug:
+    def test_already_a_slug_reports_unchanged(self):
+        slug, changed = util.named_slug("tdd-workflow-3")
+        assert (slug, changed) == ("tdd-workflow-3", False)
+
+    def test_spaces_slug_and_report_changed(self):
+        slug, changed = util.named_slug("My Fancy Skill")
+        assert (slug, changed) == ("my-fancy-skill", True)
+
+    def test_unicode_and_symbols_slug_and_report_changed(self):
+        slug, changed = util.named_slug("Ünïcode Skill ✓")
+        assert (slug, changed) == ("n-code-skill", True)
+
+    def test_empty_name_raises_instead_of_falling_back_to_skill(self):
+        with pytest.raises(BoostError, match="name has no letters or digits"):
+            util.named_slug("")
+
+    def test_punctuation_only_name_raises_instead_of_falling_back_to_skill(self):
+        with pytest.raises(BoostError, match="name has no letters or digits"):
+            util.named_slug("!!!")
+
+    def test_underscore_only_name_raises(self):
+        with pytest.raises(BoostError, match="name has no letters or digits"):
+            util.named_slug("___")
+
+    def test_raised_error_carries_a_hint(self):
+        with pytest.raises(BoostError) as excinfo:
+            util.named_slug("!!!")
+        assert excinfo.value.hint == "pick a name with at least one letter or digit"
 
 
 class TestSha256Dir:
