@@ -2,14 +2,14 @@
 id: audit-create-findings
 board: code
 section: internals
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
-note: parse(dump(meta)) != meta — evolve rewrites untouched lines, create writes broken YAML
+note: parse(dump(meta)) != meta — evolve rewrites untouched lines, create writes broken YAML — fix implemented, PR open; CI must confirm the full gate since this session's sandbox has no PyPI egress
 order: 260
-owner:
+owner: loop/frontmatter-roundtrip
 pr:
 title: "boost create: CLI audit findings (2026-08)"
 ---

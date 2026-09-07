@@ -5535,7 +5535,7 @@ the 2026-08 CLI audit (cluster <code>snapshot-restore-rules-loss</code>); repro 
       </article>
 
       <article class="cap rcard" id="audit-create-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost create: CLI audit findings (2026-08)</h3>
         <p><b>The frontmatter dump/parse round-trip is lossy, and one asymmetric pair is the root cause:</b>
 <code>frontmatter.dump</code> (<code>frontmatter.py:161-178</code>) quotes only on <code>:</code> or
@@ -5570,7 +5570,7 @@ CLI audit (cluster <code>frontmatter-roundtrip</code>); repro in the audit log.<
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">parse(dump(meta)) != meta — evolve rewrites untouched lines, create writes broken YAML</span>
+          <span class="m">parse(dump(meta)) != meta — evolve rewrites untouched lines, create writes broken YAML — fix implemented, PR open; CI must confirm the full gate since this session's sandbox has no PyPI egress</span>
         </div>
       </article>
 
