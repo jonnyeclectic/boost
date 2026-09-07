@@ -580,21 +580,28 @@ class TestDiscover:
         assert "build it with `boost index` (GitHub Code Search)" in r.out
         r = boost("discover", "--json")
         assert json.loads(r.out) == []
+        # The bug: stdout stayed valid JSON, but stderr said nothing at all, so
+        # a script could not tell "nothing indexed yet" from "no matches".
+        assert "the discovery index has not been built yet" in r.err
 
     def test_query_filters_and_footer_counts(self, boost, sandbox):
         _write_index(_ITEMS)
         r = boost("discover", "--local", "acme")
         assert "octo/skills" not in r.out
-        assert "skills/web/SKILL.md" in r.out and "skills/db/SKILL.md" in r.out
+        # One row per repository: acme/pack ships two matching files, so the
+        # "(2)" cell — same as the live table — is what says so, not a second
+        # row for the file `_by_repo` folded away.
+        assert "acme/pack (2)" in r.out
+        assert "skills/web/SKILL.md" in r.out
         # "when this index was built" is load-bearing: `boost index` now takes a
         # query, so github_total is the total for *that* query at *that* time,
         # not a live GitHub-wide count.
-        assert ("2 of 3 indexed skills · GitHub reported ~42 total when this "
-                "index was built") in r.out
+        assert ("1 repo(s) across 2 of 3 indexed skill files · GitHub reported "
+                "~42 total when this index was built") in r.out
         # multi-token queries AND together
         r = boost("discover", "--local", "acme", "web")
         assert "skills/db/SKILL.md" not in r.out
-        assert "1 of 3 indexed skills" in r.out
+        assert "1 repo(s) across 1 of 3 indexed skill files" in r.out
 
     def test_the_footer_names_the_query_the_index_was_built_with(self, boost,
                                                                  sandbox):
@@ -622,7 +629,7 @@ class TestDiscover:
     def test_limit(self, boost, sandbox):
         _write_index(_ITEMS)
         r = boost("discover", "--limit", "1")
-        assert "1 of 3 indexed skills" in r.out
+        assert "1 repo(s) across 3 of 3 indexed skill files" in r.out
         assert "acme/pack" not in r.out
 
     def test_corrupt_index(self, boost, sandbox):
@@ -740,7 +747,7 @@ class TestDiscoverLive:
         monkeypatch.setattr("boost_cli.commands.discovery.subprocess.run", boom)
         _write_index(_ITEMS)
         r = boost("discover", "--local", "acme")
-        assert "2 of 3 indexed skills" in r.out
+        assert "1 repo(s) across 2 of 3 indexed skill files" in r.out
 
     def test_bare_discover_still_browses_the_cache(self, boost, sandbox, monkeypatch):
         """No query is a browse request, and browsing the cache is free."""
@@ -752,7 +759,7 @@ class TestDiscoverLive:
         monkeypatch.setattr("boost_cli.commands.discovery.subprocess.run", boom)
         _write_index(_ITEMS)
         r = boost("discover")
-        assert "3 of 3 indexed skills" in r.out
+        assert "2 repo(s) across 3 of 3 indexed skill files" in r.out
 
     def test_empty_github_result_is_reported_not_masked(self, boost, sandbox,
                                                         monkeypatch):
@@ -770,7 +777,7 @@ class TestDiscoverLive:
         r = boost("discover", "acme")
         # The notice belongs on stderr — see test_json_survives_a_fallback.
         assert "GitHub code search failed" in r.err
-        assert "2 of 3 indexed skills" in r.out
+        assert "1 repo(s) across 2 of 3 indexed skill files" in r.out
 
     def test_missing_gh_falls_back_to_the_index(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
@@ -778,7 +785,7 @@ class TestDiscoverLive:
         _write_index(_ITEMS)
         r = boost("discover", "acme")
         assert "GitHub search needs the `gh` CLI" in r.err
-        assert "2 of 3 indexed skills" in r.out
+        assert "1 repo(s) across 2 of 3 indexed skill files" in r.out
 
     def test_a_fallback_miss_does_not_blame_a_flag_you_never_passed(
             self, boost, sandbox, monkeypatch):
@@ -786,10 +793,25 @@ class TestDiscoverLive:
                             lambda c: None)
         _write_index(_ITEMS)
         r = boost("discover", "zzz")
-        assert "because GitHub could not be reached" in r.out
+        # The bug: this said "because GitHub could not be reached" whatever the
+        # real reason — here, the real reason is that `gh` is not on PATH.
+        assert "because the `gh` CLI is not installed" in r.out
+        assert "because GitHub could not be reached" not in r.out
         # "drop --local" contradicts the warning above it for a user who never
         # typed --local, and is advice they cannot act on.
         assert "drop --local" not in r.out
+
+    def test_a_bare_browse_miss_does_not_claim_github_was_unreachable(
+            self, boost, sandbox, monkeypatch):
+        # No query means no live attempt at all — GitHub was never asked, so
+        # blaming it for being unreachable would be false, same bug as the
+        # gh-missing case above but with no fallback reason to report.
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        _write_index([])
+        r = boost("discover")
+        assert "because GitHub could not be reached" not in r.out
+        assert "GitHub was not searched" in r.out
 
     def test_json_survives_a_fallback_and_says_which_corpus_answered(
             self, boost, sandbox, monkeypatch):
