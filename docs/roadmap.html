@@ -16970,7 +16970,7 @@ audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-trust-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost trust: CLI audit findings (2026-08)</h3>
         <p><b><code>trust add</code> blames base64 for a nonexistent <code>.pub</code> path</b> (med).
 <code>trust add acme /nonexistent/acme.pub</code> answers <em>&ldquo;Error: not a valid minisign
@@ -17003,7 +17003,19 @@ itself is the defect, and the hazard is latent for every hex-id column rendered 
 
 Found by the 2026-08 CLI audit (clusters <code>trust-add-path-error</code>,
 <code>trust-verify-silent-fail</code>, <code>trust-fingerprint-alignment</code>); repro in the audit
-log.</p>
+log.
+
+<b>Status.</b> All three findings implemented and covered by new unit/functional tests (PR
+linked above): <code>trust add</code> now raises <code>no such key file: &lt;path&gt;</code> before
+falling back to base64 parsing; <code>trust verify &lt;tap&gt;</code> prints an
+<code>out.warn</code> line naming why a specific tap didn't verify; and <code>out.table</code>
+gained a <code>text=</code> parameter (columns that must never right-align as numeric,
+however their cells look), used for the trusted-keys FINGERPRINT column. Left
+<code>inflight</code> rather than <code>shipped</code> because this session's sandbox has no
+network egress to PyPI/GitHub and runs Python 3.11 (repo floor is 3.12), so
+<code>make check</code> could not be run here. ruff, mypy, and the full unit+functional suites
+were run directly and diff identically to a clean checkout of main modulo the new tests, which
+pass. CI should confirm the full gate before merge.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
