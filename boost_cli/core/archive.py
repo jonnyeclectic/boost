@@ -34,7 +34,7 @@ def resolve_export_format(out_path: str | None, zip_flag: bool) -> tuple[bool, s
         return zip_flag, None
     name = Path(out_path).name.lower()
     is_zip_suffix = name.endswith(".zip")
-    is_tar_suffix = name.endswith(".tar.gz") or name.endswith(".tgz")
+    is_tar_suffix = name.endswith((".tar.gz", ".tgz"))
     if zip_flag:
         if is_tar_suffix:
             return True, ("%s looks like a tar archive but --zip was passed — "

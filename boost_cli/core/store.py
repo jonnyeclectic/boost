@@ -1820,7 +1820,7 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
                         "declined (unpin, or `boost reinstall %s` to accept "
                         "the new content)" % (name, name))
                     continue
-                try:
+                try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
                     install_from_path(src, name=name, force=True)
                     actions.append(
                         "reinstalled missing %s from local source %s" % (name, src))
