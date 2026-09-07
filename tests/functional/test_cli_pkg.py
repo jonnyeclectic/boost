@@ -10,8 +10,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
+
+import pytest
 
 from boost_cli.core import lockfile, paths
 
@@ -1141,6 +1144,9 @@ class TestExport:
                 assert member.uname == ""
                 assert member.gname == ""
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="NTFS has no POSIX mode bits — the skill file's "
+                               "real st_mode isn't 0o644 to compare against")
     def test_zip_boostfile_member_mode_matches_skill_files(
             self, boost, installed, tmp_path):
         dest = tmp_path / "x.zip"
