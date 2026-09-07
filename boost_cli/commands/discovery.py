@@ -756,28 +756,35 @@ def _fall_back(why: str, hint: str) -> None:
 def _discover_live(args, tokens):
     """Search GitHub itself — the same reach-out the MCP tool makes.
 
-    Returns an exit code, or None to fall through to the cached index.
+    Returns ``(exit_code, fallback_reason)``. ``exit_code`` is ``None`` to fall
+    through to the cached index, in which case ``fallback_reason`` is a short
+    phrase naming *why* — fed straight into the local-index miss footer, which
+    otherwise cannot tell "gh is missing" from "the search failed" apart from
+    "no query was given at all", and used to blame all three on the same
+    ("GitHub could not be reached").
     """
     if not shutil.which("gh"):
-        return _fall_back("GitHub search needs the `gh` CLI",
-                          "install it with `brew install gh && gh auth login` "
-                          "to search GitHub itself")
+        _fall_back("GitHub search needs the `gh` CLI",
+                   "install it with `brew install gh && gh auth login` "
+                   "to search GitHub itself")
+        return None, "the `gh` CLI is not installed"
     hits = github_skill_search(" ".join(tokens), _GH_PAGE)
     if hits is None:
-        return _fall_back("GitHub code search failed", "check `gh auth status`")
+        _fall_back("GitHub code search failed", "check `gh auth status`")
+        return None, "GitHub code search failed"
     rows = _by_repo(hits)[:args.limit]
     if args.as_json:
         # `source` on every row, in both paths, because the fall-through above
         # switches corpus *and* row shape. Without it a script cannot tell
         # "GitHub has no matches" from "GitHub was never searched".
         print(json.dumps([r | {"source": "github"} for r in rows]))
-        return 0
+        return 0, None
     if not rows:
         out.info("no SKILL.md repositories on GitHub match %r"
                  % " ".join(tokens))
         out.info(out.role("try broader terms, or `boost search` for the "
                           "registries already tapped", "muted"))
-        return 0
+        return 0, None
     # The count rides the repo column, which is short: appended to the path it
     # was the first thing a narrow terminal truncated away. out.plain because
     # every field here is a GitHub string — a repo name or path carrying a
@@ -793,7 +800,7 @@ def _discover_live(args, tokens):
                       "GitHub Code Search" % (len(rows), len(hits)), "muted"))
     out.info(out.role("add one with `boost tap <repo>`, then `boost install "
                       "<skill>`", "muted"))
-    return 0
+    return 0, None
 
 
 def cmd_discover(argv):
@@ -813,21 +820,27 @@ def cmd_discover(argv):
     # A query is a question about GitHub, not about whatever `boost index`
     # happened to sample — so ask GitHub. The cached index stays the answer for
     # bare browsing and for --local, where being offline is the point.
+    fallback_reason = None
     if tokens and not args.local:
-        code = _discover_live(args, tokens)
+        code, fallback_reason = _discover_live(args, tokens)
         if code is not None:
             return code
     dpath = _discovery_path()
     if not dpath.exists():
-        if args.as_json:
-            print(json.dumps([]))
-            return 0
-        out.info("the discovery index has not been built yet")
+        # These lines must reach the user under --json too — stdout has to stay
+        # parseable, but "index not built" and "nothing matched" are different
+        # facts and a script deserves to be able to tell them apart, same as
+        # the live fall-back notice below.
+        stream = sys.stderr if args.as_json else None
+        out.info("the discovery index has not been built yet", stream=stream)
         if shutil.which("gh"):
-            out.info("build it with `boost index` (GitHub Code Search)")
+            out.info("build it with `boost index` (GitHub Code Search)",
+                     stream=stream)
         else:
             out.info("install the GitHub CLI first (`brew install gh && "
-                     "gh auth login`), then run `boost index`")
+                     "gh auth login`), then run `boost index`", stream=stream)
+        if args.as_json:
+            print(json.dumps([]))
         return 0
     try:
         data = json.loads(dpath.read_text(encoding="utf-8"))
@@ -835,41 +848,55 @@ def cmd_discover(argv):
         raise BoostError("the discovery index is corrupt",
                         hint="rebuild it with `boost index`") from None
     all_items = data.get("items") or []
-    tokens = [t.lower() for t in args.query if t.strip()]
+    query_tokens = [t.lower() for t in args.query if t.strip()]
     items = [it for it in all_items
              if all(t in ("%s %s %s" % (it.get("repo", ""), it.get("path", ""),
                                         it.get("description", ""))).lower()
-                    for t in tokens)]
-    shown = items[:args.limit]
+                    for t in query_tokens)]
     if args.as_json:
         # Tagged like the live rows above: this is the branch a script reaches
-        # after a silent fall-through, and the two row shapes differ.
+        # after a silent fall-through, and the two row shapes differ. Rows stay
+        # per-file here — a script asked for the raw matches, and repo
+        # collapsing is a table-rendering concern, not a data-shape one.
+        shown = items[:args.limit]
         print(json.dumps([it | {"source": "local-index"} for it in shown]))
         return 0
-    if not shown:
+    # One row per repository, same as the live table: code search (and a
+    # mirrored registry) can return several files from one repo, and a repo is
+    # what `boost tap` acts on.
+    repo_rows = _by_repo(items)[:args.limit]
+    if not repo_rows:
         out.info("no locally indexed skills match %r" % " ".join(args.query))
-        # Say what was actually consulted. The old wording read as a verdict on
-        # GitHub when it was only ever a verdict on this cache. The next line
-        # depends on WHY we are here: told to stay local, or fell through after
-        # GitHub was unreachable. "drop --local" to someone who never typed it
-        # is advice they cannot act on, contradicting the warning just printed.
-        out.info(out.role(
-            ("this searched a local sample of %d entries, not GitHub — drop "
-             "--local to search GitHub itself" % len(all_items))
-            if args.local else
-            ("this searched a local sample of %d entries because GitHub could "
-             "not be reached" % len(all_items)), "muted"))
+        # Say what was actually consulted. The old wording blamed "GitHub could
+        # not be reached" whatever the real reason — including a bare browse
+        # that never contacted GitHub at all. The next line depends on WHY we
+        # are here: told to stay local, a real fall-back with a known cause, or
+        # no query (so no live attempt) at all. "drop --local" to someone who
+        # never typed it is advice they cannot act on.
+        if args.local:
+            note = ("this searched a local sample of %d entries, not GitHub — "
+                     "drop --local to search GitHub itself" % len(all_items))
+        elif fallback_reason:
+            note = ("this searched a local sample of %d entries because %s"
+                     % (len(all_items), fallback_reason))
+        else:
+            note = ("this searched a local sample of %d entries — GitHub was "
+                     "not searched" % len(all_items))
+        out.info(out.role(note, "muted"))
         return 0
-    # out.plain: these rows came from GitHub too, by way of `boost index`.
-    out.table([(out.plain(it.get("repo", "?")), out.plain(it.get("path", "")),
-                out.role(out.plain(it.get("url", "")), "muted")) for it in shown],
+    # out.plain: these rows came from GitHub too, by way of `boost index`. The
+    # "(N)" cell mirrors the live table for the same reason it exists there.
+    out.table([(out.plain(it.get("repo", "?"))
+                + (" (%d)" % it["files"] if it.get("files", 1) > 1 else ""),
+                out.plain(it.get("path", "")),
+                out.role(out.plain(it.get("url", "")), "muted")) for it in repo_rows],
               headers=("repo", "path", "url"))
     # `github_total` is the match count for the query `boost index` was built
     # with, which since that command took a query is not "all of GitHub".
     scope = (" matching %r" % data["query"]) if data.get("query") else ""
-    out.info(out.role("%d of %d indexed skills · GitHub reported ~%d total%s "
-                      "when this index was built"
-                      % (len(shown), len(all_items),
+    out.info(out.role("%d repo(s) across %d of %d indexed skill files · GitHub "
+                      "reported ~%d total%s when this index was built"
+                      % (len(repo_rows), len(items), len(all_items),
                          int(data.get("github_total") or 0), scope), "muted"))
     return 0
 
