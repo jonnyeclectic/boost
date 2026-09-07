@@ -303,7 +303,7 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     name_by_safe = {name.replace("/", "__"): name for name in tap_paths}
 
     old = _load_raw()
-    reused_safe: set = set()
+    reused_safe: set[str] = set()
     if old is not None and not force:
         old_commits = old.get("commits", {})
         for safe, commit in commits.items():
