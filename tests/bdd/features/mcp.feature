@@ -36,13 +36,26 @@ Feature: boost mcp
     And the output should contain "registered boost as an MCP server for Claude Code (scope: user)"
     And the output should contain "registered boost as an MCP server for Gemini CLI (scope: user)"
 
-  Scenario: naming a host that is not installed prints its manual command
+  Scenario: naming a host that is not installed fails so a script can tell
     Given no agent CLI is on PATH
     When I run "boost mcp register --host gemini"
-    Then the exit code should be 0
+    Then the exit code should be 1
     And the output should contain "`gemini` CLI not found — run this yourself:"
     And the output should contain "gemini mcp add --scope user"
     And the output should not contain "claude mcp add"
+
+  Scenario: --host all tolerates every CLI being missing
+    Given no agent CLI is on PATH
+    When I run "boost mcp register --host all"
+    Then the exit code should be 0
+    And the output should contain "`gemini` CLI not found — run this yourself:"
+
+  Scenario: unregistering a host where nothing was registered succeeds quietly
+    Given the "gemini" CLI is on PATH but reports nothing registered
+    When I run "boost mcp unregister --host gemini"
+    Then the exit code should be 0
+    And the output should contain "Gemini CLI: not registered — nothing to do"
+    And the output should not contain "unregistered boost as an MCP server"
 
   Scenario: an unknown host fails with the known hosts
     When I run "boost mcp register --host bogus"

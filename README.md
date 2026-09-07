@@ -419,6 +419,7 @@ is the whole setup.
 boost mcp register                 # every installed host (default: --host auto)
 boost mcp register --host gemini   # just one
 boost mcp register --no-seed       # register only; tap nothing
+boost mcp register --dry-run       # print the resolved command per host; change nothing
 boost mcp unregister               # same host selection, in reverse
 ```
 
