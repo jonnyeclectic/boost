@@ -2,14 +2,14 @@
 id: audit-export-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
 note: -o x.zip writes a gzip tarball; the repair hint drops the skill from the lock instead
 order: 268
-owner:
+owner: loop/export-audit-findings
 pr:
 title: "<code>boost export</code>: CLI audit findings (2026-08)"
 ---
