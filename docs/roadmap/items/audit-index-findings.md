@@ -2,12 +2,12 @@
 id: audit-index-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
-note: "PR #802 open: all three fixes land and pass ruff/mypy/pyright + full test+smoke under py3.12; make check's eval/mutation gates unverified locally — no PyPI network in this sandbox to install mutmut/tox — pending CI"
+note: "PR #802: progress bar clears before raise/warn, 0 results keeps the previous index, gh rate-limit/403 gets a native hint — CI green (lint/eval/test/smoke/mutation), awaiting human merge"
 order: 272
 owner: loop/index-progress-and-empty-write
 pr: 802

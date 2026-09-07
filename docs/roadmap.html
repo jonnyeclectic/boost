@@ -13742,8 +13742,9 @@ the 2026-08 CLI audit (cluster <code>stderr-stdout-ordering</code>); repro in th
       </article>
 
       <article class="cap rcard" id="audit-index-findings">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost index</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The live progress bar is never cleared before an error</b> <em>(med)</em>. On a TTY a failed
 GitHub search prints <em>&ldquo;&#9619;&#9619;&#9619;&#9617;&#9617;&#9617; 1/3 searching GitHub for
 SKILL.mdError: GitHub code search failed&rdquo;</em> on one line, and a failed page 2 glues
@@ -13771,12 +13772,12 @@ boost-native advice &mdash; while sibling paths in the same function do map thei
 <em>rate limit</em>/<em>HTTP 403</em>/<em>gh auth login</em> and raise with a one-line hint
 (&ldquo;GitHub rate limit hit &mdash; wait a minute or authenticate: <code>gh auth login</code> /
 GH_TOKEN&rdquo;), and make <code>out.err</code> indent hint continuation lines. Found by the 2026-08
-CLI audit (cluster <code>index-ratelimit-hint</code>); repro in the audit log.</p>
+CLI audit (cluster <code>index-ratelimit-hint</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">PR #802 open: all three fixes land and pass ruff/mypy/pyright + full test+smoke under py3.12; make check's eval/mutation gates unverified locally — no PyPI network in this sandbox to install mutmut/tox — pending CI</span>
+          <span class="m">PR #802: progress bar clears before raise/warn, 0 results keeps the previous index, gh rate-limit/403 gets a native hint — CI green (lint/eval/test/smoke/mutation), awaiting human merge</span>
         </div>
       </article>
 
