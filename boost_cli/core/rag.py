@@ -289,10 +289,18 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     """(Re)build the full-content index, reusing unchanged taps.
 
     Returns stats: ``{"entries", "docs", "taps", "reindexed", "reused"}``.
+    ``reindexed`` and ``reused`` are both lists of tap *names* (e.g.
+    ``"acme/skills"``), never the ``__``-joined safe name used internally as a
+    cache key — so ``set(reindexed) | set(reused)`` is always the tap-name set.
     """
     entries = catalog.all_entries() if entries is None else entries
     tap_paths = _tap_paths()
     commits = _tap_commits()
+    # `commits` and the catalog's `entry["tap"]` disagree on shape: commits are
+    # keyed by safe name (`_tap_commits`'s docstring), entries carry the tap
+    # name. `tap_paths` is keyed by tap name (`_tap_paths`), so it is also the
+    # cheapest way back from a safe name to the name that names it in `stats`.
+    name_by_safe = {name.replace("/", "__"): name for name in tap_paths}
 
     old = _load_raw()
     reused_safe: set = set()
@@ -315,7 +323,10 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
         "docs": len(docs),
         "taps": len(commits),
         "reindexed": reindexed,
-        "reused": sorted(reused_safe),
+        # Tap names, matching `reindexed` — not the safe names `reused_safe`
+        # is keyed by. A caller that set-differences the two used to see every
+        # tap as changed, because "0xfurai__x" never equals "0xfurai/x".
+        "reused": sorted(name_by_safe.get(safe, safe) for safe in reused_safe),
     }
 
 

@@ -621,11 +621,25 @@ class TestIncremental:
         first = rag.build(entries=entries, force=True)
         # same commit -> the tap is reused, nothing reindexed
         second = rag.build(entries=entries)
-        assert second["reused"] == ["acme__skills"]
+        # Tap name, not the `__`-joined safe name `reused` is keyed by
+        # internally — a caller diffing `reindexed` against `reused` must see
+        # the same spelling of "acme/skills" on both sides.
+        assert second["reused"] == ["acme/skills"]
         assert second["reindexed"] == []
         assert second["docs"] == first["docs"]
         # index still queryable after a reuse-only rebuild
         assert rag.retrieve("python fixtures", entries=entries)
+
+    def test_reindexed_and_reused_partition_the_tap_names(self, corpus):
+        """set(reindexed) | set(reused) must equal the tap-name set every
+        time, whichever way a given tap split — this is the invariant a
+        caller relies on when set-differencing the two lists."""
+        _root, entries = corpus
+        rag.build(entries=entries, force=True)
+        stats = rag.build(entries=entries)
+        tap_names = {"acme/skills"}
+        assert set(stats["reindexed"]) | set(stats["reused"]) == tap_names
+        assert not (set(stats["reindexed"]) & set(stats["reused"]))
 
     def test_commit_change_forces_reindex(self, corpus, monkeypatch):
         _root, entries = corpus
@@ -640,6 +654,17 @@ class TestIncremental:
         rag.build(entries=entries, force=True)
         stats = rag.build(entries=entries, force=True)
         assert stats["reused"] == []
+
+    def test_reused_falls_back_to_safe_name_when_tap_untapped(self, corpus, monkeypatch):
+        """A tap can vanish from `_tap_paths()` (untapped) between builds while
+        its commit is still recorded in the on-disk index; `reused` must still
+        name *something* rather than KeyError, even though there is no tap
+        name left to translate the safe name back to."""
+        _root, entries = corpus
+        rag.build(entries=entries, force=True)
+        monkeypatch.setattr(rag, "_tap_paths", lambda: {})
+        stats = rag.build(entries=[])
+        assert stats["reused"] == ["acme__skills"]
 
 
 # ------------------------------------------------------------- rerank
