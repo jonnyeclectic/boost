@@ -247,6 +247,27 @@ class TestSimulate:
         assert "Without it: default behavior" not in r.out
         assert FALLBACK not in flat(r.out)
 
+    def test_trigger_description_clips_on_word_boundary(
+            self, boost, sandbox, tmp_path):
+        # repro from the 2026-08 CLI audit: the 100-char clip fell mid-word
+        # ("...write the test fir") with no ellipsis. It must now cut on a
+        # word boundary and mark the cut.
+        desc = ("Use when implementing any feature or bugfix, before "
+                "writing implementation code - write the test first, "
+                "always run it")
+        d = tmp_path / "long-desc-skill"
+        d.mkdir()
+        (d / "SKILL.md").write_text(
+            "---\nname: long-desc-skill\ndescription: %s\nversion: 0.1.0\n"
+            "---\n\n# long-desc-skill\n\n- Always write tests first.\n"
+            % desc, encoding="utf-8")
+        boost("import", d)
+        r = boost("simulate", "long-desc-skill")
+        assert ('likely triggers when the task involves: "Use when '
+                'implementing any feature or bugfix, before writing '
+                'implementation code - write the test …"') in flat(r.out)
+        assert "fir\"" not in flat(r.out)
+
 
 # ---------------------------------------------------------------- infer
 

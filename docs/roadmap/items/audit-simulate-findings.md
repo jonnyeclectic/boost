@@ -2,14 +2,14 @@
 id: audit-simulate-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · UX
 complexity: S
 impact: Low
 wow: 1
-note: "norm_rule turns NEVER into 'nEVER'; trigger desc clipped mid-word at char 100"
+note: "fixed — norm_rule lowercases the whole modal; trigger desc clips on a word boundary"
 order: 292
-owner:
+owner: loop/simulate-audit-findings
 pr:
 title: "boost simulate: CLI audit findings (2026-08)"
 ---

@@ -38,13 +38,22 @@ def match(line: str) -> Match | None:
 
 
 def norm_rule(text: str) -> str:
-    """Strip Markdown emphasis and a trailing period; lowercase the first char.
+    """Strip Markdown emphasis and a trailing period; lowercase the leading modal.
 
     So ``**Always** run tests.`` and ``Always run tests`` normalize to the same
-    ``always run tests`` — a stable, comparable rule string.
+    ``always run tests`` — a stable, comparable rule string. The whole modal
+    token is lowercased, not just its first character: skill prose commonly
+    shouts a modal in caps (``NEVER mock without understanding dependencies``),
+    and lowercasing only the leading ``N`` left the rest — ``nEVER`` — shouting
+    back. Text after the modal is untouched, so an embedded acronym there
+    (``Always use TDD``) keeps its case.
     """
     t = re.sub(r"[*_`]", "", text).strip().rstrip(".")
-    return (t[:1].lower() + t[1:]) if t else t
+    if not t:
+        return t
+    m = RULE_RE.match(t)
+    end = m.end(1) if m else 1
+    return t[:end].lower() + t[end:]
 
 
 def imperative_rules(body: str) -> list[str]:
