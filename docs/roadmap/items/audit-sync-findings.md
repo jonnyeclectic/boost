@@ -2,15 +2,15 @@
 id: audit-sync-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
-note: "Fixed in PR; make check unverified locally (sandbox has no PyPI access) — CI must confirm before shipped"
+note: "First sync run hides a blocked link; --diff prints it as a raw Python tuple"
 order: 293
 owner: loop/sync-blocked-link-report
-pr:
+pr: 813
 title: "boost sync: CLI audit findings (2026-08)"
 ---
 <b>Repairing a missing store dir silently skips a blocked agent link — only a second run reports it.</b> With the store dir deleted and a foreign dir at <code>~/.windsurf/skills/brainstorming</code>: <code>sync --diff</code> showed only missing-store plus 4 stale links, nothing about windsurf; the first <code>sync</code> printed <em>"&#10003; reinstalled missing brainstorming from sickn33/antigravity-awesome-skills"</em> with no windsurf mention (the link was not created — lock agents ended as claude-code, cursor, antigravity); only a second <code>sync</code> said <em>"! 1 agent link could not be created: brainstorming &rarr; windsurf (~/.windsurf/skills/brainstorming in the way)…"</em>. Cause: <code>sync_plan</code> (<code>core/store.py:1471-1473</code>) <code>continue</code>s past link classification when the store dir is missing, and <code>sync_apply</code> (<code>store.py:1651</code>) discards <code>install()</code>'s <code>InstallResult</code>, whose <code>.conflicts</code> names the refused link. Surface those conflicts as blocked-link warnings and still classify agent links for a missing-store entry (or re-plan after repair). This is the residual missing-store case of the shipped fix — note it in <code>docs/roadmap/items/sync-reported-success-for-a-link-it-refused.md</code>. Unit test: missing store + foreign dir reported in one run.
