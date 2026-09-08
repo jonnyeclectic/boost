@@ -21,6 +21,7 @@ from .. import cliparse, spin
 from ..core import (
     adapters,
     agents,
+    archive,
     catalog,
     complete,
     config,
@@ -1442,9 +1443,10 @@ def cmd_import(argv: list[str]) -> int:
         prog="boost import",
         description="Import skills from a GitHub URL or local path")
     ap.add_argument("source", metavar="URL_OR_PATH")
-    ap.add_argument("--name", metavar="N",
-                    help="skill to pick when several are found (or a rename)")
-    ap.add_argument("--all", action="store_true", help="import every skill found")
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument("--name", metavar="N",
+                       help="skill to pick when several are found (or a rename)")
+    group.add_argument("--all", action="store_true", help="import every skill found")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
     args = ap.parse_args(argv)
@@ -1594,6 +1596,8 @@ def cmd_snapshot(argv: list[str]) -> int:
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the restore confirmation prompt")
     args = ap.parse_args(argv)
+    if args.action == "list" and args.arg:
+        ap.error("snapshot list takes no LABEL|ID")
     if args.action == "save":
         return _snapshot_save(args.arg)
     if args.action == "list":
@@ -1785,11 +1789,17 @@ def cmd_export(argv: list[str]) -> int:
                                  "agent config files; reinstall them "
                                  "from their tap")
         if not store.skill_store_dir(name).is_dir():
-            raise BoostError("store dir for %s is missing" % name,
-                            hint="repair with `boost sync`")
+            raise BoostError(
+                "store dir for %s is missing" % name,
+                hint=("repair with `boost reinstall %s`" % name)
+                     if entry.get("tap") == "local"
+                     else "repair with `boost sync`")
         chosen[name] = entry
     stamp = datetime.now(UTC).strftime("%Y%m%d")
-    ext = ".zip" if args.zip else ".tar.gz"
+    use_zip, format_warning = archive.resolve_export_format(args.out, args.zip)
+    if format_warning:
+        out.warn(format_warning)
+    ext = ".zip" if use_zip else ".tar.gz"
     dest = paths.expand(args.out) if args.out else Path(
         "boost-skills-%s%s" % (stamp, ext))
     if dest.exists() and not args.force:
@@ -1798,9 +1808,10 @@ def cmd_export(argv: list[str]) -> int:
                              "different -o path")
     manifest = _boostfile_text(chosen, via="boost export")
     try:
-        if args.zip:
+        if use_zip:
             with zipfile.ZipFile(str(dest), "w", zipfile.ZIP_DEFLATED) as zf:
-                zf.writestr("Boostfile", manifest)
+                zf.writestr(archive.boostfile_zipinfo(
+                    datetime.now(UTC).timetuple()[:6]), manifest)
                 for name in chosen:
                     sdir = store.skill_store_dir(name)
                     for f in sorted(p for p in sdir.rglob("*") if p.is_file()):
@@ -1812,9 +1823,10 @@ def cmd_export(argv: list[str]) -> int:
                 ti.size = len(data)
                 ti.mtime = int(datetime.now(UTC).timestamp())
                 ti.mode = 0o644
-                tf.addfile(ti, io.BytesIO(data))
+                tf.addfile(archive.normalize_tar_member(ti), io.BytesIO(data))
                 for name in chosen:
-                    tf.add(str(store.skill_store_dir(name)), arcname=name)
+                    tf.add(str(store.skill_store_dir(name)), arcname=name,
+                          filter=archive.normalize_tar_member)
     except OSError as e:
         raise BoostError("cannot write %s: %s" % (_tilde(dest), e.strerror or e),
                         hint="check the output path exists and is writable") from e

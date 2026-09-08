@@ -605,6 +605,54 @@ class TestOwnershipStamp:
         assert bmad.installed_personas(tmp_path) == sorted(
             p.slug for p in bmad.PERSONAS)
 
+    def test_persona_state_is_absent_before_anything_is_written(self, tmp_path):
+        assert bmad.persona_state(tmp_path, bmad.PERSONAS[0]) == "absent"
+
+    def test_persona_state_is_managed_right_after_write(self, tmp_path):
+        bmad.write_personas(tmp_path)
+        assert bmad.persona_state(tmp_path, bmad.PERSONA_BY_SLUG["bmad-dev"]) == "managed"
+
+    def test_persona_state_is_edited_once_the_body_changes(self, tmp_path):
+        """The bug this closes: an edited-but-present file used to read the
+        same as no file at all everywhere counts and labels were derived from
+        `installed_personas` (managed-only)."""
+        bmad.write_personas(tmp_path)
+        mine = tmp_path / "bmad-ux.md"
+        mine.write_text(
+            mine.read_text(encoding="utf-8") + "\nmy own note\n", encoding="utf-8")
+        assert bmad.persona_state(
+            tmp_path, bmad.PERSONA_BY_SLUG["bmad-ux"]) == "edited"
+
+    def test_persona_states_covers_every_persona(self, tmp_path):
+        bmad.write_personas(tmp_path)
+        states = bmad.persona_states(tmp_path)
+        assert set(states) == {p.slug for p in bmad.PERSONAS}
+        assert set(states.values()) == {"managed"}
+
+    def test_present_personas_counts_managed_and_edited_but_not_absent(
+            self, tmp_path):
+        bmad.write_personas(tmp_path)
+        mine = tmp_path / "bmad-ux.md"
+        mine.write_text(
+            mine.read_text(encoding="utf-8") + "\nmy own note\n", encoding="utf-8")
+        (tmp_path / "bmad-pm.md").unlink()
+
+        present = bmad.present_personas(tmp_path)
+        assert "bmad-ux" in present            # edited, still present
+        assert "bmad-pm" not in present         # deleted, truly absent
+        assert len(present) == len(bmad.PERSONAS) - 1
+
+    def test_present_personas_is_empty_on_a_bare_directory(self, tmp_path):
+        assert bmad.present_personas(tmp_path) == []
+
+    def test_an_empty_but_existing_file_is_edited_not_absent(self, tmp_path):
+        """A file that exists with zero bytes is still a file on disk — it
+        must not be reported the same as no file at all."""
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "bmad-dev.md").write_text("", encoding="utf-8")
+        assert bmad.persona_state(
+            tmp_path, bmad.PERSONA_BY_SLUG["bmad-dev"]) == "edited"
+
     def test_remove_only_touches_boost_authored_files(self, tmp_path):
         bmad.write_personas(tmp_path)
         # a hand-written agent that happens to share the prefix must survive

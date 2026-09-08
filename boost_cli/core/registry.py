@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, gitutil, paths, policy, util
+from . import config, gitutil, lockfile, paths, policy, util
 
 
 @dataclass
@@ -478,6 +478,19 @@ def retarget(name: str, commit: str) -> Tap:
     tap = get(name)
     gitutil.checkout_commit(tap.path, commit)
     return pin(name, commit)
+
+
+def dependents(tap_name: str) -> list[tuple[str, str]]:
+    """Installed items (kind, name) whose lock entry names `tap_name`.
+
+    Skill, rule, workflow order, name-sorted within each — untapping the
+    source of a live rule or workflow deserves the same warning as untapping
+    the source of a skill.
+    """
+    return [(kind, n)
+            for kind, section in lockfile.all_installed().items()
+            for n, e in sorted(section.items())
+            if e.get("tap") == tap_name]
 
 
 def remove(name: str) -> Tap:

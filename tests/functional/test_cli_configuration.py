@@ -121,6 +121,18 @@ class TestConfig:
         assert "telemetry not set" in r.out
         assert not paths.config_path().exists()
 
+    def test_stray_positionals_are_usage_errors(self, boost, sandbox):
+        # `config list KEY`, `config get KEY VALUE` and `config unset KEY VALUE`
+        # used to silently ignore the extra word — the sharpest case being
+        # `config get ai.enabled false`, a typo for `set`, reading as a
+        # confirmed set with exit 0.
+        r = boost("config", "list", "extra", expect=2)
+        assert "config list takes no KEY/VALUE" in r.err
+        r = boost("config", "get", "ai.enabled", "false", expect=2)
+        assert "config get takes no VALUE" in r.err
+        r = boost("config", "unset", "ai.enabled", "false", expect=2)
+        assert "config unset takes no VALUE" in r.err
+
 
 # ---------------------------------------------------------------- clean
 
@@ -267,9 +279,45 @@ class TestCreate:
 
     def test_description_and_slug(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        boost("create", "My Fancy Skill", "--description", "Does a thing")
+        r = boost("create", "My Fancy Skill", "--description", "Does a thing")
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
+        # The slugging is no longer silent: the typed name and its slug both
+        # show up somewhere in the output.
+        assert "My Fancy Skill" in r.out
+        assert "my-fancy-skill" in r.out
+
+    def test_refuses_a_name_with_no_letters_or_digits(self, boost, sandbox,
+                                                       tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("create", "!!!", expect=1)
+        assert "name has no letters or digits" in r.err
+        assert not (tmp_path / "skill").exists()
+
+    def test_multiline_description_round_trips(self, boost, sandbox, tmp_path,
+                                                monkeypatch):
+        # Bug: `create multi-desc --description $'first line\nsecond line'`
+        # wrote an unquoted "description: first line" line followed by a
+        # bare "second line" inside the frontmatter fences — invalid YAML
+        # that boost's own parser then read back as just "first line".
+        monkeypatch.chdir(tmp_path)
+        boost("create", "multi-desc", "--description", "first line\nsecond line")
+        text = (tmp_path / "multi-desc" / "SKILL.md").read_text(encoding="utf-8")
+        meta, _ = frontmatter.parse(text)
+        assert meta["description"] == "first line\nsecond line"
+
+    def test_description_with_colon_and_quotes_round_trips(self, boost, sandbox,
+                                                            tmp_path, monkeypatch):
+        # Bug: a quoted, escaped description came back from boost's own
+        # reader with the backslashes still in it (`\"quotes\"` rather than
+        # `"quotes"`), because `_scalar` stripped the outer quotes without
+        # unescaping the inside.
+        monkeypatch.chdir(tmp_path)
+        desc = 'has: colon and "quotes" and #hash'
+        boost("create", "quote-desc", "--description", desc)
+        text = (tmp_path / "quote-desc" / "SKILL.md").read_text(encoding="utf-8")
+        meta, _ = frontmatter.parse(text)
+        assert meta["description"] == desc
 
     def test_install_flag(self, boost, sandbox, tmp_path):
         r = boost("create", "inst-skill", "--dir", tmp_path, "--install")
@@ -410,6 +458,16 @@ class TestPolicy:
         assert "policy_enforce is off" not in r.out
         assert json.loads(
             boost("policy", "check", "--json").out)["enforce"] is True
+
+    def test_stray_positionals_are_usage_errors(self, boost, sandbox):
+        # `policy list KEY VALUE` and `policy check KEY` used to be silently
+        # accepted and ignored, same for a stray VALUE on `policy unset`.
+        r = boost("policy", "list", "extra", "positional", expect=2)
+        assert "policy list takes no KEY/VALUE" in r.err
+        r = boost("policy", "check", "extra", expect=2)
+        assert "policy check takes no KEY/VALUE" in r.err
+        r = boost("policy", "unset", "pin_only", "true", expect=2)
+        assert "policy unset takes no VALUE" in r.err
 
 
 # ---------------------------------------------------------------- onboard
@@ -739,6 +797,50 @@ class TestCompletions:
         assert "boost __complete" in r.out
 
 
+class TestCompletionsShellDetection:
+    """An empty or unsupported `$SHELL` used to fall back to bash with zero
+    warning — silent for a real-but-unsupported shell, and actively
+    misleading (an empty shell name) for an unset one. See
+    docs/roadmap/items/audit-completions-findings.md, cluster
+    completions-shell-detection.
+    """
+
+    def test_unset_shell_env_is_an_error_not_a_silent_bash_guess(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.delenv("SHELL", raising=False)
+        r = boost("completions", expect=1)
+        assert "SHELL" in r.err
+        assert "cannot detect your shell" in r.err
+
+    def test_unset_shell_env_errors_the_same_way_for_install(
+            self, boost, sandbox, monkeypatch):
+        # "Fixed once, at the detection site": the print path and the
+        # --install path must not diverge on this — --install used to reach
+        # `_rc_path("")` and print "no one-shot install for  yet" instead.
+        monkeypatch.delenv("SHELL", raising=False)
+        r = boost("completions", "--install", expect=1)
+        assert "cannot detect your shell" in r.err
+        assert "no one-shot install for  yet" not in r.err
+
+    def test_unsupported_real_shell_warns_before_the_bash_fallback(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setenv("SHELL", "/usr/local/bin/nu")
+        r = boost("completions")
+        assert "nu" in r.err
+        assert "not a supported shell" in r.err
+        assert "_boost_complete" in r.out       # still gets the bash script
+        assert "not a supported shell" not in r.out    # never mixed into it
+
+    def test_unsupported_real_shell_still_names_it_on_the_install_path(
+            self, boost, sandbox, monkeypatch):
+        # `_rc_path`'s message is what the item says to preserve — an
+        # unsupported-but-real shell already names itself there, unlike the
+        # empty-string case above.
+        monkeypatch.setenv("SHELL", "/usr/local/bin/nu")
+        r = boost("completions", "--install", expect=1)
+        assert "no one-shot install for nu yet" in r.err
+
+
 class TestCompletionsInstall:
     """`boost completions --install` — the one-shot alternative to the
     copy-paste-into-your-rc-file instructions `INSTALL_HINT` used to be.
@@ -927,6 +1029,14 @@ class TestScheduleCron:
                         "scheduled": True, "interval": "6h",
                         "next_run": data["next_run"]}
         assert data["next_run"]
+
+    def test_interval_outside_enable_is_a_usage_error(self, boost, sandbox):
+        # `schedule status --interval daily` used to silently accept and
+        # discard the flag it never reads.
+        r = boost("schedule", "status", "--interval", "daily", expect=2)
+        assert "--interval only applies to `schedule enable`" in r.err
+        r = boost("schedule", "disable", "--interval", "daily", expect=2)
+        assert "--interval only applies to `schedule enable`" in r.err
 
     def test_status_custom_spec(self, boost, sandbox, monkeypatch):
         line = "30 6 * * * /x/boost update # boost-sync"

@@ -144,23 +144,31 @@ def cmd_search(argv):
                           "building the search index (first run)"):
             use_rag = rag.ensure()
     engine = ""
+    hit_cap = False
+    k = 0
     if use_rag:
         # retrieve_any, not retrieve: this picks the dense backend when one is
         # built and floors to BM25 otherwise, so the CLI and the MCP server
         # answer from the same engine instead of the CLI being BM25-only.
+        k = max(60, args.limit * 4)
         hits, engine = rag.retrieve_any(
-            query, k=max(60, args.limit * 4),
-            collapse_near_duplicates=args.collapse_dupes)
-        scored = [(h["entry"], h["score"]) for h in (hits or [])]
+            query, k=k, collapse_near_duplicates=args.collapse_dupes)
+        hits = hits or []
+        # Retrieval never returns more than `k` — hitting that cap means
+        # there may be more matches beyond it, not that there are exactly
+        # `k`. Recorded before the category filter narrows the count further,
+        # because the cap was already in effect at retrieval time either way.
+        hit_cap = len(hits) >= k
+        scored = [(h["entry"], h["score"]) for h in hits]
     else:
         scored = catalog.search(query)
     if args.category:
         scored = [(e, s) for e, s in scored
                  if catalog.matches_category(e, args.category)]
-    if args.as_json:
-        print(json.dumps([e | {"score": s} for e, s in scored[:args.limit]]))
-        return 0
     if not scored:
+        if args.as_json:
+            print(json.dumps([]))
+            return 0
         # The standardized ○/→ empty state, so "nothing here" reads the same
         # as every other command's; both wordings are pinned by tests.
         print(out.empty_state(
@@ -185,8 +193,14 @@ def cmd_search(argv):
         else:
             # Fires whether AI was never available or was tried and failed —
             # a silent unranked list otherwise looks identical to a
-            # deliberate BM25-only result.
+            # deliberate BM25-only result. On stderr and unconditional on
+            # --json: a script reading stdout as JSON must still learn that
+            # --smart silently did nothing.
             out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
+    if args.as_json:
+        print(json.dumps([e | {"score": s, "ranker": ranker}
+                          for e, s in scored[:args.limit]]))
+        return 0
     shown = scored[:args.limit]
     # The dot marks "a skill by this name is installed" — a name match, with
     # the known homonym caveat (13 real skills share `code-reviewer`). A lock
@@ -208,8 +222,16 @@ def cmd_search(argv):
             str(e.get("kind") or "skill"), str(e.get("tap") or ""), sc / top,
             curated=bool(e.get("curated")),
             installed=e["name"] in installed, lay=lay))
-    out.info(out.role("%d match%s · ranked by %s"
-                   % (len(scored), "" if len(scored) == 1 else "es", ranker), "muted"))
+    if hit_cap:
+        # `len(scored)` here is the retrieval cap, not a true count — retrieval
+        # stopped at `k` and there may be more matches past it. Say what is
+        # actually known (the cap), not a number that reads as exact but is an
+        # artifact of `k = max(60, limit * 4)`.
+        footer = "top %d of %d+ retrieved · ranked by %s" % (len(shown), k, ranker)
+    else:
+        footer = ("%d match%s · ranked by %s"
+                  % (len(scored), "" if len(scored) == 1 else "es", ranker))
+    out.info(out.role(footer, "muted"))
     if use_rag:
         _note_stem_expansions(query)
     _hint_semantic_search(engine)
@@ -996,11 +1018,23 @@ def cmd_recommend(argv):
 
 def _browse_plain(entries, why: str):
     out.warn(why + " — showing the full catalog")
-    out.table([(e["name"], "v" + e["version"], e["tap"],
-                "★" if e.get("curated") else "") for e in entries],
-              headers=("name", "version", "tap", ""))
-    out.info(out.role("%d skills · install with `boost install <name>`"
-                   % len(entries), "muted"))
+    # Same collapse the TUI does: a registry renders one skill into
+    # .claude/, .cursor/, .gemini/ and a plugin root, and this fallback used
+    # to list every copy with nothing to tell them apart.
+    unique = [e for e, _n in browse.dedupe(entries)]
+    show_curated = any(e.get("curated") for e in unique)
+    headers = ["name", "version", "tap", "kind"]
+    rows = [[e["name"], "v" + e["version"], e["tap"],
+             out.kind_label(e.get("kind", "skill"))]
+            for e in unique]
+    if show_curated:
+        headers.append("")
+        for row, e in zip(rows, unique, strict=True):
+            row.append("★" if e.get("curated") else "")
+    out.table([tuple(row) for row in rows], headers=tuple(headers))
+    out.info(out.role(
+        "%s · install with `boost install <name>` · narrow with `boost search <query>`"
+        % browse.plain_footer(unique), "muted"))
     return 0
 
 
@@ -1749,7 +1783,17 @@ def cmd_browse(argv):
         import curses
     except ImportError:
         return _browse_plain(entries, "curses is unavailable on this Python")
-    picked = _browse_tui(curses, entries)
+    try:
+        picked = _browse_tui(curses, entries)
+    except curses.error as e:
+        # An fd that claims isatty() but isn't a real pty (IDE run consoles,
+        # `script`, TERM=dumb) can fail deep inside curses.wrapper's own
+        # setup/teardown rather than at the isatty() check above. wrapper
+        # already ran its finally block (endwin() included), so the screen is
+        # restored by the time this is caught — printing here lands on a
+        # normal terminal, not a hosed one.
+        return _browse_plain(entries,
+                             "the terminal does not support curses (%s)" % e)
     if not picked:
         return 0
     # The browser installs in place now, so anything it hands back is usually

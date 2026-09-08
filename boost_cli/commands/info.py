@@ -703,8 +703,18 @@ def cmd_preview(argv):
     args = ap.parse_args(argv)
     text, _kind, lock, cat = _resolve_text(args.name)
     meta, body = frontmatter.parse(text)
+    if not sys.stdout.isatty():
+        # A piped/redirected preview renders nothing — no ANSI, so the
+        # per-chunk `_inline()` substitution would strip `**`/backtick
+        # markers with no styled substitute, and lines with no special-cased
+        # handling (a bare `---`, a wrapped `> quote` continuation) print
+        # mangled rather than as either faithful Markdown or a real render.
+        # `boost cat` already resolves this the same way: raw text through.
+        sys.stdout.write(body if body.endswith("\n") else body + "\n")
+        return 0
+    version = meta.get("version") or (lock or cat or {}).get("version") or "?"
     print(out.titlebar("%s · v%s · %s" % (meta.get("name") or args.name,
-                                          meta.get("version") or "?",
+                                          version,
                                           (lock or cat or {}).get("tap", "local"))))
     print()
     _render_markdown(body)
@@ -854,6 +864,8 @@ def cmd_log(argv):
     ap.add_argument("--crashes", action="store_true",
                     help="list recent crash reports")
     args = ap.parse_args(argv)
+    if args.name and (args.crashes or args.diagnostics):
+        ap.error("NAME is not used with --diagnostics/--crashes")
     if args.crashes:
         return _show_crashes(args.limit)
     if args.diagnostics:

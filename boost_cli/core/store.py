@@ -1849,7 +1849,27 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         entry = lockfile.get_skill(name) or {}
         tap_name = entry.get("tap")
         restored = False
-        if tap_name and tap_name != "local":
+        if tap_name == "local":
+            src = Path(str(entry.get("source_dir") or ""))
+            if src.is_dir() and (src / "SKILL.md").is_file():
+                try:
+                    source_sha = util.sha256_dir(src)
+                except OSError:
+                    source_sha = None
+                if _pinned_repair_blocked(entry, source_sha):
+                    actions.append(
+                        "%s is pinned and its local source has moved — repair "
+                        "declined (unpin, or `boost reinstall %s` to accept "
+                        "the new content)" % (name, name))
+                    continue
+                try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
+                    install_from_path(src, name=name, force=True)
+                    actions.append(
+                        "reinstalled missing %s from local source %s" % (name, src))
+                    restored = True
+                except BoostError:
+                    pass
+        elif tap_name and tap_name != "local":
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
                 from . import catalog
                 matches = [e for e in catalog.find(name) if e["tap"] == tap_name]

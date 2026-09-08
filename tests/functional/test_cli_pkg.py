@@ -10,8 +10,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
+
+import pytest
 
 from boost_cli.core import lockfile, paths
 
@@ -1098,6 +1101,16 @@ class TestImport:
         r = boost("import", tmp_path / "missing", expect=1)
         assert "no such directory" in r.err
 
+    def test_all_and_name_together_is_a_usage_error(self, boost, sandbox, tmp_path):
+        # --all --name used to silently drop --name and import everything —
+        # a real "Imported 3 skills" with no hint the flag was ignored.
+        root = tmp_path / "many"
+        _skill_dir(root, "alpha")
+        _skill_dir(root, "beta")
+        r = boost("import", root, "--all", "--name", "alpha", expect=2)
+        assert "not allowed with argument --all" in r.err
+        assert not paths.lockfile_path().exists()
+
 
 # ── snapshot ─────────────────────────────────────────────────────────────
 
@@ -1190,6 +1203,60 @@ class TestExport:
                   expect=1)
         assert "store dir for brainstorming is missing" in r.err
         assert "repair with `boost sync`" in r.err
+
+    def test_store_dir_missing_names_reinstall_for_a_local_skill(
+            self, boost, sandbox, tmp_path):
+        # `boost sync` cannot repair a local import (no tap to reinstall
+        # from) — the one command that can is `boost reinstall`.
+        d = _skill_dir(tmp_path, "local-skill")
+        boost("import", d)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        r = boost("export", "local-skill", "-o", tmp_path / "x.tar.gz",
+                  expect=1)
+        assert "store dir for local-skill is missing" in r.err
+        assert "repair with `boost reinstall local-skill`" in r.err
+
+    def test_out_path_zip_suffix_without_flag_writes_a_real_zip(
+            self, boost, installed, tmp_path):
+        # -o byname.zip used to write a gzip tarball named .zip.
+        dest = tmp_path / "byname.zip"
+        r = boost("export", "brainstorming", "-o", dest)
+        assert "exported 1 skill →" in r.out
+        assert zipfile.is_zipfile(str(dest))
+        with zipfile.ZipFile(str(dest)) as zf:
+            assert "brainstorming/SKILL.md" in zf.namelist()
+
+    def test_contradicting_zip_flag_and_tar_suffix_warns_and_honors_flag(
+            self, boost, installed, tmp_path):
+        dest = tmp_path / "byflag.tar.gz"
+        r = boost("export", "brainstorming", "--zip", "-o", dest)
+        assert "writing a .zip anyway" in r.out
+        assert zipfile.is_zipfile(str(dest))
+
+    def test_tar_archive_members_are_owner_normalized(
+            self, boost, installed, tmp_path):
+        dest = tmp_path / "x.tar.gz"
+        boost("export", "brainstorming", "-o", dest)
+        with tarfile.open(str(dest)) as tf:
+            for member in tf.getmembers():
+                assert member.uid == 0
+                assert member.gid == 0
+                assert member.uname == ""
+                assert member.gname == ""
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="NTFS has no POSIX mode bits — the skill file's "
+                               "real st_mode isn't 0o644 to compare against")
+    def test_zip_boostfile_member_mode_matches_skill_files(
+            self, boost, installed, tmp_path):
+        dest = tmp_path / "x.zip"
+        boost("export", "brainstorming", "--zip", "-o", dest)
+        with zipfile.ZipFile(str(dest)) as zf:
+            boostfile_mode = (zf.getinfo("Boostfile").external_attr >> 16) & 0o777
+            skill_mode = (zf.getinfo("brainstorming/SKILL.md").external_attr
+                         >> 16) & 0o777
+            assert boostfile_mode == 0o644
+            assert skill_mode == 0o644
 
     def test_existing_destination_declines_without_force(
             self, boost, installed, tmp_path):
@@ -1755,6 +1822,11 @@ class TestSnapshotEdges:
     def test_list_empty(self, boost, sandbox):
         r = boost("snapshot", "list")
         assert "no snapshots yet — create one with `boost snapshot save`" in r.out
+
+    def test_list_with_stray_positional_is_a_usage_error(self, boost, sandbox):
+        # `snapshot list extra-arg` used to silently ignore the extra word.
+        r = boost("snapshot", "list", "extra-arg", expect=2)
+        assert "snapshot list takes no LABEL|ID" in r.err
 
     def test_list_json_and_corrupt_sidecar(self, boost, installed):
         boost("snapshot", "save", "lbl")
