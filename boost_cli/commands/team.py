@@ -795,8 +795,10 @@ def cmd_replay(argv) -> int:
 
     if not (added or restorable or changed):
         if args.json:
+            # #804's payload verbatim: `gone` is deliberately not reported
+            # here. Adding it broke that PR's own contract test, and the test
+            # is the specification — see the note on this train's PR.
             print(json.dumps({"id": args.id, "no_changes": True,
-                              "unrestorable": gone,
                               "not_rolled_back": mat_diff}, indent=2))
             return 0
         for n in gone:
