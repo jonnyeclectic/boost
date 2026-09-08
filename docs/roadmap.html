@@ -13543,8 +13543,9 @@ changes, so <code>docs/commands.html</code> is untouched. Found by the 2026-08 C
       </article>
 
       <article class="cap rcard" id="audit-edit-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost edit</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>edit rewrites the lock sha, so drift misclassifies a local edit as upstream-moved.</b> After an
 edit, boost warns <em>&ldquo;local edits diverge from the tap source &mdash; boost drift will flag
 this&rdquo;</em> &mdash; and then <code>boost drift</code> prints
@@ -13564,7 +13565,7 @@ return 1 right after the warning and skip the sha compare and success messaging.
 
 <br><br>Both fixes change edit's documented behaviour, so regenerate <code>docs/commands.html</code>.
 Found by the 2026-08 CLI audit (clusters edit-drift-classification, edit-editor-failure-exit); repro
-in the audit log.</p>
+in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
