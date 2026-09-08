@@ -2,15 +2,15 @@
 id: audit-create-findings
 board: code
 section: internals
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
-note: parse(dump(meta)) != meta — evolve rewrites untouched lines, create writes broken YAML — fix implemented, PR open; CI must confirm the full gate since this session's sandbox has no PyPI egress
+note: parse(dump(meta)) != meta — evolve rewrites untouched lines, create writes broken YAML
 order: 260
 owner: loop/frontmatter-roundtrip
-pr:
+pr: 811
 title: "boost create: CLI audit findings (2026-08)"
 ---
 <b>The frontmatter dump/parse round-trip is lossy, and one asymmetric pair is the root cause:</b>
