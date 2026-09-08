@@ -353,7 +353,11 @@ def cmd_simulate(argv: list[str]) -> int:
         # Clipped to 100 characters, which is a length and not a width: at
         # 80 columns the quoted description ran seven past the pane. Wrapping
         # shows the same clipped text and fits it.
-        trigger = 'likely triggers when the task involves: "%s"' % desc[:100]
+        shown = desc
+        if len(desc) > 100:
+            # Cut on a word boundary so the tail is not a severed token.
+            shown = desc[:100].rsplit(" ", 1)[0] + " …"
+        trigger = 'likely triggers when the task involves: "%s"' % shown
         for line in out.wrap(trigger, max(out.term_width() - 2, 20)):
             out.info(out.role(line, "muted"))
     return 0

@@ -2,15 +2,15 @@
 id: audit-simulate-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · UX
 complexity: S
 impact: Low
 wow: 1
-note: "norm_rule turns NEVER into 'nEVER'; trigger desc clipped mid-word at char 100"
+note: "fixed — norm_rule lowercases the whole modal; trigger desc clips on a word boundary"
 order: 292
-owner:
-pr:
+owner: loop/simulate-audit-findings
+pr: 805
 title: "boost simulate: CLI audit findings (2026-08)"
 ---
 <b>The rule list prints 'nEVER'.</b> <code>simulate test-driven-development --task "fix a flaky test"</code> renders <em>"&bull; nEVER test mock behavior"</em>, <em>"&bull; nEVER add test-only methods to production classes"</em>, <em>"&bull; nEVER mock without understanding dependencies"</em> — <code>norm_rule</code> (<code>boost_cli/core/imperative.py:40-47</code>) lowercases only <code>t[:1]</code> of an all-caps NEVER, against its own docstring's goal of a "stable, comparable rule string". Fix at <code>imperative.py:47</code>: lowercase the whole leading modal token (never/always/must/do not/don't) — safe for dedup (it can only merge more duplicates), and since <code>norm_rule</code> is the shared extractor consumed by <code>explain</code> and <code>conflict</code> too, the fix reaches them for free. Optional: reword the <em>"Claude would:"</em> lead-in so <em>"&bull; do not treat the output as a substitute…"</em> bullets read grammatically.
