@@ -527,6 +527,74 @@ class TestScoreSkill:
         assert "frontmatter is not closed (no terminating ---)" not in notes
 
 
+class TestLintErrors:
+    def test_missing_skill_md(self, tmp_path):
+        d = tmp_path / "empty"
+        d.mkdir()
+        assert util.lint_errors(d) == ["missing SKILL.md"]
+
+    def test_clean_skill_has_no_errors(self, tmp_path):
+        d = make_skill(tmp_path, full_text())
+        assert util.lint_errors(d) == []
+
+    def test_missing_name_and_description(self, tmp_path):
+        d = make_skill(tmp_path, "just a plain markdown body\n")
+        errors = util.lint_errors(d)
+        assert "missing required field: name" in errors
+        assert "missing required field: description" in errors
+
+    def test_missing_name_only(self, tmp_path):
+        d = make_skill(tmp_path, "---\ndescription: has one\n---\nbody\n")
+        assert util.lint_errors(d) == ["missing required field: name"]
+
+    def test_unclosed_frontmatter_is_one_error(self, tmp_path):
+        d = make_skill(tmp_path, "---\nname: x\nno closing fence\n")
+        assert util.lint_errors(d) == ["frontmatter is not closed (no terminating ---)"]
+
+    def test_missing_frontmatter_entirely_reports_both_fields(self, tmp_path):
+        # No `---` at all parses as an empty frontmatter dict rather than the
+        # unclosed-fence short circuit — both required fields read absent.
+        d = make_skill(tmp_path, "no frontmatter fence here at all\n")
+        assert util.lint_errors(d) == [
+            "missing required field: name", "missing required field: description"]
+
+
+class TestLintFailed:
+    def test_high_score_but_missing_description_still_fails(self, tmp_path):
+        # The bug this closes: `boost test` used to trust the score alone, so
+        # a skill scoring 85 with no `description` passed `test` while
+        # `boost lint` failed it outright.
+        d = make_skill(tmp_path, full_text(desc=""))
+        score, _notes = util.score_skill(d)
+        assert score >= 40
+        assert util.lint_failed(d, score, min_score=40)
+
+    def test_low_score_with_no_errors_fails_on_score_alone(self, tmp_path):
+        # name and description both present (no hard errors), but a huge
+        # frontmatter field trips the oversized-file penalty hard enough to
+        # drop the score under the floor on its own.
+        text = ("---\nname: test-skill\ndescription: %s\npadding: %s\n---\n\nhi\n"
+                % ("d" * 10, "x" * 49_000))
+        d = make_skill(tmp_path, text)
+        score, _notes = util.score_skill(d)
+        assert score < 40
+        assert util.lint_errors(d) == []
+        assert util.lint_failed(d, score, min_score=40)
+
+    def test_clean_high_score_passes(self, tmp_path):
+        d = make_skill(tmp_path, full_text())
+        score, _notes = util.score_skill(d)
+        assert not util.lint_failed(d, score, min_score=40)
+
+    def test_min_score_shifts_the_floor(self, tmp_path):
+        text = ("---\nname: test-skill\ndescription: %s\npadding: %s\n---\n\nhi\n"
+                % ("d" * 10, "x" * 49_000))
+        d = make_skill(tmp_path, text)
+        score, _notes = util.score_skill(d)
+        assert util.lint_failed(d, score, min_score=40)
+        assert not util.lint_failed(d, score, min_score=0)
+
+
 class TestAtomicWriteText:
     def test_writes_content(self, tmp_path):
         p = tmp_path / "f.txt"
