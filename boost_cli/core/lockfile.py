@@ -282,6 +282,25 @@ def installed_workflows() -> dict:
     return read()["workflows"]
 
 
+def portable(lock: dict) -> dict:
+    """Deep copy of ``lock`` with machine-specific materialization paths dropped.
+
+    A rule or workflow entry's ``materializations[].path`` is written absolute,
+    rooted at this machine's ``$HOME`` (e.g. ``/Users/alice/.claude/CLAUDE.md``) —
+    fine for boost's own bookkeeping, but ``boost onboard`` commits a lock
+    snapshot into a shared repo. ``paths.tilde`` contracts each path to ``~``,
+    keeping the useful part (which agent, which file) while dropping the
+    username that would otherwise churn the committed file on every
+    teammate's own run.
+    """
+    projected = json.loads(json.dumps(lock))
+    for _kind, section in SECTIONS:
+        for entry in projected.get(section, {}).values():
+            for m in entry.get("materializations") or []:
+                if "path" in m:
+                    m["path"] = paths.tilde(m["path"])
+    return projected
+
 def agent_names(kind: str, entry: dict | None) -> list[str]:
     """Sorted, deduplicated agent names an installed item of ``kind`` reaches.
 

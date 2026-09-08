@@ -630,29 +630,36 @@ def _refuse_self_installing(entry: dict) -> None:
 
 def install(entry: dict, force: bool = False,
             only_agents: list[str] | None = None,
-            scope: str = "user", base=None) -> InstallResult:
+            scope: str = "user", base=None,
+            via: str | None = None) -> InstallResult:
     """Install a catalog entry. Raises BoostError on policy block or conflict.
 
     ``scope`` is ``"user"`` (default — the canonical store, symlinked into the
     agent's user config dirs) or ``"project"`` (real directories inside the
     current repo). Every kind honors it.
+
+    ``via`` names the caller for the journal entry (e.g. ``"protocol"`` for a
+    one-click install), the same way a tap's journal entry already can — see
+    ``registry.add``'s ``via=`` kwarg to ``journal.log``. ``None`` means an
+    ordinary ``boost install``, and is dropped from the event like any other
+    ``None``-valued field (``journal.log``).
     """
     scopes.check_scope(scope)
     _refuse_self_installing(entry)
     kind = entry.get("kind", "skill")
     if kind == "rule":
         return _install_rule(entry, force=force, only_agents=only_agents,
-                             scope=scope, base=base)
+                             scope=scope, base=base, via=via)
     if kind == "workflow":
         return _install_workflow(entry, force=force, only_agents=only_agents,
-                                 scope=scope, base=base)
+                                 scope=scope, base=base, via=via)
     if kind != "skill":
         raise BoostError(
             "%s is a %s, which boost does not know how to install" % (entry["name"], kind),
             hint="known kinds: skill, rule, workflow")
     if scope == scopes.SCOPE_PROJECT:
         return _install_project_skill(entry, force=force, only_agents=only_agents,
-                                      base=base)
+                                      base=base, via=via)
     name = entry["name"]
     existing = lockfile.get_skill(name)
     if existing and existing.get("pinned") and not force:
@@ -704,13 +711,13 @@ def install(entry: dict, force: bool = False,
         "only_agents": declared_agent_scope(only_agents, existing),
         "tags": (existing or {}).get("tags", []),
     })
-    journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
     return res
 
 
 def _install_project_skill(entry: dict, force: bool = False,
                            only_agents: list[str] | None = None,
-                           base=None) -> InstallResult:
+                           base=None, via: str | None = None) -> InstallResult:
     """Materialize a skill into the repo itself, once per enabled agent.
 
     Unlike a user install there is no canonical store and no symlink. Each agent
@@ -816,7 +823,7 @@ def _install_project_skill(entry: dict, force: bool = False,
         "materializations": materializations,
     })
     journal.log("install", name, tap=entry["tap"], version=entry.get("version"),
-                scope=scopes.SCOPE_PROJECT)
+                scope=scopes.SCOPE_PROJECT, via=via)
 
     res = InstallResult(name=name, dest=first, kind="skill")
     res.linked = linked
@@ -942,7 +949,8 @@ def project_sync_apply(plan: dict[str, list], base=None) -> list[str]:
 
 def _install_rule(entry: dict, force: bool = False,
                   only_agents: list[str] | None = None,
-                  scope: str = "user", base=None) -> InstallResult:
+                  scope: str = "user", base=None,
+                  via: str | None = None) -> InstallResult:
     """Materialize a rule into each enabled agent's native format.
 
     Cursor/Windsurf/Cline get a verbatim file drop in their ``rules/`` dir
@@ -1035,7 +1043,7 @@ def _install_rule(entry: dict, force: bool = False,
         "quarantined": False,
         "materializations": materializations,
     })
-    journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
     res = InstallResult(
         name=name,
@@ -1199,7 +1207,8 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
 
 def _install_workflow(entry: dict, force: bool = False,
                       only_agents: list[str] | None = None,
-                      scope: str = "user", base=None) -> InstallResult:
+                      scope: str = "user", base=None,
+                      via: str | None = None) -> InstallResult:
     """Materialize a workflow (slash command / subagent) into each enabled agent.
 
     A verbatim Markdown drop into the agent's ``commands/`` or ``agents/`` dir —
@@ -1278,7 +1287,7 @@ def _install_workflow(entry: dict, force: bool = False,
         "quarantined": False,
         "materializations": materializations,
     })
-    journal.log("install", name, tap=entry["tap"], version=entry.get("version"))
+    journal.log("install", name, tap=entry["tap"], version=entry.get("version"), via=via)
 
     res = InstallResult(
         name=name,

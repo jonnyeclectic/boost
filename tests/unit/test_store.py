@@ -243,6 +243,42 @@ class TestInstall:
         assert ei.value.hint == "run `boost update fixture-tap`"
 
 
+class TestInstallVia:
+    """``via`` names the caller for the journal event, the same way a tap's
+    own journal entry already can (``registry.add``'s ``via=``). Threaded
+    through all four install dispatch paths (skill, project skill, rule,
+    workflow) so a one-click ``boost protocol open`` install can be told
+    apart from an ordinary ``boost install`` — before this, only taps could.
+    """
+
+    def test_default_omits_via(self, tap, entry):
+        store.install(entry)
+        ev = journal.events(action="install")[0]
+        assert "via" not in ev   # None-valued fields are dropped (journal.log)
+
+    def test_skill_install_records_via(self, tap, entry):
+        store.install(entry, via="protocol")
+        ev = journal.events(action="install")[0]
+        assert ev["via"] == "protocol"
+
+    def test_rule_install_records_via(self, tap):
+        store.install(_rule_entry(tap), via="protocol")
+        ev = journal.events(action="install")[0]
+        assert ev["via"] == "protocol"
+
+    def test_workflow_install_records_via(self, tap):
+        store.install(_workflow_entry(tap), via="protocol")
+        ev = journal.events(action="install")[0]
+        assert ev["via"] == "protocol"
+
+    def test_project_skill_install_records_via(self, entry, tmp_path):
+        repo = tmp_path / "proj"
+        (repo / ".git").mkdir(parents=True)
+        store.install(entry, scope="project", base=str(repo), via="protocol")
+        ev = journal.events(action="install")[0]
+        assert ev["via"] == "protocol"
+
+
 class TestSourceDirFor:
     """A tap `boost catalog --import` registered but never cloned.
 

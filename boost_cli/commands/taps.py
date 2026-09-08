@@ -139,7 +139,7 @@ def cmd_tap(argv) -> int:
     """boost tap [SPEC] [--defaults] [--catalog] [--curated]"""
     p = cliparse.parser(
         prog="boost tap",
-        description="Add a GitHub repo as a skill registry")
+        description="Add a git URL, GitHub repo, or local directory as a skill registry")
     p.add_argument("spec", nargs="*",
                    help="owner/repo, a git URL, or a local directory — several "
                         "at once clone in parallel")
@@ -260,7 +260,8 @@ def cmd_untap(argv) -> int:
                    help="tap name(s) (owner/repo or short alias) — several "
                         "at once remove one invocation per tap")
     p.add_argument("-f", "--force", action="store_true",
-                   help="skip the confirmation prompt")
+                   help="skip the confirmation prompt (only shown when "
+                        "other installed items depend on this tap)")
     p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args(argv)
 
@@ -345,7 +346,7 @@ def cmd_outdated(argv) -> int:
     """boost outdated [--json]"""
     p = cliparse.parser(
         prog="boost outdated",
-        description="Show skills with available updates")
+        description="Show skills, rules & workflows with available updates")
     p.add_argument("--json", action="store_true",
                    help="machine-readable output")
     args = p.parse_args(argv)

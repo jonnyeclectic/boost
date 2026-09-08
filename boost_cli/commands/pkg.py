@@ -535,7 +535,7 @@ def cmd_install(argv: list[str]) -> int:
 def cmd_uninstall(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost uninstall",
-        description="Remove an installed skill, rule, workflow, or config")
+        description="Remove an installed skill, rule, or workflow")
     ap.add_argument("names", nargs="+", metavar="NAME")
     ap.add_argument("--local", dest="scope", action="store_const",
                     const=scopes.SCOPE_PROJECT, default=None,
@@ -1528,7 +1528,7 @@ def _import_root(root: Path, name: str | None, do_all: bool,
 
 def cmd_pin(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost pin",
-                                 description="Pin a skill to its current version")
+                                 description="Pin a skill, rule or workflow to its current version")
     ap.add_argument("name", metavar="NAME")
     ap.add_argument("--commit", action="store_true",
                     help="also freeze the exact source commit (integrity pin)")
@@ -1546,15 +1546,22 @@ def cmd_pin(argv: list[str]) -> int:
 
 def cmd_unpin(argv: list[str]) -> int:
     ap = cliparse.parser(prog="boost unpin",
-                                 description="Allow a pinned skill to update again")
+                                 description="Allow a pinned skill, rule or workflow to update again")
     ap.add_argument("name", metavar="NAME")
     args = ap.parse_args(argv)
     # Releasing the version pin releases the commit pin with it — a commit pin
-    # only makes sense while the skill is otherwise frozen.
+    # only makes sense while the skill is otherwise frozen. The commit pin is
+    # cleared before `_set_pin` so it takes effect either way, but the dim
+    # trailer prints after — it qualifies `_set_pin`'s own "unpinned" line, so
+    # printing it first would leave the trailer describing a line that has
+    # not appeared yet (mirrors `cmd_pin`'s ok-line-then-trailer order).
     found = lockfile.find_any(args.name)
-    if found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]):
+    cleared_commit_pin = bool(
+        found and integrity.clear_commit_pin(args.name, found[1], kind=found[0]))
+    rc = _set_pin(args.name, False)
+    if cleared_commit_pin:
         out.dim("  released the commit pin too")
-    return _set_pin(args.name, False)
+    return rc
 
 
 def _set_pin(name: str, pinned: bool) -> int:

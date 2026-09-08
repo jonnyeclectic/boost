@@ -89,6 +89,18 @@ def test_unpin_releases_the_commit_pin(boost, installed):
     assert "commit_pin" not in lockfile.get_skill(installed)
 
 
+def test_unpin_trailer_follows_the_line_it_qualifies(boost, installed):
+    # The dim "released the commit pin too" note used to print before the
+    # "unpinned ..." line it qualifies, since cmd_unpin printed it ahead of
+    # the _set_pin call that emits that line. cmd_pin's own commit-pin
+    # trailer prints after its main line, so unpin's should too.
+    boost("pin", installed, "--commit")
+    out_text = boost("unpin", installed).out
+    unpinned_at = out_text.index("unpinned %s" % installed)
+    trailer_at = out_text.index("released the commit pin too")
+    assert unpinned_at < trailer_at
+
+
 def test_drifted_commit_pin_fails_verify(boost, installed):
     boost("pin", installed, "--commit")
     entry = lockfile.get_skill(installed)

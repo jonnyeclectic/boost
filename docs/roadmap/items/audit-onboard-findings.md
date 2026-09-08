@@ -2,15 +2,15 @@
 id: audit-onboard-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: Med
 wow: 1
 note: onboard --pr pushes absolute /Users/… paths from the global lock file to GitHub
 order: 277
-owner:
-pr:
+owner: loop/onboard-lock-path-leak
+pr: 764
 title: "boost onboard: CLI audit findings (2026-08)"
 ---
 <code>boost onboard</code> commits the machine's <em>global</em> lock file into the repo verbatim:

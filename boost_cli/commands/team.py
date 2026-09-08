@@ -15,6 +15,7 @@ from typing import Any
 from .. import cliparse
 from ..core import (
     catalog,
+    cohort,
     complete,
     journal,
     jsonstate,
@@ -27,6 +28,7 @@ from ..core import (
 from ..core import output as out
 from ..errors import BoostError
 from ._common import _s
+from .pkg import _report_result
 
 _tilde = paths.tilde
 
@@ -81,7 +83,8 @@ def cmd_cohort(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=["list", "create", "delete", "status", "apply"])
     p.add_argument("name", nargs="?", help="cohort name")
-    p.add_argument("--skills", default="", help="comma-separated skill names")
+    p.add_argument("--skills", action="append", default=[],
+                   help="comma-separated skill names (repeatable)")
     p.add_argument("--percent", type=int, default=100,
                    help="rollout percentage (default 100)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
@@ -95,7 +98,7 @@ def cmd_cohort(argv) -> int:
             p.error("create needs a cohort NAME")
         if not 0 <= args.percent <= 100:
             p.error("--percent must be 0-100")
-        skills = [s.strip() for s in args.skills.split(",") if s.strip()]
+        skills = cohort.parse_skills(args.skills)
         if not skills:
             p.error("create needs --skills a,b,...")
         for s in skills:
@@ -163,6 +166,7 @@ def cmd_cohort(argv) -> int:
             print(out.empty_state("no cohorts defined"))
             return 0
         applied = skipped = 0
+        total_installed = total_present = total_missing = 0
         per_cohort = []
         for cname in targets:
             spec = cohorts[cname]
@@ -204,12 +208,25 @@ def cmd_cohort(argv) -> int:
                                "installed": installed_here,
                                "already_present": present_here,
                                "not_found": missing_here})
+            journal.log("cohort", cname, op="apply",
+                        installed=len(installed_here),
+                        present=len(present_here),
+                        missing=len(missing_here))
+            total_installed += len(installed_here)
+            total_present += len(present_here)
+            total_missing += len(missing_here)
+        # #767's exit code is the substance of that PR — a cohort member no tap
+        # can resolve must not read as success — so it applies under --json too:
+        # an exit code that depended on the output format would undo it.
         if args.json:
             print(json.dumps({"cohorts": per_cohort, "installed": applied,
                               "already_present": skipped}, indent=2))
-            return 0
-        out.info("applied: %d installed, %d already present" % (applied, skipped))
-        return 0
+            return cohort.apply_exit_code(total_installed, total_present,
+                                          total_missing)
+        out.info(cohort.apply_summary(total_installed, total_present,
+                                      total_missing))
+        return cohort.apply_exit_code(total_installed, total_present,
+                                      total_missing)
 
     # list / status
     rows = []
@@ -532,10 +549,10 @@ def cmd_protocol(argv) -> int:
             if not out.confirm("install %s from %s?" % (entry["name"], entry["tap"])):
                 out.info("cancelled")
                 return 1
-            res = store.install(entry)
-            out.ok("copied to %s" % _tilde(res.dest))
-            out.ok("linked → %s" % " · ".join(res.linked))
-            out.ok("lock updated (.skill-lock.json)")
+            res = store.install(entry, via="protocol")
+            _report_result(res)
+            if res.kind == "skill":
+                out.ok("quality score %d/100" % res.score)
             return 0
         # tap
         if not out.confirm("tap %s?" % arg):
@@ -599,8 +616,20 @@ def cmd_protocol(argv) -> int:
 
     # status
     out.kv("platform", system)
-    out.kv("handler", _tilde(_handler_script())
-           if _handler_script().exists() else "not registered")
+    if system == "Darwin":
+        # `register` on Darwin only ever writes the handler script and prints
+        # manual Automator steps (macOS routes URL schemes through app
+        # bundles, not a CLI call) — it never touches Launch Services. A
+        # single "handler" key that shows the script path once written reads
+        # as "registered", which is false until the user finishes building
+        # Boost.app. Splitting the path from the yes/no keeps that path from
+        # answering a question it can't.
+        out.kv("script", _tilde(_handler_script())
+               if _handler_script().exists() else "not written")
+        out.kv("registered", "no — build Boost.app (see `boost protocol register`)")
+    else:
+        out.kv("handler", _tilde(_handler_script())
+               if _handler_script().exists() else "not registered")
     if system == "Linux":
         out.kv("desktop", _tilde(_desktop_file())
                if _desktop_file().exists() else "not registered")

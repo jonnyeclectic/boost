@@ -1252,6 +1252,7 @@ def cmd_changelog(argv):
                     help="number of entries (default 20)")
     args = ap.parse_args(argv)
 
+    _, bare = catalog.split_name(args.name)
     entry = lockfile.get_skill(args.name)
     if entry:
         tap_name, rel = entry.get("tap", ""), entry.get("source_dir", ".")
@@ -1259,14 +1260,14 @@ def cmd_changelog(argv):
         e = catalog.resolve_one(args.name)
         tap_name, rel = e["tap"], e["rel_dir"]
     if tap_name == "local":
-        out.info("no upstream history — %s was imported locally" % args.name)
+        out.info("no upstream history — %s was imported locally" % bare)
         return 0
     tap = registry.get(tap_name)
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
     lines = gitutil.log_for_path(tap.path, rel, args.n)
-    out.heading("changelog for %s (%s)" % (args.name, tap.name))
+    out.heading("changelog for %s (%s)" % (bare, tap.name))
     for line in lines:
         out.info(line)
     if not lines:
@@ -1419,8 +1420,14 @@ def cmd_trust(argv) -> int:
             raise BoostError("trust add requires NAME and KEY",
                              hint="`boost trust add acme ./acme.pub`")
         key_path = paths.expand(args.key)
-        key_text = (key_path.read_text(encoding="utf-8")
-                    if key_path.is_file() else args.key)
+        if key_path.is_file():
+            key_text = key_path.read_text(encoding="utf-8")
+        elif os.sep in args.key or args.key.endswith(".pub"):
+            # Looks like a path but isn't one — say so, rather than falling
+            # through to text parsing and blaming base64 for a typo'd path.
+            raise BoostError("no such key file: %s" % args.key)
+        else:
+            key_text = args.key
         rec = provenance.add_trusted_key(args.name, key_text)
         journal.log("trust", args.name, op="add-key")
         # The fingerprint is the point of this line, not incidental detail: it
@@ -1459,6 +1466,12 @@ def cmd_trust(argv) -> int:
             print(json.dumps(list(starmap(_result_json, results)), indent=2))
         else:
             _print_provenance(results)
+            if args.name and results and not results[0][1].ok:
+                # The named-tap form used to exit 1 on the table alone, with
+                # no line saying why — the sweep form doesn't need this since
+                # it only ever alarms on outright tampering.
+                tap_name, r = results[0]
+                out.warn("%s: not verified (%s)" % (tap_name, r.detail or r.status))
         # A specific tap must verify; a full sweep only alarms on tampering.
         if args.name:
             return 0 if results and results[0][1].ok else 1
@@ -1477,8 +1490,12 @@ def cmd_trust(argv) -> int:
         return 0
     out.heading("trusted keys")
     if keys:
+        # text=("FINGERPRINT",): an all-decimal fingerprint (~0.06% of real
+        # keys) is an identifier, not a count — without this it right-aligns
+        # like a numeric column.
         out.table([(k["name"], k.get("fingerprint", "?")) for k in keys],
-                  headers=("NAME", "FINGERPRINT"), keep=("FINGERPRINT",))
+                  headers=("NAME", "FINGERPRINT"), keep=("FINGERPRINT",),
+                  text=("FINGERPRINT",))
     else:
         out.dim("  none — add one with `boost trust add <name> <key>`")
     print()

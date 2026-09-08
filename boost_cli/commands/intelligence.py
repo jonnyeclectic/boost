@@ -324,9 +324,10 @@ def cmd_simulate(argv: list[str]) -> int:
                     help="task to simulate (default: a typical coding task)")
     args = ap.parse_args(argv)
 
+    _, bare = catalog.split_name(args.name)
     text, origin = _skill_text(args.name)
     task = args.task or "a typical coding task in this repo"
-    out.heading("simulating %s  %s" % (args.name, out.role("(%s)" % origin, "muted")))
+    out.heading("simulating %s  %s" % (bare, out.role("(%s)" % origin, "muted")))
 
     if ai.available():
         reply = ai.ask(
@@ -344,7 +345,7 @@ def cmd_simulate(argv: list[str]) -> int:
     out.kv("task", task)
     rules = imperative.imperative_rules(body)
     out.info("Without it: default behavior — none of the rules below are enforced.")
-    out.info(out.c("With %s active, Claude would:" % args.name, out.BOLD))
+    out.info(out.c("With %s active, Claude would:" % bare, out.BOLD))
     if rules:
         for rule in rules[:8]:
             out.info("  • " + rule)
@@ -1142,7 +1143,7 @@ def cmd_focus(argv: list[str]) -> int:
 def cmd_impact(argv: list[str]) -> int:
     ap = cliparse.parser(
         prog="boost impact",
-        description="Measure a skill's influence on code quality")
+        description="Correlate a skill's install date with repo activity")
     ap.add_argument("name", nargs="?", metavar="NAME",
                     help="one skill (default: all installed)")
     ap.add_argument("--json", action="store_true")

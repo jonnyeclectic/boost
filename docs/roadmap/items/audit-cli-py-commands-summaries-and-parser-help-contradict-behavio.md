@@ -2,15 +2,15 @@
 id: audit-cli-py-commands-summaries-and-parser-help-contradict-behavio
 board: code
 section: dx
-status: planned
+status: shipped
 category: Docs · Drift
 complexity: S
 impact: Med
 wow: 1
 note: search says "(AI-ranked)" and every default run prints "ranked by full-content BM25"
 order: 228
-owner:
-pr:
+owner: loop/cli-help-drift
+pr: 771
 title: "cli.py COMMANDS summaries and parser help contradict behavior across ~11 commands"
 ---
 The one-line summaries in <code>boost_cli/cli.py</code>'s <code>COMMANDS</code> table &mdash; the strings
