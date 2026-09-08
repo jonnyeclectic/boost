@@ -2,15 +2,15 @@
 id: audit-taps-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: S
 impact: Low
 wow: 1
 note: one UPDATED column shows "@b29e7cf", "2026-07-24" and "11h ago" with no legend
 order: 296
-owner:
-pr:
+owner: loop/taps-updated-column
+pr: 796
 title: "boost taps: CLI audit findings (2026-08)"
 ---
 <b>The UPDATED column mixes <code>@sha</code>, ISO dates and relative times, unexplained</b> (low).
