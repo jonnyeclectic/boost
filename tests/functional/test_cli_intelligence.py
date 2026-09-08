@@ -691,6 +691,18 @@ class TestFocus:
         assert "no focus session" in r.out
         assert "restored" not in r.out
 
+    def test_focus_set_and_clear_json(self, boost, tapped):
+        boost("install", "brainstorming")
+        boost("install", "jira-integration", "--no-deps")
+        r = json.loads(boost("focus", "brainstorming", "--json").out)
+        assert r == {"active": ["brainstorming"], "sidelined": 1}
+        r = json.loads(boost("focus", "--clear", "--json").out)
+        assert r == {"active": [], "restored": 1, "had_session": True}
+
+    def test_clear_with_no_session_json(self, boost, installed):
+        r = json.loads(boost("focus", "--clear", "--json").out)
+        assert r == {"active": [], "restored": 0, "had_session": False}
+
     def test_unknown_skill(self, boost, installed):
         r = boost("focus", "nope", expect=1)
         assert "nope is not installed — focus works on installed skills" in r.err

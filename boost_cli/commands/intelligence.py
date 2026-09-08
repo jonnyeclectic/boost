@@ -1061,6 +1061,10 @@ def cmd_focus(argv: list[str]) -> int:
         if had_session:
             state_path.unlink()
         journal.log("focus", "clear", restored=restored)
+        if args.json:
+            print(json.dumps({"active": [], "restored": restored,
+                              "had_session": had_session}))
+            return 0
         if not had_session and not restored:
             out.info("no focus session")
             return 0
@@ -1109,6 +1113,9 @@ def cmd_focus(argv: list[str]) -> int:
         store.unsideline(name)
     _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     journal.log("focus", ",".join(names))
+    if args.json:
+        print(json.dumps({"active": names, "sidelined": sidelined}))
+        return 0
     out.info("⌁ focus: %s %s"
              % (", ".join(names),
                 out.role("(other %d skill%s sidelined)" % (sidelined, _s(sidelined)), "muted")))
