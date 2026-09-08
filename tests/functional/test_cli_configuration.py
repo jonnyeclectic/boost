@@ -1945,9 +1945,11 @@ class TestMcp:
                                                              sandbox,
                                                              monkeypatch):
         # naming a host you have not installed yet must still show its argv —
-        # `auto` is the mode that skips silently, not `--host <name>`.
+        # `auto` is the mode that skips silently, not `--host <name>`. And a
+        # script naming exactly one host cannot tell "it worked" from "that
+        # CLI is not installed here" unless the exit code says so.
         calls = self._fake_clis(monkeypatch, "claude")
-        r = boost("mcp", "register", "--host", "gemini")
+        r = boost("mcp", "register", "--host", "gemini", expect=1)
         assert calls == []
         assert "`gemini` CLI not found — run this yourself:" in r.out
         assert " ".join(self._gemini_add()) in r.out
@@ -1967,6 +1969,18 @@ class TestMcp:
         assert " ".join(self._gemini_add()) in r.out
         assert "`agy` CLI not found — run this yourself:" in r.out
         assert " ".join(self._agy_add()) in r.out
+
+    def test_host_all_with_nothing_installed_still_succeeds(
+            self, boost, sandbox, monkeypatch):
+        # Unlike a single named host, `all` exists specifically to preview
+        # every host's argv whether or not it is installed — the exit-1 fix
+        # for a named missing host must not spread to it.
+        calls = self._fake_clis(monkeypatch)           # no agent CLI at all
+        r = boost("mcp", "register", "--host", "all")
+        assert calls == []
+        assert "`claude` CLI not found — run this yourself:" in r.out
+        assert "`gemini` CLI not found — run this yourself:" in r.out
+        assert "`agy` CLI not found — run this yourself:" in r.out
 
     def test_unknown_host_rc1(self, boost, sandbox, monkeypatch):
         self._fake_clis(monkeypatch, "claude", "gemini")
@@ -1989,6 +2003,31 @@ class TestMcp:
         assert ("unregistered boost as an MCP server for Gemini CLI "
                 "(scope: user)") in r.out
         assert journal.events(action="mcp")[0]["subject"] == "unregister"
+
+    def test_unregister_when_nothing_was_registered_reports_it_and_succeeds(
+            self, boost, sandbox, monkeypatch):
+        # `gemini mcp remove --scope user boost` against nothing registered
+        # prints `Server "boost" not found in user settings.` on stderr and
+        # still exits 0 — mapping that rc-0 blindly to "ran" claimed success
+        # for a no-op. It must read the same as register's "already" path,
+        # worded for the direction it actually ran in.
+        self._clis_with_results(monkeypatch, {
+            "gemini": (0, 'Server "boost" not found in user settings.\n'),
+        })
+        r = boost("mcp", "unregister")
+        assert "Gemini CLI: not registered — nothing to do" in r.out
+        assert "unregistered boost as an MCP server" not in r.out
+        assert journal.events(action="mcp")[0]["hosts"] == "gemini"
+
+    def test_unregister_success_is_not_mistaken_for_not_registered(
+            self, boost, sandbox, monkeypatch):
+        # A real, successful removal must not accidentally trip the new
+        # not-registered detection.
+        self._clis_with_results(monkeypatch, {"gemini": (0, "")})
+        r = boost("mcp", "unregister")
+        assert ("unregistered boost as an MCP server for Gemini CLI "
+                "(scope: user)") in r.out
+        assert "not registered" not in r.out
 
     def test_register_names_server_before_env_flags(self, boost, sandbox,
                                                      monkeypatch):
@@ -2031,6 +2070,43 @@ class TestMcp:
         # the failing host names itself — not a generic "an agent CLI failed"
         r = boost("mcp", "register", "--host", "gemini", expect=1)
         assert "gemini mcp register failed — no auth" in r.out
+
+    def test_dry_run_prints_argv_and_install_status_without_acting(
+            self, boost, sandbox, monkeypatch):
+        # The one behaviour `--dry-run` exists for: the argv boost would run
+        # is visible even for a host whose CLI IS on PATH, not only for the
+        # one case that was already visible for free (the CLI missing
+        # entirely). Nothing may run and nothing may be tapped.
+        from boost_cli.core import bootstrap, registry
+        monkeypatch.delenv(bootstrap.NO_SEED_ENV, raising=False)
+        monkeypatch.setattr(registry, "add", lambda *a, **kw: pytest.fail(
+            "--dry-run tapped the catalog"))
+        calls = self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--dry-run")
+        assert calls == []                             # nothing was run
+        assert ("Claude Code (installed): %s"
+                % " ".join(self._claude_add())) in r.out
+        assert ("Gemini CLI (not installed): %s"
+                % " ".join(self._gemini_add())) in r.out
+        assert "dry run — nothing was registered, nothing tapped" in r.out
+        assert "registered boost as an MCP server" not in r.out
+
+    def test_dry_run_scopes_to_the_named_host(self, boost, sandbox,
+                                              monkeypatch):
+        calls = self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "register", "--host", "gemini", "--dry-run")
+        assert calls == []
+        assert "Gemini CLI (not installed):" in r.out
+        assert "Claude Code" not in r.out
+
+    def test_dry_run_for_unregister_shows_the_removal_argv(
+            self, boost, sandbox, monkeypatch):
+        calls = self._fake_clis(monkeypatch, "claude")
+        r = boost("mcp", "unregister", "--dry-run")
+        assert calls == []
+        assert ("Claude Code (installed): %s"
+                % " ".join(["claude", "mcp", "remove", "boost"])) in r.out
+        assert "dry run — nothing was unregistered, nothing tapped" in r.out
 
 
 # ---------------------------------------------------------------- self-update
@@ -2404,6 +2480,13 @@ class TestTypedValues:
             assert ("using the default; fix it with "
                     "`boost policy set max_skills <int-or-null>`") in r.out
 
+    def test_policy_set_and_unset_json(self, boost, sandbox):
+        r = boost("policy", "set", "pin_only", "no", "--json")
+        assert json.loads(r.out) == {"key": "pin_only", "value": False}
+        r = boost("policy", "unset", "pin_only", "--json")
+        assert json.loads(r.out) == {"key": "pin_only",
+                                     "value": policy.DEFAULTS["pin_only"]}
+
     def test_policy_json_output_stays_machine_readable(self, boost, sandbox):
         # The warning is chrome, so --json must not gain a line.
         paths.ensure_dirs()
@@ -2447,6 +2530,19 @@ class TestTypedValues:
         # integrations that already write their own.
         boost("config", "set", "custom.flag", "true")
         assert boost("config", "get", "custom.flag", "--json").out.strip() == "true"
+
+    def test_config_set_json(self, boost, sandbox):
+        r = boost("config", "set", "telemetry", "no", "--json")
+        assert json.loads(r.out) == {"key": "telemetry", "value": False}
+        r = boost("config", "set", "ai.enabled", "true", "--json")
+        assert json.loads(r.out) == {"key": "ai.enabled", "value": True}
+
+    def test_config_unset_json(self, boost, sandbox):
+        boost("config", "set", "telemetry", "no")
+        r = boost("config", "unset", "telemetry", "--json")
+        assert json.loads(r.out) == {"key": "telemetry", "unset": True}
+        r = boost("config", "unset", "telemetry", "--json")
+        assert json.loads(r.out) == {"key": "telemetry", "unset": False}
 
     def test_serve_help_survives_a_hand_edited_port(self, boost, sandbox):
         # `serve --help` used to die with a bare ValueError and exit 70,

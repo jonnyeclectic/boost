@@ -384,6 +384,11 @@ class TestLint:
         r = boost("lint", "--min", "-1", expect=2)
         assert "must be between 0 and 100" in r.err
 
+    def test_a_name_given_twice_counts_once(self, boost, installed):
+        r = boost("lint", "brainstorming", "brainstorming")
+        assert r.out.count("brainstorming") == 1
+        assert "1 skill passes lint (min 40)" in r.out
+
     def test_missing_fields_error_rc1_and_json(self, boost, sandbox, tmp_path):
         d = tmp_path / "noname"
         d.mkdir()
@@ -523,6 +528,17 @@ class TestLint:
 
 
 # ── audit ────────────────────────────────────────────────────────────────
+
+_GOOD_BODY = (
+    "# Test Skill\n\n"
+    "Use this skill when working on structured tasks in this repo.\n\n"
+    "## Steps\n\n"
+    "1. Do the first thing carefully and deliberately.\n"
+    "- Also consider these bullet points.\n\n"
+    "```bash\necho example\n```\n\n"
+    "Additional prose so the body is comfortably over two hundred characters.\n"
+)
+
 
 class TestAudit:
     def test_clean(self, boost, installed):
@@ -805,6 +821,26 @@ class TestTestCmd:
         assert "verify" in r.out
         assert "0 passed, 1 failed" in r.out
 
+    def test_missing_description_fails_lint_check_like_boost_lint_does(
+            self, boost, sandbox, tmp_path):
+        # A skill missing `description` scores high enough to clear the old
+        # `score < 40` predicate `boost test` used for its lint check, while
+        # `boost lint` fails it outright on the missing required field —
+        # `test` must agree with `lint` rather than passing on score alone.
+        _import_skill(boost, tmp_path, "no-desc", _GOOD_BODY, description="")
+        lint = boost("lint", expect=1)
+        assert "error: missing required field: description" in lint.out
+        test = boost("test", expect=1)
+        assert "FAIL" in test.out
+        assert "lint" in test.out
+        assert "0 passed, 1 failed" in test.out
+
+    def test_a_name_given_twice_counts_once(self, boost, tapped):
+        boost("install", "brainstorming")
+        r = boost("test", "brainstorming", "brainstorming")
+        assert r.out.count("PASS") == 1
+        assert "1 passed, 0 failed" in r.out
+
 
 # ── fingerprint ──────────────────────────────────────────────────────────
 
@@ -921,6 +957,25 @@ class TestQuarantine:
     def test_list_empty(self, boost, sandbox):
         r = boost("quarantine", "--list")
         assert "nothing in quarantine" in r.out
+
+    def test_release_preserves_narrowed_agent_scope(self, boost, tapped):
+        # A quarantine/release round trip on a skill installed with --agent
+        # must be a no-op on the agent set: release used to re-link every
+        # enabled agent regardless of the scope the install declared, which
+        # doctor then flagged as out-of-scope.
+        boost("install", "brainstorming", "--agent", "claude-code")
+        boost("quarantine", "brainstorming")
+        r = boost("quarantine", "--release", "brainstorming")
+        assert "released brainstorming (linked: claude-code)" in r.out
+        home = paths.home()
+        assert (home / ".claude" / "skills" / "brainstorming").is_symlink()
+        assert not (home / ".windsurf" / "skills" / "brainstorming").exists()
+        assert not (home / ".cursor" / "skills" / "brainstorming").exists()
+        entry = _lock()["brainstorming"]
+        assert entry["agents"] == ["claude-code"]
+        r = boost("doctor")
+        assert r.rc == 0
+        assert "outside its declared scope" not in r.out
 
 
 class TestQuarantineMaterialized:

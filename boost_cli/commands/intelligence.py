@@ -357,7 +357,11 @@ def cmd_simulate(argv: list[str]) -> int:
         # Clipped to 100 characters, which is a length and not a width: at
         # 80 columns the quoted description ran seven past the pane. Wrapping
         # shows the same clipped text and fits it.
-        trigger = 'likely triggers when the task involves: "%s"' % desc[:100]
+        shown = desc
+        if len(desc) > 100:
+            # Cut on a word boundary so the tail is not a severed token.
+            shown = desc[:100].rsplit(" ", 1)[0] + " …"
+        trigger = 'likely triggers when the task involves: "%s"' % shown
         for line in out.wrap(trigger, max(out.term_width() - 2, 20)):
             out.info(out.role(line, "muted"))
     return 0
@@ -1072,6 +1076,10 @@ def cmd_focus(argv: list[str]) -> int:
         if had_session:
             state_path.unlink()
         journal.log("focus", "clear", restored=restored)
+        if args.json:
+            print(json.dumps({"active": [], "restored": restored,
+                              "had_session": had_session}))
+            return 0
         if not had_session and not restored:
             out.info("no focus session")
             return 0
@@ -1120,6 +1128,9 @@ def cmd_focus(argv: list[str]) -> int:
         store.unsideline(name)
     _save_state(_FOCUS_STATE, {"active": names, "since": util.now_iso()})
     journal.log("focus", ",".join(names))
+    if args.json:
+        print(json.dumps({"active": names, "sidelined": sidelined}))
+        return 0
     out.info("⌁ focus: %s %s"
              % (", ".join(names),
                 out.role("(other %d skill%s sidelined)" % (sidelined, _s(sidelined)), "muted")))

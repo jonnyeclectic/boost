@@ -1242,6 +1242,13 @@ class TestConfirm:
         output.confirm("go?", default=False)
         assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
 
+    def test_non_tty_declined_quiet_suppresses_bypass_hint(self, monkeypatch, capsys):
+        # A caller about to print its own --json result on a decline needs a
+        # clean stdout — the hint would land as a stray prose line ahead of it.
+        monkeypatch.setattr(sys, "stdin", FakeStream(tty=False))
+        assert output.confirm("go?", default=False, quiet=True) is False
+        assert capsys.readouterr().out == ""
+
     def test_non_tty_proceeding_default_true_prints_no_hint(self, monkeypatch, capsys):
         # default=True means the command proceeds — nothing was declined, so
         # naming a bypass for a prompt that never blocked would be noise.
@@ -1280,6 +1287,18 @@ class TestConfirm:
         self._tty(monkeypatch, "n")
         assert output.confirm("go?", default=True) is False
         assert output._CONFIRM_BYPASS_HINT in capsys.readouterr().out
+
+    def test_tty_n_quiet_suppresses_bypass_hint(self, monkeypatch, capsys):
+        self._tty(monkeypatch, "n")
+        assert output.confirm("go?", default=True, quiet=True) is False
+        assert output._CONFIRM_BYPASS_HINT not in capsys.readouterr().out
+
+    def test_tty_eof_quiet_suppresses_bypass_hint(self, monkeypatch, capsys):
+        self._tty(monkeypatch, EOFError())
+        assert output.confirm("go?", default=True, quiet=True) is False
+        out = capsys.readouterr().out
+        assert out.startswith("\n")  # the newline after ^D still prints
+        assert output._CONFIRM_BYPASS_HINT not in out
 
     def test_tty_gibberish_is_no(self, monkeypatch):
         self._tty(monkeypatch, "maybe")

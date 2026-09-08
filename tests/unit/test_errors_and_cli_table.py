@@ -303,6 +303,145 @@ class TestMainDispatch:
             capsys.readouterr().err)
 
 
+class TestBrokenPipeBeforeDispatch:
+    """The early-return paths (--help, --version, help, __complete) used to
+    sit entirely outside main's try/except, so a BrokenPipeError raised while
+    printing them propagated straight out of main() uncaught.
+
+    `_seal_broken_stdout` is stubbed out in these tests: its real job is an
+    `os.dup2` onto the process's actual stdout fd, and exercising that for
+    real against pytest's own captured fd would corrupt capture for the rest
+    of the session. Its own tolerance-of-failure is covered directly below,
+    without ever reaching the real dup2.
+    """
+
+    def test_help_flag_broken_pipe_is_caught(self, sandbox, monkeypatch):
+        monkeypatch.setattr(cli, "print_help",
+                            lambda: (_ for _ in ()).throw(BrokenPipeError()))
+        monkeypatch.setattr(cli, "_seal_broken_stdout", lambda: None)
+        assert cli.main(["--help"]) == 0
+
+    def test_version_broken_pipe_is_caught(self, sandbox, monkeypatch):
+        monkeypatch.setattr(cli, "print_version",
+                            lambda: (_ for _ in ()).throw(BrokenPipeError()))
+        monkeypatch.setattr(cli, "_seal_broken_stdout", lambda: None)
+        assert cli.main(["--version"]) == 0
+
+    def test_seal_broken_stdout_tolerates_a_closed_fd(self, sandbox,
+                                                      monkeypatch):
+        """Even if flush/fileno both raise, the seal must not escalate.
+
+        Swaps the `sys.stdout` *name* for a bare fake rather than mutating
+        the real captured stream's attributes, and stubs `fileno()` rather
+        than `os.open`/`os.dup2` — pytest's own fd-level capture calls both
+        of those for its own bookkeeping, so faking them globally corrupts
+        capture for the rest of the session instead of testing anything.
+        """
+        import sys
+
+        class _AlwaysBroken:
+            def flush(self):
+                raise OSError("broken")
+
+            def fileno(self):
+                raise OSError("no fd")
+
+        monkeypatch.setattr(sys, "stdout", _AlwaysBroken())
+        cli._seal_broken_stdout()  # must not raise
+
+
+class TestBrokenPipeSurfacedByTheFinalFlush:
+    """A write that merely fits the pipe's kernel buffer (`--help`, `count`,
+    small dispatch output) does not raise BrokenPipeError until something
+    explicitly flushes. `_route` now forces that flush itself, still inside
+    main's own handler, instead of leaving it to the interpreter's own
+    unhandled exit-time flush."""
+
+    def test_flush_only_broken_pipe_is_still_caught(self, sandbox, monkeypatch):
+        # Wraps (rather than mutates) the real captured stream: writes still
+        # reach pytest's own capture through __getattr__ delegation, only
+        # flush() is faulty — mutating the real stream's .flush attribute
+        # directly risks pytest's own capture machinery calling it too.
+        import sys
+
+        import boost_cli.commands.taps as taps_mod
+
+        class _BrokenFlush:
+            def __init__(self, real):
+                self._real = real
+
+            def flush(self):
+                raise BrokenPipeError
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        monkeypatch.setattr(taps_mod, "cmd_taps", lambda argv: 0)
+        monkeypatch.setattr(sys, "stdout", _BrokenFlush(sys.stdout))
+        monkeypatch.setattr(cli, "_seal_broken_stdout", lambda: None)
+        assert cli.main(["taps"]) == 0
+
+
+class TestHelpRoutingAliases:
+    """`boost help <X>` must resolve main's own aliases the same way `boost
+    <X>` does, rather than treating them as unknown commands and
+    difflib-guessing an unrelated one (`--help` -> "heal", `version` ->
+    "verify")."""
+
+    def test_help_dash_dash_help(self, sandbox, capsys):
+        assert cli.main(["help", "--help"]) == 0
+        out = capsys.readouterr().out
+        assert "81 commands · 8 groups" in out
+
+    def test_help_dash_h(self, sandbox, capsys):
+        assert cli.main(["help", "-h"]) == 0
+        assert "81 commands · 8 groups" in capsys.readouterr().out
+
+    def test_help_version_word(self, sandbox, capsys):
+        assert cli.main(["help", "version"]) == 0
+        assert VERSION_LINE.match(capsys.readouterr().out.rstrip("\n"))
+
+    def test_help_dash_capital_v(self, sandbox, capsys):
+        assert cli.main(["help", "-V"]) == 0
+        assert VERSION_LINE.match(capsys.readouterr().out.rstrip("\n"))
+
+    def test_help_help(self, sandbox, capsys):
+        assert cli.main(["help", "help"]) == 0
+        assert "boost help [COMMAND]" in capsys.readouterr().out
+
+
+class TestUnknownOptionVsCommand:
+    """A dash-prefixed typo is a mistyped flag, not a command guess — nothing
+    in COMMANDS is a plausible correction for `--hepl`."""
+
+    def test_dash_token_reports_unknown_option(self, sandbox, capsys):
+        assert cli.main(["--hepl"]) == 2
+        err = capsys.readouterr().err
+        assert "unknown option: --hepl" in err
+        assert "did you mean" not in err
+
+    def test_dash_token_hints_help(self, sandbox, capsys):
+        assert cli.main(["--nope"]) == 2
+        assert "see `boost --help`" in capsys.readouterr().err
+
+    def test_bare_word_typo_is_unaffected(self, sandbox, capsys):
+        # regression guard: only dash-prefixed tokens change behavior
+        assert cli.main(["instal"]) == 2
+        err = capsys.readouterr().err
+        assert "unknown command: instal" in err
+        assert "did you mean" in err
+
+
+class TestGlobalOptionsLine:
+    def test_help_documents_the_global_flags(self, sandbox, capsys):
+        assert cli.main(["--help"]) == 0
+        out = capsys.readouterr().out
+        assert "-V/--version" in out
+        assert "-v/--verbose" in out
+        assert "--debug" in out
+        assert "-q/--quiet" in out
+
+
 class TestPrintHelpColorRole:
     """The command-name column is the same semantic role ("accent") as every
     other command name in the CLI — search results, `boost info`'s badges,

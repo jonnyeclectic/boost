@@ -125,13 +125,21 @@ def cmd_config(argv) -> int:
                                  "`boost config unset` it first") from e
         val = config.get(args.key)
         journal.log("config", args.key, op="set")
+        if args.json:
+            print(json.dumps({"key": args.key, "value": val}))
+            return 0
         out.ok("set %s = %s"
                % (args.key, val if isinstance(val, str) else json.dumps(val)))
         return 0
 
     # unset
-    if config.unset(args.key):
+    was_set = config.unset(args.key)
+    if was_set:
         journal.log("config", args.key, op="unset")
+    if args.json:
+        print(json.dumps({"key": args.key, "unset": was_set}))
+        return 0
+    if was_set:
         out.ok("unset %s" % args.key)
     else:
         out.info("%s not set" % args.key)
@@ -512,6 +520,9 @@ def cmd_policy(argv) -> int:
         pol[args.key] = _parse_policy_value(args.key, args.value)
         policy.save(pol)
         journal.log("policy", args.key, op="set")
+        if args.json:
+            print(json.dumps({"key": args.key, "value": pol[args.key]}))
+            return 0
         out.ok("set %s = %s" % (args.key, json.dumps(pol[args.key])))
         return 0
 
@@ -520,6 +531,9 @@ def cmd_policy(argv) -> int:
         pol[args.key] = policy.DEFAULTS[args.key]
         policy.save(pol)
         journal.log("policy", args.key, op="unset")
+        if args.json:
+            print(json.dumps({"key": args.key, "value": policy.DEFAULTS[args.key]}))
+            return 0
         out.ok("reset %s to default (%s)"
                % (args.key, json.dumps(policy.DEFAULTS[args.key])))
         return 0
@@ -1690,29 +1704,26 @@ def _mcp_tool(tool: str, args: dict):
     return REGISTRY.call(tool, args)
 
 
-#: Substrings an agent CLI uses to say "this server is already registered".
-#: Registering twice is not a failure — it is the state the user asked for —
-#: and treating it as one is what made `--host auto` abort on host one and
-#: never reach host two on any machine where boost was already in Claude.
-_ALREADY = ("already exists", "already registered", "already configured")
-
-
 def _run_mcp_host(host: str, action: str, cmd) -> tuple[str, str]:
     """Run one host's register/unregister argv.
 
     Returns ``(status, detail)`` where status is:
 
-    * ``"ran"``      — the CLI ran and succeeded;
-    * ``"already"``  — it reported the server is already in the state asked
-      for, which is success with a different wording;
-    * ``"missing"``  — the CLI is not installed. Not an error: most machines
-      have one agent CLI, not all of them;
-    * ``"failed"``   — it is installed and something else went wrong.
+    * ``"ran"``            — the CLI ran and did what was asked;
+    * ``"already"``        — register reported the server is already in that
+      state, which is success with a different wording;
+    * ``"not_registered"`` — unregister reported there was nothing to remove,
+      likewise success with a different wording;
+    * ``"missing"``        — the CLI is not installed. Not an error: most
+      machines have one agent CLI, not all of them;
+    * ``"failed"``         — it is installed and something else went wrong.
 
     It **returns** rather than raises so one host cannot end the sweep. That
     was the bug: a present CLI exiting non-zero raised straight out of the
     loop, so with boost already registered in Claude, `--host auto` died on
-    "already exists" and never reached the second agent.
+    "already exists" and never reached the second agent. The text
+    classification itself lives in :func:`mcphost.classify_result`, which is
+    pure and mutation-tested without a real agent CLI on PATH.
     """
     exe = mcphost.cli(host)
     if not shutil.which(exe):
@@ -1723,13 +1734,8 @@ def _run_mcp_host(host: str, action: str, cmd) -> tuple[str, str]:
         return "failed", str(e)
     for ln in (proc.stdout or "").strip().splitlines():
         out.info(ln)
-    if proc.returncode == 0:
-        return "ran", ""
-    blob = ((proc.stderr or "") + (proc.stdout or "")).lower()
-    if action == "register" and any(k in blob for k in _ALREADY):
-        return "already", ""
-    tail = (proc.stderr or "").strip().splitlines()
-    return "failed", tail[-1] if tail else "unknown error"
+    return mcphost.classify_result(action, proc.returncode,
+                                   proc.stdout, proc.stderr)
 
 
 def _seed_catalog_for_mcp(force: bool) -> None:
@@ -1838,7 +1844,7 @@ def _offer_boost_first(hosts: list[str]) -> None:
 
 
 def cmd_mcp(argv) -> int:
-    """boost mcp [register|unregister] [--host H] [--stdio] [--seed|--no-seed]"""
+    """boost mcp [register|unregister] [--host H] [--stdio] [--seed|--no-seed] [--dry-run]"""
     p = cliparse.parser(
         prog="boost mcp",
         description="Register boost as an MCP server for your agent CLIs")
@@ -1851,6 +1857,9 @@ def cmd_mcp(argv) -> int:
                         % ", ".join(mcphost.hosts()))
     p.add_argument("--stdio", action="store_true",
                    help="run the MCP server on stdin/stdout (used by the agent)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the resolved command and install status per "
+                        "host; register or tap nothing")
     # Mutually exclusive: `--seed --no-seed` used to resolve silently to the
     # network-touching side, which is the wrong way for an ambiguous pair of
     # explicitly typed flags to break.
@@ -1872,6 +1881,25 @@ def cmd_mcp(argv) -> int:
         raise BoostError("unknown MCP host %r" % args.host,
                         hint="known hosts: %s" % ", ".join(mcphost.hosts())) from e
 
+    shim = str(paths.launcher())
+    verb = "register" if args.action == "register" else "unregister"
+
+    if args.dry_run:
+        # Before seeding and before any subprocess runs — the flag exists so
+        # the argv boost would run is visible in the one case that mattered
+        # (`--host gemini` with `gemini` on PATH), not only the one case that
+        # was already visible for free (the CLI missing entirely).
+        for host in targets:
+            installed = shutil.which(mcphost.cli(host)) is not None
+            cmd = mcphost.argv(host, args.action, shim)
+            out.info("%s %s: %s" % (
+                mcphost.label(host),
+                out.role("(installed)" if installed else "(not installed)",
+                         "muted"),
+                " ".join(cmd)))
+        out.dim("  dry run — nothing was %sed, nothing tapped" % verb)
+        return 0
+
     # After the host name is validated and before anything is registered. The
     # ordering is not cosmetic in either direction: seeding first meant a
     # typo'd `--host` spent 14-45s and half a gigabyte before argparse's own
@@ -1880,12 +1908,14 @@ def cmd_mcp(argv) -> int:
     if args.action == "register" and (args.seed_ok or args.seed):
         _seed_catalog_for_mcp(args.seed)
 
-    shim = str(paths.launcher())
     # `auto` skips hosts that are not installed; naming a host explicitly (or
     # `all`) always reports it, so a user setting up a machine can see the argv
-    # for an agent CLI they have not installed yet.
+    # for an agent CLI they have not installed yet. `named` is narrower than
+    # `explicit`: it excludes `all`, which — like `auto` — deliberately shows
+    # every host's argv without treating "not installed" as a failure.
     explicit = args.host not in (None, "", "auto")
-    done, already, missing, failed = [], [], [], {}
+    named = mcphost.is_named(args.host)
+    done, already, not_registered, missing, failed = [], [], [], [], {}
     for host in targets:
         cmd = mcphost.argv(host, args.action, shim)
         status, detail = _run_mcp_host(host, args.action, cmd)
@@ -1893,6 +1923,8 @@ def cmd_mcp(argv) -> int:
             done.append(host)
         elif status == "already":
             already.append(host)
+        elif status == "not_registered":
+            not_registered.append(host)
         elif status == "failed":
             # Collected, not raised: the next host is a different agent on a
             # different config file and has nothing to do with this failure.
@@ -1904,7 +1936,6 @@ def cmd_mcp(argv) -> int:
                          % mcphost.cli(host))
                 out.info(" ".join(cmd))
 
-    verb = "register" if args.action == "register" else "unregister"
     for host in done:
         # agy has no scopes — one global file — so claiming "(scope: user)"
         # would describe a distinction its CLI does not have.
@@ -1914,6 +1945,8 @@ def cmd_mcp(argv) -> int:
     for host in already:
         out.ok("already registered with %s — nothing to do"
                % mcphost.label(host))
+    for host in not_registered:
+        out.ok("%s: not registered — nothing to do" % mcphost.label(host))
     for host, detail in failed.items():
         out.warn("%s: %s mcp %s failed — %s"
                  % (mcphost.label(host), mcphost.cli(host), args.action,
@@ -1921,7 +1954,7 @@ def cmd_mcp(argv) -> int:
         out.info(out.role("run it yourself: %s"
                           % " ".join(mcphost.argv(host, args.action, shim)),
                           "muted"))
-    settled = done + already
+    settled = done + already + not_registered
     if not settled:
         if failed:
             # Every installed CLI failed. That is a real error — but only after
@@ -1936,7 +1969,10 @@ def cmd_mcp(argv) -> int:
             for host in missing:
                 out.info(" ".join(mcphost.argv(host, args.action, shim)))
         journal.log("mcp", args.action, hosts="")
-        return 0
+        # A single named host whose CLI is missing is a no-op, not a success:
+        # `--host all` and `auto` both tolerate an absent CLI by design (see
+        # `mcphost.is_named`), so only a one-host request fails here.
+        return 1 if named else 0
     if args.action == "register":
         _offer_boost_first(settled)
     journal.log("mcp", args.action, hosts=",".join(settled))

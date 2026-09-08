@@ -2,15 +2,17 @@
 id: audit-json-accepted-but-ignored-on-many-branches-cohort-config-pol
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
-note: seven commands take --json, then print "✓ set ai.enabled = true" prose with exit 0
+note: shipped in PR 804 — all seven sites now emit JSON (or reject --json as
+  a usage error, for `update` without `--shards`); CI's full check suite
+  (lint, evals, tests, smoke, mutation) is green on the merge-ready head
 order: 231
-owner:
-pr:
+owner: loop/json-flag-fixes
+pr: 804
 title: "--json accepted but ignored: <code>cohort</code>/<code>config</code>/<code>policy</code> set, <code>focus</code>, <code>profile</code>, <code>replay rollback</code>, <code>who</code> empty state"
 ---
 The mirror image of the missing-<code>--json</code> sweep: these parsers <em>accept</em>

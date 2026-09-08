@@ -43,7 +43,7 @@ def _commit_clone(repo, msg):
 class TestTap:
     def test_local_dir_happy(self, boost, fixture_tap_src):
         r = boost("tap", fixture_tap_src)
-        assert "Tapped fixture-tap (5 items)" in r.out
+        assert "tapped fixture-tap (5 items)" in r.out
         # real effects: clone, cache, config entry
         assert (paths.repos_dir() / "fixture-tap" / "SKILL.md").exists() is False
         assert (paths.repos_dir() / "fixture-tap" / "skills" /
@@ -86,8 +86,19 @@ class TestTap:
                   expect=2)
         assert "exactly one SPEC" in r.err
 
-    def test_duplicate_rc1_with_hint(self, boost, tapped):
-        r = boost("tap", tapped, expect=1)
+    def test_duplicate_single_spec_skips_like_multi_spec(self, boost, tapped):
+        # A single already-tapped SPEC used to error (rc=1) while the same
+        # name inside a multi-SPEC call quietly skipped (rc=0) — the two
+        # surfaces answered "already tapped?" two different ways. Both now
+        # route through the same skip logic.
+        r = boost("tap", tapped)  # rc=0 — boost() asserts the default
+        assert "fixture-tap already tapped" in r.out
+
+    def test_duplicate_with_at_still_errors(self, boost, tapped):
+        # --at pins one commit; silently skipping an already-tapped repo would
+        # leave it on whatever commit it already had, which is the exact
+        # staleness a pin exists to prevent.
+        r = boost("tap", tapped, "--at", "a" * 40, expect=1)
         assert "tap fixture-tap is already configured" in r.err
         assert "boost update fixture-tap" in r.err  # the hint
 
@@ -99,6 +110,27 @@ class TestTap:
     def test_no_args_rc2(self, boost, sandbox):
         r = boost("tap", expect=2)
         assert "provide a SPEC, --defaults, or --catalog" in r.err
+
+    def test_missing_local_path_names_the_directory_not_github(
+            self, boost, sandbox, tmp_path):
+        # A path-shaped SPEC that doesn't exist used to fall through to the
+        # owner/repo branch, which cloned "https://github.com//tmp/.../nope"
+        # instead of naming the local path that was actually wrong.
+        missing = tmp_path / "nonexistent-dir"
+        r = boost("tap", str(missing), expect=1)
+        assert "no such directory: %s" % missing in r.err
+        assert "github.com" not in r.err
+
+    def test_existing_dir_without_git_names_the_real_problem(
+            self, boost, sandbox, tmp_path):
+        plain = tmp_path / "plain-skill-dir"
+        plain.mkdir()
+        (plain / "SKILL.md").write_text("---\nname: x\n---\nbody\n",
+                                        encoding="utf-8")
+        r = boost("tap", str(plain), expect=1)
+        assert "is not a git repository" in r.err
+        assert "git init" in r.err
+        assert "boost import %s" % plain in r.err
 
     def test_defaults_offline_warns_rc1(self, boost, sandbox, monkeypatch):
         from boost_cli.core import registry
