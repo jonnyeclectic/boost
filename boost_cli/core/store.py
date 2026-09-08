@@ -1063,20 +1063,28 @@ def quarantine_materialized(kind: str, name: str, entry: dict) -> list[str]:
     # artifact was already gone".
     prior = {m.get("path"): m.get("content")
              for m in entry.get("quarantine_stash") or []}
+    prior_full_text = {m.get("path"): m.get("full_text")
+                       for m in entry.get("quarantine_stash") or []}
     stash: list[dict] = []
     affected: list[str] = []
     for m in entry.get("materializations") or []:
         path = Path(m.get("path", ""))
         content: str | None = None
+        full_text: str | None = None
         if m.get("mode") == rules.MODE_CLAUDE:
             if path.exists():
-                content = rules.read_block(
-                    path.read_text(encoding="utf-8"), name)
+                # The whole file, not just the block: release_materialized
+                # needs it to restore the block at its original position
+                # rather than re-appending at end-of-file.
+                full_text = path.read_text(encoding="utf-8")
+                content = rules.read_block(full_text, name)
         elif path.is_file():
             content = path.read_text(encoding="utf-8")
         if content is None:
             content = prior.get(m.get("path"))
-        stash.append({**m, "content": content})
+        if full_text is None:
+            full_text = prior_full_text.get(m.get("path"))
+        stash.append({**m, "content": content, "full_text": full_text})
         if m.get("agent"):
             affected.append(m["agent"])
     # Persist the stash BEFORE removing anything. A crash mid-removal then
@@ -1142,7 +1150,17 @@ def release_materialized(kind: str, name: str, entry: dict) -> list[str]:
         path.parent.mkdir(parents=True, exist_ok=True)
         if m.get("mode") == rules.MODE_CLAUDE:
             current = path.read_text(encoding="utf-8") if path.exists() else ""
-            util.atomic_write_text(path, rules.merge_block(current, name, content))
+            full_text = m.get("full_text")
+            # Byte-for-byte only holds when the surrounding text is exactly
+            # what quarantine left behind — write the stashed file back
+            # whole, restoring the block at its original position instead of
+            # re-appending it. Any other surrounding text (the user edited
+            # the file, or the stash predates this field) falls back to
+            # merge_block's append.
+            if full_text is not None and rules.strip_block(full_text, name) == current:
+                util.atomic_write_text(path, full_text)
+            else:
+                util.atomic_write_text(path, rules.merge_block(current, name, content))
         else:
             util.atomic_write_text(path, content)
         if m.get("agent"):
