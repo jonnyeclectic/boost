@@ -399,6 +399,39 @@ class TestSync:
         assert link.is_symlink() and link.exists()
         assert not ghost.is_symlink()
 
+    def test_diff_renders_a_blocked_link_as_a_readable_line(self, boost, installed):
+        # `blocked_links` rows are (skill, agent, path) 3-tuples. `_PAIR_KEYS`
+        # only special-cases 2-tuples, so this used to fall through to the
+        # generic `str()` branch and print the raw Python tuple, e.g.
+        # "('brainstorming', 'cursor', '/private/tmp/.../cursor/skills/
+        # brainstorming')".
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()                      # a foreign real directory
+
+        r = boost("sync", "--diff")
+        assert "agent links blocked by a foreign file (1)" in r.out
+        assert "brainstorming → cursor" in r.out
+        assert "in the way" in r.out
+        assert "('brainstorming'" not in r.out, "printed the raw Python tuple"
+
+    def test_a_blocked_link_behind_a_missing_store_is_reported_in_one_run(
+            self, boost, installed):
+        # The residual case: repairing a missing store dir used to skip agent
+        # link classification entirely, so a foreign file already in the way
+        # went unreported until a *second* `sync` — this run must surface it
+        # in the very first one, right alongside the reinstall.
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+
+        r = boost("sync")
+        assert "reinstalled missing brainstorming" in r.out
+        assert "could not be created" in r.out
+        assert "brainstorming → cursor" in r.out
+        assert "in the way" in r.out
+
     def test_orphan_reported_and_pruned(self, boost, installed):
         orphan = paths.store_dir() / "orphan-x"
         orphan.mkdir()

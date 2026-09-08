@@ -664,6 +664,15 @@ def cmd_sync(argv: list[str]) -> int:
                     out.info("%s → %s" % (item[0], item[1]))
                 elif key == "missing_materializations":
                     out.info("%s %s" % (item[0], item[1]))  # (kind, name)
+                elif key == "blocked_links":
+                    # (skill, agent, path) — the general str()-of-a-tuple
+                    # fallback below prints this verbatim as
+                    # "('brainstorming', 'windsurf', '/private/tmp/.../
+                    # brainstorming')", which is what the live warning at the
+                    # bottom of this command deliberately does not do.
+                    name, agent, path = item
+                    out.info("%s → %s (%s in the way)"
+                             % (name, agent, _tilde(Path(path))))
                 else:
                     out.info(_tilde(item))
         return 0
@@ -699,9 +708,12 @@ def cmd_sync(argv: list[str]) -> int:
     left = [n for n in orphans if n not in pruned]
     blocked = plan["blocked_links"]
     if args.json:
+        # `sync --diff --json` above is indent=2; this printed one unindented
+        # line, so the two `--json` shapes of the same command disagreed on
+        # style for no reason tied to their content.
         print(json.dumps({"actions": actions, "pruned": pruned,
                           "orphaned_store": left, "out_of_scope_links": oos,
-                          "blocked_links": blocked}))
+                          "blocked_links": blocked}, indent=2))
         return 0
     for a in actions:
         out.ok(a)

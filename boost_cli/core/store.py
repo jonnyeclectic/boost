@@ -1632,9 +1632,22 @@ def sync_plan() -> dict[str, list]:
         # is already "reinstall this skill from its tap", which is exactly what
         # a gutted directory needs, and reusing it means sync_apply needs no
         # change at all.
-        if not sdir.is_dir() or not (sdir / "SKILL.md").is_file():
+        #
+        # This used to `continue` here, which skipped agent-link classification
+        # for the entry entirely — so a foreign file already occupying a link
+        # path went unreported until a *second* `sync` noticed the repair had
+        # not actually relinked that agent. The classification below reads
+        # only the agent dir, never the store, so running it costs nothing
+        # even while the store copy is still missing — see the `missing_store`
+        # check further down, which still lets it feed `blocked_links` but
+        # keeps it out of `missing_links`: `sync_apply` repairs a missing
+        # store by reinstalling from the tap, which relinks every non-blocked
+        # agent as one step, and that reinstall runs *after* this plan is
+        # built, so a `missing_links` entry here would have `sync_apply` try
+        # to link a store directory that does not exist yet.
+        missing_store = not sdir.is_dir() or not (sdir / "SKILL.md").is_file()
+        if missing_store:
             plan["missing_store"].append(name)
-            continue
         if entry.get("quarantined"):
             continue
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
@@ -1659,11 +1672,11 @@ def sync_plan() -> dict[str, list]:
             # A symlink is boost's to replace even when it dangles; anything
             # else that exists is someone else's file and stays put.
             if link.is_symlink():
-                if not link.exists():
+                if not link.exists() and not missing_store:
                     plan["missing_links"].append((name, agent))
             elif link.exists():
                 plan["blocked_links"].append((name, agent, str(link)))
-            else:
+            elif not missing_store:
                 plan["missing_links"].append((name, agent))
         # The other direction, which nothing checked: a link that exists in an
         # agent the declaration excludes. The loop above is narrowed to the
@@ -1802,7 +1815,11 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         p = Path(path)
         if p.is_symlink():
             p.unlink()
-            actions.append("removed stale link %s" % path)
+            # `--diff` shows this same path tilde-contracted (`_tilde` in
+            # commands/pkg.py); the raw absolute string here made the two
+            # views of one path disagree in the exact case a user compares
+            # them — planned vs. applied.
+            actions.append("removed stale link %s" % paths.tilde(path))
     for name in plan["missing_store"]:
         entry = lockfile.get_skill(name) or {}
         tap_name = entry.get("tap")
