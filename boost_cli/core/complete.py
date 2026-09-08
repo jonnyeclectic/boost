@@ -205,7 +205,7 @@ def _literal_choices(part: str) -> list[str] | None:
     or list of strings — ``None`` for anything dynamic (a name, a call, a
     starred expression like ``(*hookhost.hosts(), "auto")``) so a candidate
     is only ever an exact string this scraper can see, never a guess."""
-    m = re.match(r"choices\s*=\s*(.*)$", part, re.S)
+    m = re.match(r"choices\s*=\s*(.*)$", part, re.DOTALL)
     if not m:
         return None
     try:
