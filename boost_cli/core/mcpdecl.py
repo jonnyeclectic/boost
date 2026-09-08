@@ -122,6 +122,23 @@ def servers_for(meta: dict | None, sidecar_text: str | None = None,
     return [rows[k] for k in sorted(rows)]
 
 
+def command_line(spec: dict) -> str:
+    """The bare ``command arg1 arg2 …`` a runnable ``spec`` would launch.
+
+    Host- and scope-agnostic, unlike :func:`register_argv`: this is for
+    *showing* the server's own command to a human (the install-time MCP
+    offer), not for constructing a `<host> mcp add` invocation. A spec with
+    no ``command`` renders as an empty string — callers gate on
+    :func:`registrable` first.
+    """
+    command = str(spec.get("command") or "").strip()
+    if not command:
+        return ""
+    args = spec.get("args")
+    tail = [str(a) for a in args] if isinstance(args, list) else []
+    return " ".join([command, *tail])
+
+
 def registrable(rows) -> list[dict]:
     """The rows boost can actually wire up — those carrying a runnable spec.
 

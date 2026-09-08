@@ -1576,7 +1576,7 @@ class TestInstallEdges:
 
     def test_path_that_matches_nothing_is_refused(self, boost, tapped):
         r = boost("install", "brainstorming", "--path", "nope/here", expect=1)
-        assert "under path" in r.err
+        assert "whose path ends with" in r.err
         assert "skills/brainstorming" in r.err   # the hint lists the real one
 
     def test_no_enabled_agents_warns(self, boost, tapped):
@@ -2015,7 +2015,8 @@ class TestMcpAwareSkills:
             sidecar={"mcpServers": {"github": {"command": "npx"}}})
         r = boost("import", d)
         # non-TTY stdin makes confirm() return its default, which is False here
-        assert "skipped — `claude mcp add …` when you're ready" in r.out
+        assert "skipped — run these yourself when you're ready:" in r.out
+        assert "claude mcp add github --scope user -- npx" in r.out
         assert "mcp-skill" in _lock()
 
     def test_missing_agent_clis_print_the_commands(self, boost, sandbox,

@@ -160,8 +160,8 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     out.info("")
     out.warn("%s needs %s to work:" % (res.name, _plural(len(rows), "MCP server")))
     for row in rows:
-        how = ("`%s`" % row["spec"]["command"] if row["spec"]
-               and row["spec"].get("command") else "no command declared")
+        line = mcpdecl.command_line(row["spec"]) if row["spec"] else ""
+        how = "`%s`" % line if line else "no command declared"
         out.info("  %s  %s" % (out.c(row["name"], out.BOLD),
                                out.role(how, "muted")))
     wirable = mcpdecl.registrable(rows)
@@ -178,10 +178,14 @@ def _offer_mcp(res: store.InstallResult, no_mcp: bool = False) -> None:
     # Name the scope. The prompt used to say only "register N servers with
     # Claude Code now?", which is the one detail the answer turns on — this
     # writes a registration every project on this machine will then launch.
-    if not out.confirm("register %s with %s, for every project on this machine?"
-                       % (_plural(len(wirable), "server"), where), default=False):
-        out.dim("  skipped — `%s mcp add …` when you're ready"
-                % mcphost.cli(targets[0]))
+    if not out.confirm(
+            "  register %s with %s, for every project on this machine?"
+            % (_plural(len(wirable), "server"), where), default=False):
+        out.dim("  skipped — run these yourself when you're ready:")
+        for row in wirable:
+            argv = mcpdecl.register_argv(row["name"], row["spec"],
+                                         host=targets[0], scope=res.scope)
+            out.info("    " + " ".join(argv))
         return
     for row in wirable:
         for host in targets:
