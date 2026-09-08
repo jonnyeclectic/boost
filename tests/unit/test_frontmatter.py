@@ -242,6 +242,131 @@ class TestMutationHardening:
         assert block == "" and body == "body"
 
 
+class TestRoundTrip:
+    """Pins parse(dump(meta)) == meta for the value shapes the 2026-08 CLI
+    audit found broken: multi-line strings, embedded quotes, punctuation
+    that reads as a comment, and strings that collide with a keyword or
+    number `_scalar` would otherwise coerce."""
+
+    @staticmethod
+    def _round_trips(meta: dict) -> None:
+        dumped = frontmatter.dump(meta)
+        parsed = frontmatter.parse_block(dumped.strip("-").strip())
+        assert parsed == meta, dumped
+
+    def test_plain_scalars(self):
+        # `None` is deliberately not included: dump()'s bare `key:` for a
+        # None value reads back as "" (test_dump_none_exact pins that shape),
+        # a pre-existing gap distinct from the string-quoting bugs this class
+        # covers.
+        self._round_trips({"name": "x", "version": "1.0.0",
+                           "flag": True, "n": 3})
+
+    def test_multiline_description(self):
+        self._round_trips({"description": "first line\nsecond line"})
+
+    def test_embedded_quotes_and_backslash(self):
+        self._round_trips(
+            {"description": 'has: colon and "quotes" and #hash'})
+        self._round_trips({"path": "C:\\Users\\x"})
+
+    def test_hash_without_colon(self):
+        self._round_trips({"tag": "c#"})
+
+    def test_string_that_looks_like_a_bool_or_null(self):
+        self._round_trips({"x": "true"})
+        self._round_trips({"x": "false"})
+        self._round_trips({"x": "null"})
+        self._round_trips({"x": "~"})
+
+    def test_string_that_looks_like_a_number(self):
+        self._round_trips({"x": "3"})
+        self._round_trips({"x": "1.5"})
+
+    def test_string_that_looks_like_a_flow_list(self):
+        self._round_trips({"x": "[a, b]"})
+
+    def test_string_that_looks_like_a_block_scalar_marker(self):
+        self._round_trips({"x": "|"})
+        self._round_trips({"x": ">"})
+
+    def test_string_already_quote_wrapped(self):
+        self._round_trips({"x": "'a'"})
+        self._round_trips({"x": '"a"'})
+
+    def test_leading_or_trailing_whitespace(self):
+        self._round_trips({"x": "  padded  "})
+
+    def test_list_items_get_the_same_protection(self):
+        self._round_trips({"tags": ["true", "a: b", "plain"]})
+
+
+class TestNeedsQuoting:
+    def test_plain_word_is_not_quoted(self):
+        assert frontmatter._needs_quoting("brainstorming") is False
+
+    def test_empty_string_is_not_quoted(self):
+        assert frontmatter._needs_quoting("") is False
+
+    def test_newline_is_quoted(self):
+        assert frontmatter._needs_quoting("a\nb") is True
+
+    def test_hash_is_quoted(self):
+        assert frontmatter._needs_quoting("a#b") is True
+
+    def test_keyword_lookalikes_are_quoted(self):
+        for s in ("true", "False", "NULL", "~"):
+            assert frontmatter._needs_quoting(s) is True
+
+    def test_numeral_lookalike_is_quoted(self):
+        assert frontmatter._needs_quoting("42") is True
+
+    def test_non_numeral_is_not_quoted(self):
+        assert frontmatter._needs_quoting("v1.2.3-beta") is False
+
+
+class TestSetField:
+    def test_replaces_existing_top_level_key(self):
+        text = "---\nname: x\nversion: 1.0.0\n---\n\nbody"
+        out = frontmatter.set_field(text, "version", "1.0.1")
+        assert out == "---\nname: x\nversion: 1.0.1\n---\n\nbody"
+
+    def test_untouched_lines_are_byte_identical(self):
+        # The whole point: a quoted, specially-formatted line the naive
+        # parse-dict-dump path would have reformatted survives verbatim.
+        text = ('---\nname: x\ndescription: "first\\nsecond"\n'
+                'date_added: "2026-02-27"\nversion: 1.0.0\n---\n\nbody')
+        out = frontmatter.set_field(text, "version", "1.0.1")
+        assert 'description: "first\\nsecond"' in out
+        assert 'date_added: "2026-02-27"' in out
+        assert "version: 1.0.1" in out
+
+    def test_appends_a_missing_key(self):
+        text = "---\nname: x\n---\n\nbody"
+        out = frontmatter.set_field(text, "version", "0.0.1")
+        meta, body = frontmatter.parse(out)
+        assert meta == {"name": "x", "version": "0.0.1"}
+        assert body == "body"
+
+    def test_nested_key_is_not_mistaken_for_top_level(self):
+        # An indented `version:` under some other block must not shadow the
+        # real top-level key.
+        text = "---\nreq:\n  version: nested\nversion: 1.0.0\n---\n\nbody"
+        out = frontmatter.set_field(text, "version", "1.0.1")
+        assert "  version: nested" in out
+        assert "version: 1.0.1" in out
+
+    def test_new_value_that_needs_quoting_is_quoted(self):
+        text = "---\nversion: 1.0.0\n---\n\nbody"
+        out = frontmatter.set_field(text, "version", "true")
+        meta, _ = frontmatter.parse(out)
+        assert meta["version"] == "true"
+
+    def test_no_frontmatter_returns_text_unchanged(self):
+        assert frontmatter.set_field("# just markdown", "version", "1") == \
+            "# just markdown"
+
+
 class TestDump:
     def test_roundtrip_scalars(self):
         meta = {"name": "x", "version": "1.0.0", "flag": True, "n": 3}

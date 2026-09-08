@@ -2,15 +2,15 @@
 id: audit-index-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
-note: "index: errors glue onto the live progress bar, and 0 results overwrites a 150-entry index"
+note: "PR #802: progress bar clears before raise/warn, 0 results keeps the previous index, gh rate-limit/403 gets a native hint — CI green (lint/eval/test/smoke/mutation), awaiting human merge"
 order: 272
-owner:
-pr:
+owner: loop/index-progress-and-empty-write
+pr: 802
 title: "<code>boost index</code>: CLI audit findings (2026-08)"
 ---
 <b>The live progress bar is never cleared before an error</b> <em>(med)</em>. On a TTY a failed

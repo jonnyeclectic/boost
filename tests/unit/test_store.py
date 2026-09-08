@@ -304,6 +304,55 @@ class TestHasContent:
         assert not store.has_content()
 
 
+class TestReadSkillMeta:
+    """store.read_skill_meta() — a skill's store-copy frontmatter/body, or
+    None when it cannot be read honestly.
+
+    Feeds `boost policy check`'s retrospective require_description and
+    denied_capabilities checks (docs/roadmap/items/audit-policy-findings.md):
+    those checks must never run on absent data, so every failure mode here
+    has to come back as None, not as an empty dict a caller could mistake
+    for "no description".
+    """
+
+    def test_installed_skill_reads_frontmatter_and_body(self, brainstorming):
+        result = store.read_skill_meta("brainstorming")
+        assert result is not None
+        meta, body = result
+        assert meta["description"].startswith("Structured ideation")
+        assert meta["version"] == "1.4.0"
+        assert "Diverge" in body
+
+    def test_missing_skill_returns_none(self, sandbox):
+        assert store.read_skill_meta("never-installed") is None
+
+    def test_store_dir_with_no_skill_md_returns_none(self, sandbox):
+        d = store.skill_store_dir("ghost")
+        d.mkdir(parents=True)
+        assert store.read_skill_meta("ghost") is None
+
+    def test_unclosed_frontmatter_fence_returns_none(self, sandbox):
+        d = store.skill_store_dir("broken")
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: broken\ndescription: no closing fence\n",
+            encoding="utf-8")
+        assert store.read_skill_meta("broken") is None
+
+    def test_unreadable_skill_md_returns_none(self, sandbox):
+        d = store.skill_store_dir("locked")
+        d.mkdir(parents=True)
+        skill_md = d / "SKILL.md"
+        skill_md.write_text("---\nname: locked\n---\nbody", encoding="utf-8")
+        skill_md.chmod(0o000)
+        try:
+            if os.access(skill_md, os.R_OK):
+                pytest.skip("running as a user that ignores chmod 0o000")
+            assert store.read_skill_meta("locked") is None
+        finally:
+            skill_md.chmod(0o644)
+
+
 class TestUnlinkAgents:
     def test_removes_only_symlinks(self, brainstorming):
         cursor_link = _link("cursor")
@@ -1099,6 +1148,51 @@ class TestSyncApply:
 
     def test_nothing_to_do_no_actions(self, brainstorming):
         assert store.sync_apply(store.sync_plan()) == []
+
+    def _local_skill(self, tmp_path, name="local-skill", body="Body v1"):
+        src = tmp_path / name
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: %s\nversion: 1.0.0\n---\n\n%s\n" % (name, body),
+            encoding="utf-8")
+        return src
+
+    def test_missing_store_reinstalled_from_local_source(self, sandbox, tmp_path):
+        src = self._local_skill(tmp_path)
+        store.install_from_path(src)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        actions = store.sync_apply(store.sync_plan())
+        assert len(actions) == 5           # 4 stale links + reinstall
+        assert actions[-1] == "reinstalled missing local-skill from local source %s" % src
+        assert (paths.store_dir() / "local-skill" / "SKILL.md").is_file()
+        assert lockfile.get_skill("local-skill") is not None
+
+    def test_missing_store_local_source_gone_dropped_from_lock(self, sandbox, tmp_path):
+        src = self._local_skill(tmp_path)
+        store.install_from_path(src)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        shutil.rmtree(src)
+        actions = store.sync_apply(store.sync_plan())
+        assert ("dropped local-skill from lock (store dir missing, source gone)"
+                in actions)
+        assert lockfile.get_skill("local-skill") is None
+
+    def test_missing_store_local_source_pinned_and_changed_declined(
+            self, sandbox, tmp_path):
+        src = self._local_skill(tmp_path)
+        store.install_from_path(src)
+        lk = lockfile.get_skill("local-skill")
+        lk["pinned"] = True
+        lockfile.set_skill("local-skill", lk)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        (src / "SKILL.md").write_text(
+            "---\nname: local-skill\nversion: 2.0.0\n---\n\nBody v2\n",
+            encoding="utf-8")
+        actions = store.sync_apply(store.sync_plan())
+        assert any("is pinned and its local source has moved — repair declined"
+                  in a for a in actions)
+        assert not (paths.store_dir() / "local-skill").is_dir()
+        assert lockfile.get_skill("local-skill") is not None
 
 
 class TestCopySkillAtomic:

@@ -97,6 +97,33 @@ class TestProgress:
         assert s.getvalue().endswith("\r")
 
 
+class TestProgressClear:
+    def test_silent_on_non_tty(self):
+        s = FakeStream(tty=False)
+        spin.progress_clear(stream=s)
+        assert s.getvalue() == ""
+
+    def test_blanks_a_full_terminal_width_on_a_tty(self, monkeypatch):
+        # a caller who doesn't know the last line's exact width blanks a
+        # full terminal width instead, then returns to column 0
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        monkeypatch.setattr(spin.out, "term_width", lambda default=80: 12)
+        s = FakeStream(tty=True)
+        spin.progress_clear(stream=s)
+        assert s.getvalue() == "\r" + " " * 12 + "\r"
+
+    def test_clears_a_line_left_by_progress(self, monkeypatch):
+        monkeypatch.setenv("CLICOLOR_FORCE", "1")
+        s = FakeStream(tty=True)
+        spin.progress(1, 3, "searching GitHub for SKILL.md", stream=s)
+        assert s.getvalue() != ""            # the bar is still on the line
+        s.seek(0)
+        s.truncate()
+        spin.progress_clear(stream=s)
+        # a fresh write to the now-blanked line starts clean, at column 0
+        assert s.getvalue().startswith("\r" + " ")
+
+
 def test_tty_run_writes_and_clears():
     # exercise the animated path: wait (bounded) for the thread's first frame
     import time

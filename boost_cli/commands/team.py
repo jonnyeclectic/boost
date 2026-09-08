@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import operator
 import platform
 import shutil
 import stat
@@ -241,7 +242,7 @@ def cmd_cohort(argv) -> int:
 # ---------------------------------------------------------------- profile
 
 def _profile_path(name: str):
-    return paths.profiles_dir() / (util.slugify(name) + ".json")
+    return paths.profiles_dir() / (util.resolve_slug(name, what="profile name") + ".json")
 
 
 def _load_profile(name: str) -> dict:
@@ -310,6 +311,10 @@ def cmd_profile(argv) -> int:
                              "skills": len(data.get("skills", {})),
                              "saved": data.get("saved", "?"),
                              "unreadable": False})
+        # Sort by the name shown on screen, not the slugged filename that put
+        # them there — glob order otherwise prints rows in an order that
+        # matches nothing a reader sees (`daily, mixed, !!!, Work Profile`).
+        profiles.sort(key=operator.itemgetter("name"))
         if args.json:
             print(json.dumps(profiles, indent=2))
             return 0
@@ -327,18 +332,19 @@ def cmd_profile(argv) -> int:
 
     if args.action == "save":
         installed = lockfile.installed()
+        path = _profile_path(args.name)
         was = None
-        if _profile_path(args.name).exists():
+        if path.exists():
             try:
-                was = len(_load_profile(args.name).get("skills", {}))
-            except BoostError:
+                was = len(json.loads(path.read_text(encoding="utf-8")).get("skills", {}))
+            except (json.JSONDecodeError, OSError):
                 was = None   # unreadable old profile: still fine to replace
         profile = {"name": args.name, "saved": util.now_iso(), "user": util.user(),
                    "skills": {n: {"tap": e.get("tap", "local"),
                                   "version": e.get("version", "0.0.0")}
                               for n, e in installed.items()}}
         paths.ensure_dirs()
-        _profile_path(args.name).write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(profile, indent=2) + "\n", encoding="utf-8")
         journal.log("profile", args.name, op="save", skills=len(installed))
         n_rules = len(lockfile.installed_rules())
         n_workflows = len(lockfile.installed_workflows())
@@ -399,7 +405,8 @@ def cmd_profile(argv) -> int:
         return 0
 
     if args.action == "delete":
-        if not _profile_path(args.name).exists():
+        path = _profile_path(args.name)
+        if not path.exists():
             raise BoostError("no profile named %s" % args.name,
                             hint="list profiles with `boost profile list`")
         if not out.confirm("delete profile %s?" % args.name, quiet=args.json):
@@ -409,7 +416,7 @@ def cmd_profile(argv) -> int:
                 return 1
             out.info("cancelled")
             return 1
-        _profile_path(args.name).unlink()
+        path.unlink()
         journal.log("profile", args.name, op="delete")
         if args.json:
             print(json.dumps({"name": args.name, "deleted": True}, indent=2))
@@ -774,37 +781,50 @@ def cmd_replay(argv) -> int:
     if mat_diff and not args.json:
         out.warn("not rolled back (rollback restores skills only): %s — "
                  "reinstall or uninstall these by hand" % ", ".join(mat_diff))
-    if not (added or removed or changed):
+
+    # A "removed" skill no tap can resolve will never come back through
+    # _resolve_entry, so counting it as pending work promised a restore that
+    # could never land — and because nothing about that ever changes, every
+    # later run repeated the same warning and still claimed "complete". Split
+    # it out up front: it never gates the confirm prompt below, only whether
+    # there is anything else left to do.
+    resolved = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"))
+               for n in removed}
+    restorable = [n for n in removed if resolved[n] is not None]
+    gone = [n for n in removed if resolved[n] is None]
+
+    if not (added or restorable or changed):
         if args.json:
             print(json.dumps({"id": args.id, "no_changes": True,
+                              "unrestorable": gone,
                               "not_rolled_back": mat_diff}, indent=2))
             return 0
+        for n in gone:
+            out.warn("%s is gone from every tap — cannot restore" % n)
         out.ok("skills already match this snapshot — nothing to do"
                if mat_diff else "already at this snapshot — nothing to do")
         return 0
     if not args.json:
         out.info("rollback to %s will: uninstall %d, install %d, revisit %d version change(s)"
-                 % (args.id, len(added), len(removed), len(changed)))
+                 % (args.id, len(added), len(restorable), len(changed)))
     if not out.confirm("proceed?", quiet=args.json):
         if args.json:
             print(json.dumps({"id": args.id, "cancelled": True}, indent=2))
             return 1
         out.info("cancelled")
         return 1
-    uninstalled, restored, gone, version_diffs = [], [], [], []
+    uninstalled, restored, version_diffs = [], [], []
     for n in added:  # in current, not in snapshot
         store.uninstall(n)
         if not args.json:
             out.ok("uninstalled %s" % n)
         uninstalled.append(n)
-    for n in removed:  # in snapshot, missing now
+    for n in gone:
+        if not args.json:
+            out.warn("%s is gone from every tap — cannot restore" % n)
+    for n in restorable:  # in snapshot, missing now, resolvable
         want = snap_skills[n]
-        entry = _resolve_entry(n, prefer_tap=want.get("tap"))
-        if entry is None:
-            if not args.json:
-                out.warn("%s is gone from every tap — cannot restore" % n)
-            gone.append(n)
-            continue
+        entry = resolved[n]
         res = store.install(entry, force=True)
         if str(entry.get("version")) != str(want.get("version")):
             if not args.json:
@@ -826,7 +846,11 @@ def cmd_replay(argv) -> int:
                           "restored": restored, "unrestorable": gone,
                           "version_diffs": version_diffs,
                           "not_rolled_back": mat_diff}, indent=2))
-        return 0
+        return 1 if gone else 0
+    if gone:
+        out.warn("finished with %d skill%s not restored: %s"
+                 % (len(gone), _s(len(gone)), ", ".join(gone)))
+        return 1
     out.ok("rollback to %s complete" % args.id)
     return 0
 
@@ -866,10 +890,9 @@ def cmd_who(argv) -> int:
         # being installed would contradict `boost list`.
         found = lockfile.find_any(args.skill)
         kind, lk = found if found is not None else (None, None)
-        expertise = ("install", "edit", "evolve", "distill", "tag")
         rows = [(util.rel_time(e.get("ts", "")), e.get("user", "?"),
                  e.get("action", "?"))
-                for e in events if e.get("action") in expertise] or \
+                for e in events if journal.is_expertise_event(e)] or \
                [(util.rel_time(e.get("ts", "")), e.get("user", "?"),
                  e.get("action", "?")) for e in events]
         if args.json:
@@ -893,7 +916,7 @@ def cmd_who(argv) -> int:
         u = users.setdefault(e.get("user", "?"), {
             "events": 0, "skills": set(), "installs": 0, "last": e.get("ts", "")})
         u["events"] += 1
-        if e.get("subject"):
+        if e.get("subject") and journal.is_expertise_event(e):
             u["skills"].add(e["subject"])
         if e.get("action") == "install":
             u["installs"] += 1

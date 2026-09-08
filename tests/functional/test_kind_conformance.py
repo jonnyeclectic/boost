@@ -88,6 +88,7 @@ ALL_CLEAR = (
     ("doctor", ("doctor",),
      ("1 skill present in store with agent links",
       "1 rule and 1 workflow fully materialized")),
+    ("health", ("health",), ("rules", "workflows", "3 in-sync")),
     ("audit", ("audit",),
      ("safety audit — 3 items", "no safety findings across 3 items")),
     ("fingerprint", ("fingerprint", "--verbose"),

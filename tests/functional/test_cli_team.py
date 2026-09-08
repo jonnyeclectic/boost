@@ -466,6 +466,31 @@ class TestProfile:
         assert "broken" in r.out
         assert "unreadable" in r.out
 
+    def test_save_refuses_a_name_with_no_letters_or_digits(self, boost, installed):
+        r = boost("profile", "save", "!!!", expect=1)
+        assert "profile name has no letters or digits" in r.err
+        assert not list(paths.profiles_dir().glob("*.json"))
+
+    def test_save_prints_a_note_when_the_name_is_slugified(self, boost, installed):
+        r = boost("profile", "save", "My Daily")
+        assert "My Daily" in r.out
+        assert "my-daily" in r.out
+        assert (paths.profiles_dir() / "my-daily.json").is_file()
+
+    def test_list_sorts_by_the_displayed_name_not_the_slugged_filename(
+            self, boost, installed):
+        # "Cherry" and "banana" slug to filenames that sort the other way
+        # around (banana.json < cherry.json) — glob order used to leak
+        # through to the table, printing rows in an order that matched
+        # nothing on screen.
+        boost("profile", "save", "banana")
+        boost("profile", "save", "Cherry")
+        r = boost("profile", "list")
+        lines = [ln for ln in r.out.splitlines() if "banana" in ln or "Cherry" in ln]
+        assert len(lines) == 2
+        assert lines[0].strip().startswith("Cherry")
+        assert lines[1].strip().startswith("banana")
+
     def test_delete_removes_a_corrupt_profile_that_show_cannot_read(
             self, boost, sandbox):
         # `show`/`diff` need the content, so they still refuse; `delete` only
@@ -749,6 +774,36 @@ class TestReplay:
         r = boost("replay", "rollback", snap_id)
         assert "brainstorming is gone from every tap — cannot restore" in r.out
 
+    def test_rollback_reports_failure_and_then_converges(self, boost, tapped,
+                                                          tick_clock):
+        # Regression: rollback used to warn "gone from every tap" and then
+        # unconditionally print "rollback ... complete", exit 0 — a false
+        # success — and every later run of the same id repeated exactly that,
+        # forever, since the un-restorable skill could never leave `removed`.
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        boost("install", "cowboy-coding")     # snapshot: {brainstorming, tdd}
+        snap_id = lockfile.history_list()[-1]["id"]
+        boost("uninstall", "brainstorming")
+        boost("uninstall", "tdd-workflow")
+        boost("untap", "fixture-tap", "--force")  # both now unresolvable
+
+        r = boost("replay", "rollback", snap_id, expect=1)
+        assert "uninstalled cowboy-coding" in r.out
+        assert "brainstorming is gone from every tap — cannot restore" in r.out
+        assert "tdd-workflow is gone from every tap — cannot restore" in r.out
+        assert ("finished with 2 skills not restored: "
+                "brainstorming, tdd-workflow") in r.out
+        assert "rollback to %s complete" % snap_id not in r.out
+
+        # Nothing about the missing skills can change on a second run — it
+        # must converge to a stable no-op instead of repeating the attempt
+        # (and the false "complete") indefinitely.
+        r = boost("replay", "rollback", snap_id)
+        assert "brainstorming is gone from every tap — cannot restore" in r.out
+        assert "tdd-workflow is gone from every tap — cannot restore" in r.out
+        assert "already at this snapshot — nothing to do" in r.out
+
     def test_corrupt_snapshot_is_framed_not_raw_and_list_names_it(
             self, boost, tapped, tick_clock):
         # Two installs (no uninstall) is enough to produce one snapshot.
@@ -825,7 +880,7 @@ class TestWho:
         cols = row.split()
         assert cols[0] == USER
         assert cols[1] == "2"   # events: tap + install
-        assert cols[2] == "2"   # distinct subjects
+        assert cols[2] == "1"   # distinct skills — tap isn't expertise
         assert cols[3] == "1"   # installs
         assert "USER" in r.out and "LAST ACTIVE" in r.out
         assert "based on the local journal" in r.out
@@ -836,8 +891,24 @@ class TestWho:
         assert set(data) == {USER}
         assert data[USER]["events"] == 2
         assert data[USER]["installs"] == 1
-        assert data[USER]["skills"] == ["brainstorming", "fixture-tap"]
+        # tap isn't an expertise action, so its subject isn't a "skill"
+        assert data[USER]["skills"] == ["brainstorming"]
         assert data[USER]["last_active"]
+
+    def test_aggregate_skills_excludes_cohort_and_reindex_subjects(
+            self, boost, installed):
+        # Repro from the audit: a cohort name and a reindex summary are
+        # journal subjects but not skills, and must not inflate SKILLS.
+        boost("cohort", "create", "pilot", "--skills", "brainstorming",
+              "--percent", "100")
+        journal.log("reindex", "10152 passages")
+        r = boost("who", "--json")
+        data = json.loads(r.out)
+        assert data[USER]["skills"] == ["brainstorming"]
+        assert data[USER]["events"] == 4   # tap + install + cohort + reindex
+        row = next(l for l in boost("who").out.splitlines()
+                   if l.startswith(USER))
+        assert row.split()[2] == "1"       # SKILLS column agrees
 
     def test_per_skill_view(self, boost, installed):
         r = boost("who", "brainstorming")

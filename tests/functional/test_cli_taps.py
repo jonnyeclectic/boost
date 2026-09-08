@@ -256,8 +256,7 @@ class TestTapCatalog:
 class TestUntap:
     def test_unknown_rc1(self, boost, sandbox):
         r = boost("untap", "nope", expect=1)
-        assert "no such tap: nope" in r.err
-        assert "boost taps" in r.err
+        assert "could not untap nope: no such tap: nope" in r.out
 
     def test_dependents_declined_keeps_tap(self, boost, installed, monkeypatch):
         monkeypatch.delenv("BOOST_ASSUME_YES")
@@ -304,6 +303,37 @@ class TestUntap:
         assert "1 installed item(s) from fixture-tap: house-style (rule)" in r.out
         assert "cancelled" in r.out
         assert "fixture-tap" in boost("taps").out
+
+    def test_several_names_untap_in_one_invocation(self, boost, fixture_tap_src,
+                                                    tmp_path):
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        boost("tap", fixture_tap_src)
+        boost("tap", second)
+        r = boost("untap", "fixture-tap", "second-tap")
+        assert "untapped fixture-tap" in r.out
+        assert "untapped second-tap" in r.out
+        assert json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"] == []
+        assert "no taps configured" in boost("taps").out
+
+    def test_one_unknown_name_does_not_cost_the_others(self, boost, tapped):
+        r = boost("untap", "fixture-tap", "nope", expect=1)
+        assert "untapped fixture-tap" in r.out
+        assert "could not untap nope" in r.out + r.err
+        assert "no such tap: nope" in r.out + r.err
+        assert json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"] == []
+
+    def test_declined_dependent_does_not_cost_a_clean_tap(
+            self, boost, installed, fixture_tap_src, tmp_path, monkeypatch):
+        second = _copy_tap(fixture_tap_src, tmp_path / "second-tap")
+        boost("tap", second)
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("untap", "fixture-tap", "second-tap", expect=1)
+        assert "1 installed item(s) from fixture-tap: brainstorming" in r.out
+        assert "cancelled" in r.out
+        assert "untapped second-tap" in r.out
+        names = [t["name"] for t in
+                 json.loads(paths.config_path().read_text(encoding="utf-8"))["taps"]]
+        assert names == ["fixture-tap"]   # declined tap survives, clean one gone
 
 
 # ── taps ─────────────────────────────────────────────────────────────────
@@ -354,12 +384,29 @@ class TestTaps:
     def test_updated_from_cache_then_unknown(self, boost, tapped):
         util.rmtree(paths.repos_dir() / "fixture-tap")   # clone gone
         r = boost("taps")
-        assert "ago" in r.out                    # cache 'generated' age
+        # Same YYYY-MM-DD shape as a cloned tap's git-log date — not a
+        # relative "Xh ago", which used to be the cache-only format.
+        assert re.search(r"\d{4}-\d{2}-\d{2}", r.out)
+        assert "ago" not in r.out
         assert "1 taps · 5 items" in r.out       # items still from the cache
         (paths.cache_dir() / "fixture-tap.json").unlink()
         r = boost("taps")
         assert "?" in r.out                      # no clone, no cache
         assert "1 taps · 0 items" in r.out
+
+    def test_pinned_footer_hints_boost_update_skips_it(
+            self, boost, fixture_tap_src):
+        from boost_cli.core import gitutil
+        head = gitutil.head_commit(fixture_tap_src)
+        boost("tap", str(fixture_tap_src), "--at", head)
+        r = boost("taps")
+        assert "@%s" % head[:7] in r.out
+        assert "@sha = pinned" in r.out
+        assert "boost update` skips it" in r.out
+
+    def test_no_pinned_footer_when_nothing_pinned(self, boost, tapped):
+        r = boost("taps")
+        assert "@sha = pinned" not in r.out
 
 
 # ── outdated ─────────────────────────────────────────────────────────────
@@ -407,9 +454,40 @@ class TestOutdated:
         boost("import", d)
         assert "everything up to date" in boost("outdated").out
 
-    def test_untapped_source_skipped(self, boost, installed):
+    def test_untapped_source_reported(self, boost, installed):
+        # Untapping the skill's own registry used to make it vanish from
+        # `outdated` silently — a rule in the same state is reported as
+        # "source missing" (see test_source_vanished_marker below), and a
+        # skill should be too rather than being dropped from the table.
         boost("untap", "fixture-tap", "--force")
-        assert "everything up to date" in boost("outdated").out
+        r = boost("outdated")
+        assert "source missing" in r.out
+        assert "1 outdated" in r.out
+        assert "can't restore a deleted tap" in r.out
+        data = json.loads(boost("outdated", "--json").out)
+        assert data == [{"name": "brainstorming", "kind": "skill",
+                         "installed": "1.4.0", "latest": "source missing",
+                         "tap": "fixture-tap", "pinned": False}]
+
+    def test_mixed_footer_splits_upstream_from_source_missing(
+            self, boost, fixture_tap_src, tmp_path):
+        # One row is a real upstream bump (boost update can fix it), the
+        # other's tap is gone (boost update can't) — the footer must not
+        # lump them into one "boost update upgrades" promise.
+        bumped = _copy_tap(fixture_tap_src, tmp_path / "bumped-tap")
+        gone = _copy_tap(fixture_tap_src, tmp_path / "gone-tap")
+        boost("tap", bumped, gone)
+        boost("install", "bumped-tap:brainstorming")
+        boost("install", "gone-tap:jira-integration")
+
+        _bump(bumped, "brainstorming", "1.4.0", "1.5.0")
+        boost("update", "--taps-only")
+        boost("untap", "gone-tap", "--force")
+
+        r = boost("outdated")
+        assert "2 outdated" in r.out
+        assert "1 upstream" in r.out
+        assert "1 source missing" in r.out
 
     def test_content_change_shows_head_commit(self, boost, installed):
         clone = paths.repos_dir() / "fixture-tap"

@@ -222,32 +222,26 @@ def cmd_tap(argv) -> int:
     return rc
 
 
-def cmd_untap(argv) -> int:
-    """boost untap NAME [--force]"""
-    p = cliparse.parser(
-        prog="boost untap",
-        description="Remove a registry tap")
-    p.add_argument("name", help="tap name (owner/repo or short alias)")
-    p.add_argument("-f", "--force", action="store_true",
-                   help="skip the confirmation prompt")
-    p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
-    args = p.parse_args(argv)
+def _untap_one(name: str, force: bool) -> int:
+    """Remove one tap, warning on and confirming past live dependents.
 
-    tap = registry.get(args.name)
-    # All three lock sections: untapping the source of a live CLAUDE.md rule
-    # deserves the same warning as untapping the source of a skill.
-    dependent = [(kind, n)
-                 for kind, section in lockfile.all_installed().items()
-                 for n, e in sorted(section.items())
-                 if e.get("tap") == tap.name]
+    One tap's failure (unknown name, declined confirmation) never costs the
+    rest of a multi-name `untap` its removal, matching `tap`'s own multi-SPEC
+    guarantee that one registry's failure never costs another its clone.
+    """
+    try:
+        tap = registry.get(name)
+    except BoostError as exc:
+        out.warn("could not untap %s: %s" % (name, exc.message))
+        return 1
+    dependent = registry.dependents(tap.name)
     if dependent:
         labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
                   for kind, n in dependent]
         out.warn("%d installed item(s) from %s: %s"
                  % (len(dependent), tap.name, ", ".join(labels)))
         out.warn("installed items keep working but lose their update source")
-        if not (args.force or args.yes) and not out.confirm(
-                "untap %s anyway?" % tap.name):
+        if not force and not out.confirm("untap %s anyway?" % tap.name):
             out.info("cancelled")
             return 1
     registry.remove(tap.name)
@@ -257,8 +251,34 @@ def cmd_untap(argv) -> int:
     return 0
 
 
+def cmd_untap(argv) -> int:
+    """boost untap NAME... [--force]"""
+    p = cliparse.parser(
+        prog="boost untap",
+        description="Remove a registry tap")
+    p.add_argument("name", nargs="+",
+                   help="tap name(s) (owner/repo or short alias) — several "
+                        "at once remove one invocation per tap")
+    p.add_argument("-f", "--force", action="store_true",
+                   help="skip the confirmation prompt")
+    p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
+    args = p.parse_args(argv)
+
+    force = args.force or args.yes
+    rc = 0
+    for name in args.name:
+        rc |= _untap_one(name, force)
+    return rc
+
+
 def _tap_updated(tap: registry.Tap) -> str:
-    """Last-commit date of a tap clone, else the cache's generated age."""
+    """Last-commit date of a tap clone, else the cache's generated date.
+
+    Both branches return the same `YYYY-MM-DD` shape (`util.iso_date`
+    mirrors git's `--date=short`) — the two-format mix this used to produce
+    (git dates for cloned taps, "3h ago" for cache-only ones) is exactly the
+    UPDATED-column inconsistency this function exists to not reintroduce.
+    """
     if tap.is_cloned:
         with suppress(BoostError):
             # --date=short --format=%cd == %cs, but works on git < 2.21 too
@@ -268,7 +288,7 @@ def _tap_updated(tap: registry.Tap) -> str:
                 return proc.stdout.strip()
     try:
         data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
-        return util.rel_time(data.get("generated", ""))
+        return util.iso_date(data.get("generated", ""))
     except (OSError, ValueError):
         return "?"
 
@@ -316,6 +336,8 @@ def cmd_taps(argv) -> int:
               keep=("NAME",))
     print()
     out.dim("%d taps · %d items" % (len(taps), total))
+    if any(t["pin"] for t in taps):
+        out.dim("@sha = pinned; `boost update` skips it")
     return 0
 
 
@@ -336,6 +358,13 @@ def cmd_outdated(argv) -> int:
             continue
         matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
         if not matches:
+            # The tap is untapped, or dropped this entry entirely — same
+            # condition the rule/workflow loop below reports honestly, so a
+            # skill shouldn't just vanish from the table.
+            results.append({"name": name, "kind": "skill",
+                            "installed": str(lk.get("version") or "0.0.0"),
+                            "latest": staleness.OUTDATED_SOURCE_MISSING,
+                            "tap": tap_name, "pinned": bool(lk.get("pinned"))})
             continue
         entry, _warning = catalog.select_lock_source(matches, lk)
         entry = cast(dict, entry)             # matches is non-empty above
@@ -358,7 +387,7 @@ def cmd_outdated(argv) -> int:
                 except BoostError:
                     src_missing = True
         if src_missing:
-            stale, latest_disp = True, "source missing"
+            stale, latest_disp = True, staleness.OUTDATED_SOURCE_MISSING
         else:
             reason = staleness.upstream_reason(
                 installed_v, latest, lk.get("commit", ""), head,
@@ -389,7 +418,8 @@ def cmd_outdated(argv) -> int:
             except (OSError, BoostError):
                 results.append({"name": name, "kind": kind,
                                 "installed": installed_v,
-                                "latest": "source missing", "tap": tap_name,
+                                "latest": staleness.OUTDATED_SOURCE_MISSING,
+                                "tap": tap_name,
                                 "pinned": bool(lk.get("pinned"))})
                 continue
             if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
@@ -416,8 +446,9 @@ def cmd_outdated(argv) -> int:
              r["latest"], r["tap"]) for r in results]
     out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"))
     print()
-    out.dim("%d outdated · `boost update` upgrades (pinned items stay put)"
-            % len(results))
+    source_missing = sum(1 for r in results
+                         if r["latest"] == staleness.OUTDATED_SOURCE_MISSING)
+    out.dim(staleness.outdated_footer(len(results), source_missing))
     return 0
 
 

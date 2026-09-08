@@ -109,9 +109,65 @@ class TestAvailable:
         monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
         assert ai.available() is False
 
-    def test_fallback_note_mentions_both_routes(self):
+    def test_fallback_note_mentions_both_routes_when_no_backend(self, ai_on,
+                                                                 monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
         note = ai.fallback_note()
         assert "claude" in note and "ANTHROPIC_API_KEY" in note
+
+
+class TestUnavailableReason:
+    """The cause-attribution this whole card exists for.
+
+    `fallback_note()`/`_note_fallback()` used to print one static PATH/API-key
+    message no matter which of three causes was true. These pin that the
+    three are distinguishable and that a stale failure never survives past
+    the `ask()` call that produced it.
+    """
+
+    def test_disabled_by_boost_no_ai_names_the_env_var(self, sandbox):
+        assert "BOOST_NO_AI" in ai.unavailable_reason()
+
+    def test_disabled_by_config_names_the_key(self, sandbox, monkeypatch):
+        monkeypatch.delenv("BOOST_NO_AI")
+        config.set_value("ai.enabled", "false")
+        assert "ai.enabled" in ai.unavailable_reason()
+
+    def test_no_backend_never_blames_a_backend_failure(self, ai_on, monkeypatch):
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
+        reason = ai.unavailable_reason()
+        assert "claude" in reason and "ANTHROPIC_API_KEY" in reason
+        assert "boost.log" not in reason
+
+    def test_backend_failure_is_attributed_not_blamed_on_path(self, ai_on,
+                                                               monkeypatch):
+        """The exact bug: PATH/keys blamed while a CLI is right there and ran."""
+        _with_cli(monkeypatch, rc=1, stderr="workspace has not been trusted")
+        assert ai.ask("hi") is None
+        reason = ai.unavailable_reason()
+        assert "need one of" not in reason        # not a PATH/key problem
+        assert "exit 1" in reason
+        assert "workspace has not been trusted" in reason
+        assert "boost.log" in reason
+        note = ai.fallback_note()
+        assert "exit 1" in note and "boost.log" in note
+
+    def test_successful_ask_clears_a_previous_failure(self, ai_on, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stderr="boom")
+        assert ai.ask("hi") is None
+        assert "boom" in ai.unavailable_reason()
+        _with_cli(monkeypatch, rc=0, stdout="ok")
+        assert ai.ask("hi") == "ok"
+        assert "boom" not in ai.unavailable_reason()
+
+    def test_new_failure_replaces_the_old_one(self, ai_on, monkeypatch):
+        _with_cli(monkeypatch, rc=1, stderr="first failure")
+        assert ai.ask("hi") is None
+        assert "first failure" in ai.unavailable_reason()
+        _with_cli(monkeypatch, rc=1, stderr="second failure")
+        assert ai.ask("hi") is None
+        reason = ai.unavailable_reason()
+        assert "second failure" in reason and "first failure" not in reason
 
 
 class TestAskCli:

@@ -157,6 +157,102 @@ class TestCheckInstall:
         assert policy.check_install({}, 0) == []
 
 
+class TestCheckInstalledVersion:
+    """Retrospective require_version, run by `boost policy check` against an
+    already-installed lock entry rather than a catalog entry at install time.
+    """
+
+    def test_off_by_default(self, sandbox):
+        assert policy.check_installed_version({"version": ""}) == []
+
+    def test_missing_or_placeholder_version_violates(self, sandbox):
+        set_policy(require_version=True)
+        msg = "skill has no version (required by policy)"
+        assert policy.check_installed_version({"version": ""}) == [msg]
+        assert policy.check_installed_version({"version": "0.0.0"}) == [msg]
+        assert policy.check_installed_version({"version": None}) == [msg]
+        assert policy.check_installed_version({}) == [msg]
+
+    def test_real_version_allowed(self, sandbox):
+        set_policy(require_version=True)
+        assert policy.check_installed_version({"version": "1.4.0"}) == []
+
+    def test_master_switch_bypasses(self, sandbox):
+        set_policy(require_version=True)
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        assert policy.check_installed_version({"version": ""}) == []
+
+
+class TestCheckInstalledMeta:
+    """Retrospective require_description + denied_capabilities, run against a
+    skill's store copy (frontmatter + body) rather than a catalog entry.
+    """
+
+    def test_off_by_default(self, sandbox):
+        assert policy.check_installed_meta({"description": ""}, "body") == []
+
+    def test_require_description(self, sandbox):
+        set_policy(require_description=True)
+        msg = "skill has no description (required by policy)"
+        assert policy.check_installed_meta({"description": ""}, "b") == [msg]
+        assert policy.check_installed_meta({}, "b") == [msg]
+        assert policy.check_installed_meta(
+            {"description": "does things"}, "b") == []
+
+    def test_folds_in_check_capabilities(self, sandbox):
+        set_policy(denied_capabilities=["network"])
+        v = policy.check_installed_meta(
+            {"description": "x", "capabilities": ["network"]}, "body")
+        assert v == ["declares the 'network' capability, denied by policy"]
+
+    def test_both_checks_accumulate(self, sandbox):
+        set_policy(require_description=True, denied_capabilities=["network"])
+        v = policy.check_installed_meta({"capabilities": ["network"]}, "body")
+        assert v == [
+            "skill has no description (required by policy)",
+            "declares the 'network' capability, denied by policy",
+        ]
+
+    def test_master_switch_bypasses(self, sandbox):
+        set_policy(require_description=True)
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        assert policy.check_installed_meta({"description": ""}, "b") == []
+
+
+class TestMaxSkillsViolation:
+    """The environment-wide max_skills cap, reported once — not once per
+    installed skill, unlike every other check in this module.
+    """
+
+    def test_off_by_default(self, sandbox):
+        assert policy.max_skills_violation(500) is None
+
+    def test_none_means_unlimited(self, sandbox):
+        set_policy(max_skills=None)
+        assert policy.max_skills_violation(10_000) is None
+
+    def test_under_cap_allowed(self, sandbox):
+        set_policy(max_skills=3)
+        assert policy.max_skills_violation(2) is None
+        assert policy.max_skills_violation(3) is None
+
+    def test_over_cap_violates(self, sandbox):
+        set_policy(max_skills=3)
+        assert policy.max_skills_violation(4) == (
+            "max_skills limit (3) exceeded (4 installed)")
+
+    def test_master_switch_bypasses(self, sandbox):
+        set_policy(max_skills=0)
+        cfg = config.load()
+        cfg["policy_enforce"] = False
+        config.save(cfg)
+        assert policy.max_skills_violation(999) is None
+
+
 class TestCheckCapabilities:
     def test_declared_denied_capability_violates(self, sandbox):
         set_policy(denied_capabilities=["network"])

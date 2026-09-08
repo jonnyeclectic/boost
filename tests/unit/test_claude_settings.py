@@ -71,6 +71,30 @@ class TestLoadSave:
         # the returned path is exactly the snapshot just written
         assert dest == hist[0]
 
+    def test_save_is_a_no_op_when_the_content_is_unchanged(self, sandbox):
+        """A re-save of byte-identical content must not snapshot or rewrite.
+
+        The bug this closes: a no-op `boost bmad on` re-serialised the same
+        hooks every run, so `save` snapshotted and rewrote a file that had not
+        actually changed — four burned history slots per no-op run (2 hosts x
+        2 hooks), enough to evict every real snapshot in ~13 re-runs.
+        """
+        cs.save("global", {"model": "opus"})
+        p = cs.settings_path("global")
+        before = p.stat().st_mtime_ns
+        dest = cs.save("global", {"model": "opus"})
+        assert dest is None
+        hist = list((paths.state_dir() / "claude-settings-history").glob("global-*.json"))
+        assert hist == []
+        assert p.stat().st_mtime_ns == before
+
+    def test_save_still_snapshots_when_only_key_order_changes(self, sandbox):
+        """Two dicts that print different JSON must not be treated as equal —
+        this only skips writes whose serialised bytes are identical."""
+        cs.save("global", {"a": 1, "b": 2})
+        dest = cs.save("global", {"b": 2, "a": 1})
+        assert dest is not None
+
     def test_save_snapshots_a_corrupt_prior_file_verbatim(self, sandbox):
         p = cs.settings_path("global")
         p.parent.mkdir(parents=True)

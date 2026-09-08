@@ -90,22 +90,29 @@ class TestEncodingRobustness:
 class TestExactStrings:
     """Kills string-literal mutants in user-facing messages."""
 
-    def test_ai_fallback_note_verbatim(self):
+    def test_ai_fallback_note_verbatim(self, sandbox, monkeypatch):
         # The note names every CLI that would work, built from `aihost`'s
         # table rather than hardcoded: telling a Gemini user to install Claude
         # is a worse answer than saying boost could not find either. Still
         # asserted verbatim, because the point of this class is to kill
-        # string-literal mutants in what the user actually reads.
+        # string-literal mutants in what the user actually reads. Forced into
+        # the "no backend" cause specifically — this machine may have `claude`
+        # on its own PATH (it's running inside one), which `fallback_note()`
+        # now reports honestly instead of always blaming PATH/keys.
+        monkeypatch.delenv("BOOST_NO_AI")
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
         assert ai.fallback_note() == (
-            "AI features need one of `claude` or `gemini` on PATH, or "
+            "AI unavailable — need one of `claude` or `gemini` on PATH, or "
             "ANTHROPIC_API_KEY set — using the heuristic fallback")
 
-    def test_fallback_note_names_every_backend(self):
+    def test_fallback_note_names_every_backend(self, sandbox, monkeypatch):
         """A backend added to the table must appear in the note, not silently.
 
         The verbatim assertion above would still pass if the note were
         hardcoded; this one fails if the sentence stops being derived.
         """
+        monkeypatch.delenv("BOOST_NO_AI")
+        monkeypatch.setattr("boost_cli.core.ai.shutil.which", lambda n: None)
         for name in aihost.backends():
             assert "`%s`" % aihost.cli(name) in ai.fallback_note(), name
 
