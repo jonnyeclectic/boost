@@ -161,7 +161,7 @@ Re-run with `--debug`, then open an issue at
 
 ```bash
 boost doctor      # environment health; reports the log path + any crash reports
-boost health      # skill-environment dashboard
+boost health      # skill/rule/workflow-environment dashboard
 boost heal        # self-diagnose & repair
 ```
 

@@ -38,7 +38,8 @@ def cmd_hooks(argv) -> int:
     p.add_argument("action", choices=("add", "remove", "list"),
                    help="add | remove | list")
     p.add_argument("event", nargs="?",
-                   help="hook event, e.g. SessionStart (required for add)")
+                   help="hook event, e.g. SessionStart "
+                        "(required for add; filters remove/list)")
     p.add_argument("--host", metavar="H", default=None,
                    choices=(*hookhost.hosts(), "auto"),
                    help="agent CLI whose settings.json to manage: %s "
@@ -55,16 +56,22 @@ def cmd_hooks(argv) -> int:
     args = p.parse_args(argv)
 
     if args.action == "list":
-        return _list(args.scope, args.host)
+        return _list(args.scope, args.host, args.event)
     if args.action == "add":
         return _add(args)
     return _remove(args)
 
 
-def _list(scope, host) -> int:
+def _list(scope, host, event=None) -> int:
     rows = cs.list_all_hooks(scope, host=host)
+    if event:
+        # Each row is already tagged with its own host, so filter against
+        # that host's native spelling rather than the one the caller typed —
+        # `hooks list` (no --host) mixes Claude and Gemini rows in one table.
+        rows = [r for r in rows if r["event"] == hookhost.translate(r["host"], event)]
     if not rows:
-        out.info("no boost-managed hooks" + (" in %s scope" % scope if scope else ""))
+        out.info("no boost-managed hooks" + (" in %s scope" % scope if scope else "")
+                 + (" for event '%s'" % event if event else ""))
         return 0
     out.table(
         [(r["host"], r["scope"], r["event"], r["name"], r["matcher"] or "-",

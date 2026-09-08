@@ -2,14 +2,14 @@
 id: audit-replay-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: rollback says "complete" (exit 0) with a skill unrestored, and replans it forever
 order: 288
-owner:
+owner: loop/replay-audit-findings
 pr:
 title: "boost replay: CLI audit findings (2026-08)"
 ---

@@ -146,6 +146,33 @@ class TestWrite:
         lockfile.write({"skills": {"c": {}}})
         assert len(list(paths.lock_history_dir().glob("lock-*.json"))) == 2
 
+    def test_history_stamp_is_the_archived_lock_s_own_updated_time(
+            self, sandbox, monkeypatch):
+        # Regression: the history filename used to be stamped with `now` — the
+        # moment a lock became history, i.e. the NEXT write — rather than the
+        # moment that lock was itself written. `replay list`'s ID (from the
+        # filename) and WHEN (from the content) then named two different
+        # instants, seconds apart, for what looked like one row.
+        times = iter(["2026-01-01T00:00:00Z", "2026-01-01T00:00:04Z"])
+        monkeypatch.setattr("boost_cli.core.util.now_iso", lambda: next(times))
+        lockfile.write({"skills": {"a": {}}})            # updated = :00
+        lockfile.write({"skills": {"a": {}, "b": {}}})    # archives it, "now" = :04
+        snaps = list(paths.lock_history_dir().glob("lock-*.json"))
+        assert [s.name for s in snaps] == ["lock-20260101T000000Z.json"]
+        archived = json.loads(snaps[0].read_text(encoding="utf-8"))
+        assert archived["updated"] == "2026-01-01T00:00:00Z"
+
+    def test_history_stamp_falls_back_to_now_without_a_readable_updated(
+            self, sandbox, monkeypatch):
+        paths.ensure_dirs()
+        paths.lockfile_path().write_text(
+            json.dumps({"skills": {}}), encoding="utf-8")  # no "updated" key
+        monkeypatch.setattr("boost_cli.core.util.now_iso",
+                            lambda: "2026-05-05T05:05:05Z")
+        lockfile.write({"skills": {"z": {}}})
+        snaps = list(paths.lock_history_dir().glob("lock-*.json"))
+        assert [s.name for s in snaps] == ["lock-20260505T050505Z.json"]
+
 
 class TestPrune:
     def test_prune_55_keeps_50_newest(self, sandbox):

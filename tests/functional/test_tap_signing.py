@@ -99,6 +99,17 @@ def test_trust_remove_unknown_errors(boost):
     boost("trust", "remove", "ghost", expect=1)
 
 
+def test_trust_stray_positionals_are_usage_errors(boost):
+    # `trust list extra1 extra2` used to print the full listing and exit 0,
+    # silently dropping both words.
+    r = boost("trust", "list", "extra1", "extra2", expect=2)
+    assert "trust list takes no NAME/KEY" in r.err
+    r = boost("trust", "remove", "acme", "extra", expect=2)
+    assert "trust remove takes no KEY" in r.err
+    r = boost("trust", "verify", "sometap", "extra", expect=2)
+    assert "trust verify takes no KEY" in r.err
+
+
 # ── provenance verification ──────────────────────────────────────────────
 
 def test_verify_reports_verified_for_trusted_signed_tap(boost, fixture_tap_src,

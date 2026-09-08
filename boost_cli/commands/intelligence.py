@@ -14,6 +14,7 @@ import difflib
 import fnmatch
 import json
 import re
+import shlex
 import sys
 import tempfile
 import textwrap
@@ -213,7 +214,8 @@ def cmd_distill(argv: list[str]) -> int:
         meta, body = frontmatter.parse(text)
         sources.append({"name": name, "origin": origin, "text": text,
                         "meta": meta, "body": body})
-    new = args.output or (names[0] + "-distilled")
+    new = util.resolve_slug(args.output, what="output name") if args.output \
+        else names[0] + "-distilled"
 
     out.heading("distilling %s → %s" % (", ".join(names), new))
     merged = _distill_ai(new, sources) if ai.available() else None
@@ -227,7 +229,9 @@ def cmd_distill(argv: list[str]) -> int:
         dest = Path.cwd() / new / "SKILL.md"
         if not _write_generated(dest, merged, yes=args.yes):
             return 1
-        out.info(out.role("install it with `boost import ./%s`" % new, "muted"))
+        out.info(out.role(
+            "install it with `boost import %s`" % shlex.quote("./" + new),
+            "muted"))
     journal.log("distill", new, sources=names)
     return 0
 
@@ -813,16 +817,23 @@ def _evolve_ai(old: str, old_ver: str, feedback: str) -> str | None:
 
 
 def _evolve_append(old: str, old_ver: str, feedback: str) -> str:
-    """Heuristic revision: feedback appended as a dated rules section."""
-    meta, body = frontmatter.parse(old)
-    meta["version"] = _bump_patch(old_ver)
+    """Heuristic revision: feedback appended as a dated rules section.
+
+    Splices the bumped ``version`` into the original frontmatter text
+    (`frontmatter.set_field`) rather than parsing to a dict and dumping it
+    back — a parse -> dump round trip rewrites every field through dump's
+    own quoting rules, turning a diff that only bumped the version into one
+    that also silently reformats every other line the feedback never
+    touched.
+    """
+    revised = frontmatter.set_field(old, "version", _bump_patch(old_ver))
+    block, body = frontmatter.split(revised)
     bullets = [s.strip().rstrip(".")
                for s in re.split(r"(?<=[.!?])\s+|\n+|;\s*", feedback)
                if s.strip()]
     section = ("## Feedback (%s)\n\n" % util.now_iso()[:10]
                + "\n".join("- %s." % b for b in bullets))
-    return (frontmatter.dump(meta) + "\n\n" + body.strip()
-            + "\n\n" + section + "\n")
+    return "---\n%s\n---\n\n%s\n\n%s\n" % (block, body.strip(), section)
 
 
 def _print_diff(old: str, new: str) -> None:
@@ -1182,6 +1193,8 @@ def cmd_impact(argv: list[str]) -> int:
             if reply:
                 print()
                 print(textwrap.indent(textwrap.fill(reply, width=76), "  "))
+            else:
+                _note_fallback()
         else:
             _note_fallback()
     out.dim("  " + note)
@@ -1246,6 +1259,11 @@ def _print_reply(reply: chat_engine.Reply, show_sources: bool) -> None:
         # a downgraded answer that looks identical to a confident one.
         out.warn("the AI reply named something outside the retrieved skills — "
                  "showing the grounded matches instead")
+    elif reply.ai_failed:
+        # AI was available and was tried, but the call itself produced
+        # nothing — distinct from never having a backend, and otherwise
+        # indistinguishable from a deliberate extractive answer.
+        out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
 
 
 def cmd_chat(argv: list[str]) -> int:

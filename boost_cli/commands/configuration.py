@@ -77,12 +77,16 @@ def cmd_config(argv) -> int:
     p.add_argument("--json", action="store_true",
                    help="machine-readable output")
     args = p.parse_args(argv)
+    if args.action == "list" and (args.key or args.value is not None):
+        p.error("config list takes no KEY/VALUE")
     if args.action in ("get", "set", "unset") and not args.key:
         raise BoostError("config %s requires a KEY" % args.action,
                         hint="e.g. `boost config %s ai.enabled`" % args.action)
     if args.action == "set" and args.value is None:
         raise BoostError("config set requires a VALUE",
                         hint="e.g. `boost config set ai.enabled false`")
+    if args.action in ("get", "unset") and args.value is not None:
+        p.error("config %s takes no VALUE" % args.action)
 
     if args.action == "list":
         cfg = config.load()
@@ -397,7 +401,7 @@ def cmd_create(argv) -> int:
                    help="install the new skill immediately")
     args = p.parse_args(argv)
 
-    name = util.slugify(args.name)
+    name = util.resolve_slug(args.name)
     parent = paths.expand(args.dir) if args.dir else Path.cwd()
     target = parent / name
     skill_md = target / "SKILL.md"
@@ -476,6 +480,9 @@ def cmd_policy(argv) -> int:
                    help="machine-readable output")
     args = p.parse_args(argv)
 
+    if args.action in ("list", "check") and (args.key or args.value is not None):
+        p.error("policy %s takes no KEY/VALUE" % args.action)
+
     if args.action in ("set", "unset"):
         if not args.key:
             raise BoostError("policy %s requires a KEY" % args.action,
@@ -483,6 +490,8 @@ def cmd_policy(argv) -> int:
         if args.key not in policy.DEFAULTS:
             raise BoostError("unknown policy key %r" % args.key,
                             hint="keys: " + ", ".join(sorted(policy.DEFAULTS)))
+        if args.action == "unset" and args.value is not None:
+            p.error("policy unset takes no VALUE")
 
     if args.action == "list":
         pol = policy.load()
@@ -520,7 +529,9 @@ def cmd_policy(argv) -> int:
     everything = lockfile.all_installed()
     min_score = int(pol.get("min_quality_score") or 0)
     violations = []  # (name, problem)
+    not_checked: set[str] = set()
     total = 0
+    skill_count = len(everything.get("skill", {}))
     for kind, section in everything.items():
         for name, entry in sorted(section.items()):
             total += 1
@@ -532,12 +543,36 @@ def cmd_policy(argv) -> int:
                 violations.append((label, "tap %s is blocked" % tap))
             if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
                 violations.append((label, "tap %s is not on the allowlist" % tap))
+            violations.extend(
+                (label, msg) for msg in policy.check_installed_version(entry))
+            # require_description and denied_capabilities need the item's
+            # own content, which only a skill has on disk (see
+            # store.read_skill_meta) — a rule or workflow lands in a shared
+            # agent file with no per-item body to check.
+            if kind == "skill" and (pol["require_description"] or pol["denied_capabilities"]):
+                meta_body = store.read_skill_meta(name)
+                if meta_body is None:
+                    not_checked.add(
+                        "require_description/denied_capabilities "
+                        "(store copy unreadable)")
+                else:
+                    meta, body = meta_body
+                    violations.extend(
+                        (label, msg)
+                        for msg in policy.check_installed_meta(meta, body))
+            elif kind != "skill" and (pol["require_description"] or pol["denied_capabilities"]):
+                not_checked.add(
+                    "require_description/denied_capabilities for %s items "
+                    "(no on-disk body to check)" % kind)
             # Quality scoring reads a store directory, which only skills have.
             if min_score and kind == "skill":
                 score, _notes = util.score_skill(store.skill_store_dir(name))
                 if score < min_score:
                     violations.append(
                         (label, "quality score %d < required %d" % (score, min_score)))
+    max_skills_msg = policy.max_skills_violation(skill_count)
+    if max_skills_msg:
+        violations.append(("(environment)", max_skills_msg))
     unpinned = sorted(
         n if k == "skill" else "%s (%s)" % (n, k)
         for k, section in everything.items()
@@ -551,6 +586,8 @@ def cmd_policy(argv) -> int:
                else ", ".join("%d %s%s" % (n, kind, _s(n))
                               for kind, n in counts.items()))
 
+    enforce = config.get("policy_enforce", True)
+
     if args.json:
         print(json.dumps({
             # "skills" keeps its original meaning — the skill count — with the
@@ -561,14 +598,23 @@ def cmd_policy(argv) -> int:
             "violations": [{"skill": s, "violation": v} for s, v in violations],
             "pin_only": bool(pol["pin_only"]),
             "unpinned": unpinned if pol["pin_only"] else [],
+            "enforce": enforce,
+            "not_checked": sorted(not_checked),
         }, indent=2))
         return 1 if violations else 0
 
     _warn_invalid_policy_values()
+    if not enforce:
+        out.warn("policy_enforce is off — `boost install` does not enforce "
+                 "any of the rules below; this report names what would be "
+                 "flagged, not what is currently blocked")
     if pol["pin_only"]:
-        out.info("pin-only mode is on — installs/updates are frozen"
+        out.info("pin-only mode is on — new installs and skill updates are "
+                 "frozen (tap refreshes via `boost update` are unaffected)"
                  + (" (%d unpinned item(s): %s)"
                     % (len(unpinned), ", ".join(unpinned)) if unpinned else ""))
+    for note in sorted(not_checked):
+        out.dim("  not checked: %s" % note)
     if violations:
         out.table(violations, headers=("ITEM", "VIOLATION"))
         print()
@@ -815,6 +861,17 @@ def cmd_completions(argv) -> int:
 
     detected = args.shell or Path(os.environ.get("SHELL", "")).name
 
+    # Fixed once, here, rather than in each branch below: an empty $SHELL
+    # used to fall through silently to the bash script (print path) or to
+    # `_rc_path("")`'s confusing "no one-shot install for  yet" (install
+    # path) — neither ever told the user *why*. Raising here means every
+    # path downstream — print, --install, --uninstall, --dry-run — sees the
+    # same clear error instead of reinventing it.
+    if not detected:
+        raise BoostError(
+            "cannot detect your shell ($SHELL unset)",
+            hint="pass bash, zsh or fish, e.g. `boost completions bash`")
+
     if args.dry_run and not (args.install or args.uninstall):
         p.error("--dry-run qualifies --install or --uninstall; "
                 "pass one of them")
@@ -843,6 +900,15 @@ def cmd_completions(argv) -> int:
         return 0
 
     shell = detected if detected in ("bash", "zsh", "fish") else "bash"
+    if shell != detected:
+        # A real shell boost has no script for (e.g. nu, xonsh) — silently
+        # substituting bash used to look like success while handing the user
+        # a script their shell cannot source. stderr, not stdout: stdout here
+        # is the completion script itself (piped to a file or `eval`'d), and
+        # a warning line mixed into it would corrupt both uses.
+        out.warn("%s is not a supported shell (bash, zsh, fish) — showing "
+                 "bash's completion script instead" % detected,
+                 stream=sys.stderr)
     # The script is a thin shim that calls `boost __complete`; the candidate
     # rules live in core/complete.py so all three shells share one tested
     # implementation instead of three hand-maintained static lists.
@@ -932,6 +998,21 @@ def _interval_label(seconds) -> str:
     return "%ss" % seconds
 
 
+def _plist_interval_seconds(text: str) -> int | None:
+    """Parse a usable ``StartInterval`` out of plist ``text``.
+
+    None for both "no ``StartInterval`` key" and "``StartInterval`` present
+    but not positive" — a zero or negative interval can never fire, and
+    treating it as usable is what let the next-run loop in ``cmd_schedule``
+    spin forever advancing ``nxt`` by zero seconds each pass.
+    """
+    m = re.search(r"<key>StartInterval</key>\s*<integer>(-?\d+)</integer>", text)
+    if not m:
+        return None
+    secs = int(m.group(1))
+    return secs if secs > 0 else None
+
+
 def cmd_schedule(argv) -> int:
     """boost schedule [status|enable [--interval 6h|12h|daily]|disable]"""
     p = cliparse.parser(
@@ -940,11 +1021,13 @@ def cmd_schedule(argv) -> int:
     p.add_argument("action", nargs="?", default="status",
                    choices=("status", "enable", "disable"),
                    help="what to do (default: status)")
-    p.add_argument("--interval", choices=tuple(_INTERVALS), default="6h",
-                   help="how often to run `boost update` (default: 6h)")
+    p.add_argument("--interval", choices=tuple(_INTERVALS), default=None,
+                   help="how often to run `boost update` (default: 6h; enable only)")
     p.add_argument("--json", action="store_true",
                    help="machine-readable output (status only)")
     args = p.parse_args(argv)
+    if args.interval is not None and args.action != "enable":
+        p.error("--interval only applies to `schedule enable`")
 
     darwin = sys.platform == "darwin"
     shim = paths.launcher()
@@ -955,10 +1038,8 @@ def cmd_schedule(argv) -> int:
             plist = _plist_path()
             if plist.exists():
                 present = True
-                m = re.search(r"<key>StartInterval</key>\s*<integer>(\d+)</integer>",
-                              plist.read_text(encoding="utf-8"))
-                if m:
-                    secs = int(m.group(1))
+                secs = _plist_interval_seconds(plist.read_text(encoding="utf-8"))
+                if secs is not None:
                     interval = _interval_label(secs)
                     nxt = datetime.fromtimestamp(plist.stat().st_mtime + secs)
                     while nxt < datetime.now():
@@ -985,7 +1066,8 @@ def cmd_schedule(argv) -> int:
         out.kv("platform", "%s (%s)" % (sys.platform, "launchd" if darwin else "cron"))
         out.kv("scheduled", "yes" if present else "no")
         if present:
-            out.kv("interval", "every %s" % interval)
+            out.kv("interval", "every %s" % interval if interval is not None
+                   else "unknown (plist has no usable StartInterval)")
             out.kv("next run", next_run.strftime("%Y-%m-%d %H:%M (approx)")
                    if next_run else "unknown")
         else:
@@ -993,6 +1075,7 @@ def cmd_schedule(argv) -> int:
         return 0
 
     if args.action == "enable":
+        args.interval = args.interval or "6h"
         seconds = _INTERVALS[args.interval]
         paths.ensure_dirs()
         if darwin:

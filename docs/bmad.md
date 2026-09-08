@@ -92,6 +92,13 @@ contents, so the moment you edit one it stops being boost's. `boost bmad on`
 reports it as kept rather than overwriting it, and `boost bmad off` leaves it
 alone. Delete the file if you want the stock version back.
 
+`boost bmad personas` and `boost bmad doctor` report each persona as one of
+three states: **installed** (boost's stock file, unedited), **installed
+(edited)** (still on disk, still loaded by Claude Code, but no longer boost's
+to overwrite or delete once you have changed it), or **not installed** (no
+file at all). Persona *counts* — the number `bmad on` and `doctor` report —
+include edited files too: they are real, working subagents either way.
+
 ### Which hosts get the hooks
 
 `boost bmad on` writes its two hooks into every host it has evidence you use,

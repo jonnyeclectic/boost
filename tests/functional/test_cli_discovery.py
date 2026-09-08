@@ -249,6 +249,77 @@ class TestSearch:
         # junk reply → keep the base BM25 order (tdd-workflow ranks first)
         assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
         assert "ranked by full-content BM25" in r.out
+        # Previously silent: AI was available and was tried, but produced
+        # nothing usable — indistinguishable from a deliberate BM25-only run.
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+
+    def test_smart_with_a_failed_ai_call_still_warns(self, boost, tapped,
+                                                      monkeypatch):
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: None)
+        r = boost("search", "workflow", "--smart")
+        assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
+        assert "ranked by full-content BM25" in r.out
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+
+    def test_json_carries_a_ranker_field(self, boost, tapped):
+        # `--json` used to drop the ranker entirely — a script had no way to
+        # tell BM25 from a Claude rerank without parsing the human footer.
+        r = boost("search", "brainstorming", "--json")
+        data = json.loads(r.out)
+        assert data[0]["ranker"] == "full-content BM25"
+
+    def test_json_smart_reranks_before_printing(self, boost, tapped,
+                                                monkeypatch):
+        # `--json --smart` used to be byte-identical to `--json` alone: the
+        # JSON branch returned before the --smart rerank ever ran.
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask",
+                            lambda *a, **k: '["jira-integration", "tdd-workflow"]')
+        r = boost("search", "workflow", "--json", "--smart")
+        data = json.loads(r.out)
+        assert [e["name"] for e in data] == ["jira-integration", "tdd-workflow"]
+        assert data[0]["ranker"] == "Claude Haiku relevance"
+
+    def test_json_smart_without_ai_warns_but_stdout_stays_valid_json(
+            self, boost, tapped):
+        # BOOST_NO_AI=1 (the sandbox default): --smart can't rerank, so it
+        # must say so on stderr while stdout stays one clean JSON document —
+        # a script reading stdout must still learn --smart silently did
+        # nothing, without that warning corrupting the JSON it parses.
+        r = boost("search", "brainstorming", "--json", "--smart")
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+        data = json.loads(r.out)
+        assert r.out.count("\n") == 1
+        assert data[0]["name"] == "brainstorming"
+        assert data[0]["ranker"] == "full-content BM25"
+
+    def test_json_on_empty_results_is_an_empty_array(self, boost, tapped):
+        r = boost("search", "zzzznothing", "--json")
+        assert json.loads(r.out) == []
+        # No human empty-state line either — --json stays pure.
+        assert "no matches" not in r.out
+
+    def test_footer_says_top_of_cap_when_retrieval_saturates(
+            self, boost, tapped, monkeypatch):
+        # The footer used to report the retrieval cap (`max(60, limit*4)`) as
+        # though it were the true match count. Force retrieval to return
+        # exactly the cap so the wording must say "top N of K+", not a count
+        # that reads as exact but is an artifact of the cap.
+        from boost_cli.core import rag
+
+        def fake_retrieve_any(query, k=60, **kwargs):
+            hits = [{"entry": {"name": "skill-%d" % i, "description": "d",
+                               "kind": "skill", "tap": "fixture-tap"},
+                     "score": 1.0, "content": None, "snippet": ""}
+                    for i in range(k)]
+            return hits, "BM25 full-content"
+        monkeypatch.setattr(rag, "retrieve_any", fake_retrieve_any)
+        r = boost("search", "anything", "--limit", "1")
+        assert "top 1 of 60+ retrieved · ranked by full-content BM25" in r.out
+        assert "matches ·" not in r.out
 
     def test_index_build_failure_degrades_to_heuristic(self, boost, tapped,
                                                        monkeypatch):
@@ -449,6 +520,79 @@ class TestIndex:
         monkeypatch.setattr("boost_cli.commands.discovery.subprocess.run", boom)
         r = boost("index", expect=1)
         assert "gh api timed out on page 1" in r.err
+
+    def test_rate_limited_gh_gets_a_boost_native_hint(self, boost, sandbox,
+                                                       monkeypatch):
+        # gh's own rate-limit failure is multi-line prose plus a JSON blob —
+        # this must not reach the user verbatim as the error hint.
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        raw = ('gh: API rate limit exceeded for your IP.\n'
+               '{"message": "API rate limit exceeded"}')
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=1, stdout="", stderr=raw))
+        r = boost("index", expect=1)
+        assert "GitHub code search failed" in r.err
+        assert ("GitHub rate limit hit — wait a minute or authenticate: "
+                "`gh auth login` / GH_TOKEN") in r.err
+        assert "API rate limit exceeded" not in r.err
+
+    def test_zero_results_keeps_the_previous_index(self, boost, sandbox,
+                                                    monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page(
+                    [_gh_item("octo/skills", "a/SKILL.md"),
+                     _gh_item("acme/pack", "b/SKILL.md")])))
+        boost("index", "--limit", "100")
+        before = (paths.cache_dir() / "discovery.json").read_text(encoding="utf-8")
+
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page([], total=0)))
+        r = boost("index", "zzzznomatch")
+        assert ("no SKILL.md files match zzzznomatch — keeping the "
+                "previous index of 2 entries") in r.out
+        assert "indexed" not in r.out
+        after = (paths.cache_dir() / "discovery.json").read_text(encoding="utf-8")
+        assert after == before   # untouched, not rewritten with 0 items
+
+    def test_zero_results_with_no_prior_index_still_writes_one(self, boost,
+                                                                sandbox,
+                                                                monkeypatch):
+        # No discovery.json exists yet, so there is nothing to lose — an
+        # empty index is still written rather than reporting "keeping" one
+        # that was never there.
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page([], total=0)))
+        r = boost("index", "zzzznomatch")
+        assert "indexed 0 skill files across 0 repos" in r.out
+        data = json.loads((paths.cache_dir() / "discovery.json").read_text(encoding="utf-8"))
+        assert data["items"] == []
+
+    def test_progress_bar_is_cleared_before_a_failure(self, boost, sandbox,
+                                                       monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=1, stdout="", stderr="boom"))
+        cleared = []
+        monkeypatch.setattr("boost_cli.commands.discovery.spin.progress_clear",
+                            lambda *a, **kw: cleared.append(True))
+        boost("index", expect=1)
+        assert cleared == [True]
 
 
 class TestGithubSkillSearch:
@@ -1022,7 +1166,53 @@ class TestBrowse:
         for name in ("brainstorming", "commit-messages", "cowboy-coding",
                      "jira-integration", "tdd-workflow"):
             assert name in r.out
-        assert "5 skills · install with `boost install <name>`" in r.out
+        assert "5 items: 5 skills · install with `boost install <name>`" in r.out
+        assert "narrow with `boost search <query>`" in r.out
+        # every fixture entry is a skill and none are curated: the kind
+        # column carries the (redundant but honest) [skill] badge, and the
+        # curated column is dropped rather than rendered as an empty header.
+        assert "[skill]" in r.out
+        assert "★" not in r.out
+
+    def test_non_tty_dedupes_mirrored_rows(self, boost, tapped, monkeypatch):
+        # A registry rendering one skill into multiple agent dirs used to list
+        # every mirror in the plain fallback with nothing to tell them apart.
+        from boost_cli.core import catalog
+        entries = catalog.all_entries()
+        mirror = dict(entries[0])
+        monkeypatch.setattr(catalog, "all_entries", lambda: [*entries, mirror])
+        r = boost("browse")
+        assert r.out.count(mirror["name"]) == 1
+
+    def test_non_tty_shows_curated_column_when_curated(self, boost, tapped, monkeypatch):
+        from boost_cli.core import catalog
+        entries = catalog.all_entries()
+        entries[0]["curated"] = True
+        monkeypatch.setattr(catalog, "all_entries", lambda: entries)
+        r = boost("browse")
+        assert "★" in r.out
+
+    def test_curses_init_failure_falls_back_to_plain(self, boost, tapped, monkeypatch):
+        # An fd that claims isatty() but isn't a real pty (IDE consoles,
+        # `script`, TERM=dumb) can fail deep inside curses.wrapper rather than
+        # at the isatty() check — regression: this used to crash with an
+        # "unexpected error" and leave the terminal in raw mode.
+        if not _curses_available():
+            pytest.skip("curses not available on this platform")
+        import curses as real_curses
+
+        from boost_cli.commands import discovery
+        tty = types.SimpleNamespace(isatty=lambda: True)
+        monkeypatch.setattr(discovery, "sys",
+                            types.SimpleNamespace(stdin=tty, stdout=tty))
+
+        def boom(curses, entries):
+            raise real_curses.error("nocbreak() returned ERR")
+
+        monkeypatch.setattr(discovery, "_browse_tui", boom)
+        r = boost("browse")
+        assert "the terminal does not support curses (nocbreak() returned ERR)" in r.out
+        assert "showing the full catalog" in r.out
 
     def test_no_skills(self, boost, sandbox):
         r = boost("browse", expect=1)

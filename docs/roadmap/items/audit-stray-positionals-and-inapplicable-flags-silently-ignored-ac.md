@@ -2,15 +2,15 @@
 id: audit-stray-positionals-and-inapplicable-flags-silently-ignored-ac
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: import --all --name X imports everything; config get KEY VALUE reads as a confirmed set
 order: 238
-owner:
-pr:
+owner: loop/stray-positionals
+pr: 809
 title: "Stray positionals and inapplicable flags silently ignored across <code>import</code>, <code>config</code>, <code>policy</code>, <code>trust</code>, <code>log</code>, <code>schedule</code>, <code>hooks</code>, <code>snapshot</code>"
 ---
 An argparse hygiene gap, uniform across eight commands: optional positionals swallow words the

@@ -18,7 +18,7 @@ Feature: boost browse
     And the output should contain "interactive mode needs a TTY — showing the full catalog"
     And the output should contain "brainstorming"
     And the output should contain "commit-messages"
-    And the output should contain "5 skills · install with `boost install <name>`"
+    And the output should contain "5 items: 5 skills · install with `boost install <name>`"
 
   Scenario: --help documents the command without touching the catalog
     When I run "boost browse --help"

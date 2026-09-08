@@ -80,3 +80,19 @@ def progress(current: int, total: int, label: str = "", stream=None) -> None:
     if current >= total:
         s.write("\r" + " " * out.visible_len(line) + "\r")
     s.flush()
+
+
+def progress_clear(stream=None) -> None:
+    """Erase whatever :func:`progress` last drew on this stream.
+
+    A caller that exits a progress loop early — an error mid-build, a warning
+    on a failed page — doesn't know the exact width of the line it drew last,
+    so this blanks a full terminal width rather than reconstructing it. Silent
+    under the same conditions :func:`progress` is, so it's safe to call
+    unconditionally before a raise or a warning that follows a progress loop.
+    """
+    s = stream if stream is not None else sys.stderr
+    if not (out.color_level(s) > 0 and hasattr(s, "isatty") and s.isatty()):
+        return
+    s.write("\r" + " " * out.term_width() + "\r")
+    s.flush()

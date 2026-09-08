@@ -206,6 +206,179 @@ class TestInstalledAndTapSources:
             "aaa/repo", "zzz/repo"]
 
 
+class TestPositionalChoices:
+    """Positional `choices=(...)` tuples now complete too — the hole the
+    2026-08 CLI audit found: `boost policy set <TAB>` offered nothing even
+    though only `policy.DEFAULTS` keys are valid there. See
+    docs/roadmap/items/audit-completions-findings.md, cluster
+    completions-choices.
+    """
+
+    def test_first_word_of_a_subcommand_offers_its_literal_actions(self, sandbox):
+        # `policy`'s own action positional (`choices=("list", "set", "unset",
+        # "check")`) is scraped the same way `_flags_for` scrapes flags.
+        got = complete.candidates(["boost", "policy", ""], COMMANDS)
+        assert set(got) == {"list", "set", "unset", "check"}
+
+    def test_a_prefix_narrows_the_action_words(self, sandbox):
+        got = complete.candidates(["boost", "policy", "s"], COMMANDS)
+        assert set(got) == {"set"}
+
+    def test_config_offers_its_own_actions(self, sandbox):
+        got = complete.candidates(["boost", "config", ""], COMMANDS)
+        assert set(got) == {"list", "get", "set", "unset"}
+
+    def test_policy_set_offers_policy_default_keys(self, sandbox):
+        from boost_cli.core import policy
+        got = complete.candidates(["boost", "policy", "set", ""], COMMANDS)
+        assert set(got) == set(policy.DEFAULTS)
+
+    def test_policy_unset_offers_the_same_keys_as_set(self, sandbox):
+        from boost_cli.core import policy
+        got = complete.candidates(["boost", "policy", "unset", ""], COMMANDS)
+        assert set(got) == set(policy.DEFAULTS)
+
+    def test_policy_list_does_not_offer_keys(self, sandbox):
+        # Only `set`/`unset` take a KEY; `list` and `check` take nothing more.
+        assert complete.candidates(["boost", "policy", "list", ""], COMMANDS) == []
+
+    def test_policy_set_key_prefix_narrows(self, sandbox):
+        got = complete.candidates(["boost", "policy", "set", "pin"], COMMANDS)
+        assert got == ["pin_only"]
+
+    def test_policy_set_value_position_offers_nothing(self, sandbox):
+        # The VALUE (position 2) is never a static choice — no guessing.
+        got = complete.candidates(
+            ["boost", "policy", "set", "pin_only", ""], COMMANDS)
+        assert got == []
+
+    def test_config_set_offers_dotted_default_keys(self, sandbox):
+        got = complete.candidates(["boost", "config", "set", ""], COMMANDS)
+        assert "policy_enforce" in got
+        assert "ai.enabled" in got
+        # Only leaf keys — a section by itself is not a settable key.
+        assert "agents" not in got
+        assert "ai" not in got
+
+    def test_config_get_and_unset_offer_the_same_keys_as_set(self, sandbox):
+        set_keys = set(complete.candidates(["boost", "config", "set", ""], COMMANDS))
+        get_keys = set(complete.candidates(["boost", "config", "get", ""], COMMANDS))
+        unset_keys = set(complete.candidates(["boost", "config", "unset", ""], COMMANDS))
+        assert set_keys == get_keys == unset_keys
+        assert set_keys       # not vacuously equal
+
+    def test_config_list_does_not_offer_keys(self, sandbox):
+        assert complete.candidates(["boost", "config", "list", ""], COMMANDS) == []
+
+    def test_hooks_offers_its_actions_but_not_the_free_text_event(self, sandbox):
+        assert set(complete.candidates(["boost", "hooks", ""], COMMANDS)) == \
+            {"add", "remove", "list"}
+        # `event` (position 1) has no `choices=` at all — degrades to nothing
+        # rather than guessing at event names.
+        assert complete.candidates(["boost", "hooks", "add", ""], COMMANDS) == []
+
+    def test_a_non_literal_choices_source_offers_nothing(self, sandbox):
+        # bmad's action choices are `choices=_ACTIONS` — a name, not a tuple
+        # literal in the call itself. Resolving it would mean evaluating
+        # arbitrary module globals; degrading to nothing is the safe call.
+        assert complete.candidates(["boost", "bmad", ""], COMMANDS) == []
+
+    def test_an_unknown_command_offers_no_positional_choices(self, sandbox):
+        assert complete.candidates(["boost", "nosuchcommand", ""], COMMANDS) == []
+
+    def test_install_still_offers_the_catalogue_at_any_position(self, sandbox):
+        # The whole-command dynamic sources (catalog/installed/tap) stay
+        # position-independent: `install` takes a variadic list of names.
+        _tap("t", ["brainstorming", "code-reviewer"])
+        first = complete.candidates(["boost", "install", ""], COMMANDS)
+        second = complete.candidates(
+            ["boost", "install", "brainstorming", ""], COMMANDS)
+        assert first == second == ["brainstorming", "code-reviewer"]
+
+    def test_a_choices_scrape_that_explodes_is_swallowed(self, sandbox, monkeypatch):
+        monkeypatch.setattr(complete, "_positional_choices",
+                             lambda src: (_ for _ in ()).throw(RuntimeError("boom")))
+        assert complete.candidates(["boost", "policy", ""], COMMANDS) == []
+
+
+class TestPositionalChoicesHelpers:
+    """Direct coverage of the scraping helpers, independent of a real
+    command's source — pins the exact literal-vs-dynamic boundary.
+    """
+
+    def test_a_literal_tuple_is_read(self):
+        assert complete._literal_choices('choices=("a", "b")') == ["a", "b"]
+
+    def test_a_literal_list_is_read(self):
+        assert complete._literal_choices('choices=["a", "b"]') == ["a", "b"]
+
+    def test_a_bare_name_is_dynamic(self):
+        assert complete._literal_choices("choices=_ACTIONS") is None
+
+    def test_a_dotted_attribute_is_dynamic(self):
+        assert complete._literal_choices("choices=cs.SCOPES") is None
+
+    def test_a_call_is_dynamic(self):
+        assert complete._literal_choices("choices=tuple(_INTERVALS)") is None
+
+    def test_a_starred_call_is_dynamic(self):
+        assert complete._literal_choices(
+            'choices=(*hookhost.hosts(), "auto")') is None
+
+    def test_an_empty_tuple_is_not_offered(self):
+        # Vacuous choices are indistinguishable from "no choices given" here;
+        # both mean nothing to complete.
+        assert complete._literal_choices("choices=()") is None
+
+    def test_a_non_choices_kwarg_is_not_matched(self):
+        assert complete._literal_choices('default="list"') is None
+
+    def test_positional_choices_skips_flags(self):
+        src = ('def cmd_x(argv):\n'
+               '    p.add_argument("--json", action="store_true")\n'
+               '    p.add_argument("action", choices=("a", "b"))\n')
+        assert complete._positional_choices(src) == [["a", "b"]]
+
+    def test_positional_choices_none_for_a_choiceless_positional(self):
+        src = 'def cmd_x(argv):\n    p.add_argument("name", help="a name")\n'
+        assert complete._positional_choices(src) == [None]
+
+    def test_positional_choices_preserves_declaration_order(self):
+        src = ('def cmd_x(argv):\n'
+               '    p.add_argument("action", choices=("set", "get"))\n'
+               '    p.add_argument("key", help="k")\n')
+        assert complete._positional_choices(src) == [["set", "get"], None]
+
+    def test_a_comma_inside_a_quoted_help_string_does_not_split_the_call(self):
+        # Real source: `help="dotted key, e.g. ai.enabled"` — the comma there
+        # must not be mistaken for the boundary between add_argument's args.
+        src = ('def cmd_x(argv):\n'
+               '    p.add_argument("key", nargs="?", '
+               'help="dotted key, e.g. ai.enabled")\n')
+        assert complete._positional_choices(src) == [None]
+
+    def test_dotted_keys_flattens_nested_dicts(self):
+        node = {"a": {"b": 1, "c": {"d": 2}}, "e": []}
+        assert sorted(complete._dotted_keys(node)) == ["a.b", "a.c.d", "e"]
+
+    def test_dotted_keys_of_an_empty_dict_is_empty(self):
+        assert complete._dotted_keys({}) == []
+
+    def test_a_flag_spelling_is_not_a_positional_literal(self):
+        assert complete._is_positional_literal('"--json"') is False
+        assert complete._is_positional_literal('"-s"') is False
+
+    def test_a_quoted_name_is_a_positional_literal(self):
+        assert complete._is_positional_literal('"action"') is True
+        assert complete._is_positional_literal("'action'") is True
+
+    def test_an_unquoted_token_is_not_a_positional_literal(self):
+        assert complete._is_positional_literal("action") is False
+
+    def test_choices_of_none_is_not_offered(self):
+        assert complete._literal_choices("choices=None") is None
+
+
 class TestFlagLookupDegrades:
     """Every branch returns [] rather than raising — it runs on a keystroke."""
 

@@ -2,15 +2,15 @@
 id: audit-outdated-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: an untapped skill vanishes from outdated; the same untapped rule shows "source missing"
 order: 278
-owner:
-pr:
+owner: loop/outdated-untapped-skill
+pr: 748
 title: "boost outdated: CLI audit findings (2026-08)"
 ---
 <code>boost outdated</code> handles the same condition two ways depending on item kind. With the skill
