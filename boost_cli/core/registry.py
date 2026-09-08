@@ -526,69 +526,121 @@ def update(name: str | None = None,
 
     This mirrors what the skill-update loop in ``cmd_update`` already does — warn
     per item and carry on. The tap loop was the one place that did not.
+
+    Pulls run concurrently (mirroring :func:`add_many`'s clone pool) — a pull
+    is latency, not CPU, so a plain sweep over dozens of already-current taps
+    used to cost one network round trip per tap, serially.
     """
     targets = [get(name)] if name else list_taps()
     results: dict = {}
     failures: dict = {}
-    for tap in targets:
-        try:
-            if tap.url.startswith(WHEEL_SCHEME):
-                # boost's own tap arrives with the wheel, so there is no remote
-                # to pull and the files are re-copied from package data. Git
-                # was reached for anyway, against a directory with no .git —
-                # `is_cloned` is false, so the *clone* branch handed
-                # `builtin:boost` to git as a URL. It failed on every run, and
-                # because every downstream loop skips a tap that is not in
-                # `results`, a revised built-in rule could never reach a
-                # machine that already had it. Imported here rather than at
-                # module scope: `builtin` imports this module.
-                from . import builtin
-                builtin.ensure_tap()
-                results[tap.name] = "refreshed from the installed package"
-            elif not tap.is_cloned:
-                # A missing clone has nothing to hold still, so a pin here is
-                # a target to land on rather than a reason to skip — skipping
-                # used to report "pinned … (skipped)" while leaving nothing on
-                # disk at all. `force` means "stop holding this tap still", so
-                # it clones at HEAD and drops the pin instead.
-                gitutil.clone_shallow(tap.url, tap.path)
-                if tap.pin and not force:
-                    try:
-                        gitutil.checkout_commit(tap.path, tap.pin)
-                    except BoostError:
-                        # A pin that cannot be honoured must not leave a tap
-                        # on HEAD with a stale pin recorded beside it — the
-                        # next sweep would read `is_cloned` true and quietly
-                        # "skip" a tree that was never checked out.
-                        util.rmtree(tap.path)
-                        raise
-                    results[tap.name] = "cloned at %s" % tap.pin[:7]
+
+    def work(tap: Tap) -> tuple[str, bool]:
+        """Do the git work for one tap. Returns ``(summary, clear_pin)`` —
+        ``clear_pin`` is true when ``force`` moved a previously pinned tap and
+        its pin must be dropped. That drop is *reported* here but not *done*
+        here: dropping a pin is a `config.json` read-modify-write, and doing
+        it from a pool worker — once per tap — would race the same way
+        concurrent `registry.add` calls do (see `add_many`'s own single-write
+        comment). The caller collects every tap that needs one and clears
+        them all in one write after the pool finishes.
+        """
+        if tap.url.startswith(WHEEL_SCHEME):
+            # boost's own tap arrives with the wheel, so there is no remote
+            # to pull and the files are re-copied from package data. Git
+            # was reached for anyway, against a directory with no .git —
+            # `is_cloned` is false, so the *clone* branch handed
+            # `builtin:boost` to git as a URL. It failed on every run, and
+            # because every downstream loop skips a tap that is not in
+            # `results`, a revised built-in rule could never reach a
+            # machine that already had it. Imported here rather than at
+            # module scope: `builtin` imports this module.
+            from . import builtin
+            builtin.ensure_tap()
+            return "refreshed from the installed package", False
+        elif not tap.is_cloned:
+            # A missing clone has nothing to hold still, so a pin here is
+            # a target to land on rather than a reason to skip — skipping
+            # used to report "pinned … (skipped)" while leaving nothing on
+            # disk at all. `force` means "stop holding this tap still", so
+            # it clones at HEAD and drops the pin instead.
+            gitutil.clone_shallow(tap.url, tap.path)
+            if tap.pin and not force:
+                try:
+                    gitutil.checkout_commit(tap.path, tap.pin)
+                except BoostError:
+                    # A pin that cannot be honoured must not leave a tap
+                    # on HEAD with a stale pin recorded beside it — the
+                    # next sweep would read `is_cloned` true and quietly
+                    # "skip" a tree that was never checked out.
+                    util.rmtree(tap.path)
+                    raise
+                return "cloned at %s" % tap.pin[:7], False
+            return "cloned", bool(tap.pin)
+        elif tap.pin and not force:
+            # A pinned tap is held at one commit on purpose: prebuilt
+            # vectors are keyed to it, and moving the clone would make
+            # them stale while still present — the failure that looks
+            # like nothing at all. Not an error, because "update
+            # everything" over 400 taps should not fail because three are
+            # pinned.
+            return "pinned at %s (skipped)" % tap.pin[:7], False
+        else:
+            return gitutil.pull(tap.path), bool(tap.pin)
+
+    to_clear: list[str] = []
+
+    def finalize(tap_name: str, summary: str, clear_pin: bool) -> str:
+        if not clear_pin:
+            return summary
+        # `--force` is a decision to stop holding this tap still, so the pin
+        # goes with the move — reported here rather than silently, so a
+        # config that went from 20 pins to 0 says so once per tap instead of
+        # leaving the reader to notice later. The drop itself is batched
+        # below, not applied here.
+        to_clear.append(tap_name)
+        return summary + " (pin cleared)"
+
+    if name:
+        # A single named target: nothing to parallelize, and its failure is
+        # the direct answer to the question asked, not a collected one.
+        tap = targets[0]
+        summary, clear_pin = work(tap)
+        results[tap.name] = finalize(tap.name, summary, clear_pin)
+    else:
+        def run(tap: Tap) -> tuple[str, str | None, bool, str | None]:
+            try:
+                summary, clear_pin = work(tap)
+                return tap.name, summary, clear_pin, None
+            except BoostError as err:
+                # The caller prefixes the tap name, which is the part git
+                # never says; git's own first line already carries the URL
+                # or path. See gitutil._git_error for why that line is now
+                # the one we show.
+                return tap.name, None, False, err.message
+
+        # pool.map yields in call order regardless of completion order (same
+        # guarantee `add_many` already relies on), so `results`/`failures`
+        # come out in `targets` order exactly as the old serial loop did.
+        with ThreadPoolExecutor(max_workers=tap_jobs(None)) as pool:
+            for tname, psummary, clear_pin, err in pool.map(run, targets):
+                if psummary is None:
+                    failures[tname] = err or "unknown error"
                 else:
-                    if tap.pin:
-                        unpin(tap.name)
-                    results[tap.name] = "cloned"
-            elif tap.pin and not force:
-                # A pinned tap is held at one commit on purpose: prebuilt
-                # vectors are keyed to it, and moving the clone would make
-                # them stale while still present — the failure that looks
-                # like nothing at all. Not an error, because "update
-                # everything" over 400 taps should not fail because three are
-                # pinned.
-                results[tap.name] = "pinned at %s (skipped)" % tap.pin[:7]
-            else:
-                results[tap.name] = gitutil.pull(tap.path)
-                if tap.pin:
-                    # `--force` is a decision to stop holding this tap still,
-                    # so the pin goes with the move rather than silently
-                    # re-applying on the next run.
-                    unpin(tap.name)
-        except BoostError as err:
-            if name:
-                raise
-            # The caller prefixes the tap name, which is the part git never
-            # says; git's own first line already carries the URL or path. See
-            # gitutil._git_error for why that line is now the one we show.
-            failures[tap.name] = err.message
+                    results[tname] = finalize(tname, psummary, clear_pin)
+
+    if to_clear:
+        # One read-modify-write for every pin `force` dropped this sweep —
+        # the same single-write discipline `add_many` uses for newly tapped
+        # registries, and for the same reason: N threads each doing their own
+        # `config.load()`/`save()` would lose each other's drops at random.
+        wanted = set(to_clear)
+        cfg = config.load()
+        for row in cfg.get("taps", []) or []:
+            if isinstance(row, dict) and row.get("name") in wanted:
+                row.pop("pin", None)
+        config.save(cfg)
+
     if results:
         # Stamped on any successful sweep, including one where every tap was
         # already current: "refreshed" is about having asked, not about having

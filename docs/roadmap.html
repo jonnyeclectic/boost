@@ -14259,7 +14259,7 @@ Found by the 2026-08 CLI audit (cluster <code>unpin-trailer-order</code>); repro
       </article>
 
       <article class="cap rcard" id="audit-update-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Performance</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Performance</span></div>
         <h3><code>boost update</code>: CLI audit findings (2026-08)</h3>
         <p><b>update pulls all taps serially with no progress indicator: ~14 s no-op over 20 taps</b> (med). A plain <code>update</code> over 20 taps with nothing to fetch took <b>13.93 s</b> under TTY (verifier re-measured 13.89 s), <code>update --force</code> 17.82 s; each line appears only after its ~0.7 s pull, nothing on screen between lines. <code>registry.update()</code> (<code>registry.py:465-525</code>) is a plain <code>for tap in targets:</code> loop calling <code>gitutil.pull</code>/<code>clone_shallow</code> serially &mdash; the exact latency-bound pattern <code>registry.add_many</code> already parallelises for clones. Fix: pull in a <code>ThreadPoolExecutor</code> mirroring <code>add_many</code>, keep catalog rebuilds and the single config write serial on the caller's thread, and print a <em>refreshing N taps&hellip;</em> line or spinner while pulls run.
 <br><br>

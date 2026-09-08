@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
+import time
 
 import pytest
 
@@ -372,6 +374,125 @@ class TestUpdate:
         util.rmtree(origin)
         with pytest.raises(BoostError):
             registry.update("solo")
+
+
+class TestUpdatePinClearing:
+    """`--force` moving a pinned tap must say so in the summary, on every
+    branch that can clear a pin: the missing-clone reclone, and the ordinary
+    pull. The message is the whole fix — the pin itself was already dropped.
+    """
+
+    def test_pulled_tap_notes_pin_cleared(self, sandbox, tmp_path):
+        origin = _make_repo(tmp_path / "pullme")
+        first = gitutil.head_commit(origin)
+        tap = registry.add(str(origin), at=first)
+        (origin / "b.txt").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=origin)
+        _git("commit", "-qm", "add b", cwd=origin)
+        summary = registry.update(force=True)[0][tap.name]
+        assert summary.endswith(" (pin cleared)")
+        assert re.match(r"^[0-9a-f]{7} → [0-9a-f]{7} \(pin cleared\)$", summary)
+        assert registry.get(tap.name).pin == ""
+
+    def test_pulled_tap_without_force_is_skipped_pin_kept(
+            self, sandbox, tmp_path):
+        origin = _make_repo(tmp_path / "pullme")
+        first = gitutil.head_commit(origin)
+        tap = registry.add(str(origin), at=first)
+        summary = registry.update()[0][tap.name]
+        assert summary == "pinned at %s (skipped)" % first[:7]
+        assert registry.get(tap.name).pin == first
+
+    def test_missing_clone_of_a_pinned_tap_notes_pin_cleared(
+            self, sandbox, tmp_path):
+        origin = _make_repo(tmp_path / "pullme")
+        first = gitutil.head_commit(origin)
+        tap = registry.add(str(origin), at=first)
+        util.rmtree(tap.path)   # the clone is gone; the pin is still recorded
+        summary = registry.update(force=True)[0][tap.name]
+        assert summary == "cloned (pin cleared)"
+        assert registry.get(tap.name).pin == ""
+
+    def test_missing_clone_of_a_pinned_tap_honors_the_pin_without_force(
+            self, sandbox, tmp_path):
+        origin = _make_repo(tmp_path / "pullme")
+        first = gitutil.head_commit(origin)
+        tap = registry.add(str(origin), at=first)
+        util.rmtree(tap.path)
+        summary = registry.update()[0][tap.name]
+        assert summary == "cloned at %s" % first[:7]
+        assert registry.get(tap.name).pin == first
+
+    def test_unpinned_tap_summary_carries_no_pin_note(self, sandbox, tmp_path):
+        origin = _make_repo(tmp_path / "pullme")
+        registry.add(str(origin))
+        (origin / "b.txt").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=origin)
+        _git("commit", "-qm", "add b", cwd=origin)
+        summary = registry.update(force=True)[0]["pullme"]
+        assert "pin cleared" not in summary
+
+
+class TestUpdateConcurrency:
+    """update() pulls concurrently (mirroring add_many's clone pool), but pin
+    clearing must stay single-writer — the same race add_many avoids for
+    `config.save` on `add` (see test_registry_parallel.py), here for `unpin`.
+    """
+
+    @pytest.fixture()
+    def fake_pull(self, monkeypatch):
+        state = {"live": 0, "peak": 0}
+        lock = threading.Lock()
+
+        def pull(path):
+            with lock:
+                state["live"] += 1
+                state["peak"] = max(state["peak"], state["live"])
+            time.sleep(0.05)
+            with lock:
+                state["live"] -= 1
+            return "aaaaaaa → bbbbbbb"
+
+        monkeypatch.setattr(gitutil, "pull", pull)
+        return state
+
+    def _seed_pinned_taps(self, n):
+        cfg = config.load()
+        cfg["taps"] = [{"name": "tap%d" % i, "url": "u%d" % i,
+                        "curated": False, "pin": "a" * 40}
+                       for i in range(n)]
+        config.save(cfg)
+        for i in range(n):
+            registry.Tap(name="tap%d" % i, url="u%d" % i).path.mkdir(
+                parents=True)
+
+    def test_pulls_overlap(self, sandbox, fake_pull):
+        self._seed_pinned_taps(4)
+        results, failures = registry.update(force=True)
+        assert not failures
+        assert fake_pull["peak"] > 1, \
+            "four independent pulls never overlapped — not actually parallel"
+        assert all(s.endswith("(pin cleared)") for s in results.values())
+
+    def test_pin_clearing_is_a_single_config_write(self, sandbox, fake_pull,
+                                                    monkeypatch):
+        self._seed_pinned_taps(4)
+        writes = []
+        real_save = config.save
+        monkeypatch.setattr(
+            config, "save", lambda cfg: (writes.append(1), real_save(cfg))[1])
+        registry.update(force=True)
+        # Four taps unpinned, one write — a write per tap would race the same
+        # way concurrent `registry.add` calls lose taps (add_many's fix).
+        assert writes == [1]
+        assert all(t.pin == "" for t in registry.list_taps())
+
+    def test_results_keep_target_order(self, sandbox, fake_pull):
+        self._seed_pinned_taps(4)
+        results, _failures = registry.update(force=True)
+        # Completion order is whatever the thread pool decides; output order
+        # is not allowed to be (same guarantee add_many's own test pins).
+        assert list(results.keys()) == ["tap0", "tap1", "tap2", "tap3"]
 
 
 class TestGitErrorLine:
