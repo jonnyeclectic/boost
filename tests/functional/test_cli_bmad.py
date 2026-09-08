@@ -429,9 +429,16 @@ class TestAutopilotOff:
         """A second `off` used to still claim "both hooks" removed, even
         though there was nothing left to remove the second time."""
         boost("bmad", "on")
+        # Two hook specs per host that earned them, and which hosts those are
+        # depends on the machine: `_hook_hosts` gives Claude unconditionally
+        # plus any host whose CLI is on PATH or whose dotdir already exists.
+        # A literal here passes on a bare runner and fails on any developer
+        # box with Gemini installed — the same hardcoded-count bug this test
+        # is named for.
+        expected_hooks = 2 * len(bmad._hook_hosts("global"))
         first = boost("bmad", "off")
-        assert "removed %d persona(s) and 2 hook(s)" % len(
-            core_bmad.PERSONAS) in first.out
+        assert "removed %d persona(s) and %d hook(s)" % (
+            len(core_bmad.PERSONAS), expected_hooks) in first.out
 
         second = boost("bmad", "off")
         assert "removed 0 persona(s) and 0 hook(s)" in second.out
