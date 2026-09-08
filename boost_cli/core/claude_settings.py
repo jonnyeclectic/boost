@@ -95,9 +95,17 @@ def save(scope: str, data: dict, project_dir: Path | None = None,
 
     Returns the snapshot path, or None when there was no prior file to
     snapshot — callers that just replaced a scope's settings (`hooks add`)
-    use this to tell the user where the previous version went.
+    use this to tell the user where the previous version went. A write whose
+    serialised bytes are identical to what is already on disk also returns
+    None and touches nothing: a no-op ``boost bmad on`` used to snapshot and
+    rewrite an unchanged file on every host it wrote to, burning
+    :data:`HISTORY_KEEP` slots (2 hosts x 2 hooks = 4 per run) on nothing a
+    restore would ever need.
     """
     p = settings_path(scope, project_dir, host)
+    payload = json.dumps(data, indent=2) + "\n"
+    if p.exists() and p.read_text(encoding="utf-8") == payload:
+        return None
     p.parent.mkdir(parents=True, exist_ok=True)
     dest = None
     if p.exists():
@@ -112,7 +120,7 @@ def save(scope: str, data: dict, project_dir: Path | None = None,
             n += 1
         dest.write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
         _prune_history()
-    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    p.write_text(payload, encoding="utf-8")
     return dest
 
 
