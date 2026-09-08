@@ -859,6 +859,8 @@ def cmd_log(argv):
     ap.add_argument("--crashes", action="store_true",
                     help="list recent crash reports")
     args = ap.parse_args(argv)
+    if args.name and (args.crashes or args.diagnostics):
+        ap.error("NAME is not used with --diagnostics/--crashes")
     if args.crashes:
         return _show_crashes(args.limit)
     if args.diagnostics:

@@ -77,12 +77,16 @@ def cmd_config(argv) -> int:
     p.add_argument("--json", action="store_true",
                    help="machine-readable output")
     args = p.parse_args(argv)
+    if args.action == "list" and (args.key or args.value is not None):
+        p.error("config list takes no KEY/VALUE")
     if args.action in ("get", "set", "unset") and not args.key:
         raise BoostError("config %s requires a KEY" % args.action,
                         hint="e.g. `boost config %s ai.enabled`" % args.action)
     if args.action == "set" and args.value is None:
         raise BoostError("config set requires a VALUE",
                         hint="e.g. `boost config set ai.enabled false`")
+    if args.action in ("get", "unset") and args.value is not None:
+        p.error("config %s takes no VALUE" % args.action)
 
     if args.action == "list":
         cfg = config.load()
@@ -476,6 +480,9 @@ def cmd_policy(argv) -> int:
                    help="machine-readable output")
     args = p.parse_args(argv)
 
+    if args.action in ("list", "check") and (args.key or args.value is not None):
+        p.error("policy %s takes no KEY/VALUE" % args.action)
+
     if args.action in ("set", "unset"):
         if not args.key:
             raise BoostError("policy %s requires a KEY" % args.action,
@@ -483,6 +490,8 @@ def cmd_policy(argv) -> int:
         if args.key not in policy.DEFAULTS:
             raise BoostError("unknown policy key %r" % args.key,
                             hint="keys: " + ", ".join(sorted(policy.DEFAULTS)))
+        if args.action == "unset" and args.value is not None:
+            p.error("policy unset takes no VALUE")
 
     if args.action == "list":
         pol = policy.load()
@@ -959,11 +968,13 @@ def cmd_schedule(argv) -> int:
     p.add_argument("action", nargs="?", default="status",
                    choices=("status", "enable", "disable"),
                    help="what to do (default: status)")
-    p.add_argument("--interval", choices=tuple(_INTERVALS), default="6h",
-                   help="how often to run `boost update` (default: 6h)")
+    p.add_argument("--interval", choices=tuple(_INTERVALS), default=None,
+                   help="how often to run `boost update` (default: 6h; enable only)")
     p.add_argument("--json", action="store_true",
                    help="machine-readable output (status only)")
     args = p.parse_args(argv)
+    if args.interval is not None and args.action != "enable":
+        p.error("--interval only applies to `schedule enable`")
 
     darwin = sys.platform == "darwin"
     shim = paths.launcher()
@@ -1012,6 +1023,7 @@ def cmd_schedule(argv) -> int:
         return 0
 
     if args.action == "enable":
+        args.interval = args.interval or "6h"
         seconds = _INTERVALS[args.interval]
         paths.ensure_dirs()
         if darwin:

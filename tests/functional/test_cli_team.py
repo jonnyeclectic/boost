@@ -649,6 +649,36 @@ class TestReplay:
         r = boost("replay", "rollback", snap_id)
         assert "brainstorming is gone from every tap — cannot restore" in r.out
 
+    def test_rollback_reports_failure_and_then_converges(self, boost, tapped,
+                                                          tick_clock):
+        # Regression: rollback used to warn "gone from every tap" and then
+        # unconditionally print "rollback ... complete", exit 0 — a false
+        # success — and every later run of the same id repeated exactly that,
+        # forever, since the un-restorable skill could never leave `removed`.
+        boost("install", "brainstorming")
+        boost("install", "tdd-workflow")
+        boost("install", "cowboy-coding")     # snapshot: {brainstorming, tdd}
+        snap_id = lockfile.history_list()[-1]["id"]
+        boost("uninstall", "brainstorming")
+        boost("uninstall", "tdd-workflow")
+        boost("untap", "fixture-tap", "--force")  # both now unresolvable
+
+        r = boost("replay", "rollback", snap_id, expect=1)
+        assert "uninstalled cowboy-coding" in r.out
+        assert "brainstorming is gone from every tap — cannot restore" in r.out
+        assert "tdd-workflow is gone from every tap — cannot restore" in r.out
+        assert ("finished with 2 skills not restored: "
+                "brainstorming, tdd-workflow") in r.out
+        assert "rollback to %s complete" % snap_id not in r.out
+
+        # Nothing about the missing skills can change on a second run — it
+        # must converge to a stable no-op instead of repeating the attempt
+        # (and the false "complete") indefinitely.
+        r = boost("replay", "rollback", snap_id)
+        assert "brainstorming is gone from every tap — cannot restore" in r.out
+        assert "tdd-workflow is gone from every tap — cannot restore" in r.out
+        assert "already at this snapshot — nothing to do" in r.out
+
     def test_corrupt_snapshot_is_framed_not_raw_and_list_names_it(
             self, boost, tapped, tick_clock):
         # Two installs (no uninstall) is enough to produce one snapshot.

@@ -511,6 +511,24 @@ class TestEvolve:
         assert evs[0]["subject"] == "brainstorming"
         assert evs[0]["version"] == "1.4.1"
 
+    def test_apply_preserves_untouched_frontmatter_lines_byte_for_byte(
+            self, boost, installed):
+        # Bug: evolve's heuristic path parsed the whole frontmatter to a
+        # dict and dumped it back, rewriting every field through dump()'s
+        # own quoting rules — turning `date_added: "2026-02-27"` into the
+        # bare, differently-typed `date_added: 2026-02-27` even though the
+        # feedback never mentioned it.
+        skill_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        _, body = frontmatter.parse(skill_md.read_text(encoding="utf-8"))
+        quoted_line = 'date_added: "2026-02-27"'
+        skill_md.write_text(
+            "---\nname: brainstorming\ndescription: v1\nversion: 1.4.0\n"
+            + quoted_line + "\n---\n\n" + body, encoding="utf-8")
+        boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
+        text = skill_md.read_text(encoding="utf-8")
+        assert quoted_line in text
+        assert frontmatter.parse(text)[0]["version"] == "1.4.1"
+
     def test_ai_reply_without_bump_gets_forced_patch(self, boost, installed, ai_on):
         ai_on(ask_author="---\nname: brainstorming\ndescription: v2\n"
                          "version: 1.4.0\n---\n\n# Brainstorming v2\n\n"

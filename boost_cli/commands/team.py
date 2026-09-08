@@ -709,24 +709,37 @@ def cmd_replay(argv) -> int:
     if mat_diff:
         out.warn("not rolled back (rollback restores skills only): %s — "
                  "reinstall or uninstall these by hand" % ", ".join(mat_diff))
-    if not (added or removed or changed):
+
+    # A "removed" skill no tap can resolve will never come back through
+    # _resolve_entry, so counting it as pending work promised a restore that
+    # could never land — and because nothing about that ever changes, every
+    # later run repeated the same warning and still claimed "complete". Split
+    # it out up front: it never gates the confirm prompt below, only whether
+    # there is anything else left to do.
+    resolved = {n: _resolve_entry(n, prefer_tap=snap_skills[n].get("tap"))
+               for n in removed}
+    restorable = [n for n in removed if resolved[n] is not None]
+    gone = [n for n in removed if resolved[n] is None]
+
+    if not (added or restorable or changed):
+        for n in gone:
+            out.warn("%s is gone from every tap — cannot restore" % n)
         out.ok("skills already match this snapshot — nothing to do"
                if mat_diff else "already at this snapshot — nothing to do")
         return 0
     out.info("rollback to %s will: uninstall %d, install %d, revisit %d version change(s)"
-             % (args.id, len(added), len(removed), len(changed)))
+             % (args.id, len(added), len(restorable), len(changed)))
     if not out.confirm("proceed?"):
         out.info("cancelled")
         return 1
     for n in added:  # in current, not in snapshot
         store.uninstall(n)
         out.ok("uninstalled %s" % n)
-    for n in removed:  # in snapshot, missing now
+    for n in gone:
+        out.warn("%s is gone from every tap — cannot restore" % n)
+    for n in restorable:  # in snapshot, missing now, resolvable
         want = snap_skills[n]
-        entry = _resolve_entry(n, prefer_tap=want.get("tap"))
-        if entry is None:
-            out.warn("%s is gone from every tap — cannot restore" % n)
-            continue
+        entry = resolved[n]
         res = store.install(entry, force=True)
         if str(entry.get("version")) != str(want.get("version")):
             out.warn("restored %s v%s from current tap state (snapshot had v%s)"
@@ -738,6 +751,10 @@ def cmd_replay(argv) -> int:
                  "their current state; `boost pin` prevents future drift"
                  % (n, snap_skills[n].get("version"), current[n].get("version")))
     journal.log("replay", args.id, op="rollback")
+    if gone:
+        out.warn("finished with %d skill%s not restored: %s"
+                 % (len(gone), _s(len(gone)), ", ".join(gone)))
+        return 1
     out.ok("rollback to %s complete" % args.id)
     return 0
 

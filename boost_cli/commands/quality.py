@@ -1417,6 +1417,13 @@ def cmd_trust(argv) -> int:
     p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
 
+    if args.action == "list" and (args.name or args.key):
+        p.error("trust list takes no NAME/KEY")
+    if args.action == "remove" and args.key:
+        p.error("trust remove takes no KEY")
+    if args.action == "verify" and args.key:
+        p.error("trust verify takes no KEY")
+
     if args.action == "add":
         if not args.name or not args.key:
             raise BoostError("trust add requires NAME and KEY",

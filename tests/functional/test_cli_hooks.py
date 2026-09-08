@@ -75,6 +75,20 @@ class TestHooksAdd:
         assert "removed 1 hook(s) named 'b1'" in r.out
         assert not cs.has_hook("global", "Bogus", "b1")
 
+    def test_list_filters_by_event(self, boost, sandbox):
+        # `hooks list EVENT` used to silently ignore the extra word and show
+        # every hook regardless.
+        boost("hooks", "add", "SessionStart", "-c", "echo a", "-n", "a",
+              "-s", "global")
+        boost("hooks", "add", "SessionEnd", "-c", "echo b", "-n", "b",
+              "-s", "global")
+        r = boost("hooks", "list", "SessionStart")
+        assert "a" in r.out and "SessionStart" in r.out
+        assert "SessionEnd" not in r.out
+
+        r = boost("hooks", "list", "NoSuchEvent")
+        assert "no boost-managed hooks for event 'NoSuchEvent'" in r.out
+
     def test_remove_by_name_with_embedded_marker_in_command(self, boost, sandbox):
         # A command that itself contains the literal "# boost:" text (e.g.
         # quoting another hook's tagged command) must not corrupt name lookup

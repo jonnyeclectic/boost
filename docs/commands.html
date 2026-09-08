@@ -302,7 +302,7 @@
       <section class="cmd" id="cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">
         <h3><span class="cname">import</span><span class="gtag">pkg</span></h3>
         <p class="summary">Import skills from a GitHub URL or local path</p>
-        <pre class="syn">boost import [--name N] [--all] [--agent A] URL_OR_PATH</pre>
+        <pre class="syn">boost import [--name N | --all] [--agent A] URL_OR_PATH</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>URL_OR_PATH</code><span></span></div>
@@ -1109,7 +1109,7 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--interval {6h,12h,daily}</code><span>how often to run `boost update` (default: 6h)</span></div>
+          <div class="arg"><code>--interval {6h,12h,daily}</code><span>how often to run `boost update` (default: 6h; enable only)</span></div>
           <div class="arg"><code>--json</code><span>machine-readable output (status only)</span></div>
         </div>
       </section>
@@ -1148,7 +1148,7 @@
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{add,remove,list}</code><span>add | remove | list</span></div>
-          <div class="arg"><code>event</code><span>hook event, e.g. SessionStart (required for add)</span></div>
+          <div class="arg"><code>event</code><span>hook event, e.g. SessionStart (required for add; filters remove/list)</span></div>
         </div>
         <div class="args-h">Options</div>
         <div class="args">

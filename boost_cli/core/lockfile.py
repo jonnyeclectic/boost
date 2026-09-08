@@ -112,6 +112,30 @@ def check() -> Integrity:
     return Integrity(True, None, version)
 
 
+def _stamp(iso: str) -> str:
+    return iso.replace(":", "").replace("-", "")
+
+
+def _archive_stamp(p) -> str:
+    """History filename stamp for the lock file about to become history.
+
+    The lock's own ``updated`` field is the moment it BECAME current; using
+    that (rather than now, the moment it stops being current) makes the
+    history id equal the state it captures, so ``replay list``'s ID and WHEN
+    columns describe the same instant instead of two writes apart. Falls
+    back to now for a lock with no readable ``updated`` (corrupt, or an
+    older schema) — there is nothing truthful to stamp it with instead.
+    """
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        raw = {}
+    updated = raw.get("updated")
+    if isinstance(updated, str) and updated:
+        return _stamp(updated)
+    return _stamp(util.now_iso())
+
+
 def write(lock: dict) -> None:
     """Snapshot the existing lock to history, then write ``lock`` atomically.
 
@@ -121,7 +145,7 @@ def write(lock: dict) -> None:
     paths.ensure_dirs()
     p = paths.lockfile_path()
     if p.exists():
-        stamp = util.now_iso().replace(":", "").replace("-", "")
+        stamp = _archive_stamp(p)
         dest = paths.lock_history_dir() / ("lock-%s.json" % stamp)
         n = 2
         while dest.exists():  # same-second writes each keep their snapshot

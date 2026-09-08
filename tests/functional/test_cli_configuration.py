@@ -121,6 +121,18 @@ class TestConfig:
         assert "telemetry not set" in r.out
         assert not paths.config_path().exists()
 
+    def test_stray_positionals_are_usage_errors(self, boost, sandbox):
+        # `config list KEY`, `config get KEY VALUE` and `config unset KEY VALUE`
+        # used to silently ignore the extra word — the sharpest case being
+        # `config get ai.enabled false`, a typo for `set`, reading as a
+        # confirmed set with exit 0.
+        r = boost("config", "list", "extra", expect=2)
+        assert "config list takes no KEY/VALUE" in r.err
+        r = boost("config", "get", "ai.enabled", "false", expect=2)
+        assert "config get takes no VALUE" in r.err
+        r = boost("config", "unset", "ai.enabled", "false", expect=2)
+        assert "config unset takes no VALUE" in r.err
+
 
 # ---------------------------------------------------------------- clean
 
@@ -282,6 +294,31 @@ class TestCreate:
         assert "name has no letters or digits" in r.err
         assert not (tmp_path / "skill").exists()
 
+    def test_multiline_description_round_trips(self, boost, sandbox, tmp_path,
+                                                monkeypatch):
+        # Bug: `create multi-desc --description $'first line\nsecond line'`
+        # wrote an unquoted "description: first line" line followed by a
+        # bare "second line" inside the frontmatter fences — invalid YAML
+        # that boost's own parser then read back as just "first line".
+        monkeypatch.chdir(tmp_path)
+        boost("create", "multi-desc", "--description", "first line\nsecond line")
+        text = (tmp_path / "multi-desc" / "SKILL.md").read_text(encoding="utf-8")
+        meta, _ = frontmatter.parse(text)
+        assert meta["description"] == "first line\nsecond line"
+
+    def test_description_with_colon_and_quotes_round_trips(self, boost, sandbox,
+                                                            tmp_path, monkeypatch):
+        # Bug: a quoted, escaped description came back from boost's own
+        # reader with the backslashes still in it (`\"quotes\"` rather than
+        # `"quotes"`), because `_scalar` stripped the outer quotes without
+        # unescaping the inside.
+        monkeypatch.chdir(tmp_path)
+        desc = 'has: colon and "quotes" and #hash'
+        boost("create", "quote-desc", "--description", desc)
+        text = (tmp_path / "quote-desc" / "SKILL.md").read_text(encoding="utf-8")
+        meta, _ = frontmatter.parse(text)
+        assert meta["description"] == desc
+
     def test_install_flag(self, boost, sandbox, tmp_path):
         r = boost("create", "inst-skill", "--dir", tmp_path, "--install")
         assert "installed inst-skill" in r.out
@@ -369,6 +406,16 @@ class TestPolicy:
         assert "pin-only mode is on — installs/updates are frozen" in r.out
         assert "1 unpinned item(s): brainstorming" in r.out
         assert "quality score %d < required 101" % score in r.out
+
+    def test_stray_positionals_are_usage_errors(self, boost, sandbox):
+        # `policy list KEY VALUE` and `policy check KEY` used to be silently
+        # accepted and ignored, same for a stray VALUE on `policy unset`.
+        r = boost("policy", "list", "extra", "positional", expect=2)
+        assert "policy list takes no KEY/VALUE" in r.err
+        r = boost("policy", "check", "extra", expect=2)
+        assert "policy check takes no KEY/VALUE" in r.err
+        r = boost("policy", "unset", "pin_only", "true", expect=2)
+        assert "policy unset takes no VALUE" in r.err
 
 
 # ---------------------------------------------------------------- onboard
@@ -902,6 +949,14 @@ class TestScheduleCron:
                         "scheduled": True, "interval": "6h",
                         "next_run": data["next_run"]}
         assert data["next_run"]
+
+    def test_interval_outside_enable_is_a_usage_error(self, boost, sandbox):
+        # `schedule status --interval daily` used to silently accept and
+        # discard the flag it never reads.
+        r = boost("schedule", "status", "--interval", "daily", expect=2)
+        assert "--interval only applies to `schedule enable`" in r.err
+        r = boost("schedule", "disable", "--interval", "daily", expect=2)
+        assert "--interval only applies to `schedule enable`" in r.err
 
     def test_status_custom_spec(self, boost, sandbox, monkeypatch):
         line = "30 6 * * * /x/boost update # boost-sync"

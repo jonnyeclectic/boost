@@ -250,6 +250,64 @@ class TestSearch:
         assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
         assert "ranked by full-content BM25" in r.out
 
+    def test_json_carries_a_ranker_field(self, boost, tapped):
+        # `--json` used to drop the ranker entirely — a script had no way to
+        # tell BM25 from a Claude rerank without parsing the human footer.
+        r = boost("search", "brainstorming", "--json")
+        data = json.loads(r.out)
+        assert data[0]["ranker"] == "full-content BM25"
+
+    def test_json_smart_reranks_before_printing(self, boost, tapped,
+                                                monkeypatch):
+        # `--json --smart` used to be byte-identical to `--json` alone: the
+        # JSON branch returned before the --smart rerank ever ran.
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask",
+                            lambda *a, **k: '["jira-integration", "tdd-workflow"]')
+        r = boost("search", "workflow", "--json", "--smart")
+        data = json.loads(r.out)
+        assert [e["name"] for e in data] == ["jira-integration", "tdd-workflow"]
+        assert data[0]["ranker"] == "Claude Haiku relevance"
+
+    def test_json_smart_without_ai_warns_but_stdout_stays_valid_json(
+            self, boost, tapped):
+        # BOOST_NO_AI=1 (the sandbox default): --smart can't rerank, so it
+        # must say so on stderr while stdout stays one clean JSON document —
+        # a script reading stdout must still learn --smart silently did
+        # nothing, without that warning corrupting the JSON it parses.
+        r = boost("search", "brainstorming", "--json", "--smart")
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+        data = json.loads(r.out)
+        assert r.out.count("\n") == 1
+        assert data[0]["name"] == "brainstorming"
+        assert data[0]["ranker"] == "full-content BM25"
+
+    def test_json_on_empty_results_is_an_empty_array(self, boost, tapped):
+        r = boost("search", "zzzznothing", "--json")
+        assert json.loads(r.out) == []
+        # No human empty-state line either — --json stays pure.
+        assert "no matches" not in r.out
+
+    def test_footer_says_top_of_cap_when_retrieval_saturates(
+            self, boost, tapped, monkeypatch):
+        # The footer used to report the retrieval cap (`max(60, limit*4)`) as
+        # though it were the true match count. Force retrieval to return
+        # exactly the cap so the wording must say "top N of K+", not a count
+        # that reads as exact but is an artifact of the cap.
+        from boost_cli.core import rag
+
+        def fake_retrieve_any(query, k=60, **kwargs):
+            hits = [{"entry": {"name": "skill-%d" % i, "description": "d",
+                               "kind": "skill", "tap": "fixture-tap"},
+                     "score": 1.0, "content": None, "snippet": ""}
+                    for i in range(k)]
+            return hits, "BM25 full-content"
+        monkeypatch.setattr(rag, "retrieve_any", fake_retrieve_any)
+        r = boost("search", "anything", "--limit", "1")
+        assert "top 1 of 60+ retrieved · ranked by full-content BM25" in r.out
+        assert "matches ·" not in r.out
+
     def test_index_build_failure_degrades_to_heuristic(self, boost, tapped,
                                                        monkeypatch):
         # If the on-demand index build fails, search must not crash — it falls
