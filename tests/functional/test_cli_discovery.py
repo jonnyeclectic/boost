@@ -463,6 +463,79 @@ class TestIndex:
         r = boost("index", expect=1)
         assert "gh api timed out on page 1" in r.err
 
+    def test_rate_limited_gh_gets_a_boost_native_hint(self, boost, sandbox,
+                                                       monkeypatch):
+        # gh's own rate-limit failure is multi-line prose plus a JSON blob —
+        # this must not reach the user verbatim as the error hint.
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        raw = ('gh: API rate limit exceeded for your IP.\n'
+               '{"message": "API rate limit exceeded"}')
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=1, stdout="", stderr=raw))
+        r = boost("index", expect=1)
+        assert "GitHub code search failed" in r.err
+        assert ("GitHub rate limit hit — wait a minute or authenticate: "
+                "`gh auth login` / GH_TOKEN") in r.err
+        assert "API rate limit exceeded" not in r.err
+
+    def test_zero_results_keeps_the_previous_index(self, boost, sandbox,
+                                                    monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page(
+                    [_gh_item("octo/skills", "a/SKILL.md"),
+                     _gh_item("acme/pack", "b/SKILL.md")])))
+        boost("index", "--limit", "100")
+        before = (paths.cache_dir() / "discovery.json").read_text(encoding="utf-8")
+
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page([], total=0)))
+        r = boost("index", "zzzznomatch")
+        assert ("no SKILL.md files match zzzznomatch — keeping the "
+                "previous index of 2 entries") in r.out
+        assert "indexed" not in r.out
+        after = (paths.cache_dir() / "discovery.json").read_text(encoding="utf-8")
+        assert after == before   # untouched, not rewritten with 0 items
+
+    def test_zero_results_with_no_prior_index_still_writes_one(self, boost,
+                                                                sandbox,
+                                                                monkeypatch):
+        # No discovery.json exists yet, so there is nothing to lose — an
+        # empty index is still written rather than reporting "keeping" one
+        # that was never there.
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=0, stderr="", stdout=_gh_page([], total=0)))
+        r = boost("index", "zzzznomatch")
+        assert "indexed 0 skill files across 0 repos" in r.out
+        data = json.loads((paths.cache_dir() / "discovery.json").read_text(encoding="utf-8"))
+        assert data["items"] == []
+
+    def test_progress_bar_is_cleared_before_a_failure(self, boost, sandbox,
+                                                       monkeypatch):
+        monkeypatch.setattr("boost_cli.commands.discovery.shutil.which",
+                            lambda c: "/usr/bin/gh")
+        monkeypatch.setattr(
+            "boost_cli.commands.discovery.subprocess.run",
+            lambda cmd, **kw: types.SimpleNamespace(
+                returncode=1, stdout="", stderr="boom"))
+        cleared = []
+        monkeypatch.setattr("boost_cli.commands.discovery.spin.progress_clear",
+                            lambda *a, **kw: cleared.append(True))
+        boost("index", expect=1)
+        assert cleared == [True]
+
 
 class TestGithubSkillSearch:
     """The one-shot reach-out helper behind the boost_discover_github MCP tool."""
