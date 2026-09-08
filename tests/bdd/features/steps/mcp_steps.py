@@ -72,3 +72,18 @@ def step_cli_present_fails(context, cli, message):
             args=cmd, returncode=1, stdout="", stderr=message)
 
     _patch(context, RUN, fake_run)
+
+
+@given('the "{cli}" CLI is on PATH but reports nothing registered')
+def step_cli_present_nothing_registered(context, cli):
+    # Gemini's own `mcp remove --scope user boost` against nothing registered
+    # prints this on stderr and still exits 0 — the exact shape that used to
+    # read as a successful unregister.
+    _present(context, cli)
+
+    def fake_run(cmd, **kw):
+        return types.SimpleNamespace(
+            args=cmd, returncode=0, stdout="",
+            stderr='Server "boost" not found in user settings.\n')
+
+    _patch(context, RUN, fake_run)
