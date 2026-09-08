@@ -78,6 +78,23 @@ def test_trust_add_rejects_garbage(boost):
     boost("trust", "add", "bad", "not-a-key", expect=1)
 
 
+def test_trust_add_of_a_missing_pub_path_blames_the_path_not_base64(
+        boost, tmp_path):
+    # A nonexistent .pub path used to fall through to text parsing and blame
+    # base64 for a typo'd filename — nothing in the error named the actual
+    # problem (a path that doesn't exist).
+    missing = tmp_path / "acme.pub"
+    r = boost("trust", "add", "acme", missing, expect=1)
+    assert "no such key file" in r.err
+    assert str(missing) in r.err
+    assert "base64" not in r.err
+
+def test_trust_add_of_a_missing_relative_pub_path_is_also_named(boost):
+    r = boost("trust", "add", "acme", "./missing-key.pub", expect=1)
+    assert "no such key file: ./missing-key.pub" in r.err
+    assert "base64" not in r.err
+
+
 def test_trust_remove_unknown_errors(boost):
     boost("trust", "remove", "ghost", expect=1)
 
@@ -101,6 +118,20 @@ def test_verify_specific_untrusted_tap_exits_nonzero(boost, fixture_tap_src,
     boost("tap", tap)                       # signed, but key not trusted
     r = boost("trust", "verify", "untrusted", expect=1)
     assert "untrusted" in r.out
+
+
+def test_verify_named_tap_names_why_it_failed(boost, tapped):
+    # The named-tap form used to print the provenance table row and exit 1
+    # with no closing line saying why — a specific-tap `verify` now says so.
+    r = boost("trust", "verify", "fixture-tap", expect=1)
+    assert "fixture-tap: not verified" in r.out
+
+
+def test_verify_sweep_does_not_add_the_named_tap_warn_line(boost, tapped):
+    # The sweep form only ever alarms on outright tampering, so it must not
+    # gain the same closing line the named-tap form does.
+    r = boost("trust", "verify")
+    assert "not verified" not in r.out
 
 
 def test_unsigned_tap_shows_unsigned(boost, tapped):

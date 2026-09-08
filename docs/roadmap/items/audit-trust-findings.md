@@ -2,14 +2,14 @@
 id: audit-trust-findings
 board: code
 section: trust
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Med
 wow: 1
 note: trust add of a missing .pub path blames "invalid base64 in minisign data"
 order: 298
-owner:
+owner: loop/trust-audit-findings
 pr:
 title: "boost trust: CLI audit findings (2026-08)"
 ---
@@ -45,3 +45,15 @@ itself is the defect, and the hazard is latent for every hex-id column rendered 
 Found by the 2026-08 CLI audit (clusters <code>trust-add-path-error</code>,
 <code>trust-verify-silent-fail</code>, <code>trust-fingerprint-alignment</code>); repro in the audit
 log.
+
+<b>Status.</b> All three findings implemented and covered by new unit/functional tests (PR
+linked above): <code>trust add</code> now raises <code>no such key file: &lt;path&gt;</code> before
+falling back to base64 parsing; <code>trust verify &lt;tap&gt;</code> prints an
+<code>out.warn</code> line naming why a specific tap didn't verify; and <code>out.table</code>
+gained a <code>text=</code> parameter (columns that must never right-align as numeric,
+however their cells look), used for the trusted-keys FINGERPRINT column. Left
+<code>inflight</code> rather than <code>shipped</code> because this session's sandbox has no
+network egress to PyPI/GitHub and runs Python 3.11 (repo floor is 3.12), so
+<code>make check</code> could not be run here. ruff, mypy, and the full unit+functional suites
+were run directly and diff identically to a clean checkout of main modulo the new tests, which
+pass. CI should confirm the full gate before merge.
