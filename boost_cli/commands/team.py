@@ -563,9 +563,12 @@ def cmd_pulse(argv) -> int:
         print(json.dumps(events, indent=2))
         return 0
     if not events:
+        # A second, unfiltered read only on this rare (nothing matched) path —
+        # needed to tell "no events at all" apart from "this filter matched
+        # nothing", which used to render the identical message either way.
+        all_events = journal.events() if args.action else events
         print(out.empty_state(
-            "no activity yet — events appear as you install and manage skills",
-            wrap=True))
+            journal.pulse_empty_state(args.action, all_events), wrap=True))
         return 0
     for e in events:
         action = e.get("action", "?")
@@ -748,9 +751,18 @@ def cmd_who(argv) -> int:
 
     events = journal.events(subject=args.skill) if args.skill else journal.events()
     if not events:
-        print(out.empty_state(
-            "no journal activity yet — expertise builds as people install, "
-            "edit, and evolve skills", wrap=True))
+        if args.skill:
+            # Second, unfiltered read only on this rare (nothing matched)
+            # path — same reasoning as cmd_pulse above.
+            all_events = journal.events()
+            known = sorted({e.get("subject", "") for e in all_events
+                           if e.get("subject")})
+            msg = journal.who_empty_state(
+                args.skill, all_events, lockfile.find_any(args.skill) is not None,
+                known)
+        else:
+            msg = journal.who_empty_state(None, [], False)
+        print(out.empty_state(msg, wrap=True))
         return 0
 
     if args.skill:

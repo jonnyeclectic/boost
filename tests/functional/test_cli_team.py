@@ -547,6 +547,18 @@ class TestPulse:
         assert events[1]["action"] == "tap"
         assert events[1]["subject"] == "fixture-tap"
 
+    def test_filter_matching_nothing_names_the_filter_not_empty_journal(
+            self, boost, installed):
+        # The bug: a filter matching zero events used to print the identical
+        # "no activity yet" line a truly empty journal gets, hiding that
+        # events exist under other actions.
+        r = boost("pulse", "--action", "nosuch")
+        flat = " ".join(r.out.split())
+        assert "no events with action 'nosuch'" in flat
+        assert "2 events in the journal" in flat
+        assert "install" in flat and "tap" in flat
+        assert "no activity yet" not in r.out
+
 
 # ---------------------------------------------------------------- replay
 
@@ -742,6 +754,40 @@ class TestWho:
         r = boost("who", "fixture-tap")
         assert "tap" in r.out
         assert USER in r.out
+
+    def test_unknown_skill_with_no_close_match(self, boost, installed):
+        # The bug: an unknown skill used to print the identical generic
+        # "no journal activity yet" line a truly empty journal gets.
+        r = boost("who", "nosuchskill-zzz")
+        flat = " ".join(r.out.split())
+        assert "'nosuchskill-zzz' is not installed" in flat
+        assert "2 events in the journal, none for it" in flat
+        assert "did you mean" not in flat
+        assert "no journal activity yet" not in flat
+
+    def test_unknown_skill_with_a_close_match_suggests_it(self, boost, installed):
+        r = boost("who", "brainstormin")
+        assert "did you mean 'brainstorming'?" in " ".join(r.out.split())
+
+    def test_installed_skill_with_no_history_names_the_event_count(
+            self, boost, tapped):
+        # `tapped` already logged one "tap" event for fixture-tap; seeding the
+        # rule directly into the lock (no journal.log("install", ...)) means
+        # house-style itself has no history, but the journal as a whole isn't
+        # empty — the message must count the whole journal, not claim zero.
+        _seed_rule("house-style")
+        r = boost("who", "house-style")
+        flat = " ".join(r.out.split())
+        assert "installed but has no journal activity" in flat
+        assert "1 event in the journal" in flat
+
+    def test_installed_skill_with_no_history_counts_the_whole_journal(
+            self, boost, installed):
+        _seed_rule("house-style")
+        r = boost("who", "house-style")
+        flat = " ".join(r.out.split())
+        assert "installed but has no journal activity" in flat
+        assert "2 events in the journal" in flat
 
     def test_empty_journal(self, boost, sandbox):
         r = boost("who")
