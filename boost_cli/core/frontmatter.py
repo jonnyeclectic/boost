@@ -56,12 +56,81 @@ def unclosed(text: str) -> bool:
     return not any(line.strip() in ("---", "...") for line in lines[1:])
 
 
+def _dump_escape(s: str) -> str:
+    """Escape `s` for a double-quoted scalar; `_dump_unescape` inverts this."""
+    out = []
+    for ch in s:
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == '"':
+            out.append('\\"')
+        elif ch == "\n":
+            out.append("\\n")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _dump_unescape(s: str) -> str:
+    """Inverse of `_dump_escape`, applied to a double-quoted scalar's inside."""
+    out = []
+    i, n = 0, len(s)
+    while i < n:
+        ch = s[i]
+        if ch == "\\" and i + 1 < n and s[i + 1] in ("n", '"', "\\"):
+            out.append("\n" if s[i + 1] == "n" else s[i + 1])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+_BLOCK_SCALAR_TOKENS = frozenset({"|", "|-", "|+", ">", ">-", ">+"})
+
+
+def _needs_quoting(s: str) -> bool:
+    """True if dumping `s` bare would not read back as this same string.
+
+    Mirrors every branch in `_scalar`/`parse_block` that treats an unquoted
+    scalar specially: a flow list (``[...]``), a block-scalar opener, the
+    true/false/null/``~`` keywords, a numeral `_scalar` would coerce
+    losslessly, or a value already wrapped the way `_scalar` unwraps a
+    quoted one. Only meant for values that are already Python `str` —
+    `dump()` never calls this for a real int/float/bool, which already round
+    trip correctly unquoted.
+    """
+    if s == "":
+        return False
+    if s != s.strip():
+        return True
+    if "\n" in s or ":" in s or "#" in s:
+        return True
+    if s in _BLOCK_SCALAR_TOKENS:
+        return True
+    if s.startswith("[") and s.endswith("]"):
+        return True
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
+        return True
+    low = s.lower()
+    if low in ("true", "false", "null") or s == "~":
+        return True
+    with suppress(ValueError):
+        int(s)
+        return True
+    with suppress(ValueError):
+        float(s)
+        return True
+    return False
+
+
 def _scalar(raw: str):
     s = raw.strip()
     if not s:
         return ""
     if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
-        return s[1:-1]
+        inner = s[1:-1]
+        return _dump_unescape(inner) if s[0] == '"' else inner
     # YAML 1.2 core schema only: true/false and null/~. The 1.1 aliases
     # (yes/no/on/off, none) are NOT coerced — they are ordinary English words
     # that legitimately appear as a skill's name or tag ("on", "none"), and
@@ -183,21 +252,61 @@ def parse(text: str) -> tuple[dict, str]:
     return (parse_block(block) if block else {}), body
 
 
+def _dump_item(v) -> str:
+    """Render one scalar the way `dump()` would, quoting only when needed."""
+    if isinstance(v, str) and _needs_quoting(v):
+        return '"%s"' % _dump_escape(v)
+    return str(v)
+
+
 def dump(meta: dict) -> str:
-    """Serialize a dict back to a frontmatter block (--- fenced)."""
+    """Serialize a dict back to a frontmatter block (--- fenced).
+
+    A string scalar is quoted (and ``\\``/``"``/``\\n`` escaped) whenever
+    leaving it bare would change what `parse()` reads back — see
+    `_needs_quoting`. A real int/float/bool/None never goes through that
+    check: those already round-trip unquoted via `_scalar`'s own coercions.
+    """
     lines = ["---"]
     for k, v in meta.items():
         if isinstance(v, list):
             lines.append("%s:" % k)
-            lines.extend("  - %s" % item for item in v)
+            lines.extend("  - %s" % _dump_item(item) for item in v)
         elif isinstance(v, bool):
             lines.append("%s: %s" % (k, "true" if v else "false"))
         elif v is None:
             lines.append("%s:" % k)
         else:
-            s = str(v)
-            if ":" in s or s != s.strip():
-                s = '"%s"' % s.replace('"', '\\"')
-            lines.append("%s: %s" % (k, s))
+            lines.append("%s: %s" % (k, _dump_item(v)))
     lines.append("---")
     return "\n".join(lines)
+
+
+def set_field(text: str, key: str, value) -> str:
+    """Return `text` with top-level frontmatter key `key` set to `value`,
+    leaving every other line of the block byte-identical.
+
+    A full parse -> dict -> `dump()` round trip rewrites every field through
+    `dump()`'s own quoting rules, not just the one that changed — turning
+    ``description: "Use before ..."`` into ``description: Use before ...``
+    in a diff the caller never asked for. `evolve`'s heuristic revision only
+    ever bumps ``version``, so it edits that one line in place instead.
+    Falls back to returning `text` unchanged when it has no frontmatter
+    block to splice into.
+    """
+    block, body = split(text)
+    if not block:
+        return text
+    formatted = _dump_item(value)
+    lines = block.splitlines()
+    for i, raw in enumerate(lines):
+        if not raw.strip():
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        line = raw.strip()
+        if indent == 0 and ":" in line and line.split(":", 1)[0].strip() == key:
+            lines[i] = "%s: %s" % (key, formatted)
+            break
+    else:
+        lines.append("%s: %s" % (key, formatted))
+    return "---\n%s\n---\n\n%s" % ("\n".join(lines), body)

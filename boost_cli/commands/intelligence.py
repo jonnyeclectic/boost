@@ -812,16 +812,23 @@ def _evolve_ai(old: str, old_ver: str, feedback: str) -> str | None:
 
 
 def _evolve_append(old: str, old_ver: str, feedback: str) -> str:
-    """Heuristic revision: feedback appended as a dated rules section."""
-    meta, body = frontmatter.parse(old)
-    meta["version"] = _bump_patch(old_ver)
+    """Heuristic revision: feedback appended as a dated rules section.
+
+    Splices the bumped ``version`` into the original frontmatter text
+    (`frontmatter.set_field`) rather than parsing to a dict and dumping it
+    back — a parse -> dump round trip rewrites every field through dump's
+    own quoting rules, turning a diff that only bumped the version into one
+    that also silently reformats every other line the feedback never
+    touched.
+    """
+    revised = frontmatter.set_field(old, "version", _bump_patch(old_ver))
+    block, body = frontmatter.split(revised)
     bullets = [s.strip().rstrip(".")
                for s in re.split(r"(?<=[.!?])\s+|\n+|;\s*", feedback)
                if s.strip()]
     section = ("## Feedback (%s)\n\n" % util.now_iso()[:10]
                + "\n".join("- %s." % b for b in bullets))
-    return (frontmatter.dump(meta) + "\n\n" + body.strip()
-            + "\n\n" + section + "\n")
+    return "---\n%s\n---\n\n%s\n\n%s\n" % (block, body.strip(), section)
 
 
 def _print_diff(old: str, new: str) -> None:

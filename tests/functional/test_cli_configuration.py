@@ -283,6 +283,31 @@ class TestCreate:
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
 
+    def test_multiline_description_round_trips(self, boost, sandbox, tmp_path,
+                                                monkeypatch):
+        # Bug: `create multi-desc --description $'first line\nsecond line'`
+        # wrote an unquoted "description: first line" line followed by a
+        # bare "second line" inside the frontmatter fences — invalid YAML
+        # that boost's own parser then read back as just "first line".
+        monkeypatch.chdir(tmp_path)
+        boost("create", "multi-desc", "--description", "first line\nsecond line")
+        text = (tmp_path / "multi-desc" / "SKILL.md").read_text(encoding="utf-8")
+        meta, _ = frontmatter.parse(text)
+        assert meta["description"] == "first line\nsecond line"
+
+    def test_description_with_colon_and_quotes_round_trips(self, boost, sandbox,
+                                                            tmp_path, monkeypatch):
+        # Bug: a quoted, escaped description came back from boost's own
+        # reader with the backslashes still in it (`\"quotes\"` rather than
+        # `"quotes"`), because `_scalar` stripped the outer quotes without
+        # unescaping the inside.
+        monkeypatch.chdir(tmp_path)
+        desc = 'has: colon and "quotes" and #hash'
+        boost("create", "quote-desc", "--description", desc)
+        text = (tmp_path / "quote-desc" / "SKILL.md").read_text(encoding="utf-8")
+        meta, _ = frontmatter.parse(text)
+        assert meta["description"] == desc
+
     def test_install_flag(self, boost, sandbox, tmp_path):
         r = boost("create", "inst-skill", "--dir", tmp_path, "--install")
         assert "installed inst-skill" in r.out
