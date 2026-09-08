@@ -144,6 +144,40 @@ def test_set_commit_pin_refuses_without_a_source_commit(installed):
     assert "no recorded source commit" in err.value.message
 
 
+# ── verification_passed ──────────────────────────────────────────────────
+
+def test_verification_passed_ok_no_missing_fields_no_drift():
+    assert integrity.verification_passed(integrity.STATUS_OK, [], None) is True
+
+
+def test_verification_passed_quarantined_counts_as_a_pass():
+    assert integrity.verification_passed(integrity.STATUS_QUARANTINED, [], None) is True
+
+
+def test_verification_passed_false_when_status_is_bad():
+    assert integrity.verification_passed(integrity.STATUS_MODIFIED, [], None) is False
+    assert integrity.verification_passed(integrity.STATUS_MISSING, [], None) is False
+    assert integrity.verification_passed(integrity.STATUS_UNLOCKED, [], None) is False
+
+
+def test_verification_passed_false_on_missing_fields_even_when_status_is_ok():
+    # The exact repro from the audit: an "ok" status must not read as a pass
+    # once lock fields are missing — that gap let a green row still count
+    # toward "N failed" in cmd_verify.
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, ["version", "installed_at"], None) is False
+
+
+def test_verification_passed_false_on_drifted_commit_pin():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_MODIFIED) is False
+
+
+def test_verification_passed_true_when_commit_pin_holds():
+    assert integrity.verification_passed(
+        integrity.STATUS_OK, [], integrity.STATUS_OK) is True
+
+
 def test_clear_commit_pin_reports_whether_one_was_present(installed):
     integrity.set_commit_pin(installed, lockfile.get_skill(installed))
     assert integrity.clear_commit_pin(installed, lockfile.get_skill(installed)) is True

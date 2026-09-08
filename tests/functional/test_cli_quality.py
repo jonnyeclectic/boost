@@ -48,6 +48,14 @@ def _tamper(name):
     md.write_text(md.read_text(encoding="utf-8") + "\n- tampered line\n", encoding="utf-8")
 
 
+def _strip_lock_fields(name, *fields):
+    p = paths.lockfile_path()
+    data = json.loads(p.read_text(encoding="utf-8"))
+    for f in fields:
+        data["skills"][name].pop(f, None)
+    p.write_text(json.dumps(data), encoding="utf-8")
+
+
 def _import_skill(boost, tmp_path, name, body, description="a test skill",
                   extra_fm=""):
     d = tmp_path / name
@@ -655,7 +663,8 @@ class TestVerify:
         data = json.loads(boost("verify", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
                                     "status": "ok", "scope": "user",
-                                    "missing_fields": [], "commit_pin": None}],
+                                    "missing_fields": [], "commit_pin": None,
+                                    "passed": True}],
                         "failed": 0}
 
     def test_tampered_modified_rc1(self, boost, installed):
@@ -669,6 +678,20 @@ class TestVerify:
         r = boost("verify", expect=1)
         assert "missing" in r.out
         assert "1 of 1 item failed verification" in r.out
+
+    def test_ok_status_with_missing_lock_fields_is_not_a_pass(self, boost, installed):
+        # Audit repro: an entry stripped of `version`/`installed_at` still
+        # reports status "ok" (the content digest still matches), but must
+        # still count among the failures rather than reading as a clean row.
+        _strip_lock_fields("brainstorming", "version", "installed_at")
+        r = boost("verify", expect=1)
+        assert "missing lock fields: version, installed_at" in r.out
+        assert "1 of 1 item failed verification" in r.out
+        data = json.loads(boost("verify", "--json", expect=1).out)
+        row = data["skills"][0]
+        assert row["status"] == "ok"
+        assert row["passed"] is False
+        assert data["failed"] == 1
 
     def test_unknown_name_rc1(self, boost, installed):
         r = boost("verify", "ghost", expect=1)
