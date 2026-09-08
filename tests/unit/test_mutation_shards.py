@@ -376,6 +376,135 @@ def test_same_basename_in_different_packages_stays_distinct(tmp_path):
     assert pats == {"boost_cli.core.util.*", "boost_cli.core.rag.util.*"}
 
 
+# --------------------------------------------------------------------------
+# cache-key: the hash half of a shard's actions/cache key
+# --------------------------------------------------------------------------
+
+def _cache_repo(tmp_path):
+    """A fake checkout with one file under every CACHE_KEY_PREFIXES entry,
+    plus a core source file and an irrelevant doc, so a single fixture can
+    exercise inclusion, exclusion, and irrelevance in one place."""
+    (tmp_path / "boost_cli" / "core").mkdir(parents=True)
+    (tmp_path / "boost_cli" / "core" / "store.py").write_text("x = 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_store.py").write_text("def test_a(): pass\n")
+    (tmp_path / "requirements").mkdir()
+    (tmp_path / "requirements" / "mutation-tools.txt").write_text("mutmut==3.7.0\n")
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "mutation_gate.py").write_text("# gate\n")
+    (tmp_path / "scripts" / "mutation_shards.py").write_text("# shards\n")
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github" / "workflows" / "ci.yml").write_text("name: ci\n")
+    (tmp_path / "setup.cfg").write_text("[mutmut]\n")
+    (tmp_path / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "index.html").write_text("<html></html>\n")
+    return tmp_path
+
+
+def test_cache_key_paths_covers_every_prefix_and_excludes_core(tmp_path):
+    repo = _cache_repo(tmp_path)
+    names = {p.relative_to(repo).as_posix() for p in ms.cache_key_paths(repo)}
+    assert names == {
+        "tests/test_store.py",
+        "requirements/mutation-tools.txt",
+        "scripts/mutation_gate.py",
+        "scripts/mutation_shards.py",
+        ".github/workflows/ci.yml",
+        "setup.cfg",
+        "pyproject.toml",
+    }
+    assert "boost_cli/core/store.py" not in names
+    assert "docs/index.html" not in names
+
+
+def test_cache_key_paths_skips_missing_files(tmp_path):
+    """A fixture repo that only sets up part of the tree still works."""
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("x = 1\n")
+    assert [p.name for p in ms.cache_key_paths(tmp_path)] == ["test_a.py"]
+
+
+def test_cache_key_hash_is_deterministic(tmp_path):
+    repo = _cache_repo(tmp_path)
+    first = ms.cache_key_hash(repo)
+    for _ in range(3):
+        assert ms.cache_key_hash(repo) == first
+
+
+def test_cache_key_hash_changes_when_a_relevant_file_changes(tmp_path):
+    repo = _cache_repo(tmp_path)
+    before = ms.cache_key_hash(repo)
+    (repo / "tests" / "test_store.py").write_text("def test_a(): assert False\n")
+    assert ms.cache_key_hash(repo) != before
+
+
+def test_cache_key_hash_changes_when_the_gate_scripts_change(tmp_path):
+    repo = _cache_repo(tmp_path)
+    before = ms.cache_key_hash(repo)
+    (repo / "scripts" / "mutation_gate.py").write_text("# gate v2\n")
+    assert ms.cache_key_hash(repo) != before
+
+
+def test_cache_key_hash_changes_when_ci_yml_changes(tmp_path):
+    repo = _cache_repo(tmp_path)
+    before = ms.cache_key_hash(repo)
+    (repo / ".github" / "workflows" / "ci.yml").write_text("name: ci\non: push\n")
+    assert ms.cache_key_hash(repo) != before
+
+def test_cache_key_hash_ignores_core_source_changes(tmp_path):
+    """The whole point: mutmut's own per-file hashing already handles
+    boost_cli/ reuse, so the cache key must not evict on a core-only edit."""
+    repo = _cache_repo(tmp_path)
+    before = ms.cache_key_hash(repo)
+    (repo / "boost_cli" / "core" / "store.py").write_text("x = 2\n")
+    assert ms.cache_key_hash(repo) == before
+
+
+def test_cache_key_hash_ignores_irrelevant_files(tmp_path):
+    repo = _cache_repo(tmp_path)
+    before = ms.cache_key_hash(repo)
+    (repo / "docs" / "index.html").write_text("<html>changed</html>\n")
+    (repo / "README.md").write_text("hello\n")
+    assert ms.cache_key_hash(repo) == before
+
+
+def test_cache_key_hash_changes_on_a_new_relevant_file(tmp_path):
+    """Content alone is not enough: adding a file must also change the key,
+    or a brand-new test would silently reuse a cache that never ran it."""
+    repo = _cache_repo(tmp_path)
+    before = ms.cache_key_hash(repo)
+    (repo / "tests" / "test_new.py").write_text("def test_b(): pass\n")
+    assert ms.cache_key_hash(repo) != before
+
+
+def test_cache_key_hash_distinguishes_same_bytes_at_different_paths(tmp_path):
+    """Renaming a same-content file must change the key: the path is hashed
+    in too, not just the concatenated bytes."""
+    repo_a = tmp_path / "a"
+    (repo_a / "tests").mkdir(parents=True)
+    (repo_a / "tests" / "test_one.py").write_text("x = 1\n")
+    repo_b = tmp_path / "b"
+    (repo_b / "tests").mkdir(parents=True)
+    (repo_b / "tests" / "test_two.py").write_text("x = 1\n")
+    assert ms.cache_key_hash(repo_a) != ms.cache_key_hash(repo_b)
+
+
+def test_cache_key_hash_is_a_hex_sha256(tmp_path):
+    repo = _cache_repo(tmp_path)
+    key = ms.cache_key_hash(repo)
+    assert len(key) == 64
+    int(key, 16)  # raises ValueError if not valid hex
+
+
+def test_cmd_cache_key_prints_the_hash(tmp_path, capsys):
+    repo = _cache_repo(tmp_path)
+    rc = ms.cmd_cache_key(_ns(root=str(repo)))
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    assert out == ms.cache_key_hash(repo)
+
+
 def test_pattern_is_dotted_on_every_platform(monkeypatch):
     """The dotted prefix must not depend on the OS path separator.
 
