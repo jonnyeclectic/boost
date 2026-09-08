@@ -1072,9 +1072,12 @@ def cmd_update(argv: list[str]) -> int:
         out.info("no taps configured — start with `boost tap --defaults`")
         return 0
     moved = []
+    pinned_skips = 0
     for tname, summary in results.items():
         if "skipped" not in summary:
             catalog.rebuild_tap(registry.get(tname))
+        else:
+            pinned_skips += 1
         # "abc1234 → def5678" is a tap whose tree changed; "already up to date"
         # and "pinned at ..." are not. Only the first invalidates vectors.
         if "→" in summary:
@@ -1090,6 +1093,14 @@ def cmd_update(argv: list[str]) -> int:
             "%d of %d taps could not be refreshed — the rest are up to date. "
             "Drop a dead one with `boost untap <name>`."
             % (len(failures), len(results) + len(failures)), "muted"))
+    if pinned_skips:
+        out.info(out.role(
+            "%d tap%s pinned and left alone — `boost update --force` moves "
+            "%s too, dropping %s pin%s"
+            % (pinned_skips, "s" if pinned_skips != 1 else "",
+               "them" if pinned_skips != 1 else "it",
+               "their" if pinned_skips != 1 else "its",
+               "s" if pinned_skips != 1 else ""), "muted"))
     # A pulled tap can add, drop, or rename catalogue entries, so the
     # completion name cache must not survive an update unrefreshed.
     complete.refresh_names()
@@ -1144,10 +1155,18 @@ def cmd_update(argv: list[str]) -> int:
     upgraded += _update_materialized("rule", lockfile.installed_rules(), results)
     upgraded += _update_materialized("workflow", lockfile.installed_workflows(), results)
     if not upgraded:
-        # Don't claim "everything up to date" when some taps were never
-        # reached — that is exactly the false all-clear this fix exists to stop.
-        out.ok("everything up to date" if not failures
-               else "everything up to date, except the taps above")
+        if pinned_skips and pinned_skips == len(results) and not failures:
+            # Every tap was a pinned skip: nothing was actually checked over
+            # the network, which "everything up to date" would misreport as
+            # a fresh confirmation rather than the truth — the run never left
+            # config.json.
+            out.ok("nothing to refresh — all taps pinned")
+        else:
+            # Don't claim "everything up to date" when some taps were never
+            # reached — that is exactly the false all-clear this fix exists
+            # to stop.
+            out.ok("everything up to date" if not failures
+                   else "everything up to date, except the taps above")
     # Non-zero only when nothing was refreshed at all. A partial run did the job
     # it could do, and failing it would put us back to one dead upstream
     # breaking `boost update` for the other 79.
