@@ -139,6 +139,57 @@ def check_install(entry: dict, installed_count: int) -> list[str]:
     return v
 
 
+def check_installed_version(entry: dict) -> list[str]:
+    """require_version violation for an already-installed lock entry.
+
+    Companion to :func:`check_install`, run retrospectively by ``boost policy
+    check`` instead of at install time. The lock entry already carries the
+    installed version for every kind (skill, rule, workflow — see
+    ``lockfile``'s schema note), so unlike description/capability checks this
+    needs no store read. Honors the same ``policy_enforce`` master switch.
+    """
+    if not config.get("policy_enforce", True):
+        return []
+    if load()["require_version"] and entry.get("version") in (None, "", "0.0.0"):
+        return ["skill has no version (required by policy)"]
+    return []
+
+
+def check_installed_meta(meta: dict, text: str) -> list[str]:
+    """require_description + denied_capabilities violations from a store copy.
+
+    ``meta``/``text`` are a skill's parsed frontmatter and body, as read from
+    its canonical store directory (there is no equivalent on-disk body for a
+    rule or workflow, so callers restrict this to skills). A caller that
+    could not read the store copy honestly must not call this at all — a
+    missing or unreadable file is "not checked", never a silent pass or a
+    false violation. Honors ``policy_enforce``.
+    """
+    if not config.get("policy_enforce", True):
+        return []
+    v: list[str] = []
+    if load()["require_description"] and not meta.get("description"):
+        v.append("skill has no description (required by policy)")
+    v.extend(check_capabilities(meta, text))
+    return v
+
+
+def max_skills_violation(skill_count: int) -> str | None:
+    """A single violation when the installed skill count exceeds max_skills.
+
+    Kept apart from the per-item checks above: the cap is a property of the
+    whole environment, not any one skill, so it must be reported once — not
+    once per installed skill. Honors ``policy_enforce``.
+    """
+    if not config.get("policy_enforce", True):
+        return None
+    pol = load()
+    if pol["max_skills"] is not None and skill_count > int(pol["max_skills"]):
+        return "max_skills limit (%s) exceeded (%s installed)" % (
+            pol["max_skills"], skill_count)
+    return None
+
+
 def check_capabilities(meta: dict, text: str) -> list[str]:
     """Return capability-policy violations for a skill (empty = allowed).
 

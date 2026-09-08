@@ -5535,8 +5535,9 @@ the 2026-08 CLI audit (cluster <code>snapshot-restore-rules-loss</code>); repro 
       </article>
 
       <article class="cap rcard" id="audit-create-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost create: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The frontmatter dump/parse round-trip is lossy, and one asymmetric pair is the root cause:</b>
 <code>frontmatter.dump</code> (<code>frontmatter.py:161-178</code>) quotes only on <code>:</code> or
 surrounding whitespace and escapes <code>"</code> as <code>\"</code>, while <code>_scalar</code>
@@ -5565,7 +5566,7 @@ For evolve (<code>intelligence.py:663</code>), splice the version line and appen
 the original frontmatter text instead of parse+dump, so untouched lines stay byte-identical. The
 shipped <em>frontmatter-scalar-over-coercion</em> item covered type coercion only — this is not a
 duplicate. No flag changes, so <code>docs/commands.html</code> is untouched. Found by the 2026-08
-CLI audit (cluster <code>frontmatter-roundtrip</code>); repro in the audit log.</p>
+CLI audit (cluster <code>frontmatter-roundtrip</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6731,7 +6732,7 @@ stays 0. Found by the 2026-08 CLI audit (cluster fingerprint-completeness); repr
       </article>
 
       <article class="cap rcard" id="audit-health-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost health</code>: CLI audit findings (2026-08)</h3>
         <p><b>The dashboard counts skills only, so it calls a drifted machine healthy.</b> With 1 skill, 2 rules
 and 1 workflow installed and the workflow locally edited, <code>boost health</code> prints
@@ -6815,8 +6816,9 @@ neither targets nor skipped, on the <code>--json</code> path too (<code>quality.
       </article>
 
       <article class="cap rcard" id="audit-policy-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost policy: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost policy check</code> evaluates only <code>blocked_skills</code>/<code>blocked_taps</code>/<code>allowed_taps</code>/<code>min_quality_score</code>
 of the seven rules <code>policy.check_install</code> (<code>boost_cli/core/policy.py:58-79</code>) enforces
 at install time &mdash; <code>require_version</code>, <code>require_description</code>,
@@ -6842,7 +6844,7 @@ print a &ldquo;not checked: &hellip;&rdquo; line for anything still unevaluated 
 <em>enforce=false</em> line when <code>policy_enforce</code> is off; and reword the <code>pin_only</code>
 sentence to name only installs and skill updates, not tap refreshes. Behavior-only, no flag change, so
 <code>docs/commands.html</code> needs no regeneration. Found by the 2026-08 CLI audit (cluster
-<code>policy-check-coverage</code>); repro in the audit log.</p>
+<code>policy-check-coverage</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -6901,7 +6903,7 @@ Found by the 2026-08 CLI audit (clusters <code>test-vs-lint-predicate</code>,
       </article>
 
       <article class="cap rcard" id="audit-verify-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
         <h3><code>boost verify</code>: CLI audit findings (2026-08)</h3>
         <p><b>verify prints a green <code>ok</code> on a row it counts as failed.</b> With a lock rule entry stripped of <code>version</code> and given an empty <code>installed_at</code>, <code>verify</code> renders <em>&ldquo;dotnet-build&nbsp;&nbsp;ok&nbsp;&nbsp;rule &middot; missing lock fields: version, installed_at&rdquo;</em> and then <em>&ldquo;! 1 of 2 items failed verification&rdquo;</em> (exit 1) &mdash; the same row wears the pass token and lands in the failure count. <code>verify --json</code> is no better: <code>status: "ok"</code> beside a non-empty <code>missing_fields</code> and a top-level <code>failed</code>, with no per-row pass/fail signal. Verified mechanism: <code>cmd_verify</code> computes <code>bad</code> from status OR missing fields OR <code>commit_pin == MODIFIED</code> (<code>safety.py:391-393</code>), but the text renderer colors strictly on <code>r['status']</code> via <code>status_role</code> (<code>safety.py:418</code>) without checking membership in <code>bad</code>. Fix (verified recommendation): derive a per-row <code>passed = status in ('ok','quarantined') and not missing_fields and commit_pin != MODIFIED</code>, key the status token's role on it, and add <code>passed</code> to the JSON row. No doc changes needed. Found by the 2026-08 CLI audit (cluster <code>verify-ok-on-failure</code>); repro in the audit log.</p>
         <div class="meta">
@@ -9345,7 +9347,7 @@ about vectors that were refreshed that morning.</p></details>
       </article>
 
       <article class="cap rcard" id="mutation-shards-rerun-full-set-every-push">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CI · Performance</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CI · Performance</span></div>
         <h3>Mutation shards re-run <em>every</em> mutant on every push of the same PR</h3>
         <p><b>&ldquo;Mutation shard actions take about 20 minutes and re-run with each
 commit.&rdquo;</b> The user's words, and the workflow agrees: six
@@ -12114,7 +12116,7 @@ Found by the 2026-08 CLI audit (cluster <code>warnings-on-stdout</code>); repro 
       </article>
 
       <article class="cap rcard" id="audit-ai-degrade-note-blames-path-api-keys-regardless-of-cause-sev">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
         <h3>AI degrade note blames PATH/API keys regardless of cause; several commands fall back with no note at all</h3>
         <p><code>boost simulate</code> prints <code>! AI features need one of `claude` or `gemini` on PATH, or ANTHROPIC_API_KEY set &mdash; using the heuristic fallback</code> in two situations where that diagnosis is false: under <code>BOOST_NO_AI=1</code> with <code>claude</code> on PATH (AI was disabled by env, not missing), and with AI enabled while <code>~/.boost/logs/boost.log</code> records <code>ai: claude CLI call failed: exit 1: &hellip;workspace has not been trusted&hellip;</code> &mdash; the backend ran and failed. A controlled fake <code>claude</code> exiting 3 reproduces the same misblame for <code>evolve</code>. Meanwhile a second group degrades with <b>no note at all</b> when the call was attempted and failed: <code>explain</code> shows the extractive summary with stderr empty, <code>conflict</code> lists pairs as <code>(heuristic)</code> silently, <code>impact</code> and one-shot <code>chat</code> say nothing, and <code>search --smart</code> spent 4.62&nbsp;s then reported <code>60 matches &middot; ranked by full-content BM25</code> with no rerank-failed warning.
 
@@ -12127,7 +12129,7 @@ Found by the 2026-08 CLI audit (cluster <code>ai-fallback-misattributed</code>);
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">one static string blames PATH/keys while boost.log records "claude CLI call failed: exit 1"</span>
+          <span class="m">fix implemented and unit/functional/smoke-tested locally; mutation/eval/full-lint gates unverified — this session had no PyPI/network egress to run them, PR relies on CI</span>
         </div>
       </article>
 
@@ -12193,8 +12195,9 @@ the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-skill-profile-name-slugging-is-inconsistent-distill-o-accept">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>Name slugging is inconsistent: <code>distill -o</code> accepts what <code>import</code> rejects; <code>create</code>/<code>profile</code> slug silently</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>Three commands treat the same problem &mdash; a user-typed name that is not a valid slug &mdash; three
 different ways, and one of them contradicts itself. <code>distill -o "Bad Name!!"</code> writes
 <code>&hellip;/Bad Name!!/SKILL.md</code> and hints <em>&ldquo;install it with <code>boost import ./Bad
@@ -12220,7 +12223,7 @@ slug (<em>&ldquo;name has no letters or digits&rdquo;</em>), and print the slug 
 was typed. Apply it to <code>distill -o</code> (plus <code>shlex.quote</code> in the import hint),
 <code>create</code>, and <code>profile save</code>; sort <code>profile list</code> by the displayed name.
 Regenerate docs/commands.html if create/distill help text changes. Found by the 2026-08 CLI audit
-(cluster generated-name-slugging); repro in the audit log.</p>
+(cluster generated-name-slugging); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -12642,8 +12645,9 @@ CLI audit (cluster <code>silent-output-overwrite</code>); repro in the audit log
       </article>
 
       <article class="cap rcard" id="audit-stray-positionals-and-inapplicable-flags-silently-ignored-ac">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>Stray positionals and inapplicable flags silently ignored across <code>import</code>, <code>config</code>, <code>policy</code>, <code>trust</code>, <code>log</code>, <code>schedule</code>, <code>hooks</code>, <code>snapshot</code></h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>An argparse hygiene gap, uniform across eight commands: optional positionals swallow words the
 action never reads, and inapplicable flags are accepted without comment.
 <code>import fx/multi --all --name ab-testing</code> imports all three skills &mdash;
@@ -12674,7 +12678,7 @@ received a positional or flag it never reads &mdash; <code>config list KEY</code
 <code>import --all</code>/<code>--name</code> a mutually-exclusive group &middot; have
 <code>hooks list EVENT</code> filter rather than ignore, matching the user's evident intent.
 Regenerate docs/commands.html if help strings gain &ldquo;(enable only)&rdquo;-style annotations.
-Found by the 2026-08 CLI audit (cluster <code>stray-args-ignored</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>stray-args-ignored</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -13065,8 +13069,9 @@ locally on a real Windows box.
       </article>
 
       <article class="cap rcard" id="audit-bmad-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost bmad: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>An edited persona is reported as not installed</b> (cluster <code>bmad-edited-persona</code>, med).
 After appending one line to <code>~/.claude/agents/bmad-ux.md</code>, <code>bmad on</code> says
 <em>&ldquo;&#10003; BMAD autopilot ON (global) &mdash; 6 persona subagent(s)&rdquo;</em> and
@@ -13103,7 +13108,7 @@ per host.
 
 <br><br>Found by the 2026-08 CLI audit; repro in the audit log. Behaviour-only fixes &mdash;
 regenerate <code>docs/commands.html</code> only if a summary changes; <code>docs/bmad.md</code>
-must document the edited-persona state.</p>
+must document the edited-persona state.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -13113,7 +13118,7 @@ must document the edited-persona state.</p>
       </article>
 
       <article class="cap rcard" id="audit-browse-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost browse: CLI audit findings (2026-08)</h3>
         <p><b>A curses init failure crashes with a report instead of falling back</b> (cluster
 <code>browse-curses-fallback</code>, med). On fds that claim <code>isatty</code> but are not a pty
@@ -13147,7 +13152,7 @@ a kind column, drop the curated column when nothing is curated, and word the foo
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">curses init failure = exit-70 crash + hosed terminal; piped fallback dumps 765 KB</span>
+          <span class="m">both findings fixed in PR; make check unrunnable in the sandbox (no PyPI/apt egress) — CI is the real gate</span>
         </div>
       </article>
 
@@ -13355,8 +13360,9 @@ b</code> creates a one-skill cohort. No doc changes. Found by the 2026-08 CLI au
       </article>
 
       <article class="cap rcard" id="audit-completions-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost completions: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Generated completions never offer subcommand choices or policy keys.</b>
 <code>__complete boost policy ""</code>, <code>… policy set ""</code>, <code>… schedule ""</code>
 and <code>… completions ""</code> all exit 0 with zero output, while the controls work
@@ -13384,12 +13390,12 @@ Root: <code>configuration.py:769</code> falls back to <code>"bash"</code> uncomm
 fish"), warn before the bash fallback for a real unsupported shell, keep <code>_rc_path</code>'s
 message for the install path. No doc changes beyond the follow-up note in the shipped completions
 item. Found by the 2026-08 CLI audit (cluster <code>completions-shell-detection</code>); repro in
-the audit log.</p>
+the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">TAB after `policy set ` offers nothing; unset $SHELL gets a bash script with no warning</span>
+          <span class="m">CI ran the full pinned toolchain (lint, all mutation shards + gate, evals, full OS/version test matrix, DCO) and came back green with no merge conflict and no open review threads — the local sandbox couldn't run mutmut/vulture/etc. (PyPI blocked), so CI is what actually confirms this landed clean</span>
         </div>
       </article>
 
@@ -13617,8 +13623,9 @@ naive-version-comparison); repro in the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-explain-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3><code>boost explain</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The faithfulness guardrail scores a fully fabricated summary 1.0 when the fabrications are proper
 nouns.</b> With a canned <code>claude</code> replying <em>&ldquo;This skill provisions Kubernetes
 clusters with Terraform and migrates PostgreSQL schemas through Flyway. It triggers whenever the
@@ -13639,7 +13646,7 @@ absent from a small stop-list, and pin a test that the Kubernetes/Terraform repl
 never mistaken for source text. Update
 <code>docs/roadmap/items/runtime-explain-faithfulness-guardrail.md</code> (the shipped guardrail this
 follows up) to record the scope limit. Found by the 2026-08 CLI audit (cluster
-explain-faithfulness-gap); repro in the audit log.</p>
+explain-faithfulness-gap); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -13649,8 +13656,9 @@ explain-faithfulness-gap); repro in the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-export-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost export</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>export picks the archive format from <code>--zip</code> alone, so <code>-o x.zip</code> writes a
 gzip tarball named .zip.</b> <code>export brainstorming -o byname.zip</code> produces
 <em>&ldquo;gzip compressed data&rdquo;</em> per file(1); <code>--zip -o byflag.tar.gz</code>
@@ -13686,7 +13694,7 @@ deterministic archives that stop leaking the local username &mdash; and in the z
 Boostfile via a <code>ZipInfo</code> with <code>external_attr = (0o644|S_IFREG)&lt;&lt;16</code>.
 
 <br><br>Found by the 2026-08 CLI audit (clusters export-archive-format, sync-local-source-repair,
-export-tar-ownership); repro in the audit log.</p>
+export-tar-ownership); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -13742,8 +13750,9 @@ the 2026-08 CLI audit (cluster <code>stderr-stdout-ordering</code>); repro in th
       </article>
 
       <article class="cap rcard" id="audit-index-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost index</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The live progress bar is never cleared before an error</b> <em>(med)</em>. On a TTY a failed
 GitHub search prints <em>&ldquo;&#9619;&#9619;&#9619;&#9617;&#9617;&#9617; 1/3 searching GitHub for
 SKILL.mdError: GitHub code search failed&rdquo;</em> on one line, and a failed page 2 glues
@@ -13771,12 +13780,12 @@ boost-native advice &mdash; while sibling paths in the same function do map thei
 <em>rate limit</em>/<em>HTTP 403</em>/<em>gh auth login</em> and raise with a one-line hint
 (&ldquo;GitHub rate limit hit &mdash; wait a minute or authenticate: <code>gh auth login</code> /
 GH_TOKEN&rdquo;), and make <code>out.err</code> indent hint continuation lines. Found by the 2026-08
-CLI audit (cluster <code>index-ratelimit-hint</code>); repro in the audit log.</p>
+CLI audit (cluster <code>index-ratelimit-hint</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">index: errors glue onto the live progress bar, and 0 results overwrites a 150-entry index</span>
+          <span class="m">PR #802: progress bar clears before raise/warn, 0 results keeps the previous index, gh rate-limit/403 gets a native hint — CI green (lint/eval/test/smoke/mutation), awaiting human merge</span>
         </div>
       </article>
 
@@ -13922,8 +13931,9 @@ the 2026-08 CLI audit (cluster <code>onboard-lock-path-leak</code>); repro in th
       </article>
 
       <article class="cap rcard" id="audit-outdated-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost outdated: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost outdated</code> handles the same condition two ways depending on item kind. With the skill
 <code>brainstorming</code> installed and its source tap untapped, <code>outdated</code> prints
 <em>&ldquo;&#10003; everything up to date&rdquo;</em> &mdash; the skill is silently omitted. Do the same to a
@@ -13940,7 +13950,7 @@ path has no comment justifying the skip. Fix: in the skill loop, append a <em>so
 instead of <code>continue</code>, matching the rule path, and word the footer per reason so it never sends
 source-missing rows to <code>boost update</code>. No flag changes, so <code>docs/commands.html</code> needs no
 regeneration. Found by the 2026-08 CLI audit (cluster <code>outdated-untapped-skill</code>); repro in the
-audit log.</p>
+audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -13950,7 +13960,7 @@ audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-preview-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
         <h3><code>boost preview</code>: CLI audit findings (2026-08)</h3>
         <p><b>Preview strips markdown markers with no substitute when piped, and leaks raw <code>**</code> when a bold span straddles a wrap boundary.</b> Piped <code>preview brainstorming</code> shows 0 lines containing <code>**</code> where piped <code>cat</code> shows the raw 22 — the markers are removed and no colour replaces them, <code>---</code> prints literally, and a wrapped <code>&gt; quote</code> continuation loses its <code>&gt;</code>; neither raw Markdown nor a faithful render. On a TTY at <code>COLUMNS=60</code> the reverse bug: <b>10 lines leak literal <code>**</code></b> (0 at 120 columns) because <code>_render_markdown</code> wraps first and runs <code>_inline</code> per chunk, and <code>out.wrap</code>'s atomic-span protection (<code>output.py:369-390</code>, <code>_CODE_SPAN_RE</code>) covers only backtick spans. Fix per the verified recommendation: in <code>cmd_preview</code> (<code>boost_cli/commands/info.py:614-677</code>) emit the raw body when <code>not sys.stdout.isatty()</code>, mirroring <code>boost cat</code>; and extend the atomic-token handling in <code>out.wrap</code> to treat <code>**…**</code> like a backtick span (or apply <code>_inline</code> before wrapping with bold state carried across chunks). Regenerate <code>docs/commands.html</code>.<br><br><b>The title bar shows <code>v?</code> where <code>info</code>/<code>list</code>/<code>search</code> show 0.0.0 for the same skill.</b> Observed: <code>● ● ●  brainstorming · v? · sickn33/antigravity-awesome-skills</code> while <code>info</code> prints <code>version 0.0.0</code> — and verification found it broader than filed: <em>every</em> skill whose SKILL.md omits <code>version:</code> disagrees, installed or not, because <code>cmd_preview</code> reads raw frontmatter while <code>catalog.scan_dir</code> normalises a missing version to "0.0.0" (<code>core/catalog.py:117</code>). The same titlebar line already falls back to the lock/catalog for the <em>tap</em>; version simply missed the pattern. One-line fix at <code>info.py:673</code>: <code>meta.get("version") or (lock or cat or {}).get("version") or "?"</code>, plus a unit test asserting preview and info agree.<br><br>Found by the 2026-08 CLI audit (clusters <code>preview-markdown-render</code>, <code>preview-version-placeholder</code>); repro in the audit log.</p>
         <div class="meta">
@@ -14032,7 +14042,7 @@ Found by the 2026-08 CLI audit (clusters <code>recommend-trending-provenance</co
       </article>
 
       <article class="cap rcard" id="audit-replay-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost replay: CLI audit findings (2026-08)</h3>
         <p><b><code>replay list</code>'s ID and WHEN describe two different instants on one row.</b> <code>replay list --json</code> after two installs 4 s apart: <code>{"id": "20260831T140213Z", "updated": "2026-08-31T14:02:09Z"}</code>. <code>lockfile.write()</code> (<code>boost_cli/core/lockfile.py:78-99</code>) stamps the history filename with <em>now</em> &mdash; the moment the outgoing lock becomes historical &mdash; but that snapshot's own <code>updated</code> field was stamped by the <em>previous</em> write, and <code>cmd_replay list</code> (<code>boost_cli/commands/team.py:592</code>) prints the two side by side as if they were one instant; <code>replay show</code> reuses the earlier one. Fix: stamp the history filename with the lock's own <code>updated</code> so the id equals the state time, or relabel the column (e.g. STATE FROM) and note the distinction in <code>replay show</code>'s heading.
 
@@ -14048,7 +14058,7 @@ Found by the 2026-08 CLI audit (clusters <code>replay-id-time-semantics</code>, 
       </article>
 
       <article class="cap rcard" id="audit-run-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost run: CLI audit findings (2026-08)</h3>
         <p><b><code>run --print</code>'s provenance banner names the wrong command.</b> The first line of the emitted runner reads <code># Generated by `boost adapt brainstorming --to agents-sdk`. Do not edit by hand.</code> &mdash; but that command produces a 9-line Agent module, while this is a 55-line runner with <code>_boost_brain</code>, <code>read_file</code>/<code>list_dir</code>/<code>grep</code> tools and <code>Runner.run_sync</code>. The banner's stated purpose is provenance (&ldquo;Do not edit by hand&rdquo; &mdash; regenerate instead), and the command it names cannot regenerate the file: <code>adapters.render_runner</code> (<code>boost_cli/core/adapters.py:539-562</code>) returns <code>render_agents_sdk(&hellip;)</code> plus tools and a main, inheriting the agents-sdk banner from line 267 verbatim. Fix: in <code>render_runner</code>, replace the first line with <code># Generated by `boost run NAME [TARGET] --print`. Do not edit by hand.</code> (including TARGET when given), and add a unit test asserting the runner's banner names <code>boost run</code>. No flag or summary changes, so docs/commands.html needs no regeneration. Found by the 2026-08 CLI audit (cluster <code>run-print-banner</code>); repro in the audit log.</p>
         <div class="meta">
@@ -14060,13 +14070,15 @@ Found by the 2026-08 CLI audit (clusters <code>replay-id-time-semantics</code>, 
       </article>
 
       <article class="cap rcard" id="audit-schedule-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost schedule: CLI audit findings (2026-08)</h3>
         <p>With a launchd plist that lacks a <code>StartInterval</code> key, <code>boost schedule status</code> prints <em>"platform darwin (launchd) &middot; scheduled yes &middot; interval every None &middot; next run unknown"</em> — the kv line interpolates a bare <code>None</code> (the <code>--json</code> output is fine: <code>"interval": null</code>). Verification found the same unguarded parse is worse than cosmetic: with <code>&lt;integer&gt;0&lt;/integer&gt;</code> as the interval, the next-run loop <code>while nxt &lt; now: nxt += timedelta(seconds=secs)</code> never advances and <code>schedule status</code> hangs forever — the repro run was killed at 30&nbsp;s (exit 124). The control case <code>43200</code> renders correctly as "every 12h".
 
 Boost's own <code>schedule enable</code> only writes the <code>_INTERVALS</code> values (6h/12h/daily), so a zero or absent interval means a hand-edited or third-party plist — but a status command that can hang forever on one is still a real defect. One guard fixes both: in <code>boost_cli/commands/configuration.py:878-889</code>, compute interval/next-run only when the regex matched <b>and</b> <code>int(m.group(1)) &gt; 0</code>, otherwise print <em>"interval&nbsp;&nbsp;unknown (plist has no usable StartInterval)"</em> at the kv line (<code>configuration.py:911-913</code>). Add a unit test over both plist shapes. No doc changes.
 
-Found by the 2026-08 CLI audit (cluster <code>schedule-interval-display</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>schedule-interval-display</code>); repro in the audit log.
+
+<b>PR 758 implements the fix</b> (a pure <code>_plist_interval_seconds</code> helper plus new unit + functional tests over both malformed-plist shapes) and stays <code>inflight</code> rather than <code>shipped</code>: this run's sandbox returned 403 for every PyPI/apt request, so <code>make venv</code> could not install the pinned toolchain and the required <code>make check</code> gate (lint · eval · test · smoke · mutation) could not be run as specified. What was verified instead, with the system-provided <code>ruff</code>/<code>mypy</code>/<code>pytest</code> on Python 3.12: <code>ruff</code> and <code>mypy</code> clean on the changed file; the full <code>tests/unit</code> + <code>tests/functional</code> suite passes except 3 pre-existing <code>chmod</code>-permission tests that fail identically on unmodified <code>main</code> (root ignores file-mode bits); and <code>tests/smoke.sh</code> reproduces the same 5 pre-existing failures on unmodified <code>main</code>. CI has real network access and should run the full gate before merge.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -14076,15 +14088,16 @@ Found by the 2026-08 CLI audit (cluster <code>schedule-interval-display</code>);
       </article>
 
       <article class="cap rcard" id="audit-search-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost search: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Truncation counts code points, so CJK rows overflow the pane.</b> At <code>COLUMNS=60</code>, 14 search rows measure exactly 60 cells but <code>prompt-optimizer [skill] 分析原始提示，识别意图和…</code> measures <b>72 cells</b> (60 codepoints, East-Asian-width W/F = 2). <code>out.truncate</code> (<code>core/output.py:313-329</code>) clips with <code>len()</code> and slicing while the same module already owns <code>_char_width</code>/<code>visible_len</code> (<code>output.py:341-364</code>) — and the defect is wider than search: <code>truncate</code> also budgets columns in list/preview/browse (<code>discovery.py:202,913,1572,1590,1716,1727</code>) and <code>search_layout</code> sizes the name column with <code>len(n)</code> (<code>output.py:576-616</code>). Fix once in <code>truncate</code> — walk chars accumulating cell width, reserve the ellipsis — and size columns with <code>visible_len</code>; pin with a W-width fixture at <code>COLUMNS=60</code>.
 
 <b><code>search --json</code> silently ignores <code>--smart</code>.</b> <code>search code review --json</code> and <code>search code review --json --smart</code> are byte-identical, with nothing on stderr either — a script cannot even detect the dropped flag. The cause is ordering: <code>cmd_search</code>'s <code>if args.as_json: print(...); return 0</code> (<code>discovery.py:134-136</code>) sits above the <code>if args.smart:</code> rerank branch (<code>discovery.py:152-159</code>). Move the rerank (and its ai-unavailable fallback warn, on stderr) above the JSON branch and add a <code>ranker</code> field to the JSON; test that <code>--json --smart</code> under <code>BOOST_NO_AI=1</code> warns on stderr with stdout still valid JSON.
 
 <b>The 'N matches' footer reports the retrieval cap, not the match count.</b> One query, three limits: <code>--limit 1</code> → <em>"60 matches"</em>, <code>--limit 16</code> → <em>"64 matches"</em>, <code>--limit 1000</code> → <em>"2648 matches"</em> — exactly <code>max(60, limit*4)</code>, because <code>cmd_search</code> retrieves with <code>k=max(60, args.limit*4)</code> (<code>discovery.py:130</code>) and prints <code>len(scored)</code> (<code>discovery.py:181-182</code>), which <code>rag.py:903-910</code> caps at k. Word the footer from what is known: below k it is the true count; at the cap say <em>"top N of K+ retrieved"</em> (or have retrieve return the total hit count). Keep the ranker label unchanged — the eval baseline pins it. No flag changes, so <code>docs/commands.html</code> needs no regeneration.
 
-Found by the 2026-08 CLI audit (clusters <code>cjk-cell-width</code>, <code>search-json-smart</code>, <code>search-match-count</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (clusters <code>cjk-cell-width</code>, <code>search-json-smart</code>, <code>search-match-count</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -14111,13 +14124,14 @@ Found by the 2026-08 CLI audit (cluster <code>simulate-text-polish</code>); repr
       </article>
 
       <article class="cap rcard" id="audit-sync-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost sync: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Repairing a missing store dir silently skips a blocked agent link — only a second run reports it.</b> With the store dir deleted and a foreign dir at <code>~/.windsurf/skills/brainstorming</code>: <code>sync --diff</code> showed only missing-store plus 4 stale links, nothing about windsurf; the first <code>sync</code> printed <em>"&#10003; reinstalled missing brainstorming from sickn33/antigravity-awesome-skills"</em> with no windsurf mention (the link was not created — lock agents ended as claude-code, cursor, antigravity); only a second <code>sync</code> said <em>"! 1 agent link could not be created: brainstorming &rarr; windsurf (~/.windsurf/skills/brainstorming in the way)…"</em>. Cause: <code>sync_plan</code> (<code>core/store.py:1471-1473</code>) <code>continue</code>s past link classification when the store dir is missing, and <code>sync_apply</code> (<code>store.py:1651</code>) discards <code>install()</code>'s <code>InstallResult</code>, whose <code>.conflicts</code> names the refused link. Surface those conflicts as blocked-link warnings and still classify agent links for a missing-store entry (or re-plan after repair). This is the residual missing-store case of the shipped fix — note it in <code>docs/roadmap/items/sync-reported-success-for-a-link-it-refused.md</code>. Unit test: missing store + foreign dir reported in one run.
 
 <b><code>--diff</code> renders blocked links as a raw Python tuple, and the two modes disagree on formatting.</b> Observed: <em>"==&gt; agent links blocked by a foreign file (1)"</em> then <code>('brainstorming', 'windsurf', '/private/tmp/…/.windsurf/skills/brainstorming')</code> — <code>_PAIR_KEYS</code> (<code>commands/pkg.py:581-582</code>) covers only 2-tuples, so the 3-tuple falls to the <code>str()</code> else branch (<code>pkg.py:620-625</code>). Also apply says <em>"removed stale link /private/tmp/…/ghost"</em> where <code>--diff</code> shows <code>~/.claude/skills/ghost</code> (<code>store.py:1634</code> uses raw absolute paths), and <code>sync --diff --json</code> is indent=2 (<code>pkg.py:603</code>) while <code>sync --json</code> is one line (<code>pkg.py:660-662</code>). Fix in <code>cmd_sync</code>: a blocked_links branch printing <em>"brainstorming &rarr; windsurf (~/.windsurf/skills/brainstorming in the way)"</em>, <code>_tilde</code> paths in apply's action strings, one <code>json.dumps</code> style. No flag changes, so <code>docs/commands.html</code> needs no regeneration.
 
-Found by the 2026-08 CLI audit (clusters <code>sync-blocked-link-report</code>, <code>sync-diff-formatting</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (clusters <code>sync-blocked-link-report</code>, <code>sync-diff-formatting</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -14191,7 +14205,7 @@ Found by the 2026-08 CLI audit (clusters <code>tap-local-path-diagnosis</code>,
       </article>
 
       <article class="cap rcard" id="audit-taps-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
         <h3>boost taps: CLI audit findings (2026-08)</h3>
         <p><b>The UPDATED column mixes <code>@sha</code>, ISO dates and relative times, unexplained</b> (low).
 One real table reads <em>&ldquo;anthropics/skills&nbsp;18&nbsp;2026-07-24&rdquo;</em>,
@@ -14247,7 +14261,7 @@ Found by the 2026-08 CLI audit (cluster <code>unpin-trailer-order</code>); repro
       </article>
 
       <article class="cap rcard" id="audit-untap-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
         <h3><code>boost untap</code>: CLI audit findings (2026-08)</h3>
         <p><b>untap accepts only one NAME while tap accepts several SPECs.</b> <code>untap minio/skills anthropics/skills</code> answers <em>&ldquo;Error: unrecognized arguments: anthropics/skills&rdquo;</em> (exit 2, usage <code>boost untap [-h] [-f] name</code>), while <code>tap a b c</code> clones three in parallel &mdash; the reverse operation needs one invocation per tap. Verified: <code>cmd_tap</code> declares <code>spec</code> with <code>nargs='*'</code> (<code>taps.py:110-112</code>) and <code>cmd_untap</code> declares a bare single positional (<code>taps.py:178</code>); the per-tap dependent-item warning at <code>taps.py:187-200</code> already operates per tap, so looping is mechanical, not a redesign. Fix: make <code>name</code> <code>nargs='+'</code>, loop the existing dependent/confirm/remove body over each name, and return non-zero if any iteration failed. Regenerate <code>docs/commands.html</code> for the usage line. Found by the 2026-08 CLI audit (cluster <code>untap-single-name</code>); repro in the audit log.</p>
         <div class="meta">
@@ -14259,7 +14273,7 @@ Found by the 2026-08 CLI audit (cluster <code>unpin-trailer-order</code>); repro
       </article>
 
       <article class="cap rcard" id="audit-update-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Performance</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Performance</span></div>
         <h3><code>boost update</code>: CLI audit findings (2026-08)</h3>
         <p><b>update pulls all taps serially with no progress indicator: ~14 s no-op over 20 taps</b> (med). A plain <code>update</code> over 20 taps with nothing to fetch took <b>13.93 s</b> under TTY (verifier re-measured 13.89 s), <code>update --force</code> 17.82 s; each line appears only after its ~0.7 s pull, nothing on screen between lines. <code>registry.update()</code> (<code>registry.py:465-525</code>) is a plain <code>for tap in targets:</code> loop calling <code>gitutil.pull</code>/<code>clone_shallow</code> serially &mdash; the exact latency-bound pattern <code>registry.add_many</code> already parallelises for clones. Fix: pull in a <code>ThreadPoolExecutor</code> mirroring <code>add_many</code>, keep catalog rebuilds and the single config write serial on the caller's thread, and print a <em>refreshing N taps&hellip;</em> line or spinner while pulls run.
 <br><br>
@@ -14273,9 +14287,10 @@ Found by the 2026-08 CLI audit (cluster <code>unpin-trailer-order</code>); repro
       </article>
 
       <article class="cap rcard" id="audit-who-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost who</code>: CLI audit findings (2026-08)</h3>
-        <p><b>who's SKILLS column (and JSON <code>skills</code>) counts every journal subject, not skills.</b> On the audit machine the table read <em>&ldquo;USER jonny &middot; EVENTS 35 &middot; SKILLS 29 &middot; INSTALLS 5&rdquo;</em> &mdash; and those 29 &ldquo;skills&rdquo; were 20 tap names, the string <em>&ldquo;10152 passages&rdquo;</em> (a reindex event), 5 cohort names and 3 real items; <code>who --json</code> lists <em>&ldquo;anthropics/skills&rdquo;</em>, <em>&ldquo;pilot&rdquo;</em> and <em>&ldquo;10152 passages&rdquo;</em> under <code>skills</code>. The verifier reproduced it on a narrower run: 25 entries, of which 19 tap owner/repo names from <code>update --force</code> plus <em>&ldquo;pilot&rdquo;</em> and <em>&ldquo;all&rdquo;</em>, against only 2 real installed items. Verified mechanism: <code>cmd_who</code>'s aggregate branch (<code>team.py:735-744</code>) does <code>if e.get('subject'): u['skills'].add(e['subject'])</code> unconditional on action, while the per-skill focus branch just above (<code>team.py:708-718</code>) already filters to the expertise tuple <code>('install','edit','evolve','distill','tag')</code>. Fix (verified recommendation): apply that same action filter in the aggregate loop &mdash; or, if the broader meaning is intended, rename the column and JSON key to SUBJECTS. No doc changes needed. Found by the 2026-08 CLI audit (cluster <code>who-subject-counting</code>); repro in the audit log.</p>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p><b>who's SKILLS column (and JSON <code>skills</code>) counts every journal subject, not skills.</b> On the audit machine the table read <em>&ldquo;USER jonny &middot; EVENTS 35 &middot; SKILLS 29 &middot; INSTALLS 5&rdquo;</em> &mdash; and those 29 &ldquo;skills&rdquo; were 20 tap names, the string <em>&ldquo;10152 passages&rdquo;</em> (a reindex event), 5 cohort names and 3 real items; <code>who --json</code> lists <em>&ldquo;anthropics/skills&rdquo;</em>, <em>&ldquo;pilot&rdquo;</em> and <em>&ldquo;10152 passages&rdquo;</em> under <code>skills</code>. The verifier reproduced it on a narrower run: 25 entries, of which 19 tap owner/repo names from <code>update --force</code> plus <em>&ldquo;pilot&rdquo;</em> and <em>&ldquo;all&rdquo;</em>, against only 2 real installed items. Verified mechanism: <code>cmd_who</code>'s aggregate branch (<code>team.py:735-744</code>) does <code>if e.get('subject'): u['skills'].add(e['subject'])</code> unconditional on action, while the per-skill focus branch just above (<code>team.py:708-718</code>) already filters to the expertise tuple <code>('install','edit','evolve','distill','tag')</code>. Fix (verified recommendation): apply that same action filter in the aggregate loop &mdash; or, if the broader meaning is intended, rename the column and JSON key to SUBJECTS. No doc changes needed. Found by the 2026-08 CLI audit (cluster <code>who-subject-counting</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -16274,7 +16289,16 @@ to the deterministic extractive summary <code>cmd_explain</code> already ships
 for the no-AI case (description + outline + key rules) — or append a
 low-confidence caveat. Turns "a human notices the drift next week" into "the
 tool refuses to show an ungrounded explanation," closing the gap between
-detecting hallucinations and preventing them.</p></details>
+detecting hallucinations and preventing them.
+
+<br><br><b>Scope limit found and closed (2026-09, <code>audit-explain-findings</code>).</b>
+The shipped <code>salient_terms()</code> only recognized backtick spans, code-shaped
+tokens, and ALL-CAPS acronyms as checkable — a fabrication stated as plain,
+grammatical English (<em>"provisions Kubernetes clusters with Terraform"</em>) had
+nothing for it to catch and scored 1.0. It now also treats a capitalized word that
+is not the first word of its sentence as salient, which is the shape a fabricated
+technology or product name actually takes. See <code>boost_cli/core/faithfulness.py</code>
+and <code>tests/unit/test_faithfulness.py</code>.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -16941,8 +16965,9 @@ Found by the 2026-08 CLI audit (cluster <code>trust-tampered-manifest</code>); r
       </article>
 
       <article class="cap rcard" id="audit-attest-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Trust · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Trust · UX</span></div>
         <h3>boost attest: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>attest --verify</code> misdiagnoses a missing artifact as a content change.</b> After
 deleting <code>~/.agents/skills/brainstorming</code>, <code>boost attest --verify brainstorming</code>
 prints <em>&ldquo;! brainstorming: store content no longer matches the lock sha&rdquo;</em> (exit 1)
@@ -16961,7 +16986,7 @@ wording for the genuinely modified case, and in <code>--json</code> add a <code>
 (<code>missing</code>/<code>modified</code>) rather than repurposing the boolean. No doc changes.
 
 <br><br>Found by the 2026-08 CLI audit (cluster <code>attest-missing-store-dir</code>); repro in the
-audit log.</p>
+audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>

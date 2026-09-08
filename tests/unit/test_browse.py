@@ -242,6 +242,45 @@ class TestDedupe:
             "the counts must account for every input row"
 
 
+class TestPlainFooter:
+    """core/browse.py's ``plain_footer`` — the non-interactive `boost browse`
+    fallback's footer line. Cluster ``browse-plain-dump``: the old fallback's
+    footer said "10152 skills" over a catalog that was skills+rules+workflows,
+    so a reader had no way to tell what was actually in the table above it.
+    """
+
+    def test_empty_catalogue(self):
+        assert browse.plain_footer([]) == "0 items: none"
+
+    def test_singular_item_and_kind(self):
+        assert browse.plain_footer([_e("a", kind="skill")]) == "1 item: 1 skill"
+
+    def test_breaks_down_by_kind_in_fixed_order(self):
+        rows = [_e("a", kind="workflow"), _e("b", kind="skill"),
+                _e("c", kind="rule"), _e("d", kind="skill")]
+        assert browse.plain_footer(rows) == \
+            "4 items: 2 skills · 1 rule · 1 workflow"
+
+    def test_a_kind_absent_from_the_input_is_not_listed(self):
+        rows = [_e("a", kind="skill"), _e("b", kind="skill")]
+        assert browse.plain_footer(rows) == "2 items: 2 skills"
+
+    def test_missing_kind_counts_as_skill(self):
+        rows = [_e("a"), _e("b")]
+        del rows[0]["kind"]
+        assert browse.plain_footer(rows) == "2 items: 2 skills"
+
+    def test_an_unrecognised_kind_still_counts_toward_the_total(self):
+        rows = [_e("a", kind="skill"), _e("b", kind="plugin")]
+        assert browse.plain_footer(rows) == "2 items: 1 skill · 1 other"
+
+    def test_total_always_equals_the_row_count(self):
+        rows = [_e("a", kind="skill"), _e("b", kind="rule"),
+                _e("c", kind="workflow"), _e("d", kind="mystery")]
+        footer = browse.plain_footer(rows)
+        assert footer.startswith("4 items:")
+
+
 class TestFocusMovement:
     """Arrows cross pane boundaries — item 2 of the request."""
 

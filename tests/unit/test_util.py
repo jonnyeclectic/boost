@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from boost_cli.core import util
+from boost_cli.errors import BoostError
 
 ISO_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -147,6 +148,32 @@ class TestRelTime:
         assert util.rel_time(None) == "?"
 
 
+class TestIsoDate:
+    def test_matches_git_date_short_format(self):
+        # git's `--date=short` on the same instant: no time-of-day, no "ago"
+        assert util.iso_date("2026-07-16T01:00:00Z") == "2026-07-16"
+
+    def test_recent_instant_still_returns_a_date_not_ago(self):
+        # the whole point: `_tap_updated`'s two branches must agree on shape
+        # even when the cache was generated seconds ago — rel_time would say
+        # "1s ago" here, iso_date must not.
+        now = datetime.now(UTC)
+        assert util.iso_date(now.strftime(ISO_FMT)) == now.strftime("%Y-%m-%d")
+
+    def test_far_past_instant(self):
+        then = datetime(2020, 1, 2, 3, 4, 5, tzinfo=UTC)
+        assert util.iso_date(then.strftime(ISO_FMT)) == "2020-01-02"
+
+    def test_junk_passthrough(self):
+        assert util.iso_date("not-a-date") == "not-a-date"
+
+    def test_empty_becomes_question_mark(self):
+        assert util.iso_date("") == "?"
+
+    def test_none_becomes_question_mark(self):
+        assert util.iso_date(None) == "?"
+
+
 class TestHumanSize:
     @pytest.mark.parametrize("n,expected", [
         (0, "0B"),
@@ -189,6 +216,44 @@ class TestSlugify:
 
     def test_digits_and_dashes_kept(self):
         assert util.slugify("tdd-workflow-3") == "tdd-workflow-3"
+
+
+class TestResolveSlug:
+    """The shared helper for a user-typed name: slugify, refuse when there is
+    nothing to slug, and never swap the name for another without saying so."""
+
+    def test_already_a_slug_is_returned_unchanged_and_silent(self, capsys):
+        assert util.resolve_slug("tdd-workflow-3") == "tdd-workflow-3"
+        assert capsys.readouterr().out == ""
+
+    def test_differing_slug_is_printed_as_a_note(self, capsys):
+        assert util.resolve_slug("My Great Skill") == "my-great-skill"
+        out = capsys.readouterr().out
+        assert "my-great-skill" in out
+        assert "My Great Skill" in out
+
+    def test_what_names_the_field_in_the_note_and_the_error(self, capsys):
+        util.resolve_slug("Bad Name!!", what="profile name")
+        assert "profile name" in capsys.readouterr().out
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("!!!", what="profile name")
+        assert "profile name" in exc.value.message
+
+    def test_empty_raises_instead_of_falling_back_to_skill(self):
+        with pytest.raises(BoostError) as exc:
+            util.resolve_slug("")
+        assert "no letters or digits" in exc.value.message
+
+    def test_punctuation_only_raises_instead_of_falling_back_to_skill(self):
+        # Unlike slugify("!!!") == "skill", a user-typed name with nothing to
+        # slug is a mistake to report, not a name to invent.
+        with pytest.raises(BoostError):
+            util.resolve_slug("!!!")
+
+    def test_literal_skill_is_not_mistaken_for_the_fallback(self):
+        # "skill" slugifies to itself, so it must not raise even though it is
+        # the same string slugify() falls back to for punctuation-only input.
+        assert util.resolve_slug("skill") == "skill"
 
 
 class TestSha256Dir:

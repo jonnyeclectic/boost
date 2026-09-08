@@ -2,14 +2,14 @@
 id: audit-update-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Performance
 complexity: M
 impact: Med
 wow: 1
 note: a no-op update over 20 taps takes ~14 s serial; --force drops 20 pins without a word
 order: 301
-owner:
+owner: loop/update-parallel-pins
 pr:
 title: "<code>boost update</code>: CLI audit findings (2026-08)"
 ---

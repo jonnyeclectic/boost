@@ -395,6 +395,21 @@ class TestTruncate:
     def test_width_at_or_below_ellipsis_returns_ellipsis(self):
         assert output.truncate("abcdef", 1) == "…"
 
+    def test_clips_cjk_text_by_display_width_not_codepoint_count(self):
+        # A codepoint-counted clip lets each double-width char through as if
+        # it cost one column, so a 60-codepoint CJK string measured 72 cells
+        # on a 60-column pane — the bug this pins.
+        text = "分析原始提示，识别意图和目标，" * 3     # far more than 60 cells
+        clipped = output.truncate(text, 60)
+        assert output.visible_len(clipped) <= 60
+
+    def test_cjk_clip_never_cuts_a_wide_char_in_half(self):
+        clipped = output.truncate("名" * 10, 5)
+        # 5 columns: two whole "名" (4 cols) + a 1-col ellipsis, never a lone
+        # half-character.
+        assert clipped == "名名…"
+        assert output.visible_len(clipped) == 5
+
 
 class TestBadge:
     def test_plain_when_no_color(self, monkeypatch):
@@ -721,6 +736,17 @@ class TestHelpers:
     def test_err_with_hint(self, capsys):
         output.err("boom", hint="try again")
         assert capsys.readouterr().err == "Error: boom\n  hint: try again\n"
+
+    def test_err_with_multiline_hint_indents_continuation_lines(self, capsys):
+        # A hint carrying its own newlines (raw gh stderr, say) used to print
+        # its continuation lines flush at column 0, disconnected from the
+        # "hint:" label on the first line.
+        output.err("boom", hint="line one\nline two\nline three")
+        assert capsys.readouterr().err == (
+            "Error: boom\n"
+            "  hint: line one\n"
+            "        line two\n"
+            "        line three\n")
 
     def test_info(self, capsys):
         output.info("msg")
@@ -1440,6 +1466,25 @@ class TestSearchLayout:
         lay = output.search_layout(44, ["x" * 16], ["skill"], [])
         assert (lay.name_w, lay.kind_w, lay.tap_w, lay.desc_w) == (16, 0, 0, 17)
 
+    def test_name_column_sizes_by_display_width_not_codepoints(self):
+        # A codepoint-counted name_w undersizes the column for a CJK name (each
+        # char is 2 display cells), which then shrinks the description budget
+        # by less than the name column actually costs on screen.
+        cjk_name = "翻译助手"                          # 4 codepoints, 8 cells
+        lay = output.search_layout(100, [cjk_name], ["skill"], ["a/b"])
+        assert lay.name_w == output.visible_len(cjk_name)
+
+    def test_cjk_heavy_row_still_fits_a_60_column_pane(self):
+        # The audit's own repro: a CJK description measured 72 cells at
+        # COLUMNS=60 because `truncate` clipped by codepoint count.
+        lay = output.search_layout(60, ["prompt-optimizer"], ["skill"],
+                                   ["fixture-tap"])
+        row = output.format_search_row(
+            "prompt-optimizer", "分析原始提示，识别意图和目标，制定详细的执行计划",
+            "skill", "fixture-tap", 1.0, curated=False, installed=False,
+            lay=lay)
+        assert output.visible_len(row) + 2 <= 60
+
     def test_every_assembled_row_fits_the_terminal(self):
         """The property behind the pinned COLUMNS=60 clamp test: whatever the
         inputs, a row built from the layout measures within the terminal
@@ -1718,6 +1763,44 @@ class TestWrap:
 
     def test_an_unterminated_glued_backtick_extends_in_linear_time(self):
         text = "`" + "x" * 200_000
+        start = time.perf_counter()
+        output.wrap(text, 80)
+        assert time.perf_counter() - start < 2.0
+
+    def test_a_bold_span_is_never_split(self):
+        # Regression: `commands/info.py` wraps a line and colorizes each
+        # wrapped chunk after, via a regex that only matches a `**...**` pair
+        # inside the SAME chunk — a bold span split across the wrap boundary
+        # left literal `**` markers in the rendered output.
+        text = "before this a **very important warning** comes after"
+        lines = output.wrap(text, 20)
+        assert any("**very important warning**" in ln for ln in lines)
+        for ln in lines:
+            assert ln.count("**") % 2 == 0
+
+    def test_a_bold_span_wider_than_the_pane_stays_whole(self):
+        span = "**" + "x" * 50 + "**"
+        lines = output.wrap("run " + span + " now", 20)
+        assert span in lines
+
+    def test_a_bold_span_and_a_code_span_are_each_kept_whole(self):
+        text = "the **bold part** and the `code part` must both stay intact"
+        lines = output.wrap(text, 15)
+        assert any("**bold part**" in ln for ln in lines)
+        assert any("`code part`" in ln for ln in lines)
+
+    def test_glued_punctuation_stays_attached_to_a_bold_span(self):
+        assert output.wrap("(see **x y**)", 40) == ["(see **x y**)"]
+
+    def test_an_unterminated_bold_marker_wraps_as_ordinary_words(self):
+        # A half-open `**` is a typo in the source, not a reason to refuse to
+        # render it — it falls back to plain word-wrapping like an
+        # unterminated backtick does.
+        text = "this has an **unterminated bold marker with no close"
+        assert " ".join(output.wrap(text, 12)).split() == text.split()
+
+    def test_an_unterminated_glued_bold_marker_extends_in_linear_time(self):
+        text = "**" + "x" * 200_000
         start = time.perf_counter()
         output.wrap(text, 80)
         assert time.perf_counter() - start < 2.0

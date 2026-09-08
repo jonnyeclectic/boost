@@ -215,6 +215,24 @@ class TestDistill:
         assert "aborted" in r.out
         assert dest.read_text(encoding="utf-8") == "precious"
 
+    def test_output_name_is_slugified_not_passed_through_raw(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Bug: `distill -o "Bad Name!!"` used to write a directory that
+        # `boost import` then refused as an invalid skill name.
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "tdd-workflow", "cowboy-coding", "-o", "Bad Name!!")
+        assert (tmp_path / "bad-name" / "SKILL.md").is_file()
+        assert not (tmp_path / "Bad Name!!").exists()
+        assert "install it with `boost import ./bad-name`" in r.out
+
+    def test_output_name_with_nothing_to_slug_is_refused(
+            self, boost, tapped, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "tdd-workflow", "cowboy-coding", "-o", "!!!",
+                  expect=1)
+        assert "output name has no letters or digits" in r.err
+        assert not list(tmp_path.glob("*/SKILL.md"))
+
 
 # ---------------------------------------------------------------- simulate
 
@@ -514,6 +532,24 @@ class TestEvolve:
         assert evs[0]["subject"] == "brainstorming"
         assert evs[0]["version"] == "1.4.1"
 
+    def test_apply_preserves_untouched_frontmatter_lines_byte_for_byte(
+            self, boost, installed):
+        # Bug: evolve's heuristic path parsed the whole frontmatter to a
+        # dict and dumped it back, rewriting every field through dump()'s
+        # own quoting rules — turning `date_added: "2026-02-27"` into the
+        # bare, differently-typed `date_added: 2026-02-27` even though the
+        # feedback never mentioned it.
+        skill_md = paths.store_dir() / "brainstorming" / "SKILL.md"
+        _, body = frontmatter.parse(skill_md.read_text(encoding="utf-8"))
+        quoted_line = 'date_added: "2026-02-27"'
+        skill_md.write_text(
+            "---\nname: brainstorming\ndescription: v1\nversion: 1.4.0\n"
+            + quoted_line + "\n---\n\n" + body, encoding="utf-8")
+        boost("evolve", "brainstorming", "--apply", "--feedback", "cap ideas")
+        text = skill_md.read_text(encoding="utf-8")
+        assert quoted_line in text
+        assert frontmatter.parse(text)[0]["version"] == "1.4.1"
+
     def test_ai_reply_without_bump_gets_forced_patch(self, boost, installed, ai_on):
         ai_on(ask_author="---\nname: brainstorming\ndescription: v2\n"
                          "version: 1.4.0\n---\n\n# Brainstorming v2\n\n"
@@ -792,6 +828,15 @@ class TestImpact:
         r = boost("impact", "brainstorming")
         assert "This data is correlational only." in r.out
         assert FALLBACK not in flat(r.out)
+
+    def test_a_failed_ai_call_still_warns(self, boost, installed, tmp_path,
+                                          monkeypatch, ai_on):
+        # Previously silent: AI was available, the call was made, and it came
+        # back empty — impact printed the table and said nothing about it.
+        monkeypatch.chdir(tmp_path)
+        ai_on(ask=None)
+        r = boost("impact", "brainstorming")
+        assert FALLBACK in flat(r.err)
 
 
 # ---------------------------------------------------------------- kind declines

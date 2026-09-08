@@ -7,10 +7,31 @@ from __future__ import annotations
 import json
 import re
 import sys
+import types
 
 import pytest
 
+from boost_cli.commands import info
 from boost_cli.core import paths
+
+
+def _force_tty(monkeypatch):
+    """Make `info.sys.stdout.isatty()` report True for this test.
+
+    `boost preview` (and `cat`/`home`) branch on `sys.stdout.isatty()` to
+    decide between a rendered and a raw/piped output — right for a real
+    terminal vs. a pipe, but pytest's `capsys` stream is never a tty, and it
+    is also not a stable object to monkeypatch directly: pytest re-wraps
+    `sys.stdout` in a new object between fixture setup and the test body
+    (observed by id()), so a patch applied to "the" object during fixture
+    setup lands on an object the test body no longer sees. Swapping the
+    *command module's* `sys` reference instead (the same pattern already
+    used for `discovery.py`'s curses tests) sidesteps that entirely: nothing
+    here touches the real, capsys-captured `sys.stdout` that `print()`
+    still writes to.
+    """
+    monkeypatch.setattr(info, "sys", types.SimpleNamespace(
+        stdout=types.SimpleNamespace(isatty=lambda: True), stderr=sys.stderr))
 
 
 def _lock():
@@ -546,6 +567,13 @@ class TestEdit:
 # ── preview ──────────────────────────────────────────────────────────────
 
 class TestPreview:
+    @pytest.fixture(autouse=True)
+    def _tty(self, monkeypatch):
+        # `boost preview` renders when stdout is a terminal and dumps raw
+        # Markdown otherwise (see TestPreviewPiped below) — every test in
+        # this class wants the rendered path, so force it once here.
+        _force_tty(monkeypatch)
+
     def test_renders_headings_and_fences(self, boost, installed):
         r = boost("preview", "brainstorming")
         assert "brainstorming · v1.4.0 · fixture-tap" in r.out
@@ -600,6 +628,78 @@ class TestPreview:
         assert lines[idx + 1].startswith("  ")
         assert "clustering." in lines[idx + 1]
 
+    def test_bold_span_survives_a_narrow_wrap(self, boost, sandbox, tmp_path,
+                                              monkeypatch):
+        # Regression: `_render_markdown` wraps a line and then colorizes each
+        # wrapped chunk, so a `**bold**` span split across that boundary used
+        # to leave its `**` markers stranded in two different chunks — neither
+        # matched `_inline`'s regex, so the literal asterisks leaked into the
+        # rendered output instead of becoming bold text.
+        skill = tmp_path / "bold-wrap-skill"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: bold-wrap-skill\ndescription: d\nversion: 1.0.0\n---\n\n"
+            "# Bold Wrap Skill\n\n"
+            "This paragraph has a **very important warning** buried inside it "
+            "that must stay bold across a narrow terminal.\n",
+            encoding="utf-8")
+        boost("import", str(skill))
+        # Wide enough that the atomic span itself ("very important warning",
+        # 23 cols) fits on one line — narrow enough that the surrounding
+        # sentence still has to wrap around it, which is what used to split
+        # the span's `**` markers into two different chunks.
+        monkeypatch.setenv("COLUMNS", "30")
+        r = boost("preview", "bold-wrap-skill")
+        assert "**" not in r.out
+        # the titlebar is a separate, pre-existing, never-wrapped decorative
+        # element (see test_list_item_wraps_and_continuation_aligns_under_
+        # the_bullet above) — scope the width check to the body below it
+        body_lines = r.out.split("\n")[2:]
+        assert len(body_lines) > 1, "the paragraph did not actually wrap"
+        for ln in body_lines:
+            assert len(ln) <= 30, ln
+        assert "very important warning" in " ".join(body_lines)
+
+    def test_version_falls_back_to_the_catalog_normalized_value(
+            self, boost, sandbox, tmp_path):
+        # A SKILL.md with no `version:` key must show the same "0.0.0" that
+        # `boost info`/`catalog.scan_dir` already normalize a missing version
+        # to — not the raw-frontmatter "v?" preview used to show while every
+        # other command agreed on 0.0.0.
+        skill = tmp_path / "versionless-skill"
+        skill.mkdir()
+        (skill / "SKILL.md").write_text(
+            "---\nname: versionless-skill\ndescription: d\n---\n\n"
+            "# Versionless Skill\n\nBody text.\n", encoding="utf-8")
+        boost("import", str(skill))
+        r = boost("preview", "versionless-skill")
+        assert "versionless-skill · v0.0.0 ·" in r.out
+        assert "· v? ·" not in r.out
+
+
+class TestPreviewPiped:
+    """Piped/redirected `preview` dumps raw Markdown, mirroring `boost cat`.
+
+    pytest's capsys stream is never a tty, so these run with no monkeypatch —
+    that IS the piped state `TestPreview` above has to override.
+    """
+
+    def test_piped_output_equals_the_raw_body(self, boost, installed):
+        from boost_cli.core import frontmatter
+        text = (paths.store_dir() / "brainstorming" / "SKILL.md").read_text(
+            encoding="utf-8")
+        _meta, body = frontmatter.parse(text)
+        r = boost("preview", "brainstorming")
+        assert r.out == (body if body.endswith("\n") else body + "\n")
+
+    def test_piped_output_has_no_titlebar_and_keeps_the_heading_marker(
+            self, boost, installed):
+        r = boost("preview", "brainstorming")
+        # the raw body, unlike the rendered path, keeps its "#" heading
+        # marker verbatim rather than stripping it with no styled substitute
+        assert "# Brainstorming" in r.out
+        assert "fixture-tap" not in r.out
+
 
 # ── explain (no AI) ──────────────────────────────────────────────────────
 
@@ -650,6 +750,19 @@ class TestExplain:
         assert "diverge then cluster then converge" in r.out
         assert "ungrounded" not in r.out
         assert "Key rules:" not in r.out          # showed the AI reply, no fallback
+
+    def test_a_failed_ai_call_warns_instead_of_falling_back_silently(
+            self, boost, installed, monkeypatch):
+        # The audit bug this card fixes: AI was available and the call was
+        # made, but produced nothing (an expired login, an untrusted
+        # workspace, ...) — distinct from "no backend", and previously
+        # reported with no note at all.
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **k: None)
+        r = boost("explain", "brainstorming")
+        assert "using the heuristic fallback" in r.err
+        assert "Key rules:" in r.out
 
     def test_ungrounded_ai_reply_falls_back_to_extractive(self, boost, installed,
                                                           monkeypatch):
@@ -710,6 +823,14 @@ class TestLog:
         boost("import", _skill_dir(tmp_path, "local-one"))
         r = boost("log", "local-one")
         assert "no upstream history (imported locally)" in r.out
+
+    def test_name_with_diagnostics_or_crashes_is_a_usage_error(self, boost, installed):
+        # `log NAME --diagnostics` used to silently drop NAME and show the
+        # unfiltered diagnostic trail instead.
+        r = boost("log", "brainstorming", "--diagnostics", expect=2)
+        assert "NAME is not used with --diagnostics/--crashes" in r.err
+        r = boost("log", "brainstorming", "--crashes", expect=2)
+        assert "NAME is not used with --diagnostics/--crashes" in r.err
 
 
 # ── home ─────────────────────────────────────────────────────────────────
@@ -949,7 +1070,9 @@ class TestMaterializedKinds:
         assert "Always use two-space indents." in r.out
         assert "my own notes" not in r.out   # the managed block, not the file
 
-    def test_preview_titles_the_rule_with_its_tap(self, boost, sandbox):
+    def test_preview_titles_the_rule_with_its_tap(self, boost, sandbox,
+                                                   monkeypatch):
+        _force_tty(monkeypatch)
         self._seed_claude_rule()
         r = boost("preview", "house")
         assert "house" in r.out and "some-tap" in r.out

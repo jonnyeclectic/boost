@@ -655,7 +655,8 @@ class TestVerify:
         data = json.loads(boost("verify", "--json").out)
         assert data == {"skills": [{"name": "brainstorming", "kind": "skill",
                                     "status": "ok", "scope": "user",
-                                    "missing_fields": [], "commit_pin": None}],
+                                    "missing_fields": [], "commit_pin": None,
+                                    "passed": True}],
                         "failed": 0}
 
     def test_tampered_modified_rc1(self, boost, installed):
@@ -1004,6 +1005,29 @@ class TestGovernedIntegritySurface:
         r = boost("verify", "house-style")
         assert "house-style" in r.out and "ok" in r.out
 
+    def test_verify_ok_status_with_missing_fields_still_counts_as_failed(
+            self, boost, installed, fixture_tap_src, tmp_path):
+        # audit-verify-findings repro: a rule entry stripped of `version` and
+        # given an empty `installed_at` still hashes clean, so `status` stays
+        # "ok" — but the row must count toward "failed" and, in JSON, must
+        # not claim `"passed": true` alongside a non-empty `missing_fields`.
+        from boost_cli.core import lockfile
+        self._install_rule(boost, fixture_tap_src, tmp_path, "stripped-tap")
+        entry = lockfile.get_rule("house-style")
+        del entry["version"]
+        entry["installed_at"] = ""
+        lockfile.set_rule("house-style", entry)
+
+        data = json.loads(boost("verify", "--json", expect=1).out)
+        row = next(r for r in data["skills"] if r["name"] == "house-style")
+        assert row["status"] == "ok"
+        assert sorted(row["missing_fields"]) == ["installed_at", "version"]
+        assert row["passed"] is False
+        assert data["failed"] == 1
+
+        r = boost("verify", expect=1)
+        assert "1 of" in r.out and "failed verification" in r.out
+
     def test_verify_flags_a_tampered_claude_block(self, boost, installed,
                                                   fixture_tap_src, tmp_path):
         from boost_cli.core import rules
@@ -1031,6 +1055,21 @@ class TestGovernedIntegritySurface:
         r = boost("attest", "house-style", "--verify")
         assert "house-style (rule)" in r.out
         assert "attestation OK" in r.out
+
+    def test_attest_names_a_missing_materialized_rule(
+            self, boost, installed, fixture_tap_src, tmp_path):
+        # The rule/workflow branch folded a missing materialized artifact
+        # into the same "content no longer matches" wording as an edited
+        # one; it must say "missing" instead, same as the skill branch.
+        self._install_rule(boost, fixture_tap_src, tmp_path,
+                           "attest-missing-tap")
+        (paths.home() / ".claude" / "CLAUDE.md").unlink()
+        r = boost("attest", "house-style", "--verify", expect=1)
+        assert "house-style: materialized file missing" in r.out
+        assert "no longer matches the lock sha" not in r.out
+        data = json.loads(boost("attest", "house-style", "--verify",
+                                "--json", expect=1).out)
+        assert data["skills"][0]["reason"] == "missing"
 
     def test_drift_reports_quarantined_not_missing(self, boost, installed,
                                                    fixture_tap_src, tmp_path):
@@ -1343,6 +1382,16 @@ class TestConflict:
         assert "(ai-confirmed)" in r.out
         assert "using the heuristic fallback" not in " ".join(r.out.split())
 
+    def test_a_failed_ai_call_still_warns(self, boost, tapped, monkeypatch):
+        # Previously silent: AI was available, the call was made, and it came
+        # back empty — the pairs stayed "(heuristic)" with no note at all.
+        boost("install", "tdd-workflow", "cowboy-coding")
+        monkeypatch.delenv("BOOST_NO_AI")
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: None)
+        r = boost("conflict", expect=1)
+        assert "using the heuristic fallback" in " ".join(r.out.split())
+
 
 # ── changelog ────────────────────────────────────────────────────────────
 
@@ -1394,6 +1443,22 @@ class TestAttest:
         assert data["failed"] == 1
         assert data["skills"][0]["sha_ok"] is False
         assert data["skills"][0]["journal"] is True
+        assert data["skills"][0]["reason"] == "modified"
+
+    def test_missing_store_dir_verify_names_it_missing_not_modified(
+            self, boost, installed):
+        # A deleted store dir used to be reported identically to tampered
+        # content ("content no longer matches the lock sha"), sending the
+        # user hunting for tampering when the remedy is `boost heal` — the
+        # same state `boost drift` already names correctly as store-missing.
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+        r = boost("attest", "--verify", expect=1)
+        assert "brainstorming: store directory missing (boost heal)" in r.out
+        assert "no longer matches the lock sha" not in r.out
+        data = json.loads(boost("attest", "--verify", "--json",
+                                expect=1).out)
+        assert data["skills"][0]["sha_ok"] is False
+        assert data["skills"][0]["reason"] == "missing"
 
 
 # ── health ───────────────────────────────────────────────────────────────
@@ -1418,6 +1483,20 @@ class TestHealth:
         assert "2 events" in r.out                # tap + install in journal
         assert re.search(r"fingerprint\s+[0-9a-f]{16}", r.out)
         assert "● healthy" in r.out
+
+    def test_native_store_row_reflects_a_missing_store_dir(self, boost, installed):
+        # The bug: the native-store row was an unconditional
+        # len(expected)/len(expected) with a hard-coded ✓, never statting the
+        # store — so it kept claiming full coverage in the same report where
+        # the claude-code row (and drift) both saw the skill was gone.
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+        r = boost("health")
+        assert "1/1 ✓ (reads the store directly)" not in r.out
+        line = next(ln for ln in r.out.splitlines()
+                    if "(reads the store directly)" in ln)
+        assert "0/1" in line
+        assert "✓" not in line
+        assert "1 store-missing" in r.out
 
     def test_last_tap_sync_reads_the_refresh_marker_not_git_log(
             self, boost, installed):

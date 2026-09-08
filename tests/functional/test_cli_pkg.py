@@ -10,8 +10,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
+
+import pytest
 
 from boost_cli.core import lockfile, paths
 
@@ -399,6 +402,39 @@ class TestSync:
         assert link.is_symlink() and link.exists()
         assert not ghost.is_symlink()
 
+    def test_diff_renders_a_blocked_link_as_a_readable_line(self, boost, installed):
+        # `blocked_links` rows are (skill, agent, path) 3-tuples. `_PAIR_KEYS`
+        # only special-cases 2-tuples, so this used to fall through to the
+        # generic `str()` branch and print the raw Python tuple, e.g.
+        # "('brainstorming', 'cursor', '/private/tmp/.../cursor/skills/
+        # brainstorming')".
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()                      # a foreign real directory
+
+        r = boost("sync", "--diff")
+        assert "agent links blocked by a foreign file (1)" in r.out
+        assert "brainstorming → cursor" in r.out
+        assert "in the way" in r.out
+        assert "('brainstorming'" not in r.out, "printed the raw Python tuple"
+
+    def test_a_blocked_link_behind_a_missing_store_is_reported_in_one_run(
+            self, boost, installed):
+        # The residual case: repairing a missing store dir used to skip agent
+        # link classification entirely, so a foreign file already in the way
+        # went unreported until a *second* `sync` — this run must surface it
+        # in the very first one, right alongside the reinstall.
+        link = paths.home() / ".cursor" / "skills" / "brainstorming"
+        link.unlink()
+        link.mkdir()
+        shutil.rmtree(paths.store_dir() / "brainstorming")
+
+        r = boost("sync")
+        assert "reinstalled missing brainstorming" in r.out
+        assert "could not be created" in r.out
+        assert "brainstorming → cursor" in r.out
+        assert "in the way" in r.out
+
     def test_orphan_reported_and_pruned(self, boost, installed):
         orphan = paths.store_dir() / "orphan-x"
         orphan.mkdir()
@@ -617,6 +653,63 @@ class TestUpdate:
         assert "upgraded workflow ship-it v1.0.0 → v1.1.0" in r.out
         wf = paths.home() / ".claude" / "commands" / "ship-it.md"
         assert "go v2" in wf.read_text(encoding="utf-8")
+
+
+class TestUpdatePinnedMessaging:
+    """CLAUDE.md's own words for a silent state change: "the failure that
+    looks like nothing at all". A fully pinned run that checked nothing must
+    not read as a fresh "up to date", and --force dropping a pin must say so
+    rather than leaving the reader to notice a vanished `config.json` entry.
+    """
+
+    def _sha(self, tap_dir):
+        return subprocess.run(
+            ["git", "-C", str(tap_dir), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True).stdout.strip()
+
+    def test_all_pinned_run_says_nothing_to_refresh(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "pin-tap")
+        sha = self._sha(tap_dir)
+        boost("tap", tap_dir, "--at", sha)
+        r = boost("update")
+        assert "pinned at %s" % sha[:7] in r.out
+        assert "nothing to refresh — all taps pinned" in r.out
+        assert "everything up to date" not in r.out
+        assert "boost update --force" in r.out   # the muted --force hint
+
+    def test_a_mixed_run_still_says_everything_up_to_date(
+            self, boost, fixture_tap_src, tmp_path):
+        # Only an ALL-pinned run gets the special wording — one pinned tap
+        # beside an ordinary one is still an ordinary "up to date" sweep.
+        pinned_dir = _copy_tap(fixture_tap_src, tmp_path / "mix-pin-tap")
+        sha = self._sha(pinned_dir)
+        boost("tap", pinned_dir, "--at", sha)
+        free_dir = _copy_tap(fixture_tap_src, tmp_path / "mix-free-tap")
+        boost("tap", free_dir)
+        r = boost("update")
+        assert "everything up to date" in r.out
+        assert "nothing to refresh" not in r.out
+
+    def test_force_clearing_a_pin_is_reported_per_tap(
+            self, boost, fixture_tap_src, tmp_path):
+        from boost_cli.core import config
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "force-pin-tap")
+        sha = self._sha(tap_dir)
+        boost("tap", tap_dir, "--at", sha)
+        _bump(tap_dir, "brainstorming", "1.4.0", "1.5.0")
+        r = boost("update", "--force")
+        assert "(pin cleared)" in r.out
+        rows = config.load()["taps"]
+        assert all("pin" not in row for row in rows)
+
+    def test_pinned_skip_hints_force_even_without_force(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "hint-pin-tap")
+        sha = self._sha(tap_dir)
+        boost("tap", tap_dir, "--at", sha)
+        r = boost("update")
+        assert "1 tap pinned and left alone" in r.out
 
 
 def _poison(tap_dir, skill, old, new):
@@ -1008,6 +1101,16 @@ class TestImport:
         r = boost("import", tmp_path / "missing", expect=1)
         assert "no such directory" in r.err
 
+    def test_all_and_name_together_is_a_usage_error(self, boost, sandbox, tmp_path):
+        # --all --name used to silently drop --name and import everything —
+        # a real "Imported 3 skills" with no hint the flag was ignored.
+        root = tmp_path / "many"
+        _skill_dir(root, "alpha")
+        _skill_dir(root, "beta")
+        r = boost("import", root, "--all", "--name", "alpha", expect=2)
+        assert "not allowed with argument --all" in r.err
+        assert not paths.lockfile_path().exists()
+
 
 # ── snapshot ─────────────────────────────────────────────────────────────
 
@@ -1100,6 +1203,60 @@ class TestExport:
                   expect=1)
         assert "store dir for brainstorming is missing" in r.err
         assert "repair with `boost sync`" in r.err
+
+    def test_store_dir_missing_names_reinstall_for_a_local_skill(
+            self, boost, sandbox, tmp_path):
+        # `boost sync` cannot repair a local import (no tap to reinstall
+        # from) — the one command that can is `boost reinstall`.
+        d = _skill_dir(tmp_path, "local-skill")
+        boost("import", d)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        r = boost("export", "local-skill", "-o", tmp_path / "x.tar.gz",
+                  expect=1)
+        assert "store dir for local-skill is missing" in r.err
+        assert "repair with `boost reinstall local-skill`" in r.err
+
+    def test_out_path_zip_suffix_without_flag_writes_a_real_zip(
+            self, boost, installed, tmp_path):
+        # -o byname.zip used to write a gzip tarball named .zip.
+        dest = tmp_path / "byname.zip"
+        r = boost("export", "brainstorming", "-o", dest)
+        assert "exported 1 skill →" in r.out
+        assert zipfile.is_zipfile(str(dest))
+        with zipfile.ZipFile(str(dest)) as zf:
+            assert "brainstorming/SKILL.md" in zf.namelist()
+
+    def test_contradicting_zip_flag_and_tar_suffix_warns_and_honors_flag(
+            self, boost, installed, tmp_path):
+        dest = tmp_path / "byflag.tar.gz"
+        r = boost("export", "brainstorming", "--zip", "-o", dest)
+        assert "writing a .zip anyway" in r.out
+        assert zipfile.is_zipfile(str(dest))
+
+    def test_tar_archive_members_are_owner_normalized(
+            self, boost, installed, tmp_path):
+        dest = tmp_path / "x.tar.gz"
+        boost("export", "brainstorming", "-o", dest)
+        with tarfile.open(str(dest)) as tf:
+            for member in tf.getmembers():
+                assert member.uid == 0
+                assert member.gid == 0
+                assert member.uname == ""
+                assert member.gname == ""
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="NTFS has no POSIX mode bits — the skill file's "
+                               "real st_mode isn't 0o644 to compare against")
+    def test_zip_boostfile_member_mode_matches_skill_files(
+            self, boost, installed, tmp_path):
+        dest = tmp_path / "x.zip"
+        boost("export", "brainstorming", "--zip", "-o", dest)
+        with zipfile.ZipFile(str(dest)) as zf:
+            boostfile_mode = (zf.getinfo("Boostfile").external_attr >> 16) & 0o777
+            skill_mode = (zf.getinfo("brainstorming/SKILL.md").external_attr
+                         >> 16) & 0o777
+            assert boostfile_mode == 0o644
+            assert skill_mode == 0o644
 
     def test_existing_destination_declines_without_force(
             self, boost, installed, tmp_path):
@@ -1665,6 +1822,11 @@ class TestSnapshotEdges:
     def test_list_empty(self, boost, sandbox):
         r = boost("snapshot", "list")
         assert "no snapshots yet — create one with `boost snapshot save`" in r.out
+
+    def test_list_with_stray_positional_is_a_usage_error(self, boost, sandbox):
+        # `snapshot list extra-arg` used to silently ignore the extra word.
+        r = boost("snapshot", "list", "extra-arg", expect=2)
+        assert "snapshot list takes no LABEL|ID" in r.err
 
     def test_list_json_and_corrupt_sidecar(self, boost, installed):
         boost("snapshot", "save", "lbl")

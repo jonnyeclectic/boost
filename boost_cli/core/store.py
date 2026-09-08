@@ -71,6 +71,31 @@ def skill_store_dir(name: str) -> Path:
     return paths.store_dir() / name
 
 
+def read_skill_meta(name: str) -> tuple[dict, str] | None:
+    """(frontmatter, body) for an installed skill's store copy, or None.
+
+    None on anything that keeps the content from being read honestly: no
+    store dir, no ``SKILL.md``, an unreadable file, or an unclosed
+    frontmatter fence (:func:`frontmatter.unclosed` — every field would read
+    as absent, which is not the same fact as the skill declaring none).
+    Callers that use this for policy enforcement (``boost policy check``)
+    must treat ``None`` as *not checked*, never as a violation — a store read
+    failing is not evidence the skill lacks a version or description.
+    """
+    from . import frontmatter
+
+    skill_md = skill_store_dir(name) / "SKILL.md"
+    if not skill_md.exists():
+        return None
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if frontmatter.unclosed(text):
+        return None
+    return frontmatter.parse(text)
+
+
 def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     """(bare_name, kind, entry) for a possibly tap-qualified ``name``.
 
@@ -1632,9 +1657,22 @@ def sync_plan() -> dict[str, list]:
         # is already "reinstall this skill from its tap", which is exactly what
         # a gutted directory needs, and reusing it means sync_apply needs no
         # change at all.
-        if not sdir.is_dir() or not (sdir / "SKILL.md").is_file():
+        #
+        # This used to `continue` here, which skipped agent-link classification
+        # for the entry entirely — so a foreign file already occupying a link
+        # path went unreported until a *second* `sync` noticed the repair had
+        # not actually relinked that agent. The classification below reads
+        # only the agent dir, never the store, so running it costs nothing
+        # even while the store copy is still missing — see the `missing_store`
+        # check further down, which still lets it feed `blocked_links` but
+        # keeps it out of `missing_links`: `sync_apply` repairs a missing
+        # store by reinstalling from the tap, which relinks every non-blocked
+        # agent as one step, and that reinstall runs *after* this plan is
+        # built, so a `missing_links` entry here would have `sync_apply` try
+        # to link a store directory that does not exist yet.
+        missing_store = not sdir.is_dir() or not (sdir / "SKILL.md").is_file()
+        if missing_store:
             plan["missing_store"].append(name)
-            continue
         if entry.get("quarantined"):
             continue
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
@@ -1659,11 +1697,11 @@ def sync_plan() -> dict[str, list]:
             # A symlink is boost's to replace even when it dangles; anything
             # else that exists is someone else's file and stays put.
             if link.is_symlink():
-                if not link.exists():
+                if not link.exists() and not missing_store:
                     plan["missing_links"].append((name, agent))
             elif link.exists():
                 plan["blocked_links"].append((name, agent, str(link)))
-            else:
+            elif not missing_store:
                 plan["missing_links"].append((name, agent))
         # The other direction, which nothing checked: a link that exists in an
         # agent the declaration excludes. The loop above is narrowed to the
@@ -1802,12 +1840,36 @@ def sync_apply(plan: dict[str, list]) -> list[str]:
         p = Path(path)
         if p.is_symlink():
             p.unlink()
-            actions.append("removed stale link %s" % path)
+            # `--diff` shows this same path tilde-contracted (`_tilde` in
+            # commands/pkg.py); the raw absolute string here made the two
+            # views of one path disagree in the exact case a user compares
+            # them — planned vs. applied.
+            actions.append("removed stale link %s" % paths.tilde(path))
     for name in plan["missing_store"]:
         entry = lockfile.get_skill(name) or {}
         tap_name = entry.get("tap")
         restored = False
-        if tap_name and tap_name != "local":
+        if tap_name == "local":
+            src = Path(str(entry.get("source_dir") or ""))
+            if src.is_dir() and (src / "SKILL.md").is_file():
+                try:
+                    source_sha = util.sha256_dir(src)
+                except OSError:
+                    source_sha = None
+                if _pinned_repair_blocked(entry, source_sha):
+                    actions.append(
+                        "%s is pinned and its local source has moved — repair "
+                        "declined (unpin, or `boost reinstall %s` to accept "
+                        "the new content)" % (name, name))
+                    continue
+                try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
+                    install_from_path(src, name=name, force=True)
+                    actions.append(
+                        "reinstalled missing %s from local source %s" % (name, src))
+                    restored = True
+                except BoostError:
+                    pass
+        elif tap_name and tap_name != "local":
             try:  # noqa: FURB107 - per-item resilience in a loop (see PERF203)
                 from . import catalog
                 matches = [e for e in catalog.find(name) if e["tap"] == tap_name]

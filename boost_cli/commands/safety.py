@@ -431,7 +431,9 @@ def cmd_verify(argv):
         commit_pin = integrity.commit_status(name, entry)
         results.append({"name": name, "kind": kind, "status": status,
                         "scope": "user", "missing_fields": missing_fields,
-                        "commit_pin": commit_pin})
+                        "commit_pin": commit_pin,
+                        "passed": integrity.verification_passed(
+                            status, missing_fields, commit_pin)})
 
     # Vendored, project-scoped skills live in the repo's own lock, not the user's
     # — and they are exactly the ones worth verifying, since they arrive by PR
@@ -446,11 +448,11 @@ def cmd_verify(argv):
             missing_fields.append("sha256")
         results.append({"name": name, "kind": "skill", "status": status,
                         "scope": "project", "missing_fields": missing_fields,
-                        "commit_pin": None})
+                        "commit_pin": None,
+                        "passed": integrity.verification_passed(
+                            status, missing_fields, None)})
 
-    bad = [r for r in results
-           if r["status"] not in ("ok", "quarantined") or r["missing_fields"]
-           or r["commit_pin"] == integrity.STATUS_MODIFIED]
+    bad = [r for r in results if not r["passed"]]
     if args.json:
         print(json.dumps({"skills": results, "failed": len(bad)}))
         return 1 if bad else 0
@@ -460,8 +462,6 @@ def cmd_verify(argv):
                               hint="boost install <skill> to start"))
         return 0
     width = max(len(r["name"]) for r in results)
-    status_role = {"ok": "success", "modified": "warn", "missing": "danger",
-                   "unlocked": "warn", "quarantined": "muted"}
     for r in results:
         bits = []
         if r.get("kind") not in (None, "skill"):
@@ -476,7 +476,9 @@ def cmd_verify(argv):
             bits.append("commit pin DRIFTED")
         note = ("  " + " · ".join(bits)) if bits else ""
         print("  %s  %s%s" % (r["name"].ljust(width),
-                              out.role(r["status"], status_role.get(r["status"], "warn")),
+                              out.role(r["status"],
+                                       integrity.verification_role(
+                                           r["status"], r["passed"])),
                               out.role(note, "muted")))
     if bad:
         out.warn("%d of %d item%s failed verification"
@@ -617,16 +619,20 @@ def cmd_attest(argv):
                "sha256": (entry.get("sha256") or "")[:12]}
         if args.verify:
             if kind == "skill":
-                sdir = store.skill_store_dir(name)
-                rec["sha_ok"] = (sdir.is_dir()
-                                 and util.sha256_dir(sdir) == entry.get("sha256"))
+                st = integrity.status(name, entry)
             else:
                 # The artifact the agent loads, against the hash recorded when
                 # it was written. UNLOCKED (a pre-hash entry) never fails.
-                rec["sha_ok"] = integrity.materialized_status(name, entry) not in (
-                    integrity.STATUS_MODIFIED, integrity.STATUS_MISSING)
+                st = integrity.materialized_status(name, entry)
+            rec["sha_ok"] = st not in (integrity.STATUS_MODIFIED,
+                                       integrity.STATUS_MISSING)
             rec["journal"] = ev is not None
             if not rec["sha_ok"]:
+                # A missing store dir / materialized artifact is not a content
+                # change — conflating the two sends the user hunting for
+                # tampering when the remedy is `boost heal`.
+                rec["reason"] = ("missing" if st == integrity.STATUS_MISSING
+                                 else "modified")
                 failures += 1
         records.append(rec)
 
@@ -646,9 +652,15 @@ def cmd_attest(argv):
     if args.verify:
         for r in records:
             if not r["sha_ok"]:
-                out.warn("%s: %s content no longer matches the lock sha"
-                         % (r["name"], "store" if r["kind"] == "skill"
-                            else "materialized"))
+                if r["reason"] == "missing":
+                    msg = ("store directory missing (boost heal)"
+                           if r["kind"] == "skill"
+                           else "materialized file missing")
+                else:
+                    msg = ("%s content no longer matches the lock sha"
+                           % ("store" if r["kind"] == "skill"
+                              else "materialized"))
+                out.warn("%s: %s" % (r["name"], msg))
             elif not r["journal"]:
                 out.warn("%s: no journal record (installed before journaling?)" % r["name"])
             else:
