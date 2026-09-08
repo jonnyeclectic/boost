@@ -2,15 +2,15 @@
 id: audit-completions-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · UX
 complexity: M
 impact: Low
 wow: 1
-note: both findings landed + unit/functional-tested (ruff/mypy/pyright/pytest/smoke green on the working env); make check's mutation+eval+full-toolchain lint gates could not run in this session's sandbox (pypi.org blocked, so `make venv` fails) — CI will give the real gate signal on the PR
+note: CI ran the full pinned toolchain (lint, all mutation shards + gate, evals, full OS/version test matrix, DCO) and came back green with no merge conflict and no open review threads — the local sandbox couldn't run mutmut/vulture/etc. (PyPI blocked), so CI is what actually confirms this landed clean
 order: 257
 owner: loop/completions-audit-findings
-pr:
+pr: 819
 title: "boost completions: CLI audit findings (2026-08)"
 ---
 <b>Generated completions never offer subcommand choices or policy keys.</b>
