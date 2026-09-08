@@ -15,12 +15,17 @@ fine; a model that names a command, flag, tool, or file the ``SKILL.md`` does
 not contain is the failure mode worth catching, because that is what a
 fabricated capability looks like.
 
-So the signal is *salient* tokens — the code-shaped, acronym, and quoted terms a
-faithful summary can only have gotten from the source:
+So the signal is *salient* tokens — the code-shaped, acronym, quoted, and
+proper-noun terms a faithful summary can only have gotten from the source:
 
   * anything in `backticks`
   * tokens with code punctuation or digits (``--local``, ``skill_md``, ``v1.2``)
   * multi-letter ALL-CAPS acronyms (``SKILL``, ``MCP``)
+  * capitalized words that are not the first word of their sentence
+    (``Kubernetes``, ``Terraform``) — inventing a specific technology or
+    product tends to name it as a proper noun, and ordinary English capitalizes
+    mid-sentence only for names, so this catches fabrication that reads as
+    plain prose to the acronym/code checks above
 
 The score is the fraction of the summary's salient terms that also appear in the
 source. General words are ignored on both sides, so ordinary paraphrase never
@@ -40,11 +45,33 @@ _ACRONYM = re.compile(r"\b[A-Z]{2,}\b")
 # CLI flags — --project, -v, --dry-run. A leading dash is the whole tell, and
 # it is exactly the kind of specific the model likes to invent ("pass --force").
 _FLAG = re.compile(r"(?<![\w-])--?[A-Za-z][\w-]*")
+# A capitalized word, anywhere in the string — sentence position is what tells
+# an invented proper noun (Kubernetes, Terraform) from an ordinary word that
+# only happens to open a sentence (This, It). Matched separately from
+# _SENTENCE_START below so every occurrence is inspected, not just the first.
+_CAPWORD = re.compile(r"\b[A-Z][a-z]{2,}\b")
+# The first capitalized word of the string, or of any sentence following
+# ., !, or ? plus whitespace. Its *position* is what salient_terms() exempts,
+# not the word itself — the same word appearing again later, non-initially,
+# still counts (a fabricated "Kubernetes" opening one sentence and named again
+# mid-sentence elsewhere must not get a free pass from the first occurrence).
+_SENTENCE_START = re.compile(r"(?:\A\s*|[.!?]\s+)([A-Z][a-z]+)")
 
 # Very common ALL-CAPS words that are not really acronyms — flagging them would
 # punish an emphatic but perfectly grounded sentence.
 _STOP_ACRONYMS = {"A", "I", "AN", "THE", "AND", "OR", "IF", "IT", "IS", "TO",
                   "OK", "NO", "YES", "ON", "OFF", "AI"}
+
+# Capitalized words common enough in mid-sentence English that flagging them
+# would punish ordinary prose rather than catch an invented proper noun —
+# titles, demonstratives, and the like a model reaches for when describing
+# *any* skill, not just when it is fabricating one.
+_STOP_CAPWORDS = {
+    "this", "that", "these", "those", "it", "its", "if", "so", "but", "and",
+    "or", "for", "as", "when", "then", "we", "you", "they", "he", "she",
+    "there", "here", "what", "which", "who", "how", "why", "before", "after",
+    "once", "while", "each", "any", "some", "all", "not", "note", "warning",
+}
 
 
 def salient_terms(s: str) -> set[str]:
@@ -64,6 +91,13 @@ def salient_terms(s: str) -> set[str]:
     for m in _ACRONYM.findall(s):
         if m not in _STOP_ACRONYMS:
             out.add(m.lower())
+    sentence_initial = {m.start(1) for m in _SENTENCE_START.finditer(s)}
+    for m in _CAPWORD.finditer(s):
+        if m.start() in sentence_initial:
+            continue
+        word = m.group(0)
+        if word.lower() not in _STOP_CAPWORDS:
+            out.add(word.lower())
     return out
 
 
