@@ -88,11 +88,13 @@ Usage
   mutation_shards.py plan --shards N --explain   # the whole split + speedup cap
   mutation_shards.py merge --shards N --into mutants results/*  # rebuild results
   mutation_shards.py weights --source mutants    # refresh the balance hints
+  mutation_shards.py cache-key                   # hash half of a shard's actions/cache key
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -722,6 +724,76 @@ def cmd_scope(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------
+# cache key: reuse a shard's mutants/ results across pushes of the same PR
+# --------------------------------------------------------------------------
+
+# Same list as RELEVANT_PREFIXES, minus boost_cli/ itself. mutmut already
+# reuses a source file's own results by content hash (per the module
+# docstring's "Balance without a chicken-and-egg" -- mutmut's per-source
+# hashing, not re-verified locally against the 3.7.0 pin here), so keying the
+# actions/cache entry on boost_cli/ too would just repeat that reuse one
+# level up, at the cost of evicting every mutant in the cache -- not just the
+# ones in the file that changed -- on every core edit, which is most pushes.
+# What mutmut does NOT re-derive on its own is which tests ran, which
+# mutmut/pytest built the recorded exit codes, and the gate's own scripts;
+# any of those changing must miss the cache and pay the full run, exactly as
+# `is_relevant` already says for the scope job.
+CACHE_KEY_PREFIXES = tuple(p for p in RELEVANT_PREFIXES if p != "boost_cli/")
+CACHE_KEY_EXACT = RELEVANT_EXACT
+
+
+def cache_key_paths(root: Path) -> list[Path]:
+    """Every file whose content can change a shard's cache key.
+
+    Mirrors ``is_relevant``'s own file list, minus ``boost_cli/`` (see
+    ``CACHE_KEY_PREFIXES``). A named file or directory that does not exist is
+    skipped rather than raising, so a fixture repo that only sets up part of
+    the tree still produces a stable key.
+    """
+    found: set[Path] = set()
+    for name in CACHE_KEY_EXACT:
+        path = root / name
+        if path.is_file():
+            found.add(path)
+    for prefix in CACHE_KEY_PREFIXES:
+        base = root / prefix
+        if base.is_dir():
+            found.update(f for f in base.rglob("*") if f.is_file())
+        elif base.is_file():
+            found.add(base)
+    return sorted(found)
+
+
+def cache_key_hash(root: Path) -> str:
+    """A deterministic digest of every file ``cache_key_paths`` names.
+
+    Hashes content, not mtime or git status: a checkout's timestamps are not
+    reproducible across machines, but bytes are. Each file's path is folded
+    in alongside its content (relative to `root`, POSIX-normalized) so a
+    rename or an added/removed file changes the digest even when every
+    remaining file's bytes are untouched.
+    """
+    digest = hashlib.sha256()
+    for path in cache_key_paths(root):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def cmd_cache_key(args: argparse.Namespace) -> int:
+    """Print the hash half of a mutation shard's ``actions/cache`` key.
+
+    The workflow builds the full key itself (shard index + Python version +
+    this hash) -- this script has no reason to know either of the first two,
+    and folding them in here would just make the CI YAML a pass-through.
+    """
+    print(cache_key_hash(Path(args.root)))
+    return 0
+
+
 def cmd_weights(args: argparse.Namespace) -> int:
     """Record real mutant counts so the next split balances better.
 
@@ -826,6 +898,9 @@ def main() -> int:
     w = sub.add_parser("weights", help="record real mutant counts to improve balance")
     w.add_argument("--source", default="mutants", help="a mutants/ tree from a full run")
     w.set_defaults(func=cmd_weights)
+
+    k = sub.add_parser("cache-key", help="hash half of a shard's actions/cache key")
+    k.set_defaults(func=cmd_cache_key)
 
     args = ap.parse_args()
     return args.func(args)
