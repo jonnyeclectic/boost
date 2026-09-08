@@ -102,23 +102,23 @@
     <div class="group" data-group="pkg">
       <div class="group-h">Install &amp; lifecycle</div>
       <a class="cmd-link" href="#cmd-install" data-search="install install a skill from a tap registry  --force --path p --agent a --scope {user,project} --local --global --dry-run --no-deps --no-mcp name">install</a>
-      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local -y, --yes name">uninstall</a>
+      <a class="cmd-link" href="#cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --local -y, --yes name">uninstall</a>
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">update</a>
-      <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill or all skills (force) reinstall an installed skill, rule or workflow (force) --all name">reinstall</a>
+      <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">reinstall</a>
       <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  {dump,install} file">bundle</a>
       <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">import</a>
-      <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill to its current version  --commit name">pin</a>
-      <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill to update again  name">unpin</a>
+      <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">pin</a>
+      <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  name">unpin</a>
       <a class="cmd-link" href="#cmd-snapshot" data-search="snapshot save &amp; restore whole skill environments  --json -y, --yes {save,list,restore} label|id">snapshot</a>
       <a class="cmd-link" href="#cmd-export" data-search="export package skills as shareable zip/tar archives  -o, --out out --zip --force name">export</a>
-      <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">adapt</a>
+      <a class="cmd-link" href="#cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk, langgraph) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">adapt</a>
       <a class="cmd-link" href="#cmd-run" data-search="run adapt a skill, wire tools &amp; run it as a live agent adapt a skill, wire default tools &amp; run it as a live agent --model m --print -o, --out file name target">run</a>
     </div>
     <div class="group" data-group="find">
       <div class="group-h">Find &amp; search</div>
-      <a class="cmd-link" href="#cmd-search" data-search="search search skills across tap registries (ai-ranked)  --smart --category category --limit limit --collapse-near-duplicates --json query">search</a>
-      <a class="cmd-link" href="#cmd-reindex" data-search="reindex build/refresh the full-content search index build or refresh the full-content search index --force --dense --export-shard tap --import-shard file --fetch-shards --json">reindex</a>
+      <a class="cmd-link" href="#cmd-search" data-search="search search skills across tap registries (bm25; --smart reranks with claude)  --smart --category category --limit limit --collapse-near-duplicates --json query">search</a>
+      <a class="cmd-link" href="#cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --json">reindex</a>
       <a class="cmd-link" href="#cmd-discover" data-search="discover search github for skill repos you have not tapped yet search github for skill repositories you have not tapped yet --limit limit --json --local query">discover</a>
       <a class="cmd-link" href="#cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --category category --limit limit --json">recommend</a>
       <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">browse</a>
@@ -142,10 +142,10 @@
     </div>
     <div class="group" data-group="tap">
       <div class="group-h">Taps &amp; registries</div>
-      <a class="cmd-link" href="#cmd-tap" data-search="tap add a github repo as a skill registry  --defaults --catalog --type {skill,rule,workflow} --category category --limit n --include-lists --dry-run --curated --at sha --jobs n spec">tap</a>
+      <a class="cmd-link" href="#cmd-tap" data-search="tap add a git url, github repo, or local directory as a skill registry  --defaults --catalog --type {skill,rule,workflow} --category category --limit n --include-lists --dry-run --curated --at sha --jobs n spec">tap</a>
       <a class="cmd-link" href="#cmd-untap" data-search="untap remove a registry tap  -f, --force name">untap</a>
       <a class="cmd-link" href="#cmd-taps" data-search="taps list all configured registry taps  --json">taps</a>
-      <a class="cmd-link" href="#cmd-outdated" data-search="outdated show skills with available updates  --json">outdated</a>
+      <a class="cmd-link" href="#cmd-outdated" data-search="outdated show skills, rules &amp; workflows with available updates  --json">outdated</a>
       <a class="cmd-link" href="#cmd-catalog" data-search="catalog share the tapped catalogue so others skip the clone  --export file --import file --show file --json">catalog</a>
     </div>
     <div class="group" data-group="ai">
@@ -158,7 +158,7 @@
       <a class="cmd-link" href="#cmd-evolve" data-search="evolve iteratively improve a skill from feedback  --feedback text --apply name">evolve</a>
       <a class="cmd-link" href="#cmd-context" data-search="context branch-aware skill activation  action">context</a>
       <a class="cmd-link" href="#cmd-focus" data-search="focus temporarily prioritize skills for a work session  --clear --status --json skill">focus</a>
-      <a class="cmd-link" href="#cmd-impact" data-search="impact measure a skill&#x27;s influence on code quality  --json name">impact</a>
+      <a class="cmd-link" href="#cmd-impact" data-search="impact correlate a skill&#x27;s install date with repo activity  --json name">impact</a>
     </div>
     <div class="group" data-group="chk">
       <div class="group-h">Health &amp; integrity</div>
@@ -169,7 +169,7 @@
       <a class="cmd-link" href="#cmd-drift" data-search="drift detect installed skills diverging from source  --json name">drift</a>
       <a class="cmd-link" href="#cmd-test" data-search="test validate installed skills against quality checks  name">test</a>
       <a class="cmd-link" href="#cmd-fingerprint" data-search="fingerprint deterministic hash of the skill environment  --verbose --json">fingerprint</a>
-      <a class="cmd-link" href="#cmd-quarantine" data-search="quarantine isolate a problematic skill without uninstalling  --release name --list name">quarantine</a>
+      <a class="cmd-link" href="#cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list name">quarantine</a>
       <a class="cmd-link" href="#cmd-decay" data-search="decay flag skills irrelevant to your current stack  --json">decay</a>
       <a class="cmd-link" href="#cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates">heal</a>
       <a class="cmd-link" href="#cmd-conflict" data-search="conflict detect contradictory rules between skills  --json">conflict</a>
@@ -186,11 +186,11 @@
       <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone tap">compact</a>
       <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">create</a>
       <a class="cmd-link" href="#cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">policy</a>
-      <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run -f, --force">onboard</a>
+      <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo (optionally open a pr with --pr)  --repo repo --pr --dry-run -f, --force">onboard</a>
       <a class="cmd-link" href="#cmd-completions" data-search="completions generate shell tab-completion scripts  --eval --dry-run --install --uninstall {bash,zsh,fish}">completions</a>
       <a class="cmd-link" href="#cmd-schedule" data-search="schedule manage automatic skill-sync scheduling  --interval {6h,12h,daily} --json {status,enable,disable}">schedule</a>
       <a class="cmd-link" href="#cmd-serve" data-search="serve browse the catalogue in a browser: search, facets and a tap graph  --port port --host host">serve</a>
-      <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">mcp</a>
+      <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">mcp</a>
       <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain action value">bmad</a>
       <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
@@ -232,9 +232,9 @@
           <div class="arg"><code>--no-mcp</code><span>don&#x27;t offer to register MCP servers a skill declares</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, workflow, or config  --local -y, --yes name">
+      <section class="cmd" id="cmd-uninstall" data-search="uninstall remove an installed skill, rule, or workflow  --local -y, --yes name">
         <h3><span class="cname">uninstall</span><span class="gtag">pkg</span></h3>
-        <p class="summary">Remove an installed skill, rule, workflow, or config</p>
+        <p class="summary">Remove an installed skill, rule, or workflow</p>
         <pre class="syn">boost uninstall [--local] [-y] NAME [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -275,9 +275,9 @@
           <div class="arg"><code>--json</code><span>with --shards: print the per-tap result as JSON</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-reinstall" data-search="reinstall reinstall a skill or all skills (force) reinstall an installed skill, rule or workflow (force) --all name">
+      <section class="cmd" id="cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">
         <h3><span class="cname">reinstall</span><span class="gtag">pkg</span></h3>
-        <p class="summary">Reinstall a skill or all skills (force)</p>
+        <p class="summary">Reinstall a skill, rule or workflow (force)</p>
         <pre class="syn">boost reinstall [--all] [NAME ...]</pre>
         <p class="desc">Reinstall an installed skill, rule or workflow (force)</p>
         <div class="args-h">Arguments</div>
@@ -314,9 +314,9 @@
           <div class="arg"><code>--agent A</code><span>link only into this agent (repeatable)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-pin" data-search="pin pin a skill to its current version  --commit name">
+      <section class="cmd" id="cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">
         <h3><span class="cname">pin</span><span class="gtag">pkg</span></h3>
-        <p class="summary">Pin a skill to its current version</p>
+        <p class="summary">Pin a skill, rule or workflow to its current version</p>
         <pre class="syn">boost pin [--commit] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -327,9 +327,9 @@
           <div class="arg"><code>--commit</code><span>also freeze the exact source commit (integrity pin)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-unpin" data-search="unpin allow a pinned skill to update again  name">
+      <section class="cmd" id="cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  name">
         <h3><span class="cname">unpin</span><span class="gtag">pkg</span></h3>
-        <p class="summary">Allow a pinned skill to update again</p>
+        <p class="summary">Allow a pinned skill, rule or workflow to update again</p>
         <pre class="syn">boost unpin NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -366,9 +366,9 @@
           <div class="arg"><code>--force</code><span>overwrite OUT if it already exists</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">
+      <section class="cmd" id="cmd-adapt" data-search="adapt render a skill as another framework&#x27;s agent source (crewai, agents sdk, langgraph) render a skill as another agent framework&#x27;s native source --to framework --model m -o, --out file name">
         <h3><span class="cname">adapt</span><span class="gtag">pkg</span></h3>
-        <p class="summary">Render a skill as another framework&#x27;s agent source (CrewAI, Agents SDK)</p>
+        <p class="summary">Render a skill as another framework&#x27;s agent source (CrewAI, Agents SDK, LangGraph)</p>
         <pre class="syn">boost adapt --to FRAMEWORK [--model M] [-o FILE] name</pre>
         <p class="desc">Render a skill as another agent framework&#x27;s native source</p>
         <div class="args-h">Arguments</div>
@@ -400,9 +400,9 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-find">Find &amp; search</h2>
-      <section class="cmd" id="cmd-search" data-search="search search skills across tap registries (ai-ranked)  --smart --category category --limit limit --collapse-near-duplicates --json query">
+      <section class="cmd" id="cmd-search" data-search="search search skills across tap registries (bm25; --smart reranks with claude)  --smart --category category --limit limit --collapse-near-duplicates --json query">
         <h3><span class="cname">search</span><span class="gtag">find</span></h3>
-        <p class="summary">Search skills across tap registries (AI-ranked)</p>
+        <p class="summary">Search skills across tap registries (BM25; --smart reranks with Claude)</p>
         <pre class="syn">boost search [--smart] [--category CATEGORY] [--limit LIMIT] [--collapse-near-duplicates] [--json] query [query ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -417,11 +417,10 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-reindex" data-search="reindex build/refresh the full-content search index build or refresh the full-content search index --force --dense --export-shard tap --import-shard file --fetch-shards --json">
+      <section class="cmd" id="cmd-reindex" data-search="reindex build/refresh the full-content search index  --force --dense --export-shard tap --import-shard file --fetch-shards --json">
         <h3><span class="cname">reindex</span><span class="gtag">find</span></h3>
         <p class="summary">Build/refresh the full-content search index</p>
         <pre class="syn">boost reindex [--force] [--dense] [--export-shard TAP] [--import-shard FILE] [--fetch-shards] [--json]</pre>
-        <p class="desc">Build or refresh the full-content search index</p>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--force</code><span>reindex every tap, ignoring cached commits</span></div>
@@ -637,9 +636,9 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-tap">Taps &amp; registries</h2>
-      <section class="cmd" id="cmd-tap" data-search="tap add a github repo as a skill registry  --defaults --catalog --type {skill,rule,workflow} --category category --limit n --include-lists --dry-run --curated --at sha --jobs n spec">
+      <section class="cmd" id="cmd-tap" data-search="tap add a git url, github repo, or local directory as a skill registry  --defaults --catalog --type {skill,rule,workflow} --category category --limit n --include-lists --dry-run --curated --at sha --jobs n spec">
         <h3><span class="cname">tap</span><span class="gtag">tap</span></h3>
-        <p class="summary">Add a GitHub repo as a skill registry</p>
+        <p class="summary">Add a git URL, GitHub repo, or local directory as a skill registry</p>
         <pre class="syn">boost tap [--defaults] [--catalog] [--type {skill,rule,workflow}] [--category CATEGORY] [--limit N] [--include-lists] [--dry-run] [--curated] [--at SHA] [--jobs N] [spec ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -669,7 +668,7 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>-f, --force</code><span>skip the confirmation prompt</span></div>
+          <div class="arg"><code>-f, --force</code><span>skip the confirmation prompt (only shown when other installed items depend on this tap)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-taps" data-search="taps list all configured registry taps  --json">
@@ -681,9 +680,9 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-outdated" data-search="outdated show skills with available updates  --json">
+      <section class="cmd" id="cmd-outdated" data-search="outdated show skills, rules &amp; workflows with available updates  --json">
         <h3><span class="cname">outdated</span><span class="gtag">tap</span></h3>
-        <p class="summary">Show skills with available updates</p>
+        <p class="summary">Show skills, rules &amp; workflows with available updates</p>
         <pre class="syn">boost outdated [--json]</pre>
         <div class="args-h">Options</div>
         <div class="args">
@@ -810,9 +809,9 @@
           <div class="arg"><code>--json</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-impact" data-search="impact measure a skill&#x27;s influence on code quality  --json name">
+      <section class="cmd" id="cmd-impact" data-search="impact correlate a skill&#x27;s install date with repo activity  --json name">
         <h3><span class="cname">impact</span><span class="gtag">ai</span></h3>
-        <p class="summary">Measure a skill&#x27;s influence on code quality</p>
+        <p class="summary">Correlate a skill&#x27;s install date with repo activity</p>
         <pre class="syn">boost impact [--json] [NAME]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -900,9 +899,9 @@
           <div class="arg"><code>--json</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-quarantine" data-search="quarantine isolate a problematic skill without uninstalling  --release name --list name">
+      <section class="cmd" id="cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list name">
         <h3><span class="cname">quarantine</span><span class="gtag">chk</span></h3>
-        <p class="summary">Isolate a problematic skill without uninstalling</p>
+        <p class="summary">Isolate a problematic skill, rule or workflow without uninstalling</p>
         <pre class="syn">boost quarantine [--release NAME] [--list] [NAME]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -1071,9 +1070,9 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo &amp; open a pr  --repo repo --pr --dry-run -f, --force">
+      <section class="cmd" id="cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo (optionally open a pr with --pr)  --repo repo --pr --dry-run -f, --force">
         <h3><span class="cname">onboard</span><span class="gtag">cfg</span></h3>
-        <p class="summary">Add skill-tracker telemetry to a repo &amp; open a PR</p>
+        <p class="summary">Add skill-tracker telemetry to a repo (optionally open a PR with --pr)</p>
         <pre class="syn">boost onboard [--repo REPO] [--pr] [--dry-run] [-f]</pre>
         <div class="args-h">Options</div>
         <div class="args">
@@ -1123,9 +1122,9 @@
           <div class="arg"><code>--host HOST</code><span>address to bind (default: 127.0.0.1)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">
+      <section class="cmd" id="cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli) register boost as an mcp server for your agent clis --host h --stdio --seed --no-seed {register,unregister}">
         <h3><span class="cname">mcp</span><span class="gtag">cfg</span></h3>
-        <p class="summary">Register boost as an MCP server (Claude Code, Gemini CLI)</p>
+        <p class="summary">Register boost as an MCP server (Claude Code, Gemini CLI, Antigravity CLI)</p>
         <pre class="syn">boost mcp [--host H] [--stdio] [--seed | --no-seed] [{register,unregister}]</pre>
         <p class="desc">Register boost as an MCP server for your agent CLIs</p>
         <div class="args-h">Arguments</div>
@@ -1134,7 +1133,7 @@
         </div>
         <div class="args-h">Options</div>
         <div class="args">
-          <div class="arg"><code>--host H</code><span>agent CLI to (un)register with: claude, gemini, agy, or `auto` (default) for every one that is installed</span></div>
+          <div class="arg"><code>--host H</code><span>agent CLI to (un)register with: claude, gemini, agy, `auto` (default) for every one that is installed, or `all` for every known host regardless of install</span></div>
           <div class="arg"><code>--stdio</code><span>run the MCP server on stdin/stdout (used by the agent)</span></div>
           <div class="arg"><code>--seed</code><span>top up any missing recommended registries even if others are already tapped (the repair path)</span></div>
           <div class="arg"><code>--no-seed</code><span>register only; do not tap anything</span></div>

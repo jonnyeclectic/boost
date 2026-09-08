@@ -91,7 +91,7 @@ def cmd_search(argv):
     """Search the tap catalogs, optionally AI-reranked with --smart."""
     p = cliparse.parser(
         prog="boost search",
-        description="Search skills across tap registries (AI-ranked)")
+        description="Search skills across tap registries (BM25; --smart reranks with Claude)")
     p.add_argument("query", nargs="+", help="search terms")
     p.add_argument("--smart", action="store_true",
                    help="rerank the top hits with Claude")
@@ -422,7 +422,7 @@ def cmd_reindex(argv):
     """Build/refresh the full-content (RAG) search index over tapped items."""
     p = cliparse.parser(
         prog="boost reindex",
-        description="Build or refresh the full-content search index")
+        description="Build/refresh the full-content search index")
     p.add_argument("--force", action="store_true",
                    help="reindex every tap, ignoring cached commits")
     p.add_argument("--dense", action="store_true",
