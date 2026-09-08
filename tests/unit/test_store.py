@@ -1015,7 +1015,10 @@ class TestSyncApply:
         ghost = paths.home() / ".claude" / "skills" / "ghost"
         ghost.symlink_to(paths.store_dir() / "ghost")
         actions = store.sync_apply(store.sync_plan())
-        assert actions == ["removed stale link %s" % ghost]
+        # Tilde-contracted so this action string agrees with what `--diff`
+        # shows for the same path (`_tilde` in commands/pkg.py) — the raw
+        # absolute form used to make the two views disagree.
+        assert actions == ["removed stale link %s" % paths.tilde(ghost)]
         assert not ghost.is_symlink()
 
     def test_missing_store_reinstalled_from_tap(self, brainstorming):
