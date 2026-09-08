@@ -443,7 +443,7 @@ def cmd_profile(argv) -> int:
 
     # use
     profile = _load_profile(args.name)
-    missing, extras, _changed, other_kind = _profile_diff(profile)
+    missing, extras, changed, other_kind = _profile_diff(profile)
     want = profile.get("skills", {})
     for n, kind in sorted(other_kind.items()):
         # Installing it as a skill would shadow the rule/workflow of the same
@@ -463,6 +463,14 @@ def cmd_profile(argv) -> int:
         if not args.json:
             out.ok("installed %s → %s" % (n, " · ".join(res.linked)))
         installed_now.append(n)
+    for n in changed:
+        # Mirrors `diff`'s "~ NAME (version differs)" — `use` used to discard
+        # this and switch silently, leaving the drift `diff` warns about
+        # invisible from the command that is supposed to resolve it. Prose, so
+        # it is gated like every other line here; `--json` callers already read
+        # the same drift out of `profile diff`.
+        if not args.json:
+            out.warn("%s (version differs)" % n)
     for n in sorted(want):
         if lockfile.get_skill(n) and not (lockfile.get_skill(n) or {}).get("quarantined"):
             # unsideline, not link_agents: a skill this profile wants may have
@@ -472,20 +480,29 @@ def cmd_profile(argv) -> int:
             store.unsideline(n)
     uninstalled, sidelined, kept_extras = [], [], False
     if extras:
-        if args.prune:
-            if out.confirm("uninstall %d skill%s not in the profile (%s)?"
-                           % (len(extras), _s(len(extras)), ", ".join(extras)),
-                           quiet=args.json):
-                for n in extras:
-                    store.uninstall(n)
-                    if not args.json:
-                        out.ok("uninstalled %s" % n)
-                    uninstalled.append(n)
-            else:
-                kept_extras = True
+        # A declined --prune confirm used to leave extras fully installed
+        # and linked, then still print the unconditional "switched" below —
+        # a checkmark for a state the machine was not in. Falling through to
+        # the same sideline extras get without --prune keeps that claim true
+        # either way, without a second prompt. `and` short-circuits, so no
+        # prompt is raised when --prune was not asked for.
+        pruned = args.prune and out.confirm(
+            "uninstall %d skill%s not in the profile (%s)?"
+            % (len(extras), _s(len(extras)), ", ".join(extras)),
+            quiet=args.json)
+        if pruned:
+            for n in extras:
+                store.uninstall(n)
                 if not args.json:
-                    out.info("kept extras installed")
+                    out.ok("uninstalled %s" % n)
+                uninstalled.append(n)
         else:
+            # `kept_extras` keeps the meaning #804 published it with — the
+            # user was asked to uninstall these and declined, so they are
+            # still installed — and is now reported beside a populated
+            # `sidelined`: kept, but unlinked. It stays False when --prune
+            # was never passed, since nothing was ever kept against a no.
+            kept_extras = bool(args.prune)
             for n in extras:
                 store.sideline(n, "profile")
             sidelined = extras

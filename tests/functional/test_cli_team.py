@@ -366,6 +366,28 @@ class TestProfile:
         assert "cowboy-coding" not in json.loads(
             paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
 
+    def test_use_prune_declined_falls_through_to_sideline(
+            self, boost, tapped, monkeypatch):
+        # A declined --prune confirm used to leave cowboy-coding fully
+        # installed and linked, then still print an unconditional "switched"
+        # below — a checkmark for a state the machine was not in. It must
+        # fall through to the same sideline extras get without --prune.
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        link = paths.home() / ".claude" / "skills" / "cowboy-coding"
+        assert link.exists()
+
+        monkeypatch.delenv("BOOST_ASSUME_YES")   # stdin not a tty -> "no"
+        r = boost("profile", "use", "solo", "--prune")
+        assert ("sidelined 1 skill not in the profile (unlinked, still "
+                "installed): cowboy-coding") in r.out
+        assert "kept extras installed" not in r.out
+        assert "uninstalled cowboy-coding" not in r.out
+        assert "switched to profile solo" in r.out
+        assert not link.exists()
+        assert (paths.store_dir() / "cowboy-coding").is_dir()
+
     def test_use_records_the_sideline_and_clears_it_on_return(self, boost, tapped):
         # `sidelined_by` is what stops `doctor`/`sync` from reading a
         # deliberate switch as damage — and `profile use` has to clear it
@@ -396,6 +418,19 @@ class TestProfile:
         assert json.loads(r.out) == {"missing": [], "extras": [],
                                      "changed": ["brainstorming"],
                                      "other_kind": {}}
+
+    def test_use_warns_about_version_drift(self, boost, installed):
+        # `diff` reported this drift; `use` used to discard it and switch
+        # silently, so the one command meant to resolve the drift never
+        # mentioned it.
+        boost("profile", "save", "pin")
+        p = paths.lockfile_path()
+        lock = json.loads(p.read_text(encoding="utf-8"))
+        lock["skills"]["brainstorming"]["version"] = "0.9.0"
+        p.write_text(json.dumps(lock), encoding="utf-8")
+        r = boost("profile", "use", "pin")
+        assert "brainstorming (version differs)" in r.out
+        assert "switched to profile pin" in r.out
 
     def test_save_notes_uncaptured_rules_and_workflows(self, boost, installed):
         # Profiles carry skills only — with a rule and workflow installed the
