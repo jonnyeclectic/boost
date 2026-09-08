@@ -304,6 +304,13 @@ def cmd_outdated(argv) -> int:
             continue
         matches = [e for e in catalog.find(name) if e["tap"] == tap_name]
         if not matches:
+            # The tap is untapped, or dropped this entry entirely — same
+            # condition the rule/workflow loop below reports honestly, so a
+            # skill shouldn't just vanish from the table.
+            results.append({"name": name, "kind": "skill",
+                            "installed": str(lk.get("version") or "0.0.0"),
+                            "latest": staleness.OUTDATED_SOURCE_MISSING,
+                            "tap": tap_name, "pinned": bool(lk.get("pinned"))})
             continue
         entry, _warning = catalog.select_lock_source(matches, lk)
         entry = cast(dict, entry)             # matches is non-empty above
@@ -326,7 +333,7 @@ def cmd_outdated(argv) -> int:
                 except BoostError:
                     src_missing = True
         if src_missing:
-            stale, latest_disp = True, "source missing"
+            stale, latest_disp = True, staleness.OUTDATED_SOURCE_MISSING
         else:
             reason = staleness.upstream_reason(
                 installed_v, latest, lk.get("commit", ""), head,
@@ -357,7 +364,8 @@ def cmd_outdated(argv) -> int:
             except (OSError, BoostError):
                 results.append({"name": name, "kind": kind,
                                 "installed": installed_v,
-                                "latest": "source missing", "tap": tap_name,
+                                "latest": staleness.OUTDATED_SOURCE_MISSING,
+                                "tap": tap_name,
                                 "pinned": bool(lk.get("pinned"))})
                 continue
             if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
@@ -384,8 +392,9 @@ def cmd_outdated(argv) -> int:
              r["latest"], r["tap"]) for r in results]
     out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"))
     print()
-    out.dim("%d outdated · `boost update` upgrades (pinned items stay put)"
-            % len(results))
+    source_missing = sum(1 for r in results
+                         if r["latest"] == staleness.OUTDATED_SOURCE_MISSING)
+    out.dim(staleness.outdated_footer(len(results), source_missing))
     return 0
 
 
