@@ -641,9 +641,9 @@ def resolve_one(name: str, path: str | None = None) -> dict:
         narrowed = _by_path(matches, path)
         if not narrowed:
             raise BoostError(
-                "no skill named %r under path %r" % (name, path),
-                hint="paths for %r: %s" % (name, ", ".join(
-                    sorted(str(e.get("rel_dir", "?")) for e in matches))))
+                "no copy of %r whose path ends with %r" % (name, path),
+                hint="pass a trailing segment of one of: %s" % ", ".join(
+                    sorted(str(e.get("rel_dir", "?")) for e in matches)))
         matches = narrowed
     if not matches:
         qualifier, bare = split_name(name)

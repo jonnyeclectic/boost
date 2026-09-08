@@ -257,6 +257,28 @@ class TestRegisterArgv:
         assert argv[argv.index("--scope") + 1] == "user"
 
 
+class TestCommandLine:
+    def test_bare_command(self):
+        assert mcpdecl.command_line({"command": "npx"}) == "npx"
+
+    def test_command_with_args(self):
+        assert (mcpdecl.command_line(
+                    {"command": "npx", "args": ["-y", "@example/demo-echo-mcp"]})
+                == "npx -y @example/demo-echo-mcp")
+
+    def test_args_are_stringified(self):
+        assert mcpdecl.command_line({"command": "npx", "args": [3]}) == "npx 3"
+
+    def test_non_list_args_is_ignored(self):
+        assert mcpdecl.command_line({"command": "npx", "args": "-y"}) == "npx"
+
+    def test_missing_command_is_empty(self):
+        assert mcpdecl.command_line({}) == ""
+
+    def test_blank_command_is_empty(self):
+        assert mcpdecl.command_line({"command": "  "}) == ""
+
+
 class TestMergeInto:
     def _rows(self, *names):
         return [{"name": n, "spec": {"command": "npx"}, "source": "sidecar"}

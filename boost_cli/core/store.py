@@ -585,6 +585,40 @@ def _require_project_base(scope: str, base, what: str) -> Path | None:
     return resolved
 
 
+def _lock_location(entry: dict) -> str:
+    """Describe where a rule/workflow lock ``entry`` lives, for an error message."""
+    if entry.get("scope") == scopes.SCOPE_PROJECT:
+        base = entry.get("base")
+        return "project scope (%s)" % base if base else "project scope"
+    return "user scope"
+
+
+def _check_scope_conflict(name: str, existing: dict | None, scope: str,
+                          resolved_base: Path | None, force: bool) -> None:
+    """Refuse a name collision across install scopes before it corrupts state.
+
+    Rule/workflow lock entries are keyed by bare name with no per-scope
+    storage (unlike skills, which get their own project lock) — so a name
+    already recorded under a *different* scope/base is never "the same
+    install, seen twice". Letting ``force`` through in that case would
+    overwrite one scope's lock entry with the other's, orphaning the first
+    scope's materializations with nothing left in the lock to uninstall them.
+    Refuse the cross-scope case outright, ``force`` or not; only a same-scope,
+    same-base match falls through to the ordinary already-installed check.
+    """
+    if not existing:
+        return
+    requested_base = str(resolved_base) if resolved_base is not None else None
+    if existing.get("scope", "user") == scope and existing.get("base") == requested_base:
+        if not force:
+            raise BoostError("%s is already installed" % name,
+                            hint="`boost reinstall %s` to force" % name)
+        return
+    raise BoostError(
+        "%s is already installed at %s" % (name, _lock_location(existing)),
+        hint="uninstall it there first — a different scope cannot force-overwrite it")
+
+
 def _refuse_self_installing(entry: dict) -> None:
     """Refuse to half-copy an item whose repo installs itself.
 
@@ -931,20 +965,18 @@ def _install_rule(entry: dict, force: bool = False,
 
     from . import frontmatter, gitutil, rules
     name = entry["name"]
+    # Cheap precondition, checked before any tap or filesystem work: if there
+    # is nowhere to put this, say so immediately. Also needed ahead of the
+    # existing-install check below, which compares against this scope/base.
+    resolved_base = _require_project_base(scope, base, "rule %s" % name)
     existing = lockfile.get_rule(name)
-    if existing and not force:
-        raise BoostError("%s is already installed" % name,
-                        hint="`boost reinstall %s` to force" % name)
+    _check_scope_conflict(name, existing, scope, resolved_base, force)
     only_agents = preserved_agent_scope(only_agents, existing)
 
     violations = policy.check_install(entry, len(lockfile.installed()))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
-
-    # Cheap precondition, checked before any tap or filesystem work: if there
-    # is nowhere to put this, say so immediately.
-    resolved_base = _require_project_base(scope, base, "rule %s" % name)
 
     tap = registry.get(entry["tap"])
     src = tap.path / entry.get("skill_md", "")
@@ -1168,18 +1200,15 @@ def _install_workflow(entry: dict, force: bool = False,
 
     from . import gitutil, workflows
     name = entry["name"]
+    resolved_base = _require_project_base(scope, base, "workflow %s" % name)
     existing = lockfile.get_workflow(name)
-    if existing and not force:
-        raise BoostError("%s is already installed" % name,
-                        hint="`boost reinstall %s` to force" % name)
+    _check_scope_conflict(name, existing, scope, resolved_base, force)
     only_agents = preserved_agent_scope(only_agents, existing)
 
     violations = policy.check_install(entry, len(lockfile.installed()))
     if violations:
         raise BoostError("policy blocks installing %s: %s" % (name, "; ".join(violations)),
                         hint="inspect with `boost policy list`")
-
-    resolved_base = _require_project_base(scope, base, "workflow %s" % name)
 
     tap = registry.get(entry["tap"])
     source_rel = entry.get("skill_md", "")

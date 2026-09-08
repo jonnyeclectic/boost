@@ -920,6 +920,18 @@ class TestResolveOneVendoredCopies:
         hint = excinfo.value.hint or ""
         assert "a/dbg" in hint and "b/dbg" in hint
 
+    def test_path_that_matches_nothing_says_a_path_ends_with_not_under(self, sandbox):
+        """`--path plugins/tdd/skills` was refused as not "under" the very path
+        the error's own hint listed (`plugins/tdd/skills/test-driven-development`)
+        — matching is suffix-only by design, so the wording must say so instead
+        of claiming a containment relation it doesn't check."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dbg", path="nope/dbg")
+        assert excinfo.value.message == "no copy of 'dbg' whose path ends with 'nope/dbg'"
+        assert "under" not in excinfo.value.message
+        assert excinfo.value.hint == "pass a trailing segment of one of: a/dbg"
+
     def test_an_exact_path_beats_a_suffix_match(self, sandbox):
         """The real shape from DietrichGebert/ponytail: a canonical
         `skills/ponytail` and an agent mirror `.openclaw/skills/ponytail`. The

@@ -84,4 +84,12 @@ def find_confusions(target: dict, entries, max_distance: int = 1) -> list[dict]:
         if d <= max_distance:
             scored.append((d, e))
     scored.sort(key=lambda t: (t[0], str(t[1].get("name")), str(t[1].get("tap"))))
-    return [e for _d, e in scored]
+    seen: set[tuple[str, object]] = set()
+    deduped = []
+    for _d, e in scored:
+        key = (str(e.get("name", "")).lower(), e.get("tap"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(e)
+    return deduped

@@ -2,14 +2,14 @@
 id: audit-install-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
-note: a rule at user scope blocks the same name --local, and --force orphans the first scope
+note: "3 of 4 clusters landed; cross-scope-name-block gets a safe refusal, not true coexistence"
 order: 273
-owner:
+owner: loop/audit-install-findings
 pr:
 title: "<code>boost install</code>: CLI audit findings (2026-08)"
 ---
@@ -53,3 +53,21 @@ look-alike tap. De-duplicate <code>find_confusions</code> on <code>(name.lower()
 (<code>typosquat.py:79-87</code>) so the <code>[:3]</code> slice in <code>_warn_confusions</code>
 covers three distinct look-alikes. Found by the 2026-08 CLI audit (cluster
 <code>typosquat-warning-dupes</code>); repro in the audit log.
+
+<b>Status (2026-09).</b> Three of the four clusters shipped as described above:
+<code>install-path-prefix-match</code> (catalog.py wording), <code>mcp-offer-command-detail</code>
+(<code>mcpdecl.command_line</code> renders the full command+args, the decline path prints the real
+argv), and <code>typosquat-warning-dupes</code> (<code>find_confusions</code> dedupes on
+<code>(name.lower(), tap)</code>). <code>cross-scope-name-block</code> got the <b>narrower</b> of the
+fix's own two options: <code>store._check_scope_conflict</code> now refuses a rule/workflow install
+whose name collides with an existing lock entry recorded under a <i>different</i> scope/base —
+naming the real location ("already installed at user scope") and refusing even under
+<code>--force</code>, which closes the silent-corruption half of the bug (a forced cross-scope
+install used to overwrite the other scope's lock entry, orphaning its materializations). What is
+still missing is the other half: rules and workflows still cannot <i>coexist</i> across scopes the
+way skills do, because they share one lock keyed by bare name with no per-location table — skills
+got a separate <code>projectlock.py</code> when project scope was added, rules/workflows never did.
+Giving them the same treatment (a <code>rules</code>/<code>workflows</code> section in
+<code>projectlock.py</code>, wiring <code>_install_rule</code>/<code>_install_workflow</code> and
+their uninstall/sync counterparts through it for project scope) is real coexistence but is its own,
+larger change, and belongs in its own card rather than folded into a bugfix PR.
