@@ -585,8 +585,7 @@ def update(name: str | None = None,
             # everything" over 400 taps should not fail because three are
             # pinned.
             return "pinned at %s (skipped)" % tap.pin[:7], False
-        else:
-            return gitutil.pull(tap.path), bool(tap.pin)
+        return gitutil.pull(tap.path), bool(tap.pin)
 
     to_clear: list[str] = []
 
