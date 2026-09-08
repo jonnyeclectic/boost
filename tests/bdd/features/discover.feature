@@ -37,7 +37,7 @@ Feature: boost discover
     Then the exit code should be 0
     And the output should contain "skills/web/SKILL.md"
     And the output should not contain "octo/skills"
-    And the output should contain "2 of 3 indexed skills"
+    And the output should contain "1 repo(s) across 2 of 3 indexed skill files"
 
   Scenario: a query falls back to the index when gh is missing
     Given the discovery index is seeded with sample items
@@ -60,7 +60,8 @@ Feature: boost discover
     And the GitHub CLI is not installed
     When I run "boost discover zzz"
     Then the exit code should be 0
-    And the output should contain "because GitHub could not be reached"
+    And the output should contain "because the `gh` CLI is not installed"
+    And the output should not contain "because GitHub could not be reached"
     And the output should not contain "drop --local"
 
   Scenario: a corrupt index fails cleanly
