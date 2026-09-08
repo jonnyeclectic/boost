@@ -2,15 +2,15 @@
 id: audit-completions-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · UX
 complexity: M
 impact: Low
 wow: 1
-note: TAB after `policy set ` offers nothing; unset $SHELL gets a bash script with no warning
+note: CI ran the full pinned toolchain (lint, all mutation shards + gate, evals, full OS/version test matrix, DCO) and came back green with no merge conflict and no open review threads — the local sandbox couldn't run mutmut/vulture/etc. (PyPI blocked), so CI is what actually confirms this landed clean
 order: 257
-owner:
-pr:
+owner: loop/completions-audit-findings
+pr: 819
 title: "boost completions: CLI audit findings (2026-08)"
 ---
 <b>Generated completions never offer subcommand choices or policy keys.</b>

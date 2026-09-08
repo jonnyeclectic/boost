@@ -28,6 +28,8 @@ nothing. Silence degrades; a stack trace corrupts the line the user is typing.
 """
 from __future__ import annotations
 
+import ast
+import inspect
 import os
 import re
 from collections.abc import Callable, Sequence
@@ -35,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import BoostError
-from . import catalog, lockfile, paths, registry, store
+from . import catalog, config, lockfile, paths, policy, registry, store
 
 # cli.COMMANDS rows: (name, group, module, summary). Typed here rather than
 # imported so `core` stays the bottom layer.
@@ -101,26 +103,184 @@ def _tap_names() -> list[str]:
 
 # Long flags a command documents, read from its own parser rather than a shared
 # list — a global flag list would offer flags the command rejects.
-def _flags_for(command: str, commands: Registry) -> list[str]:
+def _command_func(command: str, commands: Registry):
     row = next((r for r in commands if r[0] == command), None)
     if row is None:
-        return []
+        return None
     module = __import__("boost_cli.commands." + row[2], fromlist=["x"])
-    func = getattr(module, "cmd_" + command.replace("-", "_"), None)
+    return getattr(module, "cmd_" + command.replace("-", "_"), None)
+
+
+def _command_source(command: str, commands: Registry) -> str:
+    """The source of ``command``'s ``cmd_*`` function, or "" if unavailable.
+
+    The parser is built inside the command function, so there is no object to
+    interrogate without running it. The source is the cheap, dependency-free
+    text both `_flags_for` and the positional-choices scraper below read.
+    """
+    func = _command_func(command, commands)
     if func is None:
-        return []
-    # The parser is built inside the command function, so there is no object to
-    # interrogate without running it. The docstring/source is the cheap,
-    # dependency-free source of truth for what it accepts.
-    import inspect
+        return ""
     try:
-        src = inspect.getsource(func)
+        return inspect.getsource(func)
     except (OSError, TypeError):
-        return []
+        return ""
+
+
+def _flags_for(command: str, commands: Registry) -> list[str]:
+    src = _command_source(command, commands)
     return sorted(set(re.findall(r'"(--[a-z][a-z0-9-]*)"', src)))
 
 
-def _source_for(command: str) -> Callable[[], list[str]] | None:
+def _add_argument_calls(src: str) -> list[str]:
+    """The raw argument text inside each ``.add_argument(...)`` call in
+    ``src``, in source order.
+
+    Paren-balanced rather than a regex match, because a ``choices=(...)``
+    tuple (or a quoted default) can itself contain the ``)`` a naive regex
+    would stop at.
+    """
+    calls = []
+    for m in re.finditer(r"\.add_argument\(", src):
+        depth, i = 1, m.end()
+        while i < len(src) and depth:
+            if src[i] == "(":
+                depth += 1
+            elif src[i] == ")":
+                depth -= 1
+            i += 1
+        calls.append(src[m.end():i - 1])
+    return calls
+
+
+def _split_top_level(text: str) -> list[str]:
+    """Split ``text`` on commas at bracket depth 0, respecting quotes — so an
+    argparse call's arguments separate cleanly even when one of them (a
+    ``choices=(...)`` tuple) contains commas of its own."""
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote: str | None = None
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            current.append(ch)
+            if ch == "\\" and i + 1 < len(text):
+                i += 1
+                current.append(text[i])
+            elif ch == quote:
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+            current.append(ch)
+        elif ch in "([{":
+            depth += 1
+            current.append(ch)
+        elif ch in ")]}":
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+        i += 1
+    if current:
+        parts.append("".join(current))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _is_positional_literal(token: str) -> bool:
+    """True for a quoted argument-name literal like ``"action"`` — false for
+    a flag spelling (``"--json"``, ``"-s"``) or anything not a bare string
+    literal (an f-string, a variable)."""
+    if len(token) < 3 or token[0] not in "'\"" or token[-1] != token[0]:
+        return False
+    return not token[1:-1].startswith("-")
+
+
+def _literal_choices(part: str) -> list[str] | None:
+    """The values of a ``choices=...`` keyword, when they are a literal tuple
+    or list of strings — ``None`` for anything dynamic (a name, a call, a
+    starred expression like ``(*hookhost.hosts(), "auto")``) so a candidate
+    is only ever an exact string this scraper can see, never a guess."""
+    m = re.match(r"choices\s*=\s*(.*)$", part, re.DOTALL)
+    if not m:
+        return None
+    try:
+        value = ast.literal_eval(m.group(1))
+    except (ValueError, SyntaxError, TypeError):
+        return None
+    if isinstance(value, (tuple, list)) and value and all(isinstance(v, str) for v in value):
+        return list(value)
+    return None
+
+
+def _positional_choices(src: str) -> list[list[str] | None]:
+    """Static ``choices=(...)`` values for each positional argument a
+    command's parser declares, in declaration order.
+
+    A position with no ``choices=`` kwarg, or one whose value is not a
+    literal tuple/list of strings, is ``None`` — degrading to nothing is the
+    point: offering a plausible-looking wrong value teaches the wrong thing.
+    """
+    result: list[list[str] | None] = []
+    for call in _add_argument_calls(src):
+        parts = _split_top_level(call)
+        if not parts or not _is_positional_literal(parts[0]):
+            continue
+        choices = None
+        for part in parts[1:]:
+            found = _literal_choices(part)
+            if found is not None:
+                choices = found
+                break
+        result.append(choices)
+    return result
+
+
+def _dotted_keys(node: object, prefix: str = "") -> list[str]:
+    """Every dotted leaf key a nested defaults dict declares, e.g.
+    ``"ai.enabled"`` out of ``config.DEFAULTS["ai"]["enabled"]``. A non-dict
+    leaf (including an empty dict) ends the walk, so ``"serve.port"`` is a
+    key but ``"serve"`` alone is not — matching what `config.set_value`
+    actually accepts."""
+    if isinstance(node, dict) and node:
+        keys: list[str] = []
+        for k, v in node.items():
+            keys.extend(_dotted_keys(v, "%s.%s" % (prefix, k) if prefix else k))
+        return keys
+    return [prefix] if prefix else []
+
+
+def _config_keys() -> list[str]:
+    return sorted(_dotted_keys(config.DEFAULTS))
+
+
+def _policy_keys() -> list[str]:
+    return sorted(policy.DEFAULTS)
+
+
+# A positional whose candidates come from `policy.DEFAULTS` / `config.DEFAULTS`
+# rather than from a literal `choices=(...)` in the parser — `policy set KEY`
+# and `config {get,set,unset} KEY` validate the key against that dict in the
+# command body, not through argparse, so there is no tuple here to scrape.
+# Keyed by command; the value names which already-typed action word (position
+# 0) unlocks it, and the source itself. Only position 1 (the word right after
+# the action) is covered — a value in position 2 is never a static choice.
+_ACTION_KEY_SOURCE: dict[str, tuple[frozenset[str], Callable[[], list[str]]]] = {
+    "policy": (frozenset({"set", "unset"}), _policy_keys),
+    "config": (frozenset({"get", "set", "unset"}), _config_keys),
+}
+
+
+def _source_for(command: str, position: int, prior: tuple[str, ...],
+                 commands: Registry) -> Callable[[], list[str]] | None:
+    """What TAB offers for the positional at ``position`` (0-indexed among a
+    command's own arguments) after ``prior`` — the positional words already
+    typed for this command, oldest first.
+    """
     table: dict[str, Callable[[], list[str]]] = {}
     for name in _CATALOG_ARG:
         table[name] = _cached_names
@@ -128,7 +288,23 @@ def _source_for(command: str) -> Callable[[], list[str]] | None:
         table[name] = _installed_names
     for name in _TAP_ARG:
         table[name] = _tap_names
-    return table.get(command)
+    if command in table:
+        # Position-independent on purpose: `install`/`uninstall`/`untap` take
+        # a variadic list of names, so word 2 and word 5 offer the same thing.
+        return table[command]
+
+    if position == 1 and command in _ACTION_KEY_SOURCE:
+        actions, source = _ACTION_KEY_SOURCE[command]
+        if prior and prior[0] in actions:
+            return source
+        return None
+
+    choices = _positional_choices(_command_source(command, commands))
+    if position < len(choices):
+        values = choices[position]
+        if values:
+            return lambda: values
+    return None
 
 
 def candidates(words: list[str], commands: Registry) -> list[str]:
@@ -151,7 +327,8 @@ def candidates(words: list[str], commands: Registry) -> list[str]:
         command = words[1]
         if current.startswith("-"):
             return [f for f in _flags_for(command, commands) if f.startswith(current)]
-        source = _source_for(command)
+        prior = tuple(words[2:-1])
+        source = _source_for(command, len(prior), prior, commands)
         if source is None:
             return []
         return [c for c in source() if c.startswith(current)]

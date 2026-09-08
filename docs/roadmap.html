@@ -13356,8 +13356,9 @@ b</code> creates a one-skill cohort. No doc changes. Found by the 2026-08 CLI au
       </article>
 
       <article class="cap rcard" id="audit-completions-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost completions: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>Generated completions never offer subcommand choices or policy keys.</b>
 <code>__complete boost policy ""</code>, <code>… policy set ""</code>, <code>… schedule ""</code>
 and <code>… completions ""</code> all exit 0 with zero output, while the controls work
@@ -13385,12 +13386,12 @@ Root: <code>configuration.py:769</code> falls back to <code>"bash"</code> uncomm
 fish"), warn before the bash fallback for a real unsupported shell, keep <code>_rc_path</code>'s
 message for the install path. No doc changes beyond the follow-up note in the shipped completions
 item. Found by the 2026-08 CLI audit (cluster <code>completions-shell-detection</code>); repro in
-the audit log.</p>
+the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">TAB after `policy set ` offers nothing; unset $SHELL gets a bash script with no warning</span>
+          <span class="m">CI ran the full pinned toolchain (lint, all mutation shards + gate, evals, full OS/version test matrix, DCO) and came back green with no merge conflict and no open review threads — the local sandbox couldn't run mutmut/vulture/etc. (PyPI blocked), so CI is what actually confirms this landed clean</span>
         </div>
       </article>
 
