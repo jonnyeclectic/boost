@@ -2,14 +2,14 @@
 id: audit-completions-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · UX
 complexity: M
 impact: Low
 wow: 1
 note: TAB after `policy set ` offers nothing; unset $SHELL gets a bash script with no warning
 order: 257
-owner:
+owner: loop/completions-audit-findings
 pr:
 title: "boost completions: CLI audit findings (2026-08)"
 ---
