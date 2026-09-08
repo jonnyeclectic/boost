@@ -13650,8 +13650,9 @@ explain-faithfulness-gap); repro in the audit log.</p>
       </article>
 
       <article class="cap rcard" id="audit-export-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost export</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>export picks the archive format from <code>--zip</code> alone, so <code>-o x.zip</code> writes a
 gzip tarball named .zip.</b> <code>export brainstorming -o byname.zip</code> produces
 <em>&ldquo;gzip compressed data&rdquo;</em> per file(1); <code>--zip -o byflag.tar.gz</code>
@@ -13687,7 +13688,7 @@ deterministic archives that stop leaking the local username &mdash; and in the z
 Boostfile via a <code>ZipInfo</code> with <code>external_attr = (0o644|S_IFREG)&lt;&lt;16</code>.
 
 <br><br>Found by the 2026-08 CLI audit (clusters export-archive-format, sync-local-source-repair,
-export-tar-ownership); repro in the audit log.</p>
+export-tar-ownership); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>

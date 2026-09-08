@@ -1100,6 +1100,51 @@ class TestSyncApply:
     def test_nothing_to_do_no_actions(self, brainstorming):
         assert store.sync_apply(store.sync_plan()) == []
 
+    def _local_skill(self, tmp_path, name="local-skill", body="Body v1"):
+        src = tmp_path / name
+        src.mkdir()
+        (src / "SKILL.md").write_text(
+            "---\nname: %s\nversion: 1.0.0\n---\n\n%s\n" % (name, body),
+            encoding="utf-8")
+        return src
+
+    def test_missing_store_reinstalled_from_local_source(self, sandbox, tmp_path):
+        src = self._local_skill(tmp_path)
+        store.install_from_path(src)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        actions = store.sync_apply(store.sync_plan())
+        assert len(actions) == 5           # 4 stale links + reinstall
+        assert actions[-1] == "reinstalled missing local-skill from local source %s" % src
+        assert (paths.store_dir() / "local-skill" / "SKILL.md").is_file()
+        assert lockfile.get_skill("local-skill") is not None
+
+    def test_missing_store_local_source_gone_dropped_from_lock(self, sandbox, tmp_path):
+        src = self._local_skill(tmp_path)
+        store.install_from_path(src)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        shutil.rmtree(src)
+        actions = store.sync_apply(store.sync_plan())
+        assert ("dropped local-skill from lock (store dir missing, source gone)"
+                in actions)
+        assert lockfile.get_skill("local-skill") is None
+
+    def test_missing_store_local_source_pinned_and_changed_declined(
+            self, sandbox, tmp_path):
+        src = self._local_skill(tmp_path)
+        store.install_from_path(src)
+        lk = lockfile.get_skill("local-skill")
+        lk["pinned"] = True
+        lockfile.set_skill("local-skill", lk)
+        shutil.rmtree(paths.store_dir() / "local-skill")
+        (src / "SKILL.md").write_text(
+            "---\nname: local-skill\nversion: 2.0.0\n---\n\nBody v2\n",
+            encoding="utf-8")
+        actions = store.sync_apply(store.sync_plan())
+        assert any("is pinned and its local source has moved — repair declined"
+                  in a for a in actions)
+        assert not (paths.store_dir() / "local-skill").is_dir()
+        assert lockfile.get_skill("local-skill") is not None
+
 
 class TestCopySkillAtomic:
     def _mkskill(self, root, name, body="v1"):
