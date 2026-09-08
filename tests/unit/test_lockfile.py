@@ -413,3 +413,78 @@ class TestKindAgnosticAccessors:
         hist = lockfile.history_list()
         assert hist, "the fourth write must have snapshotted the third state"
         assert hist[-1]["count"] == 3
+
+
+class TestPortable:
+    """lockfile.portable() — strip machine-specific paths before a lock
+    snapshot leaves this machine (``boost onboard`` commits one into a repo).
+    """
+
+    def test_home_rooted_rule_path_is_tildified(self, sandbox):
+        home_path = str(paths.home() / ".claude" / "CLAUDE.md")
+        lock = {"version": 3, "skills": {}, "workflows": {}, "rules": {
+            "house-style": {"kind": "rule", "materializations": [
+                {"agent": "claude-code", "path": home_path, "sha256": "abc"}]}}}
+        projected = lockfile.portable(lock)
+        path = projected["rules"]["house-style"]["materializations"][0]["path"]
+        assert path == "~/.claude/CLAUDE.md"
+        assert "$HOME" not in path
+
+    def test_workflow_materializations_are_also_projected(self, sandbox):
+        home_path = str(paths.home() / ".gemini" / "commands" / "ship.toml")
+        lock = {"version": 3, "skills": {}, "rules": {}, "workflows": {
+            "ship-it": {"kind": "workflow", "materializations": [
+                {"agent": "gemini", "slot": "commands", "path": home_path}]}}}
+        projected = lockfile.portable(lock)
+        path = projected["workflows"]["ship-it"]["materializations"][0]["path"]
+        assert path == "~/.gemini/commands/ship.toml"
+
+    def test_path_outside_home_is_left_alone(self, sandbox):
+        # A project-scope base can sit anywhere; tilde() only contracts a real
+        # $HOME boundary, so an unrelated absolute path passes through as-is.
+        lock = {"version": 3, "skills": {}, "workflows": {}, "rules": {
+            "r": {"kind": "rule", "materializations": [
+                {"agent": "cursor", "path": "/srv/repo/.cursor/rules/r.mdc"}]}}}
+        projected = lockfile.portable(lock)
+        path = projected["rules"]["r"]["materializations"][0]["path"]
+        assert path == "/srv/repo/.cursor/rules/r.mdc"
+
+    def test_entry_without_materializations_passes_through_untouched(self, sandbox):
+        lock = {"version": 3, "workflows": {}, "rules": {},
+                "skills": {"brainstorming": {"version": "1.0.0", "agents": ["claude-code"]}}}
+        projected = lockfile.portable(lock)
+        assert projected["skills"]["brainstorming"] == {
+            "version": "1.0.0", "agents": ["claude-code"]}
+
+    def test_materialization_missing_path_key_is_tolerated(self, sandbox):
+        lock = {"version": 3, "skills": {}, "workflows": {}, "rules": {
+            "r": {"kind": "rule", "materializations": [{"agent": "cursor"}]}}}
+        projected = lockfile.portable(lock)
+        assert projected["rules"]["r"]["materializations"][0] == {"agent": "cursor"}
+
+    def test_does_not_mutate_the_input(self, sandbox):
+        home_path = str(paths.home() / ".claude" / "CLAUDE.md")
+        lock = {"version": 3, "skills": {}, "workflows": {}, "rules": {
+            "r": {"kind": "rule", "materializations": [
+                {"agent": "claude-code", "path": home_path}]}}}
+        lockfile.portable(lock)
+        assert lock["rules"]["r"]["materializations"][0]["path"] == home_path
+
+    def test_multiple_entries_and_sections_all_projected(self, sandbox):
+        home = paths.home()
+        lock = {"version": 3,
+                "skills": {},
+                "rules": {
+                    "a": {"kind": "rule", "materializations": [
+                        {"agent": "cursor", "path": str(home / ".cursor" / "rules" / "a.mdc")}]},
+                    "b": {"kind": "rule", "materializations": [
+                        {"agent": "claude-code", "path": str(home / ".claude" / "CLAUDE.md")}]},
+                },
+                "workflows": {
+                    "c": {"kind": "workflow", "materializations": [
+                        {"agent": "gemini", "path": str(home / ".gemini" / "commands" / "c.toml")}]},
+                }}
+        projected = lockfile.portable(lock)
+        assert projected["rules"]["a"]["materializations"][0]["path"] == "~/.cursor/rules/a.mdc"
+        assert projected["rules"]["b"]["materializations"][0]["path"] == "~/.claude/CLAUDE.md"
+        assert projected["workflows"]["c"]["materializations"][0]["path"] == "~/.gemini/commands/c.toml"

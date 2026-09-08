@@ -694,7 +694,8 @@ def cmd_onboard(argv) -> int:
     files = [(_TELEMETRY_REL, telemetry), (_WORKFLOW_REL, _WORKFLOW_YML)]
     if repo != paths.store_dir().resolve():
         files.append((".skill-lock.json",
-                      json.dumps(lockfile.read(), indent=2, sort_keys=True) + "\n"))
+                      json.dumps(lockfile.portable(lockfile.read()),
+                                indent=2, sort_keys=True) + "\n"))
 
     if args.dry_run:
         for rel, content in files:
