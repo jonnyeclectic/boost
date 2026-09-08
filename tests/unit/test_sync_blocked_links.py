@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from boost_cli.core import agents, catalog, registry, store
+from boost_cli.core import agents, catalog, registry, store, util
 
 
 def _agent_path(agent, name="brainstorming"):
@@ -98,6 +98,71 @@ class TestBlockedLinks:
         link.mkdir()
         actions = store.sync_apply(store.sync_plan())
         assert not any("linked brainstorming" in a for a in actions)
+
+
+class TestBlockedLinkWithMissingStore:
+    """The residual case of the fix above: the store copy is ALSO gone.
+
+    Observed for real, as a closed loop across three commands: with the store
+    dir deleted and a foreign directory sitting at
+    ``~/.windsurf/skills/brainstorming``, ``sync --diff`` named only the
+    missing store and said nothing about windsurf; the live ``sync`` then
+    "repaired" it — reinstalling the store, relinking every agent it could —
+    with no mention of windsurf either; only a *second* ``sync`` finally
+    reported the blocked link. ``sync_plan`` used to ``continue`` the moment it
+    classified an entry as ``missing_store``, skipping the agent-link
+    classification below entirely — even though that classification reads only
+    the agent directory, never the store, so it never needed the store dir to
+    exist in the first place.
+    """
+
+    def test_missing_store_and_blocked_link_appear_in_the_same_plan(
+            self, brainstorming):
+        link = _agent_path("windsurf")
+        link.unlink()
+        link.mkdir()                      # a foreign real dir, as before
+        util.rmtree(store.skill_store_dir("brainstorming"))
+
+        plan = store.sync_plan()
+
+        assert "brainstorming" in plan["missing_store"]
+        assert any(n == "brainstorming" and a == "windsurf"
+                   for n, a, *_ in plan["blocked_links"]), (
+            "a foreign file blocking a link must be reported the same run "
+            "the store copy is found missing, not held back for a second "
+            "`sync` to discover")
+        assert ("brainstorming", "windsurf") not in plan["missing_links"]
+
+    def test_the_other_agents_still_repair_in_one_pass(self, brainstorming):
+        # Only windsurf is blocked; claude-code, cursor and antigravity's
+        # links are merely dangling (their target just vanished) and must
+        # still come back once the store is restored — the fix must not cost
+        # the ordinary repair to catch the blocked one.
+        link = _agent_path("windsurf")
+        link.unlink()
+        link.mkdir()
+        util.rmtree(store.skill_store_dir("brainstorming"))
+
+        actions = store.sync_apply(store.sync_plan())
+
+        assert any("reinstalled missing brainstorming" in a for a in actions)
+        assert _agent_path("claude-code").is_symlink()
+        assert _agent_path("claude-code").exists()
+        # windsurf stays blocked — sync never deletes a file it does not own.
+        assert _agent_path("windsurf").is_dir()
+        assert not _agent_path("windsurf").is_symlink()
+
+    def test_a_healthy_missing_store_repair_is_unaffected(self, brainstorming):
+        # No blocked link at all: the classic case from PR #515 must keep
+        # working exactly as before — a missing-store entry's own agents
+        # never enter `missing_links` (the reinstall in `sync_apply` relinks
+        # them as one step), and none of them are blocked either.
+        util.rmtree(store.skill_store_dir("brainstorming"))
+        plan = store.sync_plan()
+        assert "brainstorming" in plan["missing_store"]
+        assert plan["blocked_links"] == []
+        for agent in ("claude-code", "cursor", "windsurf"):
+            assert ("brainstorming", agent) not in plan["missing_links"]
 
 
 class TestDoctorNamesAReachableRemedy:

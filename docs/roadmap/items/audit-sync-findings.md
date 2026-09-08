@@ -2,14 +2,14 @@
 id: audit-sync-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
-note: "First sync run hides a blocked link; --diff prints it as a raw Python tuple"
+note: "Fixed in PR; make check unverified locally (sandbox has no PyPI access) — CI must confirm before shipped"
 order: 293
-owner:
+owner: loop/sync-blocked-link-report
 pr:
 title: "boost sync: CLI audit findings (2026-08)"
 ---
