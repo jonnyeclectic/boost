@@ -437,7 +437,14 @@ class TestProtocol:
                             lambda: "Darwin")
         r = boost("protocol", "status")
         assert "Darwin" in r.out
-        assert "not registered" in r.out
+        # Darwin's `register` never calls Launch Services (see below) — a
+        # bare "handler" key that shows the script path once written would
+        # read as "registered" though a boost:// link still does nothing
+        # until Boost.app exists. So Darwin gets two keys, neither of which
+        # is the generic "handler"/"not registered" pair other platforms use.
+        assert not any(line.strip().startswith("handler") for line in r.out.splitlines())
+        assert "script" in r.out and "not written" in r.out
+        assert "registered" in r.out and "no — build Boost.app" in r.out
         # One form per row now, not a `·`-joined run: the run was 100 columns
         # and wrapping it stranded a bare `·` at the start of a line.
         for form in ("boost://install/<skill>", "boost://install/<tap>:<skill>",
@@ -451,7 +458,11 @@ class TestProtocol:
         assert "copied to" in r.out
         assert "linked → claude-code · windsurf · cursor · antigravity" in r.out
         assert "lock updated (.skill-lock.json)" in r.out
+        assert "quality score" in r.out
         assert (paths.store_dir() / "brainstorming" / "SKILL.md").is_file()
+        ev = journal.events(action="install")[0]
+        assert ev["subject"] == "brainstorming"
+        assert ev["via"] == "protocol"
 
     def test_open_qualified_tap_skill(self, boost, tapped):
         boost("protocol", "open", "boost://install/fixture-tap:brainstorming")
@@ -516,7 +527,9 @@ class TestProtocol:
         assert not script.exists()
         r = boost("protocol", "unregister")
         assert "nothing registered" in r.out
-        assert "not registered" in boost("protocol", "status").out
+        status = boost("protocol", "status").out
+        assert "not written" in status
+        assert "no — build Boost.app" in status
 
     def test_register_linux_and_other(self, boost, sandbox, monkeypatch):
         monkeypatch.setattr("boost_cli.commands.team.platform.system",
