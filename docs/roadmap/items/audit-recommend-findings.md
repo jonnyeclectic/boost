@@ -2,15 +2,15 @@
 id: audit-recommend-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: curated picks repeat one name 6 of 8 rows; --json returns [] while text prints them
 order: 286
-owner:
-pr:
+owner: loop/recommend-json-dedup
+pr: 815
 title: "boost recommend: CLI audit findings (2026-08)"
 ---
 <b>The curated fallback repeats one name, JSON omits it entirely, and sibling commands disagree on whose entry wins.</b> With curated taps and an unrecognised project, <code>recommend</code> prints <em>&ldquo;no stack-specific matches &mdash; curated picks instead:&rdquo;</em> followed by 8 rows carrying only 2 distinct names (python-patterns &times;6 &mdash; its es/ja/tr/zh mirrors from one tap &mdash; react-patterns &times;2): the fallback list-comps raw entries with no dedup (<code>boost_cli/commands/discovery.py:899-906</code>) while the keyword path dedups by name at <code>:876</code> and trending at <code>:1707</code>. In the same directory <code>recommend --json</code> returns <code>"recommendations": []</code> because the <code>as_json</code> branch (<code>:885-889</code>) returns before the fallback runs. And for one name shipped by several taps, trending shows the <em>last</em> tap's description (dict comprehension) where recommend keeps the <em>first</em> (<code>agg.setdefault</code>) &mdash; verified with python-patterns showing two different descriptions. Fix: dedup the curated fallback by name or content digest before slicing to <code>--limit</code>; compute the shown set (curated included) before the JSON/text split so both modes carry the same list, tagged <code>because: ["curated"]</code>; in <code>cmd_trending</code> prefer the lock's tap (or <code>catalog.find(name)[0]</code>) over last-entry-wins.

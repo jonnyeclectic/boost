@@ -334,7 +334,7 @@ def cached_graph() -> dict:
 
 def public_row(row: dict) -> dict:
     """A row without the search blob, which is index fuel and not display data."""
-    return {k: v for k, v in row.items() if k != "search_blob"}
+    return catalog.public_entry(row)
 
 
 # The page is built by token substitution rather than %-formatting or .format():
