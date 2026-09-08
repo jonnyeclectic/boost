@@ -14,6 +14,7 @@ from typing import Any
 from .. import cliparse
 from ..core import (
     catalog,
+    cohort,
     complete,
     journal,
     jsonstate,
@@ -80,7 +81,8 @@ def cmd_cohort(argv) -> int:
     p.add_argument("action", nargs="?", default="list",
                    choices=["list", "create", "delete", "status", "apply"])
     p.add_argument("name", nargs="?", help="cohort name")
-    p.add_argument("--skills", default="", help="comma-separated skill names")
+    p.add_argument("--skills", action="append", default=[],
+                   help="comma-separated skill names (repeatable)")
     p.add_argument("--percent", type=int, default=100,
                    help="rollout percentage (default 100)")
     p.add_argument("--json", action="store_true", help="machine-readable output")
@@ -94,7 +96,7 @@ def cmd_cohort(argv) -> int:
             p.error("create needs a cohort NAME")
         if not 0 <= args.percent <= 100:
             p.error("--percent must be 0-100")
-        skills = [s.strip() for s in args.skills.split(",") if s.strip()]
+        skills = cohort.parse_skills(args.skills)
         if not skills:
             p.error("create needs --skills a,b,...")
         for s in skills:
@@ -146,7 +148,7 @@ def cmd_cohort(argv) -> int:
         if not targets:
             print(out.empty_state("no cohorts defined"))
             return 0
-        applied = skipped = 0
+        total_installed = total_present = total_missing = 0
         for cname in targets:
             spec = cohorts[cname]
             if not _is_member(user, cname, spec["percent"]):
@@ -154,6 +156,7 @@ def cmd_cohort(argv) -> int:
                                % (cname, spec["percent"]), "muted"))
                 continue
             out.heading("cohort %s" % cname)
+            installed = present = missing = 0
             for skill in spec["skills"]:
                 # find_any, not installed(): a cohort item installed as a rule
                 # or workflow would otherwise be re-installed on every apply.
@@ -162,17 +165,25 @@ def cmd_cohort(argv) -> int:
                     label = (skill if found[0] == "skill"
                              else "%s (%s)" % (skill, found[0]))
                     out.info(out.role("%s already installed" % label, "muted"))
-                    skipped += 1
+                    present += 1
                     continue
                 entry = _resolve_entry(skill)
                 if entry is None:
                     out.warn("%s not found in any tap — skipped" % skill)
+                    missing += 1
                     continue
                 res = store.install(entry)
                 out.ok("installed %s → %s" % (skill, " · ".join(res.linked)))
-                applied += 1
-        out.info("applied: %d installed, %d already present" % (applied, skipped))
-        return 0
+                installed += 1
+            journal.log("cohort", cname, op="apply", installed=installed,
+                       present=present, missing=missing)
+            total_installed += installed
+            total_present += present
+            total_missing += missing
+        out.info(cohort.apply_summary(total_installed, total_present,
+                                      total_missing))
+        return cohort.apply_exit_code(total_installed, total_present,
+                                      total_missing)
 
     # list / status
     rows = []
