@@ -757,6 +757,11 @@ def cmd_explain(argv):
                      "extractive summary instead"
                      % ", ".join(faithfulness.ungrounded_terms(reply, text)[:4]),
                      stream=sys.stderr)
+        else:
+            # The backend was available but the call itself produced nothing —
+            # distinct from "no backend at all", so it gets the same
+            # attributed note rather than silence.
+            out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     else:
         out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     meta, body = frontmatter.parse(text)

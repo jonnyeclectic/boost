@@ -1181,6 +1181,8 @@ def cmd_impact(argv: list[str]) -> int:
             if reply:
                 print()
                 print(textwrap.indent(textwrap.fill(reply, width=76), "  "))
+            else:
+                _note_fallback()
         else:
             _note_fallback()
     out.dim("  " + note)
@@ -1245,6 +1247,11 @@ def _print_reply(reply: chat_engine.Reply, show_sources: bool) -> None:
         # a downgraded answer that looks identical to a confident one.
         out.warn("the AI reply named something outside the retrieved skills — "
                  "showing the grounded matches instead")
+    elif reply.ai_failed:
+        # AI was available and was tried, but the call itself produced
+        # nothing — distinct from never having a backend, and otherwise
+        # indistinguishable from a deliberate extractive answer.
+        out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
 
 
 def cmd_chat(argv: list[str]) -> int:

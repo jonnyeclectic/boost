@@ -88,6 +88,13 @@ class Reply(NamedTuple):
     ``grounded`` is False only when the AI path was tried and rejected — the
     caller may want to say so, since a silently downgraded answer looks the same
     as a confident one.
+
+    ``ai_failed`` is True only when :func:`ai.available` said yes but
+    :func:`ai.ask` came back with nothing — a backend that ran and failed,
+    not one that was never tried. Kept separate from ``grounded``: an
+    invented name or an unfaithful reply is a *rejection*, with its own
+    warning already shown by the caller, while this is a call that produced
+    no reply to reject in the first place and would otherwise fail silently.
     """
 
     text: str
@@ -95,6 +102,7 @@ class Reply(NamedTuple):
     engine: str             # which retrieval engine ran, for attribution
     source: str             # "ai" | "extractive"
     grounded: bool
+    ai_failed: bool = False
 
 
 def _history_context(history: Sequence[Turn]) -> str:
@@ -308,7 +316,11 @@ def answer(question: str, history: Sequence[Turn] = (),
         source, question)
     reply = ai.ask(prompt, system=_SYSTEM)
     if not reply:
-        return Reply(extractive, entries.copy(), engine, "extractive", True)
+        # AI was available and was tried — this is a call that failed, not a
+        # call that was never made, so the caller gets to say so rather than
+        # showing the extractive answer as if AI had never been in the loop.
+        return Reply(extractive, entries.copy(), engine, "extractive", True,
+                    ai_failed=True)
 
     reply = reply.strip()
     invented = ungrounded_names(reply, entries)

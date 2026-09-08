@@ -651,6 +651,19 @@ class TestExplain:
         assert "ungrounded" not in r.out
         assert "Key rules:" not in r.out          # showed the AI reply, no fallback
 
+    def test_a_failed_ai_call_warns_instead_of_falling_back_silently(
+            self, boost, installed, monkeypatch):
+        # The audit bug this card fixes: AI was available and the call was
+        # made, but produced nothing (an expired login, an untrusted
+        # workspace, ...) — distinct from "no backend", and previously
+        # reported with no note at all.
+        from boost_cli.core import ai
+        monkeypatch.setattr(ai, "available", lambda: True)
+        monkeypatch.setattr(ai, "ask", lambda *a, **k: None)
+        r = boost("explain", "brainstorming")
+        assert "using the heuristic fallback" in r.err
+        assert "Key rules:" in r.out
+
     def test_ungrounded_ai_reply_falls_back_to_extractive(self, boost, installed,
                                                           monkeypatch):
         from boost_cli.core import ai

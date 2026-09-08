@@ -249,6 +249,19 @@ class TestSearch:
         # junk reply → keep the base BM25 order (tdd-workflow ranks first)
         assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
         assert "ranked by full-content BM25" in r.out
+        # Previously silent: AI was available and was tried, but produced
+        # nothing usable — indistinguishable from a deliberate BM25-only run.
+        assert "using the heuristic fallback" in " ".join(r.err.split())
+
+    def test_smart_with_a_failed_ai_call_still_warns(self, boost, tapped,
+                                                      monkeypatch):
+        monkeypatch.delenv("BOOST_NO_AI", raising=False)
+        monkeypatch.setattr("boost_cli.core.ai.available", lambda: True)
+        monkeypatch.setattr("boost_cli.core.ai.ask", lambda *a, **k: None)
+        r = boost("search", "workflow", "--smart")
+        assert r.out.index("tdd-workflow") < r.out.index("jira-integration")
+        assert "ranked by full-content BM25" in r.out
+        assert "using the heuristic fallback" in " ".join(r.err.split())
 
     def test_index_build_failure_degrades_to_heuristic(self, boost, tapped,
                                                        monkeypatch):
