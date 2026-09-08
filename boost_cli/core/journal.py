@@ -13,6 +13,17 @@ from . import paths, util
 ROTATE_AT = 5000
 ROTATE_KEEP = 2500
 
+# Actions that reflect hands-on skill expertise, as opposed to any journal
+# subject at all (tap names, cohort names, reindex summaries, ...). `who`'s
+# per-skill view already filters to this set; the aggregate view must use the
+# same set so a "skill" it counts is actually a skill.
+EXPERTISE_ACTIONS = ("install", "edit", "evolve", "distill", "tag")
+
+
+def is_expertise_event(event: dict) -> bool:
+    """True when `event`'s action reflects hands-on skill expertise."""
+    return event.get("action") in EXPERTISE_ACTIONS
+
 
 def log(action: str, subject: str = "", **fields) -> None:
     """Append one event line to the pulse feed, rotating when oversized.

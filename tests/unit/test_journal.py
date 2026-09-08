@@ -260,6 +260,25 @@ class TestRotationHealthy:
         assert journal.rotation_healthy() is False
 
 
+class TestIsExpertiseEvent:
+    """See the roadmap item: who's aggregate view used to count every
+    journal subject (tap names, cohort names, reindex summaries, ...) as a
+    "skill". is_expertise_event is the shared filter that keeps the
+    per-skill and aggregate views of `who` in agreement."""
+
+    @pytest.mark.parametrize("action", journal.EXPERTISE_ACTIONS)
+    def test_expertise_actions_pass(self, action):
+        assert journal.is_expertise_event({"action": action}) is True
+
+    @pytest.mark.parametrize(
+        "action", ["tap", "cohort", "reindex", "uninstall", "sync", ""])
+    def test_non_expertise_actions_are_rejected(self, action):
+        assert journal.is_expertise_event({"action": action}) is False
+
+    def test_missing_action_is_rejected(self):
+        assert journal.is_expertise_event({}) is False
+
+
 class TestEventsLimitGuard:
     """A negative n used to become a negative slice — see the roadmap item."""
 
