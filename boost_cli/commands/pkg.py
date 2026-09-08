@@ -1423,9 +1423,10 @@ def cmd_import(argv: list[str]) -> int:
         prog="boost import",
         description="Import skills from a GitHub URL or local path")
     ap.add_argument("source", metavar="URL_OR_PATH")
-    ap.add_argument("--name", metavar="N",
-                    help="skill to pick when several are found (or a rename)")
-    ap.add_argument("--all", action="store_true", help="import every skill found")
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument("--name", metavar="N",
+                       help="skill to pick when several are found (or a rename)")
+    group.add_argument("--all", action="store_true", help="import every skill found")
     ap.add_argument("--agent", action="append", metavar="A",
                     help="link only into this agent (repeatable)")
     args = ap.parse_args(argv)
@@ -1575,6 +1576,8 @@ def cmd_snapshot(argv: list[str]) -> int:
     ap.add_argument("-y", "--yes", action="store_true",
                     help="skip the restore confirmation prompt")
     args = ap.parse_args(argv)
+    if args.action == "list" and args.arg:
+        ap.error("snapshot list takes no LABEL|ID")
     if args.action == "save":
         return _snapshot_save(args.arg)
     if args.action == "list":

@@ -147,6 +147,32 @@ class TestRelTime:
         assert util.rel_time(None) == "?"
 
 
+class TestIsoDate:
+    def test_matches_git_date_short_format(self):
+        # git's `--date=short` on the same instant: no time-of-day, no "ago"
+        assert util.iso_date("2026-07-16T01:00:00Z") == "2026-07-16"
+
+    def test_recent_instant_still_returns_a_date_not_ago(self):
+        # the whole point: `_tap_updated`'s two branches must agree on shape
+        # even when the cache was generated seconds ago — rel_time would say
+        # "1s ago" here, iso_date must not.
+        now = datetime.now(UTC)
+        assert util.iso_date(now.strftime(ISO_FMT)) == now.strftime("%Y-%m-%d")
+
+    def test_far_past_instant(self):
+        then = datetime(2020, 1, 2, 3, 4, 5, tzinfo=UTC)
+        assert util.iso_date(then.strftime(ISO_FMT)) == "2020-01-02"
+
+    def test_junk_passthrough(self):
+        assert util.iso_date("not-a-date") == "not-a-date"
+
+    def test_empty_becomes_question_mark(self):
+        assert util.iso_date("") == "?"
+
+    def test_none_becomes_question_mark(self):
+        assert util.iso_date(None) == "?"
+
+
 class TestHumanSize:
     @pytest.mark.parametrize("n,expected", [
         (0, "0B"),
