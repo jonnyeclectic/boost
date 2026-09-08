@@ -542,7 +542,7 @@ def cmd_policy(argv) -> int:
     pol = policy.load()
     everything = lockfile.all_installed()
     min_score = int(pol.get("min_quality_score") or 0)
-    violations = []  # (name, problem)
+    violations = []  # (name, kind, label, problem)
     not_checked: set[str] = set()
     total = 0
     skill_count = len(everything.get("skill", {}))
@@ -552,13 +552,15 @@ def cmd_policy(argv) -> int:
             label = name if kind == "skill" else "%s (%s)" % (name, kind)
             tap = entry.get("tap", "local")
             if name in pol["blocked_skills"]:
-                violations.append((label, "on the blocklist"))
+                violations.append((name, kind, label, "on the blocklist"))
             if tap in pol["blocked_taps"]:
-                violations.append((label, "tap %s is blocked" % tap))
+                violations.append((name, kind, label, "tap %s is blocked" % tap))
             if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
-                violations.append((label, "tap %s is not on the allowlist" % tap))
+                violations.append((name, kind, label,
+                                   "tap %s is not on the allowlist" % tap))
             violations.extend(
-                (label, msg) for msg in policy.check_installed_version(entry))
+                (name, kind, label, msg)
+                for msg in policy.check_installed_version(entry))
             # require_description and denied_capabilities need the item's
             # own content, which only a skill has on disk (see
             # store.read_skill_meta) — a rule or workflow lands in a shared
@@ -572,7 +574,7 @@ def cmd_policy(argv) -> int:
                 else:
                     meta, body = meta_body
                     violations.extend(
-                        (label, msg)
+                        (name, kind, label, msg)
                         for msg in policy.check_installed_meta(meta, body))
             elif kind != "skill" and (pol["require_description"] or pol["denied_capabilities"]):
                 not_checked.add(
@@ -583,10 +585,15 @@ def cmd_policy(argv) -> int:
                 score, _notes = util.score_skill(store.skill_store_dir(name))
                 if score < min_score:
                     violations.append(
-                        (label, "quality score %d < required %d" % (score, min_score)))
+                        (name, kind, label,
+                         "quality score %d < required %d" % (score, min_score)))
     max_skills_msg = policy.max_skills_violation(skill_count)
     if max_skills_msg:
-        violations.append(("(environment)", max_skills_msg))
+        # Not an installed item — this one is about the environment as a
+        # whole, so it carries no name/kind. A consumer filtering on either
+        # field can tell it from a per-item violation; "(environment)" is
+        # the label the table has always shown.
+        violations.append((None, None, "(environment)", max_skills_msg))
     unpinned = sorted(
         n if k == "skill" else "%s (%s)" % (n, k)
         for k, section in everything.items()
@@ -609,7 +616,11 @@ def cmd_policy(argv) -> int:
             "skills": counts["skill"],
             "counts": counts,
             "total": total,
-            "violations": [{"skill": s, "violation": v} for s, v in violations],
+            # "skill" keeps the pre-fix shape (name+kind folded together) as a
+            # deprecated alias for an existing JSON consumer; "name"/"kind"
+            # are the machine-clean fields a new consumer should read.
+            "violations": [{"name": n, "kind": k, "skill": label,
+                            "violation": v} for n, k, label, v in violations],
             "pin_only": bool(pol["pin_only"]),
             "unpinned": unpinned if pol["pin_only"] else [],
             "enforce": enforce,
@@ -630,7 +641,8 @@ def cmd_policy(argv) -> int:
     for note in sorted(not_checked):
         out.dim("  not checked: %s" % note)
     if violations:
-        out.table(violations, headers=("ITEM", "VIOLATION"))
+        out.table([(label, v) for _n, _k, label, v in violations],
+                  headers=("ITEM", "VIOLATION"))
         print()
         out.err("%d policy violation(s) across %d installed item(s)"
                 % (len(violations), total),

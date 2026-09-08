@@ -272,13 +272,18 @@ def cmd_untap(argv) -> int:
     return rc
 
 
-def _tap_updated(tap: registry.Tap) -> str:
+def _tap_updated(tap: registry.Tap) -> str | None:
     """Last-commit date of a tap clone, else the cache's generated date.
 
     Both branches return the same `YYYY-MM-DD` shape (`util.iso_date`
     mirrors git's `--date=short`) — the two-format mix this used to produce
     (git dates for cloned taps, "3h ago" for cache-only ones) is exactly the
     UPDATED-column inconsistency this function exists to not reintroduce.
+
+    An unreadable cache returns ``None``, not the ``"?"`` the table prints:
+    this is the machine value `boost taps --json` publishes, and a
+    placeholder glyph in a date field is a display string wearing a
+    machine field's name. `_tap_updated_display` renders the absence.
     """
     if tap.is_cloned:
         with suppress(BoostError):
@@ -291,7 +296,17 @@ def _tap_updated(tap: registry.Tap) -> str:
         data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
         return util.iso_date(data.get("generated", ""))
     except (OSError, ValueError):
-        return "?"
+        return None
+
+
+def _tap_updated_display(raw: str | None) -> str:
+    """Table rendering of :func:`_tap_updated`'s machine value.
+
+    Absence only: both of `_tap_updated`'s branches already produce the same
+    `YYYY-MM-DD`, so humanizing here (`rel_time`) would put "3h ago" back
+    beside git dates in one column — the mix that function exists to avoid.
+    """
+    return raw or "?"
 
 
 def cmd_taps(argv) -> int:
@@ -315,7 +330,7 @@ def cmd_taps(argv) -> int:
                      # deprecated alias so an existing JSON consumer of
                      # `boost taps --json` does not break.
                      "items": len(items), "skills": len(items),
-                     "updated": _tap_updated(tap), "pin": tap.pin})
+                     "updated": _tap_updated(tap), "pin": tap.pin or None})
     if args.json:
         print(json.dumps(taps, indent=2))
         return 0
@@ -328,7 +343,8 @@ def cmd_taps(argv) -> int:
     # that `boost update` deliberately skips should say why on the line the
     # user is already reading.
     rows = [(t["name"], str(t["items"]),
-             "@%s" % str(t["pin"])[:7] if t["pin"] else t["updated"],
+             "@%s" % str(t["pin"])[:7] if t["pin"]
+             else _tap_updated_display(cast("str | None", t["updated"])),
              "★" if t["curated"] else "", out.role(_tilde(t["url"]), "muted"))
             for t in taps]
     # NAME is the argument `untap`/`update` take; the URL beside it is chrome
@@ -340,6 +356,22 @@ def cmd_taps(argv) -> int:
     if any(t["pin"] for t in taps):
         out.dim("@sha = pinned; `boost update` skips it")
     return 0
+
+
+def _outdated_display(r: dict) -> str:
+    """Table rendering of one `cmd_outdated` row's machine fields.
+
+    ``reason``/``latest``/``latest_commit`` are the JSON-facing values;
+    everything a human reads (the "(content changed)" wording, the short
+    commit) is derived here so the two representations can't drift apart.
+    """
+    if r["reason"] == staleness.SOURCE_MISSING:
+        return staleness.OUTDATED_SOURCE_MISSING
+    latest = r["latest"] or "?"
+    if r["reason"] == staleness.CONTENT:
+        return ("%s (%s)" % (latest, r["latest_commit"])
+                if r["latest_commit"] else "%s (content changed)" % latest)
+    return latest
 
 
 def cmd_outdated(argv) -> int:
@@ -364,14 +396,15 @@ def cmd_outdated(argv) -> int:
             # skill shouldn't just vanish from the table.
             results.append({"name": name, "kind": "skill",
                             "installed": str(lk.get("version") or "0.0.0"),
-                            "latest": staleness.OUTDATED_SOURCE_MISSING,
+                            "latest": None,
+                            "reason": staleness.SOURCE_MISSING,
+                            "latest_commit": None,
                             "tap": tap_name, "pinned": bool(lk.get("pinned"))})
             continue
         entry, _warning = catalog.select_lock_source(matches, lk)
         entry = cast(dict, entry)             # matches is non-empty above
         latest = str(entry.get("version") or "0.0.0")
         installed_v = str(lk.get("version") or "0.0.0")
-        stale, latest_disp = False, latest
         head, src_sha, src_missing = "", None, False
         if not util.semver_gt(latest, installed_v):
             if tap_name not in heads:
@@ -387,21 +420,24 @@ def cmd_outdated(argv) -> int:
                     src_sha = util.sha256_dir(store.source_dir_for(entry))
                 except BoostError:
                     src_missing = True
+        base = {"name": name, "kind": "skill", "installed": installed_v,
+                "tap": tap_name, "pinned": bool(lk.get("pinned"))}
         if src_missing:
-            stale, latest_disp = True, staleness.OUTDATED_SOURCE_MISSING
+            results.append(base | {"latest": None,
+                                   "reason": staleness.SOURCE_MISSING,
+                                   "latest_commit": None})
         else:
             reason = staleness.upstream_reason(
                 installed_v, latest, lk.get("commit", ""), head,
                 lk.get("sha256", ""), src_sha)
             if reason == staleness.VERSION:
-                stale = True
+                results.append(base | {"latest": latest,
+                                       "reason": staleness.VERSION,
+                                       "latest_commit": None})
             elif reason == staleness.CONTENT:
-                stale, latest_disp = True, "%s (%s)" % (latest, head[:7])
-        if stale:
-            results.append({"name": name, "kind": "skill",
-                            "installed": installed_v,
-                            "latest": latest_disp, "tap": tap_name,
-                            "pinned": bool(lk.get("pinned"))})
+                results.append(base | {"latest": latest,
+                                       "reason": staleness.CONTENT,
+                                       "latest_commit": head[:7]})
 
     # Rules/workflows have no store dir — their staleness signal is the lock's
     # source sha256 against the tap's current source file (the comparison
@@ -413,15 +449,15 @@ def cmd_outdated(argv) -> int:
             if tap_name == "local":
                 continue
             installed_v = str(lk.get("version") or "0.0.0")
+            base = {"name": name, "kind": kind, "installed": installed_v,
+                    "tap": tap_name, "pinned": bool(lk.get("pinned"))}
             try:
                 raw = (registry.get(tap_name).path / lk.get("source_file", "")
                        ).read_text(encoding="utf-8", errors="replace")
             except (OSError, BoostError):
-                results.append({"name": name, "kind": kind,
-                                "installed": installed_v,
-                                "latest": staleness.OUTDATED_SOURCE_MISSING,
-                                "tap": tap_name,
-                                "pinned": bool(lk.get("pinned"))})
+                results.append(base | {"latest": None,
+                                       "reason": staleness.SOURCE_MISSING,
+                                       "latest_commit": None})
                 continue
             if hashlib.sha256(raw.encode("utf-8")).hexdigest() == lk.get("sha256"):
                 continue
@@ -429,12 +465,17 @@ def cmd_outdated(argv) -> int:
                        if e["tap"] == tap_name
                        and e.get("kind", "skill") == kind]
             entry, _warning = catalog.select_lock_source(matches, lk)
-            latest = str(entry.get("version") or "?") if entry else "?"
-            if not util.semver_gt(latest, installed_v):
-                latest = "%s (content changed)" % latest
-            results.append({"name": name, "kind": kind,
-                            "installed": installed_v, "latest": latest,
-                            "tap": tap_name, "pinned": bool(lk.get("pinned"))})
+            r_latest: str | None = (str(entry.get("version"))
+                                    if entry and entry.get("version") else None)
+            reason = (staleness.VERSION
+                      if r_latest and util.semver_gt(r_latest, installed_v)
+                      else staleness.CONTENT)
+            # Rules/workflows carry no tap-HEAD commit here (only a source-file
+            # sha comparison), so `latest_commit` stays unset — `_outdated_display`
+            # falls back to the same "(content changed)" wording skills used to
+            # spell out by hand, rather than a second ad-hoc string.
+            results.append(base | {"latest": r_latest, "reason": reason,
+                                   "latest_commit": None})
 
     if args.json:
         print(json.dumps(results, indent=2))
@@ -444,11 +485,11 @@ def cmd_outdated(argv) -> int:
         return 0
     rows = [(r["name"] + ("" if r["kind"] == "skill" else " (%s)" % r["kind"]),
              r["installed"] + (" (pinned)" if r["pinned"] else ""),
-             r["latest"], r["tap"]) for r in results]
+             _outdated_display(r), r["tap"]) for r in results]
     out.table(rows, headers=("NAME", "INSTALLED", "LATEST", "TAP"))
     print()
     source_missing = sum(1 for r in results
-                         if r["latest"] == staleness.OUTDATED_SOURCE_MISSING)
+                         if r["reason"] == staleness.SOURCE_MISSING)
     out.dim(staleness.outdated_footer(len(results), source_missing))
     return 0
 
