@@ -14034,7 +14034,7 @@ Found by the 2026-08 CLI audit (clusters <code>recommend-trending-provenance</co
       </article>
 
       <article class="cap rcard" id="audit-replay-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost replay: CLI audit findings (2026-08)</h3>
         <p><b><code>replay list</code>'s ID and WHEN describe two different instants on one row.</b> <code>replay list --json</code> after two installs 4 s apart: <code>{"id": "20260831T140213Z", "updated": "2026-08-31T14:02:09Z"}</code>. <code>lockfile.write()</code> (<code>boost_cli/core/lockfile.py:78-99</code>) stamps the history filename with <em>now</em> &mdash; the moment the outgoing lock becomes historical &mdash; but that snapshot's own <code>updated</code> field was stamped by the <em>previous</em> write, and <code>cmd_replay list</code> (<code>boost_cli/commands/team.py:592</code>) prints the two side by side as if they were one instant; <code>replay show</code> reuses the earlier one. Fix: stamp the history filename with the lock's own <code>updated</code> so the id equals the state time, or relabel the column (e.g. STATE FROM) and note the distinction in <code>replay show</code>'s heading.
 
