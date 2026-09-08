@@ -12642,8 +12642,9 @@ CLI audit (cluster <code>silent-output-overwrite</code>); repro in the audit log
       </article>
 
       <article class="cap rcard" id="audit-stray-positionals-and-inapplicable-flags-silently-ignored-ac">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>Stray positionals and inapplicable flags silently ignored across <code>import</code>, <code>config</code>, <code>policy</code>, <code>trust</code>, <code>log</code>, <code>schedule</code>, <code>hooks</code>, <code>snapshot</code></h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>An argparse hygiene gap, uniform across eight commands: optional positionals swallow words the
 action never reads, and inapplicable flags are accepted without comment.
 <code>import fx/multi --all --name ab-testing</code> imports all three skills &mdash;
@@ -12674,7 +12675,7 @@ received a positional or flag it never reads &mdash; <code>config list KEY</code
 <code>import --all</code>/<code>--name</code> a mutually-exclusive group &middot; have
 <code>hooks list EVENT</code> filter rather than ignore, matching the user's evident intent.
 Regenerate docs/commands.html if help strings gain &ldquo;(enable only)&rdquo;-style annotations.
-Found by the 2026-08 CLI audit (cluster <code>stray-args-ignored</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>stray-args-ignored</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

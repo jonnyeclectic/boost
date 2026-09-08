@@ -711,6 +711,14 @@ class TestLog:
         r = boost("log", "local-one")
         assert "no upstream history (imported locally)" in r.out
 
+    def test_name_with_diagnostics_or_crashes_is_a_usage_error(self, boost, installed):
+        # `log NAME --diagnostics` used to silently drop NAME and show the
+        # unfiltered diagnostic trail instead.
+        r = boost("log", "brainstorming", "--diagnostics", expect=2)
+        assert "NAME is not used with --diagnostics/--crashes" in r.err
+        r = boost("log", "brainstorming", "--crashes", expect=2)
+        assert "NAME is not used with --diagnostics/--crashes" in r.err
+
 
 # ── home ─────────────────────────────────────────────────────────────────
 
