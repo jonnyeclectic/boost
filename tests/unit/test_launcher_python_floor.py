@@ -1,5 +1,5 @@
 # Copyright the boost contributors.
-# SPDX-License-Identifier: GPL-3.0-only
+# SPDX-License-Identifier: Apache-2.0
 """The `./boost` launcher's Python floor must track `requires-python`.
 
 The launcher shim finds an interpreter and rejects anything below its own
