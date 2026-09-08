@@ -413,3 +413,42 @@ class TestKindAgnosticAccessors:
         hist = lockfile.history_list()
         assert hist, "the fourth write must have snapshotted the third state"
         assert hist[-1]["count"] == 3
+
+
+class TestAgentNames:
+    """agent_names() — one sorted agent list for a skill's flat ``agents``
+    and a rule/workflow's per-agent ``materializations``, so `info`/`stats`
+    stop rendering one order for a skill and a different one for a rule."""
+
+    def test_skill_reads_the_flat_agents_list(self):
+        entry = {"agents": ["windsurf", "claude-code", "cursor"]}
+        assert lockfile.agent_names("skill", entry) == \
+            ["claude-code", "cursor", "windsurf"]
+
+    def test_rule_reads_agent_names_out_of_materializations(self):
+        entry = {"materializations": [
+            {"agent": "cursor", "mode": "file"},
+            {"agent": "claude-code", "mode": "claude"}]}
+        assert lockfile.agent_names("rule", entry) == ["claude-code", "cursor"]
+
+    def test_workflow_dedupes_repeated_agent_names(self):
+        # A workflow can materialize more than one file for the same agent
+        # (e.g. a TOML command plus an agents/ doc) — the agent is still
+        # counted once.
+        entry = {"materializations": [
+            {"agent": "gemini"}, {"agent": "gemini"}, {"agent": "cursor"}]}
+        assert lockfile.agent_names("workflow", entry) == ["cursor", "gemini"]
+
+    def test_missing_agent_key_in_a_materialization_is_a_placeholder(self):
+        entry = {"materializations": [{"mode": "file"}]}
+        assert lockfile.agent_names("rule", entry) == ["?"]
+
+    def test_none_entry_is_an_empty_list_for_either_kind(self):
+        assert lockfile.agent_names("skill", None) == []
+        assert lockfile.agent_names("rule", None) == []
+
+    def test_empty_agents_or_materializations_is_an_empty_list(self):
+        assert lockfile.agent_names("skill", {"agents": []}) == []
+        assert lockfile.agent_names("rule", {"materializations": []}) == []
+        assert lockfile.agent_names("skill", {}) == []
+        assert lockfile.agent_names("rule", {}) == []
