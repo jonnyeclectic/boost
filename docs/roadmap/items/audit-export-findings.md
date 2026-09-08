@@ -2,15 +2,15 @@
 id: audit-export-findings
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 1
 note: -o x.zip writes a gzip tarball; the repair hint drops the skill from the lock instead
 order: 268
-owner:
-pr:
+owner: loop/export-audit-findings
+pr: 806
 title: "<code>boost export</code>: CLI audit findings (2026-08)"
 ---
 <b>export picks the archive format from <code>--zip</code> alone, so <code>-o x.zip</code> writes a

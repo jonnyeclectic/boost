@@ -190,32 +190,26 @@ def cmd_tap(argv) -> int:
     return rc
 
 
-def cmd_untap(argv) -> int:
-    """boost untap NAME [--force]"""
-    p = cliparse.parser(
-        prog="boost untap",
-        description="Remove a registry tap")
-    p.add_argument("name", help="tap name (owner/repo or short alias)")
-    p.add_argument("-f", "--force", action="store_true",
-                   help="skip the confirmation prompt")
-    p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
-    args = p.parse_args(argv)
+def _untap_one(name: str, force: bool) -> int:
+    """Remove one tap, warning on and confirming past live dependents.
 
-    tap = registry.get(args.name)
-    # All three lock sections: untapping the source of a live CLAUDE.md rule
-    # deserves the same warning as untapping the source of a skill.
-    dependent = [(kind, n)
-                 for kind, section in lockfile.all_installed().items()
-                 for n, e in sorted(section.items())
-                 if e.get("tap") == tap.name]
+    One tap's failure (unknown name, declined confirmation) never costs the
+    rest of a multi-name `untap` its removal, matching `tap`'s own multi-SPEC
+    guarantee that one registry's failure never costs another its clone.
+    """
+    try:
+        tap = registry.get(name)
+    except BoostError as exc:
+        out.warn("could not untap %s: %s" % (name, exc.message))
+        return 1
+    dependent = registry.dependents(tap.name)
     if dependent:
         labels = [n if kind == "skill" else "%s (%s)" % (n, kind)
                   for kind, n in dependent]
         out.warn("%d installed item(s) from %s: %s"
                  % (len(dependent), tap.name, ", ".join(labels)))
         out.warn("installed items keep working but lose their update source")
-        if not (args.force or args.yes) and not out.confirm(
-                "untap %s anyway?" % tap.name):
+        if not force and not out.confirm("untap %s anyway?" % tap.name):
             out.info("cancelled")
             return 1
     registry.remove(tap.name)
@@ -223,6 +217,26 @@ def cmd_untap(argv) -> int:
     journal.log("untap", tap.name)
     out.ok("untapped %s" % tap.name)
     return 0
+
+
+def cmd_untap(argv) -> int:
+    """boost untap NAME... [--force]"""
+    p = cliparse.parser(
+        prog="boost untap",
+        description="Remove a registry tap")
+    p.add_argument("name", nargs="+",
+                   help="tap name(s) (owner/repo or short alias) — several "
+                        "at once remove one invocation per tap")
+    p.add_argument("-f", "--force", action="store_true",
+                   help="skip the confirmation prompt")
+    p.add_argument("-y", "--yes", action="store_true", help=argparse.SUPPRESS)
+    args = p.parse_args(argv)
+
+    force = args.force or args.yes
+    rc = 0
+    for name in args.name:
+        rc |= _untap_one(name, force)
+    return rc
 
 
 def _tap_updated(tap: registry.Tap) -> str:

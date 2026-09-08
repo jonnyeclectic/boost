@@ -279,9 +279,20 @@ class TestCreate:
 
     def test_description_and_slug(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        boost("create", "My Fancy Skill", "--description", "Does a thing")
+        r = boost("create", "My Fancy Skill", "--description", "Does a thing")
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
+        # The slugging is no longer silent: the typed name and its slug both
+        # show up somewhere in the output.
+        assert "My Fancy Skill" in r.out
+        assert "my-fancy-skill" in r.out
+
+    def test_refuses_a_name_with_no_letters_or_digits(self, boost, sandbox,
+                                                       tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("create", "!!!", expect=1)
+        assert "name has no letters or digits" in r.err
+        assert not (tmp_path / "skill").exists()
 
     def test_multiline_description_round_trips(self, boost, sandbox, tmp_path,
                                                 monkeypatch):
@@ -732,6 +743,50 @@ class TestCompletions:
         assert r.out.rstrip().endswith("compdef _boost boost")
         assert '_boost "$@"' not in r.out
         assert "boost __complete" in r.out
+
+
+class TestCompletionsShellDetection:
+    """An empty or unsupported `$SHELL` used to fall back to bash with zero
+    warning — silent for a real-but-unsupported shell, and actively
+    misleading (an empty shell name) for an unset one. See
+    docs/roadmap/items/audit-completions-findings.md, cluster
+    completions-shell-detection.
+    """
+
+    def test_unset_shell_env_is_an_error_not_a_silent_bash_guess(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.delenv("SHELL", raising=False)
+        r = boost("completions", expect=1)
+        assert "SHELL" in r.err
+        assert "cannot detect your shell" in r.err
+
+    def test_unset_shell_env_errors_the_same_way_for_install(
+            self, boost, sandbox, monkeypatch):
+        # "Fixed once, at the detection site": the print path and the
+        # --install path must not diverge on this — --install used to reach
+        # `_rc_path("")` and print "no one-shot install for  yet" instead.
+        monkeypatch.delenv("SHELL", raising=False)
+        r = boost("completions", "--install", expect=1)
+        assert "cannot detect your shell" in r.err
+        assert "no one-shot install for  yet" not in r.err
+
+    def test_unsupported_real_shell_warns_before_the_bash_fallback(
+            self, boost, sandbox, monkeypatch):
+        monkeypatch.setenv("SHELL", "/usr/local/bin/nu")
+        r = boost("completions")
+        assert "nu" in r.err
+        assert "not a supported shell" in r.err
+        assert "_boost_complete" in r.out       # still gets the bash script
+        assert "not a supported shell" not in r.out    # never mixed into it
+
+    def test_unsupported_real_shell_still_names_it_on_the_install_path(
+            self, boost, sandbox, monkeypatch):
+        # `_rc_path`'s message is what the item says to preserve — an
+        # unsupported-but-real shell already names itself there, unlike the
+        # empty-string case above.
+        monkeypatch.setenv("SHELL", "/usr/local/bin/nu")
+        r = boost("completions", "--install", expect=1)
+        assert "no one-shot install for nu yet" in r.err
 
 
 class TestCompletionsInstall:

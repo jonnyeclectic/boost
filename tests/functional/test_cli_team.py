@@ -371,6 +371,31 @@ class TestProfile:
         assert "broken" in r.out
         assert "unreadable" in r.out
 
+    def test_save_refuses_a_name_with_no_letters_or_digits(self, boost, installed):
+        r = boost("profile", "save", "!!!", expect=1)
+        assert "profile name has no letters or digits" in r.err
+        assert not list(paths.profiles_dir().glob("*.json"))
+
+    def test_save_prints_a_note_when_the_name_is_slugified(self, boost, installed):
+        r = boost("profile", "save", "My Daily")
+        assert "My Daily" in r.out
+        assert "my-daily" in r.out
+        assert (paths.profiles_dir() / "my-daily.json").is_file()
+
+    def test_list_sorts_by_the_displayed_name_not_the_slugged_filename(
+            self, boost, installed):
+        # "Cherry" and "banana" slug to filenames that sort the other way
+        # around (banana.json < cherry.json) — glob order used to leak
+        # through to the table, printing rows in an order that matched
+        # nothing on screen.
+        boost("profile", "save", "banana")
+        boost("profile", "save", "Cherry")
+        r = boost("profile", "list")
+        lines = [ln for ln in r.out.splitlines() if "banana" in ln or "Cherry" in ln]
+        assert len(lines) == 2
+        assert lines[0].strip().startswith("Cherry")
+        assert lines[1].strip().startswith("banana")
+
     def test_delete_removes_a_corrupt_profile_that_show_cannot_read(
             self, boost, sandbox):
         # `show`/`diff` need the content, so they still refuse; `delete` only

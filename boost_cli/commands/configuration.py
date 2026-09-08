@@ -401,7 +401,7 @@ def cmd_create(argv) -> int:
                    help="install the new skill immediately")
     args = p.parse_args(argv)
 
-    name = util.slugify(args.name)
+    name = util.resolve_slug(args.name)
     parent = paths.expand(args.dir) if args.dir else Path.cwd()
     target = parent / name
     skill_md = target / "SKILL.md"
@@ -823,6 +823,17 @@ def cmd_completions(argv) -> int:
 
     detected = args.shell or Path(os.environ.get("SHELL", "")).name
 
+    # Fixed once, here, rather than in each branch below: an empty $SHELL
+    # used to fall through silently to the bash script (print path) or to
+    # `_rc_path("")`'s confusing "no one-shot install for  yet" (install
+    # path) — neither ever told the user *why*. Raising here means every
+    # path downstream — print, --install, --uninstall, --dry-run — sees the
+    # same clear error instead of reinventing it.
+    if not detected:
+        raise BoostError(
+            "cannot detect your shell ($SHELL unset)",
+            hint="pass bash, zsh or fish, e.g. `boost completions bash`")
+
     if args.dry_run and not (args.install or args.uninstall):
         p.error("--dry-run qualifies --install or --uninstall; "
                 "pass one of them")
@@ -851,6 +862,15 @@ def cmd_completions(argv) -> int:
         return 0
 
     shell = detected if detected in ("bash", "zsh", "fish") else "bash"
+    if shell != detected:
+        # A real shell boost has no script for (e.g. nu, xonsh) — silently
+        # substituting bash used to look like success while handing the user
+        # a script their shell cannot source. stderr, not stdout: stdout here
+        # is the completion script itself (piped to a file or `eval`'d), and
+        # a warning line mixed into it would corrupt both uses.
+        out.warn("%s is not a supported shell (bash, zsh, fish) — showing "
+                 "bash's completion script instead" % detected,
+                 stream=sys.stderr)
     # The script is a thin shim that calls `boost __complete`; the candidate
     # rules live in core/complete.py so all three shells share one tested
     # implementation instead of three hand-maintained static lists.

@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from boost_cli.core import config, gitutil, paths, registry, util
+from boost_cli.core import config, gitutil, lockfile, paths, registry, util
 from boost_cli.errors import BoostError
 
 
@@ -316,6 +316,37 @@ class TestAddRemove:
     def test_remove_unknown_raises(self, sandbox):
         with pytest.raises(BoostError):
             registry.remove("nope")
+
+
+class TestDependents:
+    def test_no_dependents_is_empty(self, sandbox):
+        assert registry.dependents("some/tap") == []
+
+    def test_finds_skill_from_the_named_tap(self, sandbox):
+        lockfile.set_skill("brainstorming", {"tap": "fixture-tap"})
+        assert registry.dependents("fixture-tap") == [
+            ("skill", "brainstorming")]
+
+    def test_ignores_a_different_tap(self, sandbox):
+        lockfile.set_skill("brainstorming", {"tap": "other-tap"})
+        assert registry.dependents("fixture-tap") == []
+
+    def test_spans_all_three_lock_sections(self, sandbox):
+        # A rule or workflow materialized from a tap is as much a dependent
+        # as a skill — `boost untap`'s warning must not drop two of three.
+        lockfile.set_skill("brainstorming", {"tap": "fixture-tap"})
+        lockfile.set_rule("house-style", {"tap": "fixture-tap"})
+        lockfile.set_workflow("deploy", {"tap": "fixture-tap"})
+        assert registry.dependents("fixture-tap") == [
+            ("skill", "brainstorming"),
+            ("rule", "house-style"),
+            ("workflow", "deploy")]
+
+    def test_sorted_by_name_within_a_kind(self, sandbox):
+        lockfile.set_skill("zeta", {"tap": "fixture-tap"})
+        lockfile.set_skill("alpha", {"tap": "fixture-tap"})
+        assert registry.dependents("fixture-tap") == [
+            ("skill", "alpha"), ("skill", "zeta")]
 
 
 class TestUpdate:

@@ -2,15 +2,15 @@
 id: audit-skill-profile-name-slugging-is-inconsistent-distill-o-accept
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · UX
 complexity: S
 impact: Med
 wow: 1
 note: distill accepts "Bad Name!!", then its own import hint rejects it
 order: 226
-owner:
-pr:
+owner: loop/name-slugging
+pr: 752
 title: "Name slugging is inconsistent: <code>distill -o</code> accepts what <code>import</code> rejects; <code>create</code>/<code>profile</code> slug silently"
 ---
 Three commands treat the same problem &mdash; a user-typed name that is not a valid slug &mdash; three

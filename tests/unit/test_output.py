@@ -1756,6 +1756,44 @@ class TestWrap:
         output.wrap(text, 80)
         assert time.perf_counter() - start < 2.0
 
+    def test_a_bold_span_is_never_split(self):
+        # Regression: `commands/info.py` wraps a line and colorizes each
+        # wrapped chunk after, via a regex that only matches a `**...**` pair
+        # inside the SAME chunk — a bold span split across the wrap boundary
+        # left literal `**` markers in the rendered output.
+        text = "before this a **very important warning** comes after"
+        lines = output.wrap(text, 20)
+        assert any("**very important warning**" in ln for ln in lines)
+        for ln in lines:
+            assert ln.count("**") % 2 == 0
+
+    def test_a_bold_span_wider_than_the_pane_stays_whole(self):
+        span = "**" + "x" * 50 + "**"
+        lines = output.wrap("run " + span + " now", 20)
+        assert span in lines
+
+    def test_a_bold_span_and_a_code_span_are_each_kept_whole(self):
+        text = "the **bold part** and the `code part` must both stay intact"
+        lines = output.wrap(text, 15)
+        assert any("**bold part**" in ln for ln in lines)
+        assert any("`code part`" in ln for ln in lines)
+
+    def test_glued_punctuation_stays_attached_to_a_bold_span(self):
+        assert output.wrap("(see **x y**)", 40) == ["(see **x y**)"]
+
+    def test_an_unterminated_bold_marker_wraps_as_ordinary_words(self):
+        # A half-open `**` is a typo in the source, not a reason to refuse to
+        # render it — it falls back to plain word-wrapping like an
+        # unterminated backtick does.
+        text = "this has an **unterminated bold marker with no close"
+        assert " ".join(output.wrap(text, 12)).split() == text.split()
+
+    def test_an_unterminated_glued_bold_marker_extends_in_linear_time(self):
+        text = "**" + "x" * 200_000
+        start = time.perf_counter()
+        output.wrap(text, 80)
+        assert time.perf_counter() - start < 2.0
+
 
 class TestWrappingEmitters:
     """`warn`/`info`/`dim` wrap only when asked, and to their own prefix."""
