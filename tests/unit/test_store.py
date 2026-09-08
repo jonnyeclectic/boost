@@ -304,6 +304,55 @@ class TestHasContent:
         assert not store.has_content()
 
 
+class TestReadSkillMeta:
+    """store.read_skill_meta() — a skill's store-copy frontmatter/body, or
+    None when it cannot be read honestly.
+
+    Feeds `boost policy check`'s retrospective require_description and
+    denied_capabilities checks (docs/roadmap/items/audit-policy-findings.md):
+    those checks must never run on absent data, so every failure mode here
+    has to come back as None, not as an empty dict a caller could mistake
+    for "no description".
+    """
+
+    def test_installed_skill_reads_frontmatter_and_body(self, brainstorming):
+        result = store.read_skill_meta("brainstorming")
+        assert result is not None
+        meta, body = result
+        assert meta["description"].startswith("Structured ideation")
+        assert meta["version"] == "1.4.0"
+        assert "Diverge" in body
+
+    def test_missing_skill_returns_none(self, sandbox):
+        assert store.read_skill_meta("never-installed") is None
+
+    def test_store_dir_with_no_skill_md_returns_none(self, sandbox):
+        d = store.skill_store_dir("ghost")
+        d.mkdir(parents=True)
+        assert store.read_skill_meta("ghost") is None
+
+    def test_unclosed_frontmatter_fence_returns_none(self, sandbox):
+        d = store.skill_store_dir("broken")
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: broken\ndescription: no closing fence\n",
+            encoding="utf-8")
+        assert store.read_skill_meta("broken") is None
+
+    def test_unreadable_skill_md_returns_none(self, sandbox):
+        d = store.skill_store_dir("locked")
+        d.mkdir(parents=True)
+        skill_md = d / "SKILL.md"
+        skill_md.write_text("---\nname: locked\n---\nbody", encoding="utf-8")
+        skill_md.chmod(0o000)
+        try:
+            if os.access(skill_md, os.R_OK):
+                pytest.skip("running as a user that ignores chmod 0o000")
+            assert store.read_skill_meta("locked") is None
+        finally:
+            skill_md.chmod(0o644)
+
+
 class TestUnlinkAgents:
     def test_removes_only_symlinks(self, brainstorming):
         cursor_link = _link("cursor")

@@ -71,6 +71,31 @@ def skill_store_dir(name: str) -> Path:
     return paths.store_dir() / name
 
 
+def read_skill_meta(name: str) -> tuple[dict, str] | None:
+    """(frontmatter, body) for an installed skill's store copy, or None.
+
+    None on anything that keeps the content from being read honestly: no
+    store dir, no ``SKILL.md``, an unreadable file, or an unclosed
+    frontmatter fence (:func:`frontmatter.unclosed` — every field would read
+    as absent, which is not the same fact as the skill declaring none).
+    Callers that use this for policy enforcement (``boost policy check``)
+    must treat ``None`` as *not checked*, never as a violation — a store read
+    failing is not evidence the skill lacks a version or description.
+    """
+    from . import frontmatter
+
+    skill_md = skill_store_dir(name) / "SKILL.md"
+    if not skill_md.exists():
+        return None
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    if frontmatter.unclosed(text):
+        return None
+    return frontmatter.parse(text)
+
+
 def resolve_lock_entry(name: str) -> tuple[str, str | None, dict | None]:
     """(bare_name, kind, entry) for a possibly tap-qualified ``name``.
 

@@ -6815,8 +6815,9 @@ neither targets nor skipped, on the <code>--json</code> path too (<code>quality.
       </article>
 
       <article class="cap rcard" id="audit-policy-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost policy: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost policy check</code> evaluates only <code>blocked_skills</code>/<code>blocked_taps</code>/<code>allowed_taps</code>/<code>min_quality_score</code>
 of the seven rules <code>policy.check_install</code> (<code>boost_cli/core/policy.py:58-79</code>) enforces
 at install time &mdash; <code>require_version</code>, <code>require_description</code>,
@@ -6842,7 +6843,7 @@ print a &ldquo;not checked: &hellip;&rdquo; line for anything still unevaluated 
 <em>enforce=false</em> line when <code>policy_enforce</code> is off; and reword the <code>pin_only</code>
 sentence to name only installs and skill updates, not tap refreshes. Behavior-only, no flag change, so
 <code>docs/commands.html</code> needs no regeneration. Found by the 2026-08 CLI audit (cluster
-<code>policy-check-coverage</code>); repro in the audit log.</p>
+<code>policy-check-coverage</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
