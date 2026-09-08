@@ -267,9 +267,20 @@ class TestCreate:
 
     def test_description_and_slug(self, boost, sandbox, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        boost("create", "My Fancy Skill", "--description", "Does a thing")
+        r = boost("create", "My Fancy Skill", "--description", "Does a thing")
         text = (tmp_path / "my-fancy-skill" / "SKILL.md").read_text(encoding="utf-8")
         assert frontmatter.parse(text)[0]["description"] == "Does a thing"
+        # The slugging is no longer silent: the typed name and its slug both
+        # show up somewhere in the output.
+        assert "My Fancy Skill" in r.out
+        assert "my-fancy-skill" in r.out
+
+    def test_refuses_a_name_with_no_letters_or_digits(self, boost, sandbox,
+                                                       tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("create", "!!!", expect=1)
+        assert "name has no letters or digits" in r.err
+        assert not (tmp_path / "skill").exists()
 
     def test_install_flag(self, boost, sandbox, tmp_path):
         r = boost("create", "inst-skill", "--dir", tmp_path, "--install")

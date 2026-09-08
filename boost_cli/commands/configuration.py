@@ -397,7 +397,7 @@ def cmd_create(argv) -> int:
                    help="install the new skill immediately")
     args = p.parse_args(argv)
 
-    name = util.slugify(args.name)
+    name = util.resolve_slug(args.name)
     parent = paths.expand(args.dir) if args.dir else Path.cwd()
     target = parent / name
     skill_md = target / "SKILL.md"

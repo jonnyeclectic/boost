@@ -215,6 +215,24 @@ class TestDistill:
         assert "aborted" in r.out
         assert dest.read_text(encoding="utf-8") == "precious"
 
+    def test_output_name_is_slugified_not_passed_through_raw(
+            self, boost, tapped, tmp_path, monkeypatch):
+        # Bug: `distill -o "Bad Name!!"` used to write a directory that
+        # `boost import` then refused as an invalid skill name.
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "tdd-workflow", "cowboy-coding", "-o", "Bad Name!!")
+        assert (tmp_path / "bad-name" / "SKILL.md").is_file()
+        assert not (tmp_path / "Bad Name!!").exists()
+        assert "install it with `boost import ./bad-name`" in r.out
+
+    def test_output_name_with_nothing_to_slug_is_refused(
+            self, boost, tapped, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        r = boost("distill", "tdd-workflow", "cowboy-coding", "-o", "!!!",
+                  expect=1)
+        assert "output name has no letters or digits" in r.err
+        assert not list(tmp_path.glob("*/SKILL.md"))
+
 
 # ---------------------------------------------------------------- simulate
 
