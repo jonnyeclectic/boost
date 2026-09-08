@@ -687,12 +687,13 @@ class TestExplain:
 class TestLog:
     def test_journal_feed_shows_install(self, boost, installed):
         r = boost("log")
+        assert "==> activity" in r.out          # parity with --diagnostics/--crashes
         assert "install brainstorming" in r.out
         assert "tap fixture-tap" in r.out
 
     def test_limit_one(self, boost, installed):
         r = boost("log", "-n", "1")
-        lines = [l for l in r.out.splitlines() if l.strip()]
+        lines = [l for l in r.out.splitlines() if l.strip() and "==>" not in l]
         assert len(lines) == 1
         assert "install brainstorming" in lines[0]
 
@@ -705,6 +706,11 @@ class TestLog:
         r = boost("log", "brainstorming")
         assert "brainstorming — history in fixture-tap" in r.out
         assert "fixture skills" in r.out            # the fixture commit subject
+
+    def test_qualified_name_shows_bare_name_once_not_twice(self, boost, rival_tap):
+        r = boost("log", "rival-tap:brainstorming")
+        assert "brainstorming — history in rival-tap" in r.out
+        assert "rival-tap:brainstorming" not in r.out
 
     def test_local_import_no_upstream(self, boost, sandbox, tmp_path):
         boost("import", _skill_dir(tmp_path, "local-one"))

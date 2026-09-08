@@ -1262,6 +1262,7 @@ def cmd_changelog(argv):
                     help="number of entries (default 20)")
     args = ap.parse_args(argv)
 
+    _, bare = catalog.split_name(args.name)
     entry = lockfile.get_skill(args.name)
     if entry:
         tap_name, rel = entry.get("tap", ""), entry.get("source_dir", ".")
@@ -1269,14 +1270,14 @@ def cmd_changelog(argv):
         e = catalog.resolve_one(args.name)
         tap_name, rel = e["tap"], e["rel_dir"]
     if tap_name == "local":
-        out.info("no upstream history — %s was imported locally" % args.name)
+        out.info("no upstream history — %s was imported locally" % bare)
         return 0
     tap = registry.get(tap_name)
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
     lines = gitutil.log_for_path(tap.path, rel, args.n)
-    out.heading("changelog for %s (%s)" % (args.name, tap.name))
+    out.heading("changelog for %s (%s)" % (bare, tap.name))
     for line in lines:
         out.info(line)
     if not lines:

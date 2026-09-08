@@ -247,6 +247,12 @@ class TestSimulate:
         assert "Without it: default behavior" not in r.out
         assert FALLBACK not in flat(r.out)
 
+    def test_qualified_name_shows_bare_name_once_not_twice(self, boost, rival_tap):
+        r = boost("simulate", "rival-tap:brainstorming")
+        assert "simulating brainstorming  (tap rival-tap)" in r.out
+        assert "With brainstorming active, Claude would:" in r.out
+        assert "rival-tap:brainstorming" not in r.out
+
 
 # ---------------------------------------------------------------- infer
 
