@@ -2,7 +2,7 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
 # boost — Homebrew for AI coding skills.
-# Thin shim: finds Python 3.9+, runs the boost_cli package that lives
+# Thin shim: finds Python 3.12+, runs the boost_cli package that lives
 # next to this script (resolving symlinks, so `ln -s .../boost ~/bin/boost`
 # just works). No PyPI, no Artifactory — stdlib only.
 set -euo pipefail
@@ -24,7 +24,7 @@ fi
 find_python() {
   for py in python3 python; do
     if command -v "$py" >/dev/null 2>&1; then
-      if "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null; then
+      if "$py" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
         echo "$py"
         return 0
       fi
@@ -34,7 +34,7 @@ find_python() {
 }
 
 PY="$(find_python)" || {
-  echo "boost: Python 3.9+ is required but was not found on PATH" >&2
+  echo "boost: Python 3.12+ is required but was not found on PATH" >&2
   echo "  hint: brew install python3" >&2
   exit 1
 }
