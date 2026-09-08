@@ -249,3 +249,99 @@ class TestResolve:
     def test_resolved_list_is_a_copy(self):
         mcphost.resolve("auto").append("bogus")
         assert mcphost.resolve("auto") == mcphost.hosts()
+
+
+class TestIsNamed:
+    @pytest.mark.parametrize("value", [None, "", "auto", "all"])
+    def test_wildcards_are_not_named(self, value):
+        # `auto` and `all` both tolerate a missing CLI by design — `auto`
+        # skips it silently, `all` reports it without failing — so neither
+        # may trip the exit-1 fix meant for a single named host.
+        assert mcphost.is_named(value) is False
+
+    def test_a_single_host_is_named(self):
+        assert mcphost.is_named("gemini") is True
+        assert mcphost.is_named("claude") is True
+        assert mcphost.is_named("agy") is True
+
+    def test_an_unknown_value_is_still_named(self):
+        # is_named only classifies the wildcards; validating the name itself
+        # is resolve()'s job, and it runs first in the command layer.
+        assert mcphost.is_named("bogus") is True
+
+
+class TestClassifyResult:
+    """`classify_result` pinned as pure text classification — no subprocess,
+    no filesystem. `_run_mcp_host` (commands/configuration.py) owns launching
+    the process and detecting a missing CLI; this is everything after that,
+    reachable without a real `claude`/`gemini`/`agy` on PATH.
+    """
+
+    def test_success_is_ran(self):
+        assert mcphost.classify_result(
+            "register", 0, "Added stdio MCP server boost\n", "") == ("ran", "")
+
+    def test_successful_unregister_with_no_marker_is_ran(self):
+        # The common case: something really was registered, and removing it
+        # says nothing about "not found". Must not be misread as a no-op.
+        assert mcphost.classify_result(
+            "unregister", 0, "Removed boost\n", "") == ("ran", "")
+
+    def test_register_already_exists_is_success_worded_differently(self):
+        assert mcphost.classify_result(
+            "register", 1, "",
+            "MCP server boost already exists in local config"
+        ) == ("already", "")
+
+    def test_already_marker_is_case_insensitive(self):
+        status, _ = mcphost.classify_result(
+            "register", 1, "", "ALREADY REGISTERED elsewhere")
+        assert status == "already"
+
+    def test_already_marker_is_ignored_on_unregister(self):
+        # "already exists" only means success when registering; on the way
+        # out it is a real failure, not a no-op worded differently.
+        status, detail = mcphost.classify_result(
+            "unregister", 1, "", "already exists")
+        assert status == "failed"
+        assert detail == "already exists"
+
+    def test_unregister_not_found_at_rc0_is_not_registered(self):
+        # The exact Gemini message: `mcp remove --scope user boost` against
+        # nothing registered prints this on stderr and still exits 0.
+        assert mcphost.classify_result(
+            "unregister", 0, "",
+            'Server "boost" not found in user settings.\n'
+        ) == ("not_registered", "")
+
+    def test_not_found_marker_is_ignored_on_register(self):
+        # The marker is scoped to unregister; a register success that happens
+        # to echo "not found" in unrelated stdout must not be reclassified.
+        status, _ = mcphost.classify_result(
+            "register", 0, "config not found, creating a new one", "")
+        assert status == "ran"
+
+    def test_not_found_at_nonzero_rc_is_still_a_failure(self):
+        # Only an rc-0 "not found" is a no-op; a nonzero exit with the same
+        # words is a real error and keeps its own message.
+        status, detail = mcphost.classify_result(
+            "unregister", 1, "", "config file not found")
+        assert status == "failed"
+        assert detail == "config file not found"
+
+    def test_plain_failure_returns_the_last_stderr_line(self):
+        status, detail = mcphost.classify_result(
+            "register", 1, "", "line one\nline two\nconnection refused")
+        assert status == "failed"
+        assert detail == "connection refused"
+
+    def test_failure_with_no_stderr_names_it_unknown(self):
+        status, detail = mcphost.classify_result("register", 1, "", "")
+        assert status == "failed"
+        assert detail == "unknown error"
+
+    def test_blob_checks_both_streams(self):
+        # The marker can land on stdout too — some CLIs write status there.
+        status, _ = mcphost.classify_result(
+            "register", 1, "already configured", "")
+        assert status == "already"

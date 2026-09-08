@@ -104,6 +104,7 @@ run "unpin"                  0 ./boost unpin brainstorming
 run "sync --diff"            0 ./boost sync --diff
 run "sync"                   0 ./boost sync
 run "update"                 0 ./boost update
+run "update --json needs --shards" 2 ./boost update --json
 run "reinstall"              0 ./boost reinstall brainstorming
 run "bundle dump"            0 bash -c './boost bundle dump > "$0/Boostfile"' "$SB"
 run "export"                 0 bash -c 'cd "$0" && "'"$ROOT"'/boost" export brainstorming' "$SB"
@@ -138,14 +139,18 @@ run "infer (print)"          0 bash -c 'cd "'"$ROOT"'" && ./boost infer'
 run "absorb (no history)"    0 ./boost absorb
 run "context status"         0 ./boost context status
 run "focus"                  0 ./boost focus brainstorming
+run "focus --json"           0 bash -c './boost focus brainstorming --json | python3 -c "import json,sys; json.load(sys.stdin)"'
 run "focus --clear"          0 ./boost focus --clear
+run "focus --clear --json"   0 bash -c './boost focus --clear --json | python3 -c "import json,sys; json.load(sys.stdin)"'
 run "impact"                 0 ./boost impact
 
 echo "== configuration"
 run "config list"            0 ./boost config list
 run "config set/get"         0 bash -c './boost config set ai.enabled false && ./boost config get ai.enabled && ./boost config unset ai.enabled'
+run "config set --json"      0 bash -c './boost config set telemetry false --json | python3 -c "import json,sys; json.load(sys.stdin)"'
 run "policy list"            0 ./boost policy list
 run "policy check"           0 ./boost policy check
+run "policy set --json"      0 bash -c './boost policy set pin_only false --json | python3 -c "import json,sys; json.load(sys.stdin)"'
 run "create"                 0 bash -c 'cd "$0" && "'"$ROOT"'/boost" create my-test-skill --description "A test"' "$SB"
 run "import created"         0 bash -c 'cd "$0" && "'"$ROOT"'/boost" import my-test-skill' "$SB"
 run "completions zsh"        0 ./boost completions zsh
@@ -159,6 +164,7 @@ run "profile list"           0 ./boost profile list
 run "profile show"           0 ./boost profile show daily
 run "cohort create"          0 ./boost cohort create pilot --skills brainstorming --percent 100
 run "cohort list"            0 ./boost cohort list
+run "cohort apply --json"    0 bash -c './boost cohort apply --json | python3 -c "import json,sys; json.load(sys.stdin)"'
 run "pulse"                  0 ./boost pulse
 run "replay list"            0 ./boost replay list
 run "who"                    0 ./boost who

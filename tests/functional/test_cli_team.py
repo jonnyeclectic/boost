@@ -232,6 +232,54 @@ class TestCohort:
         assert after["skills"] == ["brainstorming", "tdd-workflow"]
         assert after["percent"] == 100
 
+    def test_create_json_reports_member_and_updated(self, boost, tapped):
+        created = json.loads(boost("cohort", "create", "pilot",
+                                   "--skills", "brainstorming",
+                                   "--percent", "100", "--json").out)
+        assert created == {"name": "pilot", "percent": 100,
+                            "skills": ["brainstorming"], "updated": False,
+                            "member": _member("pilot", 100)}
+        updated = json.loads(boost("cohort", "create", "pilot",
+                                   "--skills", "brainstorming,tdd-workflow",
+                                   "--percent", "50", "--json").out)
+        assert updated["updated"] is True
+        assert updated["skills"] == ["brainstorming", "tdd-workflow"]
+
+    def test_delete_json(self, boost, tapped, monkeypatch):
+        boost("cohort", "create", "pilot", "--skills", "brainstorming")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        cancelled = boost("cohort", "delete", "pilot", "--json", expect=1)
+        assert json.loads(cancelled.out) == {
+            "name": "pilot", "deleted": False, "cancelled": True}
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        deleted = boost("cohort", "delete", "pilot", "--json")
+        assert json.loads(deleted.out) == {"name": "pilot", "deleted": True}
+
+    def test_apply_json_no_cohorts(self, boost, tapped):
+        assert json.loads(boost("cohort", "apply", "--json").out) == {"cohorts": []}
+
+    def test_apply_json_reports_per_cohort_outcomes(self, boost, tapped):
+        boost("cohort", "create", "pilot",
+             "--skills", "brainstorming,ghost-skill", "--percent", "100")
+        boost("cohort", "create", "closed", "--skills", "brainstorming",
+             "--percent", "0")
+        first = json.loads(boost("cohort", "apply", "--json").out)
+        assert first["installed"] == 1
+        assert first["already_present"] == 0
+        by_name = {c["cohort"]: c for c in first["cohorts"]}
+        assert by_name["pilot"] == {
+            "cohort": "pilot", "member": True,
+            "installed": ["brainstorming"], "already_present": [],
+            "not_found": ["ghost-skill"]}
+        assert by_name["closed"] == {
+            "cohort": "closed", "member": False, "installed": [],
+            "already_present": [], "not_found": []}
+
+        second = json.loads(boost("cohort", "apply", "pilot", "--json").out)
+        assert second["cohorts"][0]["already_present"] == ["brainstorming"]
+        assert second["installed"] == 0
+        assert second["already_present"] == 1
+
     def test_empty_listing_hint_wraps_and_keeps_the_command_atomic(
             self, boost, tapped, monkeypatch):
         # The hint's backtick-quoted command is 62 columns by itself — wider
@@ -404,6 +452,53 @@ class TestProfile:
         assert prof["skills"]["brainstorming"] == {"tap": "fixture-tap",
                                                    "version": "1.4.0"}
         assert prof["user"] == USER
+
+    def test_save_json(self, boost, installed):
+        first = json.loads(boost("profile", "save", "daily", "--json").out)
+        assert first == {"name": "daily", "updated": False, "was_skills": None,
+                          "skills": 1, "rules_not_captured": 0,
+                          "workflows_not_captured": 0}
+        boost("install", "tdd-workflow")
+        second = json.loads(boost("profile", "save", "daily", "--json").out)
+        assert second["updated"] is True
+        assert second["was_skills"] == 1
+        assert second["skills"] == 2
+
+    def test_use_json_reports_installs_and_sidelines(self, boost, tapped):
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        r = json.loads(boost("profile", "use", "solo", "--json").out)
+        assert r == {"name": "solo", "installed": [], "not_found": [],
+                     "uninstalled": [], "sidelined": ["cowboy-coding"],
+                     "kept_extras": False, "other_kind": {}}
+
+        # cowboy-coding stays in the lock (sidelined, not uninstalled), so a
+        # second `use --prune` still sees it as an extra to remove.
+        r = json.loads(boost("profile", "use", "solo", "--prune",
+                             "--json").out)
+        assert r["uninstalled"] == ["cowboy-coding"]
+        assert r["sidelined"] == []
+
+    def test_use_json_declines_prune(self, boost, tapped, monkeypatch):
+        boost("install", "brainstorming")
+        boost("profile", "save", "solo")
+        boost("install", "cowboy-coding")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = json.loads(boost("profile", "use", "solo", "--prune",
+                             "--json").out)
+        assert r["kept_extras"] is True
+        assert r["uninstalled"] == []
+
+    def test_delete_json(self, boost, installed, monkeypatch):
+        boost("profile", "save", "gone")
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        cancelled = boost("profile", "delete", "gone", "--json", expect=1)
+        assert json.loads(cancelled.out) == {
+            "name": "gone", "deleted": False, "cancelled": True}
+        monkeypatch.setenv("BOOST_ASSUME_YES", "1")
+        deleted = boost("profile", "delete", "gone", "--json")
+        assert json.loads(deleted.out) == {"name": "gone", "deleted": True}
 
     def test_list_marks_a_corrupt_profile_unreadable_instead_of_hiding_it(
             self, boost, sandbox):
@@ -628,6 +723,18 @@ class TestPulse:
         assert events[1]["action"] == "tap"
         assert events[1]["subject"] == "fixture-tap"
 
+    def test_filter_matching_nothing_names_the_filter_not_empty_journal(
+            self, boost, installed):
+        # The bug: a filter matching zero events used to print the identical
+        # "no activity yet" line a truly empty journal gets, hiding that
+        # events exist under other actions.
+        r = boost("pulse", "--action", "nosuch")
+        flat = " ".join(r.out.split())
+        assert "no events with action 'nosuch'" in flat
+        assert "2 events in the journal" in flat
+        assert "install" in flat and "tap" in flat
+        assert "no activity yet" not in r.out
+
 
 # ---------------------------------------------------------------- replay
 
@@ -695,6 +802,24 @@ class TestReplay:
         assert "cancelled" in r.out
         assert "cowboy-coding" in json.loads(
             paths.lockfile_path().read_text(encoding="utf-8"))["skills"]
+
+    def test_rollback_json(self, boost, tapped, tick_clock):
+        _history_ops(boost)
+        snap_id = lockfile.history_list()[1]["id"]
+        r = json.loads(boost("replay", "rollback", snap_id, "--json").out)
+        assert r == {"id": snap_id, "uninstalled": ["cowboy-coding"],
+                     "restored": ["brainstorming"], "unrestorable": [],
+                     "version_diffs": [], "not_rolled_back": []}
+        again = json.loads(boost("replay", "rollback", snap_id, "--json").out)
+        assert again == {"id": snap_id, "no_changes": True,
+                         "not_rolled_back": []}
+
+    def test_rollback_declined_json(self, boost, tapped, tick_clock, monkeypatch):
+        _history_ops(boost)
+        snap_id = lockfile.history_list()[1]["id"]
+        monkeypatch.delenv("BOOST_ASSUME_YES")
+        r = boost("replay", "rollback", snap_id, "--json", expect=1)
+        assert json.loads(r.out) == {"id": snap_id, "cancelled": True}
 
     def test_rollback_skill_gone_from_taps(self, boost, tapped, tick_clock):
         boost("install", "brainstorming")
@@ -870,9 +995,53 @@ class TestWho:
         assert "tap" in r.out
         assert USER in r.out
 
+    def test_unknown_skill_with_no_close_match(self, boost, installed):
+        # The bug: an unknown skill used to print the identical generic
+        # "no journal activity yet" line a truly empty journal gets.
+        r = boost("who", "nosuchskill-zzz")
+        flat = " ".join(r.out.split())
+        assert "'nosuchskill-zzz' is not installed" in flat
+        assert "2 events in the journal, none for it" in flat
+        assert "did you mean" not in flat
+        assert "no journal activity yet" not in flat
+
+    def test_unknown_skill_with_a_close_match_suggests_it(self, boost, installed):
+        r = boost("who", "brainstormin")
+        assert "did you mean 'brainstorming'?" in " ".join(r.out.split())
+
+    def test_installed_skill_with_no_history_names_the_event_count(
+            self, boost, tapped):
+        # `tapped` already logged one "tap" event for fixture-tap; seeding the
+        # rule directly into the lock (no journal.log("install", ...)) means
+        # house-style itself has no history, but the journal as a whole isn't
+        # empty — the message must count the whole journal, not claim zero.
+        _seed_rule("house-style")
+        r = boost("who", "house-style")
+        flat = " ".join(r.out.split())
+        assert "installed but has no journal activity" in flat
+        assert "1 event in the journal" in flat
+
+    def test_installed_skill_with_no_history_counts_the_whole_journal(
+            self, boost, installed):
+        _seed_rule("house-style")
+        r = boost("who", "house-style")
+        flat = " ".join(r.out.split())
+        assert "installed but has no journal activity" in flat
+        assert "2 events in the journal" in flat
+
     def test_empty_journal(self, boost, sandbox):
         r = boost("who")
         assert "no journal activity yet" in r.out
+
+    def test_empty_journal_json(self, boost, sandbox):
+        # Verified live: this used to print the human empty-state prose even
+        # under --json, unlike `pulse --json` which answers `[]`.
+        assert json.loads(boost("who", "--json").out) == {}
+
+    def test_empty_journal_per_skill_json(self, boost, sandbox):
+        r = json.loads(boost("who", "ghost-skill", "--json").out)
+        assert r == {"skill": "ghost-skill", "installed": False,
+                     "kind": None, "events": []}
 
     def test_empty_journal_fits_a_narrow_pane(self, boost, sandbox,
                                               monkeypatch):

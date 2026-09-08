@@ -56,6 +56,31 @@ class TestNormRule:
         # an embedded acronym keeps its case; only the leading char changes
         assert imperative.norm_rule("Always use TDD") == "always use TDD"
 
+    def test_all_caps_modal_fully_lowercased(self):
+        # a shouted modal ("NEVER ...") must not come out "nEVER ..." — the
+        # whole modal token normalizes, not just its first character.
+        assert imperative.norm_rule("NEVER test mock behavior") == \
+            "never test mock behavior"
+
+    def test_all_caps_two_word_modal_fully_lowercased(self):
+        assert imperative.norm_rule("MUST NOT skip review") == \
+            "must not skip review"
+
+    def test_all_caps_dont_fully_lowercased(self):
+        assert imperative.norm_rule("DON'T mock without understanding") == \
+            "don't mock without understanding"
+
+    def test_text_after_modal_keeps_its_case(self):
+        # only the modal itself is lowercased; an acronym right after it
+        # is untouched
+        assert imperative.norm_rule("NEVER skip TDD") == "never skip TDD"
+
+    def test_non_modal_line_still_lowercases_first_char_only(self):
+        # a non-rule line (e.g. a numbered "follow:" step) has no modal to
+        # match, so the old first-char-only fallback still applies
+        assert imperative.norm_rule("Write a failing TEST first") == \
+            "write a failing TEST first"
+
 
 class TestImperativeRules:
     def test_extracts_and_normalizes_rules(self):
@@ -63,6 +88,17 @@ class TestImperativeRules:
                 "Some prose here.\n")
         assert imperative.imperative_rules(body) == [
             "always run the suite", "never force-push"]
+
+    def test_all_caps_rules_do_not_shout_back(self):
+        # repro from the 2026-08 CLI audit: `simulate` rendered these as
+        # "nEVER ..." because norm_rule only lowercased the leading char.
+        body = ("- NEVER test mock behavior\n"
+                "- NEVER add test-only methods to production classes\n"
+                "- NEVER mock without understanding dependencies\n")
+        assert imperative.imperative_rules(body) == [
+            "never test mock behavior",
+            "never add test-only methods to production classes",
+            "never mock without understanding dependencies"]
 
     def test_numbered_step_becomes_follow(self):
         body = "1. Write a failing test first\n2. Make it pass\n"

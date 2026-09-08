@@ -62,6 +62,26 @@ def _print_dry_run(pairs: list[tuple[str, str]]) -> int:
     return 0
 
 
+def _skip_if_already_tapped(spec: str) -> bool:
+    """Print the multi-SPEC skip line and return True if `spec` is tapped.
+
+    The single-SPEC counterpart to the skip branch inside `_tap_all` below —
+    without this, `boost tap already/tapped` and `boost tap already/tapped
+    other/thing` answered the same question two different ways: the first
+    errored (exit 1), the second printed this muted line and exited 0. A
+    spec that fails to parse is not "already tapped" — it falls through so
+    the ordinary `registry.add` call raises its usual, more specific error.
+    """
+    try:
+        name, _url = registry.parse_spec(spec)
+    except BoostError:
+        return False
+    if not registry.is_tapped(name):
+        return False
+    out.info(out.role("%s already tapped" % name, "muted"))
+    return True
+
+
 def _tap_all(urls: list[str], jobs: int | None,
              focus: dict[str, str] | None = None,
              pins: dict[str, str] | None = None,
@@ -169,13 +189,25 @@ def cmd_tap(argv) -> int:
                                   for d in config.DEFAULT_TAPS})
     if args.spec and args.dry_run:
         rc |= _print_dry_run(registry.parse_specs(list(args.spec)))
-    elif len(args.spec) == 1:
+    elif args.spec and args.at:
+        # --at pins one commit, which cannot describe "skip, already tapped"
+        # — a tap already sitting on a different commit must fail loudly, not
+        # silently keep whatever tree it happened to have (earlier validation
+        # already rejected --at with more than one SPEC).
         with spin.Spinner("cloning %s" % args.spec[0]):
             tap = registry.add(args.spec[0], curated=args.curated, at=args.at)
             entries = catalog.rebuild_tap(tap)
         journal.log("tap", tap.name)
-        pin = " @ %s" % args.at[:7] if args.at else ""
-        out.ok("Tapped %s (%d items)%s" % (tap.name, len(entries), pin))
+        out.ok("Tapped %s (%d items) @ %s" % (tap.name, len(entries),
+                                              args.at[:7]))
+    elif len(args.spec) == 1 and _skip_if_already_tapped(args.spec[0]):
+        pass
+    elif len(args.spec) == 1:
+        with spin.Spinner("cloning %s" % args.spec[0]):
+            tap = registry.add(args.spec[0], curated=args.curated)
+            entries = catalog.rebuild_tap(tap)
+        journal.log("tap", tap.name)
+        out.ok("tapped %s (%d items)" % (tap.name, len(entries)))
     elif args.spec:
         # Several specs clone through the same pool as --defaults/--catalog.
         # This is not only a convenience: `xargs boost_cli tap < list` hands

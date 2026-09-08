@@ -214,3 +214,56 @@ def resolve(requested: str | None) -> list[str]:
     if requested not in HOSTS:
         raise KeyError(requested)
     return [requested]
+
+
+def is_named(requested: str | None) -> bool:
+    """True when ``requested`` names exactly one host — not unset/``auto``/``all``.
+
+    A missing CLI is not an error under ``auto`` (most machines have one agent
+    CLI, not all three) or ``all`` (deliberately shows every host's argv, installed
+    or not — see :func:`resolve`'s docstring). Naming exactly one host and finding
+    its CLI absent is a different situation: a script that ran
+    ``boost mcp --host gemini`` and got exit 0 for a no-op cannot tell "it worked"
+    from "gemini is not installed here" without parsing prose.
+    """
+    return requested not in (None, "", "auto", "all")
+
+
+#: Substrings an agent CLI uses to say "this server is already registered" —
+#: shared with :func:`classify_result`, register direction.
+_ALREADY = ("already exists", "already registered", "already configured")
+
+#: Substrings an agent CLI uses to say "no such server was registered" —
+#: Gemini's own ``mcp remove --scope user boost`` prints
+#: ``Server "boost" not found in user settings.`` on stderr and still exits 0,
+#: so without this an unregister against nothing registered read as success.
+_NOT_REGISTERED = ("not found",)
+
+
+def classify_result(action: str, returncode: int, stdout: str, stderr: str) -> tuple[str, str]:
+    """Classify a finished (un)register subprocess into ``(status, detail)``.
+
+    Status is one of:
+
+    * ``"ran"``            — the CLI ran and did what was asked;
+    * ``"already"``        — register reported the server already exists,
+      which is success worded differently;
+    * ``"not_registered"`` — unregister reported there was nothing to remove,
+      likewise success worded differently;
+    * ``"failed"``         — a non-zero exit with none of the above markers.
+
+    Pure over the text a finished child process produced — launching it and
+    detecting a missing CLI (``shutil.which``) needs the filesystem and stays
+    in the command layer, which is what makes every branch here reachable
+    without a real ``claude``/``gemini``/``agy`` on PATH.
+    """
+    blob = (stderr + stdout).lower()
+    if action == "unregister" and returncode == 0 and any(
+            k in blob for k in _NOT_REGISTERED):
+        return "not_registered", ""
+    if returncode == 0:
+        return "ran", ""
+    if action == "register" and any(k in blob for k in _ALREADY):
+        return "already", ""
+    tail = stderr.strip().splitlines()
+    return "failed", tail[-1] if tail else "unknown error"

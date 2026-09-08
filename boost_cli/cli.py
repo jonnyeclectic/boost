@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import difflib
 import importlib
+import os
 import sys
 import time
 
@@ -195,6 +196,9 @@ def print_help() -> None:
     else:
         print(usage)
         print("  " + detail)
+    print(out.c(
+        "Options:  -V/--version   -v/--verbose   --debug   -q/--quiet",
+        out.DIM))
 
     width = max(len(n) for n, _, _, _ in COMMANDS)
     for idx, (gkey, (_icon, title, desc)) in enumerate(GROUPS.items()):
@@ -220,6 +224,21 @@ def print_help() -> None:
 
 
 def print_command_help(name: str) -> int:
+    # `main`'s own aliases (-h/--help, -V/--version/version, help itself)
+    # never appear in COMMANDS, so `boost help --help` used to fall straight
+    # into `_unknown` and get difflib-guessed at an unrelated command
+    # (`--help` -> "heal", `version` -> "verify"). Resolve them the same way
+    # `main` does before treating the name as an unrecognized command.
+    if name in ("-h", "--help"):
+        print_help()
+        return 0
+    if name in ("-V", "--version", "version"):
+        print_version()
+        return 0
+    if name == "help":
+        print(out.c("boost help [COMMAND]", out.BOLD)
+              + " — show this index, or one command's own --help")
+        return 0
     meta = resolve(name)
     if not meta:
         return _unknown(name)
@@ -237,6 +256,13 @@ def _crash_hint(report) -> str:
 
 
 def _unknown(name: str) -> int:
+    # A dash-prefixed token is a mistyped flag, not a command guess — nothing
+    # in _BY_NAME is a plausible correction for e.g. `--hepl`, and guessing
+    # one anyway ("did you mean: heal?") reads as a wrong command suggestion
+    # rather than what actually happened.
+    if name.startswith("-"):
+        out.err("unknown option: %s" % name, hint="see `boost --help`")
+        return 2
     close = difflib.get_close_matches(name, list(_BY_NAME), n=3)
     out.err("unknown command: %s" % name,
             hint=("did you mean: %s?" % ", ".join(close)) if close
@@ -286,6 +312,102 @@ def _extract_globals(argv: list[str]) -> tuple[dict, list[str]]:
     return opts, argv[i:]
 
 
+def _seal_broken_stdout() -> None:
+    """Stop CPython's own exit-time flush from re-raising BrokenPipeError.
+
+    A downstream reader closing early (``boost --help | head``) does not
+    raise the moment boost prints — small writes fit the pipe's kernel buffer
+    and succeed silently, so the error only surfaces on the next explicit
+    flush. Left unhandled it surfaces on the *interpreter's own* final flush
+    of stdout at shutdown, which happens outside any of boost's try/except
+    blocks: Python prints "Exception ignored on flushing sys.stdout:
+    BrokenPipeError" straight to stderr and the process exits non-zero.
+    Redirecting the fd to devnull means that final flush lands somewhere
+    that cannot raise.
+    """
+    with contextlib.suppress(Exception):
+        sys.stdout.flush()
+    with contextlib.suppress(Exception):
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, sys.stdout.fileno())
+        finally:
+            os.close(devnull)
+
+
+def _route(argv: list[str]) -> int:
+    try:
+        if not argv or argv[0] in ("-h", "--help"):
+            print_help()
+            return 0
+        if argv[0] in ("-V", "--version", "version"):
+            print_version()
+            return 0
+        if argv[0] == "help":
+            if len(argv) > 1:
+                return print_command_help(argv[1])
+            print_help()
+            return 0
+        name, rest = argv[0], argv[1:]
+        if name in _PLUMBING:
+            # Before the _BY_NAME guard (it is not a command) and before
+            # log_invocation: this runs on every TAB, and logging a line per
+            # keystroke would bury the diagnostic log in completion noise.
+            return _PLUMBING[name](rest)
+        if name not in _BY_NAME:
+            return _unknown(name)
+        logs.log_invocation([name, *rest])
+        start = time.perf_counter()
+        rc = 70  # assume the worst until a handler proves otherwise
+        try:
+            rc = _dispatch(name, rest)
+            return rc
+        except BoostError as e:
+            logs.get_logger().info("BoostError: %s", e.message)
+            rc = 1
+            out.err(e.message, hint=e.hint)
+            return rc
+        except KeyboardInterrupt:
+            logs.get_logger().debug("interrupted by user")
+            rc = 130
+            print()
+            return rc
+        except BrokenPipeError:
+            # Reclassify before `except Exception` below can mistake a
+            # closed pipe for a crash and write a spurious crash report.
+            rc = 0
+            return rc
+        except SystemExit as e:
+            # argparse (--help, usage errors) exits via SystemExit, which is
+            # a BaseException and so skips the `except Exception` below
+            # entirely — left uncaught, the trail journaled the preset rc=70
+            # for every benign --help and usage exit instead of the real 0
+            # or 2.
+            code = e.code
+            rc = 0 if code is None else code if isinstance(code, int) else 1
+            raise
+        except Exception as e:
+            report = logs.write_crash_report(e, [name, *rest])
+            if logs.is_debug():
+                raise
+            out.err("boost hit an unexpected error: %s: %s"
+                    % (type(e).__name__, e),
+                    hint=_crash_hint(report))
+            return 70  # EX_SOFTWARE
+        finally:
+            # Bookend every invocation with its exit code + duration, even
+            # when the --debug path re-raises the traceback above.
+            logs.log_completion([name, *rest], rc,
+                                (time.perf_counter() - start) * 1000)
+    finally:
+        # Force any buffered output through now, still inside `main`'s own
+        # BrokenPipeError handler below — a `--help`/`--version`/`count`
+        # write that merely fit the pipe's buffer never raised above, and
+        # would otherwise wait until the unhandled, uncatchable flush at
+        # interpreter shutdown to report the broken pipe.
+        sys.stdout.flush()
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     out.harden_console_encoding()
@@ -297,64 +419,12 @@ def main(argv: list[str] | None = None) -> int:
     opts, argv = _extract_globals(argv)
     logs.configure(verbose=opts["verbose"], debug=opts["debug"],
                    quiet=opts["quiet"])
-    if not argv or argv[0] in ("-h", "--help"):
-        print_help()
-        return 0
-    if argv[0] in ("-V", "--version", "version"):
-        print_version()
-        return 0
-    if argv[0] == "help":
-        if len(argv) > 1:
-            return print_command_help(argv[1])
-        print_help()
-        return 0
-    name, rest = argv[0], argv[1:]
-    if name in _PLUMBING:
-        # Before the _BY_NAME guard (it is not a command) and before
-        # log_invocation: this runs on every TAB, and logging a line per
-        # keystroke would bury the diagnostic log in completion noise.
-        return _PLUMBING[name](rest)
-    if name not in _BY_NAME:
-        return _unknown(name)
-    logs.log_invocation([name, *rest])
-    start = time.perf_counter()
-    rc = 70  # assume the worst until a handler proves otherwise
     try:
-        rc = _dispatch(name, rest)
-        return rc
-    except BoostError as e:
-        logs.get_logger().info("BoostError: %s", e.message)
-        rc = 1
-        out.err(e.message, hint=e.hint)
-        return rc
-    except KeyboardInterrupt:
-        logs.get_logger().debug("interrupted by user")
-        rc = 130
-        print()
-        return rc
+        return _route(argv)
     except BrokenPipeError:
-        with contextlib.suppress(Exception):
-            sys.stdout.close()
-        rc = 0
-        return rc
-    except SystemExit as e:
-        # argparse (--help, usage errors) exits via SystemExit, which is a
-        # BaseException and so skips the `except Exception` below entirely —
-        # left uncaught, the trail journaled the preset rc=70 for every
-        # benign --help and usage exit instead of the real 0 or 2.
-        code = e.code
-        rc = 0 if code is None else code if isinstance(code, int) else 1
-        raise
-    except Exception as e:
-        report = logs.write_crash_report(e, [name, *rest])
-        if logs.is_debug():
-            raise
-        out.err("boost hit an unexpected error: %s: %s"
-                % (type(e).__name__, e),
-                hint=_crash_hint(report))
-        return 70  # EX_SOFTWARE
-    finally:
-        # Bookend every invocation with its exit code + duration, even when the
-        # --debug path re-raises the traceback above.
-        logs.log_completion([name, *rest], rc,
-                            (time.perf_counter() - start) * 1000)
+        # Covers the early-return paths above (`--help`, `--version`,
+        # `help`, `__complete`) that have no try/except of their own, plus
+        # the final flush in `_route`'s own `finally` surfacing a pipe error
+        # the dispatch path's flush-free writes didn't.
+        _seal_broken_stdout()
+        return 0

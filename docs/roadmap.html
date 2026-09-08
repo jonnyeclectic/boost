@@ -6855,7 +6855,7 @@ sentence to name only installs and skill updates, not tap refreshes. Behavior-on
       </article>
 
       <article class="cap rcard" id="audit-quarantine-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
         <h3><code>boost quarantine --release</code>: CLI audit findings (2026-08)</h3>
         <p><b>Release ignores the skill's <code>only_agents</code> scope and links into every enabled agent.</b> Reproduced: <code>install pdf-official --agent claude-code</code> creates one link; quarantine then <code>--release</code> prints <code>✓ released pdf-official (linked: claude-code, windsurf, cursor, antigravity)</code> — links in all four agent dirs while <code>only_agents</code> still says <code>[claude-code]</code> — and <code>doctor</code> immediately flags the out-of-scope links and exits 1. The round trip should be a no-op on the agent set. Root cause is one missing argument: the release branch calls <code>store.link_agents(name)</code> with no <code>only=</code> (<code>boost_cli/commands/safety.py:471-478</code>), where <code>store.install</code> already passes the preserved scope correctly (<code>store.py:555</code>). Fix: <code>store.link_agents(name, only=entry.get("only_agents"))</code>, keep <code>entry["agents"]</code> consistent with the narrowed set, and add a unit test that installs with <code>--agent</code>, quarantines, releases, and asserts doctor stays clean. Same defect class as the shipped <em>update/reinstall widens agent scope</em> fix — this is the path that sweep missed.<br><br><b>Releasing a quarantined <em>rule</em> re-appends the managed block, reordering the user's own CLAUDE.md text above it.</b> Reproduced: with 3 user lines after the 865-line managed block, quarantine strips the block and keeps the user text (good), but <code>--release dotnet-build</code> restores the file to 868 lines with the user's lines now at the <em>top</em> and the block appended below — though <code>release_materialized</code>'s docstring promises byte-for-byte restore. <code>release_materialized</code> (<code>store.py:1029-1055</code>) hands the post-quarantine file to <code>rules.merge_block</code> (<code>rules.py:112-132</code>), which finds no existing block and unconditionally appends. Fix: record the block's original offset (or the full pre-quarantine text) in the quarantine stash for MODE_CLAUDE materializations and reinsert at that position, falling back to append only when the surrounding text changed — or soften the docstring to say the block is re-appended.<br><br>Found by the 2026-08 CLI audit (clusters <code>release-widens-agent-scope</code>, <code>rule-release-block-position</code>); repro in the audit log.</p>
         <div class="meta">
@@ -6867,8 +6867,9 @@ sentence to name only installs and skill updates, not tap refreshes. Behavior-on
       </article>
 
       <article class="cap rcard" id="audit-test-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost test: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b><code>boost test</code>'s lint check passes skills that <code>boost lint</code> fails</b> (med).
 The two commands use different predicates: <code>cmd_test</code> fails its <em>lint</em> check only on
 <code>score &lt; 40</code> (<code>quality.py:829-831</code>) while <code>cmd_lint</code> fails on
@@ -6894,7 +6895,7 @@ Fix: order-preserving <code>names = list(dict.fromkeys(names))</code> in
 changes for either finding.
 
 Found by the 2026-08 CLI audit (clusters <code>test-vs-lint-predicate</code>,
-<code>repeated-name-args</code>); repro in the audit log.</p>
+<code>repeated-name-args</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -12319,8 +12320,9 @@ the audit log.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-info-stats-explain-render-a-different-smaller-shape-for-rule">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>info</code>/<code>stats</code>/<code>explain</code> render a smaller shape for rules and workflows than for skills</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>All three item kinds install, but the reporting commands treat two of them as second-class.
 <code>info dotnet-build --json</code> (a rule) returns
 <code>{"name","kind":"rule","installed":{&hellip;}}</code> &mdash; three keys &mdash; while
@@ -12350,7 +12352,7 @@ envelope symmetrically; use <code>cat['skill_md']</code> for a not-installed rul
 one (sorted) agents ordering; and have <code>cmd_explain</code> fall back to
 <code>cat['description']</code>/the lock's description and strip the <code>#&nbsp;&lt;name&gt;</code> block
 header before the heading scan. Found by the 2026-08 CLI audit (cluster info-kind-parity); repro in
-the audit log.</p>
+the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -12402,8 +12404,9 @@ No flag or summary changes, so no doc regeneration needed. Found by the 2026-08 
       </article>
 
       <article class="cap rcard" id="audit-json-accepted-but-ignored-on-many-branches-cohort-config-pol">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>--json accepted but ignored: <code>cohort</code>/<code>config</code>/<code>policy</code> set, <code>focus</code>, <code>profile</code>, <code>replay rollback</code>, <code>who</code> empty state</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p>The mirror image of the missing-<code>--json</code> sweep: these parsers <em>accept</em>
 <code>--json</code>, then whole branches print human text to stdout and exit 0 &mdash; a script
 that asked for JSON gets unparseable prose and no error. Verified live on every member:
@@ -12430,12 +12433,12 @@ supports &mdash; and each <code>--json</code> help string gets qualified the way
 <code>boost_cli/commands/team.py:69-300</code>, <code>intelligence.py:945-1050</code>,
 <code>configuration.py</code>, <code>pkg.py</code>. Help strings change, so regenerate
 <code>docs/commands.html</code>. Found by the 2026-08 CLI audit (cluster
-<code>json-flag-ignored</code>); repro in the audit log.</p>
+<code>json-flag-ignored</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">seven commands take --json, then print "✓ set ai.enabled = true" prose with exit 0</span>
+          <span class="m">shipped in PR 804 — all seven sites now emit JSON (or reject --json as a usage error, for `update` without `--shards`); CI's full check suite (lint, evals, tests, smoke, mutation) is green on the merge-ready head</span>
         </div>
       </article>
 
@@ -13568,8 +13571,9 @@ changes, so <code>docs/commands.html</code> is untouched. Found by the 2026-08 C
       </article>
 
       <article class="cap rcard" id="audit-edit-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost edit</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>edit rewrites the lock sha, so drift misclassifies a local edit as upstream-moved.</b> After an
 edit, boost warns <em>&ldquo;local edits diverge from the tap source &mdash; boost drift will flag
 this&rdquo;</em> &mdash; and then <code>boost drift</code> prints
@@ -13589,7 +13593,7 @@ return 1 right after the warning and skip the sha compare and success messaging.
 
 <br><br>Both fixes change edit's documented behaviour, so regenerate <code>docs/commands.html</code>.
 Found by the 2026-08 CLI audit (clusters edit-drift-classification, edit-editor-failure-exit); repro
-in the audit log.</p>
+in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -13889,7 +13893,7 @@ Update <code>docs/DEBUGGING.md</code> where it describes the trail. Found by the
       </article>
 
       <article class="cap rcard" id="audit-mcp-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost mcp: CLI audit findings (2026-08)</h3>
         <p>Three truthfulness gaps in one command, all verified against the real CLIs.
 <code>boost mcp</code> has no <code>--dry-run</code>/<code>--print</code>: register shells straight into
@@ -14017,14 +14021,34 @@ audit log.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-pulse-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
         <h3><code>boost pulse</code>: CLI audit findings (2026-08)</h3>
-        <p><b><code>pulse --action</code> and <code>who &lt;name&gt;</code> claim "no activity yet" when only the filter is empty.</b> Reproduced with a populated journal: <code>pulse --action nosuch</code> prints <code>○ no activity yet — events appear as you install and manage skills</code> and <code>who nosuchskill-zzz</code> prints <code>○ no journal activity yet — expertise builds as people install, edit, and evolve skills</code> — while <code>pulse.jsonl</code> held 35 events at audit time (23 on re-verification; both matched verbatim). Both commands compute a filtered <code>events</code> list and print the same global empty state when it is empty, with no branch distinguishing filter-empty from journal-empty — so the output asserts a state ("nothing has happened on this machine") that is simply false, and hides that the user's filter value matched nothing.<br><br>Verified fix (<code>boost_cli/commands/team.py:518-522</code> for <code>cmd_pulse</code>, <code>team.py:692-702</code> for <code>cmd_who</code>): when <code>args.action</code> / the skill argument is set and the unfiltered journal is non-empty, print a filter-specific empty state naming the filter value — e.g. <code>○ no events with action "nosuch" (35 events in the journal)</code> — ideally listing the distinct actions present; for <code>who</code>, name the subject and say "not installed" or offer a did-you-mean when the name is close to a known one. Keep the current message only for a truly empty journal. No flag changes, so no docs regeneration needed.<br><br>Found by the 2026-08 CLI audit (cluster <code>filtered-empty-state</code>); repro in the audit log.</p>
+        <p><b><code>pulse --action</code> and <code>who &lt;name&gt;</code> claim "no activity yet" when only the filter is empty.</b> Reproduced with a populated journal: <code>pulse --action nosuch</code> prints <code>○ no activity yet — events appear as you install and manage skills</code> and <code>who nosuchskill-zzz</code> prints <code>○ no journal activity yet — expertise builds as people install, edit, and evolve skills</code> — while <code>pulse.jsonl</code> held 35 events at audit time (23 on re-verification; both matched verbatim). Both commands compute a filtered <code>events</code> list and print the same global empty state when it is empty, with no branch distinguishing filter-empty from journal-empty — so the output asserts a state ("nothing has happened on this machine") that is simply false, and hides that the user's filter value matched nothing.<br><br>Verified fix (<code>boost_cli/commands/team.py:518-522</code> for <code>cmd_pulse</code>, <code>team.py:692-702</code> for <code>cmd_who</code>): when <code>args.action</code> / the skill argument is set and the unfiltered journal is non-empty, print a filter-specific empty state naming the filter value — e.g. <code>○ no events with action "nosuch" (35 events in the journal)</code> — ideally listing the distinct actions present; for <code>who</code>, name the subject and say "not installed" or offer a did-you-mean when the name is close to a known one. Keep the current message only for a truly empty journal. No flag changes, so no docs regeneration needed.<br><br>Found by the 2026-08 CLI audit (cluster <code>filtered-empty-state</code>); repro in the audit log.
+
+<br><br><b>Status.</b> Implemented as two pure helpers in <code>core/journal.py</code>
+(<code>pulse_empty_state</code>, <code>who_empty_state</code>, unit-tested) consumed by
+<code>cmd_pulse</code>/<code>cmd_who</code>; <code>who_empty_state</code> also covers the
+"installed but no journal history" case and a <code>difflib</code>-based did-you-mean
+against subjects that actually appear in the journal. Verified end to end against a real
+build (the exact repro commands from this card) and with functional/unit tests added. This
+session's sandbox had no PyPI/apt egress (a verified, repeated 403), so the pinned
+<code>make check</code> toolchain (ruff/mypy pins, pytest-cov, mutmut, the eval corpus)
+could not be installed; what ran instead with the system-provided <code>ruff</code>
+0.15.8 / <code>mypy</code> 1.19.1 / <code>pytest</code> 9.0.2 (bound to Python 3.11, not
+the repo's required 3.12): <code>ruff</code> and <code>mypy</code> clean on every changed
+file; the new/changed tests all pass (58 assertions across
+<code>tests/unit/test_journal.py</code> and the pulse/who classes in
+<code>tests/functional/test_cli_team.py</code>); the full <code>tests/unit</code> suite
+and <code>tests/smoke.sh</code> reproduce the same failures on this diff as on unmodified
+<code>main</code> under the same tool (all traced to <code>shutil.rmtree(onexc=...)</code>,
+a Python-3.12-only kwarg, being run under the sandbox's Python-3.11-backed pytest — a
+pre-existing environment artifact, not a regression). CI has real network access and
+should run the full gate before merge.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">a filter matching 0 of 35 events prints the same line as an empty journal</span>
+          <span class="m">fix implemented + tested; make check's eval/mutation/smoke gates could not run locally (no PyPI egress) — see PR for what did run</span>
         </div>
       </article>
 
@@ -14128,18 +14152,19 @@ Found by the 2026-08 CLI audit (clusters <code>cjk-cell-width</code>, <code>sear
       </article>
 
       <article class="cap rcard" id="audit-simulate-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · UX</span></div>
         <h3>boost simulate: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The rule list prints 'nEVER'.</b> <code>simulate test-driven-development --task "fix a flaky test"</code> renders <em>"&bull; nEVER test mock behavior"</em>, <em>"&bull; nEVER add test-only methods to production classes"</em>, <em>"&bull; nEVER mock without understanding dependencies"</em> — <code>norm_rule</code> (<code>boost_cli/core/imperative.py:40-47</code>) lowercases only <code>t[:1]</code> of an all-caps NEVER, against its own docstring's goal of a "stable, comparable rule string". Fix at <code>imperative.py:47</code>: lowercase the whole leading modal token (never/always/must/do not/don't) — safe for dedup (it can only merge more duplicates), and since <code>norm_rule</code> is the shared extractor consumed by <code>explain</code> and <code>conflict</code> too, the fix reaches them for free. Optional: reword the <em>"Claude would:"</em> lead-in so <em>"&bull; do not treat the output as a substitute…"</em> bullets read grammatically.
 
 <b>The trigger description clips mid-word at 100 chars with no ellipsis.</b> <em>likely triggers when the task involves: "Use when implementing any feature or bugfix, before writing implementation code - write the test fir"</em> — verification showed the clip is width-independent (at <code>COLUMNS=200</code> the line fits yet still ends at char 100 with a trailing space before the closing quote) and shows piped and TTY alike. <code>core/chat.py:184</code> already truncates on a word boundary with <code>" …"</code>; replace <code>desc[:100]</code> at <code>boost_cli/commands/intelligence.py:287</code> with the same <code>desc[:100].rsplit(' ', 1)[0] + ' …'</code> pattern. No doc changes for either fix.
 
-Found by the 2026-08 CLI audit (cluster <code>simulate-text-polish</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>simulate-text-polish</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">norm_rule turns NEVER into 'nEVER'; trigger desc clipped mid-word at char 100</span>
+          <span class="m">fixed — norm_rule lowercases the whole modal; trigger desc clips on a word boundary</span>
         </div>
       </article>
 
@@ -14179,7 +14204,7 @@ Found by the 2026-08 CLI audit (cluster <code>tag-arg-parsing</code>); repro in 
       </article>
 
       <article class="cap rcard" id="audit-tap-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost tap: CLI audit findings (2026-08)</h3>
         <p><b>tap misdiagnoses local paths</b> (med). A path-shaped SPEC that is not an existing directory falls
 through <code>registry.parse_spec</code>'s <code>'/' in spec</code> branch
