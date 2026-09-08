@@ -542,7 +542,9 @@ def cmd_policy(argv) -> int:
     pol = policy.load()
     everything = lockfile.all_installed()
     min_score = int(pol.get("min_quality_score") or 0)
-    violations = []  # (name, kind, label, problem)
+    # name/kind are None for the one environment-level violation below;
+    # every per-item row carries both.
+    violations: list[tuple[str | None, str | None, str, str]] = []
     not_checked: set[str] = set()
     total = 0
     skill_count = len(everything.get("skill", {}))

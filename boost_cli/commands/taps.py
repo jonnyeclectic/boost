@@ -273,17 +273,14 @@ def cmd_untap(argv) -> int:
 
 
 def _tap_updated(tap: registry.Tap) -> str | None:
-    """Last-commit date of a tap clone, else the cache's generated date.
+    """ISO date/timestamp a tap was last known to change, else ``None``.
 
-    Both branches return the same `YYYY-MM-DD` shape (`util.iso_date`
-    mirrors git's `--date=short`) — the two-format mix this used to produce
-    (git dates for cloned taps, "3h ago" for cache-only ones) is exactly the
-    UPDATED-column inconsistency this function exists to not reintroduce.
-
-    An unreadable cache returns ``None``, not the ``"?"`` the table prints:
-    this is the machine value `boost taps --json` publishes, and a
-    placeholder glyph in a date field is a display string wearing a
-    machine field's name. `_tap_updated_display` renders the absence.
+    Full precision, unnarrowed: a clone answers with git's `--date=short`
+    day, a cache-only tap with the ISO timestamp it actually recorded, and an
+    unreadable one with ``None`` rather than the ``"?"`` the table prints. All
+    three are the machine values `boost taps --json` publishes — narrowing or
+    humanizing them here would discard information the JSON caller asked for.
+    `_tap_updated_display` does both for the table.
     """
     if tap.is_cloned:
         with suppress(BoostError):
@@ -294,7 +291,7 @@ def _tap_updated(tap: registry.Tap) -> str | None:
                 return proc.stdout.strip()
     try:
         data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
-        return util.iso_date(data.get("generated", ""))
+        return data.get("generated") or None
     except (OSError, ValueError):
         return None
 
@@ -302,11 +299,13 @@ def _tap_updated(tap: registry.Tap) -> str | None:
 def _tap_updated_display(raw: str | None) -> str:
     """Table rendering of :func:`_tap_updated`'s machine value.
 
-    Absence only: both of `_tap_updated`'s branches already produce the same
-    `YYYY-MM-DD`, so humanizing here (`rel_time`) would put "3h ago" back
-    beside git dates in one column — the mix that function exists to avoid.
+    Narrows a cache timestamp to the same `YYYY-MM-DD` a clone's git date
+    already is (`util.iso_date` mirrors `--date=short`). Not `rel_time`: a
+    relative "3h ago" beside git dates in one column is exactly the two-format
+    UPDATED mix this pair exists to avoid — and the narrowing happens here,
+    not in `_tap_updated`, so `--json` keeps the timestamp's full precision.
     """
-    return raw or "?"
+    return util.iso_date(raw) if raw else "?"
 
 
 def cmd_taps(argv) -> int:

@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 
-from boost_cli.core import config, paths, util
+from boost_cli.core import config, paths, staleness, util
 
 
 def _copy_tap(src, dest):
@@ -474,9 +474,16 @@ class TestOutdated:
         assert "source missing" in r.out
         assert "1 outdated" in r.out
         assert "can't restore a deleted tap" in r.out
+        # The table still says "source missing"; the JSON says it in machine
+        # fields. This row (an untapped registry) was added to `cmd_outdated`
+        # after #769 branched, so the PR never converted it — leaving it on
+        # the old shape would put a display string back in `latest` for the
+        # one case, and hand `_outdated_display` a row with no `reason`.
         data = json.loads(boost("outdated", "--json").out)
         assert data == [{"name": "brainstorming", "kind": "skill",
-                         "installed": "1.4.0", "latest": "source missing",
+                         "installed": "1.4.0", "latest": None,
+                         "reason": staleness.SOURCE_MISSING,
+                         "latest_commit": None,
                          "tap": "fixture-tap", "pinned": False}]
 
     def test_mixed_footer_splits_upstream_from_source_missing(
