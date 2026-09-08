@@ -6816,8 +6816,9 @@ neither targets nor skipped, on the <code>--json</code> path too (<code>quality.
       </article>
 
       <article class="cap rcard" id="audit-policy-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost policy: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost policy check</code> evaluates only <code>blocked_skills</code>/<code>blocked_taps</code>/<code>allowed_taps</code>/<code>min_quality_score</code>
 of the seven rules <code>policy.check_install</code> (<code>boost_cli/core/policy.py:58-79</code>) enforces
 at install time &mdash; <code>require_version</code>, <code>require_description</code>,
@@ -6843,7 +6844,7 @@ print a &ldquo;not checked: &hellip;&rdquo; line for anything still unevaluated 
 <em>enforce=false</em> line when <code>policy_enforce</code> is off; and reword the <code>pin_only</code>
 sentence to name only installs and skill updates, not tap refreshes. Behavior-only, no flag change, so
 <code>docs/commands.html</code> needs no regeneration. Found by the 2026-08 CLI audit (cluster
-<code>policy-check-coverage</code>); repro in the audit log.</p>
+<code>policy-check-coverage</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -12115,7 +12116,7 @@ Found by the 2026-08 CLI audit (cluster <code>warnings-on-stdout</code>); repro 
       </article>
 
       <article class="cap rcard" id="audit-ai-degrade-note-blames-path-api-keys-regardless-of-cause-sev">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · UX</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · UX</span></div>
         <h3>AI degrade note blames PATH/API keys regardless of cause; several commands fall back with no note at all</h3>
         <p><code>boost simulate</code> prints <code>! AI features need one of `claude` or `gemini` on PATH, or ANTHROPIC_API_KEY set &mdash; using the heuristic fallback</code> in two situations where that diagnosis is false: under <code>BOOST_NO_AI=1</code> with <code>claude</code> on PATH (AI was disabled by env, not missing), and with AI enabled while <code>~/.boost/logs/boost.log</code> records <code>ai: claude CLI call failed: exit 1: &hellip;workspace has not been trusted&hellip;</code> &mdash; the backend ran and failed. A controlled fake <code>claude</code> exiting 3 reproduces the same misblame for <code>evolve</code>. Meanwhile a second group degrades with <b>no note at all</b> when the call was attempted and failed: <code>explain</code> shows the extractive summary with stderr empty, <code>conflict</code> lists pairs as <code>(heuristic)</code> silently, <code>impact</code> and one-shot <code>chat</code> say nothing, and <code>search --smart</code> spent 4.62&nbsp;s then reported <code>60 matches &middot; ranked by full-content BM25</code> with no rerank-failed warning.
 
@@ -12128,7 +12129,7 @@ Found by the 2026-08 CLI audit (cluster <code>ai-fallback-misattributed</code>);
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">one static string blames PATH/keys while boost.log records "claude CLI call failed: exit 1"</span>
+          <span class="m">fix implemented and unit/functional/smoke-tested locally; mutation/eval/full-lint gates unverified — this session had no PyPI/network egress to run them, PR relies on CI</span>
         </div>
       </article>
 
@@ -13749,8 +13750,9 @@ the 2026-08 CLI audit (cluster <code>stderr-stdout-ordering</code>); repro in th
       </article>
 
       <article class="cap rcard" id="audit-index-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost index</code>: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The live progress bar is never cleared before an error</b> <em>(med)</em>. On a TTY a failed
 GitHub search prints <em>&ldquo;&#9619;&#9619;&#9619;&#9617;&#9617;&#9617; 1/3 searching GitHub for
 SKILL.mdError: GitHub code search failed&rdquo;</em> on one line, and a failed page 2 glues
@@ -13778,12 +13780,12 @@ boost-native advice &mdash; while sibling paths in the same function do map thei
 <em>rate limit</em>/<em>HTTP 403</em>/<em>gh auth login</em> and raise with a one-line hint
 (&ldquo;GitHub rate limit hit &mdash; wait a minute or authenticate: <code>gh auth login</code> /
 GH_TOKEN&rdquo;), and make <code>out.err</code> indent hint continuation lines. Found by the 2026-08
-CLI audit (cluster <code>index-ratelimit-hint</code>); repro in the audit log.</p>
+CLI audit (cluster <code>index-ratelimit-hint</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">index: errors glue onto the live progress bar, and 0 results overwrites a 150-entry index</span>
+          <span class="m">PR #802: progress bar clears before raise/warn, 0 results keeps the previous index, gh rate-limit/403 gets a native hint — CI green (lint/eval/test/smoke/mutation), awaiting human merge</span>
         </div>
       </article>
 
@@ -13929,8 +13931,9 @@ the 2026-08 CLI audit (cluster <code>onboard-lock-path-leak</code>); repro in th
       </article>
 
       <article class="cap rcard" id="audit-outdated-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost outdated: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><code>boost outdated</code> handles the same condition two ways depending on item kind. With the skill
 <code>brainstorming</code> installed and its source tap untapped, <code>outdated</code> prints
 <em>&ldquo;&#10003; everything up to date&rdquo;</em> &mdash; the skill is silently omitted. Do the same to a
@@ -13947,7 +13950,7 @@ path has no comment justifying the skip. Fix: in the skill loop, append a <em>so
 instead of <code>continue</code>, matching the rule path, and word the footer per reason so it never sends
 source-missing rows to <code>boost update</code>. No flag changes, so <code>docs/commands.html</code> needs no
 regeneration. Found by the 2026-08 CLI audit (cluster <code>outdated-untapped-skill</code>); repro in the
-audit log.</p>
+audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -14067,13 +14070,15 @@ Found by the 2026-08 CLI audit (clusters <code>replay-id-time-semantics</code>, 
       </article>
 
       <article class="cap rcard" id="audit-schedule-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3>boost schedule: CLI audit findings (2026-08)</h3>
         <p>With a launchd plist that lacks a <code>StartInterval</code> key, <code>boost schedule status</code> prints <em>"platform darwin (launchd) &middot; scheduled yes &middot; interval every None &middot; next run unknown"</em> — the kv line interpolates a bare <code>None</code> (the <code>--json</code> output is fine: <code>"interval": null</code>). Verification found the same unguarded parse is worse than cosmetic: with <code>&lt;integer&gt;0&lt;/integer&gt;</code> as the interval, the next-run loop <code>while nxt &lt; now: nxt += timedelta(seconds=secs)</code> never advances and <code>schedule status</code> hangs forever — the repro run was killed at 30&nbsp;s (exit 124). The control case <code>43200</code> renders correctly as "every 12h".
 
 Boost's own <code>schedule enable</code> only writes the <code>_INTERVALS</code> values (6h/12h/daily), so a zero or absent interval means a hand-edited or third-party plist — but a status command that can hang forever on one is still a real defect. One guard fixes both: in <code>boost_cli/commands/configuration.py:878-889</code>, compute interval/next-run only when the regex matched <b>and</b> <code>int(m.group(1)) &gt; 0</code>, otherwise print <em>"interval&nbsp;&nbsp;unknown (plist has no usable StartInterval)"</em> at the kv line (<code>configuration.py:911-913</code>). Add a unit test over both plist shapes. No doc changes.
 
-Found by the 2026-08 CLI audit (cluster <code>schedule-interval-display</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (cluster <code>schedule-interval-display</code>); repro in the audit log.
+
+<b>PR 758 implements the fix</b> (a pure <code>_plist_interval_seconds</code> helper plus new unit + functional tests over both malformed-plist shapes) and stays <code>inflight</code> rather than <code>shipped</code>: this run's sandbox returned 403 for every PyPI/apt request, so <code>make venv</code> could not install the pinned toolchain and the required <code>make check</code> gate (lint · eval · test · smoke · mutation) could not be run as specified. What was verified instead, with the system-provided <code>ruff</code>/<code>mypy</code>/<code>pytest</code> on Python 3.12: <code>ruff</code> and <code>mypy</code> clean on the changed file; the full <code>tests/unit</code> + <code>tests/functional</code> suite passes except 3 pre-existing <code>chmod</code>-permission tests that fail identically on unmodified <code>main</code> (root ignores file-mode bits); and <code>tests/smoke.sh</code> reproduces the same 5 pre-existing failures on unmodified <code>main</code>. CI has real network access and should run the full gate before merge.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -14267,7 +14272,7 @@ Found by the 2026-08 CLI audit (cluster <code>unpin-trailer-order</code>); repro
       </article>
 
       <article class="cap rcard" id="audit-update-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Performance</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Performance</span></div>
         <h3><code>boost update</code>: CLI audit findings (2026-08)</h3>
         <p><b>update pulls all taps serially with no progress indicator: ~14 s no-op over 20 taps</b> (med). A plain <code>update</code> over 20 taps with nothing to fetch took <b>13.93 s</b> under TTY (verifier re-measured 13.89 s), <code>update --force</code> 17.82 s; each line appears only after its ~0.7 s pull, nothing on screen between lines. <code>registry.update()</code> (<code>registry.py:465-525</code>) is a plain <code>for tap in targets:</code> loop calling <code>gitutil.pull</code>/<code>clone_shallow</code> serially &mdash; the exact latency-bound pattern <code>registry.add_many</code> already parallelises for clones. Fix: pull in a <code>ThreadPoolExecutor</code> mirroring <code>add_many</code>, keep catalog rebuilds and the single config write serial on the caller's thread, and print a <em>refreshing N taps&hellip;</em> line or spinner while pulls run.
 <br><br>
@@ -14281,9 +14286,10 @@ Found by the 2026-08 CLI audit (cluster <code>unpin-trailer-order</code>); repro
       </article>
 
       <article class="cap rcard" id="audit-who-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost who</code>: CLI audit findings (2026-08)</h3>
-        <p><b>who's SKILLS column (and JSON <code>skills</code>) counts every journal subject, not skills.</b> On the audit machine the table read <em>&ldquo;USER jonny &middot; EVENTS 35 &middot; SKILLS 29 &middot; INSTALLS 5&rdquo;</em> &mdash; and those 29 &ldquo;skills&rdquo; were 20 tap names, the string <em>&ldquo;10152 passages&rdquo;</em> (a reindex event), 5 cohort names and 3 real items; <code>who --json</code> lists <em>&ldquo;anthropics/skills&rdquo;</em>, <em>&ldquo;pilot&rdquo;</em> and <em>&ldquo;10152 passages&rdquo;</em> under <code>skills</code>. The verifier reproduced it on a narrower run: 25 entries, of which 19 tap owner/repo names from <code>update --force</code> plus <em>&ldquo;pilot&rdquo;</em> and <em>&ldquo;all&rdquo;</em>, against only 2 real installed items. Verified mechanism: <code>cmd_who</code>'s aggregate branch (<code>team.py:735-744</code>) does <code>if e.get('subject'): u['skills'].add(e['subject'])</code> unconditional on action, while the per-skill focus branch just above (<code>team.py:708-718</code>) already filters to the expertise tuple <code>('install','edit','evolve','distill','tag')</code>. Fix (verified recommendation): apply that same action filter in the aggregate loop &mdash; or, if the broader meaning is intended, rename the column and JSON key to SUBJECTS. No doc changes needed. Found by the 2026-08 CLI audit (cluster <code>who-subject-counting</code>); repro in the audit log.</p>
+        <details class="cardbody"><summary>Write-up</summary>
+        <p><b>who's SKILLS column (and JSON <code>skills</code>) counts every journal subject, not skills.</b> On the audit machine the table read <em>&ldquo;USER jonny &middot; EVENTS 35 &middot; SKILLS 29 &middot; INSTALLS 5&rdquo;</em> &mdash; and those 29 &ldquo;skills&rdquo; were 20 tap names, the string <em>&ldquo;10152 passages&rdquo;</em> (a reindex event), 5 cohort names and 3 real items; <code>who --json</code> lists <em>&ldquo;anthropics/skills&rdquo;</em>, <em>&ldquo;pilot&rdquo;</em> and <em>&ldquo;10152 passages&rdquo;</em> under <code>skills</code>. The verifier reproduced it on a narrower run: 25 entries, of which 19 tap owner/repo names from <code>update --force</code> plus <em>&ldquo;pilot&rdquo;</em> and <em>&ldquo;all&rdquo;</em>, against only 2 real installed items. Verified mechanism: <code>cmd_who</code>'s aggregate branch (<code>team.py:735-744</code>) does <code>if e.get('subject'): u['skills'].add(e['subject'])</code> unconditional on action, while the per-skill focus branch just above (<code>team.py:708-718</code>) already filters to the expertise tuple <code>('install','edit','evolve','distill','tag')</code>. Fix (verified recommendation): apply that same action filter in the aggregate loop &mdash; or, if the broader meaning is intended, rename the column and JSON key to SUBJECTS. No doc changes needed. Found by the 2026-08 CLI audit (cluster <code>who-subject-counting</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>

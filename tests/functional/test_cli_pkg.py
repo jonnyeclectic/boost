@@ -655,6 +655,63 @@ class TestUpdate:
         assert "go v2" in wf.read_text(encoding="utf-8")
 
 
+class TestUpdatePinnedMessaging:
+    """CLAUDE.md's own words for a silent state change: "the failure that
+    looks like nothing at all". A fully pinned run that checked nothing must
+    not read as a fresh "up to date", and --force dropping a pin must say so
+    rather than leaving the reader to notice a vanished `config.json` entry.
+    """
+
+    def _sha(self, tap_dir):
+        return subprocess.run(
+            ["git", "-C", str(tap_dir), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True).stdout.strip()
+
+    def test_all_pinned_run_says_nothing_to_refresh(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "pin-tap")
+        sha = self._sha(tap_dir)
+        boost("tap", tap_dir, "--at", sha)
+        r = boost("update")
+        assert "pinned at %s" % sha[:7] in r.out
+        assert "nothing to refresh — all taps pinned" in r.out
+        assert "everything up to date" not in r.out
+        assert "boost update --force" in r.out   # the muted --force hint
+
+    def test_a_mixed_run_still_says_everything_up_to_date(
+            self, boost, fixture_tap_src, tmp_path):
+        # Only an ALL-pinned run gets the special wording — one pinned tap
+        # beside an ordinary one is still an ordinary "up to date" sweep.
+        pinned_dir = _copy_tap(fixture_tap_src, tmp_path / "mix-pin-tap")
+        sha = self._sha(pinned_dir)
+        boost("tap", pinned_dir, "--at", sha)
+        free_dir = _copy_tap(fixture_tap_src, tmp_path / "mix-free-tap")
+        boost("tap", free_dir)
+        r = boost("update")
+        assert "everything up to date" in r.out
+        assert "nothing to refresh" not in r.out
+
+    def test_force_clearing_a_pin_is_reported_per_tap(
+            self, boost, fixture_tap_src, tmp_path):
+        from boost_cli.core import config
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "force-pin-tap")
+        sha = self._sha(tap_dir)
+        boost("tap", tap_dir, "--at", sha)
+        _bump(tap_dir, "brainstorming", "1.4.0", "1.5.0")
+        r = boost("update", "--force")
+        assert "(pin cleared)" in r.out
+        rows = config.load()["taps"]
+        assert all("pin" not in row for row in rows)
+
+    def test_pinned_skip_hints_force_even_without_force(
+            self, boost, fixture_tap_src, tmp_path):
+        tap_dir = _copy_tap(fixture_tap_src, tmp_path / "hint-pin-tap")
+        sha = self._sha(tap_dir)
+        boost("tap", tap_dir, "--at", sha)
+        r = boost("update")
+        assert "1 tap pinned and left alone" in r.out
+
+
 def _poison(tap_dir, skill, old, new):
     """Bump a skill's version *and* append an executable-looking line."""
     md = tap_dir / "skills" / skill / "SKILL.md"

@@ -238,10 +238,18 @@ def warn(msg: str, stream=None, wrap: bool = False) -> None:
 
 
 def err(msg: str, hint: str | None = None) -> None:
-    """Print `Error: msg` to stderr, plus a dim hint line when given."""
+    """Print `Error: msg` to stderr, plus a dim hint line when given.
+
+    A hint that carries its own newlines — gh's own multi-line failure text,
+    passed through as-is — used to print continuation lines flush at column
+    0, unindented and visually disconnected from the "hint:" label above
+    them. Every line after the first is indented to align under it instead.
+    """
     print(c("Error: ", RED, BOLD) + msg, file=sys.stderr)
     if hint:
-        print(c("  hint: " + hint, DIM), file=sys.stderr)
+        lead = "  hint: "
+        body = ("\n" + " " * len(lead)).join(hint.splitlines())
+        print(c(lead + body, DIM), file=sys.stderr)
 
 
 def info(msg: str = "", stream=None, wrap: bool = False) -> None:

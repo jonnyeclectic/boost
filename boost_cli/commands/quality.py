@@ -1233,6 +1233,12 @@ def cmd_conflict(argv):
             for i, p in enumerate(heuristic, 1):
                 if i in confirmed:
                     p["kind"] = "ai-confirmed"
+        elif not args.json:
+            # The backend was available but the call itself produced nothing —
+            # distinct from "no backend at all", so it gets the same
+            # attributed note rather than leaving the pairs silently
+            # unconfirmed.
+            out.warn(ai.fallback_note(), wrap=True)
     elif heuristic and not args.json:
         out.warn(ai.fallback_note(), wrap=True)
 

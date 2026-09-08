@@ -135,7 +135,9 @@ class TestUpdateReclonesAMissingPinnedTap:
         results, failures = registry.update(force=True)
 
         assert failures == {}
-        assert results["o/a"] == "cloned"
+        # The dropped pin is reported, not silent — CLAUDE.md calls a silent
+        # state change here "the failure that looks like nothing at all".
+        assert results["o/a"] == "cloned (pin cleared)"
         assert registry.list_taps()[0].pin == ""
         # Only the checkout `add(at=SHA)` itself performed — force must not
         # land the fresh clone back on the pin it just dropped.

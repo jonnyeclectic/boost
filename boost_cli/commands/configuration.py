@@ -529,7 +529,9 @@ def cmd_policy(argv) -> int:
     everything = lockfile.all_installed()
     min_score = int(pol.get("min_quality_score") or 0)
     violations = []  # (name, problem)
+    not_checked: set[str] = set()
     total = 0
+    skill_count = len(everything.get("skill", {}))
     for kind, section in everything.items():
         for name, entry in sorted(section.items()):
             total += 1
@@ -541,12 +543,36 @@ def cmd_policy(argv) -> int:
                 violations.append((label, "tap %s is blocked" % tap))
             if pol["allowed_taps"] and tap not in pol["allowed_taps"] and tap != "local":
                 violations.append((label, "tap %s is not on the allowlist" % tap))
+            violations.extend(
+                (label, msg) for msg in policy.check_installed_version(entry))
+            # require_description and denied_capabilities need the item's
+            # own content, which only a skill has on disk (see
+            # store.read_skill_meta) — a rule or workflow lands in a shared
+            # agent file with no per-item body to check.
+            if kind == "skill" and (pol["require_description"] or pol["denied_capabilities"]):
+                meta_body = store.read_skill_meta(name)
+                if meta_body is None:
+                    not_checked.add(
+                        "require_description/denied_capabilities "
+                        "(store copy unreadable)")
+                else:
+                    meta, body = meta_body
+                    violations.extend(
+                        (label, msg)
+                        for msg in policy.check_installed_meta(meta, body))
+            elif kind != "skill" and (pol["require_description"] or pol["denied_capabilities"]):
+                not_checked.add(
+                    "require_description/denied_capabilities for %s items "
+                    "(no on-disk body to check)" % kind)
             # Quality scoring reads a store directory, which only skills have.
             if min_score and kind == "skill":
                 score, _notes = util.score_skill(store.skill_store_dir(name))
                 if score < min_score:
                     violations.append(
                         (label, "quality score %d < required %d" % (score, min_score)))
+    max_skills_msg = policy.max_skills_violation(skill_count)
+    if max_skills_msg:
+        violations.append(("(environment)", max_skills_msg))
     unpinned = sorted(
         n if k == "skill" else "%s (%s)" % (n, k)
         for k, section in everything.items()
@@ -560,6 +586,8 @@ def cmd_policy(argv) -> int:
                else ", ".join("%d %s%s" % (n, kind, _s(n))
                               for kind, n in counts.items()))
 
+    enforce = config.get("policy_enforce", True)
+
     if args.json:
         print(json.dumps({
             # "skills" keeps its original meaning — the skill count — with the
@@ -570,14 +598,23 @@ def cmd_policy(argv) -> int:
             "violations": [{"skill": s, "violation": v} for s, v in violations],
             "pin_only": bool(pol["pin_only"]),
             "unpinned": unpinned if pol["pin_only"] else [],
+            "enforce": enforce,
+            "not_checked": sorted(not_checked),
         }, indent=2))
         return 1 if violations else 0
 
     _warn_invalid_policy_values()
+    if not enforce:
+        out.warn("policy_enforce is off — `boost install` does not enforce "
+                 "any of the rules below; this report names what would be "
+                 "flagged, not what is currently blocked")
     if pol["pin_only"]:
-        out.info("pin-only mode is on — installs/updates are frozen"
+        out.info("pin-only mode is on — new installs and skill updates are "
+                 "frozen (tap refreshes via `boost update` are unaffected)"
                  + (" (%d unpinned item(s): %s)"
                     % (len(unpinned), ", ".join(unpinned)) if unpinned else ""))
+    for note in sorted(not_checked):
+        out.dim("  not checked: %s" % note)
     if violations:
         out.table(violations, headers=("ITEM", "VIOLATION"))
         print()
@@ -960,6 +997,21 @@ def _interval_label(seconds) -> str:
     return "%ss" % seconds
 
 
+def _plist_interval_seconds(text: str) -> int | None:
+    """Parse a usable ``StartInterval`` out of plist ``text``.
+
+    None for both "no ``StartInterval`` key" and "``StartInterval`` present
+    but not positive" — a zero or negative interval can never fire, and
+    treating it as usable is what let the next-run loop in ``cmd_schedule``
+    spin forever advancing ``nxt`` by zero seconds each pass.
+    """
+    m = re.search(r"<key>StartInterval</key>\s*<integer>(-?\d+)</integer>", text)
+    if not m:
+        return None
+    secs = int(m.group(1))
+    return secs if secs > 0 else None
+
+
 def cmd_schedule(argv) -> int:
     """boost schedule [status|enable [--interval 6h|12h|daily]|disable]"""
     p = cliparse.parser(
@@ -985,10 +1037,8 @@ def cmd_schedule(argv) -> int:
             plist = _plist_path()
             if plist.exists():
                 present = True
-                m = re.search(r"<key>StartInterval</key>\s*<integer>(\d+)</integer>",
-                              plist.read_text(encoding="utf-8"))
-                if m:
-                    secs = int(m.group(1))
+                secs = _plist_interval_seconds(plist.read_text(encoding="utf-8"))
+                if secs is not None:
                     interval = _interval_label(secs)
                     nxt = datetime.fromtimestamp(plist.stat().st_mtime + secs)
                     while nxt < datetime.now():
@@ -1015,7 +1065,8 @@ def cmd_schedule(argv) -> int:
         out.kv("platform", "%s (%s)" % (sys.platform, "launchd" if darwin else "cron"))
         out.kv("scheduled", "yes" if present else "no")
         if present:
-            out.kv("interval", "every %s" % interval)
+            out.kv("interval", "every %s" % interval if interval is not None
+                   else "unknown (plist has no usable StartInterval)")
             out.kv("next run", next_run.strftime("%Y-%m-%d %H:%M (approx)")
                    if next_run else "unknown")
         else:

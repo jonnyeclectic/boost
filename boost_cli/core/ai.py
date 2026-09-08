@@ -35,6 +35,14 @@ API_URL = "https://api.anthropic.com/v1/messages"
 # for the one-line reason ("Invalid API key"), never a whole stack dump.
 STDERR_LOG_CHARS = 200
 
+# The reason the most recent `ask()` fell through, if it did. `ask()` resets
+# this before every attempt, so it always describes the last call — never a
+# stale failure from an attempt several commands ago. `unavailable_reason()`
+# reads it to tell "no backend" apart from "a backend ran and failed", which
+# `fallback_note()` used to collapse into one PATH/API-key message regardless
+# of which was true.
+_last_failure: str | None = None
+
 
 def enabled() -> bool:
     """Return True when `ai.enabled` is on and BOOST_NO_AI is unset."""
@@ -59,23 +67,44 @@ def has_cli() -> bool:
     return cli_backend() is not None
 
 
+def unavailable_reason() -> str:
+    """Why the last AI attempt degraded, as a specific, attributable clause.
+
+    Three causes used to render as one static PATH/API-key message: the user
+    disabled AI (`BOOST_NO_AI` or `ai.enabled=false`), no backend exists at
+    all, or a backend exists and was tried and failed (an expired login, an
+    untrusted workspace, a network error). Only the middle one is a PATH/key
+    problem — blaming it for the other two sends a user with a working
+    backend chasing an environment issue they do not have.
+    """
+    if os.environ.get("BOOST_NO_AI"):
+        return "disabled (BOOST_NO_AI is set)"
+    if not bool(config.get("ai.enabled", True)):
+        return "disabled (ai.enabled is off)"
+    if not (has_cli() or os.environ.get("ANTHROPIC_API_KEY")):
+        clis = " or ".join("`%s`" % aihost.cli(n) for n in aihost.backends())
+        return "unavailable — need one of %s on PATH, or ANTHROPIC_API_KEY set" % clis
+    if _last_failure:
+        return "%s — see ~/.boost/logs/boost.log" % _last_failure
+    return "unavailable"
+
+
 def fallback_note() -> str:
     """Return the one-line hint shown when a command degrades to heuristics.
 
-    Names every CLI that would work, not just Claude's — telling a Gemini user
-    to install Claude is a worse answer than telling them boost could not find
-    either.
+    Routed through :func:`unavailable_reason` so the note names the real
+    cause instead of always pointing at PATH and API keys.
     """
-    clis = " or ".join("`%s`" % aihost.cli(n) for n in aihost.backends())
-    return ("AI features need one of %s on PATH, or ANTHROPIC_API_KEY set "
-            "— using the heuristic fallback" % clis)
+    return "AI %s — using the heuristic fallback" % unavailable_reason()
 
 
 def ask(prompt: str, system: str | None = None, model: str | None = None,
         max_tokens: int = 1500, timeout: int = 120) -> str | None:
     """Ask Claude. Returns the text reply, or None if AI is unavailable/fails."""
+    global _last_failure
     if not enabled():
         return None
+    _last_failure = None
     model = model or str(config.get("ai.model"))
     backend = cli_backend()
     if backend:
@@ -101,8 +130,12 @@ def _log_failure(route: str, reason: str) -> None:
     degrade quietly, which is the right UX but leaves a user with an expired
     key or a flaky network no way to tell *why* every AI command went
     heuristic. DEBUG keeps it out of normal runs: the rotating log file always
-    records it, and ``--debug`` surfaces it on stderr.
+    records it, and ``--debug`` surfaces it on stderr. It also lands in
+    ``_last_failure`` so ``unavailable_reason()`` can name it on stderr too,
+    where a user who never passes ``--debug`` will actually see it.
     """
+    global _last_failure
+    _last_failure = "%s failed (%s)" % (route, reason)
     logs.get_logger().debug("ai: %s call failed: %s", route, reason)
 
 
