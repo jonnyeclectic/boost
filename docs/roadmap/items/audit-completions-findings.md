@@ -7,7 +7,7 @@ category: CLI · UX
 complexity: M
 impact: Low
 wow: 1
-note: TAB after `policy set ` offers nothing; unset $SHELL gets a bash script with no warning
+note: both findings landed + unit/functional-tested (ruff/mypy/pyright/pytest/smoke green on the working env); make check's mutation+eval+full-toolchain lint gates could not run in this session's sandbox (pypi.org blocked, so `make venv` fails) — CI will give the real gate signal on the PR
 order: 257
 owner: loop/completions-audit-findings
 pr:

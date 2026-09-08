@@ -13389,7 +13389,7 @@ the audit log.</p>
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">TAB after `policy set ` offers nothing; unset $SHELL gets a bash script with no warning</span>
+          <span class="m">both findings landed + unit/functional-tested (ruff/mypy/pyright/pytest/smoke green on the working env); make check's mutation+eval+full-toolchain lint gates could not run in this session's sandbox (pypi.org blocked, so `make venv` fails) — CI will give the real gate signal on the PR</span>
         </div>
       </article>
 
