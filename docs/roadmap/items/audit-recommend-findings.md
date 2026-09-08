@@ -2,14 +2,14 @@
 id: audit-recommend-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: M
 impact: Med
 wow: 2
 note: curated picks repeat one name 6 of 8 rows; --json returns [] while text prints them
 order: 286
-owner:
+owner: loop/recommend-json-dedup
 pr:
 title: "boost recommend: CLI audit findings (2026-08)"
 ---
