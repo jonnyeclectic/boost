@@ -1282,6 +1282,7 @@ def cmd_changelog(argv):
     ap.add_argument("name", metavar="NAME")
     ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     _, bare = catalog.split_name(args.name)
@@ -1292,12 +1293,24 @@ def cmd_changelog(argv):
         e = catalog.resolve_one(args.name)
         tap_name, rel = e["tap"], e["rel_dir"]
     if tap_name == "local":
+        if args.json:
+            print(json.dumps({"name": bare, "tap": None, "commits": []},
+                             indent=2))
+            return 0
         out.info("no upstream history — %s was imported locally" % bare)
         return 0
     tap = registry.get(tap_name)
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
+    if args.json:
+        # `log_entries` parses on an ASCII unit separator rather than
+        # re-splitting the display format, whose two-space column gap a commit
+        # subject or an author name may itself contain.
+        print(json.dumps(
+            {"name": bare, "tap": tap.name,
+             "commits": gitutil.log_entries(tap.path, rel, args.n)}, indent=2))
+        return 0
     lines = gitutil.log_for_path(tap.path, rel, args.n)
     out.heading("changelog for %s (%s)" % (bare, tap.name))
     for line in lines:

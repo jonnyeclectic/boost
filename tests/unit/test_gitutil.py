@@ -487,3 +487,58 @@ class TestBranchState:
         # branch name outside any repo.
         assert len(calls) == 1
         assert calls[0][0][-1] == "--is-inside-work-tree"
+
+
+class TestLogEntries:
+    """Structured git log rows, for the commands that speak `--json`.
+
+    `log_for_path` formats `%h  %ad  %an  %s` and returns strings, which is
+    right for a prose listing and unusable as data: splitting it back apart
+    guesses where the fields were. The separator is what makes the parse
+    exact, and these are the inputs that defeat a whitespace split.
+    """
+
+    def test_fields_are_split_on_the_separator_not_on_whitespace(self, tmp_path):
+        repo = _make_repo(tmp_path / "r", author="Ada  Two  Spaces")
+        (repo / "a.txt").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=repo)
+        # A subject carrying the exact two-space run the prose format uses as
+        # its delimiter, plus a pipe, which a `|`-separated format would lose.
+        _git("commit", "-qm", "fix:  spaced  subject | with a pipe", cwd=repo)
+
+        rows = gitutil.log_entries(repo, ".", 1)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["author"] == "Ada  Two  Spaces"
+        assert row["subject"] == "fix:  spaced  subject | with a pipe"
+        assert re.fullmatch(r"[0-9a-f]{7,}", row["sha"])
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", row["date"])
+
+    def test_an_empty_subject_still_yields_all_four_fields(self, tmp_path):
+        """`--allow-empty-message` produces a blank `%s`. A parse that drops
+        short rows would silently omit the commit entirely."""
+        repo = _make_repo(tmp_path / "r")
+        (repo / "a.txt").write_text("three\n", encoding="utf-8")
+        _git("add", "-A", cwd=repo)
+        _git("commit", "-q", "--allow-empty-message", "-m", "", cwd=repo)
+
+        row = gitutil.log_entries(repo, ".", 1)[0]
+        assert row["subject"] == ""
+        assert set(row) == {"sha", "date", "author", "subject"}
+
+    def test_limit_and_path_scope_are_honoured(self, tmp_path):
+        repo = _make_repo(tmp_path / "r")
+        (repo / "other.txt").write_text("x\n", encoding="utf-8")
+        _git("add", "-A", cwd=repo)
+        _git("commit", "-qm", "touch other", cwd=repo)
+
+        assert len(gitutil.log_entries(repo, ".", 1)) == 1
+        # Scoped to a path only that commit touched.
+        only = gitutil.log_entries(repo, "other.txt", 10)
+        assert [r["subject"] for r in only] == ["touch other"]
+
+    def test_a_repo_with_no_matching_commits_is_an_empty_list(self, tmp_path):
+        """Not an error and not None: "nothing touched this path" is an
+        answer, and the caller renders it as an empty array."""
+        repo = _make_repo(tmp_path / "r")
+        assert gitutil.log_entries(repo, "nope.txt", 10) == []

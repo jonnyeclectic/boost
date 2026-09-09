@@ -645,6 +645,8 @@ def cmd_index(argv):
                    help="narrow the sample to these terms (default: any SKILL.md)")
     p.add_argument("--limit", type=util.positive_int, default=300,
                    help="max skill files to index (default 300)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
     args = p.parse_args(argv)
     if not shutil.which("gh"):
         raise BoostError("the GitHub CLI (gh) is required to build the index",
@@ -703,17 +705,30 @@ def cmd_index(argv):
     dpath = _discovery_path()
     if not discovery_core.should_write_index(len(items), dpath.exists()):
         prev = _index_item_count(dpath)
+        # stderr under --json: the notice has to survive, and putting it on
+        # stdout would corrupt the payload it accompanies. Same rule out.warn
+        # documents for the commands that speak JSON there.
         out.warn("no SKILL.md files match %s — keeping the previous index "
-                 "of %d entries" % (query or "your query", prev))
+                 "of %d entries" % (query or "your query", prev),
+                 stream=sys.stderr if args.as_json else None)
+        if args.as_json:
+            print(json.dumps({"written": False, "indexed": 0, "repos": 0,
+                              "github_total": total, "query": query,
+                              "previous": prev}, indent=2))
         return 0
     paths.ensure_dirs()
     dpath.write_text(json.dumps(
         {"generated": util.now_iso(), "github_total": total, "query": query,
          "items": items}, indent=1), encoding="utf-8")
     repos = len({it["repo"] for it in items})
+    journal.log("index", "%d skill files" % len(items), total=total)
+    if args.as_json:
+        print(json.dumps({"written": True, "indexed": len(items),
+                          "repos": repos, "github_total": total,
+                          "query": query, "path": str(dpath)}, indent=2))
+        return 0
     out.ok("indexed %d skill files across %d repos (GitHub reports %d total)"
            % (len(items), repos, total))
-    journal.log("index", "%d skill files" % len(items), total=total)
     return 0
 
 
@@ -1874,6 +1889,8 @@ def cmd_trending(argv):
         description="Show trending items by install count")
     p.add_argument("--limit", type=util.positive_int, default=10,
                    help="max rows (default 10)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
     args = p.parse_args(argv)
     evs = journal.events(action="install")
     # setdefault, not a dict comprehension: a comprehension keeps the LAST
@@ -1885,8 +1902,21 @@ def cmd_trending(argv):
     for e in catalog.all_entries():
         by_name.setdefault(e["name"], e)
     if not evs:
+        curated = sorted((e for e in by_name.values() if e.get("curated")),
+                         key=operator.itemgetter("name"))[:args.limit]
+        if args.as_json:
+            # `source` names which of the two lists this is. They answer
+            # different questions — what this machine installs versus what the
+            # catalogue recommends — and a consumer that could not tell them
+            # apart would read curated picks as local activity.
+            print(json.dumps(
+                {"source": "curated", "items": [
+                    {"name": e["name"], "version": e["version"],
+                     "kind": e.get("kind", "skill"),
+                     "description": e.get("description", "")}
+                    for e in curated]}, indent=2))
+            return 0
         out.heading("curated picks (no local install data yet)")
-        curated = [e for e in by_name.values() if e.get("curated")]
         if not curated:
             out.info("no curated skills available — add taps with `boost tap --defaults`")
             return 0
@@ -1894,7 +1924,7 @@ def cmd_trending(argv):
         descw = max(out.term_width() - 34, 24)
         out.table([(e["name"], "v" + e["version"], e.get("kind", "skill"),
                     out.truncate(e["description"], descw))
-                   for e in sorted(curated, key=operator.itemgetter("name"))[:args.limit]],
+                   for e in curated],
                   headers=("name", "version", "kind", "description"))
         return 0
     agg: dict[str, Any] = {}
@@ -1903,6 +1933,17 @@ def cmd_trending(argv):
         rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})
         rec["count"] += 1
     ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    if args.as_json:
+        # `kind` is carried so rules and workflows stay distinguishable —
+        # the prose table shows it, and a payload that dropped it would make
+        # every row look like a skill.
+        print(json.dumps(
+            {"source": "installs", "items": [
+                {"name": name, "installs": rec["count"], "last": rec["last"],
+                 "kind": by_name.get(name, {}).get("kind", "skill"),
+                 "description": by_name.get(name, {}).get("description", "")}
+                for name, rec in ranked[:args.limit]]}, indent=2))
+        return 0
     # reserve name/installs/last/kind columns
     descw = max(out.term_width() - 54, 24)
     out.table([(name, str(rec["count"]), util.rel_time(rec["last"]),

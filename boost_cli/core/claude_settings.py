@@ -291,7 +291,11 @@ def foreign_hooks(scope: str | None = None,
 def list_hooks(scope: str | None = None,
                project_dir: Path | None = None,
                host: str = hookhost.CLAUDE) -> list[dict]:
-    """One host's boost-managed hooks: [{scope, event, name, command, matcher}]."""
+    """One host's boost-managed hooks.
+
+    Rows are ``{scope, event, name, command, matcher, timeout}``, with
+    ``timeout`` normalized to seconds whatever the host stores.
+    """
     scopes = (scope,) if scope else SCOPES
     rows: list[dict] = []
     for sc in scopes:
@@ -311,6 +315,13 @@ def list_hooks(scope: str | None = None,
                         "name": nm,
                         "command": raw.rsplit(MARKER, 1)[0].strip(),
                         "matcher": block.get("matcher", ""),
+                        # Normalized to seconds. The stored number is in the
+                        # host's own units — Claude seconds, Gemini
+                        # milliseconds — so reporting it raw would show the
+                        # same `--timeout 10` as 10 on one host and 10000 on
+                        # the other.
+                        "timeout": hookhost.timeout_seconds(
+                            host, h.get("timeout")),
                     })
     return rows
 

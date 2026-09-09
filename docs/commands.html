@@ -106,7 +106,7 @@
       <a class="cmd-link" href="#cmd-sync" data-search="sync reconcile installed skills &amp; symlinks against the lock file  --diff --prune --json -y, --yes">sync</a>
       <a class="cmd-link" href="#cmd-update" data-search="update sync taps or update installed skills  --taps-only -y, --yes --force --shards --json tap">update</a>
       <a class="cmd-link" href="#cmd-reinstall" data-search="reinstall reinstall a skill, rule or workflow (force) reinstall an installed skill, rule or workflow (force) --all name">reinstall</a>
-      <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  {dump,install} file">bundle</a>
+      <a class="cmd-link" href="#cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">bundle</a>
       <a class="cmd-link" href="#cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">import</a>
       <a class="cmd-link" href="#cmd-pin" data-search="pin pin a skill, rule or workflow to its current version  --commit name">pin</a>
       <a class="cmd-link" href="#cmd-unpin" data-search="unpin allow a pinned skill, rule or workflow to update again  name">unpin</a>
@@ -122,8 +122,8 @@
       <a class="cmd-link" href="#cmd-discover" data-search="discover search github for skill repos you have not tapped yet search github for skill repositories you have not tapped yet --limit limit --json --local query">discover</a>
       <a class="cmd-link" href="#cmd-recommend" data-search="recommend suggest skills based on your project&#x27;s tech stack  --path path --category category --limit limit --json">recommend</a>
       <a class="cmd-link" href="#cmd-browse" data-search="browse interactive full-screen tui with fuzzy search  --category category">browse</a>
-      <a class="cmd-link" href="#cmd-index" data-search="index build the discovery registry via github code search  --limit limit query">index</a>
-      <a class="cmd-link" href="#cmd-trending" data-search="trending show trending items by install count  --limit limit">trending</a>
+      <a class="cmd-link" href="#cmd-index" data-search="index build the discovery registry via github code search  --limit limit --json query">index</a>
+      <a class="cmd-link" href="#cmd-trending" data-search="trending show trending items by install count  --limit limit --json">trending</a>
       <a class="cmd-link" href="#cmd-stats" data-search="stats install statistics &amp; trend for a single skill  --json name">stats</a>
       <a class="cmd-link" href="#cmd-count" data-search="count quick summary of installed / available / taps  --json">count</a>
     </div>
@@ -135,7 +135,7 @@
       <a class="cmd-link" href="#cmd-edit" data-search="edit open a skill&#x27;s skill.md in your editor  name">edit</a>
       <a class="cmd-link" href="#cmd-preview" data-search="preview render a skill.md with rich formatting  name">preview</a>
       <a class="cmd-link" href="#cmd-explain" data-search="explain explain what a skill does in plain english  name">explain</a>
-      <a class="cmd-link" href="#cmd-log" data-search="log git log for a skill, or boost&#x27;s activity log  -n, --limit n --diagnostics --crashes name">log</a>
+      <a class="cmd-link" href="#cmd-log" data-search="log git log for a skill, or boost&#x27;s activity log  -n, --limit n --diagnostics --crashes --json name">log</a>
       <a class="cmd-link" href="#cmd-home" data-search="home open a skill&#x27;s github page in the browser  --print name">home</a>
       <a class="cmd-link" href="#cmd-deps" data-search="deps show dependency &amp; conflict relationships  --json name">deps</a>
       <a class="cmd-link" href="#cmd-tag" data-search="tag custom labels for organizing skills  --list --json name mods">tag</a>
@@ -156,34 +156,34 @@
       <a class="cmd-link" href="#cmd-infer" data-search="infer generate a skill.md from your codebase patterns  --path dir --name n -o, --output file --install -y, --yes">infer</a>
       <a class="cmd-link" href="#cmd-absorb" data-search="absorb turn recurring chat-history patterns into a skill  --history path --limit n --install -y, --yes">absorb</a>
       <a class="cmd-link" href="#cmd-evolve" data-search="evolve iteratively improve a skill from feedback  --feedback text --apply name">evolve</a>
-      <a class="cmd-link" href="#cmd-context" data-search="context branch-aware skill activation  action">context</a>
+      <a class="cmd-link" href="#cmd-context" data-search="context branch-aware skill activation  --json action">context</a>
       <a class="cmd-link" href="#cmd-focus" data-search="focus temporarily prioritize skills for a work session  --clear --status --json skill">focus</a>
       <a class="cmd-link" href="#cmd-impact" data-search="impact correlate a skill&#x27;s install date with repo activity  --json name">impact</a>
     </div>
     <div class="group" data-group="chk">
       <div class="group-h">Health &amp; integrity</div>
-      <a class="cmd-link" href="#cmd-doctor" data-search="doctor check installation health &amp; report issues ">doctor</a>
+      <a class="cmd-link" href="#cmd-doctor" data-search="doctor check installation health &amp; report issues  --json">doctor</a>
       <a class="cmd-link" href="#cmd-lint" data-search="lint validate skill.md frontmatter &amp; quality  --tap tap --min n --json name">lint</a>
       <a class="cmd-link" href="#cmd-audit" data-search="audit check installed skills against a safety blocklist check installed skills against a safety blocklist (scans skill.md plus .js/.md/.ps1/.py/.rb/.sh/.ts files under each skill; materialized rules/workflows are scanned whole) --json --skills">audit</a>
       <a class="cmd-link" href="#cmd-verify" data-search="verify validate skill quality &amp; lock-file integrity  --json name">verify</a>
       <a class="cmd-link" href="#cmd-drift" data-search="drift detect installed skills diverging from source  --json name">drift</a>
-      <a class="cmd-link" href="#cmd-test" data-search="test validate installed skills against quality checks  name">test</a>
+      <a class="cmd-link" href="#cmd-test" data-search="test validate installed skills against quality checks  --json name">test</a>
       <a class="cmd-link" href="#cmd-fingerprint" data-search="fingerprint deterministic hash of the skill environment  --verbose --json">fingerprint</a>
-      <a class="cmd-link" href="#cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list name">quarantine</a>
+      <a class="cmd-link" href="#cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list --json name">quarantine</a>
       <a class="cmd-link" href="#cmd-decay" data-search="decay flag skills irrelevant to your current stack  --json">decay</a>
       <a class="cmd-link" href="#cmd-heal" data-search="heal self-diagnose &amp; repair the boost environment  --dry-run --prune-duplicates">heal</a>
       <a class="cmd-link" href="#cmd-conflict" data-search="conflict detect contradictory rules between skills  --json">conflict</a>
-      <a class="cmd-link" href="#cmd-changelog" data-search="changelog show a skill&#x27;s upstream change history  -n n name">changelog</a>
+      <a class="cmd-link" href="#cmd-changelog" data-search="changelog show a skill&#x27;s upstream change history  -n n --json name">changelog</a>
       <a class="cmd-link" href="#cmd-attest" data-search="attest display/verify the install record for skills  --verify --json name">attest</a>
-      <a class="cmd-link" href="#cmd-health" data-search="health dashboard of skill-environment health ">health</a>
+      <a class="cmd-link" href="#cmd-health" data-search="health dashboard of skill-environment health  --json">health</a>
       <a class="cmd-link" href="#cmd-trust" data-search="trust manage signing keys &amp; verify tap provenance  --json {list,add,remove,verify} name key">trust</a>
     </div>
     <div class="group" data-group="cfg">
       <div class="group-h">Config &amp; setup</div>
       <a class="cmd-link" href="#cmd-quickstart" data-search="quickstart tap the starter registries and load prebuilt vectors  --catalog --no-vectors --dry-run">quickstart</a>
       <a class="cmd-link" href="#cmd-config" data-search="config display or modify boost configuration  --json {list,get,set,unset} key value">config</a>
-      <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes">clean</a>
-      <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone tap">compact</a>
+      <a class="cmd-link" href="#cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes --json">clean</a>
+      <a class="cmd-link" href="#cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone --json tap">compact</a>
       <a class="cmd-link" href="#cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">create</a>
       <a class="cmd-link" href="#cmd-policy" data-search="policy manage &amp; enforce skill governance policies  --json {list,set,unset,check} key value">policy</a>
       <a class="cmd-link" href="#cmd-onboard" data-search="onboard add skill-tracker telemetry to a repo (optionally open a pr with --pr)  --repo repo --pr --dry-run -f, --force">onboard</a>
@@ -191,7 +191,7 @@
       <a class="cmd-link" href="#cmd-schedule" data-search="schedule manage automatic skill-sync scheduling  --interval {6h,12h,daily} --json {status,enable,disable}">schedule</a>
       <a class="cmd-link" href="#cmd-serve" data-search="serve browse the catalogue in a browser: search, facets and a tap graph  --port port --host host">serve</a>
       <a class="cmd-link" href="#cmd-mcp" data-search="mcp register boost as an mcp server (claude code, gemini cli, antigravity cli) register boost as an mcp server for your agent clis --host h --stdio --dry-run --seed --no-seed {register,unregister}">mcp</a>
-      <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">hooks</a>
+      <a class="cmd-link" href="#cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout --json {add,remove,list} event">hooks</a>
       <a class="cmd-link" href="#cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain action value">bmad</a>
       <a class="cmd-link" href="#cmd-self-update" data-search="self-update update boost itself to the latest version  --dry-run">self-update</a>
     </div>
@@ -289,14 +289,18 @@
           <div class="arg"><code>--all</code><span>reinstall every installed skill, rule and workflow</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-bundle" data-search="bundle export/install skill sets via a boostfile  {dump,install} file">
+      <section class="cmd" id="cmd-bundle" data-search="bundle export/install skill sets via a boostfile  --dry-run {dump,install} file">
         <h3><span class="cname">bundle</span><span class="gtag">pkg</span></h3>
         <p class="summary">Export/install skill sets via a Boostfile</p>
-        <pre class="syn">boost bundle {dump,install} [FILE]</pre>
+        <pre class="syn">boost bundle [--dry-run] {dump,install} [FILE]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>{dump,install}</code><span></span></div>
           <div class="arg"><code>FILE</code><span>Boostfile (dump: default stdout; install: default ./Boostfile, &#x27;-&#x27; = stdin)</span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--dry-run</code><span>show what install would do, touching nothing</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-import" data-search="import import skills from a github url or local path  --name n --all --agent a url_or_path">
@@ -468,10 +472,10 @@
           <div class="arg"><code>--category CATEGORY</code><span>only browse entries whose category matches (case-insensitive)</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-index" data-search="index build the discovery registry via github code search  --limit limit query">
+      <section class="cmd" id="cmd-index" data-search="index build the discovery registry via github code search  --limit limit --json query">
         <h3><span class="cname">index</span><span class="gtag">find</span></h3>
         <p class="summary">Build the discovery registry via GitHub Code Search</p>
-        <pre class="syn">boost index [--limit LIMIT] [query ...]</pre>
+        <pre class="syn">boost index [--limit LIMIT] [--json] [query ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>query</code><span>narrow the sample to these terms (default: any SKILL.md)</span></div>
@@ -479,15 +483,17 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--limit LIMIT</code><span>max skill files to index (default 300)</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-trending" data-search="trending show trending items by install count  --limit limit">
+      <section class="cmd" id="cmd-trending" data-search="trending show trending items by install count  --limit limit --json">
         <h3><span class="cname">trending</span><span class="gtag">find</span></h3>
         <p class="summary">Show trending items by install count</p>
-        <pre class="syn">boost trending [--limit LIMIT]</pre>
+        <pre class="syn">boost trending [--limit LIMIT] [--json]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--limit LIMIT</code><span>max rows (default 10)</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-stats" data-search="stats install statistics &amp; trend for a single skill  --json name">
@@ -579,10 +585,10 @@
           <div class="arg"><code>name</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-log" data-search="log git log for a skill, or boost&#x27;s activity log  -n, --limit n --diagnostics --crashes name">
+      <section class="cmd" id="cmd-log" data-search="log git log for a skill, or boost&#x27;s activity log  -n, --limit n --diagnostics --crashes --json name">
         <h3><span class="cname">log</span><span class="gtag">info</span></h3>
         <p class="summary">Git log for a skill, or boost&#x27;s activity log</p>
-        <pre class="syn">boost log [-n N] [--diagnostics] [--crashes] [name]</pre>
+        <pre class="syn">boost log [-n N] [--diagnostics] [--crashes] [--json] [name]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>name</code><span>skill to show upstream history for</span></div>
@@ -592,6 +598,7 @@
           <div class="arg"><code>-n, --limit N</code><span>max entries (default 20)</span></div>
           <div class="arg"><code>--diagnostics</code><span>show boost&#x27;s diagnostic log trail (not skill history)</span></div>
           <div class="arg"><code>--crashes</code><span>list recent crash reports</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-home" data-search="home open a skill&#x27;s github page in the browser  --print name">
@@ -785,13 +792,17 @@
           <div class="arg"><code>--apply</code><span>write the revision to the installed skill</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-context" data-search="context branch-aware skill activation  action">
+      <section class="cmd" id="cmd-context" data-search="context branch-aware skill activation  --json action">
         <h3><span class="cname">context</span><span class="gtag">ai</span></h3>
         <p class="summary">Branch-aware skill activation</p>
-        <pre class="syn">boost context ACTION</pre>
+        <pre class="syn">boost context [--json] ACTION</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>ACTION</code><span></span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--json</code><span>machine-readable output (bare `context` = status)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-focus" data-search="focus temporarily prioritize skills for a work session  --clear --status --json skill">
@@ -823,10 +834,14 @@
         </div>
       </section>
       <h2 class="group-h" id="grp-chk">Health &amp; integrity</h2>
-      <section class="cmd" id="cmd-doctor" data-search="doctor check installation health &amp; report issues ">
+      <section class="cmd" id="cmd-doctor" data-search="doctor check installation health &amp; report issues  --json">
         <h3><span class="cname">doctor</span><span class="gtag">chk</span></h3>
         <p class="summary">Check installation health &amp; report issues</p>
-        <pre class="syn">boost doctor</pre>
+        <pre class="syn">boost doctor [--json]</pre>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
+        </div>
       </section>
       <section class="cmd" id="cmd-lint" data-search="lint validate skill.md frontmatter &amp; quality  --tap tap --min n --json name">
         <h3><span class="cname">lint</span><span class="gtag">chk</span></h3>
@@ -880,13 +895,17 @@
           <div class="arg"><code>--json</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-test" data-search="test validate installed skills against quality checks  name">
+      <section class="cmd" id="cmd-test" data-search="test validate installed skills against quality checks  --json name">
         <h3><span class="cname">test</span><span class="gtag">chk</span></h3>
         <p class="summary">Validate installed skills against quality checks</p>
-        <pre class="syn">boost test [NAME ...]</pre>
+        <pre class="syn">boost test [--json] [NAME ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span></span></div>
+        </div>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-fingerprint" data-search="fingerprint deterministic hash of the skill environment  --verbose --json">
@@ -899,10 +918,10 @@
           <div class="arg"><code>--json</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list name">
+      <section class="cmd" id="cmd-quarantine" data-search="quarantine isolate a problematic skill, rule or workflow without uninstalling  --release name --list --json name">
         <h3><span class="cname">quarantine</span><span class="gtag">chk</span></h3>
         <p class="summary">Isolate a problematic skill, rule or workflow without uninstalling</p>
-        <pre class="syn">boost quarantine [--release NAME] [--list] [NAME]</pre>
+        <pre class="syn">boost quarantine [--release NAME] [--list] [--json] [NAME]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span></span></div>
@@ -911,6 +930,7 @@
         <div class="args">
           <div class="arg"><code>--release NAME</code><span>re-link a quarantined skill</span></div>
           <div class="arg"><code>--list</code><span>list quarantined skills</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output (--list)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-decay" data-search="decay flag skills irrelevant to your current stack  --json">
@@ -941,10 +961,10 @@
           <div class="arg"><code>--json</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-changelog" data-search="changelog show a skill&#x27;s upstream change history  -n n name">
+      <section class="cmd" id="cmd-changelog" data-search="changelog show a skill&#x27;s upstream change history  -n n --json name">
         <h3><span class="cname">changelog</span><span class="gtag">chk</span></h3>
         <p class="summary">Show a skill&#x27;s upstream change history</p>
-        <pre class="syn">boost changelog [-n N] NAME</pre>
+        <pre class="syn">boost changelog [-n N] [--json] NAME</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>NAME</code><span></span></div>
@@ -952,6 +972,7 @@
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>-n N</code><span>number of entries (default 20)</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-attest" data-search="attest display/verify the install record for skills  --verify --json name">
@@ -968,10 +989,14 @@
           <div class="arg"><code>--json</code><span></span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-health" data-search="health dashboard of skill-environment health ">
+      <section class="cmd" id="cmd-health" data-search="health dashboard of skill-environment health  --json">
         <h3><span class="cname">health</span><span class="gtag">chk</span></h3>
         <p class="summary">Dashboard of skill-environment health</p>
-        <pre class="syn">boost health</pre>
+        <pre class="syn">boost health [--json]</pre>
+        <div class="args-h">Options</div>
+        <div class="args">
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
+        </div>
       </section>
       <section class="cmd" id="cmd-trust" data-search="trust manage signing keys &amp; verify tap provenance  --json {list,add,remove,verify} name key">
         <h3><span class="cname">trust</span><span class="gtag">chk</span></h3>
@@ -1015,21 +1040,22 @@
           <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes">
+      <section class="cmd" id="cmd-clean" data-search="clean clear stale caches &amp; broken symlinks  --dry-run --deep -y, --yes --json">
         <h3><span class="cname">clean</span><span class="gtag">cfg</span></h3>
         <p class="summary">Clear stale caches &amp; broken symlinks</p>
-        <pre class="syn">boost clean [--dry-run] [--deep] [-y]</pre>
+        <pre class="syn">boost clean [--dry-run] [--deep] [-y] [--json]</pre>
         <div class="args-h">Options</div>
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show what would be removed without touching anything</span></div>
           <div class="arg"><code>--deep</code><span>also remove snapshots older than 90 days</span></div>
           <div class="arg"><code>-y, --yes</code><span>skip the --deep confirmation prompt</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone tap">
+      <section class="cmd" id="cmd-compact" data-search="compact shrink tap clones to the files boost indexes  --dry-run --reclone --json tap">
         <h3><span class="cname">compact</span><span class="gtag">cfg</span></h3>
         <p class="summary">Shrink tap clones to the files boost indexes</p>
-        <pre class="syn">boost compact [--dry-run] [--reclone] [tap ...]</pre>
+        <pre class="syn">boost compact [--dry-run] [--reclone] [--json] [tap ...]</pre>
         <div class="args-h">Arguments</div>
         <div class="args">
           <div class="arg"><code>tap</code><span>taps to compact (default: all cloned taps)</span></div>
@@ -1038,6 +1064,7 @@
         <div class="args">
           <div class="arg"><code>--dry-run</code><span>show what would be reclaimed without touching anything</span></div>
           <div class="arg"><code>--reclone</code><span>re-clone blobless for the smallest result (needs network)</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-create" data-search="create scaffold a new skill from a template  --description description --dir dir --install name">
@@ -1140,10 +1167,10 @@
           <div class="arg"><code>--no-seed</code><span>register only; do not tap anything</span></div>
         </div>
       </section>
-      <section class="cmd" id="cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout {add,remove,list} event">
+      <section class="cmd" id="cmd-hooks" data-search="hooks manage agent hooks (claude code, gemini cli) in settings.json manage agent hooks (scope- and host-aware) in settings.json --host h -c, --command command -n, --name name -s, --scope {global,project} -m, --matcher matcher --timeout timeout --json {add,remove,list} event">
         <h3><span class="cname">hooks</span><span class="gtag">cfg</span></h3>
         <p class="summary">Manage agent hooks (Claude Code, Gemini CLI) in settings.json</p>
-        <pre class="syn">boost hooks [--host H] [-c COMMAND] [-n NAME] [-s {global,project}] [-m MATCHER] [--timeout TIMEOUT] {add,remove,list} [event]</pre>
+        <pre class="syn">boost hooks [--host H] [-c COMMAND] [-n NAME] [-s {global,project}] [-m MATCHER] [--timeout TIMEOUT] [--json] {add,remove,list} [event]</pre>
         <p class="desc">Manage agent hooks (scope- and host-aware) in settings.json</p>
         <div class="args-h">Arguments</div>
         <div class="args">
@@ -1158,6 +1185,7 @@
           <div class="arg"><code>-s, --scope {global,project}</code><span>settings scope (default: project; list shows both)</span></div>
           <div class="arg"><code>-m, --matcher MATCHER</code><span>Claude matcher, e.g. &#x27;startup|resume|clear&#x27;</span></div>
           <div class="arg"><code>--timeout TIMEOUT</code><span>hook timeout in seconds (default: 10)</span></div>
+          <div class="arg"><code>--json</code><span>machine-readable output (list)</span></div>
         </div>
       </section>
       <section class="cmd" id="cmd-bmad" data-search="bmad bmad method autopilot — `bmad on` routes every task to a persona bmad method autopilot: personas, prompt routing, workflows -s, --scope {project,global} --modules modules -y, --yes --startup --plain action value">

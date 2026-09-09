@@ -881,31 +881,50 @@ def _diag_line(line: str) -> str:
                                rec.get("logger", ""), rec["msg"])
 
 
-def _show_diagnostics(limit):
+def _show_diagnostics(limit, as_json=False):
     lp = logs.log_path()
     if not lp.exists():
+        if as_json:
+            print(json.dumps({"kind": "diagnostics", "path": str(lp),
+                              "lines": []}, indent=2))
+            return 0
         out.info("no diagnostic log yet at %s" % lp)
         return 0
     lines = lp.read_text(encoding="utf-8", errors="replace").splitlines()
+    if as_json:
+        # Raw lines, not the coloured `_diag_line` rendering: the decoration
+        # is display, and a consumer parsing it would be parsing our palette.
+        print(json.dumps({"kind": "diagnostics", "path": str(lp),
+                          "lines": lines[-limit:]}, indent=2))
+        return 0
     out.heading("diagnostic log — %s" % lp)
     for line in lines[-limit:]:
         out.info(_diag_line(line))
     return 0
 
 
-def _show_crashes(limit):
+def _crash_summary(r):
+    try:
+        first = r.read_text(encoding="utf-8", errors="replace").splitlines()
+        return next((ln for ln in first if ln.startswith("command:")), "")
+    except OSError:
+        return ""
+
+
+def _show_crashes(limit, as_json=False):
     ldir = paths.logs_dir()
     reports = sorted(ldir.glob("crash-*.log"), reverse=True) if ldir.is_dir() else []
+    if as_json:
+        print(json.dumps({"kind": "crashes", "dir": str(ldir), "reports": [
+            {"name": r.name, "path": str(r), "summary": _crash_summary(r)}
+            for r in reports[:limit]]}, indent=2))
+        return 0
     if not reports:
         out.info("no crash reports — nothing has blown up (that boost noticed)")
         return 0
     out.heading("crash reports in %s" % ldir)
     for r in reports[:limit]:
-        try:
-            first = r.read_text(encoding="utf-8", errors="replace").splitlines()
-            summary = next((ln for ln in first if ln.startswith("command:")), "")
-        except OSError:
-            summary = ""
+        summary = _crash_summary(r)
         out.info("%s  %s" % (r.name, summary))
     out.info("")
     out.dim("  view one with:  cat %s/<name>" % ldir)
@@ -922,13 +941,15 @@ def cmd_log(argv):
                     help="show boost's diagnostic log trail (not skill history)")
     ap.add_argument("--crashes", action="store_true",
                     help="list recent crash reports")
+    ap.add_argument("--json", action="store_true", dest="as_json",
+                    help="machine-readable output")
     args = ap.parse_args(argv)
     if args.name and (args.crashes or args.diagnostics):
         ap.error("NAME is not used with --diagnostics/--crashes")
     if args.crashes:
-        return _show_crashes(args.limit)
+        return _show_crashes(args.limit, args.as_json)
     if args.diagnostics:
-        return _show_diagnostics(args.limit)
+        return _show_diagnostics(args.limit, args.as_json)
     if args.name:
         _, bare = catalog.split_name(args.name)
         found = lockfile.find_any(args.name)
@@ -944,11 +965,24 @@ def cmd_log(argv):
         try:
             tap = registry.get(tap_name)
         except BoostError:
+            if args.as_json:
+                print(json.dumps({"kind": "history", "name": bare,
+                                  "tap": None, "commits": []}, indent=2))
+                return 0
             out.info("no upstream history (imported locally)")
             return 0
         if not tap.is_cloned:
             raise BoostError("tap %s is not cloned" % tap.name,
                             hint="run `boost update %s`" % tap.name)
+        if args.as_json:
+            # `log_entries`, not a re-split of the display format: the columns
+            # there are two-space separated and an author or subject may
+            # contain that run.
+            print(json.dumps(
+                {"kind": "history", "name": bare, "tap": tap.name,
+                 "commits": gitutil.log_entries(tap.path, rel, args.limit)},
+                indent=2))
+            return 0
         lines = gitutil.log_for_path(tap.path, rel, args.limit)
         if not lines:
             out.info("no commits touch %s in %s" % (bare, tap.name))
@@ -958,6 +992,12 @@ def cmd_log(argv):
             out.info(line)
         return 0
     events = journal.events(args.limit)
+    if args.as_json:
+        # Verbatim, which is the point: the prose listing drops the
+        # `key=value` event fields `pulse --json` shows over the same journal,
+        # and this is the command a consumer reaches for first.
+        print(json.dumps({"kind": "activity", "events": events}, indent=2))
+        return 0
     if not events:
         out.info("no activity yet")
         return 0

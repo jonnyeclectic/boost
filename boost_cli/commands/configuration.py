@@ -159,7 +159,11 @@ def cmd_clean(argv) -> int:
                    help="also remove snapshots older than 90 days")
     p.add_argument("-y", "--yes", action="store_true",
                    help="skip the --deep confirmation prompt")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
+
+    def row(pth, kind, size):
+        return {"path": str(pth), "kind": kind, "bytes": size}
 
     items: list[tuple[Path, str, int]] = []  # (path, kind, bytes)
     for spec in agents.known_agents().values():
@@ -207,9 +211,14 @@ def cmd_clean(argv) -> int:
         cutoff = time.time() - 90 * 86400
         old_snaps = [s for s in sorted(paths.snapshots_dir().iterdir())
                      if s.lstat().st_mtime < cutoff]
+        # `quiet` under --json for the reason out.confirm documents: on a
+        # non-TTY decline it prints a bypass hint, which would land as a stray
+        # prose line ahead of the payload and stop it parsing.
         if old_snaps and not args.dry_run and not (args.yes or out.confirm(
-                "remove %d snapshot(s) older than 90 days?" % len(old_snaps))):
-            out.info("keeping old snapshots")
+                "remove %d snapshot(s) older than 90 days?" % len(old_snaps),
+                quiet=args.json)):
+            if not args.json:
+                out.info("keeping old snapshots")
             declined = True
             old_snaps = []
         for s in old_snaps:
@@ -220,6 +229,12 @@ def cmd_clean(argv) -> int:
         # `declined` means the only candidate was the --deep snapshot purge
         # and the user said no — "nothing to clean" would claim there was
         # nothing to do when there was, and the user just declined doing it.
+        if args.json:
+            print(json.dumps({"items": [], "count": 0, "bytes": 0,
+                              "dry_run": args.dry_run, "removed": 0,
+                              "failed": [], "declined": declined,
+                              "ok": not declined}, indent=2))
+            return 1 if declined else 0
         if declined:
             return 1
         out.ok("nothing to clean")
@@ -227,6 +242,12 @@ def cmd_clean(argv) -> int:
 
     if args.dry_run:
         freed = sum(size for _, _, size in items)
+        if args.json:
+            print(json.dumps({"items": [row(*i) for i in items],
+                              "count": len(items), "bytes": freed,
+                              "dry_run": True, "removed": 0, "failed": [],
+                              "declined": declined, "ok": True}, indent=2))
+            return 0
         for pth, kind, _size in items:
             out.info("would remove %s %s" % (_tilde(pth), out.role("(%s)" % kind, "muted")))
         out.dim("  %d item(s) · %s would be freed" % (len(items), util.human_size(freed)))
@@ -234,6 +255,16 @@ def cmd_clean(argv) -> int:
 
     removed, freed, failures = util.remove_items(items)
     failed_errors = dict(failures)
+    if args.json:
+        journal.log("clean", "cleaned %d item(s)" % removed,
+                    freed=util.human_size(freed))
+        print(json.dumps(
+            {"items": [row(*i) for i in items], "count": len(items),
+             "bytes": freed, "dry_run": False, "removed": removed,
+             "failed": [{"path": str(pth), "error": str(err)}
+                        for pth, err in failures],
+             "declined": declined, "ok": not failures}, indent=2))
+        return 1 if failures else 0
     for pth, kind, _size in items:
         if pth in failed_errors:
             out.warn("could not remove %s: %s" % (_tilde(pth), failed_errors[pth]),
@@ -292,11 +323,18 @@ def cmd_compact(argv) -> int:
                    help="show what would be reclaimed without touching anything")
     p.add_argument("--reclone", action="store_true",
                    help="re-clone blobless for the smallest result (needs network)")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     args = p.parse_args(argv)
+
+    rows: list[dict] = []
 
     taps = [registry.get(n) for n in args.tap] if args.tap else registry.list_taps()
     taps = [t for t in taps if t.is_cloned]
     if not taps:
+        if args.json:
+            print(json.dumps({"taps": [], "count": 0, "bytes": 0,
+                              "dry_run": args.dry_run, "ok": True}, indent=2))
+            return 0
         out.ok("no cloned taps to compact")
         return 0
 
@@ -317,8 +355,11 @@ def cmd_compact(argv) -> int:
             if loose:
                 changed += 1
                 freed += loose
-                out.info("would free %s from %s"
-                         % (util.human_size(loose), tap.name))
+                rows.append({"tap": tap.name, "bytes": loose,
+                             "before": before, "after": before - loose})
+                if not args.json:
+                    out.info("would free %s from %s"
+                             % (util.human_size(loose), tap.name))
             continue
         try:
             if args.reclone:
@@ -341,7 +382,9 @@ def cmd_compact(argv) -> int:
             for rel in keep.get(tap.name, []):
                 gitutil.materialize(tap.path, rel)
         except BoostError as e:
-            out.warn("could not compact %s: %s" % (tap.name, e))
+            rows.append({"tap": tap.name, "error": str(e)})
+            out.warn("could not compact %s: %s" % (tap.name, e),
+                     stream=sys.stderr if args.json else None)
             continue
         after = util.dir_size(tap.path)
         # A re-clone did real work — refreshed the clone, possibly moved it
@@ -350,14 +393,26 @@ def cmd_compact(argv) -> int:
         if args.reclone or after < before:
             changed += 1
             freed += max(before - after, 0)
-            out.info("%s  %s → %s" % (tap.name, util.human_size(before),
-                                      util.human_size(after)))
+            rows.append({"tap": tap.name, "bytes": max(before - after, 0),
+                         "before": before, "after": after})
+            if not args.json:
+                out.info("%s  %s → %s" % (tap.name, util.human_size(before),
+                                          util.human_size(after)))
 
     if args.dry_run:
+        if args.json:
+            print(json.dumps({"taps": rows, "count": changed, "bytes": freed,
+                              "dry_run": True, "ok": True}, indent=2))
+            return 0
         out.dim("  %d tap(s) · %s would be freed"
                 % (changed, util.human_size(freed)))
         return 0
     journal.log("compact", "%d taps" % changed, freed=util.human_size(freed))
+    if args.json:
+        print(json.dumps({"taps": rows, "count": changed, "bytes": freed,
+                          "dry_run": False,
+                          "ok": not any("error" in r for r in rows)}, indent=2))
+        return 0
     if not changed:
         out.ok("every tap is already compact")
         return 0

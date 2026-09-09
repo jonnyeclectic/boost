@@ -425,6 +425,42 @@ def log_for_path(repo: Path, rel_path: str = ".", n: int = 20) -> list[str]:
     return [ln for ln in proc.stdout.splitlines() if ln.strip()]
 
 
+#: Field separator for the machine-readable log format. ASCII US (unit
+#: separator) rather than a printable delimiter: git will not insert it, and a
+#: commit subject may legitimately contain a pipe, a tab, or the two-space run
+#: `log_for_path`'s display format uses between its columns.
+_LOG_SEP = "\x1f"
+
+
+def log_entries(repo: Path, rel_path: str = ".", n: int = 20) -> list[dict]:
+    """Structured one-line log rows for a path inside a repo.
+
+    The data counterpart of :func:`log_for_path`, which formats the same
+    commits for display. Splitting that display string back into fields is a
+    guess — the columns are separated by two spaces and an author name or a
+    subject may contain them — so this asks git for an unambiguous separator
+    instead of taking the format apart afterwards.
+
+    ``maxsplit`` is pinned to three so a subject containing the separator
+    cannot shift the other fields, and a blank subject still yields all four
+    keys rather than a short row the caller would have to pad.
+    """
+    proc = run(["-C", str(repo), "log", "--date=short", "-n", str(n),
+                "--pretty=format:" + _LOG_SEP.join(("%h", "%ad", "%an", "%s")),
+                "--", rel_path], check=False)
+    rows = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(_LOG_SEP, 3)
+        if len(parts) < 4:
+            continue
+        sha, date, author, subject = parts
+        rows.append({"sha": sha, "date": date, "author": author,
+                     "subject": subject})
+    return rows
+
+
 def is_repo(path: Path) -> bool:
     """Return True when `path` contains a `.git` entry."""
     return (Path(path) / ".git").exists()

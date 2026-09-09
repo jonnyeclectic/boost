@@ -145,3 +145,178 @@ class TestHealthJson:
         r = boost("health")
         assert "boost health" in r.out
         assert "● healthy" in r.out
+
+
+# ── clean / compact ──────────────────────────────────────────────────────
+
+class TestCleanCompactJson:
+    def test_clean_reports_items_with_path_kind_and_bytes(self, boost, sandbox):
+        from boost_cli.core import paths
+        # A cache file for a tap that is not configured is exactly what clean
+        # sweeps, and it has a size worth reporting.
+        paths.ensure_dirs()
+        stale = paths.cache_dir() / "gone-tap.json"
+        stale.write_text('{"entries": []}', encoding="utf-8")
+
+        d = _payload(boost("clean", "--json"))
+        assert d["ok"] is True and d["removed"] == 1
+        row = d["items"][0]
+        assert row["kind"] == "stale tap cache" and row["bytes"] > 0
+        assert row["path"].endswith("gone-tap.json")
+        assert not stale.exists()
+
+    def test_clean_dry_run_reports_the_same_rows_and_removes_nothing(
+            self, boost, sandbox):
+        from boost_cli.core import paths
+        paths.ensure_dirs()
+        stale = paths.cache_dir() / "gone-tap.json"
+        stale.write_text('{"entries": []}', encoding="utf-8")
+
+        d = _payload(boost("clean", "--dry-run", "--json"))
+        assert d["dry_run"] is True and d["count"] == 1 and d["removed"] == 0
+        assert stale.exists(), "a dry run must not delete anything"
+
+    def test_clean_on_a_tidy_machine_is_an_empty_document_not_silence(
+            self, boost, sandbox):
+        d = _payload(boost("clean", "--json"))
+        assert d["items"] == [] and d["count"] == 0 and d["ok"] is True
+
+    def test_compact_reports_per_tap_rows(self, boost, tapped):
+        d = _payload(boost("compact", "--dry-run", "--json"))
+        assert d["dry_run"] is True and isinstance(d["taps"], list)
+        assert d["ok"] is True
+
+
+# ── log / changelog ──────────────────────────────────────────────────────
+
+class TestLogJson:
+    def test_activity_events_are_verbatim_with_their_fields(
+            self, boost, tapped):
+        """The prose listing drops the `key=value` fields `pulse --json` shows
+        over the same journal, and `log` is the command reached for first."""
+        boost("install", "brainstorming")
+        d = _payload(boost("log", "--json"))
+        assert d["kind"] == "activity"
+        install = [e for e in d["events"] if e.get("action") == "install"]
+        assert install and install[0]["subject"] == "brainstorming"
+
+    def test_an_empty_journal_is_an_empty_list(self, boost, sandbox):
+        d = _payload(boost("log", "--json"))
+        assert d["kind"] == "activity" and d["events"] == []
+
+    def test_crashes_report_their_paths(self, boost, sandbox):
+        from boost_cli.core import paths
+        paths.ensure_dirs()
+        (paths.logs_dir() / "crash-2026-01-01.log").write_text(
+            "command: boost doctor\n", encoding="utf-8")
+        d = _payload(boost("log", "--crashes", "--json"))
+        assert d["kind"] == "crashes"
+        assert d["reports"][0]["name"] == "crash-2026-01-01.log"
+        assert "boost doctor" in d["reports"][0]["summary"]
+
+    def test_skill_history_rows_are_structured_commits(self, boost, tapped):
+        boost("install", "brainstorming")
+        d = _payload(boost("log", "brainstorming", "--json"))
+        assert d["kind"] == "history" and d["name"] == "brainstorming"
+        assert set(d["commits"][0]) == {"sha", "date", "author", "subject"}
+
+    def test_changelog_rows_are_structured_commits(self, boost, tapped):
+        boost("install", "brainstorming")
+        d = _payload(boost("changelog", "brainstorming", "--json"))
+        assert d["name"] == "brainstorming"
+        assert set(d["commits"][0]) == {"sha", "date", "author", "subject"}
+
+
+# ── trending / hooks / quarantine / context ──────────────────────────────
+
+class TestOtherReportsJson:
+    def test_trending_names_which_list_it_returned(self, boost, tapped):
+        """Curated picks and local install activity answer different
+        questions; a consumer that could not tell them apart would read a
+        recommendation as something this machine actually installs."""
+        d = _payload(boost("trending", "--json"))
+        assert d["source"] == "curated"
+
+        boost("install", "brainstorming")
+        d = _payload(boost("trending", "--json"))
+        assert d["source"] == "installs"
+        assert d["items"][0]["name"] == "brainstorming"
+        assert d["items"][0]["installs"] == 1
+        assert d["items"][0]["kind"] == "skill"
+
+    def test_hooks_list_reports_every_column_plus_the_timeout(
+            self, boost, sandbox):
+        boost("hooks", "add", "SessionStart", "-c", "echo hi", "-n", "demo",
+              "-s", "global", "--timeout", "25")
+        d = _payload(boost("hooks", "list", "--json"))
+        row = d["hooks"][0]
+        assert row["name"] == "demo" and row["command"] == "echo hi"
+        assert row["event"] == "SessionStart" and row["scope"] == "global"
+        assert row["timeout"] == 25
+
+    def test_hooks_list_empty_is_a_document(self, boost, sandbox):
+        assert _payload(boost("hooks", "list", "--json")) == {"hooks": []}
+
+    def test_quarantine_list_carries_a_comparable_timestamp(
+            self, boost, tapped):
+        """`since` is rendered English; `at` is what it was rendered from, and
+        a consumer wants to compare rather than read."""
+        boost("install", "brainstorming")
+        boost("quarantine", "brainstorming")
+        d = _payload(boost("quarantine", "--list", "--json"))
+        row = d["quarantined"][0]
+        assert row["name"] == "brainstorming" and row["kind"] == "skill"
+        assert row["at"] and row["at"].startswith("20")
+
+    def test_bare_context_json_means_context_status_json(self, boost, sandbox):
+        """Bare `context` already meant status, and `context status --json`
+        already worked — `context --json` was the one spelling rejected."""
+        top = _payload(boost("context", "--json"))
+        sub = _payload(boost("context", "status", "--json"))
+        assert top == sub
+        assert "enabled" in top and "branch" in top
+
+
+# ── bundle install --dry-run ─────────────────────────────────────────────
+
+class TestBundleDryRun:
+    def test_it_installs_nothing_and_taps_nothing(self, boost, tapped,
+                                                  tmp_path, sandbox):
+        bf = tmp_path / "Boostfile"
+        bf.write_text("tap other https://example.invalid/other\n"
+                      "skill brainstorming\n", encoding="utf-8")
+
+        r = boost("bundle", "install", str(bf), "--dry-run")
+        assert "would tap other" in r.out
+        assert "would install brainstorming" in r.out
+
+        from boost_cli.core import lockfile, registry
+        assert "brainstorming" not in lockfile.installed()
+        assert "other" not in {t.name for t in registry.list_taps()}
+
+    def test_it_warns_that_a_rule_would_edit_the_agent_context_file(
+            self, boost, tmp_path, fixture_tap_src, sandbox):
+        """The reason the flag exists: a bundle install can materialize a rule
+        into the file the user reads every session, and had no preview."""
+        import shutil
+        import subprocess
+        dst = tmp_path / "rule-tap"
+        shutil.copytree(fixture_tap_src, dst)
+        md = dst / "rules" / "house.mdc"
+        md.parent.mkdir(parents=True, exist_ok=True)
+        md.write_text("---\nname: house\n---\n\nAlways write tests first.\n",
+                      encoding="utf-8")
+        subprocess.run(["git", "-C", str(dst), "add", "-A"], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(dst), "commit", "-qm", "rule"],
+                       check=True, capture_output=True)
+        boost("tap", str(dst))
+
+        bf = tmp_path / "Boostfile"
+        bf.write_text("skill house\n", encoding="utf-8")
+        r = boost("bundle", "install", str(bf), "--dry-run")
+        assert "would install house" in r.out and "[rule]" in r.out
+        assert "context file" in r.out
+
+        from boost_cli.core import lockfile
+        assert "house" not in lockfile.installed_rules()
