@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from boost_cli.core import output as out
 from boost_cli.core import report
 
 # --------------------------------------------------------------- prose mode
@@ -47,15 +50,24 @@ def test_json_mode_prints_nothing_at_all(capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_wrap_is_forwarded_only_by_the_emitters_that_accept_it(capsys):
-    """`out.ok` takes no `wrap`; `warn`/`info` do. Passing it to the wrong one
-    is a TypeError at runtime on a path a health check reaches."""
+@pytest.mark.parametrize("status", ["issue", "warn", "note"])
+def test_wrap_is_off_by_default_and_forwarded_when_asked(status, capsys):
+    """`wrap` is opt-in per call site, and both directions are load-bearing.
+
+    Defaulting it on would fold the lines that must stay whole — a hash, a
+    path, a copy-pasteable command — which is why `out.warn`/`out.info` take it
+    opt-in in the first place. Dropping it on the way through would leave
+    doctor's prose hints running past the pane they were fitted to. (`ok` is
+    absent on purpose: `out.ok` takes no `wrap`, and passing one would be a
+    TypeError on a path a health check reaches.)
+    """
     rep = report.Report()
-    rep.issue("x", "a " * 60, wrap=True)
-    rep.note("y", "b " * 60, wrap=True)
-    # Wrapped output is more than one line per call; the point is that it did
-    # not raise and did not collapse to a single over-wide line.
-    assert len(capsys.readouterr().out.splitlines()) > 2
+
+    getattr(rep, status)("x", "a " * 60)
+    assert len(capsys.readouterr().out.splitlines()) == 1
+
+    getattr(rep, status)("x", "a " * 60, wrap=True)
+    assert len(capsys.readouterr().out.splitlines()) > 1
 
 
 # ------------------------------------------------------------ issue counting
@@ -205,3 +217,63 @@ def test_a_warn_line_alone_leaves_the_run_healthy():
     rep.warn("summary", "needs attention")
     assert rep.issues == 0 and rep.exit_code() == 0
     assert rep.payload()["ok"] is True
+
+
+def test_warn_records_the_name_message_and_hint_it_was_given():
+    """A warn row is addressable like any other, and the payload is the only
+    place its text survives.
+
+    Prose renders `message` on the spot, so a warn row that recorded `None` for
+    its name, its message or its hint would still *print* correctly and only be
+    wrong for the consumer that cannot see the terminal — which is the audience
+    the flag exists for.
+    """
+    rep = report.Report(as_json=True)
+    rep.warn("integrity", "lock file integrity needs attention",
+             hint="boost heal")
+    assert rep.payload()["checks"] == [
+        {"name": "integrity", "status": "warn",
+         "message": "lock file integrity needs attention", "hint": "boost heal"},
+    ]
+
+
+def test_a_healthy_verdict_is_painted_differently_from_an_unhealthy_one(
+        capsys, monkeypatch):
+    """`ok` decides the role the whole line resolves through, and losing it
+    would report a healthy machine in the warn color — a dashboard that reads
+    as broken while every check passed."""
+    monkeypatch.setenv("BOOST_COLOR", "always")
+
+    report.Report().verdict(True, "healthy")
+    healthy = capsys.readouterr().out
+    report.Report().verdict(False, "needs attention")
+    unhealthy = capsys.readouterr().out
+
+    assert out.role("●", "success") in healthy
+    assert out.role("●", "warn") in unhealthy
+    assert healthy.replace("healthy", "X") != unhealthy.replace(
+        "needs attention", "X")
+
+
+@pytest.mark.parametrize("status", ["ok", "issue", "warn", "note"])
+def test_every_status_carries_its_hint_into_the_payload(status):
+    """A hint is the one field prose never shows on its own line.
+
+    `doctor` interpolates `dense.fix_hint()` into the message it prints, so a
+    dropped `hint` still reads correctly in the terminal and is missing only
+    for the consumer that cannot see it — the audience `--json` exists for.
+    """
+    rep = report.Report(as_json=True)
+    getattr(rep, status)("search-engine", "semantic search not configured",
+                         hint="boost reindex --dense")
+    assert rep.payload()["checks"][0]["hint"] == "boost reindex --dense"
+
+
+def test_emit_pretty_prints_with_the_indent_every_other_json_flag_uses(capsys):
+    """Two-space indent, one field per line — the spelling `lint --json` and
+    `context status --json` already print, so a reader moving between them sees
+    one format rather than three."""
+    rep = report.Report(as_json=True)
+    rep.ok("git", "git on PATH")
+    rep.emit()
+    assert capsys.readouterr().out == json.dumps(rep.payload(), indent=2) + "\n"

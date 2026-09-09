@@ -170,6 +170,30 @@ reports are present, so a stuck environment points you at its own evidence.
 That note is informational, not a fault — a crash report is history, so it
 does not count toward doctor's issue tally or its exit code.
 
+### Reading the same answer from a script
+
+Both commands take `--json`, which is what a CI job or an agent should read —
+the prose is laid out for a person and its wording is not a contract.
+
+```bash
+boost doctor --json    # {"checks": [{"name", "status", "message", "hint"}], "issues", "ok", "verdict"}
+boost health --json    # the same dashboard as a dict, plus "ok" and "status"
+```
+
+Each check carries a stable `name` (`git`, `lockfile`, `broken-links`,
+`search-engine`, …), so a consumer can look for the one it cares about instead
+of grepping a sentence. `status` is one of `ok`, `issue`, `warn` or `info`, and
+**only `issue` moves the exit code** — `info` covers the things boost reports
+but will not fix (foreign symlinks, foreign hooks, crash reports), and `warn`
+covers doctor's two closing lines, which restate faults already counted. So
+`issues` always equals the number of `issue` rows, and `ok` always agrees with
+the exit status the same run returned: exit 0 with `"ok": true`, exit 1 with
+`"ok": false`. The exit codes are unchanged from the prose mode.
+
+`verdict` is `null` when a run returned before reaching its closing line —
+`null` rather than `""` or `false`, both of which read as a verdict that was
+reached and said something.
+
 ---
 
 ## `boost self-update` didn't move
