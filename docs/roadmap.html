@@ -12362,7 +12362,7 @@ the audit log.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-taps-outdated-decay-policy-snapshot-json-emit-display-string">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>taps</code>/<code>outdated</code>/<code>decay</code>/<code>policy</code>/<code>snapshot</code> --json emit display strings as machine fields</h3>
         <p>Five <code>--json</code> outputs leak the table renderer's strings into the machine-readable
 document, because each command builds <b>one record</b> and feeds it to both the table and
@@ -12394,7 +12394,20 @@ numeric-or-null counts in snapshot list. Sites: <code>boost_cli/commands/taps.py
 <code>taps.py:239-242</code>, <code>taps.py:300</code>, <code>taps.py:308</code>,
 <code>taps.py:331</code>, <code>taps.py:341-347</code>, plus the decay/policy/snapshot row builders.
 No flag or summary changes, so no doc regeneration needed. Found by the 2026-08 CLI audit
-(cluster <code>json-display-strings</code>); repro in the audit log.</p>
+(cluster <code>json-display-strings</code>); repro in the audit log.
+
+<b>Status (this branch).</b> All five sites fixed with updated functional-test coverage. The
+implementing sandbox's network policy blocked PyPI, so the pinned <code>make check</code> toolchain
+could not be installed or run in-session; local substitutes (ruff, mypy, a byte-for-byte functional/
+unit-suite comparison against unmodified <code>main</code>, <code>tests/smoke.sh</code>) all came back
+clean. PR #769's own CI — which does have network access — has since run the real gate to completion:
+lint, mypy, pyright, import-linter, vulture, xenon, interrogate, refurb (caught and fixed one
+<code>{**base, ...}</code> pattern the sandbox's tools couldn't check), tests on every supported
+Python across three OSes, and all 6 mutation shards are green. The one red check
+(<code>lighthouse</code>, a <code>docs/roadmap.html</code> performance-budget assertion) is a
+pre-existing flake independent of this diff — it fails intermittently on <code>main</code> itself
+across unrelated commits — and is documented on the PR. Left <code>inflight</code> rather than
+<code>shipped</code> because merging is a human's call, not this branch's.</p>
         <div class="meta">
           <span class="m">Complexity <b>S</b></span>
           <span class="m">Impact <b>Med</b></span>
@@ -13813,7 +13826,7 @@ CLI audit (cluster <code>index-ratelimit-hint</code>); repro in the audit log.</
       </article>
 
       <article class="cap rcard" id="audit-install-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost install</code>: CLI audit findings (2026-08)</h3>
         <p><b>Rule/workflow lock entries are name-keyed across scopes</b> <em>(med)</em>. With the
 benchmarking rule at user scope, <code>install benchmarking --local</code> in a project fails
@@ -13854,12 +13867,30 @@ identical <em>&ldquo;closely resembles test-driven-development
 look-alike tap. De-duplicate <code>find_confusions</code> on <code>(name.lower(), tap)</code>
 (<code>typosquat.py:79-87</code>) so the <code>[:3]</code> slice in <code>_warn_confusions</code>
 covers three distinct look-alikes. Found by the 2026-08 CLI audit (cluster
-<code>typosquat-warning-dupes</code>); repro in the audit log.</p>
+<code>typosquat-warning-dupes</code>); repro in the audit log.
+
+<b>Status (2026-09).</b> Three of the four clusters shipped as described above:
+<code>install-path-prefix-match</code> (catalog.py wording), <code>mcp-offer-command-detail</code>
+(<code>mcpdecl.command_line</code> renders the full command+args, the decline path prints the real
+argv), and <code>typosquat-warning-dupes</code> (<code>find_confusions</code> dedupes on
+<code>(name.lower(), tap)</code>). <code>cross-scope-name-block</code> got the <b>narrower</b> of the
+fix's own two options: <code>store._check_scope_conflict</code> now refuses a rule/workflow install
+whose name collides with an existing lock entry recorded under a <i>different</i> scope/base —
+naming the real location ("already installed at user scope") and refusing even under
+<code>--force</code>, which closes the silent-corruption half of the bug (a forced cross-scope
+install used to overwrite the other scope's lock entry, orphaning its materializations). What is
+still missing is the other half: rules and workflows still cannot <i>coexist</i> across scopes the
+way skills do, because they share one lock keyed by bare name with no per-location table — skills
+got a separate <code>projectlock.py</code> when project scope was added, rules/workflows never did.
+Giving them the same treatment (a <code>rules</code>/<code>workflows</code> section in
+<code>projectlock.py</code>, wiring <code>_install_rule</code>/<code>_install_workflow</code> and
+their uninstall/sync counterparts through it for project scope) is real coexistence but is its own,
+larger change, and belongs in its own card rather than folded into a bugfix PR.</p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
-          <span class="m">a rule at user scope blocks the same name --local, and --force orphans the first scope</span>
+          <span class="m">3 of 4 clusters landed; cross-scope-name-block gets a safe refusal, not true coexistence</span>
         </div>
       </article>
 
@@ -13996,7 +14027,7 @@ audit log.</p></details>
       </article>
 
       <article class="cap rcard" id="audit-profile-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">CLI · Bug</span></div>
         <h3><code>boost profile use</code>: CLI audit findings (2026-08)</h3>
         <p><b><code>profile use</code> omits the version-drift warning <code>diff</code> reports, and a declined <code>--prune</code> still reports a clean switch with extras fully linked.</b> Reproduced: <code>profile diff daily</code> prints <code>~ brainstorming  (version differs)</code> but <code>profile use daily</code> says only <code>✓ switched to profile daily</code> — <code>team.py:335</code> discards the <code>_changed</code> tuple element that <code>diff</code> prints at <code>team.py:315-316</code>. Worse, with an extra skill installed and the <code>--prune</code> confirm declined via EOF, the output is <code>kept extras installed</code> then the same unconditional <code>✓ switched to profile daily</code>, and the extra's symlink was confirmed still present in <code>.claude/skills/</code> — the non-prune path would have sidelined it, so the checkmark claims a state the machine is not in.<br><br>Verified fix (<code>boost_cli/commands/team.py:333-367</code>): print a warn line per entry in <code>_changed</code>, mirroring diff's "~ NAME (version differs)" wording; and after a declined <code>--prune</code> confirm either fall through to the sideline/unlink branch or drop the trailing checkmark and say the switch was partial. No flag changes, so no docs regeneration needed.<br><br>Found by the 2026-08 CLI audit (cluster <code>profile-use-drift-prune</code>); repro in the audit log.</p>
         <div class="meta">
@@ -14069,15 +14100,16 @@ Found by the 2026-08 CLI audit (clusters <code>quickstart-pinning</code>, <code>
       </article>
 
       <article class="cap rcard" id="audit-recommend-findings">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">CLI · Bug</span></div>
         <h3>boost recommend: CLI audit findings (2026-08)</h3>
+        <details class="cardbody"><summary>Write-up</summary>
         <p><b>The curated fallback repeats one name, JSON omits it entirely, and sibling commands disagree on whose entry wins.</b> With curated taps and an unrecognised project, <code>recommend</code> prints <em>&ldquo;no stack-specific matches &mdash; curated picks instead:&rdquo;</em> followed by 8 rows carrying only 2 distinct names (python-patterns &times;6 &mdash; its es/ja/tr/zh mirrors from one tap &mdash; react-patterns &times;2): the fallback list-comps raw entries with no dedup (<code>boost_cli/commands/discovery.py:899-906</code>) while the keyword path dedups by name at <code>:876</code> and trending at <code>:1707</code>. In the same directory <code>recommend --json</code> returns <code>"recommendations": []</code> because the <code>as_json</code> branch (<code>:885-889</code>) returns before the fallback runs. And for one name shipped by several taps, trending shows the <em>last</em> tap's description (dict comprehension) where recommend keeps the <em>first</em> (<code>agg.setdefault</code>) &mdash; verified with python-patterns showing two different descriptions. Fix: dedup the curated fallback by name or content digest before slicing to <code>--limit</code>; compute the shown set (curated included) before the JSON/text split so both modes carry the same list, tagged <code>because: ["curated"]</code>; in <code>cmd_trending</code> prefer the lock's tap (or <code>catalog.find(name)[0]</code>) over last-entry-wins.
 
 <b><code>recommend --json</code> and <code>search --json</code> dump raw catalog entries including the internal <code>search_blob</code> &mdash; ~36% of the payload.</b> Measured: 15 search items = 22,855 B with <code>search_blob</code> in all 15 (mean 401 / max 881 B per item); 8 recommend rows = 10,559 B, 36.1% blob. The codebase already classifies it as internal: <code>serve.public_row()</code> (<code>boost_cli/core/serve.py:335-337</code>) strips it with the comment &ldquo;index fuel and not display data&rdquo;. Fix: move that projection into core (<code>catalog.public_entry()</code>) and apply it in both <code>--json</code> branches (<code>discovery.py:135</code>, <code>:886</code>); keep <code>content</code>, <code>tap</code>, <code>skill_md</code>; pin with a unit test asserting no <code>search_blob</code> key.
 
 <b>The stack line omits keywords the <code>because:</code> column then cites.</b> In the boost worktree: <code>stack: javascript, python &middot; frameworks: pytest</code> followed by <code>because: ci, python</code> &mdash; <code>ci</code> is matched at <code>discovery.py:874</code> but the line at <code>:890-892</code> only prints languages and frameworks. Fix: append the extra keywords, e.g. <code>&middot; also: ci</code>.
 
-Found by the 2026-08 CLI audit (clusters <code>recommend-trending-provenance</code>, <code>json-internal-blob</code>, <code>recommend-stack-line</code>); repro in the audit log.</p>
+Found by the 2026-08 CLI audit (clusters <code>recommend-trending-provenance</code>, <code>json-internal-blob</code>, <code>recommend-stack-line</code>); repro in the audit log.</p></details>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m">Impact <b>Med</b></span>

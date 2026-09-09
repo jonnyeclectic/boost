@@ -641,9 +641,9 @@ def resolve_one(name: str, path: str | None = None) -> dict:
         narrowed = _by_path(matches, path)
         if not narrowed:
             raise BoostError(
-                "no skill named %r under path %r" % (name, path),
-                hint="paths for %r: %s" % (name, ", ".join(
-                    sorted(str(e.get("rel_dir", "?")) for e in matches))))
+                "no copy of %r whose path ends with %r" % (name, path),
+                hint="pass a trailing segment of one of: %s" % ", ".join(
+                    sorted(str(e.get("rel_dir", "?")) for e in matches)))
         matches = narrowed
     if not matches:
         qualifier, bare = split_name(name)
@@ -806,6 +806,37 @@ def _search_blob(name: str, description: str, meta) -> str:
     # `or ""` is load-bearing despite the `str` annotation: search() calls this
     # with e.get("description", ""), which yields None when the key holds None.
     return " ".join([name.lower(), (description or "").lower(), _meta_text(meta)])  # noqa: FURB143
+
+
+def curated_entries(entries: list[dict]) -> list[dict]:
+    """Curated entries, deduped by name (first occurrence wins).
+
+    A registry that mirrors one skill into several locales or language
+    variants (``python-patterns`` shipped ``es``/``ja``/``tr``/``zh`` copies
+    from one tap) is one skill to a human reading a recommendation list, not
+    N — the same reasoning the keyword-matched path already applies via
+    ``agg.setdefault`` in ``cmd_recommend``. Order is preserved so a caller
+    slicing to a limit gets a stable, deterministic result.
+    """
+    seen: set[str] = set()
+    out: list[dict] = []
+    for e in entries:
+        if e.get("curated") and e["name"] not in seen:
+            seen.add(e["name"])
+            out.append(e)
+    return out
+
+
+def public_entry(entry: dict) -> dict:
+    """An entry with ``search_blob`` dropped — index fuel, not display data.
+
+    ``search_blob`` is precomputed once at scan time (above) and can be over a
+    third of an entry's serialized size; every ``--json`` surface that echoes
+    raw catalog entries (search, recommend, the web UI's ``serve.public_row``)
+    must strip it the same way, or a script consuming the payload pays for
+    text it never asked to see.
+    """
+    return {k: v for k, v in entry.items() if k != "search_blob"}
 
 
 def search(query: str, entries: list[dict] | None = None):

@@ -2,14 +2,14 @@
 id: audit-profile-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: declined --prune leaves extras fully linked yet still prints "✓ switched"
 order: 281
-owner:
+owner: loop/profile-use-drift-prune
 pr:
 title: "<code>boost profile use</code>: CLI audit findings (2026-08)"
 ---

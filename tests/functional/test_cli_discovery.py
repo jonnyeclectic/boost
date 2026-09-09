@@ -82,6 +82,19 @@ def _make_tap(root):
     return root
 
 
+def _make_mirror_tap(root, name, desc):
+    """A tap shipping one skill — for a curated fallback with duplicate names."""
+    d = root / "skills" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: %s\ndescription: %s\nversion: 1.0.0\n---\n\n"
+        "# %s\n\nBody text.\n" % (name, desc, name), encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "skill")
+    return root
+
+
 # ---------------------------------------------------------------- search
 
 class TestSearch:
@@ -130,6 +143,9 @@ class TestSearch:
         # BM25 (the default engine) scores are positive floats, not the old
         # integer heuristic score — assert the shape, not a magic constant.
         assert isinstance(data[0]["score"], float) and data[0]["score"] > 0
+        # search_blob is index fuel, not display data — ~36% of a raw payload
+        # by measurement; a --json consumer should never pay for it.
+        assert "search_blob" not in data[0]
 
     def test_a_stem_query_reaches_the_inflected_skill_and_says_so(
             self, boost, tapped):
@@ -1066,6 +1082,48 @@ class TestRecommend:
         assert "no stack-specific matches — curated picks instead:" in r.out
         assert "brainstorming" in r.out
 
+    def test_curated_fallback_json_carries_the_same_list_as_text(
+            self, boost, fixture_tap_src, tmp_path):
+        # `recommend --json` used to return `"recommendations": []` here —
+        # the JSON branch ran before the curated fallback existed at all —
+        # while the text path printed real rows in the same directory.
+        boost("tap", fixture_tap_src, "--curated")
+        proj = tmp_path / "empty-proj"
+        proj.mkdir()
+        data = json.loads(boost("recommend", "--path", proj, "--json").out)
+        assert data["recommendations"]
+        assert all(r["because"] == ["curated"] for r in data["recommendations"])
+        names = {r["name"] for r in data["recommendations"]}
+        assert "brainstorming" in names
+        # index fuel never belongs in a --json payload.
+        assert all("search_blob" not in r for r in data["recommendations"])
+
+    def test_curated_fallback_dedupes_mirrors_by_name(self, boost, tmp_path):
+        # Two taps shipping the same curated name (locale mirrors, in the
+        # audit's repro) used to count as two rows instead of one, and
+        # crowded out every other curated pick in the --limit window.
+        _make_mirror_tap(tmp_path / "mirror-a", "shared-skill", "from tap a")
+        _make_mirror_tap(tmp_path / "mirror-b", "shared-skill", "from tap b")
+        boost("tap", tmp_path / "mirror-a", "--curated")
+        boost("tap", tmp_path / "mirror-b", "--curated")
+        proj = tmp_path / "empty-proj"
+        proj.mkdir()
+        data = json.loads(boost("recommend", "--path", proj, "--json").out)
+        matches = [r for r in data["recommendations"] if r["name"] == "shared-skill"]
+        assert len(matches) == 1
+        r = boost("recommend", "--path", proj)
+        assert r.out.count("shared-skill") == 1
+
+    def test_stack_line_shows_extra_keywords_not_in_languages_or_frameworks(
+            self, boost, stack_tap, tmp_path):
+        # `stack: ... · frameworks: ...` used to drop any matched keyword that
+        # wasn't itself a language or framework (e.g. `ci`), even though the
+        # `because:` column on the very same row went on to cite it.
+        proj = tmp_path / "ci-proj"
+        (proj / ".github" / "workflows").mkdir(parents=True)
+        r = boost("recommend", "--path", proj)
+        assert "· also: ci" in r.out
+
     def test_no_recommendations_at_all(self, boost, tapped, tmp_path):
         proj = tmp_path / "empty-proj"
         proj.mkdir()
@@ -1618,6 +1676,24 @@ class TestTrending:
         r = boost("trending", "--limit", "1")
         assert "jira-integration" in r.out
         assert "brainstorming" not in r.out
+
+    def test_a_name_shared_by_two_taps_shows_the_first_taps_description(
+            self, boost, tmp_path):
+        # `by_name` used to be a dict comprehension, which keeps the LAST
+        # entry per name (whichever tap sorts last), while `recommend`'s
+        # equivalent aggregation keeps the first — so the two commands showed
+        # different descriptions for the same name. First-wins here matches
+        # that convention.
+        from boost_cli.core import journal
+        _make_mirror_tap(tmp_path / "mirror-a", "shared-skill", "from tap a")
+        _make_mirror_tap(tmp_path / "mirror-b", "shared-skill", "from tap b")
+        boost("tap", tmp_path / "mirror-a")
+        boost("tap", tmp_path / "mirror-b")
+        journal.log("install", "shared-skill")
+        r = boost("trending")
+        line = next(l for l in r.out.splitlines() if l.startswith("shared-skill"))
+        assert "from tap a" in line
+        assert "from tap b" not in line
 
     def test_curated_picks_show_a_kind_column(self, boost, fixture_tap_src):
         boost("tap", fixture_tap_src, "--curated")

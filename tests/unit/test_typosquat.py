@@ -134,3 +134,27 @@ class TestFindConfusions:
         got = typosquat.find_confusions(target, entries)
         assert [(x["name"], x["tap"]) for x in got] == [
             ("deploy", "a/first"), ("deploy", "m/mid"), ("deployy", "z/last")]
+
+    def test_mirror_copies_in_the_same_tap_collapse_to_one_hit(self):
+        # A look-alike tap that vendors its own skill several times over (one
+        # per agent dotdir, say) must not count as several distinct
+        # look-alikes — the caller's [:3] slice would then show the same tap
+        # three times instead of three distinct confusable taps.
+        target = _e("deploy", "alice/skills")
+        mirror_a = {"name": "deployy", "tap": "mallory/evil", "rel_dir": "a"}
+        mirror_b = {"name": "deployy", "tap": "mallory/evil", "rel_dir": "b"}
+        mirror_c = {"name": "deployy", "tap": "mallory/evil", "rel_dir": "c"}
+        got = typosquat.find_confusions(target, [target, mirror_a, mirror_b, mirror_c])
+        assert len(got) == 1
+        assert got[0]["tap"] == "mallory/evil"
+
+    def test_mirror_dedup_keeps_distinct_look_alikes(self):
+        target = _e("deploy", "alice/skills")
+        entries = [
+            target,
+            {"name": "deploy", "tap": "mallory/evil", "rel_dir": "a"},
+            {"name": "deploy", "tap": "mallory/evil", "rel_dir": "b"},
+            _e("deploy", "eve/clone"),
+        ]
+        got = typosquat.find_confusions(target, entries)
+        assert sorted(x["tap"] for x in got) == ["eve/clone", "mallory/evil"]

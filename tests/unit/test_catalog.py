@@ -920,6 +920,18 @@ class TestResolveOneVendoredCopies:
         hint = excinfo.value.hint or ""
         assert "a/dbg" in hint and "b/dbg" in hint
 
+    def test_path_that_matches_nothing_says_a_path_ends_with_not_under(self, sandbox):
+        """`--path plugins/tdd/skills` was refused as not "under" the very path
+        the error's own hint listed (`plugins/tdd/skills/test-driven-development`)
+        — matching is suffix-only by design, so the wording must say so instead
+        of claiming a containment relation it doesn't check."""
+        _fake_taps(("t", [_entry("dbg", "t", desc="python", rel_dir="a/dbg")]))
+        with pytest.raises(BoostError) as excinfo:
+            catalog.resolve_one("dbg", path="nope/dbg")
+        assert excinfo.value.message == "no copy of 'dbg' whose path ends with 'nope/dbg'"
+        assert "under" not in excinfo.value.message
+        assert excinfo.value.hint == "pass a trailing segment of one of: a/dbg"
+
     def test_an_exact_path_beats_a_suffix_match(self, sandbox):
         """The real shape from DietrichGebert/ponytail: a canonical
         `skills/ponytail` and an agent mirror `.openclaw/skills/ponytail`. The
@@ -1145,6 +1157,45 @@ class TestSearchBlobPrecompute:
         assert "search_blob" not in e
         res = catalog.search("fallbackword", entries=[e])
         assert [(m["name"], s) for m, s in res] == [("x", 2)]
+
+
+class TestCuratedEntries:
+    def test_dedupes_by_name_keeping_first(self):
+        # A registry that mirrors one skill into several locale copies must
+        # count once, not once per mirror — the exact defect that made a
+        # curated-fallback recommendation list show one name 6 of 8 rows.
+        a = _entry("python-patterns", "tap-a", desc="original", curated=True)
+        b = _entry("python-patterns", "tap-b", desc="mirror", curated=True)
+        c = _entry("react-patterns", "tap-a", curated=True)
+        assert catalog.curated_entries([a, b, c]) == [a, c]
+
+    def test_excludes_non_curated_entries(self):
+        curated = _entry("x", "t", curated=True)
+        plain = _entry("y", "t", curated=False)
+        assert catalog.curated_entries([plain, curated]) == [curated]
+
+    def test_empty_when_nothing_curated(self):
+        assert catalog.curated_entries([_entry("x", "t")]) == []
+
+
+class TestPublicEntry:
+    def test_strips_search_blob(self):
+        e = _entry("x", "t")
+        e["search_blob"] = "x t"
+        pub = catalog.public_entry(e)
+        assert "search_blob" not in pub
+        assert pub["name"] == "x"
+
+    def test_tolerates_a_missing_blob(self):
+        e = _entry("x", "t")
+        assert "search_blob" not in e
+        assert catalog.public_entry(e) == e
+
+    def test_does_not_mutate_the_original(self):
+        e = _entry("x", "t")
+        e["search_blob"] = "x t"
+        catalog.public_entry(e)
+        assert "search_blob" in e
 
 
 class TestLintTargets:

@@ -1416,6 +1416,49 @@ class TestRuleInstall:
         assert res.upgraded is True
         assert self._claude_md().read_text(encoding="utf-8").count("boost:rule:team-conventions start") == 1
 
+    def test_a_project_install_of_a_user_scoped_rule_is_refused(self, tap, tmp_path):
+        """A rule installed at user scope has nowhere else to be recorded
+        (rules share the one global lock, keyed by bare name) — so a project
+        install of the same name must be refused, accurately, rather than
+        raising the generic same-scope 'already installed'."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        entry = _rule_entry(tap)
+        store.install(entry)
+        with pytest.raises(BoostError, match="already installed at user scope"):
+            store.install(entry, scope="project", base=str(repo))
+        # Refused even with --force: overwriting would orphan the user-scope
+        # materializations with no lock entry left to uninstall them from.
+        with pytest.raises(BoostError, match="already installed at user scope"):
+            store.install(entry, scope="project", base=str(repo), force=True)
+        rec = lockfile.get_rule("team-conventions")
+        assert rec["scope"] == "user"          # untouched by the refused attempt
+
+    def test_a_user_install_of_a_project_scoped_rule_is_refused(self, tap, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        entry = _rule_entry(tap)
+        store.install(entry, scope="project", base=str(repo))
+        with pytest.raises(BoostError, match=r"already installed at project scope"):
+            store.install(entry, force=True)
+        rec = lockfile.get_rule("team-conventions")
+        assert rec["scope"] == "project"
+
+    def test_a_second_project_base_is_also_a_cross_location_conflict(self, tap, tmp_path):
+        """Rule/workflow lock entries are keyed by bare name only, with no
+        per-location table the way skills get a separate project lock — so
+        two different project bases collide on the same name exactly like a
+        user/project mismatch does, and must be refused the same way rather
+        than silently overwritten."""
+        repo1 = tmp_path / "repo1"
+        repo2 = tmp_path / "repo2"
+        repo1.mkdir()
+        repo2.mkdir()
+        entry = _rule_entry(tap)
+        store.install(entry, scope="project", base=str(repo1))
+        with pytest.raises(BoostError, match="already installed at project scope"):
+            store.install(entry, scope="project", base=str(repo2))
+
     def test_only_agents_limits_materialization(self, tap):
         res = store.install(_rule_entry(tap), only_agents=["cursor"])
         assert res.linked == ["cursor"]
@@ -1592,6 +1635,15 @@ class TestWorkflowInstall:
             store.install(entry)
         res = store.install(entry, force=True)
         assert res.upgraded is True
+
+    def test_a_project_install_of_a_user_scoped_workflow_is_refused(self, tap, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        entry = _workflow_entry(tap)
+        store.install(entry)
+        with pytest.raises(BoostError, match="already installed at user scope"):
+            store.install(entry, scope="project", base=str(repo), force=True)
+        assert lockfile.get_workflow("ship-it")["scope"] == "user"
 
     def test_only_agents_limits_drop(self, tap):
         res = store.install(_workflow_entry(tap), only_agents=["claude-code"])
@@ -1772,6 +1824,86 @@ class TestRestorePreserveNewerLockSections:
         catalog.rebuild_tap(tap)
         store.install(entry)
         return entry
+
+
+class TestCheckScopeConflict:
+    """Direct tests of the guard that keeps a rule/workflow install from
+    force-overwriting a lock entry that belongs to a different scope/base —
+    no tap or filesystem needed, since the function only reads plain dicts.
+    """
+
+    def test_no_existing_entry_never_raises(self):
+        store._check_scope_conflict("x", None, "user", None, force=False)
+        store._check_scope_conflict("x", None, "project", Path("/repo"), force=True)
+
+    def test_same_scope_no_force_raises_plain_already_installed(self):
+        with pytest.raises(BoostError) as ei:
+            store._check_scope_conflict(
+                "x", {"scope": "user", "base": None}, "user", None, force=False)
+        assert ei.value.message == "x is already installed"
+        assert ei.value.hint == "`boost reinstall x` to force"
+
+    def test_same_scope_with_force_does_not_raise(self):
+        store._check_scope_conflict(
+            "x", {"scope": "user", "base": None}, "user", None, force=True)
+
+    def test_same_project_base_with_force_does_not_raise(self):
+        # The literal is built through Path, not typed as "/repo", because
+        # that is how the value under test is produced: every writer of this
+        # field stores `str(resolved_base)` (store.py's three lock writes), so
+        # a POSIX-shaped literal compares against "\\repo" on Windows and the
+        # guard refuses a same-scope force that a real install never hits.
+        # Green on macOS and Linux, red on windows-latest only.
+        base = Path("/repo")
+        store._check_scope_conflict(
+            "x", {"scope": "project", "base": str(base)}, "project", base,
+            force=True)
+
+    def test_user_existing_vs_project_requested_raises_regardless_of_force(self):
+        existing = {"scope": "user", "base": None}
+        for force in (False, True):
+            with pytest.raises(BoostError, match="already installed at user scope"):
+                store._check_scope_conflict(
+                    "x", existing, "project", Path("/repo"), force=force)
+
+    def test_project_existing_vs_user_requested_raises_regardless_of_force(self):
+        existing = {"scope": "project", "base": "/repo"}
+        for force in (False, True):
+            with pytest.raises(BoostError, match="already installed at project scope"):
+                store._check_scope_conflict("x", existing, "user", None, force=force)
+
+    def test_different_project_bases_conflict(self):
+        existing = {"scope": "project", "base": "/repo1"}
+        with pytest.raises(BoostError, match=r"project scope \(/repo1\)"):
+            store._check_scope_conflict(
+                "x", existing, "project", Path("/repo2"), force=True)
+
+    def test_cross_scope_hint_points_at_uninstalling_the_other_location(self):
+        existing = {"scope": "user", "base": None}
+        with pytest.raises(BoostError) as ei:
+            store._check_scope_conflict("x", existing, "project", Path("/repo"), force=True)
+        assert "uninstall it there first" in (ei.value.hint or "")
+
+    def test_scope_defaults_to_user_when_entry_predates_the_field(self):
+        """A lock entry written before ``scope`` existed has no such key —
+        must read as user scope, not crash or silently mismatch forever."""
+        existing = {"base": None}    # no "scope" key at all
+        store._check_scope_conflict("x", existing, "user", None, force=True)
+
+
+class TestLockLocation:
+    def test_user_scope(self):
+        assert store._lock_location({"scope": "user"}) == "user scope"
+
+    def test_project_scope_with_base(self):
+        assert store._lock_location(
+            {"scope": "project", "base": "/repo"}) == "project scope (/repo)"
+
+    def test_project_scope_without_base_still_says_project(self):
+        assert store._lock_location({"scope": "project", "base": None}) == "project scope"
+
+    def test_missing_scope_key_defaults_to_user(self):
+        assert store._lock_location({}) == "user scope"
 
 
 class TestInstallScope:

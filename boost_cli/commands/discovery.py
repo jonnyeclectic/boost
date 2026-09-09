@@ -198,7 +198,11 @@ def cmd_search(argv):
             # --smart silently did nothing.
             out.warn(ai.fallback_note(), wrap=True, stream=sys.stderr)
     if args.as_json:
-        print(json.dumps([e | {"score": s, "ranker": ranker}
+        # public_entry, not the raw entry: `search_blob` is index fuel
+        # precomputed at scan time and can be a third of the payload. #815
+        # strips it here; main had since moved this emit below --smart so the
+        # rows carry `ranker`. Both hold.
+        print(json.dumps([catalog.public_entry(e) | {"score": s, "ranker": ranker}
                           for e, s in scored[:args.limit]]))
         return 0
     shown = scored[:args.limit]
@@ -1002,27 +1006,38 @@ def cmd_recommend(argv):
             rec["score"] += 10
     ranked = sorted(agg.values(),
                     key=lambda r: (-r["score"], r["entry"]["name"]))
-    if args.as_json:
-        print(json.dumps({"stack": stack, "recommendations": [
-            r["entry"] | {"score": r["score"], "because": sorted(r["because"])}
-            for r in ranked[:args.limit]]}))
-        return 0
-    line = "stack: " + (", ".join(stack["languages"]) or "unknown")
-    if stack["frameworks"]:
-        line += " · frameworks: " + ", ".join(stack["frameworks"])
-    out.info(out.role("%s  (%s)" % (line, _tilde(target)), "muted"))
+    # The shown set (curated fallback included) is computed once, before the
+    # --json/text split, so both modes report the same recommendations — the
+    # bug this replaced returned `[]` from --json whenever the fallback below
+    # was what a human would actually see.
     shown: list[dict[str, Any]] = ranked[:args.limit]
-    if not shown:
+    used_curated_fallback = not shown
+    if used_curated_fallback:
         # Annotated rather than inlined: an unannotated literal of mixed value
         # types infers dict[str, object], which then makes every r["entry"][…]
         # read below an error about indexing `object`.
         curated: list[dict[str, Any]] = [
             {"entry": e, "score": 0, "because": {"curated"}}
-            for e in entries if e.get("curated")]
+            for e in catalog.curated_entries(entries)]
         shown = curated[:args.limit]
-        if not shown:
-            out.info("no recommendations for this stack — try `boost search <keyword>`")
-            return 0
+    if args.as_json:
+        print(json.dumps({"stack": stack, "recommendations": [
+            catalog.public_entry(r["entry"]) | {"score": r["score"],
+                                                "because": sorted(r["because"])}
+            for r in shown]}))
+        return 0
+    line = "stack: " + (", ".join(stack["languages"]) or "unknown")
+    if stack["frameworks"]:
+        line += " · frameworks: " + ", ".join(stack["frameworks"])
+    extra_kw = sorted(set(stack["keywords"]) - set(stack["languages"])
+                      - set(stack["frameworks"]))
+    if extra_kw:
+        line += " · also: " + ", ".join(extra_kw)
+    out.info(out.role("%s  (%s)" % (line, _tilde(target)), "muted"))
+    if not shown:
+        out.info("no recommendations for this stack — try `boost search <keyword>`")
+        return 0
+    if used_curated_fallback:
         out.info("no stack-specific matches — curated picks instead:")
     width = min(max(len(r["entry"]["name"]) for r in shown), 32)
     cols = out.term_width()
@@ -1861,7 +1876,14 @@ def cmd_trending(argv):
                    help="max rows (default 10)")
     args = p.parse_args(argv)
     evs = journal.events(action="install")
-    by_name = {e["name"]: e for e in catalog.all_entries()}
+    # setdefault, not a dict comprehension: a comprehension keeps the LAST
+    # entry per name (whichever tap sorts last in catalog.all_entries()),
+    # while cmd_recommend's equivalent aggregation (agg.setdefault) keeps the
+    # first — so the two commands showed different descriptions for a name
+    # shipped by more than one tap. First-wins here matches that convention.
+    by_name: dict[str, dict] = {}
+    for e in catalog.all_entries():
+        by_name.setdefault(e["name"], e)
     if not evs:
         out.heading("curated picks (no local install data yet)")
         curated = [e for e in by_name.values() if e.get("curated")]
