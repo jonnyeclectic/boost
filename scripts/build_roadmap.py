@@ -203,31 +203,51 @@ def check_body_is_inline(where: str, body: str) -> None:
                 % (where, name, ", ".join(sorted(_INLINE_TAGS))))
 
 
-def _body_html(status: str, body: str) -> str:
-    """A card body, collapsed once the work is finished.
+ITEMS_URL = ("https://github.com/jonnyeclectic/boost/blob/main/"
+             "docs/roadmap/items")
 
-    WHY, with the numbers. Closing an item well means recording what was
-    measured and what turned out to be wrong, so bodies grow and finished cards
-    never stop costing. Measured on the Lighthouse run that first breached the
-    `minScore 0.85` floor (perf 0.74): 1.6 s of main-thread work, of which
-    `styleLayout` was 705 ms and `paintCompositeRender` 393 ms, against 20 ms of
-    script evaluation. The page is not slow because of bytes or JavaScript — it
-    is slow because the browser lays out and paints 6,316 elements.
 
-    A *closed* `<details>` is the cheap fix for exactly that shape: the subtree
-    still parses and still ships, so every word stays greppable and findable by
-    the browser's own find-in-page, but it is never laid out or painted. It does
-    not reduce transfer size or DOM node count, and it is not meant to — neither
-    is what the measurement blamed.
+def _body_html(status: str, body: str, item_id: str = "") -> str:
+    """A card body, inlined while open and linked once the work is settled.
+
+    WHY, with the numbers, because this replaced a mechanism whose reasoning is
+    worth keeping. Closing an item well means recording what was measured and
+    what turned out to be wrong, so bodies grow and finished cards never stop
+    costing. A closed `<details>` was the first fix, aimed at layout and paint:
+    measured on the Lighthouse run that first breached `minScore 0.85` (perf
+    0.74), 1.6 s of main-thread work was 705 ms `styleLayout` and 393 ms
+    `paintCompositeRender` against 20 ms of script. That fix worked for what it
+    targeted and it explicitly did NOT reduce transfer size or DOM node count.
+
+    Which is why it ran out. The settled bodies are 848,682 B of the code
+    board's 1,010,171 B of card text — 84.0% of it, across 350 of 405 cards —
+    and `page_budget.py` gates BYTES and ELEMENTS, the two things `<details>`
+    was never meant to touch. The board had reached 86% of both ceilings, and
+    that budget's own `why` says the answer at this point is "pagination or
+    collapsing settled sections, not another raise".
+
+    So a settled card now renders its title, status and category on the board
+    and links to its item file for the write-up. Nothing is deleted and nothing
+    is summarised: `docs/roadmap/items/<id>.md` IS the source of truth that
+    generated the collapsed copy, so the text is unchanged, still in the repo,
+    still greppable, and now versioned in view rather than flattened into one
+    1.5 MB page. What is genuinely lost is browser find-in-page over settled
+    write-ups from the board itself; that is the price, and it is named here
+    rather than left for the next reader to discover.
+
+    An archive PAGE was the other candidate and was rejected on cost, not
+    taste: `docs/*.html` is swept by the a11y (WCAG 2.1 AA), html-validate,
+    theme-lint, visual-regression, links and Lighthouse gates, so a page whose
+    only job is to hold text the repo already stores would add six gate
+    surfaces to maintain forever.
     """
     check_body_is_inline("", body)
     if status not in _SETTLED:
         return "        <p>%s</p>" % body
-    # The <summary> carries real text rather than a bare marker: an unlabelled
-    # triangle is a keyboard and screen-reader trap, and the a11y sweep covers
-    # this page.
-    return ('        <details class="cardbody"><summary>Write-up</summary>\n'
-            "        <p>%s</p></details>" % body)
+    # Real link text, not a bare arrow: an unlabelled control is a keyboard and
+    # screen-reader trap, and the a11y sweep covers this page.
+    return ('        <p class="cardbody"><a class="writeup" href="%s/%s.md">'
+            "Write-up &middot; %s.md</a></p>" % (ITEMS_URL, item_id, item_id))
 
 
 def render_code_card(item: dict) -> str:
@@ -251,7 +271,7 @@ def render_code_card(item: dict) -> str:
         '        <div class="head"><span class="pill %s">%s</span>'
         '<span class="cat">%s</span></div>' % (status, label, item.get("category", "")),
         "        <h3>%s</h3>" % item.get("title", ""),
-        _body_html(status, item["body"]),
+        _body_html(status, item["body"], str(item.get("id", ""))),
         '        <div class="meta">',
         '          <span class="m">Complexity <b>%s</b></span>' % item.get("complexity", ""),
         '          <span class="m%s">Impact <b>%s</b></span>' % (imp_cls, impact),

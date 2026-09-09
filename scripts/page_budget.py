@@ -94,20 +94,26 @@ class Budget(NamedTuple):
 #: and the roadmap board is no more nested than the smallest page on the site.
 BUDGETS: dict[str, Budget] = {
     "roadmap.html": Budget(
-        kbytes=1_800, elements=25_000, depth=20,
-        why="the code board — already 5x Lighthouse's DOM-size failure "
+        kbytes=1_200, elements=18_000, depth=20,
+        why="the code board — still 3x Lighthouse's DOM-size failure "
             "threshold, so this bounds a step change, not ordinary growth; "
             "raised deliberately 2026-08-03 from 720/10,000, which gated at "
             "8,000 and was reached by ordinary card growth in a day; raised "
             "2026-08-31 from 1,200/16,000 for the 107-card CLI-audit landing, "
-            "then recalibrated the same day to 1,800/25,000 because "
-            "1,500/21,000 was set against the ceiling alone and shipped "
-            "already past the 80% early-warning line the headroom tests "
-            "enforce (measured 1,252 kB / 18,038 elements post-merge = 69.5% "
-            "/ 72.2% of these) — and with an hourly routine now adding cards, "
-            "the NEXT time this gates the answer is pagination or collapsing "
-            "settled sections (see roadmap-page-weight-grows-without-bound), "
-            "not another raise"),
+            "then recalibrated the same day to 1,800/25,000; LOWERED "
+            "2026-09-09 from 1,800/25,000 because the answer that entry "
+            "promised was finally taken. A 41-card audit landing put the "
+            "board at 86% of both ceilings, and rather than raise a fourth "
+            "time, settled write-ups now link to their item file instead of "
+            "inlining — they were 848,682 B of 1,010,171 B of card text "
+            "(84.0%), and the board went 1,553,112 B / 21,592 elements to "
+            "768,752 B / 11,781. A ceiling 2.3x the page it measures catches "
+            "nothing, so it comes down with the page; at 1,200/18,000 the "
+            "board sits at 64.1% / 65.5% with room for roughly 80 more cards "
+            "before the 80% early-warning tests fire. The next time this "
+            "gates, the answer is pagination — the settled bodies are already "
+            "gone, so there is no third cheap win here "
+            "(see roadmap-page-weight-grows-without-bound)"),
     "commands.html": Budget(
         kbytes=180, elements=3_000, depth=20,
         why="generated from COMMANDS, so it grows a block per new command"),
