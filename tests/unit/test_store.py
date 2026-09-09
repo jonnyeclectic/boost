@@ -1848,8 +1848,15 @@ class TestCheckScopeConflict:
             "x", {"scope": "user", "base": None}, "user", None, force=True)
 
     def test_same_project_base_with_force_does_not_raise(self):
+        # The literal is built through Path, not typed as "/repo", because
+        # that is how the value under test is produced: every writer of this
+        # field stores `str(resolved_base)` (store.py's three lock writes), so
+        # a POSIX-shaped literal compares against "\\repo" on Windows and the
+        # guard refuses a same-scope force that a real install never hits.
+        # Green on macOS and Linux, red on windows-latest only.
+        base = Path("/repo")
         store._check_scope_conflict(
-            "x", {"scope": "project", "base": "/repo"}, "project", Path("/repo"),
+            "x", {"scope": "project", "base": str(base)}, "project", base,
             force=True)
 
     def test_user_existing_vs_project_requested_raises_regardless_of_force(self):
