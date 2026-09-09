@@ -261,7 +261,7 @@ def cmd_clean(argv) -> int:
         print(json.dumps(
             {"items": [row(*i) for i in items], "count": len(items),
              "bytes": freed, "dry_run": False, "removed": removed,
-             "failed": [{"path": str(pth), "error": str(err)}
+             "failed": [{"path": str(pth), "error": err}
                         for pth, err in failures],
              "declined": declined, "ok": not failures}, indent=2))
         return 1 if failures else 0

@@ -1435,9 +1435,9 @@ def cmd_health(argv):
                  or drift_counts.get("source-missing", 0) > 0
                  or not journal.rotation_healthy())
     if args.json:
-        print(json.dumps({**data, "ok": not attention,
-                          "status": "needs attention" if attention
-                          else "healthy"}, indent=2))
+        print(json.dumps(data | {"ok": not attention,
+                                 "status": "needs attention" if attention
+                                 else "healthy"}, indent=2))
     elif attention:
         print("  " + out.role("● needs attention (run boost doctor)", "warn"))
     else:

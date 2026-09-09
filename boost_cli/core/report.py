@@ -133,7 +133,7 @@ class Report:
         emitted document.
         """
         return {
-            "checks": [dict(c) for c in self._checks],
+            "checks": [c.copy() for c in self._checks],
             "issues": self.issues,
             "ok": self.issues == 0,
             # `None`, never `""` or `False`: a command that returned early
