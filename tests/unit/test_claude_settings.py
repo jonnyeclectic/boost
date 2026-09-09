@@ -8,6 +8,7 @@ import json
 import pytest
 
 from boost_cli.core import claude_settings as cs
+from boost_cli.core import hookhost as hh
 from boost_cli.core import paths
 from boost_cli.errors import BoostError
 
@@ -115,6 +116,8 @@ class TestHooks:
         assert rows == [{
             "scope": "global", "event": "SessionStart", "name": "bmad",
             "command": "boost bmad orient", "matcher": "startup|resume",
+            # `add_hook`'s own default, reported in seconds.
+            "timeout": 10,
         }]
 
     def test_add_hook_returns_none_on_first_write(self, sandbox):
@@ -157,7 +160,7 @@ class TestHooks:
         rows = cs.list_hooks("global")
         assert rows == [{
             "scope": "global", "event": "SessionStart", "name": "h9",
-            "command": "echo x # boost:zzz", "matcher": "",
+            "command": "echo x # boost:zzz", "matcher": "", "timeout": 10,
         }]
         assert cs.has_hook("global", "SessionStart", "h9")
         assert cs.remove_hook("global", "SessionStart", "h9") == 1
@@ -218,3 +221,34 @@ class TestHooks:
         cs.add_hook("global", "SessionStart", "bmad", "cmd")
         block = cs.load("global")["hooks"]["SessionStart"][0]
         assert "matcher" not in block
+
+
+class TestHookTimeoutIsReportedInSeconds:
+    """`hooks list` reads back what `hooks add` wrote, and the stored number is
+    in the host's own units — Claude seconds, Gemini milliseconds."""
+
+    def test_a_claude_hook_reports_the_seconds_it_was_given(self, sandbox):
+        cs.add_hook("global", "SessionStart", "t", "cmd", timeout=25)
+        assert cs.list_hooks("global")[0]["timeout"] == 25
+
+    def test_a_gemini_hook_reports_seconds_not_its_stored_milliseconds(
+            self, sandbox):
+        """The asymmetry that makes a raw passthrough wrong: the same
+        `--timeout 25` is stored as 25000 here."""
+        cs.add_hook("global", "BeforeTool", "t", "cmd", timeout=25,
+                    host=hh.GEMINI)
+        stored = cs.load("global", host=hh.GEMINI)
+        assert stored["hooks"]["BeforeTool"][0]["hooks"][0]["timeout"] == 25000
+        rows = cs.list_hooks("global", host=hh.GEMINI)
+        assert rows[0]["timeout"] == 25
+
+
+def test_a_hand_written_block_with_no_timeout_reports_none(sandbox):
+    """`add_hook` always writes one, but boost is not the only writer of this
+    file — a hook block someone else wrote may carry no timeout at all, and
+    reporting `0` would describe a hook that gives up instantly."""
+    cs.add_hook("global", "SessionStart", "t", "cmd")
+    data = cs.load("global")
+    del data["hooks"]["SessionStart"][0]["hooks"][0]["timeout"]
+    cs.save("global", data)
+    assert cs.list_hooks("global")[0]["timeout"] is None

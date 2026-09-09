@@ -497,6 +497,8 @@ def cmd_quarantine(argv):
                     help="re-link a quarantined skill")
     ap.add_argument("--list", action="store_true", dest="list_mode",
                     help="list quarantined skills")
+    ap.add_argument("--json", action="store_true", dest="as_json",
+                    help="machine-readable output (--list)")
     args = ap.parse_args(argv)
 
     modes = sum(1 for m in (args.name, args.release, args.list_mode) if m)
@@ -505,15 +507,26 @@ def cmd_quarantine(argv):
                         hint="e.g. `boost quarantine cowboy-coding`")
 
     if args.list_mode:
-        rows = []
+        rows, items = [], []
         for kind, section in lockfile.all_installed().items():
             for name, rec in sorted(section.items()):
                 if not rec.get("quarantined"):
                     continue
                 evs = journal.events(action="quarantine", subject=name)
-                since = util.rel_time(evs[0].get("ts", "")) if evs else "?"
+                ts = evs[0].get("ts", "") if evs else ""
+                since = util.rel_time(ts) if evs else "?"
                 rows.append((name, kind, rec.get("version", "?"),
                              rec.get("tap", "?"), since))
+                # `since` is a rendered "3 days ago"; `at` is the timestamp it
+                # was rendered from, because a consumer wants to compare, not
+                # to read English.
+                items.append({"name": name, "kind": kind,
+                              "version": rec.get("version"),
+                              "tap": rec.get("tap"),
+                              "since": since, "at": ts or None})
+        if args.as_json:
+            print(json.dumps({"quarantined": items}, indent=2))
+            return 0
         if not rows:
             out.info("nothing in quarantine")
             return 0

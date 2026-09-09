@@ -1,6 +1,6 @@
 # Copyright the boost contributors.
 # SPDX-License-Identifier: Apache-2.0
-"""Unit tests for core/hookhost.py — the per-host hook table.
+"""Unit tests for core/hh.py — the per-host hook table.
 
 Every claim here was established against Gemini CLI 0.57.0's own bundle
 (`@google/gemini-cli/bundle`): its shipped `docs/hooks/*.md`, its
@@ -179,3 +179,42 @@ class TestHookEntry:
         # Claude's filenames predate this and must not move.
         assert hh.history_prefix(hh.CLAUDE) == ""
         assert hh.history_prefix(hh.GEMINI) == "gemini-"
+
+
+class TestSecondsIsTheInverseOfTimeout:
+    """`timeout()` converts seconds into a host's native units; reading a
+    settings file back needs the other direction.
+
+    Without it a `hooks list --json` consumer comparing two hosts would see
+    `10` for Claude and `10000` for Gemini describing the same `--timeout 10`,
+    and reasonably conclude the Gemini hook was a thousand times more patient.
+    """
+
+    @pytest.mark.parametrize("host", list(hh.hosts()))
+    def test_round_trips_every_host(self, host):
+        for seconds in (1, 10, 60, 3600):
+            assert hh.timeout_seconds(host, hh.timeout(host, seconds)) \
+                == seconds
+
+    def test_claude_stores_seconds_and_gemini_milliseconds(self):
+        """The asymmetry itself, pinned — the upstream `migrate` command copies
+        the number verbatim and turns a 10-second hook into a 10ms one."""
+        assert hh.timeout_seconds(hh.CLAUDE, 10) == 10
+        assert hh.timeout_seconds(hh.GEMINI, 10000) == 10
+
+    def test_a_missing_timeout_stays_missing(self):
+        """A hook block written without a timeout has none. Reporting 0 would
+        claim a hook that times out instantly."""
+        assert hh.timeout_seconds(hh.CLAUDE, None) is None
+
+    def test_a_value_that_is_not_a_whole_second_floors_to_an_int(self):
+        """A hand-written Gemini block can hold any millisecond count, and the
+        field this feeds is declared in seconds as an integer.
+
+        True division answers `10.5` here, which is the more precise number and
+        the wrong type: it reaches `hooks list --json` as a float in a field
+        every other host reports as an int, and a consumer comparing the two
+        hosts is back to comparing different things.
+        """
+        assert hh.timeout_seconds(hh.GEMINI, 10500) == 10
+        assert isinstance(hh.timeout_seconds(hh.GEMINI, 10500), int)

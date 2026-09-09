@@ -869,6 +869,11 @@ def cmd_context(argv: list[str]) -> int:
     # metavar="ACTION": the full "status|enable|disable|map|unmap|apply"
     # spelling is one unbreakable token that overflowed the usage line at 60
     # columns. Each subcommand still lists its own help= below.
+    # A separate dest from the `status` subparser's own --json. Both land in
+    # one namespace, so sharing `json` would let the subparser's default
+    # overwrite a flag given before the action.
+    ap.add_argument("--json", action="store_true", dest="top_json",
+                    help="machine-readable output (bare `context` = status)")
     sub = ap.add_subparsers(dest="action", metavar="ACTION")
     sp = sub.add_parser("status", help="show rules, enabled flag & branch")
     sp.add_argument("--json", action="store_true")
@@ -886,7 +891,11 @@ def cmd_context(argv: list[str]) -> int:
     action = args.action or "status"
 
     if action == "status":
-        return _context_status(state, getattr(args, "json", False))
+        # Bare `boost context` means status, so `boost context --json` has to
+        # mean `context status --json` — it was the one spelling that was
+        # rejected while both halves of it worked.
+        return _context_status(state,
+                               getattr(args, "json", False) or args.top_json)
     if action == "map":
         skills = [s.strip() for s in args.skills.split(",") if s.strip()]
         if not skills:

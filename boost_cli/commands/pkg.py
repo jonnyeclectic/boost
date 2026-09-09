@@ -1302,10 +1302,12 @@ def cmd_bundle(argv: list[str]) -> int:
     ap.add_argument("file", nargs="?", metavar="FILE",
                     help="Boostfile (dump: default stdout; "
                          "install: default ./Boostfile, '-' = stdin)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="show what install would do, touching nothing")
     args = ap.parse_args(argv)
     if args.action == "dump":
         return _bundle_dump(args.file)
-    return _bundle_install(args.file)
+    return _bundle_install(args.file, args.dry_run)
 
 
 def _bundle_dump(file: str | None) -> int:
@@ -1334,7 +1336,16 @@ def _bundle_dump(file: str | None) -> int:
     return 0
 
 
-def _bundle_install(file: str | None) -> int:
+def _bundle_install(file: str | None, dry_run: bool = False) -> int:
+    """Apply a Boostfile, or with ``dry_run`` report what applying it would do.
+
+    A bundle install taps registries, installs skills **and materializes rules
+    into the agent's own context file** — `boost install` has had a
+    ``--dry-run`` all along and the one command that can edit `CLAUDE.md`
+    unattended had no way to preview. Every mutation below is therefore
+    guarded at its call site rather than by returning early, so the report
+    walks the same lines in the same order the real run would.
+    """
     if file == "-":
         text, label = sys.stdin.read(), "<stdin>"
     else:
@@ -1352,6 +1363,8 @@ def _bundle_install(file: str | None) -> int:
             raise BoostError("cannot read %s: %s" % (_tilde(path), e.strerror or e)) from e
     taps_added = installed_n = present = failed = 0
     installed_kinds: set[str] = set()
+    would_tap: set[str] = set()
+    would_rules: list[str] = []
     have_taps = {t.name for t in registry.list_taps()}
     # name -> kind across every lock section, so a `skill` line naming an
     # already-installed rule/workflow is counted present, not re-installed.
@@ -1368,6 +1381,13 @@ def _bundle_install(file: str | None) -> int:
         if parts[0] == "tap" and len(parts) >= 2:
             tname, turl = parts[1], parts[2] if len(parts) > 2 else ""
             if tname in have_taps:
+                continue
+            if dry_run:
+                # Nothing is cloned, so any skill line naming this tap cannot
+                # be resolved below — said plainly there rather than guessed.
+                would_tap.add(tname)
+                out.info("would tap %s" % tname)
+                taps_added += 1
                 continue
             try:
                 tap = registry.add(turl or tname)
@@ -1391,6 +1411,13 @@ def _bundle_install(file: str | None) -> int:
                 continue
             matches = catalog.find(sname, tap=tapq or None)
             if not matches:
+                if dry_run and (tapq in would_tap or would_tap):
+                    # Honest rather than optimistic: the tap it would come
+                    # from has not been cloned, so whether this resolves is
+                    # genuinely unknown until it is.
+                    out.info("%s — cannot resolve yet; its tap would be "
+                             "added by this same file" % sname)
+                    continue
                 out.warn("%s not found%s — skipped"
                          % (sname, (" in tap %s" % tapq) if tapq else ""))
                 failed += 1
@@ -1407,6 +1434,18 @@ def _bundle_install(file: str | None) -> int:
             if sver and str(entry.get("version")) != sver:
                 out.warn("%s: Boostfile wants @%s, tap has %s — installing that"
                          % (sname, sver, entry.get("version")))
+            entry_kind = entry.get("kind", "skill")
+            if dry_run:
+                out.info("would install %s v%s (%s)%s"
+                         % (sname, entry.get("version"), entry["tap"],
+                            "" if entry_kind == "skill"
+                            else " [%s]" % entry_kind))
+                if entry_kind == "rule":
+                    would_rules.append(sname)
+                have_installed[sname] = entry_kind
+                installed_kinds.add(entry_kind)
+                installed_n += 1
+                continue
             try:
                 store.install(entry)
             except BoostError as err:
@@ -1415,13 +1454,31 @@ def _bundle_install(file: str | None) -> int:
                 continue
             out.ok("installed %s v%s (%s)" % (sname, entry.get("version"),
                                               entry["tap"]))
-            entry_kind = entry.get("kind", "skill")
             have_installed[sname] = entry_kind
             installed_kinds.add(entry_kind)
             installed_n += 1
         else:
             out.warn("line %d: unrecognised: %s" % (lineno, line))
             failed += 1
+    if dry_run:
+        summary = "would install %s" % _plural(installed_n, "item")
+        if taps_added:
+            summary += ", add %s" % _plural(taps_added, "tap")
+        if present:
+            summary += ", %d already present" % present
+        if failed:
+            summary += ", %d would fail" % failed
+        out.info(summary)
+        if would_rules:
+            # The reason this flag exists. A rule is materialized into the
+            # agent's own context file — the one the user reads every session
+            # — so it is the most invasive thing a Boostfile can do and the
+            # least visible.
+            out.warn("%s would be installed as a rule and edit your agent "
+                     "context file (e.g. ~/.claude/CLAUDE.md): %s"
+                     % (_plural(len(would_rules), "item"),
+                        ", ".join(sorted(would_rules))), wrap=True)
+        return 1 if failed else 0
     if taps_added:
         complete.refresh_names()
     journal.log("bundle-install", label, taps=taps_added, skills=installed_n)

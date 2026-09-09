@@ -2,15 +2,15 @@
 id: audit-missing-json-on-doctor-test-health-changelog-trending-log-ho
 board: code
 section: dx
-status: planned
+status: shipped
 category: CLI · UX
 complexity: M
 impact: Med
 wow: 1
 note: doctor — the check CI would poll, mirrored by an MCP tool — offers only prose
 order: 232
-owner:
-pr:
+owner: loop/missing-json
+pr: 835
 title: "Missing --json on <code>doctor</code>, <code>test</code>, <code>health</code>, <code>changelog</code>, <code>trending</code>, <code>log</code>, <code>hooks list</code> and friends; <code>bundle install</code> lacks --dry-run"
 ---
 Eleven read-only reporting commands reject <code>--json</code> that their group siblings all have:
