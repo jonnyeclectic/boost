@@ -326,16 +326,29 @@ def test_every_item_file_is_named_for_its_id():
     assert not bad, "item filenames must match their id: %s" % "; ".join(bad)
 
 
-class TestShippedBodiesCollapse:
-    """Finished cards ship their text but must not pay to render it.
+class TestSettledBodiesAreLinkedNotInlined:
+    """Finished cards ship their title on the board and their text in the repo.
 
-    Measured from the Lighthouse artefact of the run that first failed the
-    ``minScore 0.85`` floor (perf 0.74 on ``docs/roadmap.html``): of 1.6 s of
-    main-thread work, ``styleLayout`` was 705 ms and ``paintCompositeRender``
-    393 ms, against 20 ms of script evaluation. The cost is laying out and
-    painting 6,316 elements, not bytes and not JavaScript — so the fix is to
-    stop *rendering* finished cards, which a closed ``<details>`` does while
-    leaving every word in the source.
+    The history matters, because this class used to assert the opposite and the
+    reasoning is why it changed. The first fix was a closed ``<details>``, aimed
+    at layout and paint: measured on the Lighthouse artefact of the run that
+    first failed ``minScore 0.85`` (perf 0.74), of 1.6 s of main-thread work
+    ``styleLayout`` was 705 ms and ``paintCompositeRender`` 393 ms against 20 ms
+    of script. It worked for that, and it deliberately did NOT reduce transfer
+    size or DOM node count.
+
+    Which is exactly why it ran out. Settled bodies are 848,682 B of the code
+    board's 1,010,171 B of card text — 84.0%, over 350 of 405 cards — and
+    ``page_budget.py`` gates bytes and elements, the two things ``<details>``
+    never touched. The board reached 86% of both ceilings, and that budget's own
+    ``why`` says the answer here is "pagination or collapsing settled sections,
+    not another raise". Linking settled write-ups took it to 768,681 B / 11,781
+    elements: 42.7% / 47.1% of the same ceilings.
+
+    Nothing is deleted. ``docs/roadmap/items/<id>.md`` is the source that
+    generated the collapsed copy, so the text is unchanged and still greppable.
+    What IS lost is browser find-in-page over settled write-ups from the board,
+    and these tests pin that trade rather than let it be rediscovered.
     """
 
     def _card(self, builder, **over):
@@ -345,42 +358,37 @@ class TestShippedBodiesCollapse:
         item.update(over)
         return builder.render_code_card(item)
 
-    def test_a_shipped_card_collapses_its_body(self):
-        html = self._card(_load_builder())
-        assert "<details" in html and "</details>" in html
+    def test_a_settled_card_does_not_inline_its_body(self):
+        # The whole point: those bytes and elements must not reach the page.
+        assert "BODY-TEXT" not in self._card(_load_builder())
 
-    def test_the_text_is_still_in_the_source(self):
-        # The point is to skip layout, not to hide the writing: closing a card
-        # well means recording what was measured, and that has to stay
-        # findable with the browser's own find-in-page and by grep.
-        assert "BODY-TEXT" in self._card(_load_builder())
-
-    def test_it_is_closed_so_layout_is_actually_skipped(self):
-        # An `open` details lays out exactly like a <p> and saves nothing.
+    def test_it_links_to_the_item_file_that_holds_the_text(self):
+        # Skipping layout was never worth losing the writing. Closing an item
+        # well means recording what was measured, so the card must say where
+        # that record is rather than silently dropping it.
         html = self._card(_load_builder())
-        assert "<details open" not in html
+        assert "docs/roadmap/items" in html and "x.md" in html
+
+    def test_the_link_is_labelled(self):
+        # A bare arrow or icon is an unlabelled control — a keyboard and
+        # screen-reader trap that would fail the a11y sweep this page is under.
+        html = self._card(_load_builder())
+        start = html.index("<a ")
+        text = html[start:html.index("</a>", start)].split(">", 1)[1]
+        assert len(text.strip()) >= 4, text
 
     def test_unfinished_cards_stay_expanded(self):
-        # Planned/next/inflight work is what a reader came for; collapsing it
+        # Planned/next/inflight work is what a reader came for; linking it away
         # would trade a real page for a score.
         for status in ("planned", "next", "inflight"):
             html = self._card(_load_builder(), status=status)
-            assert "<details" not in html, status
-            assert "BODY-TEXT" in html
-
-    def test_the_summary_is_labelled(self):
-        # A bare <summary> renders as an unlabelled triangle, which is a
-        # keyboard/screen-reader trap and would fail the a11y sweep.
-        html = self._card(_load_builder())
-        start = html.index("<summary")
-        text = html[start:html.index("</summary>", start)]
-        assert len(text.split(">", 1)[1].strip()) >= 4, text
+            assert "BODY-TEXT" in html, status
+            assert "roadmap/items" not in html, status
 
     def test_the_anchor_survives(self):
         # Cards deep-link each other by id; the drift diagnosis also keys on
         # this exact opening tag.
         assert '<article class="cap rcard" id="x">' in self._card(_load_builder())
-
 
 _RULE = re.compile(r"([^{}]+?)\{([^{}]*)\}", re.DOTALL)
 _COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
