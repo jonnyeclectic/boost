@@ -542,3 +542,78 @@ class TestLogEntries:
         answer, and the caller renders it as an empty array."""
         repo = _make_repo(tmp_path / "r")
         assert gitutil.log_entries(repo, "nope.txt", 10) == []
+
+    def test_the_short_sha_is_what_is_reported(self, tmp_path):
+        """`%h`, not `%H`. The payload's `sha` is what a person pastes back
+        into `git show`, and a 40-character hash is the same answer in a
+        shape nothing else in boost's output uses."""
+        repo = _make_repo(tmp_path / "r")
+        row = gitutil.log_entries(repo, ".", 1)[0]
+        full = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                              capture_output=True, text=True,
+                              check=True).stdout.strip()
+        assert len(row["sha"]) < len(full)
+        assert full.startswith(row["sha"])
+
+    def test_the_separator_survives_inside_a_subject(self, tmp_path):
+        """The one input the separator itself cannot survive without
+        `maxsplit`.
+
+        A subject containing `\\x1f` splits into five fields, and every way of
+        handling that except pinning the split is wrong: unpacking five names
+        into four raises, and splitting from the right shifts `sha`, `date`
+        and `author` by one. The remainder belongs to the subject, which is
+        the last field precisely so it can hold anything.
+        """
+        repo = _make_repo(tmp_path / "r")
+        (repo / "a.txt").write_text("sep\n", encoding="utf-8")
+        _git("add", "-A", cwd=repo)
+        _git("commit", "-qm", "fix: a \x1f inside the subject", cwd=repo)
+
+        row = gitutil.log_entries(repo, ".", 1)[0]
+        assert row["subject"] == "fix: a \x1f inside the subject"
+        assert row["author"] == "Test Author"
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", row["date"])
+
+    def test_a_directory_that_is_not_a_repo_is_an_empty_list(self, tmp_path):
+        """`check=False` is the whole of the error handling, and it is
+        deliberate: `changelog --json` runs over whatever path it was handed,
+        and a directory git refuses is an empty history, not a traceback out
+        of the middle of a JSON document."""
+        plain = tmp_path / "not-a-repo"
+        plain.mkdir()
+        assert gitutil.log_entries(plain, ".", 10) == []
+
+    def test_the_defaults_are_the_whole_repo_and_twenty_rows(self, tmp_path):
+        """Both defaults are part of the contract the callers rely on:
+        `changelog` asks for a path and a count, `log` takes them from here."""
+        repo = _make_repo(tmp_path / "r")
+        for i in range(21):
+            (repo / "a.txt").write_text("%d\n" % i, encoding="utf-8")
+            _git("add", "-A", cwd=repo)
+            _git("commit", "-qm", "commit %d" % i, cwd=repo)
+
+        rows = gitutil.log_entries(repo)
+        assert len(rows) == 20
+        assert rows[0]["subject"] == "commit 20"
+
+    def test_one_unparseable_line_drops_that_row_and_keeps_the_rest(
+            self, monkeypatch):
+        """`continue`, never `break`.
+
+        git does not produce these lines, which is exactly why the guards need
+        a test: a `break` would read as equivalent until the day something
+        upstream emits one, and then it would truncate the history at the
+        first oddity instead of skipping it — a shorter answer that still
+        looks like a complete one.
+        """
+        sep = "\x1f"
+        _record_run(monkeypatch, stdout="\n".join((
+            sep.join(("aaa1111", "2026-01-01", "Ada", "first")),
+            "",                                    # blank line
+            "   ",                                 # whitespace-only line
+            sep.join(("short", "row")),            # too few fields
+            sep.join(("bbb2222", "2026-01-02", "Bee", "last")),
+        )))
+        rows = gitutil.log_entries("/repo", ".", 10)
+        assert [r["subject"] for r in rows] == ["first", "last"]

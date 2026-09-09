@@ -206,3 +206,15 @@ class TestSecondsIsTheInverseOfTimeout:
         """A hook block written without a timeout has none. Reporting 0 would
         claim a hook that times out instantly."""
         assert hh.timeout_seconds(hh.CLAUDE, None) is None
+
+    def test_a_value_that_is_not_a_whole_second_floors_to_an_int(self):
+        """A hand-written Gemini block can hold any millisecond count, and the
+        field this feeds is declared in seconds as an integer.
+
+        True division answers `10.5` here, which is the more precise number and
+        the wrong type: it reaches `hooks list --json` as a float in a field
+        every other host reports as an int, and a consumer comparing the two
+        hosts is back to comparing different things.
+        """
+        assert hh.timeout_seconds(hh.GEMINI, 10500) == 10
+        assert isinstance(hh.timeout_seconds(hh.GEMINI, 10500), int)
