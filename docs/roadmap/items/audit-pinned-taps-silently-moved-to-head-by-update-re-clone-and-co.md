@@ -2,7 +2,7 @@
 id: audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: M
 impact: High

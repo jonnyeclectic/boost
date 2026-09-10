@@ -2,7 +2,7 @@
 id: audit-trust-findings
 board: code
 section: trust
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 1
 note: trust add of a missing .pub path blames "invalid base64 in minisign data"
 order: 298
 owner: loop/trust-audit-findings
-pr:
+pr: 793
 title: "boost trust: CLI audit findings (2026-08)"
 ---
 <b><code>trust add</code> blames base64 for a nonexistent <code>.pub</code> path</b> (med).

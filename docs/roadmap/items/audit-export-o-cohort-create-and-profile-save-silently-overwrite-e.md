@@ -2,7 +2,7 @@
 id: audit-export-o-cohort-create-and-profile-save-silently-overwrite-e
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: Med

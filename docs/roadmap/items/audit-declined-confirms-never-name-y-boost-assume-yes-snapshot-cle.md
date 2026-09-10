@@ -2,7 +2,7 @@
 id: audit-declined-confirms-never-name-y-boost-assume-yes-snapshot-cle
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · UX
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 1
 note: implementation lands the full fix; make check's eval/mutation/smoke gates could not run in the claiming sandbox (no PyPI egress) — see PR for what did run
 order: 224
 owner: loop/confirm-bypass-hints
-pr:
+pr: 731
 title: "Declined confirms never name <code>-y</code>/<code>BOOST_ASSUME_YES</code>; snapshot, clean, infer/distill/absorb and sync reject <code>--yes</code>"
 ---
 One pattern across seven commands. <code>snapshot restore</code>, piped without <code>BOOST_ASSUME_YES</code>: output is exactly <code>&nbsp;&nbsp;cancelled</code>, exit 0 &mdash; no prompt shown, no reason, no bypass named &mdash; and <code>snapshot restore ID --yes</code> answers <code>Error: unrecognized arguments: --yes</code> (exit 2). <code>clean --deep --yes</code> hits the same error, and its declined path claims <code>&#10003; nothing to clean</code> when a snapshot was in fact kept. <code>sync --prune</code> declined tells the user to run <code>boost sync --prune</code> &mdash; the command just run. <code>untap</code> and <code>bmad uninstall</code> print bare <code>cancelled</code>/<code>aborted</code> lines (bmad exits 0 with nothing removed); <code>infer -o</code>/<code>distill</code> abort with no hint and reject <code>--yes</code>. <code>BOOST_ASSUME_YES</code> appears in zero command help texts.

@@ -2,7 +2,7 @@
 id: audit-browse-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 1
 note: both findings fixed in PR; make check unrunnable in the sandbox (no PyPI/apt egress) — CI is the real gate
 order: 251
 owner: loop/browse-plain-fallback
-pr:
+pr: 790
 title: "boost browse: CLI audit findings (2026-08)"
 ---
 <b>A curses init failure crashes with a report instead of falling back</b> (cluster

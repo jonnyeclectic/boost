@@ -2,7 +2,7 @@
 id: audit-snapshot-restore-replaces-the-lock-wholesale-orphaning-newer
 board: code
 section: internals
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 2
 note: restore forgets a newer rule; its 865-line CLAUDE.md block stays, uninstall refuses
 order: 219
 owner: loop/snapshot-restore-lock-merge
-pr:
+pr: 658
 title: "<code>snapshot restore</code> replaces the lock wholesale, orphaning newer rules' CLAUDE.md blocks"
 ---
 <code>_snapshot_save</code> tars every child of <code>store_dir()</code> including

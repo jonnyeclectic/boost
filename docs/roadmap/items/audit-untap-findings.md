@@ -2,7 +2,7 @@
 id: audit-untap-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · UX
 complexity: S
 impact: Low
