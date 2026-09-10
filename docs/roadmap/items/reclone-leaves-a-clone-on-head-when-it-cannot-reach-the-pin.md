@@ -10,7 +10,7 @@ wow: 3
 note: the last unfixed path of the pin-integrity item, left behind when three PRs claimed it and one won
 order: 310
 owner: loop/reclone-pin-integrity
-pr: 0
+pr: 845
 title: "<code>compact --reclone</code> left a clone on HEAD when it could not reach the pin"
 ---
 The residual of <code>audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co</code>,
