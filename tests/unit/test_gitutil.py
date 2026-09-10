@@ -487,3 +487,133 @@ class TestBranchState:
         # branch name outside any repo.
         assert len(calls) == 1
         assert calls[0][0][-1] == "--is-inside-work-tree"
+
+
+class TestLogEntries:
+    """Structured git log rows, for the commands that speak `--json`.
+
+    `log_for_path` formats `%h  %ad  %an  %s` and returns strings, which is
+    right for a prose listing and unusable as data: splitting it back apart
+    guesses where the fields were. The separator is what makes the parse
+    exact, and these are the inputs that defeat a whitespace split.
+    """
+
+    def test_fields_are_split_on_the_separator_not_on_whitespace(self, tmp_path):
+        repo = _make_repo(tmp_path / "r", author="Ada  Two  Spaces")
+        (repo / "a.txt").write_text("two\n", encoding="utf-8")
+        _git("add", "-A", cwd=repo)
+        # A subject carrying the exact two-space run the prose format uses as
+        # its delimiter, plus a pipe, which a `|`-separated format would lose.
+        _git("commit", "-qm", "fix:  spaced  subject | with a pipe", cwd=repo)
+
+        rows = gitutil.log_entries(repo, ".", 1)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["author"] == "Ada  Two  Spaces"
+        assert row["subject"] == "fix:  spaced  subject | with a pipe"
+        assert re.fullmatch(r"[0-9a-f]{7,}", row["sha"])
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", row["date"])
+
+    def test_an_empty_subject_still_yields_all_four_fields(self, tmp_path):
+        """`--allow-empty-message` produces a blank `%s`. A parse that drops
+        short rows would silently omit the commit entirely."""
+        repo = _make_repo(tmp_path / "r")
+        (repo / "a.txt").write_text("three\n", encoding="utf-8")
+        _git("add", "-A", cwd=repo)
+        _git("commit", "-q", "--allow-empty-message", "-m", "", cwd=repo)
+
+        row = gitutil.log_entries(repo, ".", 1)[0]
+        assert row["subject"] == ""
+        assert set(row) == {"sha", "date", "author", "subject"}
+
+    def test_limit_and_path_scope_are_honoured(self, tmp_path):
+        repo = _make_repo(tmp_path / "r")
+        (repo / "other.txt").write_text("x\n", encoding="utf-8")
+        _git("add", "-A", cwd=repo)
+        _git("commit", "-qm", "touch other", cwd=repo)
+
+        assert len(gitutil.log_entries(repo, ".", 1)) == 1
+        # Scoped to a path only that commit touched.
+        only = gitutil.log_entries(repo, "other.txt", 10)
+        assert [r["subject"] for r in only] == ["touch other"]
+
+    def test_a_repo_with_no_matching_commits_is_an_empty_list(self, tmp_path):
+        """Not an error and not None: "nothing touched this path" is an
+        answer, and the caller renders it as an empty array."""
+        repo = _make_repo(tmp_path / "r")
+        assert gitutil.log_entries(repo, "nope.txt", 10) == []
+
+    def test_the_short_sha_is_what_is_reported(self, tmp_path):
+        """`%h`, not `%H`. The payload's `sha` is what a person pastes back
+        into `git show`, and a 40-character hash is the same answer in a
+        shape nothing else in boost's output uses."""
+        repo = _make_repo(tmp_path / "r")
+        row = gitutil.log_entries(repo, ".", 1)[0]
+        full = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo),
+                              capture_output=True, text=True,
+                              check=True).stdout.strip()
+        assert len(row["sha"]) < len(full)
+        assert full.startswith(row["sha"])
+
+    def test_the_separator_survives_inside_a_subject(self, tmp_path):
+        """The one input the separator itself cannot survive without
+        `maxsplit`.
+
+        A subject containing `\\x1f` splits into five fields, and every way of
+        handling that except pinning the split is wrong: unpacking five names
+        into four raises, and splitting from the right shifts `sha`, `date`
+        and `author` by one. The remainder belongs to the subject, which is
+        the last field precisely so it can hold anything.
+        """
+        repo = _make_repo(tmp_path / "r")
+        (repo / "a.txt").write_text("sep\n", encoding="utf-8")
+        _git("add", "-A", cwd=repo)
+        _git("commit", "-qm", "fix: a \x1f inside the subject", cwd=repo)
+
+        row = gitutil.log_entries(repo, ".", 1)[0]
+        assert row["subject"] == "fix: a \x1f inside the subject"
+        assert row["author"] == "Test Author"
+        assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", row["date"])
+
+    def test_a_directory_that_is_not_a_repo_is_an_empty_list(self, tmp_path):
+        """`check=False` is the whole of the error handling, and it is
+        deliberate: `changelog --json` runs over whatever path it was handed,
+        and a directory git refuses is an empty history, not a traceback out
+        of the middle of a JSON document."""
+        plain = tmp_path / "not-a-repo"
+        plain.mkdir()
+        assert gitutil.log_entries(plain, ".", 10) == []
+
+    def test_the_defaults_are_the_whole_repo_and_twenty_rows(self, tmp_path):
+        """Both defaults are part of the contract the callers rely on:
+        `changelog` asks for a path and a count, `log` takes them from here."""
+        repo = _make_repo(tmp_path / "r")
+        for i in range(21):
+            (repo / "a.txt").write_text("%d\n" % i, encoding="utf-8")
+            _git("add", "-A", cwd=repo)
+            _git("commit", "-qm", "commit %d" % i, cwd=repo)
+
+        rows = gitutil.log_entries(repo)
+        assert len(rows) == 20
+        assert rows[0]["subject"] == "commit 20"
+
+    def test_one_unparseable_line_drops_that_row_and_keeps_the_rest(
+            self, monkeypatch):
+        """`continue`, never `break`.
+
+        git does not produce these lines, which is exactly why the guards need
+        a test: a `break` would read as equivalent until the day something
+        upstream emits one, and then it would truncate the history at the
+        first oddity instead of skipping it — a shorter answer that still
+        looks like a complete one.
+        """
+        sep = "\x1f"
+        _record_run(monkeypatch, stdout="\n".join((
+            sep.join(("aaa1111", "2026-01-01", "Ada", "first")),
+            "",                                    # blank line
+            "   ",                                 # whitespace-only line
+            sep.join(("short", "row")),            # too few fields
+            sep.join(("bbb2222", "2026-01-02", "Bee", "last")),
+        )))
+        rows = gitutil.log_entries("/repo", ".", 10)
+        assert [r["subject"] for r in rows] == ["first", "last"]

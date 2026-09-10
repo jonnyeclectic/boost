@@ -338,10 +338,17 @@ without `--force`.
 boost search jira          # look across every tapped registry
 boost install my-jira      # copy, link, lock — with a quality score attached
 boost doctor               # broken links, lock drift, stale taps
+boost doctor --json        # the same checks as a payload, for CI or an agent
 
 # hand the whole setup to a team:
 boost bundle dump > Boostfile     # everyone else runs: boost bundle install
+boost bundle install --dry-run    # …or see what that would tap, install and edit first
 ```
+
+The reporting commands all speak `--json` — `doctor`, `health`, `test`,
+`changelog`, `log`, `trending`, `hooks list`, `clean`, `compact`, `context`
+and `index` — so a script reads a payload instead of parsing prose. Exit codes
+are the same either way.
 
 ## Browsing the catalogue
 

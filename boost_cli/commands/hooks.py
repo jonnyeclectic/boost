@@ -24,6 +24,8 @@ are left untouched. See core/claude_settings.py.
 """
 from __future__ import annotations
 
+import json
+
 from .. import cliparse
 from ..core import claude_settings as cs
 from ..core import hookhost, journal, util
@@ -53,22 +55,34 @@ def cmd_hooks(argv) -> int:
                    help="Claude matcher, e.g. 'startup|resume|clear'")
     p.add_argument("--timeout", type=util.positive_int, default=10,
                    help="hook timeout in seconds (default: 10)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output (list)")
     args = p.parse_args(argv)
 
     if args.action == "list":
-        return _list(args.scope, args.host, args.event)
+        return _list(args.scope, args.host, args.event, args.as_json)
     if args.action == "add":
         return _add(args)
     return _remove(args)
 
 
-def _list(scope, host, event=None) -> int:
+def _list(scope, host, event=None, as_json=False) -> int:
     rows = cs.list_all_hooks(scope, host=host)
     if event:
         # Each row is already tagged with its own host, so filter against
         # that host's native spelling rather than the one the caller typed —
         # `hooks list` (no --host) mixes Claude and Gemini rows in one table.
         rows = [r for r in rows if r["event"] == hookhost.translate(r["host"], event)]
+    if as_json:
+        # Every field the table shows, and `timeout` besides — it is in the
+        # rows already and is the one value a reader cannot see in the prose
+        # listing at all.
+        print(json.dumps({"hooks": [
+            {"host": r["host"], "scope": r["scope"], "event": r["event"],
+             "name": r["name"], "matcher": r["matcher"] or None,
+             "command": r["command"], "timeout": r.get("timeout")}
+            for r in rows]}, indent=2))
+        return 0
     if not rows:
         out.info("no boost-managed hooks" + (" in %s scope" % scope if scope else "")
                  + (" for event '%s'" % event if event else ""))

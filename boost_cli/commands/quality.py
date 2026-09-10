@@ -37,6 +37,7 @@ from ..core import (
     paths,
     provenance,
     registry,
+    report,
     staleness,
     store,
     util,
@@ -393,34 +394,36 @@ def _decay_rows(cwd: Path) -> list[dict]:
 def cmd_doctor(argv):
     ap = cliparse.parser(
         prog="boost doctor", description="Check installation health & report issues")
-    ap.parse_args(argv)
-    issues = 0
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    args = ap.parse_args(argv)
+    # Every check routes through the collector so one run can speak prose or
+    # JSON without the message existing in two spellings — see core/report.py.
+    rep = report.Report(as_json=args.json)
 
-    out.heading("boost doctor")
+    if not args.json:
+        out.heading("boost doctor")
 
-    def bad(msg, wrap=False):
-        nonlocal issues
-        issues += 1
-        out.warn(msg, wrap=wrap)
+    def bad(name, msg, wrap=False):
+        rep.issue(name, msg, wrap=wrap)
 
     if gitutil.has_git():
-        out.ok("git on PATH")
+        rep.ok("git", "git on PATH")
     else:
-        bad("git not found on PATH — install git")
+        bad("git", "git not found on PATH — install git")
     paths.ensure_dirs()  # create silently; never a failure
 
     taps = registry.list_taps()
     tap_ok = 0
     for tap in taps:
         if not tap.is_cloned:
-            bad("tap %s not cloned — run `boost update`" % tap.name)
+            bad("tap", "tap %s not cloned — run `boost update`" % tap.name)
         elif not tap.cache_file.exists():
-            bad("tap %s has no catalog cache — run `boost update %s`"
+            bad("tap", "tap %s has no catalog cache — run `boost update %s`"
                 % (tap.name, tap.name))
         else:
             tap_ok += 1
     if taps and tap_ok == len(taps):
-        out.ok("%d tap%s cloned & cached" % (len(taps), _s(len(taps))))
+        rep.ok("taps", "%d tap%s cloned & cached" % (len(taps), _s(len(taps))))
     elif not taps:
         # `boost tap --defaults` leads, and it is the same command in the same
         # order that `boost search`'s error, `mcp.no_results` and the MCP
@@ -428,7 +431,7 @@ def cmd_doctor(argv):
         # in one session must not see the recommendation flip and read it as
         # two different fixes — which is exactly what happened here: search
         # said `--defaults`, doctor said `owner/repo`.
-        out.info("no registries tapped — nothing is searchable yet; add the "
+        rep.note("taps", "no registries tapped — nothing is searchable yet; add the "
                  "recommended ones with `boost tap --defaults`", wrap=True)
 
     # lockfile.read() collapses missing/corrupt/wrong-schema into an empty
@@ -438,23 +441,23 @@ def cmd_doctor(argv):
     # claimed for a file doctor actually parsed.
     integ = lockfile.check()
     if integ.ok:
-        out.ok("lock file parses (v%d)" % lockfile.SCHEMA_VERSION)
+        rep.ok("lockfile", "lock file parses (v%d)" % lockfile.SCHEMA_VERSION)
         lock_ok = True
     elif integ.problem == "missing":
         if store.has_content():
             n = sum(1 for c in paths.store_dir().iterdir()
                     if c.is_dir() and not c.name.startswith("."))
-            bad("lock file missing — %d store dir%s unrecorded, run `boost sync`"
+            bad("lockfile", "lock file missing — %d store dir%s unrecorded, run `boost sync`"
                 % (n, _s(n)))
             lock_ok = False
         else:
-            out.info("no lock file yet — nothing installed")
+            rep.note("lockfile", "no lock file yet — nothing installed")
             lock_ok = True
     elif integ.problem == "corrupt":
-        bad("lock file is corrupt — restore with `boost replay`")
+        bad("lockfile", "lock file is corrupt — restore with `boost replay`")
         lock_ok = False
     else:  # "schema"
-        bad("lock file schema is v%s, expected v%d"
+        bad("lockfile", "lock file schema is v%s, expected v%d"
             % (integ.version, lockfile.SCHEMA_VERSION))
         lock_ok = False
 
@@ -465,7 +468,7 @@ def cmd_doctor(argv):
     for name, entry in sorted(skills.items()):
         sdir = store.skill_store_dir(name)
         if not sdir.is_dir():
-            bad("skill %s missing from store — run `boost heal`" % name)
+            bad("skill", "skill %s missing from store — run `boost heal`" % name)
             skill_issues += 1
             continue
         if entry.get("quarantined"):
@@ -475,7 +478,7 @@ def cmd_doctor(argv):
         # only `boost verify` ever re-checked it — surface content drift here too.
         locked = entry.get("sha256")
         if locked and util.sha256_dir(sdir) != locked:
-            bad("skill %s modified since install — run `boost verify`" % name)
+            bad("skill", "skill %s modified since install — run `boost verify`" % name)
             skill_issues += 1
         # A deliberate sideline (`focus`, `profile use`, `context apply`)
         # unlinked this skill on purpose, and `sidelined_by` says so. Without
@@ -499,11 +502,11 @@ def cmd_doctor(argv):
             if link.is_symlink() and link.exists():
                 continue
             if not link.is_symlink() and link.exists():
-                bad("skill %s not linked for %s — %s exists and is not a boost "
+                bad("skill-link", "skill %s not linked for %s — %s exists and is not a boost "
                     "link; move or delete it, then run `boost sync`"
                     % (name, agent, paths.tilde(link)))
             else:
-                bad("skill %s not linked for %s — run `boost sync`" % (name, agent))
+                bad("skill-link", "skill %s not linked for %s — run `boost sync`" % (name, agent))
             skill_issues += 1
         # The other direction. `agents` records what is linked and `only_agents`
         # what was asked for, so a link the declaration excludes is pure lock
@@ -513,7 +516,7 @@ def cmd_doctor(argv):
         scope = entry.get("only_agents")
         stray = [a for a in entry.get("agents", []) if scope and a not in scope]
         if stray:
-            bad("skill %s is linked for %s, outside its declared scope (%s) — "
+            bad("skill-scope", "skill %s is linked for %s, outside its declared scope (%s) — "
                 "run `boost sync --prune`"
                 % (name, ", ".join(stray), ", ".join(scope)))
             skill_issues += 1
@@ -523,12 +526,12 @@ def cmd_doctor(argv):
         # removed them — so it must not inflate this count into a false
         # "healthy, N skills with agent links" the way it used to.
         if active_skills:
-            out.ok("%d skill%s present in store with agent links%s"
+            rep.ok("skills", "%d skill%s present in store with agent links%s"
                    % (active_skills, _s(active_skills),
                       " (%d quarantined)" % quarantined_skills
                       if quarantined_skills else ""))
         else:
-            out.ok("%d skill%s quarantined, none active"
+            rep.ok("skills", "%d skill%s quarantined, none active"
                    % (quarantined_skills, _s(quarantined_skills)))
 
     # Project-scoped skills committed into THIS repo — the governance blind spot
@@ -540,15 +543,15 @@ def cmd_doctor(argv):
     for name, entry in sorted(pskills.items()):
         st = integrity.project_status(entry, pbase)
         if st == integrity.STATUS_MISSING:
-            bad("project skill %s is in .boost but its files are gone — "
+            bad("project-skill", "project skill %s is in .boost but its files are gone — "
                 "run `boost sync`" % name)
             proj_issues += 1
         elif st == integrity.STATUS_MODIFIED:
-            bad("project skill %s modified since install — "
+            bad("project-skill", "project skill %s modified since install — "
                 "run `boost verify`" % name)
             proj_issues += 1
     if pskills and not proj_issues:
-        out.ok("%d project skill%s intact in %s"
+        rep.ok("project-skills", "%d project skill%s intact in %s"
                % (len(pskills), _s(len(pskills)), paths.tilde(pbase)))
 
     # Rules and workflows don't live in the store — they materialize into agent
@@ -577,13 +580,13 @@ def cmd_doctor(argv):
             else:
                 present = p.is_file()
             if not present:
-                bad("rule %s missing its %s materialization — run "
+                bad("rule", "rule %s missing its %s materialization — run "
                     "`boost reinstall %s`" % (name, m.get("agent", "?"), name))
                 mat_issues += 1
     for name, entry in sorted(workflows.items()):
         for m in entry.get("materializations") or []:
             if not Path(m.get("path", "")).is_file():
-                bad("workflow %s missing its %s file — run `boost reinstall %s`"
+                bad("workflow", "workflow %s missing its %s file — run `boost reinstall %s`"
                     % (name, m.get("agent", "?"), name))
                 mat_issues += 1
     if (all_rules or all_workflows) and not mat_issues:
@@ -602,7 +605,7 @@ def cmd_doctor(argv):
                 bits.append("%d workflow%s" % (quarantined_workflows,
                                                _s(quarantined_workflows)))
             note = " (%s quarantined)" % " and ".join(bits)
-        out.ok("%d rule%s and %d workflow%s fully materialized%s"
+        rep.ok("rules-workflows", "%d rule%s and %d workflow%s fully materialized%s"
                % (len(rules), _s(len(rules)), len(workflows), _s(len(workflows)),
                   note))
 
@@ -611,19 +614,19 @@ def cmd_doctor(argv):
                if c.is_dir() and not c.name.startswith(".") and c.name not in skills
                ] if root.is_dir() else []
     if orphans:
-        bad("%d orphaned store dir%s (%s) — run `boost sync`"
+        bad("orphans", "%d orphaned store dir%s (%s) — run `boost sync`"
             % (len(orphans), _s(len(orphans)), ", ".join(orphans[:5])))
 
     broken, foreign = _broken_links()
     if broken:
-        bad("%d broken symlink%s in agent dirs — run `boost heal`"
+        bad("broken-links", "%d broken symlink%s in agent dirs — run `boost heal`"
             % (len(broken), _s(len(broken))))
     if foreign:
         # `out.info`, not `bad`: this does not raise the issue count, because
         # boost will not fix it and `heal` deliberately leaves it — counting it
         # would leave doctor permanently red on something no boost command can
         # clear, which is how a health check stops being read.
-        out.info("%d broken symlink%s in agent dirs not created by boost — "
+        rep.note("foreign-links", "%d broken symlink%s in agent dirs not created by boost — "
                  "left alone; yours to remove or repair"
                  % (len(foreign), _s(len(foreign))))
 
@@ -637,7 +640,7 @@ def cmd_doctor(argv):
         # and a user debugging a hook needs to know boost is not the only one
         # in it.
         events = sorted({h["event"] for h in others})
-        out.info("%d hook%s in ~/.claude/settings.json not managed by boost "
+        rep.note("foreign-hooks", "%d hook%s in ~/.claude/settings.json not managed by boost "
                  "(%s) — left alone; `boost hooks` only touches its own"
                  % (len(others), _s(len(others)), ", ".join(events)), wrap=True)
 
@@ -648,7 +651,7 @@ def cmd_doctor(argv):
         # loads the same skill from two discovery tiers and says so on every
         # session, so a health check that stayed quiet about it would be
         # describing a machine the user is not looking at.
-        bad("skill %s is discoverable twice by %s — %s leads to %s, which it "
+        bad("duplicate-discovery", "skill %s is discoverable twice by %s — %s leads to %s, which it "
             "already reads natively; remove the duplicate with "
             "`boost heal --prune-duplicates`"
             % (dup.name, agents.display_name(dup.agent), _tilde(dup.path),
@@ -656,17 +659,17 @@ def cmd_doctor(argv):
 
     for adir in enabled.values():
         if adir.is_dir() and not os.access(str(adir), os.W_OK):
-            bad("agent dir %s is not writable" % _tilde(adir))
+            bad("agent-dir", "agent dir %s is not writable" % _tilde(adir))
 
     rotation = journal.rotation_healthy()
     if not rotation:
-        bad("journal is overdue for rotation — run `boost heal`")
+        bad("journal", "journal is overdue for rotation — run `boost heal`")
 
     # Which search engine will actually answer a query. Dense retrieval needs
     # three things to line up and every one of them fails silently, so doctor
     # is where the answer belongs — `search` only ever reports the engine that
     # already ran, never that a configured one never got the chance.
-    _report_search_engine(bad)
+    _report_search_engine(rep)
 
     lp = logs.log_path()
     if lp.exists():
@@ -687,9 +690,9 @@ def cmd_doctor(argv):
         else:
             writable = True
         if writable:
-            out.ok("diagnostic log at %s" % _tilde(lp))
+            rep.ok("log", "diagnostic log at %s" % _tilde(lp))
         else:
-            bad("diagnostic log %s is not writable — every invocation is "
+            bad("log", "diagnostic log %s is not writable — every invocation is "
                 "failing to record; fix its permissions (chmod u+w)"
                 % _tilde(lp))
     crashes = sorted(paths.logs_dir().glob("crash-*.log")) \
@@ -699,18 +702,19 @@ def cmd_doctor(argv):
         # symlinks and hooks above: a crash report is history, not a current
         # fault, so it must not wear the "!" glyph or verdict a healthy
         # machine as having an issue that needs attention.
-        out.info("%d crash report%s in %s (newest: %s) — see `boost log --crashes`"
+        rep.note("crashes", "%d crash report%s in %s (newest: %s) — see `boost log --crashes`"
                  % (len(crashes), _s(len(crashes)), _tilde(paths.logs_dir()),
                     crashes[-1].name))
 
     line1 = ("%d skill%s installed · %d tap%s synced · %d broken link%s"
              % (len(skills), _s(len(skills)), tap_ok, _s(tap_ok),
                 len(broken), _s(len(broken))))
-    (out.ok if not broken else out.warn)(line1)
+    (rep.ok if not broken else rep.warn)("summary", line1)
     if lock_ok and rotation:
-        out.ok("lock file integrity OK · log rotation healthy")
+        rep.ok("integrity", "lock file integrity OK · log rotation healthy")
     else:
-        out.warn("lock file integrity or log rotation needs attention")
+        rep.warn("integrity",
+                 "lock file integrity or log rotation needs attention")
 
     # A machine with no taps has nothing to disagree about, so every check
     # above passes and the verdict read "healthy" — directly under the line
@@ -720,22 +724,24 @@ def cmd_doctor(argv):
     # still turns only on real issues, so scripts and CI are unaffected. The
     # MCP `boost_doctor` tool already refused to say "healthy" here; this is
     # the CLI half of the same rule.
+    issues = rep.issues
     if issues == 0 and not taps:
-        out.verdict(True, "ready to set up — tap a registry to make boost "
+        rep.verdict(True, "ready to set up — tap a registry to make boost "
                           "searchable")
     else:
-        out.verdict(issues == 0,
+        rep.verdict(issues == 0,
                     "healthy" if not issues else
                     "%d issue%s %s attention — see the suggestions above"
                     % (issues, _s(issues), "needs" if issues == 1 else "need"))
-    return 1 if issues else 0
+    rep.emit()
+    return rep.exit_code()
 
 
 # The remedy table moved to core.dense.fix_hint so `boost search` reports the
 # same next action as `boost doctor` — see that function for why.
 
 
-def _report_search_engine(bad) -> None:
+def _report_search_engine(rep) -> None:
     """Report the engine `boost search` will use, and why it isn't the best one.
 
     Only a *degraded* dense tier counts against doctor's exit code: BM25 is the
@@ -751,7 +757,8 @@ def _report_search_engine(bad) -> None:
     st = dense.status(count=True)
 
     if st["ready"]:
-        out.ok("semantic search active — %s %s (%d-d), %d chunk%s across %d tap%s"
+        rep.ok("search-engine",
+               "semantic search active — %s %s (%d-d), %d chunk%s across %d tap%s"
                % (st["provider"], st["model"], st["dim"] or 0,
                   st["chunks"], _s(st["chunks"]), st["taps"], _s(st["taps"])))
         if not st["quantized"]:
@@ -760,7 +767,11 @@ def _report_search_engine(bad) -> None:
             # query — 28.2 s measured at 750,416 chunks. The remedy costs no
             # embedding calls, so it is worth naming rather than leaving the
             # user to wonder why the search they enabled feels broken.
-            out.warn("the vector store predates binary quantization, so every "
+            # A warning, not an issue: the store still answers every query,
+            # so counting it would leave doctor red on a machine whose search
+            # works. Same rule as the foreign links and hooks above.
+            rep.warn("search-quantization",
+                     "the vector store predates binary quantization, so every "
                      "query scans all %d vectors — `boost reindex --dense` "
                      "converts it offline (no re-embedding, no API cost)"
                      % st["chunks"])
@@ -778,13 +789,15 @@ def _report_search_engine(bad) -> None:
             detail += ", live key is %s" % st["provider"]
         elif st["reason"] == "empty":
             detail += " but holds no vectors"
-        bad("semantic search silently off — %d-chunk vector store %s; "
-            "searches are using BM25 — %s" % (st["chunks"], detail, fix),
-            wrap=True)
+        rep.issue("search-engine",
+                  "semantic search silently off — %d-chunk vector store %s; "
+                  "searches are using BM25 — %s" % (st["chunks"], detail, fix),
+                  hint=fix, wrap=True)
         return
 
-    out.info("semantic search not configured — using the full-content BM25 "
-             "engine (%s)" % fix, wrap=True)
+    rep.note("search-engine",
+             "semantic search not configured — using the full-content BM25 "
+             "engine (%s)" % fix, hint=fix, wrap=True)
 
 
 def _print_skipped(skipped: list[dict]) -> None:
@@ -922,9 +935,14 @@ def cmd_test(argv):
         prog="boost test",
         description="Validate installed skills against quality checks")
     ap.add_argument("names", nargs="*", metavar="NAME")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     rows, failed_count = [], 0
+    # The failed-check names, uncoloured. `rows` holds them wrapped in role()
+    # escapes for the table, which is display, not data — a consumer parsing
+    # those would be parsing our palette.
+    results: list[dict] = []
     for name, entry in _iter_installed(args.names or None):
         sdir = store.skill_store_dir(name)
         md = sdir / "SKILL.md"
@@ -943,9 +961,19 @@ def cmd_test(argv):
             failed.append("layout")
         if failed:
             failed_count += 1
+        results.append({"name": name, "ok": not failed, "failed": failed})
         rows.append((name,
                      out.role("FAIL", "danger") if failed else out.role("PASS", "success"),
                      out.role(", ".join(failed), "muted")))
+    if args.json:
+        # Emitted even when nothing is installed: an empty `skills` list is the
+        # answer to "what failed", and a CI gate that got no output at all
+        # could not tell that from a crash.
+        print(json.dumps({"skills": results,
+                          "passed": len(results) - failed_count,
+                          "failed": failed_count,
+                          "ok": not failed_count}, indent=2))
+        return 1 if failed_count else 0
     if not rows:
         out.info("no skills installed")
         return 0
@@ -1254,6 +1282,7 @@ def cmd_changelog(argv):
     ap.add_argument("name", metavar="NAME")
     ap.add_argument("-n", type=util.positive_int, default=20, metavar="N",
                     help="number of entries (default 20)")
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
     args = ap.parse_args(argv)
 
     _, bare = catalog.split_name(args.name)
@@ -1264,12 +1293,24 @@ def cmd_changelog(argv):
         e = catalog.resolve_one(args.name)
         tap_name, rel = e["tap"], e["rel_dir"]
     if tap_name == "local":
+        if args.json:
+            print(json.dumps({"name": bare, "tap": None, "commits": []},
+                             indent=2))
+            return 0
         out.info("no upstream history — %s was imported locally" % bare)
         return 0
     tap = registry.get(tap_name)
     if not tap.is_cloned:
         raise BoostError("tap %s is not cloned" % tap.name,
                         hint="run `boost update %s`" % tap.name)
+    if args.json:
+        # `log_entries` parses on an ASCII unit separator rather than
+        # re-splitting the display format, whose two-space column gap a commit
+        # subject or an author name may itself contain.
+        print(json.dumps(
+            {"name": bare, "tap": tap.name,
+             "commits": gitutil.log_entries(tap.path, rel, args.n)}, indent=2))
+        return 0
     lines = gitutil.log_for_path(tap.path, rel, args.n)
     out.heading("changelog for %s (%s)" % (bare, tap.name))
     for line in lines:
@@ -1287,7 +1328,20 @@ def cmd_changelog(argv):
 def cmd_health(argv):
     ap = cliparse.parser(
         prog="boost health", description="Dashboard of skill-environment health")
-    ap.parse_args(argv)
+    ap.add_argument("--json", action="store_true", help="machine-readable output")
+    args = ap.parse_args(argv)
+    data: dict = {}
+
+    def kv(key, display, value=None):
+        """Record a dashboard row, and print it unless we are emitting JSON.
+
+        `value` carries the structured form where the displayed one is
+        decorated — the agent coverage rows embed a role() escape, and a
+        consumer parsing those would be parsing our palette.
+        """
+        data[key] = display if value is None else value
+        if not args.json:
+            out.kv(key, display)
 
     # Skills-only used to be the whole dashboard, so a rule or workflow could
     # drift — or vanish from the store entirely — invisibly: the skills line
@@ -1302,15 +1356,18 @@ def cmd_health(argv):
     taps = registry.list_taps()
     cloned = [t for t in taps if t.is_cloned]
 
-    out.heading("boost health")
+    if not args.json:
+        out.heading("boost health")
     for kind, label in (("skill", "skills"), ("rule", "rules"),
                         ("workflow", "workflows")):
         items = by_kind.get(kind, [])
         q = sum(1 for _n, e in items if e.get("quarantined"))
         p = sum(1 for _n, e in items if e.get("pinned"))
-        out.kv(label, "%d installed · %d quarantined · %d pinned"
-               % (len(items), q, p))
-    out.kv("taps", "%d configured · %d cloned" % (len(taps), len(cloned)))
+        kv(label, "%d installed · %d quarantined · %d pinned"
+           % (len(items), q, p),
+           {"installed": len(items), "quarantined": q, "pinned": p})
+    kv("taps", "%d configured · %d cloned" % (len(taps), len(cloned)),
+       {"configured": len(taps), "cloned": len(cloned)})
 
     expected = [n for n, e in installed if not e.get("quarantined")]
     coverage_ok = True
@@ -1319,9 +1376,10 @@ def cmd_health(argv):
                      if (adir / n).is_symlink() and (adir / n).exists())
         full = linked == len(expected)
         coverage_ok = coverage_ok and full
-        out.kv(agent, "%d/%d %s" % (linked, len(expected),
-                                    out.role("✓", "success") if full
-                                    else out.role("!", "warn")))
+        kv(agent, "%d/%d %s" % (linked, len(expected),
+                                out.role("✓", "success") if full
+                                else out.role("!", "warn")),
+           {"linked": linked, "expected": len(expected), "ok": full})
     # Agents that read the canonical store have no links to count, so they
     # used to be scored an unconditional len(expected)/len(expected) — green
     # even with a skill's store directory gone, in the same report `drift`
@@ -1332,25 +1390,29 @@ def cmd_health(argv):
     store_full = store_present == len(expected)
     for agent in agents.native_store_agents():
         coverage_ok = coverage_ok and store_full
-        out.kv(agent, "%d/%d %s (reads the store directly)"
-               % (store_present, len(expected),
-                  out.role("✓", "success") if store_full
-                  else out.role("!", "warn")))
+        kv(agent, "%d/%d %s (reads the store directly)"
+           % (store_present, len(expected),
+              out.role("✓", "success") if store_full
+              else out.role("!", "warn")),
+           {"linked": store_present, "expected": len(expected),
+            "ok": store_full, "native_store": True})
 
     drift_counts: dict = {}
     for kind, name, entry in all_installed:
         st = (_drift_status(name, entry) if kind == "skill"
               else _drift_status_materialized(kind, name, entry))
         drift_counts[st] = drift_counts.get(st, 0) + 1
-    out.kv("drift", " · ".join("%d %s" % (n, s)
-                               for s, n in sorted(drift_counts.items())) or "—")
+    kv("drift", " · ".join("%d %s" % (n, s)
+                           for s, n in sorted(drift_counts.items())) or "—",
+       drift_counts)
 
     decay_n = sum(1 for r in _decay_rows(Path.cwd()) if r["verdict"] == "decay")
-    out.kv("decay", "%d candidate%s" % (decay_n, _s(decay_n)))
+    kv("decay", "%d candidate%s" % (decay_n, _s(decay_n)), decay_n)
 
     broken, foreign = _broken_links()
-    out.kv("broken links", "%d%s" % (
-        len(broken), " (+%d not ours)" % len(foreign) if foreign else ""))
+    kv("broken links", "%d%s" % (
+        len(broken), " (+%d not ours)" % len(foreign) if foreign else ""),
+       {"ours": len(broken), "foreign": len(foreign)})
 
     # `registry.last_refresh_at` reads the marker `boost update` stamps, not a
     # tap clone's git log — a clone's newest commit is the *upstream's* clock,
@@ -1358,19 +1420,25 @@ def cmd_health(argv):
     # twelve minutes after tapping every configured registry.
     refreshed_at = registry.last_refresh_at()
     last_sync = util.rel_time(refreshed_at) if refreshed_at else "never"
-    out.kv("last tap sync", last_sync)
+    kv("last tap sync", last_sync,
+       # `last_refresh_at` already returns an ISO8601 string, not a datetime.
+       {"relative": last_sync, "at": refreshed_at})
 
     week_ago = datetime.now(UTC) - timedelta(days=7)
     recent = sum(1 for e in journal.events()
                  if (_parse_ts(e.get("ts", "")) or week_ago) > week_ago)
-    out.kv("journal (7d)", "%d event%s" % (recent, _s(recent)))
-    out.kv("fingerprint", _fingerprint()[0][:16])
+    kv("journal (7d)", "%d event%s" % (recent, _s(recent)), recent)
+    kv("fingerprint", _fingerprint()[0][:16])
 
     attention = (bool(broken) or not coverage_ok
                  or drift_counts.get("store-missing", 0) > 0
                  or drift_counts.get("source-missing", 0) > 0
                  or not journal.rotation_healthy())
-    if attention:
+    if args.json:
+        print(json.dumps(data | {"ok": not attention,
+                                 "status": "needs attention" if attention
+                                 else "healthy"}, indent=2))
+    elif attention:
         print("  " + out.role("● needs attention (run boost doctor)", "warn"))
     else:
         print("  " + out.role("● healthy", "success"))

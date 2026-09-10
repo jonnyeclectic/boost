@@ -183,6 +183,23 @@ def timeout_unit(host: str) -> str:
     return str(_spec(host)["timeout_unit"])
 
 
+def timeout_seconds(host: str, native: int | None) -> int | None:
+    """``native`` (a value read from ``host``'s settings) back in seconds.
+
+    The inverse of :func:`timeout`, for the readers rather than the writers —
+    ``hooks list`` reports what is stored, and the stored number means
+    different things per host. A consumer comparing a Claude hook's ``10``
+    against a Gemini hook's ``10000`` would otherwise read the same
+    ``--timeout 10`` as two very different settings.
+
+    ``None`` in, ``None`` out: a hook block written without a timeout has
+    none, and reporting ``0`` would describe a hook that gives up instantly.
+    """
+    if native is None:
+        return None
+    return int(native) // int(_spec(host)["timeout_scale"])
+
+
 def timeout(host: str, seconds: int) -> int:
     """``seconds`` expressed in ``host``'s own timeout units.
 

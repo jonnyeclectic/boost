@@ -165,15 +165,35 @@ def cmd_search(argv):
     if args.category:
         scored = [(e, s) for e, s in scored
                  if catalog.matches_category(e, args.category)]
+    # One measurement, three branches below: the words the index cannot hold.
+    # Two gates, and each excludes an engine that did not drop anything.
+    # `catalog.search` is a substring match, so the non-RAG path discards
+    # nothing; and `dense.retrieve` embeds the raw query string, so on a
+    # machine with vectors built the term reached an index after all.
+    dropped = (rag.dropped_terms(query)
+               if use_rag and rag.tokenizer_is_the_only_reader() else [])
     if not scored:
         if args.as_json:
             print(json.dumps([]))
+            _warn_dropped_terms(dropped)
             return 0
-        # The standardized ○/→ empty state, so "nothing here" reads the same
-        # as every other command's; both wordings are pinned by tests.
-        print(out.empty_state(
-            "no matches for %r" % query,
-            "try `boost discover %s` to search all of GitHub" % query))
+        if dropped and not rag.tokenize(query):
+            # Nothing was searched at all, so "no matches" asserts something
+            # this command never checked, and `boost discover` spends a network
+            # round trip on a query that never reached an index. Measured: a
+            # bare `C++` gave the empty state below on a corpus holding 45
+            # entries naming the language.
+            print(out.empty_state(
+                "no searchable terms in %r" % query,
+                "a term needs 2 or more ASCII letters or digits — %s"
+                % _quoted(dropped)))
+        else:
+            # The standardized ○/→ empty state, so "nothing here" reads the same
+            # as every other command's; both wordings are pinned by tests.
+            print(out.empty_state(
+                "no matches for %r" % query,
+                "try `boost discover %s` to search all of GitHub" % query))
+            _note_dropped_terms(dropped)
         _hint_semantic_search(engine)
         # Especially here: "no matches" is exactly the answer an out-of-date
         # tap set produces, and the user has no other way to suspect it.
@@ -204,6 +224,7 @@ def cmd_search(argv):
         # rows carry `ranker`. Both hold.
         print(json.dumps([catalog.public_entry(e) | {"score": s, "ranker": ranker}
                           for e, s in scored[:args.limit]]))
+        _warn_dropped_terms(dropped)
         return 0
     shown = scored[:args.limit]
     # The dot marks "a skill by this name is installed" — a name match, with
@@ -238,6 +259,7 @@ def cmd_search(argv):
     out.info(out.role(footer, "muted"))
     if use_rag:
         _note_stem_expansions(query)
+        _note_dropped_terms(dropped)
     _hint_semantic_search(engine)
     _hint_stale_taps()
     return 0
@@ -258,6 +280,44 @@ def _note_stem_expansions(query: str) -> None:
     out.info(out.role(out.truncate(
         "no exact match for %s — showing %s" % (said, shown),
         max(0, out.term_width() - 2)), "muted"))
+
+
+#: How the index's own rule reads to someone who just lost a word to it.
+_TERM_RULE = "a term needs 2 or more ASCII letters or digits"
+
+
+def _quoted(terms: list[str]) -> str:
+    return ", ".join("%r" % t for t in terms)
+
+
+def _note_dropped_terms(dropped: list[str]) -> None:
+    """Say which words were not searched, next to the results they are not in.
+
+    The erasure was the defect. `boost search 'c++ testing'` answered with
+    results for `testing` and said nothing, so it was byte-identical to
+    `boost search 'c# testing'` and to `boost search testing` — three
+    questions, one answer, no way to tell from the output. Aliasing rescues
+    the languages boost can name (`rag.SYMBOL_ALIASES`); this is for the rest,
+    where the honest answer is that the word never reached an index.
+    """
+    if not dropped:
+        return
+    out.info(out.role(out.truncate(
+        "not searched: %s — %s" % (_quoted(dropped), _TERM_RULE),
+        max(0, out.term_width() - 2)), "muted"))
+
+
+def _warn_dropped_terms(dropped: list[str]) -> None:
+    """The same fact on stderr, so `--json` cannot swallow it.
+
+    Same contract as this command's `--smart` fallback note: a script reading
+    stdout as JSON must still learn that half its query was discarded, and an
+    empty `[]` is exactly what a genuine miss looks like.
+    """
+    if not dropped:
+        return
+    out.warn("not searched: %s — %s" % (_quoted(dropped), _TERM_RULE),
+             wrap=True, stream=sys.stderr)
 
 
 def _hint_stale_taps() -> None:
@@ -645,6 +705,8 @@ def cmd_index(argv):
                    help="narrow the sample to these terms (default: any SKILL.md)")
     p.add_argument("--limit", type=util.positive_int, default=300,
                    help="max skill files to index (default 300)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
     args = p.parse_args(argv)
     if not shutil.which("gh"):
         raise BoostError("the GitHub CLI (gh) is required to build the index",
@@ -703,17 +765,30 @@ def cmd_index(argv):
     dpath = _discovery_path()
     if not discovery_core.should_write_index(len(items), dpath.exists()):
         prev = _index_item_count(dpath)
+        # stderr under --json: the notice has to survive, and putting it on
+        # stdout would corrupt the payload it accompanies. Same rule out.warn
+        # documents for the commands that speak JSON there.
         out.warn("no SKILL.md files match %s — keeping the previous index "
-                 "of %d entries" % (query or "your query", prev))
+                 "of %d entries" % (query or "your query", prev),
+                 stream=sys.stderr if args.as_json else None)
+        if args.as_json:
+            print(json.dumps({"written": False, "indexed": 0, "repos": 0,
+                              "github_total": total, "query": query,
+                              "previous": prev}, indent=2))
         return 0
     paths.ensure_dirs()
     dpath.write_text(json.dumps(
         {"generated": util.now_iso(), "github_total": total, "query": query,
          "items": items}, indent=1), encoding="utf-8")
     repos = len({it["repo"] for it in items})
+    journal.log("index", "%d skill files" % len(items), total=total)
+    if args.as_json:
+        print(json.dumps({"written": True, "indexed": len(items),
+                          "repos": repos, "github_total": total,
+                          "query": query, "path": str(dpath)}, indent=2))
+        return 0
     out.ok("indexed %d skill files across %d repos (GitHub reports %d total)"
            % (len(items), repos, total))
-    journal.log("index", "%d skill files" % len(items), total=total)
     return 0
 
 
@@ -1874,6 +1949,8 @@ def cmd_trending(argv):
         description="Show trending items by install count")
     p.add_argument("--limit", type=util.positive_int, default=10,
                    help="max rows (default 10)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="machine-readable output")
     args = p.parse_args(argv)
     evs = journal.events(action="install")
     # setdefault, not a dict comprehension: a comprehension keeps the LAST
@@ -1885,8 +1962,21 @@ def cmd_trending(argv):
     for e in catalog.all_entries():
         by_name.setdefault(e["name"], e)
     if not evs:
+        curated = sorted((e for e in by_name.values() if e.get("curated")),
+                         key=operator.itemgetter("name"))[:args.limit]
+        if args.as_json:
+            # `source` names which of the two lists this is. They answer
+            # different questions — what this machine installs versus what the
+            # catalogue recommends — and a consumer that could not tell them
+            # apart would read curated picks as local activity.
+            print(json.dumps(
+                {"source": "curated", "items": [
+                    {"name": e["name"], "version": e["version"],
+                     "kind": e.get("kind", "skill"),
+                     "description": e.get("description", "")}
+                    for e in curated]}, indent=2))
+            return 0
         out.heading("curated picks (no local install data yet)")
-        curated = [e for e in by_name.values() if e.get("curated")]
         if not curated:
             out.info("no curated skills available — add taps with `boost tap --defaults`")
             return 0
@@ -1894,7 +1984,7 @@ def cmd_trending(argv):
         descw = max(out.term_width() - 34, 24)
         out.table([(e["name"], "v" + e["version"], e.get("kind", "skill"),
                     out.truncate(e["description"], descw))
-                   for e in sorted(curated, key=operator.itemgetter("name"))[:args.limit]],
+                   for e in curated],
                   headers=("name", "version", "kind", "description"))
         return 0
     agg: dict[str, Any] = {}
@@ -1903,6 +1993,17 @@ def cmd_trending(argv):
         rec = agg.setdefault(name, {"count": 0, "last": ev.get("ts", "")})
         rec["count"] += 1
     ranked = sorted(agg.items(), key=lambda kv: (-kv[1]["count"], kv[0]))
+    if args.as_json:
+        # `kind` is carried so rules and workflows stay distinguishable —
+        # the prose table shows it, and a payload that dropped it would make
+        # every row look like a skill.
+        print(json.dumps(
+            {"source": "installs", "items": [
+                {"name": name, "installs": rec["count"], "last": rec["last"],
+                 "kind": by_name.get(name, {}).get("kind", "skill"),
+                 "description": by_name.get(name, {}).get("description", "")}
+                for name, rec in ranked[:args.limit]]}, indent=2))
+        return 0
     # reserve name/installs/last/kind columns
     descw = max(out.term_width() - 54, 24)
     out.table([(name, str(rec["count"]), util.rel_time(rec["last"]),
