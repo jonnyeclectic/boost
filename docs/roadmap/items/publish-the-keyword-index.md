@@ -2,13 +2,14 @@
 id: publish-the-keyword-index
 board: code
 section: planned
-status: planned
+status: inflight
 category: Search · Performance
 complexity: L
 impact: High
 wow: 4
 note: every machine rebuilds 697 MB of index for a corpus that is byte-identical on all of them
 order: 99
+owner: loop/keyword-index-completeness
 title: publish the keyword index the way vectors are published
 ---
 Dense vectors are built once in CI and downloaded. The BM25 index is not:
