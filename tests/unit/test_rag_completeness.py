@@ -91,19 +91,19 @@ def two_items(tmp_path, monkeypatch, sandbox):
 
 class TestBuildCountsWhatItCouldNotRead:
     def test_a_fully_cloned_corpus_reports_none_missing(self, two_items):
-        root, entries = two_items
+        _root, entries = two_items
         stats = rag.build([entries[0]])
         assert stats["docs"] == 1
         assert stats["metadata_only"] == 0
 
     def test_a_bundle_only_corpus_reports_every_document(self, two_items):
-        root, entries = two_items
+        _root, entries = two_items
         stats = rag.build([entries[1]])
         assert stats["docs"] == 1
         assert stats["metadata_only"] == 1
 
     def test_a_mixed_corpus_reports_the_exact_count(self, two_items):
-        root, entries = two_items
+        _root, entries = two_items
         stats = rag.build(entries)
         assert stats["docs"] == 2
         assert stats["metadata_only"] == 1     # not 0, not 2
@@ -118,7 +118,7 @@ class TestBuildCountsWhatItCouldNotRead:
         carries no flag, and reading its absence as "has a body" is a wrong
         answer rather than a missing one.
         """
-        root, entries = two_items
+        _root, entries = two_items
         rag.build(entries)
         again = rag.build(entries)             # same commit -> all reused
         assert again["reused"] == ["acme/skills"]
@@ -131,7 +131,7 @@ class TestIndexCompleteness:
         assert rag.index_completeness() is None
 
     def test_it_reads_the_answer_back_off_disk(self, two_items):
-        root, entries = two_items
+        _root, entries = two_items
         rag.build(entries)
         got = rag.index_completeness()
         assert got["docs"] == 2
@@ -139,7 +139,7 @@ class TestIndexCompleteness:
 
     def test_the_share_is_of_tokens_not_documents(self, two_items):
         """The card's 6.0% is a token share; a doc share would read 50% here."""
-        root, entries = two_items
+        _root, entries = two_items
         rag.build(entries)
         got = rag.index_completeness()
         # "present" indexes its surface + 5 body words; "absent" only its
@@ -151,7 +151,7 @@ class TestIndexCompleteness:
             1.0 - got["metadata_only_tokens"] / got["tokens"])
 
     def test_a_wholly_metadata_index_reports_a_zero_share(self, two_items):
-        root, entries = two_items
+        _root, entries = two_items
         rag.build([entries[1]])
         got = rag.index_completeness()
         assert got["metadata_only"] == got["docs"] == 1
