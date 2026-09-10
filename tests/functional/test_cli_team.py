@@ -14,6 +14,7 @@ import json
 import shutil
 import stat
 import sys
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -45,13 +46,31 @@ def _seed_rule(name="house-style", tap="rule-tap"):
 
 @pytest.fixture()
 def tick_clock(monkeypatch):
-    """Monotonic fake now_iso() so each lock write snapshots separately."""
+    """Monotonic fake now_iso() so each lock write snapshots separately.
+
+    Anchored an hour behind the REAL clock rather than on a literal date, and
+    that is the whole point. `boost replay list` renders its WHEN column
+    through `util.rel_time`, which switches from "Nw ago" to an absolute
+    "YYYY-MM-DD" at eight weeks. This fixture used to pin every snapshot to
+    2026-07-16, so eight weeks later the column started rendering a date —
+    and "2026-07-16" contains "-1", which is what `test_list_shows_deltas`
+    scanned each row for.
+
+    It went off at 2026-09-10T00:00:06Z, exactly 604800 * 8 seconds after the
+    pin, and reddened every required `tests` leg on every open PR for a reason
+    no diff could explain: `main` was green at 55.9 days and red at 56.0. A
+    fixture that pins the clock but compares against the real one is a test
+    with an expiry date. `tests/unit/test_util.py` already had the right
+    shape — its `iso_ago(seconds)` helper is relative to now — so this is that
+    idea, kept monotonic.
+    """
     counter = {"n": 0}
+    base = datetime.now(UTC) - timedelta(hours=1)
 
     def fake_now():
         counter["n"] += 1
-        return "2026-07-16T%02d:%02d:%02dZ" % (
-            counter["n"] // 3600, counter["n"] // 60 % 60, counter["n"] % 60)
+        return (base + timedelta(seconds=counter["n"])).strftime(
+            "%Y-%m-%dT%H:%M:%SZ")
 
     monkeypatch.setattr("boost_cli.core.util.now_iso", fake_now)
     return fake_now
@@ -790,11 +809,17 @@ class TestReplay:
         rows = [l for l in r.out.splitlines()
                 if any(l.startswith(h["id"]) for h in history)]
         assert len(rows) == 3
-        # newest first: {tdd} (-1), {b,tdd} (+1), {b} (no predecessor)
-        assert rows[0].startswith(history[2]["id"]) and "-1" in rows[0]
-        assert rows[1].startswith(history[1]["id"]) and "+1" in rows[1]
+        # newest first: {tdd} (-1), {b,tdd} (+1), {b} (no predecessor).
+        # Assert on the Δ COLUMN, which is what this test is about, not on the
+        # row as a whole: WHEN renders through `util.rel_time`, so scanning the
+        # whole row for "-1" also matches any date it decides to print.
+        assert rows[0].startswith(history[2]["id"])
+        assert rows[0].split()[-1] == "-1"
+        assert rows[1].startswith(history[1]["id"])
+        assert rows[1].split()[-1] == "+1"
         assert rows[2].startswith(history[0]["id"])
-        assert "+1" not in rows[2] and "-1" not in rows[2]
+        # No predecessor, so no delta at all — the row ends at ITEMS.
+        assert rows[2].split()[-1] == str(history[0]["count"])
         r = boost("replay", "list", "--json")
         assert [h["count"] for h in json.loads(r.out)] == [1, 2, 1]
 
