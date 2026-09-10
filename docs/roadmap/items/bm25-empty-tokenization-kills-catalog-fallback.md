@@ -10,7 +10,7 @@ wow: 4
 note: the four symbol-bearing language names now tokenize, and a query that still tokenizes to nothing says so instead of reporting a miss; the catalog.search fallback stays unreachable on purpose — substring 'R' returns 10,092 of 10,152 entries
 order: 200
 owner: loop/symbol-language-queries
-pr:
+pr: 840
 title: A query made only of characters <code>tokenize</code> drops returns zero results, and the documented <code>catalog.search</code> fallback is unreachable — <code>boost search "C++"</code> finds nothing on a machine holding …
 ---
 <b>Measured.</b> On the developer's own 440-tap install — with no BOOST_HOME override, where <code>dense.status()</code> reports <code>ready: False, reason: 'provider-changed'</code> so the machine is on the always-on BM25 path — <code>rag.retrieve("C++")</code> returns <b>0</b> hits while <code>rag.retrieve("cpp")</code> returns <b>60</b>, and <code>retrieve_any</code> reports <code>(0, 'BM25 full-content')</code> rather than <code>None</code>, so the <code>catalog.search</code> fallback that finds 45 C++ items can never run.

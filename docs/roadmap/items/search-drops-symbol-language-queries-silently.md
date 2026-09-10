@@ -10,7 +10,7 @@ wow: 4
 note: c++/c#/f#/objective-c now alias to indexable tokens on BOTH the index and query side (INDEX_VERSION 7 -&gt; 8); a term that is still dropped is named on stdout, on stderr under --json, and in the MCP reply
 order: 230
 owner: loop/symbol-language-queries
-pr:
+pr: 840
 title: <code>boost search 'C++'</code> returns zero and blames the catalogue: tokenize drops every 1-char token, and nothing ever says a term was discarded
 ---
 <b>Measured.</b> On a corpus holding 42 entries that name C++ in their name or description, <code>boost search 'c++ testing'</code>, <code>boost search 'c# testing'</code> and <code>boost search 'testing'</code> produce byte-identical <code>--json</code> output (md5 70050f6044e9957148ceec29f76a8fb2, 15 rows each, top row <code>testing-qa</code>) with exactly 0 bytes on stderr — the language term is erased with no notice and the query silently becomes a search for <code>testing</code>, while <code>cpp testing</code> (md5 dd4b3d1c…) returns cpp-review/cpp-test/cpp-testing at ranks 1-5.
