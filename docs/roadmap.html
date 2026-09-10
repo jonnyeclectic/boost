@@ -132,8 +132,8 @@
       <!-- ROADMAP:stats -->
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
-      <div class="stat"><b>52</b><span>Planned</span></div>
-      <div class="stat"><b>446</b><span>Loop finds</span></div>
+      <div class="stat"><b>56</b><span>Planned</span></div>
+      <div class="stat"><b>450</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -2999,6 +2999,172 @@ SCOPE LIMITS OF MY REPRO — things a card author must not get wrong:
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">Every other issue doctor raises names a command (boost heal, boost sync, boost update…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="bare-boost-never-names-an-entry-point">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Onboarding · Bug</span></div>
+        <h3>Nothing boost prints ever names an entry point: bare <code>./boost</code> is byte-identical on a virgin machine and a working one, and the one command its failure-hints route you to is the only setup …</h3>
+        <p><b>Measured.</b> Bare <code>./boost</code> is md5-identical (dd3c84b8d6510df1871bea5f1518fff4) on a machine with 0 taps and on the same machine with 7 taps and 1 installed skill, because <code>print_help</code> (cli.py:165-223) reads no state at all — and the command every newcomer-facing hint routes to, <code>boost tap --defaults</code>, produces exactly 7 lines whose last is a <code>✓ tapped …</code> row with no summary, while <code>boost install</code> through the same pipe closes with a framed "next: boost info brainstorming" box.
+
+<b>Reproduce it.</b>
+
+<code>cd &lt;repo&gt;</code><br>
+<code>export HOME=$TMPDIR/lens2-ep ; export BOOST_HOME=$HOME/.boost ; rm -rf "$HOME" ; mkdir -p "$HOME"</code><br>
+<code># 1. the first screen: 103 lines, 81 commands, quickstart at line 80, no "start here"</code><br>
+<code>./boost &gt; "$TMPDIR/h0.txt" 2&gt;&amp;1</code><br>
+<code>wc -l &lt; "$TMPDIR/h0.txt"                                                        # 103</code><br>
+<code>grep -n quickstart "$TMPDIR/h0.txt"                                            # 80:  quickstart   Tap the starter registries...</code><br>
+<code>grep -ci 'start here\|new to boost\|first, run\|get started' "$TMPDIR/h0.txt"   # 0</code><br>
+<code>head -4 "$TMPDIR/h0.txt"</code><br>
+<code># 2. the only entry-point pointers are failure hints, and they name tap --defaults, never quickstart</code><br>
+…
+
+<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
+
+Three sentences in the claim are false as written; the underlying defect survives all three.
+
+1. "you must run a command that exits 1 to learn where setup lives" — WRONG. <code>boost doctor</code> exits <b>0</b> and carries the identical <code>boost tap --defaults</code> hint plus the verdict line "● ready to set up — tap a registry to make boost searchable". I measured DOCTOR_EXIT=0 (the claim's own evidence block also shows EXIT=0, contradicting its prose). The pointer is not gated behind a non-zero exit; it is gated behind running a diagnostic command, which is a weaker statement.
+
+2. "every CLI hint routes to <code>tap --defaults</code> … never mentions that quickstart exists" — OVERBROAD. Two user-facing hints do name <code>boost quickstart</code>: <code>boost_cli/commands/discovery.py:398</code> ("<code>boost quickstart</code> taps the defaults and fetches their vectors in one pass", raised by <code>reindex --fetch-shards</code>) and <code>boost_cli/commands/pkg.py:981</code> ("<code>boost quickstart</code> taps the starters and loads their vectors in one pass", raised by <code>update --shards</code>). Correct figures: ~15 source sites name <code>boost tap --defaults</code> vs 2 that name <code>boost quickstart</code>, and <b>0 of the newcomer-plausible surfaces</b> (search, doctor, taps, browse, list, catalogbundle, mcp, serve) name quickstart. The substantive routing gap is real; the words "every" and "never" are not.
+
+3.
+
+<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
+
+Not carded — I re-checked independently over all 473 items. <code>audit-root-findings.md</code> (the bare-<code>boost</code> card) covers EPIPE exit 120, <code>help --help</code>/<code>help version</code> alias routing, and the launcher's 3.9 Python floor; its one <code>print_help</code> ask ("add one dim Options line under Usage") has shipped — I see the Options line. Nothing about state-awareness or a first-run pointer. <code>BOOST-D13</code> "Framed success summary with next step" is status:done, <code>ref: core/output.py:41 · commands/pkg.py</code>, and its body scopes itself to install/uninstall. <code>audit-tap-findings.md</code> (inflight, PR 772) is about path-shaped SPECs going to the network — zero hits for next/defaults/quickstart/summary. <code>audit-taps-findings.md</code> — zero hits for the same terms. <code>audit-quickstart-findings.md</code> covers unpinned-at-HEAD taps without <code>[rag]</code> and three divergent <code>[rag]</code> hint wordings, not routing.
+
+Scope limits of my repro: - <code>boost quickstart</code>'s final line was verified by <b>source read</b> (<code>quickstart.py:220</code>, unconditional, immediately before <code>return 0</code>), not by running it — a live run fetches the shard manifest and would download vectors. I did not re-run the claim's <code>quickstart | tail -1</code> control. - <code>core/bootstrap.py</code> shows <code>boost mcp register</code> <b>auto-seeds</b> the catalog (taps the defaults unless <code>BOOST_NO_SEED</code>/<code>--no-seed</code>), and its docstring states "<code>boost mcp</code> is the only command a new user is told to run after installing". So an MCP-first newcomer is not stranded; this finding is specifically the <b>CLI-first</b> path.
+
+<b>Why it is worth doing.</b> This is the whole first-value path and it costs a newcomer their first two commands. The productive path is 3 commands / 10.6s once you know it; the tool makes you discover it by failing. Worse, the two setup paths are not equivalent — README leads with <code>quickstart</code>, which pins taps to shard commits and can import prebuilt vectors, while every CLI hint routes to <code>tap --defaults</code>, which does neither and never mentions that quickstart exists. Both fixes are one line each: make <code>print_help</code> add a first-run line when <code>registry.list_taps()</code> is empty (it already resolves config at startup), and give the tap/registry success path the same next-step emitter <code>pkg.py</code> and <code>quickstart.py</code> already use.
+
+<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">A newcomer's first screen is 103 lines of 81 commands that is byte-for-byte the same …</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="exemplar-graded-golden-set-runs-in-no-gate">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>golden-natural.jsonl — the only fully exemplar-graded query set — is invoked by no make target and no workflow, so its numbers can only be produced by a human typing the command</h3>
+        <p><b>Measured.</b> Running the natural set today against the same 20-tap eval corpus prints "REGRESSION vs baseline: catalog.search recall@k: 0.080 -&gt; 0.060 (-0.020)" (BM25 MRR 0.2447 -&gt; 0.237, nDCG 0.2640 -&gt; 0.259) — the snapshot has already drifted, and no Makefile target or workflow passes <code>--golden</code>, so nothing in the repo can ever emit that line.
+
+<b>Reproduce it.</b>
+
+<code>cd &lt;repo&gt;</code><br>
+<code>grep -n natural Makefile ; echo "makefile grep exit $?"</code><br>
+<code>grep -rn natural .github/workflows/ ; echo "workflow grep exit $?"</code><br>
+<code>grep -rn 'golden-natural' Makefile .github/workflows/ scripts/ tests/ | sed -n '1,20p'</code><br>
+<code>sed -n '1,23p' tests/unit/test_eval_baseline.py</code><br>
+<code>python3 -c "import json,hashlib,pathlib; b=json.load(open('tests/eval/baseline.json')); print('baseline keys:',list(b['sets'])); print('current digests:',[p+'@'+hashlib.sha256(pathlib.Path('tests/eval/'+p).read_bytes()).hexdigest()[:12] for p in ('golden.jsonl','golden-natural.jsonl')])"</code>
+
+<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
+
+1. BASELINE NUMBERS ARE WRONG. The claim says the golden-natural row carries "0.350 / 0.160 / 0.245 / 0.259". It does not. tests/eval/baseline.json's <code>golden-natural.jsonl@0d91b0cd8e41</code> BM25 row is <b>0.360 / 0.160 / 0.2447 / 0.2640</b>. The quoted 0.350/0.160/0.245/0.259 are the *pre-migration* ("name-graded (before)") figures at docs/roadmap/items/golden-set-grades-by-name-not-by-skill.md:125; the baseline holds the *post*-migration row from line 126-127 (0.360 / 0.160 / 0.245 / 0.264). The claim read the wrong line of the card.
+
+2. "the only tests that touch it are explicitly synthetic" IS WRONG. tests/unit/test_eval_grading.py reads the REAL shipped file in three live assertions: <code>test_the_shipped_set_has_nothing_left_to_decide</code> (line 217-228, asserts len(rows) == 50 and no unpinned row) and class <code>TestTheMigrationIsFinished</code> (line 247+): <code>test_every_row_pins_an_exemplar</code>, <code>test_every_exemplar_is_well_formed</code>, <code>test_no_exemplar_is_a_localised_copy</code>. Only tests/unit/test_eval_baseline.py is synthetic. The defect survives the correction, because those tests grade the file's SHAPE (row count, exemplar presence and syntax) and never run retrieval — so they cannot move or invalidate a single number in the baseline row. The accurate statement is: automation pins the query set's shape, nothing re-measures its scores.
+
+3.
+
+<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
+
+Scope and limits of my repro: - The structural half (no <code>--golden</code> in any Makefile target or workflow; <code>--golden</code> defaults to golden.jsonl at scripts/eval_retrieval.py:66/:656) is exhaustive over Makefile, .github/workflows/ and scripts/ — read, not inferred. - The drift measurement was run against a PRIVATE COPY of the shared 20-tap eval corpus (I copied cache/ + config.json into $TMPDIR/lens2-exemplar and never wrote to the shared home). I did not verify that this corpus is byte-identical to the one that produced the committed baseline row: Makefile:130-133 says the corpus "tracks upstream HEAD rather than pinned commits", while CLAUDE.md says every taps.txt row pins a SHA — the repo disagrees with itself there and I did not resolve it. So the -0.020 delta could be corpus movement rather than ranker movement. That distinction does not affect the finding: corpus movement is exactly the thing a re-run is supposed to report, and no re-run happens. - I did not run <code>make eval</code>, <code>make check</code>, or any workflow; I read their recipes. - I did not measure how long a <code>make eval-natural</code> would add (the eval corpus was already materialised for me, so I never paid the tap cost). - <code>catalog.search</code>'s numbers here are near the floor of resolution (3 of 50 queries vs 4 of 50), so its -0.020 is one query; the BM25 MRR/nDCG drift is below the default 0.02 eps and would not have been flagged even if someone ran it.
+
+<b>Why it is worth doing.</b> CLAUDE.md documents the two-set design ("Baselines are keyed by query set (name@content-digest), so one file holds both golden.jsonl and golden-natural.jsonl without either overwriting the other") as if both sets are exercised. Only one is. The set that received 50 hand-made relevance judgments — the project's best available measurement of retrieval quality, and the one whose grading key actually identifies a skill — contributes to no gate and no scheduled monitor, so the investment decays silently. Adding a <code>make eval-natural</code> target (or a non-blocking scheduled run alongside eval-stats.yml) would cost one recipe and turn a frozen snapshot back into a signal.
+
+<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">The 50-row natural-language golden set is the one place where the project's content-c…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="required-eval-gate-still-grades-by-name">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>The exemplar migration never reached the query set the required gate runs: 0 of 91 rows, and 27 of them have an ambiguous target on the gate's own corpus</h3>
+        <p><b>Measured.</b> Both invocations of the merge-blocking retrieval gate — the Makefile <code>eval</code> target and ci.yml's "retrieval quality gate" step — run <code>scripts/eval_retrieval.py</code> with no <code>--golden</code>, so both take <code>DEFAULT_GOLDEN = tests/eval/golden.jsonl</code>; 0 of that file's 91 rows carry an <code>exemplar</code>, and on the gate's own 20-tap corpus 27 of the 91 rows have at least one target name that resolves to more than one content digest (21 of 77 distinct target names are ambiguous).
+
+<b>Reproduce it.</b>
+
+<code>cd &lt;repo&gt;</code><br>
+<code>python3 -c "import json; rows=[json.loads(l) for l in open('tests/eval/golden.jsonl') if l.strip() and not l.startswith('#')]; print(len(rows),'rows;',sum(1 for r in rows if r.get('exemplar')),'with exemplar')"</code><br>
+<code>python3 -c "import json; rows=[json.loads(l) for l in open('tests/eval/golden-natural.jsonl') if l.strip() and not l.startswith('#')]; print(len(rows),'rows;',sum(1 for r in rows if r.get('exemplar')),'with exemplar')"</code><br>
+<code>grep -n 'DEFAULT_GOLDEN' scripts/eval_retrieval.py</code><br>
+<code>sed -n '134,139p' Makefile</code><br>
+<code>sed -n '269,279p' .github/workflows/ci.yml</code><br>
+<code>export BOOST_HOME=$TMPDIR/eval-home</code><br>
+<code>python3 -c "</code><br>
+<code>import json,glob,collections,os</code><br>
+<code>n2c=collections.defaultdict(set)</code><br>
+…
+
+<b>Verification found nothing to correct.</b> Every number, <code>file:line</code> and command output above was independently re-derived and matched exactly.
+
+<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
+
+Severity lowered from the claim's High to Medium on a measurement the claim did not make. I inspected the bodies behind the ambiguous names and they are two different things. Genuine homonyms exist — <code>brand-guidelines</code> is Anthropic brand colors vs OpenAI brand colors vs Sentry *copy writing* (three different jobs), and <code>pdf</code> is a general PDF skill vs a workflow that converts PDF to Markdown with one specific tool — but they are a minority, and neither appears among the rank-1 hits. The names that actually score hit@1 through an ambiguous target (skill-creator, slack-gif-creator, theme-factory, prompt-engineering, mcp-builder) are re-publications of one upstream skill across anthropics/skills, composio-community/awesome-codex-skills and sickn33/antigravity-awesome-skills, differing by a few bytes. A "wrong body" there is still a correct answer to the user, so the looseness is much smaller in practice than in principle. I did not adopt the shipped card's "the looseness was latent" finding as a reason: that was measured at hit@1 0.160, where there was nothing for ambiguity to inflate, whereas this set measures 0.484 — a different regime, so it does not transfer.
+
+Floor-margin exposure, with that qualification attached: hit@1 measures 44/91 = 0.484 against a floor needing 37 rows (margin 7 rows) with 10 rank-1 hits landing on an ambiguous name; recall@10 measures 77/91 = 0.846 against a floor needing 71 rows (margin 6 rows) with 20 rows matched only via ambiguous names.
+
+<b>Why it is worth doing.</b> This is the only gate in <code>make check</code> that can fail a merge on retrieval quality, and every retrieval decision validated against it (RRF fusion vs preferring dense, pool depth, whether the LLM rerank earns its keep) inherits the looseness. The project already established the fix and built the harness for it; the required set simply never got migrated, and because the card is closed as shipped nothing tracks the remaining work on the set that matters most.
+
+<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CONFIRMED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">CLAUDE.md states "Relevance is still decided by name (or by content class when a gold…</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="stale-tap-hint-dead-for-tap-only-installs">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">Tech-debt</span></div>
+        <h3>The "taps last refreshed N days ago" hint can never fire on a machine that tapped and never ran <code>boost update</code> — the only writer of the marker is <code>update</code> itself</h3>
+        <p><b>Measured.</b> The maintainer's own production install has 458 taps configured and no marker: <code>~/.boost/state/</code> is fully populated (pulse.jsonl 95k, lock-history/, snapshots/, and <code>last-shard-sync</code> stamped 8 Sep) while <code>last-tap-refresh</code> is absent — so the directory was not wiped, the file was simply never written across 458 taps, and the stale-tap hint CLAUDE.md describes as search's drift-reporting mechanism has never been able to fire there. The 20-tap eval corpus is the same: no marker. Two real installs, zero markers.
+
+<b>Reproduce it.</b>
+
+<code>export HOME=$TMPDIR/lens2-du2 ; export BOOST_HOME=$HOME/.boost ; mkdir -p "$HOME"</code><br>
+<code>cd &lt;repo&gt;</code><br>
+<code>python3 tests/make_fixture.py $TMPDIR/lens2-fix2</code><br>
+<code>./boost tap $TMPDIR/lens2-fix2</code><br>
+<code>python3 -c "from boost_cli.core import paths, registry; m=paths.tap_refresh_marker(); print('marker:',m); print('exists:',m.exists()); print('refresh_age_days():',registry.refresh_age_days()); print('STALE_TAPS_DAYS:',registry.STALE_TAPS_DAYS)"</code><br>
+<code># now prove update is the only writer:</code><br>
+<code>grep -rn 'mark_refreshed()' boost_cli | grep -v 'def mark_refreshed'</code><br>
+<code>./boost update</code><br>
+<code>ls -la $BOOST_HOME/state/last-tap-refresh</code>
+
+<b>What adversarial verification corrected.</b> This card's numbers are the re-measured ones, not the ones first reported.
+
+The mechanism reproduces exactly, but three of the claim's supporting statements are wrong:
+
+1. "the open card audit-audit-findings.md:36" — that card is <code>status: shipped</code> (docs/roadmap/items/audit-audit-findings.md, frontmatter line 5), not open. Its proposal is not pending; it landed.
+
+2. "would make two more surfaces silent for the same population" — false for <code>boost health</code>, which has ALREADY moved onto this marker and does NOT go silent. boost_cli/commands/quality.py:1417-1425 reads <code>registry.last_refresh_at()</code> and I measured the tap-only install printing <code>last tap sync never</code>. That is an honest degradation, visible to the user — the opposite of the silent failure the claim predicts.
+
+3. "would make two more surfaces silent" — also false for <code>boost audit --skills</code>, which never moved onto the marker. boost_cli/commands/safety.py:233 <code>_tap_age_days</code> still shells out to <code>git log -1 --format=%ct</code> on the clone, so it is unaffected by the marker either way. Zero additional surfaces are made silent, not two.
+
+4. "unreachable for the entire population it is aimed at" — over-broad. The hint is aimed at users whose taps are stale, and the long-ago-updated half of that population IS served correctly (my control run B proves it fires at 200 days).
+
+<b>What is NOT established.</b> Recorded because a card that overstates its own evidence is worse than no card.
+
+Scope limits of my repro:
+
+- My A/B used a 5-item <code>tests/make_fixture.py</code> tap, not the real default set. The population claim about <code>boost tap --defaults</code> and <code>boost quickstart</code> is settled by code inspection, not by running them: quickstart.py touches only <code>registry.list_taps</code> and <code>registry.add_many</code>, and <code>pkg.py:1077</code> is the sole <code>registry.update</code> call in all of boost_cli/commands/. No command other than <code>update</code> can reach <code>mark_refreshed</code>. - I aged install A by backdating every file under BOOST_HOME and install B by backdating the marker; neither is a genuinely 200-day-old machine, but the marker's mtime is the only input <code>refresh_age_days</code> reads (registry.py:435-440), so the emulation is exact. - The real install was inspected read-only with <code>ls</code> and a <code>json.load</code> of config.json. I did NOT run <code>boost health</code> there — it writes caches — so the "last tap sync never" line is measured on my disposable HOME, and the real machine's marker absence is measured directly. - I did not weigh the mitigation heavily: <code>boost health</code> does report "never", but it reaches the wrong population — the hint lives in <code>search</code> precisely because that is the command a never-update user runs, and nothing routes them to <code>health</code>. - Noticed but out of scope, not chased: the <code>if results:</code> guard at registry.py:680 means an <code>update</code> sweep where every tap FAILED also skips the stamp, and <code>test_a_sweep_with_no_taps_stamps_nothing</code> pins the no-taps case deliberately. - Not carded: <code>grep -h '^title:' docs/roadmap/items/*.md</code> plus body greps for mark_refreshed / tap_refresh_marker / refresh_age_days / "never …
+
+<b>Why it is worth doing.</b> Tap clones are load-bearing for both BM25 freshness and dense vector validity, and boost deliberately refuses to refresh them in the background — which makes this one muted line the entire mechanism by which a user learns their catalogue has drifted. It is switched off for precisely the users who need it (onboard via quickstart or <code>tap --defaults</code>, search for months, never update), and switched on only for users who already demonstrated they run <code>boost update</code>. Stamping the marker on a successful tap would cost one <code>write_text</code> and make the hint reachable.
+
+<em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">CLAUDE.md's rule is that "search must never refresh taps in the background: _hint_sta…</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
