@@ -611,6 +611,29 @@ class TestTheEmptyCatalogAnswersDifferentlyFromAMiss:
         # exactly what makes the reply indistinguishable from a real miss.
         assert "widgets" not in mcp.no_results("widgets", tapped=0)
 
+    def test_an_unsearchable_query_is_not_reported_as_a_miss(self):
+        # Worse here than on the CLI: an agent told "no skills match 'C++'"
+        # has no second query to try, and it is the answer a machine holding
+        # 45 C++ entries used to give. The agent has to learn that the term
+        # never reached the index, not that the catalogue is empty.
+        reply = mcp.no_results("R", tapped=4, dropped=["R"])
+        assert "no skills match" not in reply
+        assert "'R'" in reply
+
+    def test_it_names_the_rule_so_the_agent_can_retry(self):
+        reply = mcp.no_results("R", tapped=4, dropped=["R"])
+        assert "2 or more" in reply
+
+    def test_a_real_miss_is_unchanged_by_the_new_argument(self):
+        assert (mcp.no_results("widgets", tapped=4, dropped=[])
+                == "no skills match 'widgets'")
+
+    def test_setup_state_still_outranks_an_unsearchable_query(self):
+        # A machine with no taps could not have matched anything, whatever the
+        # query looked like — that branch stays first.
+        reply = mcp.no_results("R", tapped=0, dropped=["R"])
+        assert "boost tap --defaults" in reply
+
 
 def _descriptions():
     from boost_cli.commands import configuration

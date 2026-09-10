@@ -365,6 +365,104 @@ class TestSearch:
         assert with_flag.out == without_flag.out
 
 
+class TestSearchDroppedTerms:
+    """A term the index cannot hold must be named, never silently erased.
+
+    Measured before the fix: `c++ testing`, `c# testing` and `testing`
+    produced byte-identical `--json` with zero bytes on stderr, and a bare
+    `C++` answered "no matches — try `boost discover`" on a corpus holding 45
+    entries that name the language. Two halves: the aliases (unit-tested in
+    test_rag) make the language searchable, and these say so when a term still
+    is not.
+    """
+
+    def test_an_all_dropped_query_does_not_blame_the_catalogue(
+            self, boost, tapped):
+        # `R` is one character, so nothing was searched at all — reporting that
+        # as "no matches" asserts something the command never checked.
+        r = boost("search", "R")
+        assert "no searchable terms" in r.out
+        assert "no matches for" not in r.out
+
+    def test_it_names_the_term_and_the_rule(self, boost, tapped):
+        r = boost("search", "R")
+        assert "'R'" in r.out
+        assert "2 or more" in r.out
+
+    def test_it_does_not_send_the_user_to_github(self, boost, tapped):
+        # `boost discover R` is a worse answer than the one above: it spends a
+        # network round trip on a query that was never a query.
+        r = boost("search", "R")
+        assert "boost discover" not in r.out
+
+    def test_non_latin_reaches_the_same_branch(self, boost, tapped):
+        r = boost("search", "代码审查")
+        assert "no searchable terms" in r.out
+
+    def test_a_surviving_term_still_searches_and_says_what_was_dropped(
+            self, boost, tapped):
+        r = boost("search", "R", "brainstorming")
+        assert "brainstorming" in r.out
+        assert "no searchable terms" not in r.out
+        assert "not searched: 'R'" in r.out
+
+    def test_an_ordinary_query_says_nothing(self, boost, tapped):
+        r = boost("search", "brainstorming")
+        assert "not searched" not in r.out
+        assert "no searchable terms" not in r.out
+
+    def test_a_stopword_is_not_reported_as_dropped(self, boost, tapped):
+        # Dropped by design; a notice on every ordinary phrase is noise.
+        r = boost("search", "how", "to", "brainstorming")
+        assert "not searched" not in r.out
+
+    def test_a_dropped_term_beside_a_real_miss_still_reads_as_a_miss(
+            self, boost, tapped):
+        # `zzzznothing` was searched and found nothing; `R` was not searched.
+        # Only the first is a verdict on the catalogue, so the empty state
+        # stays the ordinary one and the dropped term rides along beside it.
+        r = boost("search", "R", "zzzznothing")
+        assert "no matches for" in r.out
+        assert "no searchable terms" not in r.out
+        assert "not searched: 'R'" in r.out
+
+    def test_an_ordinary_json_query_leaves_stderr_clean(self, boost, tapped):
+        r = boost("search", "brainstorming", "--json")
+        assert json.loads(r.out)
+        assert "not searched" not in r.err
+
+    def test_it_stays_quiet_when_a_dense_store_read_the_query(
+            self, boost, tapped, monkeypatch):
+        # dense embeds the raw string, so `R` DID reach an index — claiming it
+        # was not searched would be false, and the dense path is exactly the
+        # one both cards scoped their defect away from.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "ready", lambda: True)
+        r = boost("search", "R", "brainstorming")
+        assert "not searched" not in r.out
+
+    def test_a_dense_store_also_suppresses_the_all_dropped_empty_state(
+            self, boost, tapped, monkeypatch):
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "ready", lambda: True)
+        r = boost("search", "R")
+        assert "no searchable terms" not in r.out
+        assert "no matches for" in r.out
+
+    def test_json_stays_machine_readable_and_warns_on_stderr(
+            self, boost, tapped):
+        # Same contract as the --smart fallback note in this command: a script
+        # reading stdout as JSON must still learn that a term was discarded.
+        r = boost("search", "R", "--json")
+        assert json.loads(r.out) == []
+        assert "not searched: 'R'" in r.err
+
+    def test_json_with_results_still_warns_on_stderr(self, boost, tapped):
+        r = boost("search", "R", "brainstorming", "--json")
+        assert [d["name"] for d in json.loads(r.out)]
+        assert "not searched: 'R'" in r.err
+
+
 class TestSearchCategoryFilter:
     """Every fixture skill's `category` (see catalog.CACHE_FORMAT 2) is its
     first frontmatter tag, since none declares an explicit `category`:

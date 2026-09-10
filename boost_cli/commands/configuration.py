@@ -1336,9 +1336,15 @@ def _tool_search(args: dict):
         entries = [e for e, _score in catalog.search(query)[:10]]
         ranker = FRONTMATTER_RANKER
     if not entries:
-        # mcp.no_results owns the empty reply on both paths, including the
-        # untapped-machine branch that must not read as a genuine miss.
-        return mcp.no_results(query, tapped=tapped), False
+        # mcp.no_results owns the empty reply on all three paths: a genuine
+        # miss, the untapped machine that must not read as one, and a query
+        # every word of which fell out of the tokenizer. The third is asked
+        # only of the RAG branch — `catalog.search` is a substring match and
+        # discards nothing, so a notice there would describe another engine.
+        dropped = (rag.dropped_terms(query)
+                   if rag_result is not None
+                   and rag.tokenizer_is_the_only_reader() else [])
+        return mcp.no_results(query, tapped=tapped, dropped=dropped), False
     # Name-keyed, the same test `lockfile.find_any` and `store.install` apply —
     # those are the tools this marker is advising about. mcp.hit_line's
     # docstring records why the imprecision is disclosed rather than removed,
