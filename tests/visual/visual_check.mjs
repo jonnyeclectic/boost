@@ -163,6 +163,10 @@ for (const rel of PAGES) {
         // heroes — the shared invariant is the .wrap content column.
         hasWrap: !!document.querySelector(".wrap"),
         headings: document.querySelectorAll("h1,h2").length,
+        // Not an assertion — the number the capture note reports when Chrome
+        // refuses a full-page shot, so the log says how tall the page got
+        // rather than only that it was too tall.
+        pageHeight: Math.max(doc.scrollHeight, document.body.scrollHeight),
       };
     }, SCROLL_OK_SEL);
 
@@ -179,12 +183,40 @@ for (const rel of PAGES) {
     if (!r.hasWrap) problems.push("chrome missing (.wrap)");
     if (r.headings < 2) problems.push(`only ${r.headings} headings rendered`);
 
-    await page.screenshot({ path: `${OUT}/${name}.png`, fullPage: width === 1280 });
+    // Report BEFORE capturing. The verdict is the gate and the screenshot is
+    // an artifact for eyeballing (see the header), so nothing below this line
+    // may decide whether a page/width combination counts as checked.
     if (problems.length) {
       failures++;
       console.error(`FAIL ${rel} @${width}: ${problems.join("; ")}`);
     } else {
       console.log(`PASS ${rel} @${width}`);
+    }
+
+    // Capture last, and never fatally. `docs/roadmap.html` is generated from
+    // `docs/roadmap/items/*.md` and grows a card at a time; at 291 cards the
+    // full-page capture at 1280 asked for more than Chrome will composite —
+    // `ProtocolError (Page.captureScreenshot): Page is too large` — an
+    // unhandled rejection that killed node mid-sweep. The red X was the cheap
+    // half: the verdict just above was discarded unprinted and the six
+    // combinations behind it never ran, so the gate went on reporting failure
+    // while it had stopped checking a page and a half.
+    //
+    // The ceiling is Chrome's, it moves with the runner image, and this file
+    // does not record a guess about its value — it asks for the whole page and
+    // takes no for an answer, falling back to the viewport shot the other four
+    // widths already take, which cannot be too large. `console_check.mjs` in
+    // this directory reasons the same way about a page it cannot load.
+    for (const fullPage of width === 1280 ? [true, false] : [false]) {
+      try {
+        await page.screenshot({ path: `${OUT}/${name}.png`, fullPage });
+        break;
+      } catch (err) {
+        console.log(`     note: ${rel} @${width} — `
+          + `${fullPage ? "full-page" : "viewport"} capture refused `
+          + `(${String(err?.message ?? err).split("\n")[0]}); `
+          + `page is ${r.pageHeight}px tall`);
+      }
     }
   }
 }
