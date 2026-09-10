@@ -573,6 +573,20 @@ def cmd_reindex(argv):
                        % (len(stats["reused"]),
                           "" if len(stats["reused"]) == 1 else "s",
                           ", ".join(stats["reindexed"]) or "none"), "muted"))
+    # The line that was missing. `boost catalog --import` restores catalogues
+    # with no repositories cloned, so every entry indexes from its frontmatter
+    # and the count above reads exactly as it does for a full corpus. Say what
+    # the index actually holds, in the share of TEXT rather than of documents —
+    # a document share reads 100% until it reads 0%.
+    if stats["metadata_only"]:
+        share = rag.index_completeness() or {}
+        out.warn("%d of %d items were indexed from catalog metadata alone — "
+                 "their registries are not cloned here, so this index holds "
+                 "%.1f%% of the searchable text. Tap them for real with "
+                 "`boost tap <owner/repo>` and re-run `boost reindex` to index "
+                 "their bodies."
+                 % (stats["metadata_only"], stats["docs"],
+                    100.0 * share.get("body_share", 0.0)), wrap=True)
     if args.dense:
         if dense_stats is None:
             out.warn("dense index skipped — %s" % embed.fallback_note(),

@@ -1096,8 +1096,8 @@ class TestMakeDocs:
         assert "blueberry" in terms
 
     def test_term_frequencies_and_kind_default_and_snippet(self, monkeypatch):
-        monkeypatch.setattr(rag, "read_body",
-                            lambda e, tp: "widget widget gadget")
+        monkeypatch.setattr(rag, "read_body_full",
+                            lambda e, tp: ("widget widget gadget", True))
         e = {"name": "n", "tap": "x/y", "skill_md": "s"}  # no kind
         docs = rag._make_docs([e], {})
         assert docs[0]["tf"] == {"widget": 2, "gadget": 1}
@@ -1107,14 +1107,14 @@ class TestMakeDocs:
         # v2: more than SNIP_WIDTH is stored (windowed later at retrieve time)
         # so `retrieve` can center on the matched terms — but capped at
         # SNIP_STORE to bound index growth.
-        monkeypatch.setattr(rag, "read_body", lambda e, tp: "Q" * 250)
+        monkeypatch.setattr(rag, "read_body_full", lambda e, tp: ("Q" * 250, True))
         e = _entry("n")
         docs = rag._make_docs([e], {})
         assert docs[0]["snip"] == "Q" * 250              # under cap -> stored whole
 
     def test_snippet_storage_is_capped(self, monkeypatch):
-        monkeypatch.setattr(rag, "read_body",
-                            lambda e, tp: "Q" * (rag.SNIP_STORE + 200))
+        monkeypatch.setattr(rag, "read_body_full",
+                            lambda e, tp: ("Q" * (rag.SNIP_STORE + 200), True))
         e = _entry("n")
         docs = rag._make_docs([e], {})
         assert docs[0]["snip"] == "Q" * rag.SNIP_STORE
@@ -1125,7 +1125,7 @@ class TestMakeDocs:
         # fields and its own snippet, and `retrieve` collapsed them back to one
         # hit per entry anyway, so the extra documents were built, stored,
         # re-parsed on every cold search, and then discarded.
-        monkeypatch.setattr(rag, "read_body", lambda e, tp: "widget " * 400)
+        monkeypatch.setattr(rag, "read_body_full", lambda e, tp: ("widget " * 400, True))
         docs = rag._make_docs([_entry("n")], {})
         assert len(docs) == 1
         assert docs[0]["tf"]["widget"] == 400
@@ -1134,7 +1134,7 @@ class TestMakeDocs:
         # A chunked index matched names for free — the name sat in whatever
         # chunk contained it. One doc per entry has to state the surface, or
         # searching for an item by its own name stops working.
-        monkeypatch.setattr(rag, "read_body", lambda e, tp: "unrelated prose")
+        monkeypatch.setattr(rag, "read_body_full", lambda e, tp: ("unrelated prose", True))
         docs = rag._make_docs(
             [_entry("code-reviewer", desc="reviews diffs")], {})
         tf = docs[0]["tf"]
@@ -1143,7 +1143,7 @@ class TestMakeDocs:
 
     def test_empty_chunk_is_skipped_not_break(self, monkeypatch):
         body = ("the " * 220) + "\n\n" + ("widget " * 130)
-        monkeypatch.setattr(rag, "read_body", lambda e, tp: body)
+        monkeypatch.setattr(rag, "read_body_full", lambda e, tp: (body, True))
         e = _entry("n")
         docs = rag._make_docs([e], {})
         # An all-stopword passage contributes no terms; the entry still yields
