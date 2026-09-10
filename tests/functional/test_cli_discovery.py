@@ -2088,6 +2088,35 @@ class TestReindex:
         data = json.loads(boost("reindex", "--force", "--json").out)
         assert data["reused"] == []
 
+    def test_an_uncloned_registry_is_named_rather_than_counted_as_full(
+            self, boost, tapped):
+        """The `boost catalog --import` shape: catalogs present, clones gone.
+
+        `rag.read_body` degrades to name + description without saying so, so
+        this index used to report the same confident "indexed N passages" as a
+        fully cloned one while holding a fraction of the text.
+        """
+        import shutil
+
+        from boost_cli.core import paths
+        boost("reindex")
+        for d in paths.repos_dir().iterdir():
+            shutil.rmtree(d)
+        data = json.loads(boost("reindex", "--force", "--json").out)
+        assert data["docs"] > 0
+        assert data["metadata_only"] == data["docs"]
+        r = boost("reindex", "--force")
+        said = r.out + r.err
+        assert "indexed from catalog metadata alone" in said
+        assert "0.0% of the searchable text" in said
+        assert "boost tap <owner/repo>" in said
+
+    def test_a_cloned_registry_says_nothing_about_metadata(self, boost, tapped):
+        r = boost("reindex", "--force")
+        assert "catalog metadata alone" not in (r.out + r.err)
+        assert json.loads(
+            boost("reindex", "--force", "--json").out)["metadata_only"] == 0
+
     def test_no_taps_errors(self, boost):
         r = boost("reindex", expect=1)
         assert "no taps configured" in r.err
