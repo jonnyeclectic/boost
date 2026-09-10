@@ -51,7 +51,7 @@ from . import ai, catalog, config, frontmatter, gitutil, paths, registry, util
 # reach the entries spelling it that way. `build` reuses a tap only when
 # `_load_raw` returned an index, and a version mismatch returns None — so the
 # bump re-indexes every tap rather than half of them.
-INDEX_VERSION = 8
+INDEX_VERSION = 9
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -294,23 +294,51 @@ def entry_path(entry: dict, tap_paths: dict[str, Path] | None = None
     return Path(base) / rel
 
 
-def read_body(entry: dict, tap_paths: dict[str, Path] | None = None) -> str:
-    """Return an item's searchable text: name + description + prose body.
+def read_body_full(entry: dict, tap_paths: dict[str, Path] | None = None
+                   ) -> tuple[str, bool]:
+    """Return ``(text, has_body)`` — the searchable text, and whether it is
+    actually the item's body rather than its catalog metadata standing in.
 
-    The frontmatter is stripped (reusing ``frontmatter.parse``); the name and
-    description are prepended so short items keep keyword parity with the old
-    search. Missing files degrade to just the catalog metadata.
+    The degradation itself is unchanged and deliberate: a tap whose clone is
+    absent still contributes its name and description, because a smaller index
+    beats no index. What was missing is that it happened *silently*.
+    ``boost catalog --import`` restores catalogues with zero repositories
+    cloned, so every entry takes this path, and the index it produces is not
+    the full-content index the ``evals`` gate floors — it is a frontmatter
+    index wearing the same file name. Measured over 3,015 real entries,
+    indexed with and then without their clones: 3,041,326 tokens against
+    182,507, or **6.0%** of the searchable text, with nothing in the output
+    saying so.
+
+    ``has_body`` is False in both degrade cases, and they are one answer on
+    purpose: whether the entry names no file or names one that cannot be read,
+    the document carries only metadata, which is the thing a caller needs to
+    know. :func:`build` counts them and :func:`index_completeness` reports the
+    share.
     """
     header = "%s\n%s" % (entry.get("name", ""), entry.get("description", ""))
     src = entry_path(entry, tap_paths)
     if src is None:
-        return header.strip()
+        return header.strip(), False
     try:
         text = src.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return header.strip()
+        return header.strip(), False
     _meta, body = frontmatter.parse(text)
-    return ("%s\n%s" % (header, body)).strip()
+    return ("%s\n%s" % (header, body)).strip(), True
+
+
+def read_body(entry: dict, tap_paths: dict[str, Path] | None = None) -> str:
+    """An item's searchable text: name + description + prose body.
+
+    The frontmatter is stripped (reusing ``frontmatter.parse``); the name and
+    description are prepended so short items keep keyword parity with the old
+    search. Missing files degrade to just the catalog metadata — ask
+    :func:`read_body_full` when you need to know that it happened. This
+    signature is load-bearing: ``dense`` and ``boost_langchain`` both call it
+    and several tests monkeypatch it.
+    """
+    return read_body_full(entry, tap_paths)[0]
 
 
 # ----------------------------------------------------------------- build
@@ -349,7 +377,7 @@ def _make_docs(entries: list[dict], tap_paths: dict[str, Path]) -> list[dict]:
     """
     docs: list[dict] = []
     for e in entries:
-        body = read_body(e, tap_paths)
+        body, has_body = read_body_full(e, tap_paths)
         # The scanner already hashed this exact text (`catalog._content_digest`
         # assembles name + description + body, the same string `read_body`
         # returns), so an entry from a current cache hands the value over. The
@@ -365,6 +393,13 @@ def _make_docs(entries: list[dict], tap_paths: dict[str, Path]) -> list[dict]:
         docs.append({
             "n": e["name"], "t": e["tap"], "f": e["skill_md"], "h": digest,
             "k": e.get("kind", "skill"),
+            # Written only when the body is MISSING, so a fully cloned corpus
+            # pays nothing for the flag — which matters on an index measured at
+            # 43.7 MB. Absence therefore means "has a body", and that reading
+            # is only safe because INDEX_VERSION moved with it: `_load_raw`
+            # rejects any other version outright, so no document written before
+            # this change can be misread as complete.
+            **({"m": 1} if not has_body else {}),
             "c": 0, "l": sum(tf.values()),
             "snip": body[:SNIP_STORE].strip(),  # windowed at retrieve time
             "tf": dict(tf),  # noqa: FURB123  tf is a defaultdict; .copy() would keep the factory
@@ -428,7 +463,7 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
     if old is not None and reused_safe:
         docs = _kept_docs(old, reused_safe) + docs
 
-    _save(docs, commits)
+    saved = _save(docs, commits)
     reindexed = sorted({e["tap"] for e in fresh})
     # `reindexed` names taps by their real name ("owner/repo"); `reused_safe`
     # is keyed by the safe name ("owner__repo") that `_tap_commits` uses to
@@ -446,6 +481,10 @@ def build(entries: list[dict] | None = None, force: bool = False) -> dict:
         "taps": len(commits),
         "reindexed": reindexed,
         "reused": reused,
+        # Counted over every document written, reused ones included — an
+        # incremental build that reported only what it re-indexed would say
+        # zero on the run after a bundle import.
+        "metadata_only": saved["metadata_only"],
     }
 
 
@@ -640,17 +679,38 @@ def _all_postings() -> dict[str, list[list[int]]]:
     return dict(out)  # noqa: FURB123  out is a defaultdict; .copy() would keep the factory
 
 
-def _save(docs: list[dict], commits: dict[str, str]) -> None:
+def _save(docs: list[dict], commits: dict[str, str]) -> dict:
+    """Persist the index and return the ``stats`` block it wrote.
+
+    Returning the stats rather than recomputing them in :func:`build` keeps one
+    definition of "how much of this index is real body text": the totals are
+    summed here, over the same documents that are being written.
+    """
     postings: dict[str, list[list[int]]] = defaultdict(list)
     meta_docs: list[dict] = []
     total_len = 0
+    metadata_only = 0
+    metadata_only_len = 0
     for doc_id, d in enumerate(docs):
         for term, tf in d["tf"].items():
             postings[term].append([doc_id, tf])
         total_len += d["l"]
+        # `.get`, because a document reused from the previous index carries
+        # whatever it was written with, and a hand-built one (several tests)
+        # carries nothing. Absence is "has a body" — see `_make_docs`.
+        bodyless = bool(d.get("m"))
+        if bodyless:
+            metadata_only += 1
+            metadata_only_len += d["l"]
         meta_docs.append({"n": d["n"], "t": d["t"], "f": d["f"], "k": d["k"],
                           "h": d.get("h", ""),
+                          **({"m": 1} if bodyless else {}),
                           "c": d["c"], "l": d["l"], "snip": d["snip"]})
+    stats: dict = {"docs": len(docs),
+                   "avg_len": (total_len / len(docs)) if docs else 0.0,
+                   "tokens": total_len,
+                   "metadata_only": metadata_only,
+                   "metadata_only_tokens": metadata_only_len}
     payload = {
         "version": INDEX_VERSION,
         "engine": ENGINE,
@@ -658,8 +718,7 @@ def _save(docs: list[dict], commits: dict[str, str]) -> None:
         "commits": commits,
         "params": {"chunk_chars": CHUNK_CHARS, "overlap": OVERLAP,
                    "k1": K1, "b": B},
-        "stats": {"docs": len(docs),
-                  "avg_len": (total_len / len(docs)) if docs else 0.0},
+        "stats": stats,
         "docs": meta_docs,
     }
     paths.ensure_dirs()
@@ -671,6 +730,7 @@ def _save(docs: list[dict], commits: dict[str, str]) -> None:
     # Drop the mtime-keyed cache so a reindex is visible to an immediately
     # following query even when the filesystem mtime granularity is coarse.
     _CACHE.pop(str(p), None)
+    return stats
 
 
 def _now() -> str:
@@ -716,6 +776,43 @@ def ready() -> bool:
     """
     raw = _load_raw()
     return bool(raw and raw.get("docs") and postings_path().exists())
+
+
+def index_completeness() -> dict | None:
+    """How much of the index on disk is the corpus, and how much is its labels.
+
+    Returns ``None`` when there is no readable index — the same answer
+    :func:`_load_raw` gives, rather than a zeroed dict, because "no index" and
+    "an index carrying no bodies" are different situations with different
+    remedies and must not render alike.
+
+    ``body_share`` is a share of **tokens**, not of documents, and that is the
+    whole point. An entry whose body is missing still produces a document, so a
+    document share sits at 1.0 until the moment it drops to 0.0 and tells a
+    partially-cloned machine nothing. The token share degrades smoothly and
+    reproduces the measurement the roadmap card made by hand: 3,041,326 tokens
+    against 182,507 over 3,015 entries indexed with and then without their
+    clones, or 6.0% of the searchable text.
+
+    Reads the persisted totals rather than re-deriving them, so asking is a
+    stat plus a cached parse — nothing walks the corpus.
+    """
+    raw = _load_raw()
+    if raw is None:
+        return None
+    stats = raw.get("stats") or {}
+    tokens = int(stats.get("tokens") or 0)
+    metadata_only_tokens = int(stats.get("metadata_only_tokens") or 0)
+    return {
+        "docs": int(stats.get("docs") or 0),
+        "metadata_only": int(stats.get("metadata_only") or 0),
+        "tokens": tokens,
+        "metadata_only_tokens": metadata_only_tokens,
+        # Guarded on `tokens`, not on `docs`: an index of documents that all
+        # tokenized to nothing would divide by zero, and 0.0 is the honest
+        # answer there — no body text is present.
+        "body_share": (1.0 - metadata_only_tokens / tokens) if tokens else 0.0,
+    }
 
 
 def stale() -> bool:

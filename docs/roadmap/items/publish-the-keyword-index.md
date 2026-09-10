@@ -2,13 +2,14 @@
 id: publish-the-keyword-index
 board: code
 section: planned
-status: planned
+status: inflight
 category: Search · Performance
 complexity: L
 impact: High
 wow: 4
 note: every machine rebuilds 697 MB of index for a corpus that is byte-identical on all of them
 order: 99
+owner: loop/keyword-index-completeness
 title: publish the keyword index the way vectors are published
 ---
 Dense vectors are built once in CI and downloaded. The BM25 index is not:
@@ -66,3 +67,27 @@ as a match.
 <a href="#shrink-the-published-index">shrink-the-published-index</a>. This card should not ship
 until that one has an answer, because publishing 697&nbsp;MB per refresh to save 65&nbsp;s of CPU
 is not obviously the right trade, and at the compressed sizes measured there it clearly is.
+
+<b>Partly landed, and deliberately still <code>inflight</code> — 2026-09-10.</b> What shipped is
+the half that needed no size decision: <b>the index now records what it is</b>.
+<code>read_body_full</code> returns the text and whether it contains the item's body,
+<code>build()</code> reports <code>metadata_only</code> over every document written (reused ones
+included, or an incremental build reports zero on the run after a bundle import),
+<code>index_completeness()</code> reads the share back off disk, and <code>boost reindex</code>
+says it out loud instead of reporting the same confident count for a 6% index. The share is of
+<b>tokens</b>, not documents: a bodyless entry still produces a document, so a document share sits
+at 1.0 until it drops to 0.0. <code>INDEX_VERSION</code> moved to <b>9</b>, because the flag is
+written only when a body is missing and absence may only be read as "complete" once no older
+document can survive.
+
+<b>What did NOT land:</b> <code>rag.export_shard</code> / <code>rag.import_shard</code>, the
+per-registry assets, and the <code>manifest.json</code> rows — the publishing pipeline itself.
+That half is what the payload-size question governs, and
+<a href="#shrink-the-published-index">shrink-the-published-index</a> still has no answer: its claim
+is <b>stale</b>, not active — branch <code>loop/shrink-postings-index</code> was last touched
+2026-09-02, carries one commit, has no pull request, and is 394 commits behind
+<code>main</code>. Someone should un-claim it. One structural finding for whoever takes it: doc
+ids are positional (<code>_save</code> does <code>enumerate(docs)</code>), so the card's
+"merge by offsetting <code>doc_id</code>" is sound as written — and the shard format should
+serialize <em>logical</em> postings (digest → term → tf) rather than the SQLite layout, so the
+interning that branch was attempting cannot invalidate a published shard.
