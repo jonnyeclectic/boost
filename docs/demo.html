@@ -303,10 +303,11 @@ const STOP = new Set(("a an and are as at be by for from has have how i in is it
 // on non-alphanumerics, `C++` yields `c`, which the 1-char filter then drops
 // too. The index was built with the Python tokenizer, so leaving these out
 // here would answer `C++` with nothing on an index that holds `cpp`.
-const ALIASES = {"objective-c": "objectivec", "c++": "cpp", "c#": "csharp", "f#": "fsharp"};
+const ALIASES = {"objective-c": "objectivec", "objective c": "objectivec",
+                 "c++": "cpp", "c#": "csharp", "f#": "fsharp"};
 // Longest first; the lookarounds stop `basic++` from indexing as C++ and the
 // musical note `c#5` from becoming a language.
-const ALIAS_RE = /(?<![a-z0-9])(objective-c|c\+\+|c#|f#)(?![a-z0-9])/g;
+const ALIAS_RE = /(?<![a-z0-9])(objective-c|objective c|c\+\+|c#|f#)(?![a-z0-9])/g;
 
 function tokenize(text) {
   // rag.tokenize: fold the aliases, lowercase, split on non-alphanumerics,

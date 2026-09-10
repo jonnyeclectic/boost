@@ -1286,7 +1286,9 @@ def _tool_search(args: dict):
         # every word of which fell out of the tokenizer. The third is asked
         # only of the RAG branch — `catalog.search` is a substring match and
         # discards nothing, so a notice there would describe another engine.
-        dropped = rag.dropped_terms(query) if rag_result is not None else []
+        dropped = (rag.dropped_terms(query)
+                   if rag_result is not None
+                   and rag.tokenizer_is_the_only_reader() else [])
         return mcp.no_results(query, tapped=tapped, dropped=dropped), False
     # Name-keyed, the same test `lockfile.find_any` and `store.install` apply —
     # those are the tools this marker is advising about. mcp.hit_line's

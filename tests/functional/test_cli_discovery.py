@@ -431,6 +431,24 @@ class TestSearchDroppedTerms:
         assert json.loads(r.out)
         assert "not searched" not in r.err
 
+    def test_it_stays_quiet_when_a_dense_store_read_the_query(
+            self, boost, tapped, monkeypatch):
+        # dense embeds the raw string, so `R` DID reach an index — claiming it
+        # was not searched would be false, and the dense path is exactly the
+        # one both cards scoped their defect away from.
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "ready", lambda: True)
+        r = boost("search", "R", "brainstorming")
+        assert "not searched" not in r.out
+
+    def test_a_dense_store_also_suppresses_the_all_dropped_empty_state(
+            self, boost, tapped, monkeypatch):
+        from boost_cli.core import dense
+        monkeypatch.setattr(dense, "ready", lambda: True)
+        r = boost("search", "R")
+        assert "no searchable terms" not in r.out
+        assert "no matches for" in r.out
+
     def test_json_stays_machine_readable_and_warns_on_stderr(
             self, boost, tapped):
         # Same contract as the --smart fallback note in this command: a script

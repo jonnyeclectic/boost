@@ -109,8 +109,19 @@ class Hit(TypedDict, total=False):  # type: ignore[misc]
 #: remapping those would change rankings that work today to fix nothing. Each
 #: row here was checked against the 20-tap eval corpus (10,731 entries):
 #: c++ 45, c# 30, f# 5, objective-c 3.
+#:
+#: `objective c` earns its own row rather than a widened pattern, and it is
+#: the row that shows why the query side alone is never enough: aliasing only
+#: the hyphen form would index those 3 entries as `objectivec` while a user
+#: typing the space form still tokenized to `objective`, which used to match
+#: them — a fix that broke a query that worked. Measured over the 10,731
+#: full bodies: `objective-c` 12 occurrences, `objective c` **0**, so the
+#: false positive this could invent ("our objective C grade") is not in the
+#: corpus. A form separated by anything else (newline, two spaces) is not
+#: covered; the table is surface forms, not a grammar.
 SYMBOL_ALIASES = {
     "objective-c": "objectivec",
+    "objective c": "objectivec",
     "c++": "cpp",
     "c#": "csharp",
     "f#": "fsharp",
@@ -177,6 +188,27 @@ def dropped_terms(text: str) -> list[str]:
             continue
         out.append(word)
     return list(dict.fromkeys(out))
+
+
+def tokenizer_is_the_only_reader() -> bool:
+    """True when nothing but BM25 could have seen this query.
+
+    Only BM25 tokenizes: :func:`dense.retrieve` embeds the raw query string and
+    never calls :func:`tokenize`. So on a machine with vectors built, a term
+    this module drops still reached an index, and telling that user the word
+    "was not searched" is false. It is also the exact path both roadmap cards
+    scoped their defect away from — a fix that speaks there breaks the scope it
+    inherited.
+
+    Deliberately asks ``dense.ready()`` rather than reading a result's engine
+    label. A label is *more* precise (a ready-but-thin store answers ``[]`` and
+    BM25 alone decides the ranking), but it is not always the retrieval's own:
+    :func:`rerank` may replace it with the LLM's name and :func:`search` hands
+    that string on, so a caller cannot tell the two apart. Staying quiet when
+    we could have spoken is a smaller error than a confident false claim.
+    """
+    from . import dense
+    return not dense.ready()
 
 
 def chunk(text: str, size: int = CHUNK_CHARS, overlap: int = OVERLAP,

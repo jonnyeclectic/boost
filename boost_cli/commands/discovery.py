@@ -166,9 +166,12 @@ def cmd_search(argv):
         scored = [(e, s) for e, s in scored
                  if catalog.matches_category(e, args.category)]
     # One measurement, three branches below: the words the index cannot hold.
-    # Only asked on the RAG path — `catalog.search` is a substring match and
-    # discards nothing, so the notice would be describing the wrong engine.
-    dropped = rag.dropped_terms(query) if use_rag else []
+    # Two gates, and each excludes an engine that did not drop anything.
+    # `catalog.search` is a substring match, so the non-RAG path discards
+    # nothing; and `dense.retrieve` embeds the raw query string, so on a
+    # machine with vectors built the term reached an index after all.
+    dropped = (rag.dropped_terms(query)
+               if use_rag and rag.tokenizer_is_the_only_reader() else [])
     if not scored:
         if args.as_json:
             print(json.dumps([]))

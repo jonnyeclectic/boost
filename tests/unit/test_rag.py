@@ -64,6 +64,13 @@ class TestSymbolLanguageAliases:
         # whole meaning is the character the length filter drops.
         assert rag.tokenize("Objective-C") == ["objectivec"]
 
+    def test_the_space_form_reaches_the_same_token(self):
+        # Aliasing only the hyphen form would index those entries as
+        # `objectivec` while `objective c` still tokenized to `objective` —
+        # breaking a query that worked before the fix.
+        assert rag.tokenize("objective c") == ["objectivec"]
+        assert rag.tokenize("Objective C") == rag.tokenize("Objective-C")
+
     def test_the_language_survives_alongside_ordinary_terms(self):
         assert rag.tokenize("C++ testing") == ["cpp", "testing"]
 
@@ -109,6 +116,24 @@ class TestSymbolLanguageAliases:
         for surface, replacement in rag.SYMBOL_ALIASES.items():
             assert re.fullmatch(r"[a-z0-9]+", replacement), (surface, replacement)
             assert rag.tokenize(surface) == [replacement], surface
+
+
+class TestOnlyBm25Tokenizes:
+    """The notice must not fire on a machine whose vectors saw the query.
+
+    `dense.retrieve` embeds the raw query string, so a term `tokenize` drops
+    still reached an index there — and "not searched" would be false. Both
+    roadmap cards scoped their defect to the BM25-only path for this reason,
+    so a fix that speaks on the dense path breaks the scope it inherited.
+    """
+
+    def test_bm25_alone_reads_the_query_when_no_vectors_are_built(self):
+        with mock.patch.object(dense_mod, "ready", return_value=False):
+            assert rag.tokenizer_is_the_only_reader() is True
+
+    def test_a_built_dense_store_means_something_else_read_it(self):
+        with mock.patch.object(dense_mod, "ready", return_value=True):
+            assert rag.tokenizer_is_the_only_reader() is False
 
 
 class TestDroppedTerms:
