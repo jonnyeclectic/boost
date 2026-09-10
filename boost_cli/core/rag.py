@@ -45,7 +45,13 @@ from . import ai, catalog, config, frontmatter, gitutil, paths, registry, util
 # v7: postings interns term text into its own `terms` table instead of
 # repeating it on every posting row — see `_write_postings`; bump forces a
 # one-time reindex so every store gets the smaller layout.
-INDEX_VERSION = 7
+# v8: `tokenize` folds `SYMBOL_ALIASES` (c++ -> cpp, c# -> csharp, ...), so a
+# v7 store holds neither the aliased tokens nor the documents that would carry
+# them; bump forces the one-time re-tokenize that makes `boost search 'C++'`
+# reach the entries spelling it that way. `build` reuses a tap only when
+# `_load_raw` returned an index, and a version mismatch returns None — so the
+# bump re-indexes every tap rather than half of them.
+INDEX_VERSION = 8
 ENGINE = "bm25"
 
 # Chunking defaults (documented in docs/rag-architecture.md §4).
@@ -85,10 +91,92 @@ class Hit(TypedDict, total=False):  # type: ignore[misc]
 
 # --------------------------------------------------------------- tokenizing
 
+#: Language names whose meaning lives in the punctuation, mapped to a token
+#: the index can hold. `C++` is four characters of which three the splitter
+#: throws away; what survives is `c`, which the 1-char filter then drops too —
+#: so `boost search 'C++'` scored zero documents on a corpus holding 45 entries
+#: that name it, and `c++ testing`, `c# testing` and `testing` were three
+#: spellings of one query with no notice that anything had been discarded.
+#:
+#: Every replacement must be a single `[a-z0-9]+` run: `stem_expansions`
+#: range-scans the terms table on "tokenize emits only [a-z0-9]+", and a
+#: replacement like `c-sharp` would re-split into a word plus the 1-char noise
+#: this exists to avoid. `tests/unit/test_rag.py` pins that.
+#:
+#: Deliberately short. It holds the forms that tokenize to *nothing* or to the
+#: wrong word — not every language with a symbol in it. `.NET` already reaches
+#: its 124 entries through the token `net`, and `node.js` through `node`+`js`;
+#: remapping those would change rankings that work today to fix nothing. Each
+#: row here was checked against the 20-tap eval corpus (10,731 entries):
+#: c++ 45, c# 30, f# 5, objective-c 3.
+SYMBOL_ALIASES = {
+    "objective-c": "objectivec",
+    "c++": "cpp",
+    "c#": "csharp",
+    "f#": "fsharp",
+}
+
+# Longest first, so `objective-c` wins over any shorter row that prefixes it.
+# The lookarounds are what keep this from inventing mentions: without the
+# lookbehind, `basic++` contains `c++` and would index a document about BASIC
+# as C++; without the lookahead, the musical note `c#5` becomes the language.
+_ALIAS_RE = re.compile(
+    r"(?<![a-z0-9])(?:%s)(?![a-z0-9])"
+    % "|".join(re.escape(k)
+               for k in sorted(SYMBOL_ALIASES, key=len, reverse=True)))
+
+
 def tokenize(text: str) -> list[str]:
-    """Lowercase, split on non-alphanumerics, drop stopwords and 1-char noise."""
-    return [t for t in re.split(r"[^a-z0-9]+", text.lower())
+    """Lowercase, split on non-alphanumerics, drop stopwords and 1-char noise.
+
+    :data:`SYMBOL_ALIASES` is folded in first, and on the **index** side as
+    well as the query side — that symmetry is the whole point. A query-only map
+    would reach the items already *named* `cpp-*` and still miss every entry
+    whose description spells the language `C++`, which is most of them.
+
+    A C source sample containing `for (i = 0; i++ ...)` is unaffected (`i++`
+    is not an alias), but a literal `c++` in a code block does index as `cpp`.
+    That is the same false positive prose already gives BM25, and the eval
+    gate is what says whether it costs anything measurable.
+    """
+    lowered = _ALIAS_RE.sub(lambda m: " %s " % SYMBOL_ALIASES[m.group(0)],
+                            text.lower())
+    return [t for t in re.split(r"[^a-z0-9]+", lowered)
             if len(t) >= 2 and t not in _STOPWORDS]
+
+
+def dropped_terms(text: str) -> list[str]:
+    """The words in ``text`` that :func:`tokenize` discards entirely.
+
+    Erasure with no notice was the defect, not the discarding itself: a query
+    is answered from the terms that survived, so `c++ testing` returned results
+    for `testing` and said nothing about the half that had gone. A caller can
+    now say which words were not searched.
+
+    Two classes are deliberately *not* reported, because a notice that fires on
+    ordinary queries is noise rather than information: a stopword, which is
+    dropped by design, and punctuation carrying no alphanumerics at all — so
+    `foo & bar` does not report `&`. A word the aliases rescue is not dropped,
+    so nothing is said about it either.
+
+    Surfaces are returned as the user typed them, in first-seen order: the
+    point is that they recognise the word, which a lowercased or stripped form
+    can defeat.
+    """
+    out: list[str] = []
+    for word in text.split():
+        if tokenize(word):
+            continue
+        parts = [p for p in re.split(r"[^a-z0-9]+", word.lower()) if p]
+        if parts and all(p in _STOPWORDS for p in parts):
+            continue
+        # `isalnum` rather than the ASCII class above: a CJK query has no
+        # `[a-z0-9]` runs at all and is exactly what this must report, while
+        # `--` is punctuation the user did not mean as a term.
+        if not parts and not any(ch.isalnum() for ch in word):
+            continue
+        out.append(word)
+    return list(dict.fromkeys(out))
 
 
 def chunk(text: str, size: int = CHUNK_CHARS, overlap: int = OVERLAP,

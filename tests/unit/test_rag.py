@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sqlite3
 from pathlib import Path
 from unittest import mock
@@ -35,6 +36,127 @@ class TestTokenize:
 
     def test_empty(self):
         assert rag.tokenize("") == []
+
+
+class TestSymbolLanguageAliases:
+    """The languages whose common name the splitter destroys.
+
+    `C++` is four characters of which three are punctuation: split on
+    `[^a-z0-9]+` it yields `c`, and the 1-char filter then yields nothing at
+    all. So `boost search 'C++'` scored zero documents and reported the
+    catalogue empty, while `c++ testing`, `c# testing` and `testing` were three
+    spellings of one query. Aliasing is applied to the *index* as well, which
+    is what makes the 45 corpus entries spelling it `C++` reachable — a
+    query-side-only map would find only items already named `cpp-*`.
+    """
+
+    def test_cpp(self):
+        assert rag.tokenize("C++") == ["cpp"]
+
+    def test_csharp(self):
+        assert rag.tokenize("c#") == ["csharp"]
+
+    def test_fsharp(self):
+        assert rag.tokenize("F#") == ["fsharp"]
+
+    def test_objective_c(self):
+        # Without the alias this is `objective` — the `c` that carries the
+        # whole meaning is the character the length filter drops.
+        assert rag.tokenize("Objective-C") == ["objectivec"]
+
+    def test_the_language_survives_alongside_ordinary_terms(self):
+        assert rag.tokenize("C++ testing") == ["cpp", "testing"]
+
+    def test_two_languages_in_one_query(self):
+        assert rag.tokenize("C#/F#") == ["csharp", "fsharp"]
+
+    def test_a_query_that_used_to_collapse_no_longer_does(self):
+        # The measured defect: these three produced byte-identical results.
+        assert rag.tokenize("c++ testing") != rag.tokenize("c# testing")
+        assert rag.tokenize("c++ testing") != rag.tokenize("testing")
+
+    def test_it_does_not_fire_mid_word(self):
+        # `basic++` contains the substring `c++`. Rewriting it would invent a
+        # C++ mention in a document about BASIC.
+        assert "cpp" not in rag.tokenize("basic++")
+
+    def test_it_does_not_fire_before_an_alphanumeric(self):
+        # `c#5` is a musical note, not a language.
+        assert "csharp" not in rag.tokenize("c#5")
+
+    def test_longer_aliases_come_first_in_the_alternation(self):
+        """Order is load-bearing the moment one row prefixes another.
+
+        It does not bite on today's four — none is a prefix of another — so
+        this pins the property rather than an observable behaviour, which is
+        the point: the next row added is where a shortest-first alternation
+        starts matching `c` out of `c-something` and stops matching the row
+        that meant it.
+        """
+        pat = rag._ALIAS_RE.pattern
+        lengths = [n for _at, n in
+                   sorted((pat.index(re.escape(k)), len(k))
+                          for k in rag.SYMBOL_ALIASES)]
+        assert lengths == sorted(lengths, reverse=True)
+
+    def test_every_alias_replacement_is_a_legal_token(self):
+        """`stem_expansions` range-scans on "emits only [a-z0-9]+".
+
+        A replacement carrying a hyphen (`c-sharp`) would re-split into two
+        terms, one of which is the 1-char noise this exists to avoid, and
+        would break the half-open `term < term + "~"` scan.
+        """
+        for surface, replacement in rag.SYMBOL_ALIASES.items():
+            assert re.fullmatch(r"[a-z0-9]+", replacement), (surface, replacement)
+            assert rag.tokenize(surface) == [replacement], surface
+
+
+class TestDroppedTerms:
+    """What the user typed that the index cannot hold.
+
+    Erasure was the whole defect: the term vanished and nothing said so, so a
+    search for a language returned a search for everything else in the query.
+    """
+
+    def test_a_single_character_term_is_reported(self):
+        assert rag.dropped_terms("R") == ["R"]
+
+    def test_non_latin_is_reported(self):
+        assert rag.dropped_terms("代码审查") == ["代码审查"]
+
+    def test_a_stopword_is_not_reported(self):
+        # Dropped by design. Saying so on every ordinary query is noise.
+        assert rag.dropped_terms("how to test this") == []
+
+    def test_punctuation_alone_is_not_reported(self):
+        # `foo & bar` must not print "ignored '&'".
+        assert rag.dropped_terms("foo & bar") == []
+        assert rag.dropped_terms("--") == []
+
+    def test_an_aliased_language_is_not_reported(self):
+        # It is indexed now, so there is nothing to apologise for. This is the
+        # test that fails if the alias is added to `dropped_terms` but not to
+        # `tokenize`, or removed from one of them later.
+        assert rag.dropped_terms("c++ testing") == []
+
+    def test_it_reports_the_surface_the_user_typed(self):
+        # Not the lowercased or stripped form: the user has to recognise it.
+        assert rag.dropped_terms("Q") == ["Q"]
+
+    def test_ordinary_terms_are_never_reported(self):
+        assert rag.dropped_terms("code reviewer") == []
+
+    def test_a_stopword_beside_a_dropped_term_is_still_reported(self):
+        # `the-x` tokenizes to nothing for two different reasons: `the` is a
+        # stopword and `x` is too short. Only the second is worth saying, and
+        # the word as a whole did not reach the index — so it is reported.
+        assert rag.dropped_terms("the-x") == ["the-x"]
+
+    def test_duplicates_collapse_and_order_is_kept(self):
+        assert rag.dropped_terms("R x R") == ["R", "x"]
+
+    def test_empty(self):
+        assert rag.dropped_terms("") == []
 
 
 # ------------------------------------------------------------- chunk

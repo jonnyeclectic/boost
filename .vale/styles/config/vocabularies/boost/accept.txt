@@ -83,6 +83,7 @@ Langfuse
 LeadMagic
 libFuzzer
 libsodium
+lookarounds
 lookups
 lowercasing
 Magento
@@ -163,6 +164,7 @@ textarea
 toggleable
 Tokenization
 tokenization
+tokenizer
 toolchain
 toolkits
 traceback

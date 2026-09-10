@@ -1349,6 +1349,19 @@ class TestMcp:
         assert is_err is False
         assert "no skills match 'zzzznothing'" in text
 
+    def test_boost_search_says_when_the_query_never_reached_the_index(
+            self, boost, tapped):
+        # The MCP half of the CLI's "no searchable terms" state. An agent told
+        # "no skills match 'C++'" has no second query to try, and that was the
+        # answer on a corpus holding 45 entries naming the language.
+        from boost_cli.commands import configuration
+        boost("reindex")
+        text, is_err = configuration._mcp_tool("boost_search", {"query": "R"})
+        assert is_err is False
+        assert "no skills match" not in text
+        assert "nothing was searched" in text
+        assert "2 or more" in text
+
     def test_boost_search_on_a_fresh_machine_reports_setup_not_a_miss(
             self, sandbox):
         # The first question any agent ever asks a newly registered server,

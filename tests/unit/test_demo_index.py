@@ -48,6 +48,32 @@ class TestScoringParameters:
         assert index["avg_len"] > 0
 
 
+class TestTokenizerParity:
+    """`demo.html` ports `rag.tokenize` to JS and says a divergence "would make
+    it a lie". The index is built with the Python tokenizer, so a JS side that
+    does not fold the same aliases would type `C++` into the demo's box and get
+    the zero results the aliases exist to fix — on an index that holds them.
+
+    This reads the page rather than executing it: node is not a test dependency
+    here, and what can actually drift is a table someone forgets to copy.
+    """
+
+    def test_every_alias_appears_in_the_ported_tokenizer(self):
+        from boost_cli.core import rag
+        js = PAGE.read_text(encoding="utf-8")
+        for surface, replacement in rag.SYMBOL_ALIASES.items():
+            assert '"%s"' % surface in js or "'%s'" % surface in js, surface
+            assert replacement in js, replacement
+
+    def test_the_page_does_not_carry_an_alias_the_engine_dropped(self):
+        from boost_cli.core import rag
+        js = PAGE.read_text(encoding="utf-8")
+        block = js[js.index("const ALIASES"):js.index("function tokenize")]
+        for surface in ("c++", "c#", "f#", "objective-c"):
+            if surface in block:
+                assert surface in rag.SYMBOL_ALIASES, surface
+
+
 class TestShape:
     """The JS reads these fields by name; renaming one breaks the demo silently."""
 

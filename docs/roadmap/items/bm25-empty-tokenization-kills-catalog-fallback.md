@@ -1,15 +1,15 @@
 ---
 id: bm25-empty-tokenization-kills-catalog-fallback
 board: code
-section: planned
-status: planned
+section: pipeline
+status: shipped
 category: Quality · Retrieval eval
 complexity: L
 impact: High
 wow: 4
-note: rag.tokenize (rag.py:88-91) keeps only [a-z0-9] runs of length &gt;= 2, so "C++", "C#" a…
+note: the four symbol-bearing language names now tokenize, and a query that still tokenizes to nothing says so instead of reporting a miss; the catalog.search fallback stays unreachable on purpose — substring 'R' returns 10,092 of 10,152 entries
 order: 200
-owner:
+owner: loop/symbol-language-queries
 pr:
 title: A query made only of characters <code>tokenize</code> drops returns zero results, and the documented <code>catalog.search</code> fallback is unreachable — <code>boost search "C++"</code> finds nothing on a machine holding …
 ---
@@ -57,3 +57,11 @@ DO NOT WRITE "FALL BACK TO catalog.search" AS THE FIX. I measured the naive reme
 <b>Why it is worth doing.</b> A user or agent asking for the most common name of a mainstream language is told the catalogue holds nothing and is sent to <code>boost discover</code> to search all of GitHub for <code>cpp-expert</code>, <code>cpp-reviewer</code> and <code>cpp-coding-standards</code> that are already on their disk — the exact symptom the shipped card <code>bm25-has-no-stemming</code> was written to kill, arriving through a different door. It is worse on the MCP surface, where <code>boost_search</code> answers an agent "no skills match 'C++'" and the agent has no second query to try.
 
 <em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em>
+
+<b>What shipped.</b> <code>rag.SYMBOL_ALIASES</code> folds four language names the splitter destroys — <code>c++</code>&rarr;<code>cpp</code>, <code>c#</code>&rarr;<code>csharp</code>, <code>f#</code>&rarr;<code>fsharp</code>, <code>objective-c</code>&rarr;<code>objectivec</code> — before the split, on the <b>index</b> side as well as the query side. That symmetry is the fix: a query-side-only map reaches the items already named <code>cpp-*</code> and still misses every entry whose description spells it <code>C++</code>, which is most of them. Lookarounds keep <code>basic++</code> from indexing as a C++ mention and the musical note <code>c#5</code> from becoming a language. Unlike <code>stem_expansions</code> this conflates terms that both exist, so it is an <code>INDEX_VERSION</code> bump (7 &rarr; 8) and one forced re-tokenize.
+
+The table is deliberately four rows. <code>.NET</code> already reaches its 124 entries through the token <code>net</code> and <code>node.js</code> through <code>node</code>+<code>js</code>, so remapping those would change rankings that work today to fix nothing.
+
+<b>And what is still dropped is now said out loud.</b> <code>rag.dropped_terms</code> names the words that fell out of the tokenizer — a single character, a non-Latin script. <code>boost search</code> reports them beside the results they are not in, on <b>stderr</b> under <code>--json</code> (same contract as the <code>--smart</code> fallback note, so a script reading stdout as JSON still learns), and as its own empty state when every term went: <code>no searchable terms in 'R'</code> rather than <code>no matches</code>, and no <code>boost discover</code> suggestion for a query that never reached an index. <code>mcp.no_results</code> grew the same third branch, because an agent told "no skills match 'C++'" has no second query to try. <code>docs/demo.html</code> ports the tokenizer to JS and a test pins the table in both, so the browser demo cannot drift into answering <code>C++</code> differently from the CLI.
+
+<b>What was rejected.</b> Falling back to <code>catalog.search</code> for an untokenizable query, exactly as the verifier warned: substring-matching <code>R</code> returns 10,092 of 10,152 entries. The fallback stays unreachable on purpose; what changed is that the answer now says why.
