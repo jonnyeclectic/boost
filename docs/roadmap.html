@@ -133,7 +133,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>54</b><span>Planned</span></div>
-      <div class="stat"><b>451</b><span>Loop finds</span></div>
+      <div class="stat"><b>454</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -4007,43 +4007,14 @@ Scope limits of my repro:
       </article>
 
       <article class="cap rcard" id="audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co">
-        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Safety · Bug</span></div>
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
         <h3>Pinned taps silently moved to HEAD by <code>update</code> re-clone and <code>compact --reclone</code>, pin left stale</h3>
-        <p>The pin invariant &mdash; only <code>update --force</code> may move a pinned tap, and moving one is
-deciding to stop holding it still &mdash; is broken by three paths, all reproduced byte-for-byte.
-<b>1:</b> <code>compact minio/skills --reclone</code> against a tap pinned at <code>d543829&hellip;</code>
-printed <em>&ldquo;&#10003; every tap is already compact&rdquo;</em>, yet afterwards the clone's
-<code>refs/heads/main</code> is <code>22961d3&hellip;</code> while <code>config.json</code> still says
-<code>"pin": "d543829&hellip;"</code>, the catalog cache still says the old commit, <code>boost taps</code>
-prints <code>@d543829</code>, and <code>doctor</code> is silent. <b>2:</b> after the clone directory is
-deleted, <code>update minio/skills --force</code> re-clones at HEAD but keeps the stale pin &mdash;
-breaking <code>--force</code>'s own help promise (<em>&ldquo;move pinned taps too, clearing their
-pin&rdquo;</em>) &mdash; and prints no SHA. <b>3:</b> plain <code>update</code> on a pinned tap whose
-clone is gone reports <em>&ldquo;&#10003; pinned at b7c025b (skipped) / &#10003; everything up to
-date&rdquo;</em> with nothing on disk.
-
-Why it matters is stated in the code itself (<code>boost_cli/core/registry.py:492-496</code>): pinned
-commits are what imported shard vectors are keyed to, and a tap moved silently leaves stale vectors
-present with no error &mdash; the failure that looks like nothing at all. Here every readout
-(<code>taps</code>, cache, <code>doctor</code>) keeps vouching for a commit the clone left.
-
-Fix (verified recommendation): in <code>registry.update</code>'s clone branch
-(<code>registry.py:513-522</code>), when <code>tap.pin</code> and not force, clone then check out the
-pin (reuse the <code>tap --at</code> path); when force, <code>unpin()</code> as the pull branch does;
-print <code>cloned at &lt;sha7&gt;</code>. Move the pin skip (<code>registry.py:491</code>) after the
-<code>is_cloned</code> test so a pinned tap with no clone is re-cloned at its pin. In
-<code>cmd_compact --reclone</code> (<code>boost_cli/commands/configuration.py:277-279</code>), check
-out <code>tap.pin</code> after <code>clone_shallow</code> (or refuse with a hint), run
-<code>catalog.rebuild_tap</code>, and report re-clones regardless of size direction &mdash; the
-size-only report at <code>configuration.py:288-292</code> is what hid the move. Docs: README.md's
-pinned-tap paragraph (lines 176-178) and its <code>compact --reclone</code> line (274); regenerate
-<code>docs/commands.html</code> only if the <code>--force</code> help string changes. Found by the
-2026-08 CLI audit (cluster <code>pinned-tap-integrity</code>); repro in the audit log.</p>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co.md">Write-up &middot; audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co.md</a></p>
         <div class="meta">
           <span class="m">Complexity <b>M</b></span>
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
-          <span class="m">compact --reclone moved a pin to HEAD and printed "every tap is already compact"</span>
+          <span class="m">three broken paths, three PRs claiming it, and one residual that took a second item to finish</span>
         </div>
       </article>
 
@@ -4145,6 +4116,88 @@ the 2026-08 CLI audit (cluster <code>snapshot-restore-rules-loss</code>); repro 
           <span class="m hi">Impact <b>High</b></span>
           <span class="m">Wow <b class="wow">★★★</b></span>
           <span class="m">two overlapping rag.build() runs share one .tmp name; the second unlinks the first's finished 644 MB file and the first dies on replace()</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="reclone-leaves-a-clone-on-head-when-it-cannot-reach-the-pin">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Safety · Bug</span></div>
+        <h3><code>compact --reclone</code> left a clone on HEAD when it could not reach the pin</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/reclone-leaves-a-clone-on-head-when-it-cannot-reach-the-pin.md">Write-up &middot; reclone-leaves-a-clone-on-head-when-it-cannot-reach-the-pin.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">the last unfixed path of the pin-integrity item, left behind when three PRs claimed it and one won</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="compact-answers-a-named-tap-with-a-global-all-clear">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3><code>compact &lt;tap&gt;</code> answers a question about one tap with a global all-clear</h3>
+        <p><code>cmd_compact</code> resolves its named taps and then filters
+(<code>taps = [t for t in taps if t.is_cloned]</code>). A tap that is configured but has
+no clone falls out of that list silently, so the empty-list branch fires and prints
+<em>&ldquo;&#10003; no cloned taps to compact&rdquo;</em> with exit 0 &mdash; a green,
+plural, global-sounding all-clear in answer to a question about one specific tap, which
+it never names.
+
+Reproduced on a scratch <code>BOOST_HOME</code>: tap a repo, delete its clone directory,
+then <code>boost compact &lt;that-tap&gt;</code> &rarr; <code>rc=0</code>,
+<em>&ldquo;&#10003; no cloned taps to compact&rdquo;</em>. Meanwhile
+<code>boost doctor</code> exits 1 on the same machine and says
+<em>&ldquo;! tap &lt;x&gt; not cloned &mdash; run <code>boost update</code>&rdquo;</em>,
+so the information exists and this command is the one that withholds it.
+
+This contradicts the convention <code>registry.update</code> states in its own docstring:
+<em>&ldquo;A named tap still raises. <code>boost update sometap</code> is a request about
+that one tap, so its failure is the answer to the question asked.&rdquo;</em> The sweep
+form is right to stay quiet; the named form is not. Fix: when <code>args.tap</code> named
+taps and the filter dropped some, say which and why, and point at
+<code>boost update</code> the way <code>doctor</code> does &mdash; and do not report
+success for a tap nothing was done to.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">boost compact &lt;tap&gt; on an uncloned tap prints a green "no cloned taps to compact" and exits 0</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="taps-vouches-for-a-clone-that-is-not-there">
+        <div class="head"><span class="pill planned">Planned</span><span class="cat">CLI · Bug</span></div>
+        <h3><code>boost taps</code> vouches for a clone that is not there</h3>
+        <p><code>boost taps</code> reads the per-tap catalog cache, and
+<code>catalog.load_tap</code> deliberately serves a stale cache when the clone is gone
+(rescanning is only possible while the clone exists &mdash; making the missing clone an
+error there would trade a missing field for a missing catalogue). The consequence
+reaches the readout unlabelled: a tap whose clone has been deleted still prints its
+<code>NAME</code>, an <code>ITEMS</code> count and an <code>UPDATED</code> date, and the
+footer still counts it in <em>&ldquo;N taps &middot; N items&rdquo;</em>. Nothing on the
+line says the clone is missing.
+
+Measured on a scratch <code>BOOST_HOME</code>: after deleting the clone directory,
+<code>boost taps</code> printed <code>probe-src &nbsp;1&nbsp; 2026-09-10</code> and
+<em>&ldquo;1 taps &middot; 1 items&rdquo;</em> &mdash; while <code>boost doctor</code>
+exited 1 with <em>&ldquo;! tap &lt;x&gt; not cloned&rdquo;</em>. Two readouts of the same
+machine, one of which is wrong, and the wrong one is the command whose entire job is to
+describe the taps.
+
+It is the same shape as the pin bugs in
+<code>audit-pinned-taps-silently-moved-to-head-by-update-re-clone-and-co</code>: a
+readout that keeps vouching for state the clone no longer has. The precedent is in
+the tree: <code>boost list</code> carries a <code>FLAGS</code> column for exactly this
+reason, and <code>info.py:239-241</code> states it &mdash; <em>&ldquo;so a quarantined or
+pinned rule/workflow doesn't render byte-identical to a healthy one &hellip; a reader
+needs to see that here, not just in --json&rdquo;</em>. Its values are
+<code>pinned</code> and <code>quarantined</code>; a tap with no clone is the same class of
+fact about a different table. Fix: <code>taps</code> already has
+<code>tap.is_cloned</code> in hand, so mark the row and keep the footer counts honest,
+rather than leaving <code>doctor</code> as the only command that knows.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Medium</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">boost taps prints item counts and an UPDATED date for a tap whose clone was deleted</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
