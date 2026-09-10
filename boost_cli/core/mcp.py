@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import json
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from ..errors import BoostError
 
@@ -396,10 +396,11 @@ def overlap_note(installed_hits: int, total_hits: int) -> str:
             % (installed_hits, total_hits))
 
 
-def no_results(query: str, *, tapped: int) -> str:
+def no_results(query: str, *, tapped: int,
+               dropped: Sequence[str] = ()) -> str:
     """The reply for a search that returned nothing.
 
-    Two different situations wore one sentence. On a configured machine
+    THREE different situations wore one sentence. On a configured machine
     nothing matching the query is a real answer, and saying so is what makes
     "finding nothing is a good outcome" true. On a machine with no taps
     nothing could have matched *anything*, and reporting that as a failed
@@ -409,7 +410,20 @@ def no_results(query: str, *, tapped: int) -> str:
     So the empty-catalog branch does not repeat the query back: the query was
     fine. It names the state and the one command that changes it, the way
     ``tool-design`` asks agent-facing errors to carry their own recovery path.
+
+    ``dropped`` is the third: every word of the query fell out of the
+    tokenizer (``rag.dropped_terms``), so nothing was searched. Measured, this
+    answered an agent "no skills match 'C++'" on a corpus holding 45 entries
+    that name the language — and an agent has no second query to try, which is
+    what makes the wrong answer worse here than on the CLI. It reports what
+    happened and the rule, so a retry is possible. The setup branch still wins:
+    an untapped machine could not have matched anything either way.
     """
+    if tapped > 0 and dropped:
+        return ("%s did not reach the index, so nothing was searched — a term "
+                "needs 2 or more ASCII letters or digits. Retry with a "
+                "plain-word description of the task."
+                % ", ".join("%r" % t for t in dropped))
     if tapped > 0:
         return "no skills match %r" % query
     # Addressed to the user via the agent, and naming ONE command. Telling an

@@ -165,15 +165,35 @@ def cmd_search(argv):
     if args.category:
         scored = [(e, s) for e, s in scored
                  if catalog.matches_category(e, args.category)]
+    # One measurement, three branches below: the words the index cannot hold.
+    # Two gates, and each excludes an engine that did not drop anything.
+    # `catalog.search` is a substring match, so the non-RAG path discards
+    # nothing; and `dense.retrieve` embeds the raw query string, so on a
+    # machine with vectors built the term reached an index after all.
+    dropped = (rag.dropped_terms(query)
+               if use_rag and rag.tokenizer_is_the_only_reader() else [])
     if not scored:
         if args.as_json:
             print(json.dumps([]))
+            _warn_dropped_terms(dropped)
             return 0
-        # The standardized ○/→ empty state, so "nothing here" reads the same
-        # as every other command's; both wordings are pinned by tests.
-        print(out.empty_state(
-            "no matches for %r" % query,
-            "try `boost discover %s` to search all of GitHub" % query))
+        if dropped and not rag.tokenize(query):
+            # Nothing was searched at all, so "no matches" asserts something
+            # this command never checked, and `boost discover` spends a network
+            # round trip on a query that never reached an index. Measured: a
+            # bare `C++` gave the empty state below on a corpus holding 45
+            # entries naming the language.
+            print(out.empty_state(
+                "no searchable terms in %r" % query,
+                "a term needs 2 or more ASCII letters or digits — %s"
+                % _quoted(dropped)))
+        else:
+            # The standardized ○/→ empty state, so "nothing here" reads the same
+            # as every other command's; both wordings are pinned by tests.
+            print(out.empty_state(
+                "no matches for %r" % query,
+                "try `boost discover %s` to search all of GitHub" % query))
+            _note_dropped_terms(dropped)
         _hint_semantic_search(engine)
         # Especially here: "no matches" is exactly the answer an out-of-date
         # tap set produces, and the user has no other way to suspect it.
@@ -204,6 +224,7 @@ def cmd_search(argv):
         # rows carry `ranker`. Both hold.
         print(json.dumps([catalog.public_entry(e) | {"score": s, "ranker": ranker}
                           for e, s in scored[:args.limit]]))
+        _warn_dropped_terms(dropped)
         return 0
     shown = scored[:args.limit]
     # The dot marks "a skill by this name is installed" — a name match, with
@@ -238,6 +259,7 @@ def cmd_search(argv):
     out.info(out.role(footer, "muted"))
     if use_rag:
         _note_stem_expansions(query)
+        _note_dropped_terms(dropped)
     _hint_semantic_search(engine)
     _hint_stale_taps()
     return 0
@@ -258,6 +280,44 @@ def _note_stem_expansions(query: str) -> None:
     out.info(out.role(out.truncate(
         "no exact match for %s — showing %s" % (said, shown),
         max(0, out.term_width() - 2)), "muted"))
+
+
+#: How the index's own rule reads to someone who just lost a word to it.
+_TERM_RULE = "a term needs 2 or more ASCII letters or digits"
+
+
+def _quoted(terms: list[str]) -> str:
+    return ", ".join("%r" % t for t in terms)
+
+
+def _note_dropped_terms(dropped: list[str]) -> None:
+    """Say which words were not searched, next to the results they are not in.
+
+    The erasure was the defect. `boost search 'c++ testing'` answered with
+    results for `testing` and said nothing, so it was byte-identical to
+    `boost search 'c# testing'` and to `boost search testing` — three
+    questions, one answer, no way to tell from the output. Aliasing rescues
+    the languages boost can name (`rag.SYMBOL_ALIASES`); this is for the rest,
+    where the honest answer is that the word never reached an index.
+    """
+    if not dropped:
+        return
+    out.info(out.role(out.truncate(
+        "not searched: %s — %s" % (_quoted(dropped), _TERM_RULE),
+        max(0, out.term_width() - 2)), "muted"))
+
+
+def _warn_dropped_terms(dropped: list[str]) -> None:
+    """The same fact on stderr, so `--json` cannot swallow it.
+
+    Same contract as this command's `--smart` fallback note: a script reading
+    stdout as JSON must still learn that half its query was discarded, and an
+    empty `[]` is exactly what a genuine miss looks like.
+    """
+    if not dropped:
+        return
+    out.warn("not searched: %s — %s" % (_quoted(dropped), _TERM_RULE),
+             wrap=True, stream=sys.stderr)
 
 
 def _hint_stale_taps() -> None:

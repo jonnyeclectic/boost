@@ -149,6 +149,28 @@ index-format bump and a regenerated baseline. Terms shorter than `STEM_MIN_LEN` 
 alone, because a three-letter prefix expands to a guess. `boost search` states the
 substitution rather than silently answering a different question.
 
+**Symbol-bearing language names are aliased, on the index side as well as the query side.**
+The splitter throws away punctuation, so `C++` yields `c` and the 1-char filter then yields
+nothing at all: `boost search 'C++'` scored zero documents on a corpus holding 45 entries that
+name the language, and `c++ testing`, `c# testing` and `testing` were three spellings of one
+query with no notice that anything had been discarded. `rag.SYMBOL_ALIASES` folds four such
+names (`c++`→`cpp`, `c#`→`csharp`, `f#`→`fsharp`, `objective-c`→`objectivec`) before the split,
+with lookarounds so `basic++` is not a C++ mention and the musical note `c#5` is not a language.
+Unlike `stem_expansions` this *does* conflate terms that both exist, so it is an
+`INDEX_VERSION` bump (7 → 8) and one forced re-tokenize — a query-side-only map would reach
+the items already named `cpp-*` and still miss every entry whose description spells it `C++`.
+The table is deliberately short: `.NET` already reaches its 124 entries through the token
+`net`, so remapping it would change rankings that work today to fix nothing.
+
+**What is still dropped is now said out loud.** `rag.dropped_terms` names the words that fell
+out of the tokenizer — a single character, a non-Latin script — and `boost search` reports
+them next to the results they are not in, on stderr under `--json`, and as its own empty state
+when *every* term went (`no searchable terms in 'R'`, not `no matches`, and no `boost discover`
+suggestion for a query that never reached an index). `mcp.no_results` carries the same third
+branch, because an agent told "no skills match 'C++'" has no second query to try. Falling back
+to `catalog.search` for these was measured and rejected: substring-matching `R` returns 10,092
+of 10,152 entries.
+
 **Query path as shipped** (post `cold-search-reads-the-whole-catalogue`): with
 `entries=None` — the CLI, MCP and eval path — `rag.retrieve` ranks straight off
 the index's own doc metadata and materialises real catalog entries only for the
