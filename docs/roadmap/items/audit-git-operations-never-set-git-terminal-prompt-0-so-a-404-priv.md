@@ -2,7 +2,7 @@
 id: audit-git-operations-never-set-git-terminal-prompt-0-so-a-404-priv
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med

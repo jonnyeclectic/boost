@@ -2,7 +2,7 @@
 id: capability-policy-skips-rules-and-workflows
 board: code
 section: trust
-status: inflight
+status: shipped
 category: Security · Bug
 complexity: S
 impact: High

@@ -2,7 +2,7 @@
 id: audit-out-warn-defaults-to-stdout-infer-absorb-corrupt-skill-md-se
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High

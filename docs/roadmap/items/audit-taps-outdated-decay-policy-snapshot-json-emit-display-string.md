@@ -2,7 +2,7 @@
 id: audit-taps-outdated-decay-policy-snapshot-json-emit-display-string
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med

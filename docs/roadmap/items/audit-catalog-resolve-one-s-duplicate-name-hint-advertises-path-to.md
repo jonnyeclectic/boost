@@ -2,7 +2,7 @@
 id: audit-catalog-resolve-one-s-duplicate-name-hint-advertises-path-to
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 1
 note: Following the CLI's own hint earns `unrecognized arguments: --path`, exit 2
 order: 215
 owner: loop/resolve-one-path-hint
-pr:
+pr: 655
 title: "<code>catalog.resolve_one</code>'s duplicate-name hint advertises <code>--path</code> to commands that reject it"
 ---
 When a name matches two skills inside one tap, every <code>catalog.resolve_one</code> caller prints

@@ -2,7 +2,7 @@
 id: audit-output-wrap-tokens-splits-punctuation-off-backtick-spans-ins
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Low
@@ -10,7 +10,7 @@ wow: 1
 note: the wrapper rejoins span + ")" with a space; one fix covers doctor, reindex and all help
 order: 240
 owner: loop/wrap-tokens-punctuation
-pr:
+pr: 665
 title: "<code>output._wrap_tokens</code> splits punctuation off backtick spans, inserting a stray space"
 ---
 CLAUDE.md's wrap law makes a backtick span one atomic token so pasteable commands survive folding

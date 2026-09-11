@@ -10,6 +10,7 @@ wow: 3
 note: 653 MB of postings holds 1.4 MB of distinct terms — the term string is stored 88 times over
 order: 100
 owner: loop/shrink-postings-index
+pr: 688
 title: shrink the keyword index before publishing it — structure first, then compression
 ---
 <a href="#publish-the-keyword-index">publish-the-keyword-index</a> is worth doing only if the
@@ -60,7 +61,7 @@ for the many-small-registries case, where per-shard compression has little conte
 <a href="#publish-the-keyword-index">publish-the-keyword-index</a> what to ship, and it is worth
 having even if publishing is declined: the on-disk win applies to every install today.
 
-<b>Progress (PR pending).</b> The structural half shipped: <code>_write_postings</code> now
+<b>Progress — PR 688, merged as <code>f003fa03</code> in train 691.</b> The structural half shipped: <code>_write_postings</code> now
 interns terms into their own <code>terms(id, term, df)</code> table, with <code>postings</code>
 carrying an integer <code>term_id</code> instead of repeating the term string on every row —
 exactly the "structure first" change this card calls the bigger win, and it bumps

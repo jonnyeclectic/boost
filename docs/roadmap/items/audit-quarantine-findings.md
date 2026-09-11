@@ -2,7 +2,7 @@
 id: audit-quarantine-findings
 board: code
 section: health
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: Med

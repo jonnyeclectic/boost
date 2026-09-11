@@ -2,7 +2,7 @@
 id: audit-update-findings
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Performance
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 1
 note: a no-op update over 20 taps takes ~14 s serial; --force drops 20 pins without a word
 order: 301
 owner: loop/update-parallel-pins
-pr:
+pr: 821
 title: "<code>boost update</code>: CLI audit findings (2026-08)"
 ---
 <b>update pulls all taps serially with no progress indicator: ~14 s no-op over 20 taps</b> (med). A plain <code>update</code> over 20 taps with nothing to fetch took <b>13.93 s</b> under TTY (verifier re-measured 13.89 s), <code>update --force</code> 17.82 s; each line appears only after its ~0.7 s pull, nothing on screen between lines. <code>registry.update()</code> (<code>registry.py:465-525</code>) is a plain <code>for tap in targets:</code> loop calling <code>gitutil.pull</code>/<code>clone_shallow</code> serially &mdash; the exact latency-bound pattern <code>registry.add_many</code> already parallelises for clones. Fix: pull in a <code>ThreadPoolExecutor</code> mirroring <code>add_many</code>, keep catalog rebuilds and the single config write serial on the caller's thread, and print a <em>refreshing N taps&hellip;</em> line or spinner while pulls run.

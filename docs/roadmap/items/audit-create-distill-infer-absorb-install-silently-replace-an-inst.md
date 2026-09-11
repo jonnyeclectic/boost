@@ -2,7 +2,7 @@
 id: audit-create-distill-infer-absorb-install-silently-replace-an-inst
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: High

@@ -2,7 +2,7 @@
 id: audit-mcp-register-s-boost-first-consent-names-only-the-registered
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Safety · Bug
 complexity: S
 impact: High
