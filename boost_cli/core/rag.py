@@ -789,10 +789,21 @@ def index_completeness() -> dict | None:
     ``body_share`` is a share of **tokens**, not of documents, and that is the
     whole point. An entry whose body is missing still produces a document, so a
     document share sits at 1.0 until the moment it drops to 0.0 and tells a
-    partially-cloned machine nothing. The token share degrades smoothly and
-    reproduces the measurement the roadmap card made by hand: 3,041,326 tokens
-    against 182,507 over 3,015 entries indexed with and then without their
-    clones, or 6.0% of the searchable text.
+    partially-cloned machine nothing.
+
+    It describes **this index**, not the corpus behind it: the fraction of the
+    tokens actually indexed that came from a document carrying a body. The
+    share of the *corpus's* text that made it in is a different number, and it
+    is not computable here — the bodies that were never read have no token
+    count to compare against, by construction. An earlier version of this
+    docstring claimed the value "reproduces the measurement the roadmap card
+    made by hand ... or 6.0% of the searchable text". It does not: for that
+    input every token indexed came from metadata, so it returns **0.0**. The
+    two move in opposite directions, and because a body runs about an order of
+    magnitude longer than the metadata standing in for it, presenting this as
+    corpus completeness overstates a half-cloned machine badly. Callers must
+    say which share they are quoting; :func:`cmd_reindex` quotes
+    ``metadata_only_tokens / tokens`` and names it.
 
     Reads the persisted totals rather than re-deriving them, so asking is a
     stat plus a cached parse — nothing walks the corpus.

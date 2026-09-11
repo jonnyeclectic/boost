@@ -218,6 +218,51 @@ class TestRecloneHonoursThePin:
         assert "already compact" not in res.out.lower()
         assert "freed" in res.out.lower()
 
+    def test_a_pin_it_cannot_reach_leaves_no_clone_at_all(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        """`--reclone` deletes the clone before it makes a new one, so an
+        unreachable pin has already destroyed the only copy of the pinned
+        tree. Warning and moving on leaves a clone sitting on HEAD with the
+        old pin still recorded beside it — and the next `update` reads
+        `is_cloned` true plus a pin and answers "pinned at <sha> (skipped)"
+        forever, for a tree that is not on that commit. `registry.update`
+        already removes the half-made clone in exactly this case; this is the
+        same rule on the path that gets there first.
+
+        Not cloned is a state `doctor` names and `update` repairs.
+        Cloned-but-lying is neither. (`boost taps` still shows such a tap as
+        if it were fine, from its stale cache — its own item, not this one.)
+        """
+        from boost_cli.core import gitutil, registry
+        from boost_cli.errors import BoostError
+
+        src = _repo(tmp_path / "src")
+        pin_sha = gitutil.head_commit(src)
+        boost("tap", "--at", pin_sha, str(src))
+        clone = registry.list_taps()[0].path
+
+        def unreachable(repo, sha):
+            raise BoostError("could not check out %s" % sha[:7])
+
+        monkeypatch.setattr(gitutil, "checkout_commit", unreachable)
+
+        res = boost("compact", "--reclone")
+
+        assert not clone.exists()
+        # The re-raise is what makes the diagnostic name the *pin*. Without it
+        # the flow falls through to `catalog.rebuild_tap`, which raises about
+        # the clone this command just removed, and the user is told "tap src is
+        # not cloned" — a symptom, pointing at the wrong remedy.
+        assert "could not compact" in res.out.lower()
+        assert "could not check out" in res.out
+        assert "is not cloned" not in res.out
+        # The pin survives in config.json: it is the target `update` needs to
+        # put the tap back. Dropping it here would turn an unreachable pin
+        # into an unpinned tap, which is the silent move by another route.
+        tap = registry.list_taps()[0]
+        assert tap.pin == pin_sha
+        assert not tap.is_cloned
+
 
 def os_utime(pth):
     import os

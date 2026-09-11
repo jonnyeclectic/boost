@@ -370,9 +370,26 @@ def cmd_compact(argv) -> int:
                     # other — nothing about `--reclone` consults the pin — so
                     # without this the clone silently lands on HEAD while
                     # config.json, the catalog cache and `boost taps` keep
-                    # naming the old commit. checkout_commit's own BoostError
-                    # (unresolvable pin) surfaces through the except below.
-                    gitutil.checkout_commit(tap.path, tap.pin)
+                    # naming the old commit.
+                    try:
+                        gitutil.checkout_commit(tap.path, tap.pin)
+                    except BoostError:
+                        # `--reclone` removed the clone before making this
+                        # one, so the pinned tree is already gone and there is
+                        # nothing to fall back to. Letting the `except` below
+                        # warn and carry on would leave a clone sitting on
+                        # HEAD with the old pin still recorded beside it, and
+                        # the next `update` reads `is_cloned` true plus a pin
+                        # and answers "pinned at <sha> (skipped)" — forever,
+                        # for a tree that is not on that commit. Remove it
+                        # instead: `doctor` names a tap with no clone (`! tap
+                        # <x> not cloned`, exit 1) and `update` re-clones it
+                        # back onto its pin, so the tap ends in a state
+                        # something reports and something repairs.
+                        # `registry.update` takes the same exit on the same
+                        # failure; this is the path that gets there first.
+                        util.rmtree(tap.path)
+                        raise
                 # The re-clone can change what's on disk even when the byte
                 # count doesn't (a pinned tap's tree is identical, but the
                 # cache's recorded commit and mtime are now stale either way).

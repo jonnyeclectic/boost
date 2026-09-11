@@ -578,15 +578,30 @@ def cmd_reindex(argv):
     # and the count above reads exactly as it does for a full corpus. Say what
     # the index actually holds, in the share of TEXT rather than of documents —
     # a document share reads 100% until it reads 0%.
+    #
+    # The share quoted is of the tokens THIS INDEX holds, and the sentence says
+    # so. It used to read "this index holds N% of the searchable text", which
+    # is a share of the corpus — a number nothing here can compute, because the
+    # bodies that were never read have no token count to compare against. Since
+    # a body runs about an order of magnitude longer than the metadata standing
+    # in for it, that reading overstated badly in exactly the partly-cloned case
+    # this warning exists for: a half-cloned index announced itself as 94%
+    # complete, and one unreadable file among a thousand rendered as "100.0% of
+    # the searchable text" inside a warning about missing text.
     if stats["metadata_only"]:
         share = rag.index_completeness() or {}
-        out.warn("%d of %d items were indexed from catalog metadata alone — "
-                 "their registries are not cloned here, so this index holds "
-                 "%.1f%% of the searchable text. Tap them for real with "
-                 "`boost tap <owner/repo>` and re-run `boost reindex` to index "
-                 "their bodies."
-                 % (stats["metadata_only"], stats["docs"],
-                    100.0 * share.get("body_share", 0.0)), wrap=True)
+        tokens = share.get("tokens") or 0
+        meta_tokens = share.get("metadata_only_tokens") or 0
+        # No tokens at all means nothing but metadata got as far as the index,
+        # so 100% is the honest reading rather than a division to protect.
+        meta_pct = (100.0 * meta_tokens / tokens) if tokens else 100.0
+        out.warn("%d of %d indexed items have no body text — their registries "
+                 "are not cloned here, so only their catalog metadata was "
+                 "indexed, and that metadata is %.1f%% of everything this "
+                 "index holds. Clone them with `boost update`, then re-run "
+                 "`boost reindex --force` to index their bodies."
+                 % (stats["metadata_only"], stats["docs"], meta_pct),
+                 wrap=True)
     if args.dense:
         if dense_stats is None:
             out.warn("dense index skipped — %s" % embed.fallback_note(),

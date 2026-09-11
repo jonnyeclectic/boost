@@ -23,8 +23,15 @@ reads the answer back off disk without re-indexing anything.
 
 The token counts are the honest denominator, not the document counts: an entry
 whose body is missing still produces a document, so a doc-share reads 100%
-complete right up until it reads 0%, while the token share degrades smoothly
-and reproduces the card's 6.0%.
+complete right up until it reads 0%, while the token share degrades smoothly.
+
+It does **not** reproduce the card's 6.0%, and an earlier version of this note
+said it did. The card's figure is a share of the *corpus* — what the index
+would hold if every registry were cloned — and nothing here can compute it,
+because the bodies that were never read have no token count to compare
+against. `body_share` is a share of *this index's own* tokens, so for the
+bundle-only shape it reads 0.0, not 0.06. The two move in opposite directions;
+see `TestIndexCompleteness.test_the_share_describes_this_index_not_the_corpus_behind_it`.
 """
 from __future__ import annotations
 
@@ -138,17 +145,42 @@ class TestIndexCompleteness:
         assert got["metadata_only"] == 1
 
     def test_the_share_is_of_tokens_not_documents(self, two_items):
-        """The card's 6.0% is a token share; a doc share would read 50% here."""
+        """A token share, not a document share — a doc share reads 50% here."""
         _root, entries = two_items
         rag.build(entries)
         got = rag.index_completeness()
-        # "present" indexes its surface + 5 body words; "absent" only its
-        # surface. The body share is therefore well under the 0.5 a
-        # document-count share would report.
         assert got["tokens"] > got["metadata_only_tokens"] > 0
         assert 0.0 < got["body_share"] < 1.0
         assert got["body_share"] == pytest.approx(
             1.0 - got["metadata_only_tokens"] / got["tokens"])
+
+    def test_the_share_describes_this_index_not_the_corpus_behind_it(
+            self, two_items):
+        """`body_share` counts the tokens that ARE here, not the ones that
+        are missing — and the two move in opposite directions.
+
+        "present" contributes its surface plus a body; "absent" contributes a
+        surface alone. So the tokens actually indexed are mostly body text and
+        `body_share` is HIGH, even though half the items lost their bodies
+        entirely. An earlier comment here asserted the opposite ("well under
+        the 0.5 a document-count share would report") and the only assertion
+        guarding it was `0.0 < body_share < 1.0`, which every value satisfies —
+        so the number was free to mean whatever the caller assumed. It was
+        being printed as "this index holds N% of the searchable text", which is
+        a share of the CORPUS, and that quantity is not computable here: the
+        bodies that were never read have no token count to compare against.
+
+        This pins the direction, which is the part that was never pinned.
+        """
+        _root, entries = two_items
+        rag.build(entries)
+        got = rag.index_completeness()
+        assert got["body_share"] > 0.5, (
+            "the body-bearing item dominates the tokens that were indexed")
+        # The corpus share would be far lower than this, and is unknowable.
+        # Nothing may present `body_share` as though it were that number.
+        assert got["metadata_only_tokens"] < got["tokens"] - got[
+            "metadata_only_tokens"]
 
     def test_a_wholly_metadata_index_reports_a_zero_share(self, two_items):
         _root, entries = two_items

@@ -7,7 +7,7 @@ category: Safety · Bug
 complexity: M
 impact: High
 wow: 2
-note: compact --reclone moved a pin to HEAD and printed "every tap is already compact"
+note: three broken paths, three PRs claiming it, and one residual that took a second item to finish
 order: 216
 owner: loop/tap-pin-integrity
 pr: 725
@@ -43,3 +43,14 @@ size-only report at <code>configuration.py:288-292</code> is what hid the move. 
 pinned-tap paragraph (lines 176-178) and its <code>compact --reclone</code> line (274); regenerate
 <code>docs/commands.html</code> only if the <code>--force</code> help string changes. Found by the
 2026-08 CLI audit (cluster <code>pinned-tap-integrity</code>); repro in the audit log.
+
+
+<b>Closed 2026-09-10.</b> <code>#725</code> landed the <code>registry.update</code> half
+(both the <code>--force</code> unpin and the re-clone of a pinned tap whose clone had
+vanished, with <code>tests/unit/test_tap_pins.py</code> covering each). The
+<code>compact --reclone</code> half landed in two pieces: the pin checkout, the
+<code>catalog.rebuild_tap</code> and the size-independent report came with
+<code>#725</code>; the unresolvable-pin guard was left behind when three PRs claimed this
+one item and only one could merge, and is its own card &mdash;
+<code>reclone-leaves-a-clone-on-head-when-it-cannot-reach-the-pin</code>. All three paths
+named above are now closed, and README's pinned-tap paragraph says what the code does.

@@ -2107,9 +2107,21 @@ class TestReindex:
         assert data["metadata_only"] == data["docs"]
         r = boost("reindex", "--force")
         said = r.out + r.err
-        assert "indexed from catalog metadata alone" in said
-        assert "0.0% of the searchable text" in said
-        assert "boost tap <owner/repo>" in said
+        assert "have no body text" in said
+        # The share reported is of THIS INDEX's tokens, and with every entry
+        # bodyless that is all of them. The old line claimed a share of the
+        # corpus ("0.0% of the searchable text") — a quantity this index
+        # cannot know, and one that read 100% on a machine missing a single
+        # clone. See rag.index_completeness.
+        assert "100.0% of everything this index holds" in said
+        assert "of the searchable text" not in said
+        # The remedy has to be one that works. `boost tap` refuses a tap that
+        # is already configured, which is exactly the `catalog --import` shape
+        # this test recreates, and a plain `reindex` reuses a tap whose commit
+        # has not moved — bodies or no bodies.
+        assert "boost update" in said
+        assert "boost reindex --force" in said
+        assert "boost tap <owner/repo>" not in said
 
     def test_a_cloned_registry_says_nothing_about_metadata(self, boost, tapped):
         r = boost("reindex", "--force")
