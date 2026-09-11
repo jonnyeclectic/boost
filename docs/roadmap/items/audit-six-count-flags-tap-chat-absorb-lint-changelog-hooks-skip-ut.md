@@ -2,7 +2,7 @@
 id: audit-six-count-flags-tap-chat-absorb-lint-changelog-hooks-skip-ut
 board: code
 section: dx
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Med

@@ -2,7 +2,7 @@
 id: mutation-shards-rerun-full-set-every-push
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: CI · Performance
 complexity: M
 impact: Med

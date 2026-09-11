@@ -9,6 +9,7 @@ impact: High
 wow: 4
 note: probe fixed; --strict-mcp-config shipped for the surface confound; second host (Gemini CLI) still unwritten
 owner: loop/eval-tools-strict-mcp
+pr: 633
 order: 96
 title: a Tier 3 eval for tool-call behaviour, floored in <b>both</b> directions
 ---

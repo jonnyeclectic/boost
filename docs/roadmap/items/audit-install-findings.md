@@ -10,7 +10,7 @@ wow: 1
 note: "3 of 4 clusters landed; cross-scope-name-block gets a safe refusal, not true coexistence"
 order: 273
 owner: loop/audit-install-findings
-pr:
+pr: 823
 title: "<code>boost install</code>: CLI audit findings (2026-08)"
 ---
 <b>Rule/workflow lock entries are name-keyed across scopes</b> <em>(med)</em>. With the

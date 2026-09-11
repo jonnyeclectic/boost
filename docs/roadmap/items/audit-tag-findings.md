@@ -20,3 +20,14 @@ title: "boost tag: CLI audit findings (2026-08)"
 Fix in <code>cmd_tag</code>: hand any token starting with <code>--</code> (or <code>-letter</code> that is not a tag operand) to argparse so it errors; compute <code>changed = sorted(tags) != sorted(before)</code>; print a one-line notice for removing an absent tag; reject whitespace in tags; document or fold case; error when a name is given with <code>--list</code>. Regenerate <code>docs/commands.html</code> if the help text gains the tag grammar.
 
 Found by the 2026-08 CLI audit (cluster <code>tag-arg-parsing</code>); repro in the audit log.
+
+<b>Partly landed — PR 735.</b> The correctness half shipped: any unrecognized
+<code>--</code> token now reaches argparse (<i>unrecognized arguments</i>, exit 2),
+<code>--list</code> with a skill name is a named error, whitespace in a tag is rejected, and
+<code>changed</code> is a before/after set comparison in the new
+<code>lockfile.apply_tag_mods</code>, so <code>+x -x</code> no longer writes the lock and a
+journal event for a net no-op. <b>Still open</b>, and why this card stays
+<code>inflight</code>: the one-line notice when <code>-tag</code> removes a tag that was
+never present (the remove branch is still a silent no-op), and documenting or folding tag
+case (<code>+Design</code> and <code>#design</code> still coexist). Both are UX asks rather
+than correctness bugs, which is why the PR left them.
