@@ -24,10 +24,13 @@ way to <code>socket.bind</code>, which raises <code>OverflowError</code> — not
 inviting the reader to file a GitHub issue. New <code>util.port_number</code> bounds it to
 1-65535 at parse time, where the error is still about the thing the user typed.
 
-<code>tap --jobs</code> was found by the scan rather than by anyone hitting it. It is fed
-straight to a <code>ThreadPoolExecutor</code>, so <code>--jobs 0</code> is a
-<code>ValueError</code> out of the pool's constructor and a negative is the same — a crash
-where "must be &gt;= 1" was wanted.
+<code>tap --jobs</code> was found by the scan rather than by anyone hitting it, and it fails
+the quiet way rather than the loud one: <code>registry.tap_jobs</code> ends in
+<code>max(1, min(requested, MAX_TAP_JOBS))</code>, so <code>--jobs 0</code> and
+<code>--jobs -5</code> both silently became <b>1</b>. That clamp is right for the env var and
+the default it also normalises; it is the wrong answer to an explicit flag, where the user asked
+for something boost cannot do and was given something else without being told. The upper clamp
+stays, and <code>--help</code> has always named it.
 
 <b>The durable half is the scan.</b> An AST pass walks every <code>add_argument</code> in the
 command layer and fails on any new bare <code>type=int</code>. One genuinely unbounded option

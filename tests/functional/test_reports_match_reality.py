@@ -140,7 +140,7 @@ class TestSidelinedSkillStaysSidelined:
         boost("profile", "use", "both")
         assert (sandbox / ".claude" / "skills" / sidelined).exists()
         entry = json.loads(boost("list", "--json").out)["skills"][sidelined]
-        assert entry["agents"] and not entry.get("sidelined")
+        assert entry["agents"] and not entry.get("sidelined_by")
 
     def test_the_lock_records_the_sideline(self, boost, sidelined):
         data = json.loads(boost("list", "--json").out)

@@ -28,4 +28,4 @@ every command that <i>acts</i> on the sideline behaved correctly.
 <code>sideline</code> now empties the list and <code>unsideline</code> records what it relinked,
 which is exactly the <code>quarantine</code> / <code>--release</code> shape one function over.
 
-Separately, the same listing said "1 taps · 3 items".
+Separately, <code>boost taps</code> said "1 taps · 3 items".

@@ -16,7 +16,7 @@ of the thinking lives in :mod:`boost_cli.core.bmad`; this module is glue.
 
     boost bmad on                          # <- the one command. global.
     boost bmad off                         # remove hooks + boost-written personas
-    boost bmad personas                    # the roster, and whether it is installed
+    boost bmad personas                    # the roster + whether installed, both scopes
     boost bmad route [PROMPT] [--plain]    # hook target; pipeable for debugging
 
 **The full method** is `boost bmad install`, unchanged: it delegates to the
@@ -100,7 +100,8 @@ def cmd_bmad(argv) -> int:
     p.add_argument("value", nargs="?",
                    help="startup: on | off | status · route: the prompt to classify")
     p.add_argument("-s", "--scope", choices=("project", "global"), default=None,
-                   help="target scope (on/off default: global; others: project)")
+                   help="target scope (on/off default: global; personas and "
+                        "status: both; others: project)")
     p.add_argument("--modules", default=DEFAULT_MODULES,
                    help="BMAD modules to install (default: %s)" % DEFAULT_MODULES)
     p.add_argument("-y", "--yes", action="store_true",
