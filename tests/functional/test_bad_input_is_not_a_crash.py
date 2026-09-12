@@ -20,6 +20,7 @@ commands that miss a house style rather than an absent one.
 from __future__ import annotations
 
 import os
+import sys
 
 import pytest
 
@@ -56,7 +57,13 @@ class TestCreateDir:
         r = boost("create", "x", "--dir", str(sandbox / "afile"), expect=1)
         assert_clean_error(r)
 
-    @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores the mode bits")
+    # The condition is evaluated at COLLECTION time, so `os.geteuid` must not
+    # be touched on a platform that does not have it: Windows has no such
+    # attribute and the whole module failed to import, taking every test in it
+    # down with a collection error rather than a skip. `or` short-circuits.
+    @pytest.mark.skipif(
+        sys.platform == "win32" or os.geteuid() == 0,
+        reason="Windows has no POSIX mode bits to honour; root ignores them")
     def test_an_unwritable_parent_is_refused_cleanly(self, boost, sandbox):
         ro = sandbox / "ro"
         ro.mkdir(mode=0o500)
