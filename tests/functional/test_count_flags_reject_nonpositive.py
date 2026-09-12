@@ -46,7 +46,7 @@ def test_count_flag_rejects_nonpositive(boost, tapped, argv, value):
     assert "must be >= 1" in (r.out + r.err)
 
 
-OUT_OF_RANGE_PORTS = ["0", "-1", "65536", "70000"]
+OUT_OF_RANGE_PORTS = ["-1", "65536", "70000"]
 
 
 @pytest.mark.parametrize("port", OUT_OF_RANGE_PORTS)
@@ -56,7 +56,7 @@ def test_serve_rejects_an_out_of_range_port(boost, port):
     text = r.out + r.err
     assert "boost hit an unexpected error" not in text
     assert "crash report" not in text
-    assert "1-65535" in text
+    assert "0-65535" in text
 
 
 def test_serve_still_accepts_a_valid_port():
@@ -69,3 +69,12 @@ def test_serve_still_accepts_a_valid_port():
 
     for ok in ("1", "8787", "65535"):
         assert util.port_number(ok) == int(ok)
+
+
+def test_port_zero_stays_the_any_free_port_idiom():
+    """`bind(host, 0)` is how you ask the OS for a free port, and boost's own
+    `TestServe` starts the server that way — so 0 is valid input, not a typo.
+    Bolting a maximum onto `positive_int` would have broken it."""
+    from boost_cli.core import util
+
+    assert util.port_number("0") == 0

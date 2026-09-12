@@ -84,6 +84,14 @@ class TestMentionsKeyword:
         e2 = {"name": "pasta-recipes", "description": "Delicious", "meta": {}}
         assert catalog.mentions_keyword(catalog.entry_text(e2), "ci") is False
 
+    def test_it_prefers_the_cached_blob_over_rebuilding(self):
+        """`search_blob` is stamped at scan time and is the string `search`
+        ranks on, so a question *about* an entry must read the same one."""
+        e = {"name": "x", "description": "y", "meta": {},
+             "search_blob": "x y terraform"}
+        assert catalog.entry_text(e) == "x y terraform"
+        assert catalog.mentions_keyword(catalog.entry_text(e), "terraform") is True
+
     def test_frontmatter_tags_count_as_a_mention(self):
         """A skill tagged `ci` mentions ci even if its prose never says so."""
         e = {"name": "pipeline-hygiene", "description": "Keep builds green",

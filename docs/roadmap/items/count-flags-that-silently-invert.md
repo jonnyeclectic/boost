@@ -22,7 +22,12 @@ needs a <i>ceiling</i> as well as a floor. Without one an out-of-range number tr
 way to <code>socket.bind</code>, which raises <code>OverflowError</code> — not an
 <code>OSError</code> boost frames — so a <b>typo</b> exited 70 and wrote a crash report
 inviting the reader to file a GitHub issue. New <code>util.port_number</code> bounds it to
-1-65535 at parse time, where the error is still about the thing the user typed.
+0-65535 at parse time, where the error is still about the thing the user typed.
+
+<b>0 is valid, and that is why this is not <code>positive_int</code> with a maximum.</b> The
+first draft rejected it and broke <code>TestServe</code>, which — like anything that wants a
+free port — starts the server with <code>--port 0</code>. A tidier bound would have turned a
+working idiom into a parse error; the control run against <code>main</code> is what caught it.
 
 <code>tap --jobs</code> was found by the scan rather than by anyone hitting it, and it fails
 the quiet way rather than the loud one: <code>registry.tap_jobs</code> ends in
