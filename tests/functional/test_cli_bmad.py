@@ -587,8 +587,13 @@ class TestPersonas:
         assert "not installed" in r.out
 
     def test_reports_installed_after_on(self, boost, sandbox, proj):
-        boost("bmad", "on")
-        r = boost("bmad", "personas")
+        boost("bmad", "on")                       # no --scope: global
+        # Ask about the scope `on` actually wrote to. A bare `personas` now
+        # reports BOTH scopes, so "not installed" appears against the project
+        # scope — correctly, since nothing was installed there. This assertion
+        # only ever held because both commands defaulted to the same scope,
+        # which is the coincidence that made a project install read as missing.
+        r = boost("bmad", "personas", "--scope", "global")
         assert "not installed" not in r.out
 
     def test_an_edited_persona_reads_installed_edited_not_not_installed(
@@ -600,7 +605,7 @@ class TestPersonas:
         mine.write_text(
             mine.read_text(encoding="utf-8") + "\nmy own note\n", encoding="utf-8")
 
-        r = boost("bmad", "personas")
+        r = boost("bmad", "personas", "--scope", "global")
         assert "bmad-ux" in r.out
         for line in r.out.splitlines():
             if line.strip().startswith("bmad-ux"):

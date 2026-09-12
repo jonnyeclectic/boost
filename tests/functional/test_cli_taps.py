@@ -391,7 +391,7 @@ class TestTaps:
         # relative "Xh ago", which used to be the cache-only format.
         assert re.search(r"\d{4}-\d{2}-\d{2}", r.out)
         assert "ago" not in r.out
-        assert "1 taps · 5 items" in r.out       # items still from the cache
+        assert "1 tap · 5 items" in r.out       # items still from the cache
         # The table humanizes; the JSON `updated` field stays the raw ISO
         # timestamp the cache actually recorded, not the same relative string.
         data = json.loads(boost("taps", "--json").out)
@@ -399,7 +399,7 @@ class TestTaps:
         (paths.cache_dir() / "fixture-tap.json").unlink()
         r = boost("taps")
         assert "?" in r.out                      # no clone, no cache
-        assert "1 taps · 0 items" in r.out
+        assert "1 tap · 0 items" in r.out
         assert json.loads(boost("taps", "--json").out)[0]["updated"] is None
 
     def test_pinned_footer_hints_boost_update_skips_it(

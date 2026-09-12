@@ -133,7 +133,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>54</b><span>Planned</span></div>
-      <div class="stat"><b>457</b><span>Loop finds</span></div>
+      <div class="stat"><b>461</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -4207,6 +4207,18 @@ rather than leaving <code>doctor</code> as the only command that knows.</p>
           <span class="m">shipped in v1.2.108 and caught by an adversarial review of the merge that carried it</span>
         </div>
       </article>
+
+      <article class="cap rcard" id="count-flags-that-silently-invert">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>A scan that stops the bare-int count flag coming back</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/count-flags-that-silently-invert.md">Write-up &middot; count-flags-that-silently-invert.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">`serve --port 99999` reached socket.bind and exited 70 with a crash report</span>
+        </div>
+      </article>
       <!-- /ROADMAP:cards -->
 
     </div>
@@ -4686,6 +4698,30 @@ rather than leaving <code>doctor</code> as the only command that knows.</p>
           <span class="m">Impact <b>Low</b></span>
           <span class="m">Wow <b class="wow">★</b></span>
           <span class="m">a row counted among the N failed still renders the green ok token</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="because-that-was-not-the-reason">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>Three commands that denied what was on the disk in front of them</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/because-that-was-not-the-reason.md">Write-up &middot; because-that-was-not-the-reason.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★★</b></span>
+          <span class="m">A `.github/workflows/` directory made `boost recommend` suggest a pasta-recipe skill "because: ci"</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="lock-kept-links-it-had-just-removed">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>The lock kept advertising links it had just removed</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/lock-kept-links-it-had-just-removed.md">Write-up &middot; lock-kept-links-it-had-just-removed.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Low</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">`boost profile use` unlinked four agents and `boost list` kept naming all four</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
@@ -7512,6 +7548,18 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★</b></span>
           <span class="m">landed everywhere except the search-row badge — see PR for what remains</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="typos-reported-as-boost-bugs">
+        <div class="head"><span class="pill shipped">Shipped</span><span class="cat">Bug</span></div>
+        <h3>The last command that blamed boost for the user's typo</h3>
+        <p class="cardbody"><a class="writeup" href="https://github.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/typos-reported-as-boost-bugs.md">Write-up &middot; typos-reported-as-boost-bugs.md</a></p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★★</b></span>
+          <span class="m">`boost create --dir` answered a mistyped path with "file it at github.com/.../issues"</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->

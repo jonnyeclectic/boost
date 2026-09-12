@@ -1101,6 +1101,13 @@ def cmd_recommend(argv):
     agg: dict[str, dict[str, Any]] = {}
     for kw in stack["keywords"]:
         for e, s in catalog.search(kw, entries):
+            # `search` ranks substrings, which is right for a search box and
+            # wrong for the `because:` column below — that column is a causal
+            # claim, and `ci` matching re*ci*pes made it a false one. Filtering
+            # here rather than inside `search` leaves the shared (and
+            # eval-gated) ranker exactly as it is; see catalog.mentions_keyword.
+            if not catalog.mentions_keyword(catalog.entry_text(e), kw):
+                continue
             rec = agg.setdefault(e["name"], {"entry": e, "score": 0,
                                              "because": set()})
             rec["score"] += s

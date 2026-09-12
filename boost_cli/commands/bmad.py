@@ -16,7 +16,7 @@ of the thinking lives in :mod:`boost_cli.core.bmad`; this module is glue.
 
     boost bmad on                          # <- the one command. global.
     boost bmad off                         # remove hooks + boost-written personas
-    boost bmad personas                    # the roster, and whether it is installed
+    boost bmad personas                    # the roster + whether installed, both scopes
     boost bmad route [PROMPT] [--plain]    # hook target; pipeable for debugging
 
 **The full method** is `boost bmad install`, unchanged: it delegates to the
@@ -100,7 +100,8 @@ def cmd_bmad(argv) -> int:
     p.add_argument("value", nargs="?",
                    help="startup: on | off | status · route: the prompt to classify")
     p.add_argument("-s", "--scope", choices=("project", "global"), default=None,
-                   help="target scope (on/off default: global; others: project)")
+                   help="target scope (on/off default: global; personas and "
+                        "status: both; others: project)")
     p.add_argument("--modules", default=DEFAULT_MODULES,
                    help="BMAD modules to install (default: %s)" % DEFAULT_MODULES)
     p.add_argument("-y", "--yes", action="store_true",
@@ -363,7 +364,25 @@ _PERSONA_STATE_LABEL = {
 
 
 def _personas(scope) -> int:
-    scope = scope or "global"
+    """List personas: one scope if asked, otherwise both.
+
+    This is a query, so with no ``--scope`` it reports BOTH — exactly what
+    ``bmad status`` already does, and for the same reason. Picking one scope by
+    default made the answer wrong whenever the personas lived in the other: it
+    defaulted to global, so after `boost bmad on --scope project` it read
+    ``~/.claude/agents``, found nothing, and reported seven personas sitting on
+    disk as "not installed" — contradicting `boost bmad status` run a moment
+    later in the same directory. Flipping the default to project would only
+    move the false statement to the global install, which is the more common
+    one; a query that inspects both places cannot be wrong about either.
+    """
+    for sc in (scope,) if scope else ("global", "project"):
+        _personas_scope(sc)
+    return 0
+
+
+def _personas_scope(scope) -> None:
+    """Report the persona roster for exactly one scope."""
     agents = _agents_dir(scope)
     states = core.persona_states(agents)
     out.heading("BMAD personas — %s" % scope)
@@ -376,7 +395,6 @@ def _personas(scope) -> int:
     out.dim("  → %s" % paths.tilde(agents))
     if all(state == "absent" for state in states.values()):
         out.dim("  install them with `boost bmad on`")
-    return 0
 
 
 # ------------------------------------------------------------------- provisioning

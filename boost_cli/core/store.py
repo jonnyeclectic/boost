@@ -324,6 +324,12 @@ def sideline(name: str, by: str) -> list[str]:
     entry = lockfile.get_skill(name)
     if entry is not None:
         entry["sidelined_by"] = by
+        # `agents` is defined as the links measured from disk, and the links
+        # have just been removed — so leaving the old list had `boost list`
+        # keep advertising the skill to agents that could no longer see it.
+        # `quarantine` clears it for the same reason; :func:`unsideline`
+        # recomputes it, exactly as `quarantine --release` does.
+        entry["agents"] = []
         lockfile.set_skill(name, entry)
     return removed
 
@@ -339,8 +345,10 @@ def unsideline(name: str) -> InstallResult:
     """
     res = link_agents(name)
     entry = lockfile.get_skill(name)
-    if entry is not None and entry.get("sidelined_by"):
-        del entry["sidelined_by"]
+    if entry is not None:
+        # Record the links this just made, since sideline() emptied the list.
+        entry["agents"] = res.linked
+        entry.pop("sidelined_by", None)
         lockfile.set_skill(name, entry)
     return res
 
