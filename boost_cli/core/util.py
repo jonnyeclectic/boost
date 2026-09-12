@@ -170,6 +170,25 @@ def positive_int(s: str) -> int:
     return v
 
 
+def port_number(s: str) -> int:
+    """argparse ``type=`` for a TCP port (``serve --port``): an int in 1-65535.
+
+    :func:`positive_int` with the ceiling a port needs. Without one an
+    out-of-range number travelled all the way to ``socket.bind``, which raises
+    ``OverflowError`` — not an ``OSError`` boost frames — so a typo exited 70
+    and wrote a crash report inviting the reader to file a GitHub issue.
+    """
+    import argparse
+
+    try:
+        v = int(s)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("invalid int value: %r" % s) from None
+    if not 1 <= v <= 65535:
+        raise argparse.ArgumentTypeError("must be 1-65535")
+    return v
+
+
 def score_int(s: str) -> int:
     """argparse ``type=`` for ``lint --min``: an int in [0, 100].
 

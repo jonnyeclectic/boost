@@ -41,7 +41,18 @@ def branch_state(cwd: Path | None = None) -> BranchState:
     if wt.returncode != 0 or wt.stdout.strip() != "true":
         return BranchState(has_git=True, in_repo=False, branch=None)
     proc = run(["-C", str(cwd), "rev-parse", "--abbrev-ref", "HEAD"], check=False)
-    branch = proc.stdout.strip() if proc.returncode == 0 else None
+    if proc.returncode == 0:
+        return BranchState(has_git=True, in_repo=True,
+                           branch=proc.stdout.strip() or None)
+    # rev-parse resolves HEAD to a COMMIT, so it also fails on an unborn HEAD —
+    # a repo between `git init` and its first commit. Readers here take a
+    # `None` branch inside a repo for "not a repo at all": `boost context
+    # status` printed "(not in a git repository)" while standing in one, and
+    # `boost context apply` declined to do anything there. `symbolic-ref` reads
+    # the ref HEAD points at without requiring it to exist yet, so the branch
+    # is named from the first `git init` onward.
+    sym = run(["-C", str(cwd), "symbolic-ref", "--short", "HEAD"], check=False)
+    branch = sym.stdout.strip() or None if sym.returncode == 0 else None
     return BranchState(has_git=True, in_repo=True, branch=branch)
 
 

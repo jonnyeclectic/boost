@@ -808,6 +808,57 @@ def _search_blob(name: str, description: str, meta) -> str:
     return " ".join([name.lower(), (description or "").lower(), _meta_text(meta)])  # noqa: FURB143
 
 
+def entry_text(entry: dict) -> str:
+    """The searchable text of one entry — the cached blob, or rebuilt.
+
+    One definition of "everything we know about this entry as text", so a
+    caller asking a question *about* an entry reads the same string
+    :func:`search` ranks on.
+    """
+    blob = entry.get("search_blob")
+    if blob is None:
+        blob = _search_blob(entry["name"], entry.get("description", ""),
+                            entry.get("meta", {}))
+    return blob
+
+
+#: Suffixes a language/framework keyword may grow when it appears in prose:
+#: `next` should reach `nextjs`, `go` should reach `golang`. Deliberately
+#: one-way and additive — a keyword may match a LONGER token, never a shorter
+#: one, which is why `java` still cannot reach `javascript` (that would need
+#: `java` + `script`, and `script` is not on this list).
+_KEYWORD_SUFFIXES = ("js", "lang")
+
+_WORDS = re.compile(r"[a-z0-9]+")
+
+
+def mentions_keyword(text: str, keyword: str) -> bool:
+    """True when ``text`` mentions ``keyword`` as a WORD, not as a substring.
+
+    :func:`search` scores substrings, which is right for a free-text search box
+    — someone typing `docker` wants `dockerfile` back. It is wrong for
+    ``boost recommend``, which prints ``because: <keyword>`` and thereby makes
+    a causal claim about why a skill suits a project.
+
+    The stack vocabulary is short words that live inside longer unrelated ones,
+    so the false claims were the common case rather than the edge: ``ci`` was
+    found inside "recipes", "delicious", "facilitation" and "discipline";
+    ``rust`` inside "trust", of which boost ships a whole command; ``java``
+    inside "javascript", so a JavaScript project was recommended Java skills;
+    and ``go`` inside "algorithms", "django" and "goals".
+    """
+    want = _WORDS.findall(keyword.strip().lower())
+    if not want:
+        return False
+    have = set(_WORDS.findall(text.lower()))
+    # A multi-word keyword needs all of its words. None of the built-in stack
+    # keywords carry a space, but callers pass user-shaped strings.
+    if len(want) > 1:
+        return all(w in have for w in want)
+    w = want[0]
+    return w in have or any(w + suf in have for suf in _KEYWORD_SUFFIXES)
+
+
 def curated_entries(entries: list[dict]) -> list[dict]:
     """Curated entries, deduped by name (first occurrence wins).
 
@@ -848,12 +899,9 @@ def search(query: str, entries: list[dict] | None = None):
     for e in entries:
         name = e["name"].lower()
         desc = (e["description"] or "").lower()
-        # Precomputed at index time; fall back for older caches / entries
+        # Precomputed at index time; falls back for older caches / entries
         # constructed without a blob (e.g. tests passing raw dicts).
-        blob = e.get("search_blob")
-        if blob is None:
-            blob = _search_blob(e["name"], e.get("description", ""),
-                                e.get("meta", {}))
+        blob = entry_text(e)
         score = 0
         if q == name:
             score += 100

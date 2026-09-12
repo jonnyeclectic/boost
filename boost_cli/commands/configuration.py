@@ -496,9 +496,19 @@ def cmd_create(argv) -> int:
         "version": "0.1.0",
     }
     title = name.replace("-", " ").title()
-    target.mkdir(parents=True, exist_ok=True)
-    skill_md.write_text(frontmatter.dump(meta) + "\n\n"
-                        + _CREATE_BODY % {"title": title}, encoding="utf-8")
+    # `--dir` is user input, so an OSError here is a mistyped path — a file
+    # standing where the parent should be, or a directory boost cannot write —
+    # not a defect in boost. Unframed it exited 70 and wrote a crash report
+    # inviting the reader to file a GitHub issue. `boost import` already
+    # answers the same mistake with "no such directory: X"; match it.
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        skill_md.write_text(frontmatter.dump(meta) + "\n\n"
+                            + _CREATE_BODY % {"title": title}, encoding="utf-8")
+    except OSError as exc:
+        raise BoostError("cannot create %s: %s" % (_tilde(skill_md),
+                                                   exc.strerror or exc),
+                         hint="--dir takes a writable directory") from exc
     journal.log("create", name, path=str(target))
     out.ok("created %s" % _tilde(skill_md))
     if args.install:
@@ -1270,7 +1280,7 @@ def cmd_serve(argv) -> int:
     p = cliparse.parser(
         prog="boost serve",
         description="Browse the catalogue in a browser: search, facets and a tap graph")
-    p.add_argument("--port", type=int, default=default_port,
+    p.add_argument("--port", type=util.port_number, default=default_port,
                    help="port to listen on (default: config serve.port)")
     p.add_argument("--host", default="127.0.0.1",
                    help="address to bind (default: 127.0.0.1)")

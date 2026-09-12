@@ -26,6 +26,7 @@ from ..core import (
 )
 from ..core import output as out
 from ..errors import BoostError
+from ._common import _s
 
 _tilde = paths.tilde
 
@@ -161,7 +162,7 @@ def cmd_tap(argv) -> int:
     p.add_argument("--at", metavar="SHA",
                    help="pin the clone to one 40-character commit, as a "
                         "published vector shard requires")
-    p.add_argument("--jobs", type=int, metavar="N",
+    p.add_argument("--jobs", type=util.positive_int, metavar="N",
                    help="clone this many registries at once (default %d, max "
                         "%d)" % (registry.DEFAULT_TAP_JOBS,
                                  registry.MAX_TAP_JOBS))
@@ -351,7 +352,8 @@ def cmd_taps(argv) -> int:
     out.table(rows, headers=("NAME", "ITEMS", "UPDATED", "", "URL"),
               keep=("NAME",))
     print()
-    out.dim("%d taps · %d items" % (len(taps), total))
+    out.dim("%d tap%s · %d item%s"
+            % (len(taps), _s(len(taps)), total, _s(total)))
     if any(t["pin"] for t in taps):
         out.dim("@sha = pinned; `boost update` skips it")
     return 0
