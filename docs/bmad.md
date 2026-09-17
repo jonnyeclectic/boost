@@ -83,7 +83,7 @@ puts real change requests on both kinds.
 Only a change gets the closing "finish and verify" line, and that line defers
 to any approval step your repo guide or a loaded skill requires.
 
-The router costs a question nothing. Acknowledgements, slash commands, short
+The router leaves questions alone. Acknowledgements, slash commands, short
 questions ("what does `scan_dir` do?", "are there tests for the parser?"),
 "read X and tell me Y" asks and anything containing `no bmad` produce no banner
 at all. Pasted output is scored on the lines you typed around it, and needs two
@@ -99,6 +99,14 @@ always exits 0. The hook also speaks only while the autopilot is on for its
 scope, so a copy `boost bmad off` could not reach (a committed project
 `.claude/settings.json` in another checkout, a restored settings snapshot) stays
 silent, and a banner never names a persona whose file is gone.
+
+That silence governs the banner, and the personas are written to follow it.
+Claude Code decides delegation from the `description` line of a subagent, so
+each persona says it applies when a routing banner names it, or when you ask for
+it by name; a silent or `no bmad` prompt has nothing pointing at a persona
+except the session briefing's roster. The final call is Claude Code's, not boost's.
+Personas written by earlier releases said "Use PROACTIVELY" instead: run
+`boost bmad on` again to rewrite the ones you have not edited.
 
 ```bash
 boost bmad personas                            # the roster, and whether it's installed

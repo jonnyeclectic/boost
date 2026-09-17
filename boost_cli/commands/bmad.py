@@ -11,7 +11,7 @@ and no network: it writes the seven BMAD persona subagents into
 carrying the persona that should lead it, the support personas to spawn
 alongside, the BMAD skill for that track, and a definition of done read off the
 repo in front of it (its test dir, its docs, its roadmap items, its gate
-command). Trivial asks get nothing, so the router costs a question nothing. All
+command). Trivial asks get no banner. All
 of the thinking lives in :mod:`boost_cli.core.bmad`; this module is glue.
 
     boost bmad on                          # <- the one command. global.

@@ -979,9 +979,10 @@ class TestPersonaFiles:
         assert lines[:6] == [
             "---",
             "name: bmad-ux",
-            'description: "Sally, UX Designer (BMAD bmm). Use PROACTIVELY for '
-            'interface and layout work, visual hierarchy, spacing, responsive '
-            'behaviour, accessibility, or a design review."',
+            'description: "Sally, UX Designer (BMAD bmm). Use when a [BMAD '
+            'autopilot] routing banner names bmad-ux, or the user asks for it '
+            'by name. Covers interface and layout work, visual hierarchy, '
+            'spacing, responsive behaviour, accessibility, or a design review."',
             "model: inherit",
             "color: pink",
             "---",
@@ -1192,3 +1193,12 @@ no code unless you were asked for a change, which then gets the contract above."
             desc = bmad.persona_description(p)
             assert len(desc) > 40
             assert "\n" not in desc
+
+    def test_the_banner_is_the_trigger_not_the_description(self):
+        """"Use PROACTIVELY" let a persona spawn on a prompt the router kept
+        silent, so the silence and `no bmad` governed only the banner."""
+        for p in bmad.PERSONAS:
+            desc = bmad.persona_description(p)
+            assert "proactive" not in desc.lower(), p.slug
+            assert "routing banner names %s," % p.slug in desc
+            assert desc.endswith("Covers %s." % p.triggers)
