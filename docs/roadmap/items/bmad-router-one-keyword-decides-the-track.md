@@ -2,7 +2,7 @@
 id: bmad-router-one-keyword-decides-the-track
 board: code
 section: dx
-status: inflight
+status: shipped
 category: Agents · BMAD
 complexity: S
 impact: High
@@ -10,7 +10,7 @@ wow: 3
 note: 89 of 143 routed prompts rode on a single keyword
 order: 319
 owner: loop/bmad-incidental-keywords
-pr:
+pr: 861
 title: One incidental keyword decides the <code>boost bmad</code> track
 ---
 <code>classify</code> counts distinct keyword patterns per track over the raw prompt and routes on
