@@ -117,7 +117,7 @@ def cmd_bmad(argv) -> int:
     if args.action == "off":
         return _autopilot_off(args.scope)
     if args.action == "route":
-        return _route(args.value, args.plain)
+        return _route(args.value, args.plain, args.scope)
     if args.action == "personas":
         return _personas(args.scope)
     if args.action == "install":
@@ -255,6 +255,9 @@ def _autopilot_on(scope) -> int:
     """
     scope = scope or "global"
     agents = _agents_dir(scope)
+    # Asked before writing: whether this run *creates* the directory decides
+    # what running sessions can see (see the restart line below).
+    fresh = not agents.is_dir()
     _written, skipped = core.write_personas(agents)
     # A skipped (edited) persona file is still on disk and Claude Code still
     # loads it — only the ones neither written nor present at all are truly
@@ -267,7 +270,7 @@ def _autopilot_on(scope) -> int:
         scope, _ORIENT_HOOK,
         _never_fails("%s bmad orient --scope %s" % (launcher, scope)))
     _add_hook_everywhere(scope, _ROUTE_HOOK,
-                         _never_fails("%s bmad route" % launcher))
+                         _never_fails("%s bmad route --scope %s" % (launcher, scope)))
     _set_scope_state(scope, autopilot=True, startup=True, personas=present,
                      enabled_at=util.now_iso())
     journal.log("bmad-autopilot", "on", scope=scope, personas=present)
@@ -286,9 +289,13 @@ def _autopilot_on(scope) -> int:
                    hookhost.translate(host, "UserPromptSubmit")))
     out.dim("  every substantive prompt now names its lead persona and its "
             "definition of done; trivial asks are left alone")
-    # Claude Code only watches an agents dir that existed when the session
-    # started, so a first-ever install is invisible until the next launch.
-    out.info("restart your agent session to pick up the new subagents")
+    # Hook edits reach open sessions through the settings watcher, but Claude
+    # Code only watches an agents dir that existed when the session started. So
+    # a run that creates the dir starts banners before their personas can load;
+    # one that finds it already there is picked up live and needs no restart.
+    if fresh:
+        out.info("routing banners can start in open sessions now; restart "
+                 "them to use the new subagents")
     out.dim("  full BMAD workflow skills (needs Node): boost bmad install")
     return 0
 
@@ -328,20 +335,33 @@ def _read_hook_stdin() -> dict:
     return data if isinstance(data, dict) else {"prompt": raw}
 
 
-def _route(prompt, plain) -> int:
+def _route(prompt, plain, scope=None) -> int:
     """UserPromptSubmit hook target: classify, then emit the routing banner.
 
     This runs on every single prompt, so it has exactly one hard rule: **always
     exit 0**. On UserPromptSubmit an exit code of 2 blocks the prompt and erases
     it from the transcript — a crash here would eat the user's message. Every
     failure mode therefore degrades to silence.
+
+    Run as a hook (no positional prompt, no ``--plain``) it speaks only while
+    the autopilot is on, the same rule `_orient` applies. `off` works by
+    deleting the hook, so without this any copy it missed kept routing: a
+    committed `.claude/settings.json` in a second checkout, or a settings
+    snapshot restored from boost's own history. A human asking what a prompt
+    would route to gets the answer whatever the state.
     """
     try:
         payload = {} if prompt else _read_hook_stdin()
         text = prompt or str(payload.get("prompt") or "")
         cwd = payload.get("cwd")
         root = Path(cwd) if cwd else Path.cwd()
-        banner = core.route_context(text, root)
+        if prompt or plain:
+            banner = core.route_context(text, root)
+        elif _autopilot_live(scope, root):
+            banner = core.route_context(
+                text, root, (_agents_dir("global"), root / ".claude" / "agents"))
+        else:
+            return 0
     except Exception:                     # a hook must never break the session
         return 0
     if not banner:
@@ -689,15 +709,28 @@ def _state_write(d: dict) -> None:
     _state_path().write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
 
 
-def _proj_key() -> str:
-    return str(Path.cwd().resolve())
+def _proj_key(project=None) -> str:
+    return str(Path(project or Path.cwd()).resolve())
 
 
-def _get_scope_state(scope) -> dict:
+def _get_scope_state(scope, project=None) -> dict:
     d = _state_read()
     if scope == "global":
         return d["global"]
-    return d["projects"].get(_proj_key(), {})
+    return d["projects"].get(_proj_key(project), {})
+
+
+def _autopilot_live(scope, root) -> bool:
+    """Whether the router hook for ``scope`` may speak in the repo at ``root``.
+
+    Project state is keyed by the exact checkout path, the key `_orient` uses. A
+    nearest-parent lookup would route in a worktree nested under the repo while
+    the briefing stayed silent — the disagreement this check exists to end. A
+    hook with no ``--scope`` (every install before this one wrote it that way)
+    accepts either scope until the next `boost bmad on` rewrites it.
+    """
+    scopes = (scope,) if scope else ("global", "project")
+    return any(_get_scope_state(sc, root).get("autopilot") for sc in scopes)
 
 
 def _set_scope_state(scope, **patch) -> None:

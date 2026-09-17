@@ -507,6 +507,37 @@ class TestRouteContext:
             "ask only when a choice would change what gets delivered.",
         ]
 
+    def test_no_persona_file_anywhere_means_no_subagent_is_named(self, tmp_path):
+        """A banner must not send the model after a subagent it cannot spawn."""
+        dirs = (tmp_path / "home-agents", tmp_path / "repo-agents")
+        lines = bmad.route_lines("implement the new export command", tmp_path, dirs)
+        assert lines[0] == "[BMAD autopilot] track: build"
+        assert not any(line.startswith(("Lead:", "Support:")) for line in lines)
+        assert any(line.startswith("Done means:") for line in lines)
+        assert "bmad-build" in lines[1]
+        assert "Lead:" not in bmad.route_context(
+            "implement the new export command", tmp_path, dirs)
+
+    def test_an_edited_lead_in_either_dir_still_counts(self, tmp_path):
+        """Edited is not absent: the session still loads that subagent."""
+        home, repo = tmp_path / "home-agents", tmp_path / "repo-agents"
+        repo.mkdir()
+        (repo / "bmad-dev.md").write_text("my own Amelia", encoding="utf-8")
+        lines = bmad.route_lines("implement the new export command", tmp_path,
+                                 (home, repo))
+        assert lines[1].startswith("Lead: `bmad-dev`")
+        assert lines[2].startswith("Support:")
+        assert bmad.route_context("implement the new export command", tmp_path,
+                                  (home, repo)) == "\n".join(lines)
+
+    def test_only_the_lead_decides_not_a_support_persona(self, tmp_path):
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        (agents / "bmad-tea.md").write_text("x", encoding="utf-8")
+        lines = bmad.route_lines("implement the new export command", tmp_path,
+                                 (agents,))
+        assert not any(line.startswith("Lead:") for line in lines)
+
     def test_route_context_joins_the_lines_with_newlines(self, tmp_path):
         lines = bmad.route_lines("implement the export command", tmp_path)
         assert bmad.route_context("implement the export command", tmp_path) == (

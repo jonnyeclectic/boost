@@ -2,15 +2,15 @@
 id: bmad-route-ignores-autopilot-state
 board: code
 section: dx
-status: next
+status: shipped
 category: Agents · BMAD
 complexity: S
 impact: Med
 wow: 2
 note: the briefing hook checks state, the router never does
 order: 322
-owner:
-pr:
+owner: loop/bmad-route-state
+pr: 862
 title: <code>bmad route</code> never checks autopilot state, so any hook <code>off</code> missed keeps routing
 ---
 The two autopilot hooks disagree about what decides whether they speak. <code>_orient</code>

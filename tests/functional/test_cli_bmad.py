@@ -357,7 +357,8 @@ class TestAutopilotOn:
             p.slug for p in core_bmad.PERSONAS)
         assert cs.has_hook("global", "SessionStart", "bmad")
         assert cs.has_hook("global", "UserPromptSubmit", "bmad-route")
-        assert "bmad route" in _hook_cmd("global", "UserPromptSubmit", "bmad-route")
+        assert "bmad route --scope global" in _hook_cmd(
+            "global", "UserPromptSubmit", "bmad-route")
         assert "bmad orient --scope global" in _hook_cmd(
             "global", "SessionStart", "bmad")
 
@@ -367,6 +368,13 @@ class TestAutopilotOn:
         assert "BMAD autopilot ON" in r.out
         # the agents dir is only watched if it existed at launch
         assert "restart" in r.out.lower()
+
+    def test_no_restart_is_asked_for_when_the_agents_dir_already_existed(
+            self, boost, sandbox, proj):
+        """An agents dir open sessions already watch picks new files up live."""
+        (sandbox / ".claude" / "agents").mkdir(parents=True)
+        r = boost("bmad", "on")
+        assert "restart" not in r.out.lower()
 
     def test_both_hooks_cannot_report_failure(self, boost, sandbox, proj):
         """A boost older than this change does not know `bmad route` and exits
@@ -401,6 +409,8 @@ class TestAutopilotOn:
         assert not (sandbox / ".claude" / "agents").exists()
         assert cs.has_hook("project", "UserPromptSubmit", "bmad-route",
                            project_dir=proj)
+        assert "bmad route --scope project" in _hook_cmd(
+            "project", "UserPromptSubmit", "bmad-route", project_dir=proj)
 
     def test_does_not_disturb_a_users_own_hooks(self, boost, sandbox, proj):
         boost("hooks", "add", "UserPromptSubmit", "-c", "echo hi", "-n", "mine",
@@ -478,6 +488,7 @@ class TestRoute:
         monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
 
     def test_emits_the_hook_json_contract(self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
         (proj / "tests").mkdir()
         (proj / "Makefile").write_text("check:\n\ttrue\n", encoding="utf-8")
         self._pipe(monkeypatch, json.dumps({
@@ -496,6 +507,7 @@ class TestRoute:
     def test_uses_the_cwd_the_hook_reports_not_its_own(
             self, boost, sandbox, monkeypatch, tmp_path, proj):
         """The hook may run anywhere; `cwd` from stdin is the project."""
+        boost("bmad", "on")
         elsewhere = tmp_path / "elsewhere"
         (elsewhere / "spec").mkdir(parents=True)
         self._pipe(monkeypatch, json.dumps({
@@ -505,6 +517,7 @@ class TestRoute:
 
     def test_trivial_prompts_produce_no_output_at_all(
             self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
         self._pipe(monkeypatch, json.dumps({"prompt": "what is a tap?"}))
         r = boost("bmad", "route")
         assert r.out == "" and r.rc == 0
@@ -572,11 +585,118 @@ class TestRoute:
 
     def test_a_project_signal_failure_still_exits_zero(
             self, boost, sandbox, monkeypatch, proj):
-        monkeypatch.setattr(core_bmad, "project_signals",
-                            lambda _root: (_ for _ in ()).throw(RuntimeError("nope")))
+        boost("bmad", "on")
+        called = []
+
+        def explode(_root):
+            called.append("signals")
+            raise RuntimeError("nope")
+
+        monkeypatch.setattr(core_bmad, "project_signals", explode)
         self._pipe(monkeypatch, json.dumps({"prompt": "implement the thing"}))
         r = boost("bmad", "route", expect=None)
-        assert r.rc == 0
+        assert called == ["signals"]       # the gate let it get that far
+        assert r.rc == 0 and r.out == ""
+
+
+class TestRouteFollowsAutopilotState:
+    """The router hook speaks only while the autopilot is on, like the briefing.
+
+    `off` used to be the only thing silencing it, and `off` works by deleting
+    the hook — so any copy it missed kept routing with the autopilot reading as
+    off everywhere else.
+    """
+
+    PROMPT = "implement the new export command"
+
+    def _hook(self, boost, monkeypatch, cwd, *argv):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+            {"prompt": self.PROMPT, "cwd": str(cwd)})))
+        return boost("bmad", "route", *argv, expect=None)
+
+    def test_a_hook_is_silent_while_the_autopilot_is_off(
+            self, boost, sandbox, monkeypatch, proj):
+        r = self._hook(boost, monkeypatch, proj)
+        assert r.rc == 0 and r.out == ""
+
+    def test_a_hook_that_off_missed_stays_silent(
+            self, boost, sandbox, monkeypatch, proj):
+        """The restore-net repro: a settings snapshot holding only the router."""
+        boost("bmad", "on")
+        boost("bmad", "off")
+        r = self._hook(boost, monkeypatch, proj, "--scope", "global")
+        assert r.rc == 0 and r.out == ""
+
+    def test_a_second_checkout_does_not_route_on_the_first_ones_state(
+            self, boost, sandbox, monkeypatch, tmp_path, proj):
+        """A committed project hook, run in a copy whose state was never set."""
+        boost("bmad", "on", "--scope", "project")
+        copy = tmp_path / "copy"
+        copy.mkdir()
+        assert self._hook(boost, monkeypatch, copy, "--scope", "project").out == ""
+        r = self._hook(boost, monkeypatch, proj, "--scope", "project")
+        assert "bmad-dev" in r.out
+
+    def test_project_state_is_keyed_by_the_hook_cwd_not_the_process_cwd(
+            self, boost, sandbox, monkeypatch, tmp_path, proj):
+        boost("bmad", "on", "--scope", "project")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        r = self._hook(boost, monkeypatch, proj, "--scope", "project")
+        assert "bmad-dev" in r.out
+
+    def test_a_scoped_hook_ignores_the_other_scope(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        assert self._hook(boost, monkeypatch, proj, "--scope", "project").out == ""
+        assert "bmad-dev" in self._hook(
+            boost, monkeypatch, proj, "--scope", "global").out
+
+    @pytest.mark.parametrize("scope", ["global", "project"])
+    def test_an_unscoped_hook_accepts_either_scope(
+            self, boost, sandbox, monkeypatch, proj, scope):
+        """Every install before this change wrote the hook without --scope."""
+        boost("bmad", "on", "--scope", scope)
+        assert "bmad-dev" in self._hook(boost, monkeypatch, proj).out
+
+    def test_a_corrupt_state_file_reads_as_off(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        bmad._state_path().write_text("{{{", encoding="utf-8")
+        r = self._hook(boost, monkeypatch, proj)
+        assert r.rc == 0 and r.out == ""
+
+    def test_a_state_file_of_the_wrong_shape_reads_as_off(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        bmad._state_path().write_text("[]", encoding="utf-8")
+        r = self._hook(boost, monkeypatch, proj)
+        assert r.rc == 0 and r.out == ""
+
+    def test_asking_by_hand_answers_whatever_the_state(
+            self, boost, sandbox, monkeypatch, proj):
+        assert "bmad-dev" in boost("bmad", "route", self.PROMPT).out
+        monkeypatch.setattr(sys, "stdin", io.StringIO(self.PROMPT))
+        assert "bmad-dev" in boost("bmad", "route", "--plain").out
+
+    def test_a_live_autopilot_whose_personas_are_gone_names_no_subagent(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        for f in (sandbox / ".claude" / "agents").glob("*.md"):
+            f.unlink()
+        ctx = json.loads(self._hook(boost, monkeypatch, proj).out)[
+            "hookSpecificOutput"]["additionalContext"]
+        assert "Lead:" not in ctx and "Support:" not in ctx
+        assert "Done means" in ctx
+
+    def test_project_personas_count_for_a_global_hook(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        boost("bmad", "on", "--scope", "project")
+        for f in (sandbox / ".claude" / "agents").glob("*.md"):
+            f.unlink()
+        assert "Lead: `bmad-dev`" in self._hook(boost, monkeypatch, proj).out
 
 
 class TestPersonas:
