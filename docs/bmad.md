@@ -101,10 +101,10 @@ scope, so a copy `boost bmad off` could not reach (a committed project
 silent, and a banner never names a persona whose file is gone.
 
 That silence governs the banner, and the personas are written to follow it.
-Claude Code decides delegation from a subagent's `description`, so each persona
-says it applies when a routing banner names it or when you ask for it by name;
-a silent or `no bmad` prompt has nothing pointing at a persona except the
-session briefing's roster. The final call is Claude Code's, not boost's.
+Claude Code decides delegation from the `description` line of a subagent, so
+each persona says it applies when a routing banner names it, or when you ask for
+it by name; a silent or `no bmad` prompt has nothing pointing at a persona
+except the session briefing's roster. The final call is Claude Code's, not boost's.
 Personas written by earlier releases said "Use PROACTIVELY" instead: run
 `boost bmad on` again to rewrite the ones you have not edited.
 
