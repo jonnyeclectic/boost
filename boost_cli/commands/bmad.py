@@ -391,7 +391,7 @@ def _route(prompt, plain, scope=None, host=hookhost.CLAUDE) -> int:
         cwd = payload.get("cwd")
         root = Path(cwd) if cwd else Path.cwd()
         if prompt or plain:
-            banner = core.route_context(text, root)
+            banner = core.route_context(text, root, None, host)
         elif _autopilot_live(scope, root):
             banner = _session_banner(payload, text, root, host)
         else:
@@ -629,11 +629,11 @@ def _orient(scope, host=hookhost.CLAUDE) -> int:
 
 def _status(scope) -> int:
     st = _get_scope_state(scope)
-    hook = cs.has_hook(scope, "SessionStart", HOOK_NAME)
+    hosts = _hosts_with(scope, "SessionStart", HOOK_NAME)
     n = _count_skills(_skills_dir(scope))
     out.heading("BMAD startup — %s" % scope)
     out.kv("enabled", str(bool(st.get("startup"))))
-    out.kv("hook", "present" if hook else "absent")
+    out.kv("hook", "present (%s)" % ", ".join(hosts) if hosts else "absent")
     out.kv("skills", str(n))
     out.kv("installed", str(bool(st.get("installed"))))
     return 0
@@ -717,16 +717,18 @@ def _doctor() -> int:
         # managed + edited: an edited persona file is still on disk and
         # Claude Code still loads it, same as core.present_personas().
         personas = len(core.present_personas(agents))
-        router = cs.has_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
+        router_hosts = _hosts_with(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
+        briefing_hosts = _hosts_with(scope, "SessionStart", HOOK_NAME)
+        router = bool(router_hosts)
         live = bool(st.get("autopilot")) and router
-        briefing = _on_off(cs.has_hook(scope, "SessionStart", HOOK_NAME))
-        if briefing == "on" and _stale_matcher(scope):
+        briefing = _where(briefing_hosts)
+        if briefing_hosts and _stale_matcher(scope):
             # The matcher lives in the user's settings.json from whenever they
             # last ran `on`, while the code that depends on it ships with the
             # binary — so an old install silently misses newer sources.
             briefing += " (stale matcher: re-run `boost bmad on`)"
         out.kv(scope, "autopilot=%s  %d personas  router=%s  briefing=%s"
-               % (_on_off(live), personas, _on_off(router), briefing))
+               % (_on_off(live), personas, _where(router_hosts), briefing))
         out.kv("  workflows", "skills=%d  installed=%s"
                % (_count_skills(_skills_dir(scope)), _on_off(st.get("installed"))))
     out.dim("  project = %s" % Path.cwd())
@@ -746,6 +748,30 @@ def _stale_matcher(scope) -> bool:
     rows = [r for r in cs.list_hooks(scope)
             if r["event"] == "SessionStart" and r["name"] == HOOK_NAME]
     return any(r.get("matcher") != HOOK_MATCHER for r in rows)
+
+
+def _hosts_with(scope, event: str, name: str) -> list[str]:
+    """Which hosts carry this boost hook, in report order.
+
+    `--host gemini` makes a Claude-less autopilot reachable for the first time,
+    and a report that asks only Claude called that install absent — `doctor`
+    said `autopilot=off router=off` about a router that was about to run.
+    """
+    found = []
+    for host in hookhost.hosts():
+        target = hookhost.translate(host, event)
+        if target is not None and cs.has_hook(scope, target, name, host=host):
+            found.append(host)
+    return found
+
+
+def _where(hosts: list[str]) -> str:
+    """``off``, ``on`` (Claude only) or ``on (gemini)`` — who has the hook."""
+    if not hosts:
+        return "off"
+    if hosts == [hookhost.CLAUDE]:
+        return "on"
+    return "on (%s)" % ", ".join(hosts)
 
 
 def _skills_dir(scope) -> Path:

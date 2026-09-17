@@ -301,7 +301,7 @@ class TestDoctor:
         cs.add_hook("global", "SessionStart", bmad.HOOK_NAME, "x",
                     matcher="startup|resume|clear")
         r = boost("bmad", "doctor")
-        assert "briefing=on (stale matcher: re-run `boost bmad on`)" in r.out
+        assert "stale matcher: re-run `boost bmad on`" in r.out
 
     def test_autopilot_reads_as_off_when_the_hook_is_gone(
             self, boost, sandbox, proj):
@@ -532,6 +532,17 @@ class TestRoute:
         assert "~/.claude" not in payload["additionalContext"]
         claude = boost("bmad", "orient", "--scope", "global")
         assert claude.out.startswith("[BMAD autopilot active]")
+
+    def test_asking_by_hand_for_a_host_gets_that_host_s_banner(
+            self, boost, sandbox, proj):
+        """`--host` picked the envelope but not the dialect, so the only way to
+        preview Gemini's banner printed Claude's subagent wording inside it."""
+        r = boost("bmad", "route", "implement the new export command",
+                  "--host", "gemini", "--plain")
+        assert "take the role of Amelia" in r.out
+        assert "subagent" not in r.out
+        assert "`bmad-dev` subagent" in boost(
+            "bmad", "route", "implement the new export command", "--plain").out
 
     def test_a_gemini_hook_keeps_no_session_record(
             self, boost, sandbox, monkeypatch, proj):

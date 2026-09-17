@@ -177,3 +177,36 @@ class TestHostFlag:
         boost("bmad", "startup", "on", "--scope", "global", "--host", "claude")
         gem = both_hosts / hookhost.settings_dir(hookhost.GEMINI) / "settings.json"
         assert not gem.exists()
+
+
+class TestReportsEveryHost:
+    """A Gemini-only autopilot is a real install, and must read as one.
+
+    Before `--host`, `_hook_hosts` always returned Claude first, so asking
+    Claude alone was a safe shortcut. It is not any more: `doctor` called a
+    working Gemini install `autopilot=off router=off`.
+    """
+
+    def test_doctor_names_the_host_that_has_the_hooks(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "gemini")
+        r = boost("bmad", "doctor")
+        assert "autopilot=on" in r.out
+        assert "router=on (gemini)" in r.out and "briefing=on (gemini)" in r.out
+
+    def test_claude_only_stays_unqualified(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "claude")
+        r = boost("bmad", "doctor")
+        assert "router=on  " in r.out and "(gemini)" not in r.out
+
+    def test_both_hosts_are_listed(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global")
+        assert "router=on (claude, gemini)" in boost("bmad", "doctor").out
+
+    def test_startup_status_names_the_host_too(self, both_hosts, boost):
+        boost("bmad", "startup", "on", "--scope", "global", "--host", "gemini")
+        r = boost("bmad", "startup", "status", "--scope", "global")
+        assert "present (gemini)" in r.out
+
+    def test_nothing_installed_still_reads_off(self, both_hosts, boost):
+        r = boost("bmad", "doctor")
+        assert "router=off" in r.out and "briefing=off" in r.out
