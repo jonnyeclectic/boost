@@ -79,6 +79,22 @@ class Track(NamedTuple):
     support: tuple[str, ...]   # persona slugs to run alongside the lead
     skill: str                 # canonical BMAD v6 skill for this track
     note: str                  # how the lead should open
+    done: str                  # what finished looks like: one of DONE_KINDS
+
+
+DONE_KINDS: tuple[str, ...] = ("change", "findings", "artifact")
+"""What a track delivers, which decides what "done" means for it.
+
+Every track used to get the build contract — new coverage, updated docs, a
+finished and verified change — so "review the changes on this branch" was told
+to add tests and finish a change, and "compare the two caching options" was
+told to document what changed when nothing had. A *change* ends in edited
+source; *findings* (review, discovery) end in an answer with its evidence; an
+*artifact* (product, planning, architecture) ends in a written document. Neither
+of the last two refuses work the prompt asked for: the tie-break sends
+"implement the spec in specs/retry.md" to *product* on the word "spec", and a
+flat "no code" would tell the model not to do what it was just asked to do.
+"""
 
 
 # --------------------------------------------------------------------- personas
@@ -238,33 +254,33 @@ PERSONA_BY_SLUG: dict[str, Persona] = {p.slug: p for p in PERSONAS}
 TRACKS: dict[str, Track] = {
     "discovery": Track(
         lead="bmad-analyst", support=("bmad-pm",), skill="bmad-deep-recon",
-        note="Ground it in sources before recommending."),
+        note="Ground it in sources before recommending.", done="findings"),
     "product": Track(
         lead="bmad-pm", support=("bmad-analyst", "bmad-architect"),
         skill="bmad-prd",
-        note="Write criteria a test could assert."),
+        note="Write criteria a test could assert.", done="artifact"),
     "planning": Track(
         lead="bmad-pm", support=("bmad-architect",), skill="bmad-sprint-planning",
-        note="Keep the tracked items and the work in sync."),
+        note="Keep the tracked items and the work in sync.", done="artifact"),
     "architecture": Track(
         lead="bmad-architect", support=("bmad-dev",), skill="bmad-architecture",
-        note="One recommendation, with the rejected option named."),
+        note="One recommendation, with the rejected option named.", done="artifact"),
     "ux": Track(
         lead="bmad-ux", support=("bmad-dev",), skill="bmad-ux",
-        note="Hierarchy and spacing before colour."),
+        note="Hierarchy and spacing before colour.", done="change"),
     "build": Track(
         lead="bmad-dev", support=("bmad-tea", "bmad-scribe"), skill="bmad-build",
-        note="Ship it complete and verified."),
+        note="Ship it complete and verified.", done="change"),
     "quality": Track(
         lead="bmad-tea", support=("bmad-dev",),
         skill="bmad-qa-generate-e2e-tests",
-        note="Assertions that a mutation would fail."),
+        note="Assertions that a mutation would fail.", done="change"),
     "docs": Track(
         lead="bmad-scribe", support=("bmad-dev",), skill="bmad-document-project",
-        note="Verify against the code, regenerate what is generated."),
+        note="Verify against the code, regenerate what is generated.", done="change"),
     "review": Track(
         lead="bmad-tea", support=("bmad-architect",), skill="bmad-code-review",
-        note="Find the failure, not the style nit."),
+        note="Find the failure, not the style nit.", done="findings"),
 }
 
 TRACK_ORDER: tuple[str, ...] = (
@@ -680,14 +696,33 @@ def project_signals(root: Path) -> dict:
     }
 
 
-def done_checklist(signals: dict) -> list[str]:
-    """The definition of done, in the repo's own vocabulary.
+def done_checklist(signals: dict, done: str = "change") -> list[str]:
+    """The definition of done for one kind of work, in the repo's own vocabulary.
 
-    Tests and docs are unconditional — "no doc change needed" is a conclusion to
-    reach, not a step to skip. Roadmap and gate clauses appear only when the
-    repo actually has one, because an instruction to update a file that does
-    not exist teaches the agent to ignore the whole banner.
+    For a *change*, tests and docs are unconditional — "no doc change needed"
+    is a conclusion to reach, not a step to skip. Roadmap and gate clauses
+    appear only when the repo actually has one, because an instruction to
+    update a file that does not exist teaches the agent to ignore the whole
+    banner. *Findings* and *artifacts* are not changes, so they get no tests or
+    docs clause: they are done when the answer or the document is. Both carry
+    an "unless asked" escape, because the tie-break routes real change requests
+    onto them — "fix the lint errors in the scanner" goes to review, and
+    "implement the spec in specs/retry.md" to product.
     """
+    guide = signals.get("guide")
+    binding = ["`%s` is binding" % guide] if guide else []
+    if done == "findings":
+        gate = signals.get("gate")
+        return ["findings: each with its evidence (file:line, output or source)",
+                "no edits unless asked; an edit gets tests%s like any change"
+                % (" and `%s`" % gate if gate else ""), *binding]
+    if done == "artifact":
+        roadmap = signals.get("roadmap")
+        tracked = (["roadmap: create or claim the item under `%s`" % roadmap]
+                   if roadmap else [])
+        return ["a written artifact; no code unless the prompt asks for a "
+                "change, which then gets the change contract", *tracked, *binding]
+
     items: list[str] = []
 
     tests = signals.get("tests")
@@ -711,11 +746,7 @@ def done_checklist(signals: dict) -> list[str]:
     if gate:
         items.append("gate: `%s` green, with real output" % gate)
 
-    guide = signals.get("guide")
-    if guide:
-        items.append("`%s` is binding" % guide)
-
-    return items
+    return items + binding
 
 
 # --------------------------------------------------------------------- routing
@@ -756,11 +787,19 @@ def route_lines(prompt: str, root: Path | None = None,
     lines.extend((
         "BMAD skill: `%s` — invoke it if it is installed; otherwise the "
         "persona's own playbook stands." % track.skill,
-        "Done means: " + " · ".join(done_checklist(signals)),
-        "Work autonomously through to a finished, verified change; stop to ask "
-        "only when a choice would change what gets delivered.",
+        "Done means: " + " · ".join(done_checklist(signals, track.done)),
     ))
+    if track.done == "change":
+        # Not "work autonomously": that competed with approval gates people add
+        # on purpose, and the guide clause above only exists when a guide does.
+        lines.append(CHANGE_CLOSE)
     return lines
+
+
+CHANGE_CLOSE = ("Finish the change and verify it; stop only for a choice that "
+                "changes what gets delivered, or an approval step a repo guide "
+                "or a loaded skill requires.")
+"""The closing banner line for a change, and only a change."""
 
 
 def route_context(prompt: str, root: Path | None = None,
@@ -793,8 +832,9 @@ bmad-create-epics-and-stories / bmad-sprint-planning; ship with bmad-build
 bmad-qa-generate-e2e-tests / bmad-retrospective; bmad-help lists the rest.
 Full workflow skills need a per-project `_bmad/` runtime — `boost bmad init`.
 
-House rule: no change is done until its tests, its docs and its tracked item
-are done with it. Turn this off with `boost bmad off`.""" % roster
+House rule: a change is done when its tests, its docs and its tracked item are;
+findings are done when each carries its evidence; an artifact is done when it is
+written down and tracked. Turn this off with `boost bmad off`.""" % roster
 
 
 # ------------------------------------------------------------ persona files
@@ -870,11 +910,18 @@ How you work:
 BMAD skills to prefer when they are installed: %s.
 They are not required — when they are absent, the playbook above is the method.
 
-Before you report back, the same contract applies to you as to the session that
-spawned you: tests updated and actually run, documentation left true, any
-tracked roadmap or backlog item moved to match, and the repo's own gate green
-with output you have seen. If you could not finish a part of it, say which part
-and why — do not narrow the task silently.
+Before you report back, meet the contract for the kind of work you were given,
+the same one the session that spawned you works to.
+
+A change: tests updated and actually run, documentation left true, any tracked
+roadmap or backlog item moved to match, and the repo's own gate green with
+output you have seen.
+Findings: each one with its evidence, and no edits unless you were asked.
+An artifact: the written document itself, with any tracked item moved to match —
+no code unless you were asked for a change, which then gets the contract above.
+
+If you could not finish a part of it, say which part and why — do not narrow
+the task silently.
 """ % (persona.slug, json.dumps(persona_description(persona)), persona.color,
        persona.character, persona.title, persona.mission, playbook, skills)
 

@@ -654,10 +654,69 @@ class TestDoneChecklist:
             "docs: write down what changed for the next reader",
         ]
 
-    def test_always_demands_tests_and_docs_even_in_a_bare_repo(self, tmp_path):
-        line = " ".join(bmad.done_checklist(bmad.project_signals(tmp_path)))
+    def test_a_change_always_demands_tests_and_docs_even_in_a_bare_repo(
+            self, tmp_path):
+        line = " ".join(bmad.done_checklist(bmad.project_signals(tmp_path),
+                                            "change"))
         assert "test" in line.lower()
         assert "doc" in line.lower()
+
+    def _full_repo(self, root):
+        (root / "tests").mkdir()
+        (root / "docs" / "roadmap" / "items").mkdir(parents=True)
+        (root / "CLAUDE.md").write_text("rules", encoding="utf-8")
+        (root / "Makefile").write_text("check:\n\ttrue\n", encoding="utf-8")
+        return bmad.project_signals(root)
+
+    def test_findings_are_evidence_and_no_edits_unless_asked(self, tmp_path):
+        """"fix the lint errors in the scanner" routes to review, hence "unless"."""
+        assert bmad.done_checklist(self._full_repo(tmp_path), "findings") == [
+            "findings: each with its evidence (file:line, output or source)",
+            "no edits unless asked; an edit gets tests and `make check` like "
+            "any change",
+            "`CLAUDE.md` is binding",
+        ]
+
+    def test_findings_in_a_bare_repo_name_no_gate(self, tmp_path):
+        assert bmad.done_checklist(bmad.project_signals(tmp_path), "findings") == [
+            "findings: each with its evidence (file:line, output or source)",
+            "no edits unless asked; an edit gets tests like any change",
+        ]
+
+    def test_an_artifact_is_written_not_coded_and_keeps_the_roadmap(self, tmp_path):
+        assert bmad.done_checklist(self._full_repo(tmp_path), "artifact") == [
+            "a written artifact; no code unless the prompt asks for a change, "
+            "which then gets the change contract",
+            "roadmap: create or claim the item under `docs/roadmap/items/`",
+            "`CLAUDE.md` is binding",
+        ]
+
+    def test_an_artifact_in_a_bare_repo_is_just_the_artifact(self, tmp_path):
+        assert bmad.done_checklist(bmad.project_signals(tmp_path), "artifact") == [
+            "a written artifact; no code unless the prompt asks for a change, "
+            "which then gets the change contract"]
+
+    @pytest.mark.parametrize("kind", ["findings", "artifact"])
+    def test_neither_kind_refuses_work_that_was_asked_for(self, tmp_path, kind):
+        """The tie-break sends real change requests onto both kinds: "fix the
+        lint errors in the scanner" is review, "implement the spec in
+        specs/retry.md" is product. A flat "no code" contradicts the prompt."""
+        line = " ".join(bmad.done_checklist(bmad.project_signals(tmp_path), kind))
+        assert "unless" in line and ("asked" in line or "asks" in line)
+
+    def test_an_edit_request_that_tie_breaks_onto_product_is_not_told_no_code(
+            self, tmp_path):
+        assert bmad.classify("implement the spec in specs/retry.md",
+                             tmp_path) == "product"
+        done = next(ln for ln in
+                    bmad.route_lines("implement the spec in specs/retry.md", tmp_path)
+                    if ln.startswith("Done means:"))
+        assert "no code unless the prompt asks for a change" in done
+
+    def test_the_default_kind_is_a_change(self, tmp_path):
+        signals = self._full_repo(tmp_path)
+        assert bmad.done_checklist(signals) == bmad.done_checklist(signals,
+                                                                   "change")
 
     def test_no_roadmap_means_no_roadmap_clause(self, tmp_path):
         line = " ".join(bmad.done_checklist(bmad.project_signals(tmp_path)))
@@ -699,9 +758,44 @@ class TestRouteContext:
         assert len(bmad.route_lines("implement the new export command", tmp_path)) <= 8
         assert len(text) < 1200
 
-    def test_it_tells_the_agent_not_to_wait_for_a_human(self, tmp_path):
-        text = bmad.route_context("fix the crash in store.install", tmp_path)
-        assert "autonom" in text.lower()
+    def test_a_change_is_finished_but_approval_steps_still_hold(self, tmp_path):
+        """Not "work autonomously": that line competed with approval gates a
+        user adds on purpose, such as a brainstorming skill's HARD-GATE."""
+        lines = bmad.route_lines("fix the crash in store.install", tmp_path)
+        assert lines[-1] == bmad.CHANGE_CLOSE
+        assert "approval step" in bmad.CHANGE_CLOSE
+        assert "autonom" not in bmad.route_context(
+            "fix the crash in store.install", tmp_path).lower()
+
+    @pytest.mark.parametrize("prompt,kind", [
+        ("review the changes on this branch and tell me what could break",
+         "findings"),
+        ("compare the two caching options and recommend one", "findings"),
+        ("write the PRD for the policy engine", "artifact"),
+        ("prioritize the backlog for next sprint", "artifact"),
+        ("design the schema for the pulse feed", "artifact"),
+    ])
+    def test_findings_and_artifacts_get_no_build_contract(
+            self, tmp_path, prompt, kind):
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "README.md").write_text("x", encoding="utf-8")
+        (tmp_path / "Makefile").write_text("check:\n\ttrue\n", encoding="utf-8")
+        track = bmad.classify(prompt, tmp_path)
+        assert bmad.TRACKS[track].done == kind
+        lines = bmad.route_lines(prompt, tmp_path)
+        done = next(line for line in lines if line.startswith("Done means:"))
+        assert "tests:" not in done and "docs:" not in done
+        assert bmad.CHANGE_CLOSE not in lines
+        assert lines[-1] == done
+
+    def test_every_track_declares_what_it_delivers(self):
+        assert {name: t.done for name, t in bmad.TRACKS.items()} == {
+            "build": "change", "quality": "change", "docs": "change",
+            "ux": "change", "review": "findings", "discovery": "findings",
+            "product": "artifact", "planning": "artifact",
+            "architecture": "artifact",
+        }
+        assert set(bmad.DONE_KINDS) == {t.done for t in bmad.TRACKS.values()}
 
     def test_quality_prompts_lead_with_the_test_architect(self, tmp_path):
         text = bmad.route_context("add tests for catalog.scan_dir", tmp_path)
@@ -742,8 +836,39 @@ class TestRouteContext:
             "Done means: tests: add or update coverage under `tests/`, and run "
             "them · docs: update `README.md` wherever the change shows · "
             "gate: `make check` green, with real output",
-            "Work autonomously through to a finished, verified change; stop to "
-            "ask only when a choice would change what gets delivered.",
+            "Finish the change and verify it; stop only for a choice that "
+            "changes what gets delivered, or an approval step a repo guide or "
+            "a loaded skill requires.",
+        ]
+
+    def test_the_whole_review_banner_is_exactly_this(self, tmp_path):
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "Makefile").write_text("check:\n\ttrue\n", encoding="utf-8")
+        assert bmad.route_lines("review the changes on this branch", tmp_path) == [
+            "[BMAD autopilot] track: review",
+            "Lead: `bmad-tea` subagent — Murat, Master Test Architect. "
+            "Find the failure, not the style nit.",
+            "Support: `bmad-architect` (Winston) — spawn them with the Agent "
+            "tool, in parallel where the work is independent.",
+            "BMAD skill: `bmad-code-review` — invoke it if it is installed; "
+            "otherwise the persona's own playbook stands.",
+            "Done means: findings: each with its evidence (file:line, output or "
+            "source) · no edits unless asked; an edit gets tests and "
+            "`make check` like any change",
+        ]
+
+    def test_the_whole_discovery_banner_is_exactly_this(self, tmp_path):
+        assert bmad.route_lines("research how other CLIs pin their toolchains",
+                                tmp_path) == [
+            "[BMAD autopilot] track: discovery",
+            "Lead: `bmad-analyst` subagent — Mary, Business Analyst. "
+            "Ground it in sources before recommending.",
+            "Support: `bmad-pm` (John) — spawn them with the Agent tool, in "
+            "parallel where the work is independent.",
+            "BMAD skill: `bmad-deep-recon` — invoke it if it is installed; "
+            "otherwise the persona's own playbook stands.",
+            "Done means: findings: each with its evidence (file:line, output or "
+            "source) · no edits unless asked; an edit gets tests like any change",
         ]
 
     def test_no_persona_file_anywhere_means_no_subagent_is_named(self, tmp_path):
@@ -815,6 +940,12 @@ class TestOrientation:
 
     def test_it_names_the_command_that_turns_it_off(self):
         assert "boost bmad off" in bmad.orientation()
+
+    def test_the_house_rule_names_all_three_kinds_of_done(self):
+        rule = bmad.orientation().split("House rule:")[1]
+        assert "a change is done when its tests, its docs and its tracked item" in rule
+        assert "findings are done when each carries its evidence" in rule
+        assert "an artifact is done when it is\nwritten down and tracked" in rule
 
 
 # -------------------------------------------------------------------- personas
@@ -1042,11 +1173,18 @@ class TestOwnershipStamp:
             p.slug for p in bmad.PERSONAS if p.slug != "bmad-dev")
         assert (tmp_path / "bmad-dev.md").exists()
 
-    def test_every_persona_body_carries_the_done_contract(self):
+    CONTRACT = """A change: tests updated and actually run, documentation left true, any tracked
+roadmap or backlog item moved to match, and the repo's own gate green with
+output you have seen.
+Findings: each one with its evidence, and no edits unless you were asked.
+An artifact: the written document itself, with any tracked item moved to match —
+no code unless you were asked for a change, which then gets the contract above."""
+
+    def test_every_persona_body_states_the_contract_for_each_kind(self):
+        """`bmad-tea` leads quality (a change) and review (findings), so a
+        persona cannot carry one kind's contract."""
         for p in bmad.PERSONAS:
-            md = bmad.persona_markdown(p)
-            low = md.lower()
-            assert "test" in low and "doc" in low
+            assert self.CONTRACT in bmad.persona_markdown(p), p.slug
 
     def test_persona_descriptions_are_delegation_triggers(self):
         """Claude picks a subagent off `description`; it must say when to use it."""

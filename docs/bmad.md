@@ -60,8 +60,8 @@ BMAD skill: `bmad-build` — invoke it if it is installed; otherwise the persona
 Done means: tests: add or update coverage under `tests/`, and run them · docs: update
 `README.md` / `docs/` wherever the change shows · roadmap: create or claim the item under
 `docs/roadmap/items/` · gate: `make check` green, with real output · `CLAUDE.md` is binding
-Work autonomously through to a finished, verified change; stop to ask only when a choice
-would change what gets delivered.
+Finish the change and verify it; stop only for a choice that changes what gets delivered,
+or an approval step a repo guide or a loaded skill requires.
 ```
 
 Nine tracks (`build`, `quality`, `docs`, `planning`, `product`, `architecture`,
@@ -72,6 +72,16 @@ That last line is the point. The definition of done is read off the repository
 in front of you: your test directory, your docs, your roadmap items, your gate
 command. Documentation, testing and roadmap bookkeeping travel with the task
 instead of being remembered afterwards.
+
+What "done" means depends on what the track delivers. `build`, `quality`,
+`docs` and `ux` deliver a **change**, and get the contract above. `review` and
+`discovery` deliver **findings**: each with its evidence, and no edits unless
+the prompt asks for them. `product`, `planning` and `architecture` deliver an
+**artifact**: a written document with the roadmap item kept in step, and no
+code unless the prompt asked for a change. Both escapes matter: the tie-break
+puts real change requests on both kinds.
+Only a change gets the closing "finish and verify" line, and that line defers
+to any approval step your repo guide or a loaded skill requires.
 
 The router costs a question nothing. Acknowledgements, slash commands, short
 questions ("what does `scan_dir` do?", "are there tests for the parser?"),
