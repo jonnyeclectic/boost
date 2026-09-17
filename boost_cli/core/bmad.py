@@ -872,8 +872,8 @@ def orientation(host: str = hookhost.CLAUDE) -> str:
 %s
 
 Every substantive prompt arrives with a one-line routing banner naming the lead
-persona, the support personas, the BMAD skill for that track, and the definition
-of done for this repo. Follow it. Trivial asks get no banner — answer those
+persona, the support personas, the BMAD skill for that track when one fits, and
+the definition of done for this repo. Follow it. Trivial asks get no banner — answer those
 directly and skip the ceremony.
 
 BMAD v6 workflow skills, if installed (`boost bmad install`): plan with

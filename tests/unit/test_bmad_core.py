@@ -65,6 +65,11 @@ class TestPinnedRelease:
         assert not any(line.startswith("BMAD skill:") for line in lines)
         assert lines[3].startswith("Done means:")
 
+    def test_the_briefing_does_not_promise_a_skill_on_every_banner(self):
+        """`docs` routes at none, so "the BMAD skill for that track" was a
+        claim the banner stopped honouring."""
+        assert "the BMAD skill for that track when one fits" in bmad.orientation()
+
     def test_the_skills_that_need_a_runtime_are_real(self):
         assert set(bmad.RUNTIME_SKILLS) <= _pinned_skills()
 

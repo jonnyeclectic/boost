@@ -523,9 +523,9 @@ def _install(scope, modules, do_startup) -> int:
     scope = scope or "project"
     _require_npx()
     if scope == "global":
-        previous = _get_scope_state("global").get("skill_list")
+        before = _get_scope_state("global")
         ver, names = _copy_global_skills(modules)
-        dropped = _drop_retired_skills(previous, names)
+        dropped = _drop_retired_skills(before, names, modules)
         _set_scope_state("global", installed=True, skills=len(names),
                          skill_list=names, version=ver,
                          modules=modules.split(","), installed_at=util.now_iso())
@@ -596,7 +596,8 @@ def _copy_global_skills(modules) -> tuple[str, list[str]]:
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def _drop_retired_skills(previous, installed: list[str]) -> list[str]:
+def _drop_retired_skills(before: dict, installed: list[str],
+                         modules: str) -> list[str]:
     """Remove skills the last global install recorded and this one did not ship.
 
     The copy only replaces directories the new stage has, and upstream's own
@@ -604,8 +605,18 @@ def _drop_retired_skills(previous, installed: list[str]) -> list[str]:
     a skill a release retired (`bmad-document-project` in 6.12.0) survived
     every reinstall. Only *recorded* names go: another `bmad-*` directory may
     be the user's own.
+
+    **A narrower module set retires nothing.** `--modules` defaults to `bmm` on
+    every run, so `boost bmad install --scope global` after an earlier
+    `--modules bmm,cis` stages only bmm — and every cis skill would read as
+    "retired by the release" and be deleted. A run can only retire within the
+    modules it actually installed.
     """
+    previous = before.get("skill_list")
     if not isinstance(previous, list):
+        return []
+    had = before.get("modules")
+    if isinstance(had, list) and set(had) - set(modules.split(",")):
         return []
     dest = _skills_dir("global")
     dropped = []

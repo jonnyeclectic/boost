@@ -66,7 +66,10 @@ or an approval step a repo guide or a loaded skill requires.
 
 Nine tracks (`build`, `quality`, `docs`, `planning`, `product`, `architecture`,
 `ux`, `discovery`, `review`) each name a lead persona, the support personas to
-spawn alongside it, and the canonical BMAD v6 skill for that kind of work.
+spawn alongside it, and — where one fits — the canonical BMAD v6 skill for that
+kind of work. `docs` deliberately names none: BMAD 6.12.0 stopped installing
+`bmad-document-project`, and its replacement manages one block in `AGENTS.md`
+rather than documentation at large.
 
 That last line is the point. The definition of done is read off the repository
 in front of you: your test directory, your docs, your roadmap items, your gate

@@ -343,6 +343,36 @@ class TestGlobalInstallTracksWhatItShipped:
         assert escape.is_dir()
         assert gone.is_dir() == (not isinstance(record, list))
 
+    def test_a_narrower_module_set_retires_nothing(
+            self, boost, sandbox, monkeypatch, proj):
+        """`--modules` defaults to bmm, so the natural reinstall stages less
+        than the last one did — and every other module's skill would read as
+        retired by the release and be deleted."""
+        _installer(monkeypatch, "bmad-help", "bmad-brainstorm")
+        boost("bmad", "install", "--scope", "global", "--modules", "bmm,cis")
+        _installer(monkeypatch, "bmad-help")
+        r = boost("bmad", "install", "--scope", "global")
+        assert self._skills(sandbox) == {"bmad-help", "bmad-brainstorm"}
+        assert "no longer installs" not in r.out
+
+    def test_the_same_module_set_still_retires(
+            self, boost, sandbox, monkeypatch, proj):
+        _installer(monkeypatch, "bmad-help", "bmad-brainstorm")
+        boost("bmad", "install", "--scope", "global", "--modules", "bmm,cis")
+        _installer(monkeypatch, "bmad-help")
+        r = boost("bmad", "install", "--scope", "global", "--modules", "bmm,cis")
+        assert self._skills(sandbox) == {"bmad-help"}
+        assert "no longer installs: bmad-brainstorm" in r.out
+
+    def test_a_wider_module_set_still_retires(
+            self, boost, sandbox, monkeypatch, proj):
+        _installer(monkeypatch, "bmad-help", "bmad-old")
+        boost("bmad", "install", "--scope", "global")
+        _installer(monkeypatch, "bmad-help")
+        r = boost("bmad", "install", "--scope", "global", "--modules", "bmm,cis")
+        assert self._skills(sandbox) == {"bmad-help"}
+        assert "no longer installs: bmad-old" in r.out
+
     def test_names_the_skills_that_need_bmad_init(
             self, boost, sandbox, monkeypatch, proj):
         _installer(monkeypatch, "bmad-build", "bmad-build-auto", "bmad-help")
