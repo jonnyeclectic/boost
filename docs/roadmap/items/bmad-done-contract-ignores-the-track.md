@@ -2,14 +2,14 @@
 id: bmad-done-contract-ignores-the-track
 board: code
 section: dx
-status: next
+status: inflight
 category: "Agents · BMAD"
 complexity: M
 impact: High
 wow: 2
 note: a review or research ask is told to add tests and finish a change
 order: 321
-owner:
+owner: loop/bmad-done-contract
 pr:
 title: "<code>boost bmad</code> gives every track the build contract, so a review is told to finish a change"
 ---
