@@ -253,6 +253,12 @@ class TestPromptsThatAreNotTasks:
         """The accepted loss: "fix this:" over a paste goes silent."""
         assert bmad.classify("fix this:\n" + self.PYTEST) == "trivial"
 
+    def test_three_lines_can_be_a_paste(self):
+        assert bmad.classify("update it\n  x = 1\n  y = 2") == "trivial"
+
+    def test_the_typed_lines_of_a_paste_stay_separate_words(self):
+        assert bmad.classify("refactor\nupdate\n  x = 1\n  y = 2") == "build"
+
     def test_two_lines_are_not_a_paste(self):
         assert bmad.classify("update the flag\n  in the config") == "build"
 
