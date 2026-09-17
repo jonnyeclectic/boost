@@ -133,7 +133,7 @@
       <div class="stat"><b>20</b><span>Shipped</span></div>
       <div class="stat"><b>1</b><span>Next up</span></div>
       <div class="stat"><b>54</b><span>Planned</span></div>
-      <div class="stat"><b>461</b><span>Loop finds</span></div>
+      <div class="stat"><b>468</b><span>Loop finds</span></div>
       <!-- /ROADMAP:stats -->
     </div>
   </section>
@@ -7560,6 +7560,503 @@ its own pass rather than a bolt-on inside this PR. Left <code>inflight</code> ra
           <span class="m">Impact <b>Med</b></span>
           <span class="m">Wow <b class="wow">★★★★</b></span>
           <span class="m">`boost create --dir` answered a mistyped path with "file it at github.com/.../issues"</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="bmad-router-one-keyword-decides-the-track">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Agents · BMAD</span></div>
+        <h3>One incidental keyword decides the <code>boost bmad</code> track</h3>
+        <p><code>classify</code> counts distinct keyword patterns per track over the raw prompt and routes on
+the best score (<code>core/bmad.py:412</code>&ndash;<code>417</code>). Two hits are required only
+past <code>LONG_PROMPT_WORDS</code> (60, #630; <code>:415</code>), so any prompt of up to 60 words
+that clears the question and slash gates <b>routes on one match anywhere</b> &mdash; including
+words nobody meant as intent: a URL, a path, a flag, a ticket reference, the repo's own name.
+Replaying the origin/main classifier over one real prompt history (417 prompts, 348 unique, 6
+active days): <b>89 of 143 routed unique prompts were decided by exactly one keyword</b>. A single
+judge labelling 41 routed banners found the track or lead clearly wrong in <b>21 of 41</b>.
+
+<b>A wrong route costs more than silence.</b> The banner names a lead, asks for support subagents,
+sets a done-contract (tests, docs, and the gate when there is one) and says to work autonomously
+(<code>:536</code>&ndash;<code>553</code>). In a repo directory named <code>migrations</code>,
+&ldquo;list the last three commits in migrations&rdquo; gets a 643-char build banner &mdash; Amelia
+leads, Murat and Paige to be spawned, <code>make check</code> green &mdash; for a
+<code>git log</code>. The module already chose: it &ldquo;would rather under-route than talk over
+someone&rdquo; (<code>:387</code>&ndash;<code>388</code>).
+
+<b>Five collision classes, all single hits, reproduced on origin/main with synthetic prompts</b>
+(three spot-checked on the installed v1.2.112): <i>repo name</i> &mdash; &ldquo;list the last three
+commits in migrations&rdquo; in <code>migrations/</code> &rarr; build, &ldquo;list the new notebooks
+in benchmarks&rdquo; in <code>benchmarks/</code> &rarr; discovery; <i>flags</i> &mdash; &ldquo;rerun
+the installer with <code>--scope</code> global&hellip;&rdquo; &rarr; product; <i>URLs, paths,
+code</i> &mdash; <code>https://example.com/docs/&hellip;</code> &rarr; docs, <code>tail
+logs/build/server.log</code> &rarr; build, <code>`npm run build`</code> &rarr; build; <i>tracker
+words</i> &mdash; &ldquo;move story ABC-123 to in progress&rdquo; &rarr; product; <i>generic
+verbs</i> &mdash; &ldquo;update me when the CI run finishes&rdquo; &rarr; build. The hook already
+has the repo &mdash; <code>cwd</code> becomes <code>root</code>
+(<code>commands/bmad.py:342</code>&ndash;<code>344</code>) &mdash; but <code>route_lines</code>
+calls <code>classify(prompt)</code> bare (<code>core/bmad.py:529</code>).
+
+<b>Fix: stop scoring text that is not intent; do not raise the threshold.</b> Before scoring,
+<i>(1)</i> drop URLs, backtick spans, <code>--flag</code>/<code>-f</code> tokens and tracker-noun +
+ID pairs (<code>story ABC-123</code>); <i>(2)</i> a token containing <code>/</code> stops scoring
+for <code>build</code> but still counts for every other table, so <code>docs/README.md</code>
+stays docs; <i>(3)</i> <code>classify(prompt, root=None)</code>, fed by <code>route_lines</code>,
+drops whole-word matches of <code>Path(root).name</code>; <i>(4)</i> a build verb followed by
+<em>me</em>/<em>us</em> does not score. On a stdlib prototype: all <b>46</b> distinct prompts
+<code>test_bmad_core.py</code> sends through <code>classify</code> keep their verdict; <b>16 of
+18</b> synthetic misroutes go silent; build asks still route &mdash; 12/12 verb-first, 8/8 not
+(&ldquo;we need to fix the crash&hellip;&rdquo;), 4/4 late-verb &mdash; and 5/5 path-object asks
+keep their track. Small hand-written sets: they show which rule does the work, not a rate.
+
+<b>Threshold rules measured and declined.</b> Layered on <i>(1)</i>&ndash;<i>(4)</i>: two build hits
+or a head verb silences neither of the 2 left but routes <b>2 of 8</b> non-head and <b>0 of 4</b>
+late-verb asks; a verb in a clause's first six words routes <b>0 of 4</b> late-verb asks; making
+<code>add</code>/<code>update</code>/<code>create</code>-class verbs need a second hit silences one
+more but keeps only <b>6 of 12</b> short build asks and breaks <code>"update the flag"</code>
+(<code>test_bmad_core.py:142</code>). Stripping paths outright flips 3 of 5 path-object asks.
+<b>Residue:</b> &ldquo;add the meeting notes to my summary&rdquo; stays build; &ldquo;pull the
+comments on story ABC-123&hellip;&rdquo; goes docs on <code>\bcomments?\b</code>; a sibling repo's
+name still routes; and a cwd named after a keyword loses that word &mdash; in <code>tests/</code>,
+&ldquo;add tests for catalog.scan_dir&rdquo; flips quality &rarr; build.
+
+<b>Tests:</b> add <code>TestIncidentalKeywords</code> beside <code>TestClassifyTracks</code>
+(<code>tests/unit/test_bmad_core.py:173</code>): one <code>(prompt, repo_dirname, expected)</code>
+table with every repro as <code>trivial</code> except the two residues (pinned at today's track,
+so a later fix shows as a diff), the non-head, late-verb and path-object asks at their tracks,
+plus a <code>route_lines</code> case rooted at <code>tmp_path / "migrations"</code> so the name
+must reach <code>classify</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">89 of 143 routed prompts rode on a single keyword</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="bmad-router-reads-each-prompt-alone">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Agents · BMAD</span></div>
+        <h3>The BMAD router reads each prompt alone, so a pasted log, an &ldquo;ok update both and rerun&rdquo; and a yes/no question all get a banner</h3>
+        <p><b>The hook is handed the conversation and drops it.</b> <code>_route</code> (<code>commands/bmad.py:340</code>&ndash;<code>342</code>)
+reads <code>prompt</code> and <code>cwd</code> from a <code>UserPromptSubmit</code> payload that also carries
+<code>session_id</code>, <code>transcript_path</code> and (v2.1.196+) <code>prompt_id</code>, per Claude Code's hooks reference;
+Gemini's <code>BeforeAgent</code> input has the first two. So <code>classify()</code> (<code>core/bmad.py:392</code>) judges
+every message as if it opened a session, and one keyword buys a ~650-char banner whose last line opens &ldquo;Work autonomously
+through to a finished, verified change&rdquo; (<code>core/bmad.py:551</code>). A misrouted question becomes an invitation to edit.
+
+<b>Measured on one real prompt history, in aggregate.</b> Replaying origin/main's classifier over 669 history records
+from 6 active days: of 417 regular prompts, <b>147 (35%) get a banner</b> &mdash; 109 if the hook's <code>prompt</code>
+excludes pasted-text expansion, which is <em>unverified</em>. Of 318 unique prompts up to 2,000 chars, 60.7% classify
+trivial but 55.7% match no keyword at all, so the gates silence only 5.0 points of prompts that do hit one. And
+89 of the 143 routed unique prompts were decided by exactly one keyword. A <b>single judge</b> (an agent without prior
+turns) labelled 41 banners stratified by track: warranted 20, track or lead clearly wrong 21, <b>any clear failure 29</b>
+(~74% weighted by track size), fully right 3, &ldquo;Done means&rdquo; fit 5 (11 with partial). About half that history
+is the author's own tooling repos.
+
+<b>Four shapes, reproduced on origin/main</b> with synthetic prompts in a throwaway repo (banners 648&ndash;666 chars).
+<i>(a) Pasted output</i>, 4 of 5 routed: a 25-word pytest failure &rarr; <code>quality</code>; a <code>git status</code> paste
+&rarr; <code>build</code> on git's own words (<code>Changes not staged</code>, <code>use "git add &lt;file&gt;..." to update</code>);
+an 80-word npm log &rarr; <code>build</code>, clearing <code>LONG_PROMPT_WORDS</code> (<code>core/bmad.py:374</code>) on two hits,
+the word <code>build</code> and the <code>fix</code> of <code>npm audit fix</code>. The silent one, a Python traceback, just had
+no keyword. <i>(b) Replies</i>, 7 of 10: &ldquo;ok update both and rerun&rdquo; &rarr; <code>build</code>; &ldquo;sure, add a
+test for that too&rdquo; &rarr; <code>quality</code>, handing the lead to Murat mid-task. <i>(c) Yes/no questions</i>, 11 of 11:
+<code>_INFO_QUESTION</code> (<code>core/bmad.py:342</code>) knows only wh-words, so &ldquo;are there any tests for the
+parser?&rdquo; routes and &ldquo;what tests cover the parser?&rdquo; does not. <i>(d) Read-and-tell</i>, 4 of 5, the track
+picked by words inside the URL (<code>/changelog</code>, <code>docs.example.com/guide</code>, <code>api-schema-design</code>).
+
+<b>Fix, stateless, in <code>classify()</code>.</b> (1) An auxiliary opener (<code>is|are|do|does|did|has|have|should|can|could|would|will</code>)
+on a prompt ending in <code>?</code> is a question, except <code>can|could|would|will</code> + <code>you|we</code>, which is a
+request unless the verb is <code>explain|tell|describe|summarize</code>. That exception keeps
+<code>test_a_modal_request_is_not_trivial</code> (<code>tests/unit/test_bmad_core.py:74</code>) green: it pins &ldquo;can you
+fix the crash in store.install?&rdquo; as <code>build</code>. (2) <code>read|skim|look at</code> &hellip; <code>tell me|summarize</code>
+is a question unless a <code>then</code> clause follows; strip URLs before scoring. (3) Paste shape: 3+ lines, at least half
+machine-shaped (<code>$ </code>, <code>Traceback</code>, <code>File "&hellip;", line N</code>, <code>at</code> frames,
+<code>npm ERR!</code>, <code>path:line</code>, timestamps, indented lines); score only the rest and require two hits, the
+argument <code>LONG_PROMPT_WORDS</code> already makes.
+
+<b>Fix, per session, in the hook.</b> Record the last banner per <code>session_id</code> under <code>paths.state_dir()</code>,
+like <code>_state_path</code> (<code>commands/bmad.py:670</code>). A banner is a function of track and root alone, and Claude
+Code inserts <code>additionalContext</code> into the conversation where the hook fired, so a same-track banner in the same
+<code>cwd</code> repeats context the model already holds &mdash; skip it (Gemini's reference appends it &ldquo;for this turn
+only&rdquo;, so there that is unverified). A short reply (<code>yes|ok|sure|no|go ahead</code>, &le;12 words) gets none once
+the session has one. Clear the record on <code>SessionStart</code> <code>clear</code>/<code>compact</code> (the matcher at
+<code>commands/bmad.py:84</code> lacks <code>compact</code>). Reading <code>transcript_path</code> is best-effort: it is written
+asynchronously and may lag.
+
+<b>Prototyped in a scratch copy, not merged.</b> Stateless gates plus a stateless reply gate: all 109 tests in
+<code>test_bmad_core.py</code> pass, the repros route 0/5, 0/10, 0/11, 0/5, and 10 of 12 genuine-task controls still route.
+A first cut that called any auxiliary opener not followed by <code>you</code> a question routed only 4 of 12 further request
+probes (&ldquo;do the migration for the orders table&rdquo; went silent) and still bannered &ldquo;did you update the
+docs?&rdquo;; the rules above route 10 of 12 and silence all 4 question probes. Both lose &ldquo;fix this:&rdquo; over a pytest
+paste (accepted under &ldquo;rather under-route than talk over someone&rdquo;, <code>core/bmad.py:387</code>&ndash;<code>388</code>)
+and, to the reply gate, short replies that carry a task (&ldquo;ok, now implement the export command and add tests for it&rdquo;).
+Behind the session check that loss is mid-session only, where a lead and done-contract stand even if the reply changes the
+track &mdash; an accepted cost, not a solved one.
+
+<b>How to test.</b> A class in <code>tests/unit/test_bmad_core.py</code> beside <code>TestEvidenceScalesWithLength</code>
+(line 110): silence cases for all four shapes, the controls and request probes as must-route cases, the golden banner
+(line 396) unchanged; keep the session decision a pure function in <code>core/bmad.py</code> so this file covers it. The hook
+side extends <code>TestRoute</code> in <code>tests/functional/test_cli_bmad.py</code> (line 473), which already pipes JSON to
+<code>boost bmad route</code> under the <code>sandbox</code> fixture's fake HOME: same <code>session_id</code> twice &rarr; one
+banner, a new id &rarr; banner, corrupt state &rarr; exit 0.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">pastes, follow-up replies and yes/no questions get delegation banners</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="bmad-done-contract-ignores-the-track">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Agents · BMAD</span></div>
+        <h3><code>boost bmad</code> gives every track the build contract, so a review is told to finish a change</h3>
+        <p><code>route_lines</code> (<code>core/bmad.py:523</code>) takes the first four banner lines from the track
+and the last two ignore it: <code>done_checklist(signals)</code> (<code>:483</code>) has no
+track parameter, and the autonomy sentence (<code>:551</code>) is a literal. One prompt per track against
+one fixture repo gave <b>one distinct pair of closing lines across all 9 tracks</b>:<br>
+<code>Done means: tests: add or update coverage under `tests/`, and run them · docs: update `README.md` / `docs/` wherever the change shows · gate: `make check` green, with real output · `CLAUDE.md` is binding</code><br>
+<code>Work autonomously through to a finished, verified change; stop to ask only when a choice would change what gets delivered.</code>
+
+<b>Repro</b> (throwaway repo with <code>tests/</code>, <code>docs/</code>, <code>README.md</code>,
+<code>CLAUDE.md</code>, and a <code>Makefile</code> with <code>check:</code>).
+<code>boost bmad route "review the changes on this branch and tell me what could break" --plain</code>
+names Murat (<code>bmad-tea</code>) as lead with <code>bmad-code-review</code>, then defines done as new
+coverage, updated docs and a finished, verified change. <code>"compare the two caching options and recommend one"</code>,
+<code>"write the PRD for the policy engine"</code> and <code>"prioritize the backlog for next sprint"</code>
+get the same two lines. In an empty repo the comparison is told <code>tests: cover the change … docs: write down what changed</code>, but nothing changed.
+The shared lines are 48% of the fixture's review banner (326 of 673 chars) and 41% in the empty repo.
+
+<b>Against real prompts the clause seldom fits.</b> Replaying the origin/main classifier over one
+profile's history (417 ordinary prompts over 6 active days, roughly half from tooling repos): 147 (35%)
+would get a banner, or 109 if pasted text is not in the hook's <code>prompt</code> field (not yet
+checked). A <em>single judge</em> (an agent) labelled 41 routed banners, sampled by track: <code>Done means</code>
+fit <b>5 of 41</b> (11 counting partial fits).
+
+<b>The same contract appears in three places, and one was a deliberate choice.</b> The autopilot item
+made tests and docs unconditional (&ldquo;no doc change needed&rdquo; is a conclusion to reach), and
+<code>tests/unit/test_bmad_core.py:331</code> enforces that. It is right for a change and wrong for an
+answer. Every persona file repeats the contract (<code>_persona_text</code>,
+<code>core/bmad.py:663&ndash;667</code>: &ldquo;tests updated and actually run, documentation left true …&rdquo;),
+so the <code>bmad-analyst</code> a discovery banner hands off to brings it back. The SessionStart
+briefing says to follow the banner (<code>:576</code>) and ends on a tests-docs-item house rule
+(<code>:586</code>).
+
+<b>The autonomy line competes with approval gates users add on purpose</b>, such as the
+<code>HARD-GATE</code> in superpowers' <code>brainstorming</code> skill (no implementation until the user
+approves) or a team rule requiring confirmation before a change that affects production. The banner is
+<code>UserPromptSubmit</code> <code>additionalContext</code> (<code>commands/bmad.py:354</code>), added
+again on every routed prompt. <b>Untested:</b> which instruction a model follows when they
+conflict. Softening the line to defer to the repo guide would not cover this: the <code>is binding</code>
+clause only appears when a guide file exists (<code>core/bmad.py:514&ndash;516</code>), and a plugin skill is not a guide file.
+
+<b>Fix: store the kind of done on <code>Track</code></b> (<code>core/bmad.py:75</code>) and pass it to
+<code>done_checklist(signals, done)</code>. <i>change</i> (build, quality, docs, ux): today's clauses,
+unchanged. <i>findings</i> (review, discovery): &ldquo;findings with evidence, no edits unless
+asked&rdquo;. The &ldquo;unless asked&rdquo; matters because the tie-break sends <code>"fix the lint
+errors in the scanner"</code> to review and <code>"investigate why the export crashes and fix it"</code>
+to discovery. <i>artifact</i> (product, planning, architecture): &ldquo;a written artifact, no
+code&rdquo;, keeping the roadmap and guide clauses. Drop the autonomy line from
+findings and artifact tracks. On change tracks, replace it with wording that does not depend on a
+guide file: finish and verify, and still honour any approval step that the guide or a loaded skill
+requires. <code>_persona_text</code> should state the contract for each kind, since
+<code>bmad-tea</code> leads both quality and review. The house rule should name all three kinds.
+
+<b>Tests go in <code>tests/unit/test_bmad_core.py</code>.</b> Assert every <code>TRACKS</code> entry
+declares a kind, and that no findings or artifact banner has a <code>tests:</code> clause.
+Add verbatim review and discovery banners next to <code>test_the_whole_banner_is_exactly_this</code>
+(<code>:396</code>), whose build pin keeps its <code>Done means</code> line and takes the new closing line.
+Limit <code>:331</code> to change tracks. <code>:376</code> pins <code>autonom</code> on one build banner:
+move it to the new wording and assert the line is absent from findings and artifact banners.
+<code>:688</code> only checks that each persona file mentions tests and docs, so pin the per-kind persona
+contract directly. Out of scope: router accuracy (same single judge: track or lead clearly wrong on
+21 of 41) is a separate defect.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m hi">Impact <b>High</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">a review or research ask is told to add tests and finish a change</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="bmad-route-ignores-autopilot-state">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Agents · BMAD</span></div>
+        <h3><code>bmad route</code> never checks autopilot state, so any hook <code>off</code> missed keeps routing</h3>
+        <p>The two autopilot hooks disagree about what decides whether they speak. <code>_orient</code>
+(<code>boost_cli/commands/bmad.py:525-531</code>) prints only when its scope's state says so, and its hook names the
+scope (<code>:266-268</code>). <code>_route</code> (<code>:331-356</code>) reads the prompt and the payload
+<code>cwd</code> and nothing else, and its hook is a bare <code>&lt;launcher&gt; bmad route || true</code>
+(<code>:269-270</code>). Only <code>status</code> reads the <code>autopilot</code> flag, and it already applies the
+right rule: on means state <em>and</em> hook (<code>:625</code>, pinned by
+<code>test_autopilot_reads_as_off_when_the_hook_is_gone</code>). <code>off</code> works only because it deletes the
+hook, so any copy it misses keeps routing. Replayed once over one real prompt history, the router bannered <b>147 of
+417</b> regular prompts (35%; 109 if pasted text is not part of the hook's <code>prompt</code> field, which was not
+checked), averaging ~163 tokens.
+
+<b>Copies it misses are ordinary. Two were reproduced in a throwaway HOME.</b> <i>(1) A worktree or second
+checkout.</i> <code>on --scope project</code> writes the hook into <code>.claude/settings.json</code>, which Claude
+Code's docs tell teams to commit, but keys state by the absolute checkout path (<code>:692-693</code>). In a copy of
+the checkout, <code>status</code> reads <code>project autopilot=off 7 personas router=on briefing=on</code>,
+<code>orient</code> prints <b>0 bytes</b> and <code>route</code> prints <b>711 bytes</b> of hook JSON.
+<i>(2) The restore net.</i> Every hook write that changes the file snapshots the prior version into
+<code>claude-settings-history/</code> (<code>boost_cli/core/claude_settings.py:19-21, 88-124</code>). <code>off</code>
+removes the two hooks in two saves, so the last snapshot it writes holds <em>only</em> the router. Copy it back and
+state says <code>autopilot:false</code>, no personas are on disk, the hook still sends a <b>594-char</b> banner, and
+<code>status</code> suggests turning the autopilot on (<code>commands/bmad.py:632-633</code>).
+
+<b>The first <code>on</code> reaches running sessions before its personas can.</b> The hooks docs say edits to hooks
+in settings files &ldquo;are normally picked up automatically by the file watcher&rdquo;. The sub-agents docs say
+the agents-directory watcher &ldquo;covers only directories that existed when the session started&rdquo;, and
+<code>write_personas</code> creates <code>~/.claude/agents</code> when it is absent (<code>core/bmad.py:680</code>).
+Read together (inferred from the docs, not observed in a live session), a first install that creates the directory
+can start banners in open sessions before any restart, naming a lead subagent and support personas those sessions
+cannot load. The command only says &ldquo;restart your agent session to pick up the new subagents&rdquo;
+(<code>commands/bmad.py:289-291</code>), not that the banners are already live.
+
+<b>Fix.</b> <i>(1)</i> Install <code>&lt;launcher&gt; bmad route --scope &lt;scope&gt; || true</code> and pass
+<code>args.scope</code> through (<code>commands/bmad.py:120</code>). When <code>_route</code> runs as a hook (no
+positional prompt, no <code>--plain</code>), it returns 0 silently inside its existing <code>try</code> unless that
+scope's state has <code>autopilot</code>. Project scope looks up the payload <code>cwd</code> with the same exact
+key <code>_orient</code> uses (<code>:692-693</code>). A nearest-parent lookup would route in a worktree nested under
+the repo while the briefing stays silent, which is this defect again. A hook with no <code>--scope</code>, as on
+every current install, accepts either scope until the next <code>on</code> replaces it. A corrupt state file reads as
+empty, so the router stays silent. <i>(2)</i> For a live autopilot whose persona files are gone, drop the Lead and Support lines when the
+lead's <code>.md</code> is in neither <code>~/.claude/agents</code> nor the project's. Check with
+<code>persona_state()</code> (<code>core/bmad.py:707-720</code>), not <code>installed_personas()</code>
+(<code>:693-704</code>), which requires an unedited digest and would drop the lead for anyone who hand-edited
+<code>bmad-dev.md</code>. <i>(3)</i>
+<code>on</code> checks <code>agents.is_dir()</code> before writing. If the directory is new, say that banners can
+start in open sessions immediately and a restart is needed to use the personas. If it already existed, drop the
+restart line.
+
+<b>Checked and left alone.</b> <code>off</code> leaves an empty agents directory. Keep it, because it lets the
+<em>next</em> <code>on</code> reach running sessions without a restart.
+
+<b>Tests.</b> In <code>tests/functional/test_cli_bmad.py</code>,
+<code>TestRoute.test_emits_the_hook_json_contract</code> and
+<code>test_uses_the_cwd_the_hook_reports_not_its_own</code> assert a banner where <code>on</code> never ran. They
+pin the defect, so they should run <code>on</code> first. So should
+<code>test_trivial_prompts_produce_no_output_at_all</code> and <code>test_a_project_signal_failure_still_exits_zero</code>,
+which would otherwise pass vacuously once state gates the router. Add <code>TestRoute</code> cases for state off
+(empty stdout, exit 0), the second-checkout repro, a corrupt state file (as in
+<code>TestOrient.test_a_broken_state_file_never_breaks_the_session</code>), and positional or <code>--plain</code>
+input still printing. <code>TestAutopilotOn</code> should check <code>--scope global</code> on the route hook and
+split its <code>"restart"</code> assertion by whether the directory existed. Also add a personas-absent case to
+<code>TestRouteContext</code> in <code>tests/unit/test_bmad_core.py</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">the briefing hook checks state, the router never does</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="bmad-roster-drifted-from-bmad-6-12">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Agents · BMAD</span></div>
+        <h3>The autopilot routes docs at a skill BMAD 6.12 no longer installs, and no test would notice</h3>
+        <p><code>core/bmad.py</code> hard-codes upstream skill names in persona <code>skills</code> and track
+<code>skill</code>, while <code>boost bmad install</code> fetches <code>bmad-method@latest</code>
+(<code>commands/bmad.py:410</code>). The tests check the two tables only against <em>each other</em>
+(<code>tests/unit/test_bmad_core.py:207</code>) and <code>orientation()</code> against a three-name
+denylist (<code>:431</code>), so a name that goes stale in both tables passes.
+
+<b>Against a real install, one name is gone.</b> A pinned <code>bmad-method@6.12.0</code> install
+(<code>--tools claude-code --modules bmm</code>) wrote <b>29</b> skills, matching its
+<code>skill-manifest.csv</code> <code>canonicalId</code> column exactly. <b>12 of the 13</b> names in
+<code>PERSONAS</code>/<code>TRACKS</code> are present, as are all 11 in <code>orientation()</code>. The missing
+one is <code>bmad-document-project</code>, the docs track's skill (<code>core/bmad.py:263</code>) and Paige's
+only one (<code>:229</code>). v6.11.0 turned it into a <code>v6-shims/</code> forwarder for
+<code>bmad-project-context</code> (#2674), and v6.12.0 made shims opt-in on fresh installs. boost passes
+no <code>--shims</code>, so the install records <code>installShims: false</code>. Every docs banner still
+says <code>invoke it if it is installed</code> (<code>:548</code>). Paige also supports the catch-all
+<code>build</code> track (<code>:256</code>), so build banners also ask for a subagent whose file names that skill.
+
+<b>The shipped item's account of Paige is half right.</b> &ldquo;On hiatus&rdquo; matches 6.12.0's
+<code>removals.txt</code>, but it also says <code>bmad-agent-tech-writer</code> &ldquo;never existed to
+invoke&rdquo;. <code>removals.txt</code> lists it under removed bmm agents as <em>&ldquo;retired —
+capabilities were generic LLM defaults&rdquo;</em> (v6.11.0, #2658). That is the same release that shimmed
+the one skill boost gave her.
+
+<b><code>install --scope global</code> leaves the build skill broken.</b> Run from origin/main against a
+throwaway HOME, it printed <code>installed 29 BMAD skill(s) globally</code>. <code>bmad-build</code> and
+<code>bmad-build-auto</code>, the only 2 of the 29 that do this, start by running
+<code>{project-root}/_bmad/scripts/render_skill.py</code> and HALT if it fails. In a repo without
+<code>_bmad/</code> that is <code>uv</code> exit 2, <code>Failed to spawn … No such file or directory</code>.
+The install prints one dim line about <code>boost bmad init</code> (<code>commands/bmad.py:448</code>)
+that does not name those skills.
+
+<b>The global path also hides drift.</b> On either scope, installer output is captured
+(<code>commands/bmad.py:415</code>), and only a failure's last line is shown (<code>:422</code>). Global
+state records no version (<code>:444</code>, unlike <code>:472</code>), and the staged
+<code>manifest.yaml</code> that has one is deleted (<code>:496</code>). The copy replaces only directories
+the new stage has (<code>:486</code>). Upstream's own cleanup removes what the previous manifest listed plus
+<code>removals.txt</code> entries, but it runs inside the empty stage, never against
+<code>~/.claude/skills</code>. With the installer stubbed to emit the real 6.12.0 output, a pre-existing
+<code>bmad-document-project</code> survived (30 directories on disk).
+
+<b>Fix.</b> <i>(1)</i> Add <code>BMAD_VERSION = "6.12.0"</code> in <code>core/bmad.py</code> and install that,
+not <code>@latest</code>. <i>(2)</i> Check in that install's <code>canonicalId</code> column as a versioned
+snapshot. Add a test in <code>tests/unit/test_bmad_core.py</code> that every persona, track and
+<code>orientation()</code> skill is in it and that its version equals <code>BMAD_VERSION</code>. A pin bump
+without a regenerated snapshot then fails CI, and the denylist at <code>test_bmad_core.py:431</code> is
+redundant. <i>(3)</i> Make <code>Track.skill</code> optional, drop it for <code>docs</code> (so the banner
+omits that line and <code>:207</code> skips the row), and give Paige <code>bmad-project-context</code> for
+agent-instruction files only. <i>(4)</i> Have <code>install --scope global</code> name the build skills
+that need <code>boost bmad init</code> per repo, and record the staged version and skill list. On reinstall,
+it should remove recorded skills the new stage lacks, not every <code>bmad-*</code> directory, since some may
+be the user's own. Extend <code>tests/functional/test_cli_bmad.py</code>, which asserts <code>@latest</code>
+(<code>:74</code>) and reinstalls the same three skills twice (<code>:264</code>).
+
+<b>Declined: routing <code>docs</code> at <code>bmad-project-context</code>.</b> Upstream names it as the
+replacement, but it manages a block in <code>AGENTS.md</code> (&ldquo;Use when invoked by name&rdquo;), and
+the shim says deeper docs material is &ldquo;not part of that block&rdquo;. Sending every README edit there
+would trade a dead pointer for a misroute.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">docs routes at a skill no default 6.12 install contains</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="bmad-gemini-gets-claude-hook-output">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Agents · BMAD</span></div>
+        <h3>On Gemini, the <code>bmad on</code> briefing reaches the user and never the model</h3>
+        <p><code>boost bmad on</code> installs both autopilot hooks on Claude always, and on Gemini whenever
+<code>gemini</code> is on <code>PATH</code> <em>or</em> <code>~/.gemini/</code> exists
+(<code>commands/bmad.py:177</code>). It has no <code>--host</code>
+(<code>:98</code>–<code>112</code>), so Claude-only means hand-editing Gemini's settings, and the
+next <code>bmad on</code> re-adds what was deleted. The <a href="#bmad-hooks-all-hosts">fan-out</a> translated event names and timeout
+units, but left stdout in Claude's format. Checked against <b>Gemini CLI 0.57.0</b>: its bundled
+hook runner was read, then imported and driven against main's hooks in a throwaway
+<code>HOME</code> with only an empty <code>.gemini/</code>.
+
+<b>The router works, so this is narrower than hooks that do nothing.</b> Gemini's
+<code>BeforeAgent</code> input has <code>prompt</code> and <code>cwd</code> under the names
+<code>_route</code> reads (<code>:341</code>–<code>342</code>), and <code>hookEventName</code> is
+never validated, so the hardcoded <code>"UserPromptSubmit"</code> (<code>:353</code>) is harmless.
+Measured: <b><code>outputFormat: json</code>, 643 chars of <code>additionalContext</code></b> for a
+build-track banner.
+
+<b>The briefing never reaches the model.</b> <code>_orient</code> prints plain text
+(<code>:530</code>), which Claude Code adds to context. Gemini turns non-JSON stdout into
+<code>{decision: "allow", systemMessage: text}</code> and adds only <code>additionalContext</code>
+to history. Measured: <b><code>systemMessage</code> 1,297 chars, <code>additionalContext</code>
+0</b>. The 26-line briefing is shown to the user as an info message instead, on
+<code>startup</code>, <code>resume</code> and <code>/clear</code>.
+
+<b>What does reach the model is framed as data, and names tools Gemini lacks.</b> Gemini wraps
+<code>additionalContext</code> in <code>&lt;hook_context&gt;</code>, and its default system prompt
+says to treat that as "<b>read-only data</b> or <b>informational context</b>". The banner is all
+instructions. It names a <code>bmad-dev</code> subagent and spawning support personas with the Agent
+tool (<code>core/bmad.py:538</code>, <code>:543</code>), and the briefing puts the personas in
+<code>~/.claude/agents</code> (<code>:570</code>). Gemini's subagent tool is
+<code>invoke_agent</code>, and boost writes no personas for it. <em>Not measured:</em> whether a
+Gemini model follows the banner anyway, since no live model call was made. <em>Also seen:</em>
+Gemini parses stderr when stdout is empty, so a launcher that rejects the action shows its argparse
+error as a <code>systemMessage</code> despite <code>|| true</code> (simulated once, 330 chars).
+
+<b>Proposed fix.</b> <i>(1)</i> <code>bmad on</code> and <code>startup on</code> take <code>--host
+claude|gemini|auto</code>, the choices <code>boost hooks --host</code> has
+(<code>commands/hooks.py:45</code>), with <code>auto</code> as today's evidence rule. <i>(2)</i>
+Gemini's hooks run <code>bmad route --host gemini</code> and <code>bmad orient … --host
+gemini</code>. Claude's commands stay byte-identical. <i>(3)</i> A pure
+<code>hookhost.context_output(host, event, text)</code> formats stdout: Claude's is unchanged, and
+Gemini always gets JSON, with <code>hookEventName</code> from <code>translate()</code> and the text in
+<code>additionalContext</code>. That reaches the model on startup and resume, not after
+<code>/clear</code>, whose Gemini path reads only <code>systemMessage</code>. <i>(4)</i>
+<code>route_lines</code> and <code>orientation</code> take the host. On Gemini the lead is a role
+to adopt, with no subagent, Agent tool or <code>~/.claude</code> wording.
+
+<b>Tests.</b> <code>tests/unit/test_hookhost.py</code>: for each host and both events, Gemini output
+passes <code>json.loads</code> with the text in <code>additionalContext</code> (plain text is the
+regression), and Claude output matches today's bytes. <code>tests/unit/test_bmad_core.py</code>: the
+Gemini banner and briefing name no subagent, Agent tool or <code>~/.claude</code>. Parametrize
+<code>test_emits_the_hook_json_contract</code> by host
+(<code>tests/functional/test_cli_bmad.py:480</code>, which pins <code>"UserPromptSubmit"</code> at
+<code>:492</code>). In <code>tests/functional/test_bmad_all_hosts.py</code>, assert that Gemini's
+commands carry <code>--host gemini</code> and that <code>--host claude</code> never writes
+<code>~/.gemini/settings.json</code>.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>M</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★</b></span>
+          <span class="m">gemini takes the banner but shows the briefing to the user</span>
+        </div>
+      </article>
+
+      <article class="cap rcard" id="bmad-personas-delegate-outside-the-router">
+        <div class="head"><span class="pill next">Next</span><span class="cat">Agents · BMAD</span></div>
+        <h3>Persona descriptions say <code>Use PROACTIVELY</code>, so the router's silence governs only the banner</h3>
+        <p><code>boost bmad on</code> gives Claude Code two routes to a persona, and only one goes through the router.
+The banner is gated: <code>classify</code> returns <code>trivial</code> for slash commands and
+<code>no bmad</code> (<code>boost_cli/core/bmad.py:402</code>), short informational questions (<code>:407</code>)
+and thin keyword evidence (<code>:415</code>). The other route is the <code>description:</code> line of the
+seven persona files written into <code>~/.claude/agents/</code> (<code>boost_cli/commands/bmad.py:258</code>),
+which <code>persona_description</code> renders as <code>&lt;Name&gt;, &lt;Title&gt; (BMAD &lt;module&gt;). Use
+PROACTIVELY for &lt;triggers&gt;.</code> (<code>boost_cli/core/bmad.py:594</code>). Neither that line nor the
+persona body (<code>:642</code>) ties spawning to the router; the body's one mention has Amelia read the gate
+command off its banner (<code>:91</code>).
+
+<b>Claude Code reads that line as a delegation rule.</b> The sub-agents docs define <code>description</code>
+as &ldquo;When Claude should delegate to this subagent&rdquo;, name it alongside the request and current
+context as what automatic delegation is based on, and advise: &ldquo;To encourage proactive delegation,
+include phrases like &lsquo;use proactively&rsquo; in your subagent's description field.&rdquo; So the
+router's tuned silence and the <code>no bmad</code> opt-out decide whether a banner is added, not whether a
+persona gets spawned.
+
+<b>The repo's own silent-prompt fixtures read like the triggers.</b> <code>what does scan_dir do?</code>,
+<code>fix the flaky test in test_catalog, no bmad</code> and <code>/code-review fix the failing tests in the
+catalog scanner</code> (<code>tests/unit/test_bmad_core.py:48</code>, <code>:68</code>, <code>:86</code>) all
+classify <code>trivial</code> with a 0-char banner on origin/main, yet Paige covers &ldquo;explaining a system
+to the next person who touches it&rdquo;, Murat &ldquo;flaky suites&rdquo; and Amelia &ldquo;fixing a bug
+&hellip; or any change that ends in edited source files&rdquo; (<code>boost_cli/core/bmad.py:183</code>&ndash;<code>218</code>).
+Replayed over one real Claude Code profile's history (318 unique non-slash prompts up to 2,000 chars, 6 active
+days), <b>60.7%</b> classify trivial and <b>55.7%</b> match no keyword. Little pushes back. The
+<code>SessionStart</code> briefing says &ldquo;Trivial asks get no banner &mdash; answer those directly&rdquo;
+(<code>:576</code>), but also that personas &ldquo;are delegated to with the Agent tool&rdquo; (<code>:570</code>),
+and its hook does not fire on compaction (matcher <code>startup|resume|clear</code>,
+<code>boost_cli/commands/bmad.py:84</code>). A <code>no bmad</code> prompt carries its own words, but nothing
+says they cover the personas.
+
+<b>Unmeasured, and the measurement could close this item.</b> Nobody has counted delegations on silent
+prompts. Banner cost is countable (mean ~650 chars, ~163 tokens on that profile), while a description-triggered
+spawn would be a whole subagent run that no banner count sees. That is inference, but it limits the claim that
+the router &ldquo;costs a question nothing&rdquo; (<code>docs/bmad.md:76</code>,
+<code>boost_cli/commands/bmad.py:14</code>) to the banner. Measure from a HOME with no persona files or boost
+hooks: run each router-trivial prompt (the fixtures plus the trivial slice of a real history) as
+<code>claude -p &lt;prompt&gt; --output-format stream-json --verbose</code> with the briefing via
+<code>--append-system-prompt</code>, in three arms that differ only in the session-only <code>--agents</code>
+flag (no personas, shipped descriptions, fixed descriptions). Count <code>Agent</code> <code>tool_use</code>
+blocks whose <code>subagent_type</code> starts with <code>bmad-</code>, in messages with a null
+<code>parent_tool_use_id</code>. Cost is on the stream's last line. A fourth arm runs routed prompts with the
+real hook via <code>--settings</code>, to check that the fix still delegates when the slug arrives in hook-added
+context rather than typed by the user. If the shipped arm spawns no more <code>bmad-*</code> subagents than the
+no-persona arm, record that here and close the item.
+
+<b>Proposed fix: make the banner the trigger.</b> Drop <code>Use PROACTIVELY</code> and have
+<code>persona_description</code> say when the persona applies, e.g. <code>Amelia, Senior Software Engineer
+(BMAD bmm). Use when a [BMAD autopilot] routing banner names bmad-dev, or the user asks for it by name.
+Covers implementing a feature, fixing a bug, &hellip;</code>. The banner already names lead and support by
+slug, and the docs say that when you name a subagent in your prompt &ldquo;Claude typically delegates&rdquo;.
+Silent prompts would then leave only the briefing's roster pointing at a persona. If the conditional wording
+fails the measurement, fall back to plain scope descriptions with no imperative. Until the fix lands,
+<code>permissions.deny</code> on <code>Agent(bmad-dev)</code> and the rest stops the spawns but blocks
+banner-led delegation too. <code>docs/bmad.md:76</code>&ndash;<code>78</code> should say that the opt-out and
+the silence apply only to the banner. That doc change needs no measurement and can land now.
+
+<b>Tests.</b> Extend <code>tests/unit/test_bmad_core.py</code>.
+<code>TestPersonaFiles.test_the_frontmatter_block_is_exactly_this</code> (<code>:485</code>) pins Sally's
+description byte for byte and must take the new text. <code>test_persona_descriptions_are_delegation_triggers</code>
+(<code>:694</code>) checks only length and that there is no newline. It should also assert that every
+description lacks <code>proactively</code> in any case and contains its persona's slug.
+<code>test_explicit_opt_out_is_honored</code> (<code>:71</code>) proves only that the classifier stays silent,
+and no unit test can observe delegation, so the headless run is the acceptance check. Only re-running
+<code>boost bmad on</code> rewrites unedited persona files (<code>boost_cli/core/bmad.py:672</code>), so the
+release note must tell users to re-run it.</p>
+        <div class="meta">
+          <span class="m">Complexity <b>S</b></span>
+          <span class="m">Impact <b>Med</b></span>
+          <span class="m">Wow <b class="wow">★★★</b></span>
+          <span class="m">router silence is banner-only, and nobody has counted</span>
         </div>
       </article>
       <!-- /ROADMAP:cards -->
