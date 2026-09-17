@@ -90,7 +90,10 @@ finished and verified change — so "review the changes on this branch" was told
 to add tests and finish a change, and "compare the two caching options" was
 told to document what changed when nothing had. A *change* ends in edited
 source; *findings* (review, discovery) end in an answer with its evidence; an
-*artifact* (product, planning, architecture) ends in a written document.
+*artifact* (product, planning, architecture) ends in a written document. Neither
+of the last two refuses work the prompt asked for: the tie-break sends
+"implement the spec in specs/retry.md" to *product* on the word "spec", and a
+flat "no code" would tell the model not to do what it was just asked to do.
 """
 
 
@@ -701,8 +704,10 @@ def done_checklist(signals: dict, done: str = "change") -> list[str]:
     appear only when the repo actually has one, because an instruction to
     update a file that does not exist teaches the agent to ignore the whole
     banner. *Findings* and *artifacts* are not changes, so they get no tests or
-    docs clause: they are done when the answer or the document is. The "unless
-    asked" matters — "fix the lint errors in the scanner" routes to review.
+    docs clause: they are done when the answer or the document is. Both carry
+    an "unless asked" escape, because the tie-break routes real change requests
+    onto them — "fix the lint errors in the scanner" goes to review, and
+    "implement the spec in specs/retry.md" to product.
     """
     guide = signals.get("guide")
     binding = ["`%s` is binding" % guide] if guide else []
@@ -715,7 +720,8 @@ def done_checklist(signals: dict, done: str = "change") -> list[str]:
         roadmap = signals.get("roadmap")
         tracked = (["roadmap: create or claim the item under `%s`" % roadmap]
                    if roadmap else [])
-        return ["a written artifact, no code", *tracked, *binding]
+        return ["a written artifact; no code unless the prompt asks for a "
+                "change, which then gets the change contract", *tracked, *binding]
 
     items: list[str] = []
 
@@ -911,8 +917,8 @@ A change: tests updated and actually run, documentation left true, any tracked
 roadmap or backlog item moved to match, and the repo's own gate green with
 output you have seen.
 Findings: each one with its evidence, and no edits unless you were asked.
-An artifact: the written document itself, no code, with any tracked item moved
-to match.
+An artifact: the written document itself, with any tracked item moved to match —
+no code unless you were asked for a change, which then gets the contract above.
 
 If you could not finish a part of it, say which part and why — do not narrow
 the task silently.

@@ -77,7 +77,9 @@ What "done" means depends on what the track delivers. `build`, `quality`,
 `docs` and `ux` deliver a **change**, and get the contract above. `review` and
 `discovery` deliver **findings**: each with its evidence, and no edits unless
 the prompt asks for them. `product`, `planning` and `architecture` deliver an
-**artifact**: a written document, no code, with the roadmap item kept in step.
+**artifact**: a written document with the roadmap item kept in step, and no
+code unless the prompt asked for a change. Both escapes matter: the tie-break
+puts real change requests on both kinds.
 Only a change gets the closing "finish and verify" line, and that line defers
 to any approval step your repo guide or a loaded skill requires.
 

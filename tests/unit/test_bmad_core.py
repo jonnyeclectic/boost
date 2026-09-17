@@ -685,14 +685,33 @@ class TestDoneChecklist:
 
     def test_an_artifact_is_written_not_coded_and_keeps_the_roadmap(self, tmp_path):
         assert bmad.done_checklist(self._full_repo(tmp_path), "artifact") == [
-            "a written artifact, no code",
+            "a written artifact; no code unless the prompt asks for a change, "
+            "which then gets the change contract",
             "roadmap: create or claim the item under `docs/roadmap/items/`",
             "`CLAUDE.md` is binding",
         ]
 
     def test_an_artifact_in_a_bare_repo_is_just_the_artifact(self, tmp_path):
         assert bmad.done_checklist(bmad.project_signals(tmp_path), "artifact") == [
-            "a written artifact, no code"]
+            "a written artifact; no code unless the prompt asks for a change, "
+            "which then gets the change contract"]
+
+    @pytest.mark.parametrize("kind", ["findings", "artifact"])
+    def test_neither_kind_refuses_work_that_was_asked_for(self, tmp_path, kind):
+        """The tie-break sends real change requests onto both kinds: "fix the
+        lint errors in the scanner" is review, "implement the spec in
+        specs/retry.md" is product. A flat "no code" contradicts the prompt."""
+        line = " ".join(bmad.done_checklist(bmad.project_signals(tmp_path), kind))
+        assert "unless" in line and ("asked" in line or "asks" in line)
+
+    def test_an_edit_request_that_tie_breaks_onto_product_is_not_told_no_code(
+            self, tmp_path):
+        assert bmad.classify("implement the spec in specs/retry.md",
+                             tmp_path) == "product"
+        done = next(ln for ln in
+                    bmad.route_lines("implement the spec in specs/retry.md", tmp_path)
+                    if ln.startswith("Done means:"))
+        assert "no code unless the prompt asks for a change" in done
 
     def test_the_default_kind_is_a_change(self, tmp_path):
         signals = self._full_repo(tmp_path)
@@ -1158,8 +1177,8 @@ class TestOwnershipStamp:
 roadmap or backlog item moved to match, and the repo's own gate green with
 output you have seen.
 Findings: each one with its evidence, and no edits unless you were asked.
-An artifact: the written document itself, no code, with any tracked item moved
-to match."""
+An artifact: the written document itself, with any tracked item moved to match —
+no code unless you were asked for a change, which then gets the contract above."""
 
     def test_every_persona_body_states_the_contract_for_each_kind(self):
         """`bmad-tea` leads quality (a change) and review (findings), so a
