@@ -341,6 +341,55 @@ _SLASH = re.compile(r"^\s*/")
 _OPT_OUT = re.compile(r"\b(no|skip|without|disable)\s+bmad\b", re.IGNORECASE)
 _INFO_QUESTION = re.compile(
     r"^\s*(what|why|how|when|where|which|who|whose|whom)\b", re.IGNORECASE)
+_YES_NO_QUESTION = re.compile(
+    r"^\s*(is|are|do|does|did|has|have|should|can|could|would|will)\b",
+    re.IGNORECASE)
+"""An auxiliary opener: with a closing `?`, a yes/no question.
+
+`_INFO_QUESTION` knew only wh-words, so "what tests cover the parser?" was
+silent and "are there any tests for the parser?" got a quality banner. Replayed
+over real prompts, all 11 synthetic yes/no questions routed.
+"""
+_MODAL_REQUEST = re.compile(
+    r"^\s*(can|could|would|will)\s+(you|we)\b"
+    r"(?!\s+(please\s+)?(explain|tell|describe|summari[sz]e)\b)",
+    re.IGNORECASE)
+""""can you fix the crash?" is a request wearing a question mark.
+
+Unless its verb only asks to be told something: "could you explain the cache?"
+is still a question.
+"""
+_READ_AND_TELL = re.compile(
+    r"^\s*((please|can you|could you)\s+)?(read|skim|look at)\b"
+    r".*?\b(tell me|summari[sz]e)\b",
+    re.IGNORECASE | re.DOTALL)
+""""read X and tell me Y" asks for an answer, whatever words X is made of.
+
+The track used to be picked by words inside the thing to be read — `/changelog`
+in a URL, `api-schema-design` in a doc name. A `then` after the ask is the one
+way it turns back into work (:data:`_THEN`).
+"""
+_THEN = re.compile(r"\bthen\b", re.IGNORECASE)
+
+PASTE_MIN_LINES = 3
+"""Below this, a prompt is not shaped like pasted output."""
+
+_MACHINE_LINE = re.compile(
+    r"^\s+\S"                                   # indented
+    r"|^\$\s"                                   # a shell prompt
+    r"|^Traceback \(most recent call last\)"
+    r"|^[A-Za-z_][\w.]*(Error|Exception|Warning)\b"   # its last line
+    r"|^npm (ERR!|WARN)"
+    r"|^[>E]\s"                                  # pytest's source and error marks
+    r"|^(FAILED|ERROR|PASSED|SKIPPED)\b"
+    r"|^=+ .* =+$"                               # pytest's section rules
+    r"|^(On branch|Your branch is|Changes not staged|Changes to be committed"
+    r"|Untracked files|nothing to commit|no changes added)\b"  # git status
+    r"|\S:\d+\b"                                # path:line
+    r"|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}:\d{2}:\d{2}\b",  # timestamps
+    re.MULTILINE)
+"""A line a program wrote rather than a person."""
+
 _SECOND_SENTENCE = re.compile(r"[.?!]\s+\S")
 """A sentence terminator with more prose after it.
 
@@ -456,10 +505,14 @@ def classify(prompt: str, root: Path | str | None = None) -> str:
     words = text.split()
     if len(words) < MIN_WORDS:
         return TRIVIAL
-    if (_INFO_QUESTION.match(text) and len(words) <= QUESTION_MAX_WORDS
-            and not _SECOND_SENTENCE.search(text)):
+    if _is_question(text, words):
         return TRIVIAL
-    intent = _intent_text(text, root)
+    prose = _paste_prose(text)
+    # A paste gets the long-prompt argument whatever its length: one keyword in
+    # a wall of machine output is incidental, and only the person's own lines
+    # are theirs to score.
+    long_or_paste = prose is not None or len(words) > LONG_PROMPT_WORDS
+    intent = _intent_text(text if prose is None else prose, root)
     build_intent = _ADDRESSEE.sub(" ", _PATH_TOKEN.sub(" ", intent))
     # Distinct patterns matched, not occurrences: saying "update" twenty times
     # is one piece of evidence, which is what keeps a repetitive log quiet.
@@ -467,9 +520,71 @@ def classify(prompt: str, root: Path | str | None = None) -> str:
                      if rx.search(build_intent if t == "build" else intent))
               for t, pats in _COMPILED.items()}
     best = max(scores.values())
-    if best == 0 or (best < 2 and len(words) > LONG_PROMPT_WORDS):
+    if best == 0 or (best < 2 and long_or_paste):
         return TRIVIAL
     return next(t for t in TRACK_ORDER if scores[t] == best)
+
+
+def _is_question(text: str, words: list[str]) -> bool:
+    """A prompt that asks to be told something rather than for work.
+
+    Three shapes: a wh-question, a yes/no question (an auxiliary opener and a
+    closing ``?``, unless it is a modal request), and "read X and tell me".
+    The first two stop being questions past :data:`QUESTION_MAX_WORDS` or once
+    another sentence follows; the third stops at a ``then``.
+    """
+    if len(words) <= QUESTION_MAX_WORDS and not _SECOND_SENTENCE.search(text):
+        if _INFO_QUESTION.match(text):
+            return True
+        if (text.endswith("?") and _YES_NO_QUESTION.match(text)
+                and not _MODAL_REQUEST.match(text)):
+            return True
+    ask = _READ_AND_TELL.match(text)
+    return ask is not None and not _THEN.search(text, ask.end())
+
+
+def _paste_prose(text: str) -> str | None:
+    """The lines a person typed, when the prompt is mostly pasted output.
+
+    ``None`` when it is not paste-shaped: fewer than :data:`PASTE_MIN_LINES`
+    non-blank lines, or more of them prose than machine output. A `git status`
+    paste routed to build on git's own words ("Changes not staged", "to
+    update"), and an npm log on the `fix` of `npm audit fix`.
+    """
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if len(lines) < PASTE_MIN_LINES:
+        return None
+    prose = [ln for ln in lines if not _MACHINE_LINE.search(ln)]
+    if 2 * len(prose) > len(lines):
+        return None
+    return "\n".join(prose)
+
+
+# --------------------------------------------------------------------- sessions
+
+REPLY_MAX_WORDS = 12
+"""Past this, an "ok, …" is carrying a task of its own, not agreeing to one."""
+
+_REPLY = re.compile(r"^\s*(yes|yep|yeah|ok|okay|sure|no|nope|go ahead)\b",
+                    re.IGNORECASE)
+
+
+def banner_is_news(last: dict | None, prompt: str, track: str, root: str) -> bool:
+    """Whether a routed prompt's banner tells the session anything new.
+
+    ``last`` is the record of the banner this session was last given
+    (``{"track", "root"}``), or ``None`` if it has had none. A banner is a
+    function of track and root alone, and Claude Code keeps hook context in the
+    conversation where it fired, so the same track in the same repo repeats
+    what the model already holds. A short reply — "ok update both and rerun",
+    "sure, add a test for that too" — continues the task that banner set up;
+    re-routing it handed the lead to another persona mid-task.
+    """
+    if not isinstance(last, dict):
+        return True
+    if _REPLY.match(prompt) and len(prompt.split()) <= REPLY_MAX_WORDS:
+        return False
+    return (last.get("track"), last.get("root")) != (track, root)
 
 
 # -------------------------------------------------------------- project signals

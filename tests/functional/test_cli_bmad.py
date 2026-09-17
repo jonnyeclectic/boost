@@ -110,7 +110,7 @@ class TestStartupToggle:
         # hook command routes back through boost
         block = cs.load("project", proj)["hooks"]["SessionStart"][0]
         assert "bmad orient --scope project" in block["hooks"][0]["command"]
-        assert block["matcher"] == "startup|resume|clear"
+        assert block["matcher"] == "startup|resume|clear|compact"
 
         boost("bmad", "startup", "off")
         assert not cs.has_hook("project", "SessionStart", "bmad", project_dir=proj)
@@ -597,6 +597,118 @@ class TestRoute:
         r = boost("bmad", "route", expect=None)
         assert called == ["signals"]       # the gate let it get that far
         assert r.rc == 0 and r.out == ""
+
+
+class TestRouteRemembersTheSession:
+    """A banner the session already holds is not sent again.
+
+    The hook is handed `session_id` and used to drop it, so every prompt was
+    judged as if it opened a session: a same-track follow-up re-sent ~650 chars
+    the model already had, and "sure, add a test for that too" handed the lead
+    to Murat mid-task.
+    """
+
+    def _hook(self, boost, monkeypatch, proj, prompt, session="s1", **extra):
+        payload = {"prompt": prompt, "cwd": str(proj), "session_id": session}
+        payload.update(extra)
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))
+        return boost("bmad", "route", expect=None).out
+
+    def test_the_same_track_twice_in_one_session_is_one_banner(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        assert "track: build" in self._hook(
+            boost, monkeypatch, proj, "implement the export command")
+        assert self._hook(boost, monkeypatch, proj,
+                          "refactor the export command too") == ""
+
+    def test_a_new_session_gets_its_own_banner(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        self._hook(boost, monkeypatch, proj, "implement the export command")
+        assert "track: build" in self._hook(
+            boost, monkeypatch, proj, "implement the export command", "s2")
+
+    def test_a_new_track_is_news(self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        self._hook(boost, monkeypatch, proj, "implement the export command")
+        assert "track: quality" in self._hook(
+            boost, monkeypatch, proj, "add tests for the export command")
+
+    def test_a_reply_continues_the_task_it_answers(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        self._hook(boost, monkeypatch, proj, "implement the export command")
+        assert self._hook(boost, monkeypatch, proj,
+                          "sure, add a test for that too") == ""
+
+    def test_a_trivial_prompt_leaves_no_record(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        self._hook(boost, monkeypatch, proj, "what is a tap?")
+        assert "track: build" in self._hook(
+            boost, monkeypatch, proj, "ok update both and rerun")
+
+    @pytest.mark.parametrize("source", ["clear", "compact"])
+    def test_clear_and_compact_forget_the_banner(
+            self, boost, sandbox, monkeypatch, proj, source):
+        boost("bmad", "on")
+        self._hook(boost, monkeypatch, proj, "implement the export command")
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+            {"session_id": "s1", "source": source})))
+        boost("bmad", "orient", "--scope", "global")
+        assert "track: build" in self._hook(
+            boost, monkeypatch, proj, "refactor the export command too")
+
+    def test_resume_keeps_it(self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        self._hook(boost, monkeypatch, proj, "implement the export command")
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(
+            {"session_id": "s1", "source": "resume"})))
+        assert "BMAD autopilot active" in boost(
+            "bmad", "orient", "--scope", "global").out
+        assert self._hook(boost, monkeypatch, proj,
+                          "refactor the export command too") == ""
+
+    def test_gemini_gets_the_banner_every_turn(
+            self, boost, sandbox, monkeypatch, proj):
+        """Gemini appends hook context for one turn only."""
+        boost("bmad", "on")
+        for _ in range(2):
+            assert "track: build" in self._hook(
+                boost, monkeypatch, proj, "implement the export command",
+                hook_event_name="BeforeAgent")
+
+    @pytest.mark.parametrize("junk", ["{{{", "[]"])
+    def test_an_unreadable_record_file_costs_one_banner_not_the_hook(
+            self, boost, sandbox, monkeypatch, proj, junk):
+        boost("bmad", "on")
+        path = bmad._sessions_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(junk, encoding="utf-8")
+        assert "track: build" in self._hook(
+            boost, monkeypatch, proj, "implement the export command")
+        assert json.loads(path.read_text(encoding="utf-8"))["s1"]["track"] == "build"
+
+    def test_the_record_file_stays_bounded(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        old = {"old%03d" % i: {"track": "build", "root": "/x",
+                               "at": "2020-01-01T00:00:%02dZ" % (i % 60)}
+               for i in range(bmad.SESSIONS_KEPT)}
+        bmad._sessions_write(old)
+        self._hook(boost, monkeypatch, proj, "implement the export command", "new")
+        kept = json.loads(bmad._sessions_path().read_text(encoding="utf-8"))
+        assert len(kept) == bmad.SESSIONS_KEPT and "new" in kept
+
+    def test_the_oldest_record_is_the_one_dropped(self, sandbox):
+        records = {"b": {"at": "2026-01-02"}, "a": {"at": "2026-01-01"},
+                   "junk": "not a record"}
+        records.update({"k%03d" % i: {"at": "2026-02-%02d" % (i % 28 + 1)}
+                        for i in range(bmad.SESSIONS_KEPT - 1)})
+        bmad._sessions_write(records)
+        kept = json.loads(bmad._sessions_path().read_text(encoding="utf-8"))
+        assert "junk" not in kept and "a" not in kept and "b" in kept
 
 
 class TestRouteFollowsAutopilotState:
