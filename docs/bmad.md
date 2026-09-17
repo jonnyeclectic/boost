@@ -74,8 +74,12 @@ command. Documentation, testing and roadmap bookkeeping travel with the task
 instead of being remembered afterwards.
 
 The router costs a question nothing. Acknowledgements, slash commands, short
-informational questions ("what does `scan_dir` do?") and anything containing
-`no bmad` produce no banner at all. A short prompt routes on a single keyword, so
+questions ("what does `scan_dir` do?", "are there tests for the parser?"),
+"read X and tell me Y" asks and anything containing `no bmad` produce no banner
+at all. Pasted output is scored on the lines you typed around it, and needs two
+keyword hits there. Within one Claude Code session a banner is sent once per
+track and repo, and a short reply ("ok, update both and rerun") keeps the lead
+it answers; `/clear` and compaction reset that. A short prompt routes on a single keyword, so
 only intent is scored: code spans, URLs, `--flags`, tracker IDs such as
 `story ABC-123` and the name of the repo you are in never count, and the `build`
 track also ignores paths and verbs aimed at you ("update me when CI finishes").

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -180,6 +181,244 @@ boost bmad install
                   "catalog build for everyone here today")
         assert len(prompt.split()) == bmad.QUESTION_MAX_WORDS
         assert bmad.classify(prompt) == "trivial"
+
+
+class TestPromptsThatAreNotTasks:
+    """Pasted output, yes/no questions and read-and-tell asks.
+
+    Replayed over one real history, 35% of regular prompts got a banner, and a
+    judge found a clear failure in 29 of 41 sampled. These shapes were most of
+    it, each reproduced with synthetic prompts: pasted output 4 of 5 routed,
+    yes/no questions 11 of 11, read-and-tell 4 of 5.
+    """
+
+    PYTEST = (
+        "    def test_scan(tmp_path):\n"
+        ">       assert scan_dir(tmp_path) == 3\n"
+        "E       AssertionError: assert 2 == 3\n"
+        "tests/unit/test_catalog.py:42: AssertionError\n"
+        "FAILED tests/unit/test_catalog.py::test_scan - AssertionError")
+    GIT_STATUS = (
+        "On branch main\n"
+        "Changes not staged for commit:\n"
+        '  (use "git add <file>..." to update what will be committed)\n'
+        "\tmodified:   boost_cli/core/bmad.py\n"
+        'no changes added to commit (use "git add" and/or "git commit -a")')
+    NPM = (
+        "npm WARN deprecated glob@7.2.3: no longer supported\n"
+        "added 812 packages, and audited 813 packages in 14s\n"
+        "  3 vulnerabilities (1 moderate, 2 high)\n"
+        "  npm audit fix\n"
+        "> app@1.0.0 build\n"
+        "> vite build --mode production")
+    TRACEBACK = (
+        "Traceback (most recent call last):\n"
+        '  File "/app/export.py", line 12, in <module>\n'
+        "    main()\n"
+        "ValueError: bad row in the build step, fix needed")
+
+    @pytest.mark.parametrize("paste", ["PYTEST", "GIT_STATUS", "NPM", "TRACEBACK"])
+    def test_pasted_output_alone_is_silent(self, paste):
+        assert bmad.classify(getattr(self, paste)) == "trivial"
+
+    @pytest.mark.parametrize("line", [
+        "$ make build",
+        "==================== short test summary info ====================",
+        "2026-09-17 build started",
+        "12:03:44 build started",
+        "npm ERR! build failed",
+        "  npm audit fix",
+        "Traceback (most recent call last):",
+        "E       AssertionError: build != fix",
+        ">       assert build_it() == 3",
+        "concurrent.futures.TimeoutError: the build hung",
+        "DeprecationWarning: build is deprecated",
+        "RuntimeException: build failed",
+        "Your branch is behind, update it",
+        "Untracked files: fix",
+        "nothing to commit, update later",
+        "Changes to be committed: build",
+        "PASSED the build",
+        "SKIPPED the build",
+        "ERROR the build",
+    ])
+    def test_each_machine_shape_counts_as_output(self, line):
+        """Three copies of one machine line and one person's line: a paste."""
+        prompt = "\n".join([line] * 3 + ["please fix it"])
+        assert bmad.classify(prompt) == "trivial"
+
+    @pytest.mark.parametrize("prompt", [
+        # an indented task list — indentation alone is not machine output
+        "Do these:\n  - add a test for scan_dir\n  - update the docs\n"
+        "  - run make check",
+        "here's what I need:\n  1. add a retry to the fetcher\n"
+        "  2. write a test for it\n  3. update the changelog",
+        # a hard-wrapped request, indented as prose wraps
+        "Please update the installer so it writes the lock file\n"
+        "  atomically, and add a regression test that kills the\n"
+        "  mutant where the rename is dropped.",
+    ])
+    def test_an_indented_request_is_not_a_paste(self, prompt):
+        """The indent rule silenced ordinary multi-line asks: a bullet list and
+        a wrapped sentence are indented too, and each routes as one line."""
+        assert bmad.classify(prompt) != "trivial"
+
+    def test_a_fenced_paste_does_not_outvote_the_ask_around_it(self):
+        """The fence is pasted material inside a request, not the request."""
+        prompt = ("Add a retry to this function and a test for it:\n"
+                  "```python\ndef fetch(url):\n    r = requests.get(url)\n"
+                  "    return r.json()\n```")
+        assert bmad.classify(prompt) == "quality"
+
+    def test_a_person_asking_over_a_paste_still_routes(self):
+        """Two hits in the typed lines are the evidence a paste needs."""
+        prompt = ("the export crashes on bad rows, fix it and add a regression "
+                  "test:\n" + self.TRACEBACK)
+        assert bmad.classify(prompt) == "quality"
+
+    def test_one_word_over_a_paste_is_not_enough(self):
+        """The accepted loss: "fix this:" over a paste goes silent."""
+        assert bmad.classify("fix this:\n" + self.PYTEST) == "trivial"
+
+    def test_three_lines_can_be_a_paste(self):
+        assert bmad.classify("update it\n  x = 1\n  y = 2") == "trivial"
+
+    def test_the_typed_lines_of_a_paste_stay_separate_words(self):
+        assert bmad.classify("refactor\nupdate\n  x = 1\n  y = 2") == "build"
+
+    def test_two_lines_are_not_a_paste(self):
+        assert bmad.classify("update the flag\n  in the config") == "build"
+
+    def test_mostly_prose_is_not_a_paste(self):
+        prompt = ("fix the crash\nin the exporter\n  when a row is empty\n"
+                  "and ship it")
+        assert bmad.classify(prompt) == "build"
+
+    def test_half_machine_output_is_a_paste(self):
+        """At least half the lines, not more than half."""
+        prompt = "update it\nplease\n  x = 1\n  y = 2"
+        assert bmad.classify(prompt) == "trivial"
+
+    def test_blank_lines_are_neither(self):
+        prompt = "update it\n\n\n  x = 1"
+        assert bmad.classify(prompt) == "build"
+
+    @pytest.mark.parametrize("prompt", [
+        "are there any tests for the parser?",
+        "is the export command documented?",
+        "do we have docs for the export command?",
+        "does the migration need a schema change?",
+        "did you update the docs?",
+        "has anyone added tests for this?",
+        "have you added tests for it?",
+        "should we refactor the scanner?",
+        "can the scanner build its cache offline?",
+        "could you explain how the scanner builds its cache?",
+        "would you please describe the schema?",
+        "will you tell me what the release changed?",
+        "can we summarise the review?",
+    ])
+    def test_a_yes_no_question_is_silent(self, prompt):
+        assert bmad.classify(prompt) == "trivial"
+
+    @pytest.mark.parametrize("prompt,track", [
+        ("can you fix the crash in store.install?", "build"),
+        ("could you add tests for the parser?", "quality"),
+        ("would you refactor the scanner please?", "build"),
+        ("will we update the README for the new flag?", "docs"),
+        # no question mark: an instruction that opens with "do"
+        ("do the migration for the orders table", "build"),
+        # another sentence follows: the question was a preamble
+        ("Is the parser tested? Add tests for it.", "quality"),
+    ])
+    def test_a_request_shaped_like_a_question_still_routes(self, prompt, track):
+        assert bmad.classify(prompt) == track
+
+    def test_a_long_yes_no_question_is_a_brief(self):
+        prompt = ("should we restructure the retrieval layer so the dense engine "
+                  "and the BM25 engine share one index build path, given the eval "
+                  "gate floors four metrics and we need the docs regenerated?")
+        assert len(prompt.split()) > bmad.QUESTION_MAX_WORDS
+        assert bmad.classify(prompt) != "trivial"
+
+    @pytest.mark.parametrize("prompt", [
+        "read the changelog at https://example.com/changelog and tell me what changed",
+        "read https://docs.example.com/guide and tell me what it says about auth",
+        "look at the api-schema-design doc and tell me if it is sound",
+        "skim docs/bmad.md and summarize the router rules",
+        "please read the PRD and summarise it",
+        "can you read the review and tell me what it wants?",
+        "Read the changelog.\nThen tell me what changed in the build.",
+    ])
+    def test_read_and_tell_is_a_question(self, prompt):
+        assert bmad.classify(prompt) == "trivial"
+
+    def test_a_long_read_and_tell_is_a_brief_not_a_question(self):
+        """The read-and-tell gate had no length cap, so a spec that opened
+        "read the RFC…" and said "tell me" anywhere went silent."""
+        prompt = ("read the RFC at https://example.com/rfc and tell me how we "
+                  "should implement the retry budget, what it means for the "
+                  "exporter, whether the current backoff is compatible, and "
+                  "which tests would need to change before any of it lands")
+        assert len(prompt.split()) > bmad.QUESTION_MAX_WORDS
+        assert bmad.classify(prompt) != "trivial"
+
+    @pytest.mark.parametrize("prompt", [
+        "can you explain how the cache works and add a test for it?",
+        "read the spec and then implement it and tell me when done",
+        "could you describe the scanner and also fix the flaky test?",
+    ])
+    def test_a_question_with_work_attached_is_work(self, prompt):
+        """The gates read only the first verb, so the work went unrouted."""
+        assert bmad.classify(prompt) != "trivial"
+
+    def test_a_then_after_the_ask_turns_it_back_into_work(self):
+        assert bmad.classify("read the PRD and tell me the gaps, then add "
+                             "stories for them") == "product"
+
+    def test_telling_without_reading_first_is_not_this_rule(self):
+        assert bmad.classify("fix the build and tell me when it is done") == "build"
+
+
+class TestBannerIsNews:
+    """The session half: a pure function, so the hook stays glue."""
+
+    LAST: ClassVar[dict] = {"track": "build", "root": "/work/proj"}
+
+    def test_a_session_with_no_banner_needs_one(self):
+        assert bmad.banner_is_news(None, "implement it", "build", "/work/proj")
+
+    def test_a_malformed_record_is_no_record(self):
+        assert bmad.banner_is_news("build", "ok do it", "build", "/work/proj")
+
+    def test_the_same_track_in_the_same_repo_is_a_repeat(self):
+        assert not bmad.banner_is_news(self.LAST, "refactor it", "build",
+                                       "/work/proj")
+
+    def test_another_track_or_repo_is_news(self):
+        assert bmad.banner_is_news(self.LAST, "add tests", "quality", "/work/proj")
+        assert bmad.banner_is_news(self.LAST, "refactor it", "build", "/work/other")
+
+    @pytest.mark.parametrize("prompt", [
+        "ok update both and rerun", "sure, add a test for that too",
+        "yes", "Yeah do that", "yep", "okay", "no, use the other one",
+        "nope", "go ahead and ship it",
+    ])
+    def test_a_short_reply_continues_the_session(self, prompt):
+        assert not bmad.banner_is_news(self.LAST, prompt, "quality", "/work/other")
+
+    def test_a_reply_at_the_word_limit_is_still_a_reply(self):
+        prompt = "ok " + "x " * (bmad.REPLY_MAX_WORDS - 1)
+        assert len(prompt.split()) == bmad.REPLY_MAX_WORDS
+        assert not bmad.banner_is_news(self.LAST, prompt, "quality", "/work/proj")
+
+    def test_a_long_reply_carries_its_own_task(self):
+        prompt = "ok " + "x " * bmad.REPLY_MAX_WORDS
+        assert bmad.banner_is_news(self.LAST, prompt, "quality", "/work/proj")
+
+    def test_a_reply_word_inside_a_sentence_is_not_a_reply(self):
+        assert bmad.banner_is_news(self.LAST, "token ok, now add tests",
+                                   "quality", "/work/proj")
 
 
 class TestClassifyTracks:

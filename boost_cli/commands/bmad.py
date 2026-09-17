@@ -81,7 +81,7 @@ from ..errors import BoostError
 
 DEFAULT_MODULES = "bmm"
 HOOK_NAME = "bmad"
-HOOK_MATCHER = "startup|resume|clear"
+HOOK_MATCHER = "startup|resume|clear|compact"
 ROUTE_HOOK_NAME = "bmad-route"
 
 _ACTIONS = ("on", "off", "route", "personas", "install", "init", "startup",
@@ -358,8 +358,7 @@ def _route(prompt, plain, scope=None) -> int:
         if prompt or plain:
             banner = core.route_context(text, root)
         elif _autopilot_live(scope, root):
-            banner = core.route_context(
-                text, root, (_agents_dir("global"), root / ".claude" / "agents"))
+            banner = _session_banner(payload, text, root)
         else:
             return 0
     except Exception:                     # a hook must never break the session
@@ -374,6 +373,37 @@ def _route(prompt, plain, scope=None) -> int:
         "additionalContext": banner,
     }}))
     return 0
+
+
+def _session_banner(payload: dict, text: str, root: Path) -> str:
+    """The hook's banner, or ``""`` when this session already holds it.
+
+    Keyed by ``session_id``. Gemini's `BeforeAgent` carries one too, but its
+    reference says hook context is appended "for this turn only", so a banner
+    skipped there would simply be missing; the check applies to Claude alone.
+    """
+    session = str(payload.get("session_id") or "")
+    if payload.get("hook_event_name") == "BeforeAgent":
+        session = ""
+    track = core.classify(text, root)
+    if track == core.TRIVIAL:
+        return ""
+    sessions = _sessions_read() if session else {}
+    if session and not core.banner_is_news(sessions.get(session), text, track,
+                                           str(root)):
+        return ""
+    banner = core.route_context(
+        text, root, (_agents_dir("global"), root / ".claude" / "agents"))
+    if session and banner:
+        sessions[session] = {"track": track, "root": str(root),
+                             "at": util.now_iso()}
+        # Best effort: a state dir that cannot be written (full disk, a
+        # root-owned ~/.boost after one `sudo boost`) must cost one repeated
+        # banner, not every banner — the write happens after the banner is
+        # built, so an escaping OSError silenced the router outright.
+        with suppress(OSError):
+            _sessions_write(sessions)
+    return banner
 
 
 _PERSONA_STATE_LABEL = {
@@ -543,9 +573,21 @@ def _startup(value, scope) -> int:
 
 
 def _orient(scope) -> int:
-    """SessionStart hook target: print the briefing iff enabled (else silent)."""
+    """SessionStart hook target: print the briefing iff enabled (else silent).
+
+    On `clear` and `compact` it also forgets the session's last routing banner:
+    the conversation that held it is gone, so the next routed prompt needs it
+    again rather than being skipped as a repeat.
+    """
     scope = scope or "project"
     with suppress(Exception):  # a hook must never break the session
+        payload = _read_hook_stdin()
+        session = str(payload.get("session_id") or "")
+        if session and payload.get("source") in ("clear", "compact"):
+            sessions = _sessions_read()
+            if sessions.pop(session, None) is not None:
+                _sessions_write(sessions)
+    with suppress(Exception):
         if _get_scope_state(scope).get("startup"):
             print(core.orientation())
     return 0
@@ -643,9 +685,14 @@ def _doctor() -> int:
         personas = len(core.present_personas(agents))
         router = cs.has_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
         live = bool(st.get("autopilot")) and router
+        briefing = _on_off(cs.has_hook(scope, "SessionStart", HOOK_NAME))
+        if briefing == "on" and _stale_matcher(scope):
+            # The matcher lives in the user's settings.json from whenever they
+            # last ran `on`, while the code that depends on it ships with the
+            # binary — so an old install silently misses newer sources.
+            briefing += " (stale matcher: re-run `boost bmad on`)"
         out.kv(scope, "autopilot=%s  %d personas  router=%s  briefing=%s"
-               % (_on_off(live), personas, _on_off(router),
-                  _on_off(cs.has_hook(scope, "SessionStart", HOOK_NAME))))
+               % (_on_off(live), personas, _on_off(router), briefing))
         out.kv("  workflows", "skills=%d  installed=%s"
                % (_count_skills(_skills_dir(scope)), _on_off(st.get("installed"))))
     out.dim("  project = %s" % Path.cwd())
@@ -655,6 +702,17 @@ def _doctor() -> int:
 
 
 # -------------------------------------------------------------------- helpers
+
+def _stale_matcher(scope) -> bool:
+    """True when the installed briefing hook predates the current matcher.
+
+    `_orient` forgets a session's last banner on `clear` and `compact`, and
+    `compact` only reaches it if the hook was written with today's matcher.
+    """
+    rows = [r for r in cs.list_hooks(scope)
+            if r["event"] == "SessionStart" and r["name"] == HOOK_NAME]
+    return any(r.get("matcher") != HOOK_MATCHER for r in rows)
+
 
 def _skills_dir(scope) -> Path:
     base = paths.home() if scope == "global" else Path.cwd()
@@ -707,6 +765,33 @@ def _state_read() -> dict:
 def _state_write(d: dict) -> None:
     paths.ensure_dirs()
     _state_path().write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+
+
+SESSIONS_KEPT = 200
+"""Session records kept; the oldest go first. A lost one costs one banner."""
+
+
+def _sessions_path() -> Path:
+    return paths.state_dir() / "bmad-sessions.json"
+
+
+def _sessions_read() -> dict:
+    """``{session_id: {track, root, at}}``; anything unreadable reads as empty."""
+    try:
+        data = json.loads(_sessions_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _sessions_write(sessions: dict) -> None:
+    """Atomically, and bounded: every routed prompt in every session writes it."""
+    def at(item):
+        record = item[1]
+        return str(record.get("at", "")) if isinstance(record, dict) else ""
+
+    kept = dict(sorted(sessions.items(), key=at)[-SESSIONS_KEPT:])
+    util.atomic_write_text(_sessions_path(), json.dumps(kept, indent=1) + "\n")
 
 
 def _proj_key(project=None) -> str:
