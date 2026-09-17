@@ -170,7 +170,9 @@ boost bmad on --host claude     # never touch ~/.gemini/settings.json
 The method itself is a separate, heavier install. `boost bmad install` delegates
 to the canonical `npx bmad-method install` (needs Node.js 20.12+) for the
 `bmad-*` workflow skills and the per-project `_bmad/` runtime they read on
-activation:
+activation. It installs the release boost's routing tables were checked
+against (currently `bmad-method@6.12.0`) rather than `@latest`, so a skill the
+banner names is one that install contains:
 
 ```bash
 boost bmad install --scope project   # skills + per-project _bmad/ runtime
@@ -181,6 +183,12 @@ boost bmad disable / enable          # quarantine / restore skills (recoverable)
 boost bmad uninstall                 # delete skills + _bmad/ for a scope; confirms
                                       # unless you pass -y/--yes or set BOOST_ASSUME_YES=1
 ```
+
+A global install records the release and the skills it copied. Reinstalling
+removes the recorded skills the new release no longer ships, and leaves any
+other `bmad-*` directory alone, since it may be yours. `bmad-build` and
+`bmad-build-auto` halt without a per-repo `_bmad/` runtime, so the global
+install names them: run `boost bmad init` in each repo that uses them.
 
 The two compose. The autopilot routes at `bmad-build`, `bmad-prd` and friends
 whether or not they are installed, and says which case you are in. With the

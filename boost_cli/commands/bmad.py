@@ -490,7 +490,7 @@ def _require_npx() -> None:
 
 
 def _run_installer(directory: Path, modules: str) -> subprocess.CompletedProcess:
-    cmd = ["npx", "--yes", "bmad-method@latest", "install",
+    cmd = ["npx", "--yes", "bmad-method@%s" % core.BMAD_VERSION, "install",
            "--yes", "--directory", str(directory),
            "--tools", "claude-code", "--modules", modules,
            "--user-name", _whoami()]
@@ -523,12 +523,24 @@ def _install(scope, modules, do_startup) -> int:
     scope = scope or "project"
     _require_npx()
     if scope == "global":
-        n = _copy_global_skills(modules)
-        _set_scope_state("global", installed=True, skills=n,
+        previous = _get_scope_state("global").get("skill_list")
+        ver, names = _copy_global_skills(modules)
+        dropped = _drop_retired_skills(previous, names)
+        _set_scope_state("global", installed=True, skills=len(names),
+                         skill_list=names, version=ver,
                          modules=modules.split(","), installed_at=util.now_iso())
-        out.ok("installed %d BMAD skill(s) globally → %s"
-               % (n, _skills_dir("global")))
-        out.dim("  run `boost bmad init` in a project for its _bmad/ workflow runtime")
+        out.ok("installed %d BMAD skill(s) globally → %s (v%s)"
+               % (len(names), _skills_dir("global"), ver))
+        if dropped:
+            out.info("removed %d skill(s) this BMAD release no longer installs: %s"
+                     % (len(dropped), ", ".join(dropped)))
+        needs_runtime = [n for n in core.RUNTIME_SKILLS if n in names]
+        if needs_runtime:
+            out.warn("%s halt without a per-repo _bmad/ runtime — run "
+                     "`boost bmad init` in each repo that uses them"
+                     % " and ".join(needs_runtime))
+        else:
+            out.dim("  run `boost bmad init` in a project for its _bmad/ workflow runtime")
     else:
         ver, n = _install_project_runtime(modules)
         out.ok("installed BMAD in %s (%d skills, v%s)" % (Path.cwd(), n, ver))
@@ -557,15 +569,20 @@ def _install_project_runtime(modules):
     return ver, n
 
 
-def _copy_global_skills(modules) -> int:
-    """Stage the installer in a temp dir; copy only bmad-* skills into ~/.claude."""
+def _copy_global_skills(modules) -> tuple[str, list[str]]:
+    """Stage the installer in a temp dir; copy only bmad-* skills into ~/.claude.
+
+    Returns ``(version, skill names copied)``. The names are recorded so the
+    next global install knows which skills are boost's to retire.
+    """
     stage = Path(tempfile.mkdtemp(prefix="boost-bmad-"))
     try:
-        _run_installer(stage, modules)
+        proc = _run_installer(stage, modules)
+        ver = _parse_version((proc.stdout or "") + (proc.stderr or ""))
         src = stage / ".claude" / "skills"
         dest = _skills_dir("global")
         dest.mkdir(parents=True, exist_ok=True)
-        n = 0
+        names = []
         for d in sorted(src.glob("bmad-*")):
             if not d.is_dir():
                 continue
@@ -573,10 +590,33 @@ def _copy_global_skills(modules) -> int:
             if t.exists():
                 util.rmtree(t)
             shutil.copytree(d, t)
-            n += 1
-        return n
+            names.append(d.name)
+        return ver, names
     finally:
         shutil.rmtree(stage, ignore_errors=True)
+
+
+def _drop_retired_skills(previous, installed: list[str]) -> list[str]:
+    """Remove skills the last global install recorded and this one did not ship.
+
+    The copy only replaces directories the new stage has, and upstream's own
+    cleanup runs inside the empty stage, never against `~/.claude/skills` — so
+    a skill a release retired (`bmad-document-project` in 6.12.0) survived
+    every reinstall. Only *recorded* names go: another `bmad-*` directory may
+    be the user's own.
+    """
+    if not isinstance(previous, list):
+        return []
+    dest = _skills_dir("global")
+    dropped = []
+    for name in sorted({n for n in previous if isinstance(n, str)} - set(installed)):
+        # A hand-edited state file must not steer the delete out of the dir.
+        if not (name.startswith("bmad-") and Path(name).name == name):
+            continue
+        if (dest / name).is_dir():
+            util.rmtree(dest / name)
+            dropped.append(name)
+    return dropped
 
 
 # ----------------------------------------------------------------------- toggle

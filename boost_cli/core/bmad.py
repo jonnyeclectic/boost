@@ -24,7 +24,8 @@ first time it was assumed rather than checked:
   persona subagents below are boost's to author — they duplicate nothing.
 * **The bmm module ships five personas, not seven.** Mary, John, Sally, Winston
   and Amelia. Murat (test architect) is the separate `tea` module and Paige
-  (technical writer) is a game-dev-studio agent, "on hiatus" in bmm. boost
+  (technical writer) is a game-dev-studio agent, "on hiatus" in bmm — bmm's own
+  `bmad-agent-tech-writer` was retired in v6.11.0 as "generic LLM defaults". boost
   authors all seven anyway, because a routing table with no owner for tests or
   docs cannot honour the done-contract; the two extras are labelled as such.
 
@@ -59,6 +60,25 @@ statements true: edit the file however you like and boost stops claiming it.
 
 _STAMP_RE = re.compile(r"<!-- boost:bmad-persona ([0-9a-f]{12}) -->")
 
+BMAD_VERSION = "6.12.0"
+"""The bmad-method release `boost bmad install` installs, and the tables name.
+
+It used to install `@latest` while the skill names below were hard-coded, and
+the tests only checked the tables against each other — so when v6.11.0 turned
+`bmad-document-project` into a shim and v6.12.0 stopped installing shims, the
+docs track kept routing at a skill no default install contains, and nothing
+noticed. `tests/unit/data/bmad-skills-<version>.json` is that release's skill
+list; bumping this without regenerating it fails the build.
+"""
+
+RUNTIME_SKILLS: tuple[str, ...] = ("bmad-build", "bmad-build-auto")
+"""Skills that halt without a per-repo `_bmad/` runtime.
+
+They start by running `{project-root}/_bmad/scripts/render_skill.py`, so a
+global install leaves them broken in every repo `boost bmad init` has not
+touched — while reporting every skill installed.
+"""
+
 
 class Persona(NamedTuple):
     """A BMAD persona, rendered as one Claude Code subagent definition."""
@@ -79,7 +99,7 @@ class Track(NamedTuple):
 
     lead: str                  # persona slug
     support: tuple[str, ...]   # persona slugs to run alongside the lead
-    skill: str                 # canonical BMAD v6 skill for this track
+    skill: str | None          # canonical BMAD v6 skill, if one fits
     note: str                  # how the lead should open
     done: str                  # what finished looks like: one of DONE_KINDS
 
@@ -243,8 +263,10 @@ PERSONAS: tuple[Persona, ...] = (
             "never by editing the output; a hand-edit fails the freshness gate.",
             "Write for the reader who arrives at 2am with a broken build: what "
             "it does, how to run it, what breaks it.",
+            "`bmad-project-context` is for the agent-instruction block in "
+            "`AGENTS.md` only; READMEs and guides need no BMAD skill.",
         ),
-        skills=("bmad-document-project",),
+        skills=("bmad-project-context",),
     ),
 )
 
@@ -278,7 +300,11 @@ TRACKS: dict[str, Track] = {
         skill="bmad-qa-generate-e2e-tests",
         note="Assertions that a mutation would fail.", done="change"),
     "docs": Track(
-        lead="bmad-scribe", support=("bmad-dev",), skill="bmad-document-project",
+        # No skill: `bmad-document-project` is a shim since v6.11.0 and not
+        # installed since v6.12.0, and its replacement `bmad-project-context`
+        # manages one block in AGENTS.md — routing every README edit there
+        # would trade a dead pointer for a misroute.
+        lead="bmad-scribe", support=("bmad-dev",), skill=None,
         note="Verify against the code, regenerate what is generated.", done="change"),
     "review": Track(
         lead="bmad-tea", support=("bmad-architect",), skill="bmad-code-review",
@@ -799,11 +825,10 @@ def route_lines(prompt: str, root: Path | None = None,
                 "the work is independent."
                 % ", ".join("`%s` (%s)" % (s, PERSONA_BY_SLUG[s].character)
                             for s in track.support))
-    lines.extend((
-        "BMAD skill: `%s` — invoke it if it is installed; otherwise the "
-        "persona's own playbook stands." % track.skill,
-        "Done means: " + " · ".join(done_checklist(signals, track.done)),
-    ))
+    if track.skill:
+        lines.append("BMAD skill: `%s` — invoke it if it is installed; otherwise "
+                     "the persona's own playbook stands." % track.skill)
+    lines.append("Done means: " + " · ".join(done_checklist(signals, track.done)))
     if track.done == "change":
         # Not "work autonomously": that competed with approval gates people add
         # on purpose, and the guide clause above only exists when a guide does.
