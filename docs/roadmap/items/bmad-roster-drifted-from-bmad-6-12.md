@@ -2,14 +2,14 @@
 id: bmad-roster-drifted-from-bmad-6-12
 board: code
 section: dx
-status: next
+status: inflight
 category: "Agents · BMAD"
 complexity: M
 impact: Med
 wow: 2
 note: docs routes at a skill no default 6.12 install contains
 order: 323
-owner:
+owner: loop/bmad-roster-pin
 pr:
 title: The autopilot routes docs at a skill BMAD 6.12 no longer installs, and no test would notice
 ---
