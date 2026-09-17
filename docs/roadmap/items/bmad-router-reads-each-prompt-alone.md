@@ -2,14 +2,14 @@
 id: bmad-router-reads-each-prompt-alone
 board: code
 section: dx
-status: next
+status: inflight
 category: "Agents · BMAD"
 complexity: M
 impact: High
 wow: 3
 note: pastes, follow-up replies and yes/no questions get delegation banners
 order: 320
-owner:
+owner: loop/bmad-prompt-context
 pr:
 title: "The BMAD router reads each prompt alone, so a pasted log, an &ldquo;ok update both and rerun&rdquo; and a yes/no question all get a banner"
 ---
