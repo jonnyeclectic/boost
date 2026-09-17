@@ -840,9 +840,19 @@ written down and tracked. Turn this off with `boost bmad off`.""" % roster
 # ------------------------------------------------------------ persona files
 
 def persona_description(persona: Persona) -> str:
-    """The one-line `description:` Claude reads when choosing a subagent."""
-    return ("%s, %s (BMAD %s). Use PROACTIVELY for %s."
-            % (persona.character, persona.title, persona.module,
+    """The one-line `description:` Claude reads when choosing a subagent.
+
+    Claude Code treats this line as a delegation rule, and its docs recommend
+    "use proactively" to make delegation *more* eager. That wording made the
+    router's silence cosmetic: a prompt the router judged trivial, or marked
+    `no bmad`, got no banner but could still spawn a persona on the strength of
+    its description alone. Tying the trigger to the banner makes the router the
+    one place that decides, while naming the persona by slug keeps delegation
+    working when a banner does name it, or the user does.
+    """
+    return ("%s, %s (BMAD %s). Use when a [BMAD autopilot] routing banner names "
+            "%s, or the user asks for it by name. Covers %s."
+            % (persona.character, persona.title, persona.module, persona.slug,
                persona.triggers))
 
 
