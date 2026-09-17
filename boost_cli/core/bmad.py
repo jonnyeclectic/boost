@@ -790,16 +790,15 @@ def route_lines(prompt: str, root: Path | None = None,
             lines.append("Support: bring in the view of %s." % ", ".join(
                 "%s (%s)" % (PERSONA_BY_SLUG[s].character, PERSONA_BY_SLUG[s].title)
                 for s in track.support))
-        delegate = False
     elif delegate:
         lines.append("Lead: `%s` subagent — %s, %s. %s"
                      % (lead.slug, lead.character, lead.title, track.note))
-    if delegate and track.support:
-        lines.append(
-            "Support: %s — spawn them with the Agent tool, in parallel where "
-            "the work is independent."
-            % ", ".join("`%s` (%s)" % (s, PERSONA_BY_SLUG[s].character)
-                        for s in track.support))
+        if track.support:
+            lines.append(
+                "Support: %s — spawn them with the Agent tool, in parallel where "
+                "the work is independent."
+                % ", ".join("`%s` (%s)" % (s, PERSONA_BY_SLUG[s].character)
+                            for s in track.support))
     lines.extend((
         "BMAD skill: `%s` — invoke it if it is installed; otherwise the "
         "persona's own playbook stands." % track.skill,
