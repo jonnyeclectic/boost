@@ -155,6 +155,18 @@ boost bmad install
         assert len(prompt.split()) > bmad.LONG_PROMPT_WORDS
         assert bmad.classify(prompt) == "build"
 
+    def test_exactly_two_hits_is_enough_past_the_cutoff(self):
+        """The long-prompt rule asks for two hits, not three."""
+        prompt = "please refactor it and update it " + "blah " * bmad.LONG_PROMPT_WORDS
+        assert len(prompt.split()) > bmad.LONG_PROMPT_WORDS
+        assert bmad.classify(prompt) == "build"
+
+    def test_one_hit_at_exactly_the_cutoff_still_routes(self):
+        """The cutoff is exclusive: a 60-word prompt is still short enough."""
+        prompt = "please refactor it " + "blah " * (bmad.LONG_PROMPT_WORDS - 3)
+        assert len(prompt.split()) == bmad.LONG_PROMPT_WORDS
+        assert bmad.classify(prompt) == "build"
+
     def test_repeating_one_keyword_is_not_more_evidence(self):
         """Scoring counts distinct patterns, not occurrences — so a long log
         that says "update" twenty times still scores 1 and stays silent."""
@@ -226,6 +238,81 @@ class TestClassifyTracks:
 
     def test_classification_is_case_insensitive(self):
         assert bmad.classify("ADD TESTS FOR THE SCANNER") == "quality"
+
+
+class TestIncidentalKeywords:
+    """A prompt of up to 60 words routes on one keyword, so it must be intent.
+
+    Replayed over a real prompt history, 89 of 143 routed prompts were decided
+    by exactly one keyword — often one nobody meant: a URL, a path, a flag, a
+    tracker ID, the repo's own name. Every row marked trivial below routed on
+    origin/main (the track it went to is in the comment). The fix removes text
+    that is not intent before scoring rather than raising the threshold, which
+    measured worse on genuine short asks.
+    """
+
+    @pytest.mark.parametrize("prompt,repo,expected", [
+        # the repo's own name (was: build, discovery, discovery)
+        ("list the last three commits in migrations", "migrations", "trivial"),
+        ("list the new notebooks in benchmarks", "benchmarks", "trivial"),
+        ("list the new notebooks in Benchmarks", "benchmarks", "trivial"),
+        # flags, long and short (was: product, quality)
+        ("rerun the installer with --scope global and paste the output",
+         "proj", "trivial"),
+        ("rerun mvn package with -Dmaven.test.skip=true and paste the log",
+         "proj", "trivial"),
+        # URLs (was: docs, docs)
+        ("open https://example.com/docs/setup and paste what it says",
+         "proj", "trivial"),
+        ("open www.example.com/docs and paste what it says", "proj", "trivial"),
+        # code, inline and fenced (was: build, build)
+        ("paste the output of `npm run build` here", "proj", "trivial"),
+        ("paste what this prints:\n```\nnpm run build\n```", "proj", "trivial"),
+        # a path, for build only (was: build)
+        ("tail logs/build/server.log and paste the last error", "proj", "trivial"),
+        # tracker IDs (was: product, build)
+        ("move story ABC-123 to in progress", "proj", "trivial"),
+        ("close bug #42 in the tracker", "proj", "trivial"),
+        # a verb aimed at the user (was: build, build)
+        ("update me when the CI run finishes", "proj", "trivial"),
+        ("keep an eye on it and update us once the deploy is done",
+         "proj", "trivial"),
+        # residue, pinned where it lands today so a later fix shows as a diff
+        ("add the meeting notes to my summary", "proj", "build"),
+        ("pull the comments on story ABC-123 into a list", "proj", "docs"),
+        ("add tests for catalog.scan_dir", "tests", "build"),
+        # a name is dropped whole-word only
+        ("add tests for catalog.scan_dir", "test", "quality"),
+        # genuine asks keep routing: not verb-first, late verb, path objects
+        ("we need to fix the crash in the exporter", "proj", "build"),
+        ("the scanner is slow, so refactor the walk loop", "proj", "build"),
+        ("once that lands, please implement the export command", "proj", "build"),
+        ("fix the crash in boost_cli/core/store.py", "proj", "build"),
+        ("fix bug ABC-123 in the exporter", "proj", "build"),
+        ("update docs/README.md with the new flag", "proj", "docs"),
+        ("add tests to tests/unit/test_catalog.py", "proj", "quality"),
+        ("document the helpers in boost_cli/core/rag.py", "proj", "docs"),
+    ])
+    def test_only_intent_is_scored(self, prompt, repo, expected):
+        assert bmad.classify(prompt, Path("/work") / repo) == expected
+
+    def test_a_removed_span_does_not_glue_its_neighbours(self):
+        """Blanked out, not deleted: `rename` must still read as a word."""
+        assert bmad.classify("rename`load_tap`to`read_tap` in the scanner") == "build"
+
+    def test_no_root_means_no_name_is_dropped(self):
+        assert bmad.classify("list the last three commits in migrations") == "build"
+
+    def test_a_root_with_no_name_drops_nothing(self):
+        assert bmad.classify("fix the bug", Path("/")) == "build"
+
+    def test_the_hook_root_reaches_the_classifier(self, tmp_path):
+        """`route_lines` has the repo; the name only counts if it passes it on."""
+        root = tmp_path / "migrations"
+        root.mkdir()
+        prompt = "list the last three commits in migrations"
+        assert bmad.route_lines(prompt, root) == []
+        assert bmad.route_lines(prompt, tmp_path) != []
 
 
 # ------------------------------------------------------------- project signals

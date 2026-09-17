@@ -389,7 +389,54 @@ under-route than talk over someone.
 """
 
 
-def classify(prompt: str) -> str:
+_NOT_INTENT = re.compile(
+    r"```.*?```"                           # fenced code
+    r"|`[^`\n]*`"                          # inline code
+    r"|\b(?:https?|ftp)://\S+|\bwww\.\S+"  # URLs
+    r"|(?<!\S)--?[a-z]\S*"                 # --flag, -f, --flag=value
+    r"|\b(?:story|ticket|issue|epic|task|bug|card|pr)\s+"
+    r"(?:[a-z][a-z0-9]*-\d+|#\d+)\b",      # story ABC-123, issue #42
+    re.IGNORECASE | re.DOTALL)
+"""Text that names something rather than asking for anything.
+
+A prompt of up to :data:`LONG_PROMPT_WORDS` routes on one keyword, so one match
+anywhere decided the track — including words nobody meant as intent. "rerun the
+installer with --scope global" went to product on `\\bscope\\b`, a link to
+`https://example.com/docs/...` went to docs, "move story ABC-123 to in progress"
+went to product. These spans are removed before any table is scored.
+"""
+
+_PATH_TOKEN = re.compile(r"\S*/\S*")
+"""A token with a `/` in it: a path, which `build` does not score.
+
+"tail logs/build/server.log" is not a build. The rule is build-only because a
+path is often the object of the ask — "update docs/README.md" must stay docs —
+and build is the catch-all whose single hits are the cheapest.
+"""
+
+_ADDRESSEE = re.compile(r"\b\w+\s+(?:me|us)\b", re.IGNORECASE)
+"""A verb aimed at the user, not the code: "update me when the CI run finishes".
+
+Build-only for the same reason as :data:`_PATH_TOKEN` — every build keyword is
+a verb that also reads as a request to *tell* someone something.
+"""
+
+
+def _intent_text(text: str, root: Path | str | None) -> str:
+    """`text` with everything that is not intent blanked out, for scoring.
+
+    The repo's own directory name goes too, whole-word: in a checkout called
+    `migrations`, "list the last three commits in migrations" is a `git log`,
+    not a migration. The hook already knows the root; this is where it counts.
+    """
+    text = _NOT_INTENT.sub(" ", text)
+    if root is not None and Path(root).name:
+        text = re.sub(r"(?<!\w)%s(?!\w)" % re.escape(Path(root).name), " ",
+                      text, flags=re.IGNORECASE)
+    return text
+
+
+def classify(prompt: str, root: Path | str | None = None) -> str:
     """Name the track a prompt belongs to, or ``"trivial"`` to stay silent.
 
     Silence is the default for anything that is not recognisably a unit of
@@ -397,6 +444,11 @@ def classify(prompt: str) -> str:
     own instructions), a short informational question, an explicit opt-out
     ("no bmad"), a prompt that matches no track at all, or — past
     :data:`LONG_PROMPT_WORDS` — one that matches only a single keyword.
+
+    Only intent is scored (:func:`_intent_text`): code spans, URLs, flags,
+    tracker IDs and the name of ``root`` — the repo the prompt was typed in —
+    never count, and ``build`` additionally ignores paths and verbs addressed
+    to the user. The threshold stays where it is; the evidence got cleaner.
     """
     text = prompt.strip()
     if not text or _SLASH.match(text) or _OPT_OUT.search(text):
@@ -407,9 +459,12 @@ def classify(prompt: str) -> str:
     if (_INFO_QUESTION.match(text) and len(words) <= QUESTION_MAX_WORDS
             and not _SECOND_SENTENCE.search(text)):
         return TRIVIAL
+    intent = _intent_text(text, root)
+    build_intent = _ADDRESSEE.sub(" ", _PATH_TOKEN.sub(" ", intent))
     # Distinct patterns matched, not occurrences: saying "update" twenty times
     # is one piece of evidence, which is what keeps a repetitive log quiet.
-    scores = {t: sum(1 for rx in pats if rx.search(text))
+    scores = {t: sum(1 for rx in pats
+                     if rx.search(build_intent if t == "build" else intent))
               for t, pats in _COMPILED.items()}
     best = max(scores.values())
     if best == 0 or (best < 2 and len(words) > LONG_PROMPT_WORDS):
@@ -526,12 +581,13 @@ def route_lines(prompt: str, root: Path | None = None) -> list[str]:
     Kept to a handful of lines on purpose — this is prepended to *every*
     substantive prompt, so its cost is paid on each turn of every session.
     """
-    track_name = classify(prompt)
+    root = Path(root) if root is not None else Path.cwd()
+    track_name = classify(prompt, root)
     if track_name == TRIVIAL:
         return []
     track = TRACKS[track_name]
     lead = PERSONA_BY_SLUG[track.lead]
-    signals = project_signals(Path(root) if root is not None else Path.cwd())
+    signals = project_signals(root)
 
     lines = [
         "[BMAD autopilot] track: %s" % track_name,
