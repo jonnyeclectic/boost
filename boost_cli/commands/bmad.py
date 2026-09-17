@@ -397,7 +397,12 @@ def _session_banner(payload: dict, text: str, root: Path) -> str:
     if session and banner:
         sessions[session] = {"track": track, "root": str(root),
                              "at": util.now_iso()}
-        _sessions_write(sessions)
+        # Best effort: a state dir that cannot be written (full disk, a
+        # root-owned ~/.boost after one `sudo boost`) must cost one repeated
+        # banner, not every banner — the write happens after the banner is
+        # built, so an escaping OSError silenced the router outright.
+        with suppress(OSError):
+            _sessions_write(sessions)
     return banner
 
 
@@ -680,9 +685,14 @@ def _doctor() -> int:
         personas = len(core.present_personas(agents))
         router = cs.has_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
         live = bool(st.get("autopilot")) and router
+        briefing = _on_off(cs.has_hook(scope, "SessionStart", HOOK_NAME))
+        if briefing == "on" and _stale_matcher(scope):
+            # The matcher lives in the user's settings.json from whenever they
+            # last ran `on`, while the code that depends on it ships with the
+            # binary — so an old install silently misses newer sources.
+            briefing += " (stale matcher: re-run `boost bmad on`)"
         out.kv(scope, "autopilot=%s  %d personas  router=%s  briefing=%s"
-               % (_on_off(live), personas, _on_off(router),
-                  _on_off(cs.has_hook(scope, "SessionStart", HOOK_NAME))))
+               % (_on_off(live), personas, _on_off(router), briefing))
         out.kv("  workflows", "skills=%d  installed=%s"
                % (_count_skills(_skills_dir(scope)), _on_off(st.get("installed"))))
     out.dim("  project = %s" % Path.cwd())
@@ -692,6 +702,17 @@ def _doctor() -> int:
 
 
 # -------------------------------------------------------------------- helpers
+
+def _stale_matcher(scope) -> bool:
+    """True when the installed briefing hook predates the current matcher.
+
+    `_orient` forgets a session's last banner on `clear` and `compact`, and
+    `compact` only reaches it if the hook was written with today's matcher.
+    """
+    rows = [r for r in cs.list_hooks(scope)
+            if r["event"] == "SessionStart" and r["name"] == HOOK_NAME]
+    return any(r.get("matcher") != HOOK_MATCHER for r in rows)
+
 
 def _skills_dir(scope) -> Path:
     base = paths.home() if scope == "global" else Path.cwd()

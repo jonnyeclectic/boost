@@ -370,16 +370,34 @@ in a URL, `api-schema-design` in a doc name. A `then` after the ask is the one
 way it turns back into work (:data:`_THEN`).
 """
 _THEN = re.compile(r"\bthen\b", re.IGNORECASE)
+_COMPOUND_ASK = re.compile(
+    r"\b(and|then|also)\s+(please\s+|also\s+)?"
+    r"(add|fix|update|create|implement|refactor|rename|remove|delete|build|"
+    r"ship|write|wire|migrate|run)\b", re.IGNORECASE)
+"""A second clause that asks for work, after a clause that asks for an answer.
+
+"read the spec and then implement it" and "can you explain the cache and add a
+test?" are requests with a question attached, not questions. Without this the
+question gates read only the first verb and silenced the work.
+"""
 
 PASTE_MIN_LINES = 3
 """Below this, a prompt is not shaped like pasted output."""
 
+_FENCE = re.compile(r"```.*?```", re.DOTALL)
+"""A fenced block: pasted *inside* a request, so it is not what the ask is."""
+
 _MACHINE_LINE = re.compile(
-    r"^\s+\S"                                   # indented
+    # Indented and code-shaped. Indentation alone is not enough: a bullet list
+    # and a hanging-indent sentence are indented too, and reading them as
+    # output silenced ordinary multi-line requests ("Do these:\n  - add a test
+    # …") that route fine as one line.
+    r"^\s+(?![-*•]\s|\d+[.)]\s)\S.*[=(){}\[\];|<>]"
+    r"|^\s*(modified|new file|deleted|renamed|both modified):"  # git status
     r"|^\$\s"                                   # a shell prompt
     r"|^Traceback \(most recent call last\)"
     r"|^[A-Za-z_][\w.]*(Error|Exception|Warning)\b"   # its last line
-    r"|^npm (ERR!|WARN)"
+    r"|^\s*npm\b"                                # npm's own log lines
     r"|^[>E]\s"                                  # pytest's source and error marks
     r"|^(FAILED|ERROR|PASSED|SKIPPED)\b"
     r"|^=+ .* =+$"                               # pytest's section rules
@@ -507,7 +525,9 @@ def classify(prompt: str, root: Path | str | None = None) -> str:
         return TRIVIAL
     if _is_question(text, words):
         return TRIVIAL
-    prose = _paste_prose(text)
+    # A fenced block is pasted material inside a request, so it must not
+    # outvote the request: strip it before deciding whether this is a paste.
+    prose = _paste_prose(_FENCE.sub(" ", text))
     # A paste gets the long-prompt argument whatever its length: one keyword in
     # a wall of machine output is incidental, and only the person's own lines
     # are theirs to score.
@@ -530,10 +550,20 @@ def _is_question(text: str, words: list[str]) -> bool:
 
     Three shapes: a wh-question, a yes/no question (an auxiliary opener and a
     closing ``?``, unless it is a modal request), and "read X and tell me".
-    The first two stop being questions past :data:`QUESTION_MAX_WORDS` or once
-    another sentence follows; the third stops at a ``then``.
+    All three stop being questions past :data:`QUESTION_MAX_WORDS`, once
+    another sentence follows, or once a second clause asks for work; the third
+    also stops at a ``then`` after the ask.
     """
-    if len(words) <= QUESTION_MAX_WORDS and not _SECOND_SENTENCE.search(text):
+    if _COMPOUND_ASK.search(text):
+        # "can you explain the cache and add a test for it?" asks for both; the
+        # tell-me verb only decides the question when nothing else is asked.
+        return False
+    if len(words) > QUESTION_MAX_WORDS:
+        # Past this a question is a brief, whatever shape it opens in. The
+        # read-and-tell gate had no cap at all, so a 200-word spec that opened
+        # "read the RFC …" and said "tell me" anywhere went silent.
+        return False
+    if not _SECOND_SENTENCE.search(text):
         if _INFO_QUESTION.match(text):
             return True
         if (text.endswith("?") and _YES_NO_QUESTION.match(text)

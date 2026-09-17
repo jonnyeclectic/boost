@@ -292,6 +292,17 @@ class TestDoctor:
         assert "autopilot=on" in r.out
         assert "%d personas" % len(core_bmad.PERSONAS) in r.out
 
+    def test_an_old_briefing_hook_is_reported_as_stale(
+            self, boost, sandbox, proj):
+        """The matcher lives in the user's settings.json from their last `on`,
+        so an install from before `compact` never forgets a compacted session."""
+        boost("bmad", "on")
+        assert "stale matcher" not in boost("bmad", "doctor").out
+        cs.add_hook("global", "SessionStart", bmad.HOOK_NAME, "x",
+                    matcher="startup|resume|clear")
+        r = boost("bmad", "doctor")
+        assert "briefing=on (stale matcher: re-run `boost bmad on`)" in r.out
+
     def test_autopilot_reads_as_off_when_the_hook_is_gone(
             self, boost, sandbox, proj):
         """State alone is not the truth — the router hook has to be there."""
@@ -689,6 +700,17 @@ class TestRouteRemembersTheSession:
         assert "track: build" in self._hook(
             boost, monkeypatch, proj, "implement the export command")
         assert json.loads(path.read_text(encoding="utf-8"))["s1"]["track"] == "build"
+
+    def test_an_unwritable_state_dir_costs_a_banner_not_the_router(
+            self, boost, sandbox, monkeypatch, proj):
+        """The record is written after the banner is built, so an escaping
+        OSError silenced every banner instead of repeating one."""
+        boost("bmad", "on")
+        monkeypatch.setattr(bmad.util, "atomic_write_text",
+                            lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
+        for _ in range(2):
+            assert "track: build" in self._hook(
+                boost, monkeypatch, proj, "implement the export command")
 
     def test_the_record_file_stays_bounded(
             self, boost, sandbox, monkeypatch, proj):

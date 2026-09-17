@@ -227,6 +227,10 @@ class TestPromptsThatAreNotTasks:
         "2026-09-17 build started",
         "12:03:44 build started",
         "npm ERR! build failed",
+        "  npm audit fix",
+        "Traceback (most recent call last):",
+        "E       AssertionError: build != fix",
+        ">       assert build_it() == 3",
         "concurrent.futures.TimeoutError: the build hung",
         "DeprecationWarning: build is deprecated",
         "RuntimeException: build failed",
@@ -242,6 +246,29 @@ class TestPromptsThatAreNotTasks:
         """Three copies of one machine line and one person's line: a paste."""
         prompt = "\n".join([line] * 3 + ["please fix it"])
         assert bmad.classify(prompt) == "trivial"
+
+    @pytest.mark.parametrize("prompt", [
+        # an indented task list — indentation alone is not machine output
+        "Do these:\n  - add a test for scan_dir\n  - update the docs\n"
+        "  - run make check",
+        "here's what I need:\n  1. add a retry to the fetcher\n"
+        "  2. write a test for it\n  3. update the changelog",
+        # a hard-wrapped request, indented as prose wraps
+        "Please update the installer so it writes the lock file\n"
+        "  atomically, and add a regression test that kills the\n"
+        "  mutant where the rename is dropped.",
+    ])
+    def test_an_indented_request_is_not_a_paste(self, prompt):
+        """The indent rule silenced ordinary multi-line asks: a bullet list and
+        a wrapped sentence are indented too, and each routes as one line."""
+        assert bmad.classify(prompt) != "trivial"
+
+    def test_a_fenced_paste_does_not_outvote_the_ask_around_it(self):
+        """The fence is pasted material inside a request, not the request."""
+        prompt = ("Add a retry to this function and a test for it:\n"
+                  "```python\ndef fetch(url):\n    r = requests.get(url)\n"
+                  "    return r.json()\n```")
+        assert bmad.classify(prompt) == "quality"
 
     def test_a_person_asking_over_a_paste_still_routes(self):
         """Two hits in the typed lines are the evidence a paste needs."""
@@ -325,6 +352,25 @@ class TestPromptsThatAreNotTasks:
     ])
     def test_read_and_tell_is_a_question(self, prompt):
         assert bmad.classify(prompt) == "trivial"
+
+    def test_a_long_read_and_tell_is_a_brief_not_a_question(self):
+        """The read-and-tell gate had no length cap, so a spec that opened
+        "read the RFC…" and said "tell me" anywhere went silent."""
+        prompt = ("read the RFC at https://example.com/rfc and tell me how we "
+                  "should implement the retry budget, what it means for the "
+                  "exporter, whether the current backoff is compatible, and "
+                  "which tests would need to change before any of it lands")
+        assert len(prompt.split()) > bmad.QUESTION_MAX_WORDS
+        assert bmad.classify(prompt) != "trivial"
+
+    @pytest.mark.parametrize("prompt", [
+        "can you explain how the cache works and add a test for it?",
+        "read the spec and then implement it and tell me when done",
+        "could you describe the scanner and also fix the flaky test?",
+    ])
+    def test_a_question_with_work_attached_is_work(self, prompt):
+        """The gates read only the first verb, so the work went unrouted."""
+        assert bmad.classify(prompt) != "trivial"
 
     def test_a_then_after_the_ask_turns_it_back_into_work(self):
         assert bmad.classify("read the PRD and tell me the gaps, then add "
