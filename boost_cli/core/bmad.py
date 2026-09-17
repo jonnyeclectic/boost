@@ -42,6 +42,8 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
+from . import hookhost
+
 MARKER = "<!-- boost:bmad-persona"
 """Prefix of the ownership stamp boost writes into every persona file.
 
@@ -752,7 +754,8 @@ def done_checklist(signals: dict, done: str = "change") -> list[str]:
 # --------------------------------------------------------------------- routing
 
 def route_lines(prompt: str, root: Path | None = None,
-                agents_dirs: tuple[Path, ...] | None = None) -> list[str]:
+                agents_dirs: tuple[Path, ...] | None = None,
+                host: str = hookhost.CLAUDE) -> list[str]:
     """The banner for one prompt: `[]` when the prompt is not a unit of work.
 
     Kept to a handful of lines on purpose — this is prepended to *every*
@@ -763,6 +766,11 @@ def route_lines(prompt: str, root: Path | None = None,
     are dropped: naming a subagent the session cannot spawn sends the model
     after something that does not exist. An edited file counts as present —
     it is still a subagent, just no longer boost's.
+
+    On a host other than Claude Code the personas are roles to adopt, not
+    subagents: Gemini's subagent tool is `invoke_agent` and boost writes no
+    personas for it, so its banner names no subagent, no Agent tool and no
+    ``~/.claude`` path.
     """
     root = Path(root) if root is not None else Path.cwd()
     track_name = classify(prompt, root)
@@ -775,7 +783,15 @@ def route_lines(prompt: str, root: Path | None = None,
         persona_state(d, lead) != "absent" for d in agents_dirs)
 
     lines = ["[BMAD autopilot] track: %s" % track_name]
-    if delegate:
+    if host != hookhost.CLAUDE:
+        lines.append("Lead: take the role of %s, %s. %s"
+                     % (lead.character, lead.title, track.note))
+        if track.support:
+            lines.append("Support: bring in the view of %s." % ", ".join(
+                "%s (%s)" % (PERSONA_BY_SLUG[s].character, PERSONA_BY_SLUG[s].title)
+                for s in track.support))
+        delegate = False
+    elif delegate:
         lines.append("Lead: `%s` subagent — %s, %s. %s"
                      % (lead.slug, lead.character, lead.title, track.note))
     if delegate and track.support:
@@ -803,20 +819,31 @@ CHANGE_CLOSE = ("Finish the change and verify it; stop only for a choice that "
 
 
 def route_context(prompt: str, root: Path | None = None,
-                  agents_dirs: tuple[Path, ...] | None = None) -> str:
+                  agents_dirs: tuple[Path, ...] | None = None,
+                  host: str = hookhost.CLAUDE) -> str:
     """:func:`route_lines` as one string (``""`` when there is nothing to say)."""
-    return "\n".join(route_lines(prompt, root, agents_dirs))
+    return "\n".join(route_lines(prompt, root, agents_dirs, host))
 
 
 # ----------------------------------------------------------------- orientation
 
-def orientation() -> str:
-    """The SessionStart briefing: the roster, the phases, and the house rule."""
+_SUBAGENT_INTRO = ("This session routes work through BMAD personas. Persona "
+                   "subagents live in\n~/.claude/agents and are delegated to "
+                   "with the Agent tool:")
+_ROLE_INTRO = ("This session routes work through BMAD personas. A routing banner "
+               "names the\npersona whose role to take on for that prompt:")
+
+
+def orientation(host: str = hookhost.CLAUDE) -> str:
+    """The SessionStart briefing: the roster, the phases, and the house rule.
+
+    Only Claude Code gets persona subagents; elsewhere the roster is a list of
+    roles, for the same reason as :func:`route_lines`.
+    """
     roster = "\n".join(
         "  %-15s %s, %s" % (p.slug, p.character, p.title) for p in PERSONAS)
     return """[BMAD autopilot active]
-This session routes work through BMAD personas. Persona subagents live in
-~/.claude/agents and are delegated to with the Agent tool:
+%s
 
 %s
 
@@ -834,7 +861,8 @@ Full workflow skills need a per-project `_bmad/` runtime — `boost bmad init`.
 
 House rule: a change is done when its tests, its docs and its tracked item are;
 findings are done when each carries its evidence; an artifact is done when it is
-written down and tracked. Turn this off with `boost bmad off`.""" % roster
+written down and tracked. Turn this off with `boost bmad off`.""" % (
+        _SUBAGENT_INTRO if host == hookhost.CLAUDE else _ROLE_INTRO, roster)
 
 
 # ------------------------------------------------------------ persona files

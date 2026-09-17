@@ -122,3 +122,58 @@ class TestHostSelectionRule:
         boost("bmad", "on", "--scope", "global")
         gem = sandbox / hookhost.settings_dir(hookhost.GEMINI) / "settings.json"
         assert not gem.exists()
+
+
+def _commands(data):
+    """{event: command} for boost's own hooks, marker included."""
+    return {event: h["command"]
+            for event, entries in (data.get("hooks") or {}).items()
+            for block in entries for h in block.get("hooks", [])
+            if "# boost:" in h.get("command", "")}
+
+
+class TestEachHostAnswersInItsOwnFormat:
+    """Gemini's hooks ask for Gemini's output; Claude's bytes do not move."""
+
+    def test_gemini_commands_name_their_host_and_claudes_do_not(
+            self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global")
+        gemini = _commands(_settings(both_hosts, hookhost.GEMINI))
+        claude = _commands(_settings(both_hosts, hookhost.CLAUDE))
+        assert "bmad route --scope global --host gemini 2>/dev/null || true" in (
+            gemini["BeforeAgent"])
+        assert "bmad orient --scope global --host gemini 2>/dev/null || true" in (
+            gemini["SessionStart"])
+        assert "--host" not in claude["UserPromptSubmit"]
+        assert "bmad route --scope global || true" in claude["UserPromptSubmit"]
+        assert "bmad orient --scope global || true" in claude["SessionStart"]
+
+    def test_startup_on_names_the_host_too(self, both_hosts, boost):
+        boost("bmad", "startup", "on", "--scope", "global")
+        gemini = _commands(_settings(both_hosts, hookhost.GEMINI))
+        assert "--host gemini" in gemini["SessionStart"]
+
+
+class TestHostFlag:
+    """`--host` overrides the evidence rule, so Claude-only is one flag."""
+
+    def test_host_claude_never_writes_gemini_settings(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "claude")
+        gem = both_hosts / hookhost.settings_dir(hookhost.GEMINI) / "settings.json"
+        assert not gem.exists()
+        assert _boost_hooks(_settings(both_hosts, hookhost.CLAUDE))
+
+    def test_host_gemini_writes_only_gemini_hooks(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "gemini")
+        assert _boost_hooks(_settings(both_hosts, hookhost.GEMINI))
+        assert not _boost_hooks(_settings(both_hosts, hookhost.CLAUDE))
+
+    def test_host_auto_is_the_evidence_rule(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "auto")
+        for host in (hookhost.CLAUDE, hookhost.GEMINI):
+            assert _boost_hooks(_settings(both_hosts, host)), host
+
+    def test_startup_on_honours_it(self, both_hosts, boost):
+        boost("bmad", "startup", "on", "--scope", "global", "--host", "claude")
+        gem = both_hosts / hookhost.settings_dir(hookhost.GEMINI) / "settings.json"
+        assert not gem.exists()

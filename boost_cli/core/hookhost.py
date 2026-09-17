@@ -52,6 +52,8 @@ Gemini's tool names, and a lifecycle matcher is an exact string.
 """
 from __future__ import annotations
 
+import json
+
 from ..errors import BoostError
 
 CLAUDE = "claude"
@@ -257,3 +259,27 @@ def resolve(requested: str | None) -> list[str]:
         return hosts()
     _spec(str(requested))
     return [str(requested)]
+
+
+def context_output(host: str, event: str, text: str) -> str:
+    """What a hook prints to hand ``text`` to the model, for a Claude ``event``.
+
+    The two hosts read hook stdout differently, and the difference is silent.
+    Claude Code adds a `SessionStart` hook's plain stdout to the context, and
+    takes `UserPromptSubmit` context from ``hookSpecificOutput``. Gemini CLI
+    turns any non-JSON stdout into ``{decision: "allow", systemMessage: text}``
+    — shown to the *user* — and adds only ``additionalContext`` to the model's
+    history. So boost's session briefing, printed as text, reached Gemini users
+    as a 26-line info message and never reached the model at all (measured
+    against Gemini CLI 0.57.0's hook runner: ``systemMessage`` 1,297 chars,
+    ``additionalContext`` 0).
+
+    Claude's bytes are unchanged. Gemini always gets JSON, under its own name
+    for the event.
+    """
+    if host == CLAUDE and event == "SessionStart":
+        return text
+    return json.dumps({"hookSpecificOutput": {
+        "hookEventName": translate(host, event),
+        "additionalContext": text,
+    }})

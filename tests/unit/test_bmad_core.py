@@ -902,6 +902,37 @@ class TestRouteContext:
                                  (agents,))
         assert not any(line.startswith("Lead:") for line in lines)
 
+    def test_on_gemini_the_lead_is_a_role_not_a_subagent(self, tmp_path):
+        """Gemini's subagent tool is `invoke_agent` and boost writes it no
+        personas, so nothing on that host may point at a Claude subagent."""
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "Makefile").write_text("check:\n\ttrue\n", encoding="utf-8")
+        lines = bmad.route_lines("implement the new export command", tmp_path,
+                                 host="gemini")
+        assert lines[:3] == [
+            "[BMAD autopilot] track: build",
+            "Lead: take the role of Amelia, Senior Software Engineer. "
+            "Ship it complete and verified.",
+            "Support: bring in the view of Murat (Master Test Architect), "
+            "Paige (Technical Writer).",
+        ]
+        text = "\n".join(lines)
+        for claude_only in ("subagent", "Agent tool", "~/.claude"):
+            assert claude_only not in text
+        assert bmad.route_context("implement the new export command", tmp_path,
+                                  host="gemini") == text
+
+    def test_on_gemini_absent_persona_files_do_not_drop_the_role(self, tmp_path):
+        lines = bmad.route_lines("implement the new export command", tmp_path,
+                                 (tmp_path / "none",), host="gemini")
+        assert lines[1].startswith("Lead: take the role of Amelia")
+
+    def test_a_single_support_role_reads_as_one(self, tmp_path):
+        lines = bmad.route_lines("review the changes on this branch", tmp_path,
+                                 host="gemini")
+        assert lines[2] == ("Support: bring in the view of Winston "
+                            "(System Architect).")
+
     def test_route_context_joins_the_lines_with_newlines(self, tmp_path):
         lines = bmad.route_lines("implement the export command", tmp_path)
         assert bmad.route_context("implement the export command", tmp_path) == (
@@ -937,6 +968,18 @@ class TestOrientation:
         roster = [ln for ln in lines if ln.startswith("  bmad-")]
         assert len(roster) == len(bmad.PERSONAS)
         assert "  bmad-dev        Amelia, Senior Software Engineer" in roster
+
+    def test_the_gemini_briefing_names_no_claude_machinery(self):
+        text = bmad.orientation("gemini")
+        for claude_only in ("subagent", "Agent tool", "~/.claude"):
+            assert claude_only not in text
+        assert "names the\npersona whose role to take on" in text
+        assert "  bmad-dev        Amelia, Senior Software Engineer" in text
+
+    def test_the_claude_briefing_is_the_default(self):
+        assert bmad.orientation() == bmad.orientation("claude")
+        assert "~/.claude/agents and are delegated to with the Agent tool" in (
+            bmad.orientation())
 
     def test_it_names_the_command_that_turns_it_off(self):
         assert "boost bmad off" in bmad.orientation()
