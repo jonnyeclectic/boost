@@ -2,7 +2,7 @@
 id: bmad-personas-delegate-outside-the-router
 board: code
 section: dx
-status: inflight
+status: shipped
 category: "Agents · BMAD"
 complexity: S
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: router silence is banner-only, and nobody has counted
 order: 325
 owner: loop/bmad-persona-triggers
-pr:
+pr: 865
 title: "Persona descriptions say <code>Use PROACTIVELY</code>, so the router's silence governs only the banner"
 ---
 <code>boost bmad on</code> gives Claude Code two routes to a persona, and only one goes through the router.
