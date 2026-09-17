@@ -75,7 +75,11 @@ instead of being remembered afterwards.
 
 The router costs a question nothing. Acknowledgements, slash commands, short
 informational questions ("what does `scan_dir` do?") and anything containing
-`no bmad` produce no banner at all. Because a `UserPromptSubmit` hook that exits
+`no bmad` produce no banner at all. A short prompt routes on a single keyword, so
+only intent is scored: code spans, URLs, `--flags`, tracker IDs such as
+`story ABC-123` and the name of the repo you are in never count, and the `build`
+track also ignores paths and verbs aimed at you ("update me when CI finishes").
+Because a `UserPromptSubmit` hook that exits
 non-zero would erase your prompt, it degrades every failure to silence and
 always exits 0.
 
