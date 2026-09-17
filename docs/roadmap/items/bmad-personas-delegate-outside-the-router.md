@@ -2,14 +2,14 @@
 id: bmad-personas-delegate-outside-the-router
 board: code
 section: dx
-status: next
+status: inflight
 category: "Agents · BMAD"
 complexity: S
 impact: Med
 wow: 3
 note: router silence is banner-only, and nobody has counted
 order: 325
-owner:
+owner: loop/bmad-persona-triggers
 pr:
 title: "Persona descriptions say <code>Use PROACTIVELY</code>, so the router's silence governs only the banner"
 ---
