@@ -81,7 +81,10 @@ only intent is scored: code spans, URLs, `--flags`, tracker IDs such as
 track also ignores paths and verbs aimed at you ("update me when CI finishes").
 Because a `UserPromptSubmit` hook that exits
 non-zero would erase your prompt, it degrades every failure to silence and
-always exits 0.
+always exits 0. The hook also speaks only while the autopilot is on for its
+scope, so a copy `boost bmad off` could not reach (a committed project
+`.claude/settings.json` in another checkout, a restored settings snapshot) stays
+silent, and a banner never names a persona whose file is gone.
 
 ```bash
 boost bmad personas                            # the roster, and whether it's installed

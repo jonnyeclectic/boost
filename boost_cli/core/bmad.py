@@ -575,11 +575,18 @@ def done_checklist(signals: dict) -> list[str]:
 
 # --------------------------------------------------------------------- routing
 
-def route_lines(prompt: str, root: Path | None = None) -> list[str]:
+def route_lines(prompt: str, root: Path | None = None,
+                agents_dirs: tuple[Path, ...] | None = None) -> list[str]:
     """The banner for one prompt: `[]` when the prompt is not a unit of work.
 
     Kept to a handful of lines on purpose — this is prepended to *every*
     substantive prompt, so its cost is paid on each turn of every session.
+
+    ``agents_dirs`` are the directories a session loads subagents from. When
+    given, and the lead's file is in none of them, the Lead and Support lines
+    are dropped: naming a subagent the session cannot spawn sends the model
+    after something that does not exist. An edited file counts as present —
+    it is still a subagent, just no longer boost's.
     """
     root = Path(root) if root is not None else Path.cwd()
     track_name = classify(prompt, root)
@@ -588,13 +595,14 @@ def route_lines(prompt: str, root: Path | None = None) -> list[str]:
     track = TRACKS[track_name]
     lead = PERSONA_BY_SLUG[track.lead]
     signals = project_signals(root)
+    delegate = agents_dirs is None or any(
+        persona_state(d, lead) != "absent" for d in agents_dirs)
 
-    lines = [
-        "[BMAD autopilot] track: %s" % track_name,
-        "Lead: `%s` subagent — %s, %s. %s"
-        % (lead.slug, lead.character, lead.title, track.note),
-    ]
-    if track.support:
+    lines = ["[BMAD autopilot] track: %s" % track_name]
+    if delegate:
+        lines.append("Lead: `%s` subagent — %s, %s. %s"
+                     % (lead.slug, lead.character, lead.title, track.note))
+    if delegate and track.support:
         lines.append(
             "Support: %s — spawn them with the Agent tool, in parallel where "
             "the work is independent."
@@ -610,9 +618,10 @@ def route_lines(prompt: str, root: Path | None = None) -> list[str]:
     return lines
 
 
-def route_context(prompt: str, root: Path | None = None) -> str:
+def route_context(prompt: str, root: Path | None = None,
+                  agents_dirs: tuple[Path, ...] | None = None) -> str:
     """:func:`route_lines` as one string (``""`` when there is nothing to say)."""
-    return "\n".join(route_lines(prompt, root))
+    return "\n".join(route_lines(prompt, root, agents_dirs))
 
 
 # ----------------------------------------------------------------- orientation
