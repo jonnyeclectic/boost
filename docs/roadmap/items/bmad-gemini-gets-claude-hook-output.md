@@ -2,14 +2,14 @@
 id: bmad-gemini-gets-claude-hook-output
 board: code
 section: dx
-status: next
+status: inflight
 category: "Agents · BMAD"
 complexity: M
 impact: Med
 wow: 2
 note: gemini takes the banner but shows the briefing to the user
 order: 324
-owner:
+owner: loop/bmad-gemini-hook-output
 pr:
 title: On Gemini, the <code>bmad on</code> briefing reaches the user and never the model
 ---
