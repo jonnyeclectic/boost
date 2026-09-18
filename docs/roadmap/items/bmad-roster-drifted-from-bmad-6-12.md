@@ -2,15 +2,15 @@
 id: bmad-roster-drifted-from-bmad-6-12
 board: code
 section: dx
-status: next
+status: shipped
 category: "Agents · BMAD"
 complexity: M
 impact: Med
 wow: 2
 note: docs routes at a skill no default 6.12 install contains
 order: 323
-owner:
-pr:
+owner: loop/bmad-roster-pin
+pr: 867
 title: The autopilot routes docs at a skill BMAD 6.12 no longer installs, and no test would notice
 ---
 <code>core/bmad.py</code> hard-codes upstream skill names in persona <code>skills</code> and track

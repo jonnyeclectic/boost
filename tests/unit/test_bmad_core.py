@@ -29,6 +29,51 @@ from boost_cli.core import bmad
 
 _STAMP = re.compile(r"<!-- boost:bmad-persona [0-9a-f]{12} -->")
 
+def _pinned_skills() -> set[str]:
+    """The skills `bmad-method@BMAD_VERSION` installs, from the checked-in list."""
+    path = (Path(__file__).parent / "data"
+            / ("bmad-skills-%s.json" % bmad.BMAD_VERSION))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["version"] == bmad.BMAD_VERSION
+    return set(data["skills"])
+
+
+class TestPinnedRelease:
+    """Every BMAD skill boost names exists in the release it installs.
+
+    The tables were only ever checked against each other, so a name that went
+    stale in both passed: the docs track routed at `bmad-document-project`
+    after BMAD 6.12.0 stopped installing it. A bump of `BMAD_VERSION` without a
+    regenerated `tests/unit/data/bmad-skills-<version>.json` fails here.
+    """
+
+    def test_the_snapshot_is_the_pinned_version(self):
+        assert len(_pinned_skills()) == 29
+
+    def test_every_persona_skill_is_installed_by_the_pin(self):
+        for p in bmad.PERSONAS:
+            assert set(p.skills) <= _pinned_skills(), p.slug
+
+    def test_every_track_skill_is_installed_by_the_pin(self):
+        for name, track in bmad.TRACKS.items():
+            assert track.skill is None or track.skill in _pinned_skills(), name
+
+    def test_docs_routes_at_no_skill_and_says_nothing_about_one(self, tmp_path):
+        assert bmad.TRACKS["docs"].skill is None
+        lines = bmad.route_lines("update the README for the new flag", tmp_path)
+        assert lines[0] == "[BMAD autopilot] track: docs"
+        assert not any(line.startswith("BMAD skill:") for line in lines)
+        assert lines[3].startswith("Done means:")
+
+    def test_the_briefing_does_not_promise_a_skill_on_every_banner(self):
+        """`docs` routes at none, so "the BMAD skill for that track" was a
+        claim the banner stopped honouring."""
+        assert "the BMAD skill for that track when one fits" in bmad.orientation()
+
+    def test_the_skills_that_need_a_runtime_are_real(self):
+        assert set(bmad.RUNTIME_SKILLS) <= _pinned_skills()
+
+
 # --------------------------------------------------------------- classification
 
 class TestClassifyTrivial:
@@ -461,11 +506,13 @@ class TestClassifyTracks:
         the other eight rows could be edited to anything."""
         for name, track in bmad.TRACKS.items():
             lead = bmad.PERSONA_BY_SLUG[track.lead]
+            assert track.lead not in track.support
+            assert track.note.endswith((".", "!"))
+            if track.skill is None:
+                continue
             assert track.skill in lead.skills, (
                 "track %r routes at %r, which %s does not drive"
                 % (name, track.skill, lead.character))
-            assert track.lead not in track.support
-            assert track.note.endswith((".", "!"))
 
     def test_track_order_covers_every_track_exactly_once(self):
         assert sorted(bmad.TRACK_ORDER) == sorted(bmad.TRACKS)
@@ -941,18 +988,15 @@ class TestRouteContext:
 
 
 class TestOrientation:
-    def test_names_only_live_v6_skills(self):
-        """v6 deprecated the shims this text used to advertise.
-
-        `bmad-quick-dev` and `bmad-dev-story` are now redirect shims; the
-        canonical implementation workflow is `bmad-build`. Naming a shim sent
-        every build task through a deprecation notice.
-        """
+    def test_names_only_skills_the_pinned_release_installs(self):
+        """v6 deprecated the shims this text used to advertise, and a denylist
+        of three of them could not notice the next one. The pinned release's
+        own skill list can."""
         text = bmad.orientation()
-        assert "bmad-build" in text
-        assert "bmad-quick-dev" not in text
-        assert "bmad-dev-story" not in text
-        assert "bmad-create-story" not in text
+        named = {t for t in re.findall(r"\bbmad-[a-z0-9-]+", text)
+                 if t not in bmad.PERSONA_BY_SLUG}
+        assert "bmad-build" in named
+        assert named <= _pinned_skills()
 
     def test_does_not_claim_a_persona_that_bmm_does_not_ship(self):
         """Paige is a game-dev-studio agent, on hiatus in bmm."""

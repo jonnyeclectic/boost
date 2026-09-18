@@ -71,7 +71,8 @@ class TestInstall:
         assert "installed BMAD" in r.out
         # correct installer invocation
         cmd = npx[0]
-        assert cmd[:4] == ["npx", "--yes", "bmad-method@latest", "install"]
+        assert cmd[:4] == ["npx", "--yes", "bmad-method@%s" % core_bmad.BMAD_VERSION,
+                           "install"]
         assert "--directory" in cmd and str(proj) in cmd
         assert cmd[cmd.index("--tools") + 1] == "claude-code"
         assert cmd[cmd.index("--modules") + 1] == "bmm"
@@ -266,6 +267,126 @@ class TestResilience:
         boost("bmad", "install", "--scope", "global")  # second pass overwrites
         assert {d.name for d in (sandbox / ".claude" / "skills").glob("bmad-*")} == {
             "bmad-agent-dev", "bmad-agent-pm", "bmad-help"}
+
+
+def _installer(monkeypatch, *skills, version="6.12.0"):
+    """Stub `npx bmad-method install` to stage exactly ``skills``."""
+    def fake_run(cmd, **kw):
+        directory = Path(cmd[cmd.index("--directory") + 1])
+        for name in skills:
+            d = directory / ".claude" / "skills" / name
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "SKILL.md").write_text("---\nname: %s\n---\n" % name,
+                                        encoding="utf-8")
+        return types.SimpleNamespace(
+            returncode=0, stdout="BMAD Method v%s installed" % version, stderr="")
+
+    monkeypatch.setattr(bmad.shutil, "which", lambda _n: "/usr/bin/npx")
+    monkeypatch.setattr(bmad.subprocess, "run", fake_run)
+
+
+class TestGlobalInstallTracksWhatItShipped:
+    """A global install records what it copied, and retires only that."""
+
+    def _skills(self, sandbox):
+        return {d.name for d in (sandbox / ".claude" / "skills").glob("bmad-*")}
+
+    def test_records_the_version_and_the_skill_list(
+            self, boost, sandbox, monkeypatch, proj):
+        _installer(monkeypatch, "bmad-help", "bmad-prd")
+        r = boost("bmad", "install", "--scope", "global")
+        st = bmad._get_scope_state("global")
+        assert st["version"] == "6.12.0"
+        assert st["skill_list"] == ["bmad-help", "bmad-prd"]
+        assert st["skills"] == 2
+        assert "(v6.12.0)" in r.out
+
+    def test_a_skill_the_new_release_dropped_is_removed(
+            self, boost, sandbox, monkeypatch, proj):
+        _installer(monkeypatch, "bmad-help", "bmad-document-project")
+        boost("bmad", "install", "--scope", "global")
+        _installer(monkeypatch, "bmad-help", "bmad-project-context")
+        r = boost("bmad", "install", "--scope", "global")
+        assert self._skills(sandbox) == {"bmad-help", "bmad-project-context"}
+        assert "no longer installs: bmad-document-project" in r.out
+
+    def test_a_bmad_dir_it_never_recorded_is_left_alone(
+            self, boost, sandbox, monkeypatch, proj):
+        mine = sandbox / ".claude" / "skills" / "bmad-my-own"
+        mine.mkdir(parents=True)
+        _installer(monkeypatch, "bmad-help")
+        boost("bmad", "install", "--scope", "global")
+        boost("bmad", "install", "--scope", "global")
+        assert mine.is_dir()
+
+    def test_a_first_install_with_no_record_removes_nothing(
+            self, boost, sandbox, monkeypatch, proj):
+        old = sandbox / ".claude" / "skills" / "bmad-document-project"
+        old.mkdir(parents=True)
+        _installer(monkeypatch, "bmad-help")
+        r = boost("bmad", "install", "--scope", "global")
+        assert old.is_dir() and "no longer installs" not in r.out
+
+    @pytest.mark.parametrize("record", [
+        ["bmad-gone", "../escape", "bmad-x/../../escape", 7],
+        "bmad-gone",
+    ])
+    def test_a_hand_edited_record_cannot_steer_the_delete(
+            self, boost, sandbox, monkeypatch, proj, record):
+        escape = sandbox / ".claude" / "escape"
+        escape.mkdir(parents=True)
+        gone = sandbox / ".claude" / "skills" / "bmad-gone"
+        gone.mkdir(parents=True)
+        bmad._set_scope_state("global", skill_list=record)
+        _installer(monkeypatch, "bmad-help")
+        boost("bmad", "install", "--scope", "global")
+        assert escape.is_dir()
+        assert gone.is_dir() == (not isinstance(record, list))
+
+    def test_a_narrower_module_set_retires_nothing(
+            self, boost, sandbox, monkeypatch, proj):
+        """`--modules` defaults to bmm, so the natural reinstall stages less
+        than the last one did — and every other module's skill would read as
+        retired by the release and be deleted."""
+        _installer(monkeypatch, "bmad-help", "bmad-brainstorm")
+        boost("bmad", "install", "--scope", "global", "--modules", "bmm,cis")
+        _installer(monkeypatch, "bmad-help")
+        r = boost("bmad", "install", "--scope", "global")
+        assert self._skills(sandbox) == {"bmad-help", "bmad-brainstorm"}
+        assert "no longer installs" not in r.out
+
+    def test_the_same_module_set_still_retires(
+            self, boost, sandbox, monkeypatch, proj):
+        _installer(monkeypatch, "bmad-help", "bmad-brainstorm")
+        boost("bmad", "install", "--scope", "global", "--modules", "bmm,cis")
+        _installer(monkeypatch, "bmad-help")
+        r = boost("bmad", "install", "--scope", "global", "--modules", "bmm,cis")
+        assert self._skills(sandbox) == {"bmad-help"}
+        assert "no longer installs: bmad-brainstorm" in r.out
+
+    def test_a_wider_module_set_still_retires(
+            self, boost, sandbox, monkeypatch, proj):
+        _installer(monkeypatch, "bmad-help", "bmad-old")
+        boost("bmad", "install", "--scope", "global")
+        _installer(monkeypatch, "bmad-help")
+        r = boost("bmad", "install", "--scope", "global", "--modules", "bmm,cis")
+        assert self._skills(sandbox) == {"bmad-help"}
+        assert "no longer installs: bmad-old" in r.out
+
+    def test_names_the_skills_that_need_bmad_init(
+            self, boost, sandbox, monkeypatch, proj):
+        _installer(monkeypatch, "bmad-build", "bmad-build-auto", "bmad-help")
+        r = boost("bmad", "install", "--scope", "global")
+        assert "bmad-build and bmad-build-auto halt without a per-repo _bmad/" in (
+            r.out + r.err)
+        assert "boost bmad init" in r.out + r.err
+
+    def test_without_those_skills_it_only_points_at_init(
+            self, boost, sandbox, monkeypatch, proj):
+        _installer(monkeypatch, "bmad-help")
+        r = boost("bmad", "install", "--scope", "global")
+        assert "halt without" not in r.out + r.err
+        assert "boost bmad init" in r.out
 
     def test_corrupt_state_file_ignored(self, boost, sandbox, proj):
         sp = bmad._state_path()
