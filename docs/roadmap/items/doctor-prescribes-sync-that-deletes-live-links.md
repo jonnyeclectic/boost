@@ -1,16 +1,16 @@
 ---
 id: doctor-prescribes-sync-that-deletes-live-links
 board: code
-section: planned
-status: planned
+section: health
+status: shipped
 category: Onboarding · Bug
 complexity: L
 impact: High
 wow: 4
 note: store.sync_plan decides staleness with link.name not in lock where lock = lockfile.in…
 order: 206
-owner:
-pr:
+owner: loop/sync-keeps-live-links
+pr: 869
 title: A missing or corrupt lock file makes doctor prescribe <code>boost sync</code>/<code>boost heal</code>, and both delete every live agent symlink of an intact install
 ---
 <b>Measured.</b> With the lock file deleted from an otherwise intact install, <code>boost doctor</code> exits 1 and prescribes <code>boost sync</code> on two separate lines; running that prescription removes 4 of 4 live, boost-owned, store-resolving agent symlinks (claude-code, windsurf, cursor, antigravity) with four green ✓ marks, no confirmation prompt of any kind, and exit code 0 — because <code>store.sync_plan</code> (store.py:1785-1787) tests <code>link.name not in lock</code> against <code>lockfile.installed()</code>, which collapses a missing lock into an empty skeleton (lockfile.py:44-45), and <code>sync_apply</code>'s unlink loop (store.py:1895) has no confirm while cmd_sync's only two confirms (pkg.py:694, 704) are both <code>--prune</code>-gated.
@@ -46,3 +46,5 @@ NOT A DUPLICATE — I re-checked all 432 items independently rather than trustin
 <b>Why it is worth doing.</b> This is the recovery surface behaving as a destroyer at the exact moment a user reaches for it. The lock file is the one file with no atomic-write protection story a new user knows about (an interrupted install, a full disk, a bad restore), the skill on disk and its four agent links are all still correct, and the single command doctor prints — twice — silently uninstalls it from Claude Code, Cursor, Windsurf and Antigravity, exits 0, and calls the result healthy two commands later. The one command that actually recovers (<code>boost install &lt;name&gt;</code>) is never mentioned, and the corrupt-lock alternative (<code>boost replay</code>) is empty on any machine with a single install — i.e.
 
 <em>Found by an automated audit of retrieval/eval quality, the search &amp; browse surfaces, and first-run onboarding; every finding was then re-measured from scratch by an independent adversarial verifier whose instruction was to refute it. Verdict: <b>CORRECTED</b>. No fix is prescribed here — the measurement is the contribution.</em>
+
+<b>Fixed.</b> The lock is authoritative only while it can vouch (<code>store.lock_vouches</code>): a missing lock over a populated store, a corrupt one or one in another schema cannot, and then nothing it lacks is a stale link or an orphan — the store dirs are reported as <code>unrecorded_store</code>, which <code>--prune</code> never touches. A merely <em>missing</em> lock is rebuilt by <code>boost sync</code> from what is on disk: a dir byte-identical to exactly one tapped source is re-recorded from that tap, anything else as a local skill whose source is the store copy (reinstalling was the obvious repair, and it silently discards edits), and a narrowed install keeps its narrowing. A corrupt lock is never overwritten; sync leaves the links alone and points at <code>boost replay</code>. Re-running the reproduction above: sync prints <code>re-recorded brainstorming from …</code> and all four links survive.

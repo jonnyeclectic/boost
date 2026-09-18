@@ -619,6 +619,7 @@ _PLAN_LABELS = [
     ("blocked_links", "agent links blocked by a foreign file"),
     ("stale_links", "stale links"),
     ("orphaned_store", "orphaned store dirs"),
+    ("unrecorded_store", "store dirs the lock file has lost"),
     ("missing_materializations", "missing rule/workflow files"),
     ("out_of_scope_links", "linked outside declared scope"),
 ]
@@ -711,17 +712,26 @@ def cmd_sync(argv: list[str]) -> int:
                 journal.log("prune", name)
                 pruned.append(name)
     left = [n for n in orphans if n not in pruned]
+    # Re-recorded by sync_apply when the lock was merely missing; still here
+    # only when it is corrupt or in another schema, which sync never overwrites.
+    unrecorded = [n for n in plan["unrecorded_store"]
+                  if lockfile.get_skill(n) is None]
     blocked = plan["blocked_links"]
     if args.json:
         # `sync --diff --json` above is indent=2; this printed one unindented
         # line, so the two `--json` shapes of the same command disagreed on
         # style for no reason tied to their content.
         print(json.dumps({"actions": actions, "pruned": pruned,
-                          "orphaned_store": left, "out_of_scope_links": oos,
+                          "orphaned_store": left, "unrecorded_store": unrecorded,
+                          "out_of_scope_links": oos,
                           "blocked_links": blocked}, indent=2))
         return 0
     for a in actions:
         out.ok(a)
+    if unrecorded:
+        out.warn("%s the lock file cannot record, left as they are: %s — "
+                 "restore the lock with `boost replay`"
+                 % (_plural(len(unrecorded), "store dir"), ", ".join(unrecorded)))
     for name in pruned:
         out.ok("pruned %s" % _tilde(store.skill_store_dir(name)))
     if left:
