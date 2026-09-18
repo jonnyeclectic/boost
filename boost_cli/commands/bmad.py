@@ -18,6 +18,7 @@ of the thinking lives in :mod:`boost_cli.core.bmad`; this module is glue.
     boost bmad off                         # remove hooks + boost-written personas
     boost bmad personas                    # the roster + whether installed, both scopes
     boost bmad route [PROMPT] [--plain]    # hook target; pipeable for debugging
+    boost bmad on --host claude            # hooks for one host, not every one in use
 
 **The full method** is `boost bmad install`, unchanged: it delegates to the
 canonical `npx bmad-method install` (Node.js 20.12+) for the `bmad-*` workflow
@@ -55,8 +56,10 @@ way. Matchers are *not* translated — `hookhost` passes them through
 host-native — so Claude's `startup|resume|clear` source matcher is applied only
 on Claude.
 
-What that buys on a second host is prompt shaping, not full parity: the routing
-banner names personas Gemini cannot spawn.
+What that buys on a second host is prompt shaping, not full parity. Gemini's
+hooks pass `--host gemini`, so `route` and `orient` answer in the JSON Gemini
+adds to the model's context and name the personas as roles rather than
+subagents; `--host` on `on`/`startup` picks the hosts explicitly.
 """
 from __future__ import annotations
 
@@ -110,14 +113,19 @@ def cmd_bmad(argv) -> int:
                    help="enable the startup toggle right after install")
     p.add_argument("--plain", action="store_true",
                    help="route: print the banner as text, not as hook JSON")
+    p.add_argument("--host", metavar="H", default=None,
+                   choices=(*hookhost.hosts(), "auto"),
+                   help="on/startup: hosts to hook (%s; default auto: "
+                        "claude + any in use) · route/orient: output format"
+                        % " | ".join(hookhost.hosts()))
     args = p.parse_args(argv)
 
     if args.action == "on":
-        return _autopilot_on(args.scope)
+        return _autopilot_on(args.scope, args.host)
     if args.action == "off":
         return _autopilot_off(args.scope)
     if args.action == "route":
-        return _route(args.value, args.plain, args.scope)
+        return _route(args.value, args.plain, args.scope, _one_host(args.host))
     if args.action == "personas":
         return _personas(args.scope)
     if args.action == "install":
@@ -125,9 +133,9 @@ def cmd_bmad(argv) -> int:
     if args.action == "init":
         return _init(args.modules, args.startup)
     if args.action == "startup":
-        return _startup(args.value or "status", args.scope)
+        return _startup(args.value or "status", args.scope, args.host)
     if args.action == "orient":
-        return _orient(args.scope)
+        return _orient(args.scope, _one_host(args.host))
     if args.action == "uninstall":
         return _uninstall(args.scope, args.yes)
     if args.action == "disable":
@@ -174,7 +182,12 @@ def _never_fails(command: str) -> str:
     return command + " || true"
 
 
-def _hook_hosts(scope: str) -> list[str]:
+def _one_host(host) -> str:
+    """The host a hook runs under. Hooks written before `--host` are Claude's."""
+    return hookhost.CLAUDE if host in (None, "auto") else host
+
+
+def _hook_hosts(scope: str, requested=None) -> list[str]:
     """Hosts to write hooks into: Claude always, others on evidence of use.
 
     Claude is unconditional. It is boost's primary host and the behaviour every
@@ -189,7 +202,13 @@ def _hook_hosts(scope: str) -> list[str]:
     `~/.gemini/settings.json` for someone who has never run Gemini is litter in
     a file boost does not own. A host that appears later is picked up by the
     next `boost bmad on`, which is idempotent.
+
+    ``requested`` (`--host`) overrides the rule: naming one host writes that
+    host only, so Claude-only no longer means hand-editing Gemini's settings
+    after every `on`.
     """
+    if requested not in (None, "auto"):
+        return [requested]
     chosen = [hookhost.CLAUDE]
     for host in hookhost.hosts():
         if host == hookhost.CLAUDE:
@@ -209,11 +228,26 @@ _ORIENT_HOOK = ("SessionStart", HOOK_NAME, HOOK_MATCHER)
 _ROUTE_HOOK = ("UserPromptSubmit", ROUTE_HOOK_NAME, None)
 
 
-def _add_hook_everywhere(scope: str, spec: tuple, command: str) -> list[str]:
-    """Install one hook on every installed host. Returns the hosts written."""
+def _host_command(host: str, command: str) -> str:
+    """``command`` as ``host``'s hook runs it, made incapable of failing.
+
+    Claude's bytes are what every earlier release wrote. Another host's hook
+    names its host, so `route`/`orient` answer in the format that host reads,
+    and drops stderr: Gemini shows stderr to the user when stdout is empty, so
+    a launcher too old to know the action printed its usage error into the
+    session despite `|| true`.
+    """
+    if host == hookhost.CLAUDE:
+        return _never_fails(command)
+    return _never_fails("%s --host %s 2>/dev/null" % (command, host))
+
+
+def _add_hook_everywhere(scope: str, spec: tuple, command: str,
+                         requested=None) -> list[str]:
+    """Install one hook on every chosen host. Returns the hosts written."""
     event, name, matcher = spec
     written = []
-    for host in _hook_hosts(scope):
+    for host in _hook_hosts(scope, requested):
         target = hookhost.translate(host, event)
         if target is None:
             # Refused out loud rather than dropped: a hook the user asked for
@@ -221,7 +255,7 @@ def _add_hook_everywhere(scope: str, spec: tuple, command: str) -> list[str]:
             out.warn("%s has no counterpart for %s — skipped"
                      % (hookhost.label(host), event))
             continue
-        cs.add_hook(scope, target, name, command,
+        cs.add_hook(scope, target, name, _host_command(host, command),
                     matcher=matcher if host == hookhost.CLAUDE else None,
                     host=host)
         written.append(host)
@@ -246,7 +280,7 @@ def _remove_hook_everywhere(scope: str, *specs: tuple) -> int:
     return removed
 
 
-def _autopilot_on(scope) -> int:
+def _autopilot_on(scope, requested_host=None) -> int:
     """The one command. Personas + orientation + router, in one idempotent pass.
 
     Global by default: the point of the autopilot is that a task arriving in
@@ -267,10 +301,11 @@ def _autopilot_on(scope) -> int:
 
     launcher = shlex.quote(str(paths.launcher()))
     hosts = _add_hook_everywhere(
-        scope, _ORIENT_HOOK,
-        _never_fails("%s bmad orient --scope %s" % (launcher, scope)))
+        scope, _ORIENT_HOOK, "%s bmad orient --scope %s" % (launcher, scope),
+        requested_host)
     _add_hook_everywhere(scope, _ROUTE_HOOK,
-                         _never_fails("%s bmad route --scope %s" % (launcher, scope)))
+                         "%s bmad route --scope %s" % (launcher, scope),
+                         requested_host)
     _set_scope_state(scope, autopilot=True, startup=True, personas=present,
                      enabled_at=util.now_iso())
     journal.log("bmad-autopilot", "on", scope=scope, personas=present)
@@ -335,7 +370,7 @@ def _read_hook_stdin() -> dict:
     return data if isinstance(data, dict) else {"prompt": raw}
 
 
-def _route(prompt, plain, scope=None) -> int:
+def _route(prompt, plain, scope=None, host=hookhost.CLAUDE) -> int:
     """UserPromptSubmit hook target: classify, then emit the routing banner.
 
     This runs on every single prompt, so it has exactly one hard rule: **always
@@ -356,9 +391,9 @@ def _route(prompt, plain, scope=None) -> int:
         cwd = payload.get("cwd")
         root = Path(cwd) if cwd else Path.cwd()
         if prompt or plain:
-            banner = core.route_context(text, root)
+            banner = core.route_context(text, root, None, host)
         elif _autopilot_live(scope, root):
-            banner = _session_banner(payload, text, root)
+            banner = _session_banner(payload, text, root, host)
         else:
             return 0
     except Exception:                     # a hook must never break the session
@@ -368,14 +403,12 @@ def _route(prompt, plain, scope=None) -> int:
     if plain:
         print(banner)
         return 0
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "UserPromptSubmit",
-        "additionalContext": banner,
-    }}))
+    print(hookhost.context_output(host, "UserPromptSubmit", banner))
     return 0
 
 
-def _session_banner(payload: dict, text: str, root: Path) -> str:
+def _session_banner(payload: dict, text: str, root: Path,
+                    host: str = hookhost.CLAUDE) -> str:
     """The hook's banner, or ``""`` when this session already holds it.
 
     Keyed by ``session_id``. Gemini's `BeforeAgent` carries one too, but its
@@ -383,7 +416,7 @@ def _session_banner(payload: dict, text: str, root: Path) -> str:
     skipped there would simply be missing; the check applies to Claude alone.
     """
     session = str(payload.get("session_id") or "")
-    if payload.get("hook_event_name") == "BeforeAgent":
+    if host != hookhost.CLAUDE or payload.get("hook_event_name") == "BeforeAgent":
         session = ""
     track = core.classify(text, root)
     if track == core.TRIVIAL:
@@ -393,7 +426,7 @@ def _session_banner(payload: dict, text: str, root: Path) -> str:
                                            str(root)):
         return ""
     banner = core.route_context(
-        text, root, (_agents_dir("global"), root / ".claude" / "agents"))
+        text, root, (_agents_dir("global"), root / ".claude" / "agents"), host)
     if session and banner:
         sessions[session] = {"track": track, "root": str(root),
                              "at": util.now_iso()}
@@ -548,12 +581,12 @@ def _copy_global_skills(modules) -> int:
 
 # ----------------------------------------------------------------------- toggle
 
-def _startup(value, scope) -> int:
+def _startup(value, scope, requested_host=None) -> int:
     scope = scope or "project"
     if value == "on":
-        cmd = _never_fails("%s bmad orient --scope %s" % (
-            shlex.quote(str(paths.launcher())), scope))
-        started = _add_hook_everywhere(scope, _ORIENT_HOOK, cmd)
+        cmd = "%s bmad orient --scope %s" % (
+            shlex.quote(str(paths.launcher())), scope)
+        started = _add_hook_everywhere(scope, _ORIENT_HOOK, cmd, requested_host)
         _set_scope_state(scope, startup=True)
         journal.log("bmad-startup", "on", scope=scope)
         out.ok("BMAD startup ON (%s) — new sessions get orientation" % scope)
@@ -572,7 +605,7 @@ def _startup(value, scope) -> int:
                      hint="use 'on', 'off' or 'status'")
 
 
-def _orient(scope) -> int:
+def _orient(scope, host=hookhost.CLAUDE) -> int:
     """SessionStart hook target: print the briefing iff enabled (else silent).
 
     On `clear` and `compact` it also forgets the session's last routing banner:
@@ -589,17 +622,18 @@ def _orient(scope) -> int:
                 _sessions_write(sessions)
     with suppress(Exception):
         if _get_scope_state(scope).get("startup"):
-            print(core.orientation())
+            print(hookhost.context_output(host, "SessionStart",
+                                          core.orientation(host)))
     return 0
 
 
 def _status(scope) -> int:
     st = _get_scope_state(scope)
-    hook = cs.has_hook(scope, "SessionStart", HOOK_NAME)
+    hosts = _hosts_with(scope, "SessionStart", HOOK_NAME)
     n = _count_skills(_skills_dir(scope))
     out.heading("BMAD startup — %s" % scope)
     out.kv("enabled", str(bool(st.get("startup"))))
-    out.kv("hook", "present" if hook else "absent")
+    out.kv("hook", "present (%s)" % ", ".join(hosts) if hosts else "absent")
     out.kv("skills", str(n))
     out.kv("installed", str(bool(st.get("installed"))))
     return 0
@@ -683,16 +717,18 @@ def _doctor() -> int:
         # managed + edited: an edited persona file is still on disk and
         # Claude Code still loads it, same as core.present_personas().
         personas = len(core.present_personas(agents))
-        router = cs.has_hook(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
+        router_hosts = _hosts_with(scope, "UserPromptSubmit", ROUTE_HOOK_NAME)
+        briefing_hosts = _hosts_with(scope, "SessionStart", HOOK_NAME)
+        router = bool(router_hosts)
         live = bool(st.get("autopilot")) and router
-        briefing = _on_off(cs.has_hook(scope, "SessionStart", HOOK_NAME))
-        if briefing == "on" and _stale_matcher(scope):
+        briefing = _where(briefing_hosts)
+        if briefing_hosts and _stale_matcher(scope):
             # The matcher lives in the user's settings.json from whenever they
             # last ran `on`, while the code that depends on it ships with the
             # binary — so an old install silently misses newer sources.
             briefing += " (stale matcher: re-run `boost bmad on`)"
         out.kv(scope, "autopilot=%s  %d personas  router=%s  briefing=%s"
-               % (_on_off(live), personas, _on_off(router), briefing))
+               % (_on_off(live), personas, _where(router_hosts), briefing))
         out.kv("  workflows", "skills=%d  installed=%s"
                % (_count_skills(_skills_dir(scope)), _on_off(st.get("installed"))))
     out.dim("  project = %s" % Path.cwd())
@@ -712,6 +748,30 @@ def _stale_matcher(scope) -> bool:
     rows = [r for r in cs.list_hooks(scope)
             if r["event"] == "SessionStart" and r["name"] == HOOK_NAME]
     return any(r.get("matcher") != HOOK_MATCHER for r in rows)
+
+
+def _hosts_with(scope, event: str, name: str) -> list[str]:
+    """Which hosts carry this boost hook, in report order.
+
+    `--host gemini` makes a Claude-less autopilot reachable for the first time,
+    and a report that asks only Claude called that install absent — `doctor`
+    said `autopilot=off router=off` about a router that was about to run.
+    """
+    found = []
+    for host in hookhost.hosts():
+        target = hookhost.translate(host, event)
+        if target is not None and cs.has_hook(scope, target, name, host=host):
+            found.append(host)
+    return found
+
+
+def _where(hosts: list[str]) -> str:
+    """``off``, ``on`` (Claude only) or ``on (gemini)`` — who has the hook."""
+    if not hosts:
+        return "off"
+    if hosts == [hookhost.CLAUDE]:
+        return "on"
+    return "on (%s)" % ", ".join(hosts)
 
 
 def _skills_dir(scope) -> Path:

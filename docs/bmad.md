@@ -152,8 +152,18 @@ applied only on Claude, where that vocabulary exists.
 
 **The personas stay Claude-only.** A subagent definition is a Claude Code
 contract, and Gemini's `agents/` slot validates its input, so a Claude-dialect
-persona would be rejected. What a second host gets is prompt shaping: the
-routing banner arrives and names a lead persona, but Gemini cannot spawn it.
+persona would be rejected. What a second host gets is prompt shaping. Gemini's
+hooks run `bmad route --host gemini` and `bmad orient --host gemini`, which
+answer in the JSON Gemini adds to the model's context (plain stdout on Gemini is
+shown to you instead, and never reaches the model), and name the lead persona as
+a role to take on rather than a subagent to spawn.
+
+Pass `--host claude`, `--host gemini` or `--host auto` (the default, the rule
+above) to `boost bmad on` or `boost bmad startup on` to choose for yourself:
+
+```bash
+boost bmad on --host claude     # never touch ~/.gemini/settings.json
+```
 
 ## The full BMAD method
 

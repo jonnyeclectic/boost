@@ -9,6 +9,8 @@ observed `gemini hooks migrate --from-claude` run. See the module docstring.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from boost_cli.core import hookhost as hh
@@ -218,3 +220,27 @@ class TestSecondsIsTheInverseOfTimeout:
         """
         assert hh.timeout_seconds(hh.GEMINI, 10500) == 10
         assert isinstance(hh.timeout_seconds(hh.GEMINI, 10500), int)
+
+
+class TestContextOutput:
+    """How a hook's stdout reaches the model, per host.
+
+    Gemini turns non-JSON stdout into a `systemMessage` shown to the user and
+    adds only `additionalContext` to the model's history, so plain text is the
+    regression: the briefing reached Gemini users and never the model.
+    """
+
+    @pytest.mark.parametrize("event,native", [
+        ("SessionStart", "SessionStart"), ("UserPromptSubmit", "BeforeAgent")])
+    def test_gemini_always_gets_json_under_its_own_event_name(self, event, native):
+        out = hh.context_output(hh.GEMINI, event, "the text")
+        assert json.loads(out) == {"hookSpecificOutput": {
+            "hookEventName": native, "additionalContext": "the text"}}
+
+    def test_claude_session_start_is_plain_text_as_before(self):
+        assert hh.context_output(hh.CLAUDE, "SessionStart", "a\nb") == "a\nb"
+
+    def test_claude_prompt_context_bytes_are_unchanged(self):
+        assert hh.context_output(hh.CLAUDE, "UserPromptSubmit", "x") == (
+            '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", '
+            '"additionalContext": "x"}}')

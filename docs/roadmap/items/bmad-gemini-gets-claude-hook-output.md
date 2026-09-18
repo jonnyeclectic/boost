@@ -2,15 +2,15 @@
 id: bmad-gemini-gets-claude-hook-output
 board: code
 section: dx
-status: next
+status: shipped
 category: "Agents · BMAD"
 complexity: M
 impact: Med
 wow: 2
 note: gemini takes the banner but shows the briefing to the user
 order: 324
-owner:
-pr:
+owner: loop/bmad-gemini-hook-output
+pr: 866
 title: On Gemini, the <code>bmad on</code> briefing reaches the user and never the model
 ---
 <code>boost bmad on</code> installs both autopilot hooks on Claude always, and on Gemini whenever

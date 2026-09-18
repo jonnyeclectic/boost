@@ -301,7 +301,7 @@ class TestDoctor:
         cs.add_hook("global", "SessionStart", bmad.HOOK_NAME, "x",
                     matcher="startup|resume|clear")
         r = boost("bmad", "doctor")
-        assert "briefing=on (stale matcher: re-run `boost bmad on`)" in r.out
+        assert "stale matcher: re-run `boost bmad on`" in r.out
 
     def test_autopilot_reads_as_off_when_the_hook_is_gone(
             self, boost, sandbox, proj):
@@ -498,22 +498,60 @@ class TestRoute:
     def _pipe(self, monkeypatch, payload):
         monkeypatch.setattr(sys, "stdin", io.StringIO(payload))
 
-    def test_emits_the_hook_json_contract(self, boost, sandbox, monkeypatch, proj):
+    @pytest.mark.parametrize("host,event,lead", [
+        ([], "UserPromptSubmit", "`bmad-dev` subagent"),
+        (["--host", "claude"], "UserPromptSubmit", "`bmad-dev` subagent"),
+        (["--host", "gemini"], "BeforeAgent", "take the role of Amelia"),
+    ])
+    def test_emits_the_hook_json_contract(self, boost, sandbox, monkeypatch, proj,
+                                          host, event, lead):
         boost("bmad", "on")
         (proj / "tests").mkdir()
         (proj / "Makefile").write_text("check:\n\ttrue\n", encoding="utf-8")
         self._pipe(monkeypatch, json.dumps({
-            "hook_event_name": "UserPromptSubmit",
+            "hook_event_name": event,
             "prompt": "implement the new export command",
             "cwd": str(proj)}))
 
-        r = boost("bmad", "route")
+        r = boost("bmad", "route", *host)
 
         payload = json.loads(r.out)
         ctx = payload["hookSpecificOutput"]["additionalContext"]
-        assert payload["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
-        assert "bmad-dev" in ctx and "Amelia" in ctx
+        assert payload["hookSpecificOutput"]["hookEventName"] == event
+        assert lead in ctx and "Amelia" in ctx
         assert "make check" in ctx and "tests/" in ctx
+
+    def test_gemini_gets_the_briefing_as_model_context_not_text(
+            self, boost, sandbox, proj):
+        """Plain stdout on Gemini is a message to the user, never context."""
+        boost("bmad", "on")
+        r = boost("bmad", "orient", "--scope", "global", "--host", "gemini")
+        payload = json.loads(r.out)["hookSpecificOutput"]
+        assert payload["hookEventName"] == "SessionStart"
+        assert "BMAD autopilot active" in payload["additionalContext"]
+        assert "~/.claude" not in payload["additionalContext"]
+        claude = boost("bmad", "orient", "--scope", "global")
+        assert claude.out.startswith("[BMAD autopilot active]")
+
+    def test_asking_by_hand_for_a_host_gets_that_host_s_banner(
+            self, boost, sandbox, proj):
+        """`--host` picked the envelope but not the dialect, so the only way to
+        preview Gemini's banner printed Claude's subagent wording inside it."""
+        r = boost("bmad", "route", "implement the new export command",
+                  "--host", "gemini", "--plain")
+        assert "take the role of Amelia" in r.out
+        assert "subagent" not in r.out
+        assert "`bmad-dev` subagent" in boost(
+            "bmad", "route", "implement the new export command", "--plain").out
+
+    def test_a_gemini_hook_keeps_no_session_record(
+            self, boost, sandbox, monkeypatch, proj):
+        boost("bmad", "on")
+        for _ in range(2):
+            self._pipe(monkeypatch, json.dumps({
+                "prompt": "implement the new export command", "cwd": str(proj),
+                "session_id": "g1"}))
+            assert "Amelia" in boost("bmad", "route", "--host", "gemini").out
 
     def test_uses_the_cwd_the_hook_reports_not_its_own(
             self, boost, sandbox, monkeypatch, tmp_path, proj):

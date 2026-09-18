@@ -122,3 +122,91 @@ class TestHostSelectionRule:
         boost("bmad", "on", "--scope", "global")
         gem = sandbox / hookhost.settings_dir(hookhost.GEMINI) / "settings.json"
         assert not gem.exists()
+
+
+def _commands(data):
+    """{event: command} for boost's own hooks, marker included."""
+    return {event: h["command"]
+            for event, entries in (data.get("hooks") or {}).items()
+            for block in entries for h in block.get("hooks", [])
+            if "# boost:" in h.get("command", "")}
+
+
+class TestEachHostAnswersInItsOwnFormat:
+    """Gemini's hooks ask for Gemini's output; Claude's bytes do not move."""
+
+    def test_gemini_commands_name_their_host_and_claudes_do_not(
+            self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global")
+        gemini = _commands(_settings(both_hosts, hookhost.GEMINI))
+        claude = _commands(_settings(both_hosts, hookhost.CLAUDE))
+        assert "bmad route --scope global --host gemini 2>/dev/null || true" in (
+            gemini["BeforeAgent"])
+        assert "bmad orient --scope global --host gemini 2>/dev/null || true" in (
+            gemini["SessionStart"])
+        assert "--host" not in claude["UserPromptSubmit"]
+        assert "bmad route --scope global || true" in claude["UserPromptSubmit"]
+        assert "bmad orient --scope global || true" in claude["SessionStart"]
+
+    def test_startup_on_names_the_host_too(self, both_hosts, boost):
+        boost("bmad", "startup", "on", "--scope", "global")
+        gemini = _commands(_settings(both_hosts, hookhost.GEMINI))
+        assert "--host gemini" in gemini["SessionStart"]
+
+
+class TestHostFlag:
+    """`--host` overrides the evidence rule, so Claude-only is one flag."""
+
+    def test_host_claude_never_writes_gemini_settings(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "claude")
+        gem = both_hosts / hookhost.settings_dir(hookhost.GEMINI) / "settings.json"
+        assert not gem.exists()
+        assert _boost_hooks(_settings(both_hosts, hookhost.CLAUDE))
+
+    def test_host_gemini_writes_only_gemini_hooks(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "gemini")
+        assert _boost_hooks(_settings(both_hosts, hookhost.GEMINI))
+        assert not _boost_hooks(_settings(both_hosts, hookhost.CLAUDE))
+
+    def test_host_auto_is_the_evidence_rule(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "auto")
+        for host in (hookhost.CLAUDE, hookhost.GEMINI):
+            assert _boost_hooks(_settings(both_hosts, host)), host
+
+    def test_startup_on_honours_it(self, both_hosts, boost):
+        boost("bmad", "startup", "on", "--scope", "global", "--host", "claude")
+        gem = both_hosts / hookhost.settings_dir(hookhost.GEMINI) / "settings.json"
+        assert not gem.exists()
+
+
+class TestReportsEveryHost:
+    """A Gemini-only autopilot is a real install, and must read as one.
+
+    Before `--host`, `_hook_hosts` always returned Claude first, so asking
+    Claude alone was a safe shortcut. It is not any more: `doctor` called a
+    working Gemini install `autopilot=off router=off`.
+    """
+
+    def test_doctor_names_the_host_that_has_the_hooks(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "gemini")
+        r = boost("bmad", "doctor")
+        assert "autopilot=on" in r.out
+        assert "router=on (gemini)" in r.out and "briefing=on (gemini)" in r.out
+
+    def test_claude_only_stays_unqualified(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global", "--host", "claude")
+        r = boost("bmad", "doctor")
+        assert "router=on  " in r.out and "(gemini)" not in r.out
+
+    def test_both_hosts_are_listed(self, both_hosts, boost):
+        boost("bmad", "on", "--scope", "global")
+        assert "router=on (claude, gemini)" in boost("bmad", "doctor").out
+
+    def test_startup_status_names_the_host_too(self, both_hosts, boost):
+        boost("bmad", "startup", "on", "--scope", "global", "--host", "gemini")
+        r = boost("bmad", "startup", "status", "--scope", "global")
+        assert "present (gemini)" in r.out
+
+    def test_nothing_installed_still_reads_off(self, both_hosts, boost):
+        r = boost("bmad", "doctor")
+        assert "router=off" in r.out and "briefing=off" in r.out
