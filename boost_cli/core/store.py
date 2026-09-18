@@ -1680,6 +1680,21 @@ def restore_preserve_newer_lock_sections(
     return kept
 
 
+def lock_vouches() -> bool:
+    """Whether the lock file can say which store dirs and links are boost's.
+
+    It can when it parses, and when it is missing over an empty store — that
+    is a fresh install with nothing to disown. It cannot when it is missing
+    over a populated store, corrupt, or written in another schema:
+    :func:`lockfile.installed` collapses all three into an empty record, and
+    reading that as "nothing is installed" turned `boost sync` — the command
+    `boost doctor` prescribes for exactly this state — into an uninstaller that
+    removed every live link of an intact install with green ticks and exit 0.
+    """
+    integ = lockfile.check()
+    return integ.ok or (integ.problem == "missing" and not has_content())
+
+
 def sync_plan() -> dict[str, list]:
     """Compare lock file <-> store <-> agent symlinks.
 
@@ -1691,6 +1706,9 @@ def sync_plan() -> dict[str, list]:
                       symlink occupies the link path — sync will not clobber it
       stale_links:    paths in agent dirs that are broken/unmanaged symlinks
       orphaned_store: store dirs not present in the lock file
+      unrecorded_store: the same, while the lock cannot vouch for anything
+                      (:func:`lock_vouches`) — never pruned, re-recorded by
+                      :func:`sync_apply` when the lock is merely missing
       out_of_scope_links: (skill, agent) pairs linked outside a declared
                       ``--agent`` narrowing — reported, never auto-removed
 
@@ -1704,9 +1722,11 @@ def sync_plan() -> dict[str, list]:
     as a directory: a closed loop with no exit.
     """
     lock = lockfile.installed()
+    vouches = lock_vouches()
     plan: dict[str, list] = {"missing_store": [], "missing_links": [],
             "blocked_links": [], "stale_links": [], "orphaned_store": [],
-            "missing_materializations": [], "out_of_scope_links": []}
+            "unrecorded_store": [], "missing_materializations": [],
+            "out_of_scope_links": []}
     for name, entry in lock.items():
         sdir = skill_store_dir(name)
         # A directory with no SKILL.md counts as missing, not as healthy. The
@@ -1780,9 +1800,11 @@ def sync_plan() -> dict[str, list]:
                     plan["out_of_scope_links"].append((name, agent))
     store_root = paths.store_dir()
     if store_root.is_dir():
-        for child in store_root.iterdir():
-            if child.is_dir() and child.name not in lock:
-                plan["orphaned_store"].append(child.name)
+        for child in sorted(store_root.iterdir()):
+            if (child.is_dir() and not child.name.startswith(".")
+                    and child.name not in lock):
+                plan["orphaned_store" if vouches else "unrecorded_store"].append(
+                    child.name)
     for adir in agents.enabled_agents().values():
         if not adir.is_dir():
             continue
@@ -1790,8 +1812,13 @@ def sync_plan() -> dict[str, list]:
             # Ownership first, for broken links too: the old test short-circuited
             # on `not link.exists()`, so any dangling symlink a user happened to
             # keep in ~/.claude/skills was swept up by `boost sync`.
+            #
+            # "Not in the lock" means "not installed" only while the lock can
+            # vouch. Without that guard a missing lock made every live link
+            # into an intact store look stale, and sync removed them all.
             if (link.is_symlink() and points_into_store(link)
-                    and (not link.exists() or link.name not in lock)):
+                    and (not link.exists()
+                         or (vouches and link.name not in lock))):
                 plan["stale_links"].append(str(link))
     # Rules/workflows don't live in the store — they materialize into agent dirs.
     # A materialization whose file (or CLAUDE.md block) is gone can be repaired
@@ -1893,9 +1920,71 @@ def _pinned_repair_blocked(entry: dict, source_sha: str | None) -> bool:
     return source_sha is None or source_sha != entry.get("sha256")
 
 
+def recover_unrecorded(name: str) -> str | None:
+    """Re-record one store dir the lock has lost; return how, or None.
+
+    Only ever called while the lock file is missing over a populated store, so
+    writing a record cannot overwrite a newer or merely unreadable lock. The
+    store copy is authoritative and is never replaced: re-installing would
+    have been the obvious repair, and it silently discards any edits made to
+    the store copy.
+
+    A dir whose content is byte-identical to exactly one tapped source is
+    recorded as installed from that tap, the record a fresh install would have
+    written. Anything else — edited, or from a tap no longer tapped — is
+    recorded as a local skill whose source is the store dir itself, so nothing
+    is lost and nothing is left unrecorded: a dir left out would read as an
+    orphan the moment this pass creates a lock, and the next sync would remove
+    its links, the defect this function exists to close.
+    """
+    sdir = skill_store_dir(name)
+    if not (sdir / "SKILL.md").is_file():
+        return None
+    from . import catalog, gitutil
+    have = util.sha256_dir(sdir)
+    matches = [e for e in catalog.find(name)
+               if e.get("kind", "skill") == "skill"
+               and _skill_source_sha(e) == have]
+    linked = linked_agents(name)
+    linking = list(agents.linking_agents())
+    # Record what is on disk: a skill linked into fewer agents than are enabled
+    # was narrowed, and recording no narrowing would have the next sync link it
+    # everywhere behind the user's back.
+    narrowed = sorted(linked) if linked and set(linked) != set(linking) else None
+    now = util.now_iso()
+    record: dict[str, object]
+    if len(matches) == 1:
+        cat = matches[0]
+        tap = registry.get(cat["tap"])
+        record = {"version": cat.get("version", "0.0.0"), "tap": cat["tap"],
+                  "source_dir": cat.get("rel_dir", "."),
+                  "commit": gitutil.head_commit(tap.path)}
+        how = "from %s" % cat["tap"]
+    else:
+        # The shape `import_local` writes for a skill with no tap behind it.
+        record = {"version": "0.0.0", "tap": "local", "source_dir": str(sdir),
+                  "commit": ""}
+        how = ("as a local skill (its content matches %s tapped source; "
+               "`boost reinstall %s` replaces it with a tap's copy)"
+               % ("no" if not matches else "more than one", name))
+    record.update({"sha256": have, "installed_at": now, "updated_at": now,
+                   "pinned": False, "quarantined": False, "agents": linked,
+                   "only_agents": narrowed, "tags": []})
+    lockfile.set_skill(name, record)
+    journal.log("recover", name, how=record["tap"])
+    return "re-recorded %s %s" % (name, how)
+
+
 def sync_apply(plan: dict[str, list]) -> list[str]:
     """Fix what sync_plan found. Returns human-readable actions taken."""
     actions = []
+    # First, so every re-recorded skill is in the lock before anything else
+    # runs; and only when the lock is *missing* — a corrupt or other-schema
+    # lock is left for `boost replay`, never overwritten.
+    if plan.get("unrecorded_store") and lockfile.check().problem == "missing":
+        for name in plan["unrecorded_store"]:
+            how = recover_unrecorded(name)
+            actions.append(how or "left %s unrecorded (no SKILL.md to record)" % name)
     for name, agent in plan["missing_links"]:
         res = link_agents(name, only=[agent])
         if agent in res.linked:

@@ -1609,12 +1609,13 @@ class TestSyncJson:
         plan = json.loads(boost("sync", "--diff", "--json").out)
         assert plan == {"missing_store": [], "missing_links": [],
                         "blocked_links": [], "stale_links": [],
-                        "orphaned_store": [],
+                        "orphaned_store": [], "unrecorded_store": [],
                         "missing_materializations": [], "out_of_scope_links": [],
                         "project": {"missing": [], "orphaned": []}}
         data = json.loads(boost("sync", "--json").out)
         assert data == {"actions": [], "pruned": [], "orphaned_store": [],
-                        "out_of_scope_links": [], "blocked_links": []}
+                        "unrecorded_store": [], "out_of_scope_links": [],
+                        "blocked_links": []}
 
     def test_a_narrowing_reinstall_is_reported_and_pruned_only_on_request(
             self, boost, installed):

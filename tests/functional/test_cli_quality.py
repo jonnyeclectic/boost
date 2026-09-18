@@ -181,6 +181,42 @@ class TestDoctor:
         assert "lock file missing — 1 store dir unrecorded, run `boost sync`" in r.out
         assert "lock file integrity OK" not in r.out
 
+    def test_following_the_missing_lock_prescription_repairs_not_uninstalls(
+            self, boost, installed):
+        """The prescription used to be an uninstaller: `boost sync` removed
+        every live agent link with green ticks and exit 0. It must now be the
+        repair doctor promises, and doctor must say so once, not twice."""
+        links = [p for p in (paths.home() / d / "brainstorming" for d in (
+            ".claude/skills", ".cursor/skills", ".windsurf/skills",
+            ".gemini/antigravity-cli/skills")) if p.is_symlink()]
+        assert len(links) == 4
+        paths.lockfile_path().unlink()
+        r = boost("doctor", expect=1)
+        assert "run `boost sync` to re-record it" in r.out
+        assert "orphaned store dir" not in r.out
+        r = boost("sync")
+        assert "re-recorded brainstorming from" in r.out
+        assert "removed stale link" not in r.out
+        assert all(p.is_symlink() and p.exists() for p in links)
+        r = boost("doctor")
+        assert "lock file parses (v3)" in r.out
+
+    def test_a_corrupt_lock_leaves_sync_non_destructive(self, boost, installed):
+        link = paths.home() / ".claude/skills" / "brainstorming"
+        paths.lockfile_path().write_text("{oops", encoding="utf-8")
+        r = boost("sync")
+        assert "removed stale link" not in r.out
+        assert "restore the lock with `boost replay`" in r.out + r.err
+        assert link.is_symlink() and link.exists()
+        r = boost("doctor", expect=1)
+        assert "orphaned store dir" not in r.out
+
+    def test_heal_previews_the_re_record(self, boost, installed):
+        paths.lockfile_path().unlink()
+        r = boost("heal", "--dry-run")
+        assert "would re-record brainstorming" in r.out
+        assert "would remove stale link" not in r.out
+
     def test_missing_lock_with_empty_store_is_not_an_issue(self, boost, sandbox):
         # No lock file and nothing in the store either: a fresh install, not
         # a fault. Must not claim "parses" for a file that isn't there.
