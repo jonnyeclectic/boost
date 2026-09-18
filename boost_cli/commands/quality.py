@@ -447,8 +447,8 @@ def cmd_doctor(argv):
         if store.has_content():
             n = sum(1 for c in paths.store_dir().iterdir()
                     if c.is_dir() and not c.name.startswith("."))
-            bad("lockfile", "lock file missing — %d store dir%s unrecorded, run `boost sync`"
-                % (n, _s(n)))
+            bad("lockfile", "lock file missing — %d store dir%s unrecorded, "
+                "run `boost sync` to re-record %s" % (n, _s(n), "it" if n == 1 else "them"))
             lock_ok = False
         else:
             rep.note("lockfile", "no lock file yet — nothing installed")
@@ -613,7 +613,10 @@ def cmd_doctor(argv):
     orphans = [c.name for c in sorted(root.iterdir())
                if c.is_dir() and not c.name.startswith(".") and c.name not in skills
                ] if root.is_dir() else []
-    if orphans:
+    # Only while the lock can vouch. Without one every store dir reads as an
+    # orphan, the lock line above already names the state and its remedy, and
+    # a second "run `boost sync`" line counted the same fault twice.
+    if orphans and store.lock_vouches():
         bad("orphans", "%d orphaned store dir%s (%s) — run `boost sync`"
             % (len(orphans), _s(len(orphans)), ", ".join(orphans[:5])))
 
@@ -1104,6 +1107,9 @@ def cmd_heal(argv):
         for name in plan["missing_store"]:
             out.info("would restore %s from its tap (or drop it from the lock)" % name)
             actions.append("restore %s" % name)
+        for name in plan["unrecorded_store"]:
+            out.info("would re-record %s, which the lock file has lost" % name)
+            actions.append("re-record %s" % name)
     else:
         for msg in store.sync_apply(plan):
             out.ok(msg.replace(str(paths.home()), "~"))
