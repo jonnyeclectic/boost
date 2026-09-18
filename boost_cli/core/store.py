@@ -1952,6 +1952,7 @@ def recover_unrecorded(name: str) -> str | None:
     # everywhere behind the user's back.
     narrowed = sorted(linked) if linked and set(linked) != set(linking) else None
     now = util.now_iso()
+    record: dict[str, object]
     if len(matches) == 1:
         cat = matches[0]
         tap = registry.get(cat["tap"])
