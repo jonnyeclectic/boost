@@ -185,6 +185,20 @@ class TestSyncApplyRecovers:
         [action] = store.sync_apply(store.sync_plan())
         assert "matches more than one tapped source" in action
 
+    def test_only_skill_entries_can_vouch_for_a_store_dir(
+            self, installed, monkeypatch):
+        """A rule of the same name is not a second source; an entry with no
+        `kind` is a skill, as it is everywhere else in the catalog."""
+        skill = {k: v for k, v in catalog.resolve_one("brainstorming").items()
+                 if k != "kind"}
+        rule = dict(skill, kind="rule", tap="rules")
+        monkeypatch.setattr(catalog, "find", lambda n: [skill, rule])
+        same = util.sha256_dir(store.skill_store_dir("brainstorming"))
+        monkeypatch.setattr(store, "_skill_source_sha", lambda _e: same)
+        _lose_lock()
+        assert store.sync_apply(store.sync_plan()) == [
+            "re-recorded brainstorming from %s" % installed.name]
+
     def test_a_narrowed_install_keeps_its_narrowing(self, installed):
         for agent in ("windsurf", "antigravity"):
             _links()[agent].unlink()
