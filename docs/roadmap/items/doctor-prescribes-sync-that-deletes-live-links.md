@@ -2,7 +2,7 @@
 id: doctor-prescribes-sync-that-deletes-live-links
 board: code
 section: health
-status: inflight
+status: shipped
 category: Onboarding · Bug
 complexity: L
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: store.sync_plan decides staleness with link.name not in lock where lock = lockfile.in…
 order: 206
 owner: loop/sync-keeps-live-links
-pr:
+pr: 869
 title: A missing or corrupt lock file makes doctor prescribe <code>boost sync</code>/<code>boost heal</code>, and both delete every live agent symlink of an intact install
 ---
 <b>Measured.</b> With the lock file deleted from an otherwise intact install, <code>boost doctor</code> exits 1 and prescribes <code>boost sync</code> on two separate lines; running that prescription removes 4 of 4 live, boost-owned, store-resolving agent symlinks (claude-code, windsurf, cursor, antigravity) with four green ✓ marks, no confirmation prompt of any kind, and exit code 0 — because <code>store.sync_plan</code> (store.py:1785-1787) tests <code>link.name not in lock</code> against <code>lockfile.installed()</code>, which collapses a missing lock into an empty skeleton (lockfile.py:44-45), and <code>sync_apply</code>'s unlink loop (store.py:1895) has no confirm while cmd_sync's only two confirms (pkg.py:694, 704) are both <code>--prune</code>-gated.
