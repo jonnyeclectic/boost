@@ -1537,7 +1537,7 @@ SCOPE LIMITS OF MY REPRO — a card author must not blur these: - I measured the
       </article>
 
       <article class="cap rcard" id="explain-outline-has-no-cap">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">UX · Bug</span></div>
         <h3><code>boost explain</code>'s heuristic fallback prints every heading in the file — 541 lines for one skill — while the sibling list in the same function caps at 12</h3>
         <p><b>Measured.</b> <code>BOOST_NO_AI=1 boost explain fpf-agent</code> prints 541 lines / 27,699 bytes, 521 of them an uncapped outline emitted by the unsliced <code>for hashes, title in headings</code> at info.py:844, while <code>for rule in rules[:12]</code> nineteen lines below at info.py:859 caps the sibling list in the same function — and 2,861 of 10,152 eval-corpus entries (28.2%) exceed 25 outline lines.
 

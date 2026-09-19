@@ -2,14 +2,14 @@
 id: explain-outline-has-no-cap
 board: code
 section: planned
-status: planned
+status: inflight
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: cmd_explain asks the model for "4-6 sentences, no markdown" (info.py:800-803), but th…
 order: 212
-owner:
+owner: loop/explain-outline-cap
 pr:
 title: <code>boost explain</code>'s heuristic fallback prints every heading in the file — 541 lines for one skill — while the sibling list in the same function caps at 12
 ---
