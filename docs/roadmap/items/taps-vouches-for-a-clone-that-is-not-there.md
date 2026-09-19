@@ -2,7 +2,7 @@
 id: taps-vouches-for-a-clone-that-is-not-there
 board: code
 section: internals
-status: inflight
+status: shipped
 category: CLI · Bug
 complexity: S
 impact: Medium
@@ -10,7 +10,7 @@ wow: 3
 note: boost taps prints item counts and an UPDATED date for a tap whose clone was deleted
 order: 312
 owner: loop/taps-missing-clone
-pr:
+pr: 872
 title: "<code>boost taps</code> vouches for a clone that is not there"
 ---
 <code>boost taps</code> reads the per-tap catalog cache, and
