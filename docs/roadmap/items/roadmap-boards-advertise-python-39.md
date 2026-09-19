@@ -2,14 +2,14 @@
 id: roadmap-boards-advertise-python-39
 board: code
 section: planned
-status: planned
+status: inflight
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: docs/roadmap.html:17141 and docs/design-roadmap.html:582 both close with Install with…
 order: 228
-owner:
+owner: loop/boards-python-floor
 pr:
 title: The two roadmap boards' install footers still advertise Python 3.9+, four minor versions under the real floor
 ---
