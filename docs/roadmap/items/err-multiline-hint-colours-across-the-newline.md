@@ -2,15 +2,15 @@
 id: err-multiline-hint-colours-across-the-newline
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: S
 impact: Low
 wow: 2
 note: err() joins a multi-line hint's lines and then wraps the whole joined string in one c…
 order: 207
-owner:
-pr:
+owner: loop/err-hint-per-line
+pr: 877
 title: <code>out.err</code>'s multi-line hint is coloured as one span, so line 1 ends with no RESET and lines 2+ carry no start code
 ---
 <b>Measured.</b> With colour forced, a three-line hint from <code>err()</code> emits an opening <code>ESC[2m</code> on hint line 1 that is never terminated, two bare continuation lines carrying no SGR at all, and one closing <code>ESC[0m</code> at visible column 98 of the last line — so <code>boost index 2&gt;&amp;1 | head -2</code> under <code>CLICOLOR_FORCE</code> hands the consumer a stream ending inside an unterminated dim span; output.py:252 wraps the newline-joined body in a single <code>c(..., DIM)</code>, colouring first and splitting after.

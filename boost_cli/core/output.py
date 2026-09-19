@@ -72,11 +72,23 @@ def use_color(stream=None) -> bool:
     return hasattr(stream, "isatty") and stream.isatty()
 
 
+def _span(code: str, text: str) -> str:
+    """``code + text + RESET``, applied to each line on its own.
+
+    One span across a newline opens the style on line 1 and closes it at the
+    end of the last: a reader that stops early (``… 2>&1 | head -2``) is left
+    inside an unterminated style, and lines 2+ carry no code of their own. A
+    multi-line hint from `err` did exactly that. Every painter below routes
+    through here, so no emitter can reintroduce it.
+    """
+    return "\n".join(code + line + RESET for line in text.split("\n"))
+
+
 def c(text: str, *styles: str) -> str:
     """Wrap text in the given SGR styles + RESET; plain when color is off."""
     if not styles or not use_color():
         return text
-    return "".join(styles) + text + RESET
+    return _span("".join(styles), text)
 
 
 # --------------------------------------------------------------------------- #
@@ -139,7 +151,7 @@ def aurora(text: str, name: str, stream=None) -> str:
         return text
     triple, fallback = _AURORA[name]
     code = rgb(*triple) if level == 2 else fallback
-    return code + text + RESET
+    return _span(code, text)
 
 
 # --------------------------------------------------------------------------- #
@@ -171,8 +183,9 @@ def role(text: str, name: str, bold: bool = False, stream=None) -> str:
     if color_level(stream) == 0:
         return text
     kind, value = ROLES[name]
-    painted = aurora(text, value, stream) if kind == "aurora" else value + text + RESET
-    return BOLD + painted if bold else painted
+    painted = aurora(text, value, stream) if kind == "aurora" else _span(value, text)
+    # Per line too: BOLD before line 1 alone would leave lines 2+ regular.
+    return "\n".join(BOLD + ln for ln in painted.split("\n")) if bold else painted
 
 
 def _lerp(a, b, t: float):

@@ -163,6 +163,34 @@ class TestForcedColorOutput:
             "\033[31m\033[1mError: \033[0mboom\n"
             "\033[2m  hint: try x\033[0m\n")
 
+    def test_err_multiline_hint_is_coloured_per_line(self, capsys):
+        # One span over the joined body opened DIM on line 1 and closed it on
+        # the last, so `| head -2` ended inside an unterminated dim run.
+        out.err("boom", hint="one\ntwo\nthree")
+        assert capsys.readouterr().err == (
+            "\033[31m\033[1mError: \033[0mboom\n"
+            "\033[2m  hint: one\033[0m\n"
+            "\033[2m        two\033[0m\n"
+            "\033[2m        three\033[0m\n")
+
+    def test_every_painter_styles_each_line_on_its_own(self):
+        # The same one-span shape in any painter reopens the bug `err` had;
+        # they all route through `_span`, which these pin per path.
+        y = "\033[38;2;250;204;21m"               # warn -> aurora yellow
+        assert out.c("a\nb", out.DIM) == (
+            "\033[2ma\033[0m\n\033[2mb\033[0m")
+        assert out.aurora("a\nb", "yellow") == (
+            y + "a\033[0m\n" + y + "b\033[0m")
+        assert out.role("a\nb", "muted") == (         # the sgr branch
+            "\033[2ma\033[0m\n\033[2mb\033[0m")
+        # A space in the text: splitting the painted span on whitespace
+        # instead of "\n" would bold each word, not each line.
+        assert out.role("a b\nc", "warn", bold=True) == (
+            "\033[1m" + y + "a b\033[0m\n\033[1m" + y + "c\033[0m")
+        # A single line is byte-identical to the old code + text + RESET.
+        assert out.role("a", "warn", bold=True) == "\033[1m" + y + "a\033[0m"
+        assert out.c("", out.DIM) == "\033[2m\033[0m"
+
     def test_heading_exact_ansi(self, capsys):
         # Aurora cyan marker (truecolor under forced color) + bold title.
         out.heading("Section")
