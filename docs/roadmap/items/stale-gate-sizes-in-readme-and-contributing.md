@@ -2,15 +2,15 @@
 id: stale-gate-sizes-in-readme-and-contributing
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: README.md:515 says make smoke is "176 checks" and CONTRIBUTING.md:123 says bash tests…
 order: 235
-owner:
-pr:
+owner: loop/gate-sizes
+pr: 879
 title: The contributor-onboarding gate tables state three wrong suite sizes, and README and CONTRIBUTING disagree with each other
 ---
 <b>Measured.</b> One command (<code>make smoke</code> is literally <code>bash tests/smoke.sh</code>, Makefile:48-49) is documented as three different sizes in three files — 176 in README.md:515, 170 in CONTRIBUTING.md:123 and 170 again in docs/openssf-badge.md:123 — while it actually runs 183 checks, a figure that is deterministic and statically derivable as 102 top-level <code>run</code> lines plus 81 <code>--help</code> entries in the CMDS heredoc.
