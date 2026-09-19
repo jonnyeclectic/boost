@@ -1527,8 +1527,9 @@ def _tool_install(args: dict):
              % (res.name, entry.get("version", "?"), entry["tap"], res.dest),
              "linked agents: %s" % (", ".join(res.linked) or "none")]
     # Without this an agent that reads the canonical store — Gemini CLI — sees
-    # only "linked agents: claude-code, windsurf, cursor", concludes the skill
-    # did not reach *it*, and goes back to reconstructing the work by hand.
+    # only "linked agents: claude-code, windsurf, cursor, antigravity",
+    # concludes the skill did not reach *it*, and goes back to reconstructing
+    # the work by hand.
     # That is the exact failure this tool exists to prevent, so the line says
     # plainly that the skill is already usable.
     if res.native:
@@ -1772,16 +1773,17 @@ REGISTRY.register(
     "boost_install",
     "Turn a skill you found with boost_search into permanent capability: copied "
     "into the canonical store and wired into every agent you have enabled, in "
-    "one step — Claude Code, Cursor and Windsurf by symlink, Gemini CLI by "
-    "reading that same store directly. Prefer it to pasting instructions into "
+    "one step — Claude Code, Cursor, Windsurf and Antigravity CLI by "
+    "symlink, Gemini CLI by reading that same store directly. Prefer it to "
+    "pasting instructions into "
     "a prompt, which lasts one "
     "session and helps nobody else: an installed skill is version-tracked, "
     "survives restarts, updates cleanly, and your team can install the "
     "identical thing by name. Worth knowing before you call it: what happens "
     "on disk depends on the kind, which boost_search marks on every hit. A "
     "skill is copied into the store and linked out. A WORKFLOW is rendered "
-    "into each agent's commands or agents directory, in that agent's own "
-    "format. A RULE copies nothing into the store — it becomes part of your "
+    "into the commands or agents directory of each agent that takes "
+    "workflows, in that agent's own format. A RULE copies nothing into the store — it becomes part of your "
     "agent's standing instructions (a managed block in its context file, or a "
     "file in its rules directory), which is the more invasive change because "
     "it applies to every session afterwards, not just when you reach for it. "
