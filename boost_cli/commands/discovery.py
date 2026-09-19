@@ -1157,7 +1157,7 @@ def cmd_recommend(argv):
     # between rows (34-54 at COLUMNS=100) and neither column lined up.
     desc_w = max(out.term_width() - 2 - width - 2
                  - (max(map(len, becauses)) + 2), 8)
-    for r, because in zip(shown, becauses):
+    for r, because in zip(shown, becauses, strict=True):
         e = r["entry"]
         name_cell = out.role(out.truncate(e["name"], width).ljust(width), "accent")
         desc = out.truncate(e["description"] or "", desc_w)
