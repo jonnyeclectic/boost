@@ -1883,7 +1883,7 @@ THE ONE THING A CARD AUTHOR MUST NOT GET WRONG — there is a recorded counter-p
       </article>
 
       <article class="cap rcard" id="panel-fits-data-to-an-assumed-80-in-a-pipe">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">UX · Bug</span></div>
         <h3><code>out.panel</code> still fits its content to <code>term_width()</code>, so <code>boost count | …</code> clips the line to an assumed 80 columns</h3>
         <p><b>Measured.</b> On this machine <code>./boost count | cat</code> renders the 110-character inventory summary into an 80-column box, clipping the content to 76 columns and dropping the 34-character tail "0 taps) · discovery index not built", while <code>COLUMNS=300 ./boost count</code> prints all 110.
 

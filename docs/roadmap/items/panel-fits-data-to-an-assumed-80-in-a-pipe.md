@@ -2,14 +2,14 @@
 id: panel-fits-data-to-an-assumed-80-in-a-pipe
 board: code
 section: planned
-status: planned
+status: inflight
 category: UX · Bug
 complexity: S
 impact: Low
 wow: 2
 note: output.panel computes room = term_width() - 4 (output.py:527) and clips its content t…
 order: 219
-owner:
+owner: loop/panel-pipe
 pr:
 title: <code>out.panel</code> still fits its content to <code>term_width()</code>, so <code>boost count | …</code> clips the line to an assumed 80 columns
 ---
