@@ -2,14 +2,14 @@
 id: corrupt-config-reads-as-ready-to-set-up
 board: code
 section: planned
-status: planned
+status: inflight
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: Doctor has no config-integrity check. When ~/.boost/config.json fails to parse, confi…
 order: 202
-owner:
+owner: loop/corrupt-config
 pr:
 title: With a corrupt config.json, doctor reports "no registries tapped" and verdicts "● ready to set up" exit 0 while search is dead; heal says "nothing to heal"
 ---
