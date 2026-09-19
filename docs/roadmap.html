@@ -2103,7 +2103,7 @@ Nothing else needed correcting: 7 starter registries, 962 items, 11 matches, the
       </article>
 
       <article class="cap rcard" id="recommend-recomputes-its-columns-per-row">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">UX · Bug</span></div>
         <h3><code>boost recommend</code> sizes the description cell per row from that row's <code>because:</code> text, so neither column lines up</h3>
         <p><b>Measured.</b> At COLUMNS=100 the eight <code>boost recommend</code> rows truncate their descriptions at eight per-row widths spanning 34 to 54 columns — a 20-column swing, the widest cell 59% wider than the narrowest — because <code>desc_w</code> is recomputed inside the row loop from that row's own <code>because:</code> tag length (<code>boost_cli/commands/discovery.py:1062</code>); every rendered cell matched the predicted <code>desc_w</code> to the character and every description ended in an ellipsis, so this is column geometry, not natural description length.
 
