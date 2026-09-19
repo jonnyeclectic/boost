@@ -2,14 +2,14 @@
 id: audit-stale-prose-after-shipped-changes-catalog-export-live-discov
 board: code
 section: dx
-status: planned
+status: inflight
 category: Docs · Drift
 complexity: S
 impact: Low
 wow: 1
 note: a documented command that exits 2, 463 vs 464 in eight places, a GPL rule over Apache files
 order: 244
-owner:
+owner: loop/stale-prose
 pr:
 title: "Stale prose after shipped changes: <code>catalog --export</code>, live discover, 464 count, Apache-2.0"
 ---
