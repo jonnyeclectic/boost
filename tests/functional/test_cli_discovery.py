@@ -1131,6 +1131,19 @@ class TestRecommend:
         assert "because: pytest, python" in r.out
         assert "because: javascript, react" in r.out
 
+    @pytest.mark.parametrize("cols", ["60", "100"])
+    def test_rows_share_one_column_plan(self, boost, stack_tap, react_project,
+                                        monkeypatch, cols):
+        # The description width used to be sized per row from that row's own
+        # `because:` tag, so the clip point swung row to row and the reason
+        # column started wherever each description happened to end.
+        monkeypatch.setenv("COLUMNS", cols)
+        r = boost("recommend", "--path", react_project)
+        rows = [ln for ln in r.out.splitlines() if "because: " in ln]
+        reasons = {ln.split("because: ")[1] for ln in rows}
+        assert len(rows) >= 2 and len({len(x) for x in reasons}) >= 2, rows
+        assert len({ln.index("because: ") for ln in rows}) == 1, rows
+
     def test_json_purity(self, boost, stack_tap, react_project):
         r = boost("recommend", "--path", react_project, "--json")
         data = json.loads(r.out)
