@@ -45,6 +45,14 @@ jobs:
           path: .lycheecache
           key: lychee-${{ github.sha }}
           restore-keys: lychee-
+      # On a pull request, a settled card's write-up link is checked against
+      # this checkout, not GitHub. build_roadmap.py links it to
+      # blob/main/docs/roadmap/items/<id>.md, so a PR filing a NEW card as
+      # shipped always 404'd (#845): the file is not on main until the PR
+      # merges. The remap sends that one prefix to the PR's own tree, where a
+      # mistyped id still fails as "File not found"; pushes to main and the
+      # weekly run keep fetching the real URL. tests/unit/test_roadmap_fresh.py
+      # pins the pattern to build_roadmap.ITEMS_URL.
       - name: lychee (URLs + local paths)
         uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
         with:
@@ -52,6 +60,7 @@ jobs:
             --cache --max-cache-age 1d --no-progress
             --accept 200,206,403,429
             --max-retries 3
+            ${{ github.event_name == 'pull_request' && format('--remap ''^https://github\.com/jonnyeclectic/boost/blob/main/docs/roadmap/items/ file://{0}/docs/roadmap/items/''', github.workspace) || '' }}
             README.md docs/*.html
           fail: true
       - name: anchors (in-page + cross-page fragments)

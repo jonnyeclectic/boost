@@ -2,7 +2,7 @@
 id: a-new-shipped-card-always-404s-its-own-write-up-link
 board: code
 section: pipeline
-status: inflight
+status: shipped
 category: CI · Bug
 complexity: S
 impact: Medium
@@ -10,7 +10,7 @@ wow: 3
 note: the links check goes red on every correct PR that files a new card as shipped, and green again on merge
 order: 313
 owner: loop/links-new-card
-pr:
+pr: 874
 title: "A new card filed as <code>shipped</code> always 404s its own write-up link"
 ---
 <code>build_roadmap.py</code> renders a settled card's body as a link to the item file on
