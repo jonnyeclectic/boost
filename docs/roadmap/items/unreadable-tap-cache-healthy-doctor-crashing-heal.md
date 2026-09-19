@@ -2,7 +2,7 @@
 id: unreadable-tap-cache-healthy-doctor-crashing-heal
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: Doctor's tap check is elif not tap.cache_file.exists(): (quality.py:420) — existence …
 order: 239
 owner: loop/tap-cache-write
-pr:
+pr: 889
 title: An unreadable tap cache is invisible to doctor ("✓ 1 tap cloned &amp; cached", exit 0) while search, browse and heal all exit 70 with a crash report
 ---
 <b>Measured.</b> A tap cache file that is fully READABLE but not writable (mode 400 — exactly what one <code>sudo boost</code> run leaves behind) turns the next routine <code>CACHE_FORMAT</code> bump into exit 70 on <code>search</code>, <code>browse</code>, <code>info</code>, <code>update</code> and <code>heal</code>, while <code>boost doctor</code> prints "✓ 1 tap cloned &amp; cached" and verdicts "● healthy" at exit 0 — and no boost command repairs it, because <code>boost update &lt;tap&gt;</code>, the remedy doctor would name, crashes with the same PermissionError at exit 70.

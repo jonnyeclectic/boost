@@ -25,10 +25,11 @@ import json
 import operator
 import os
 import re
+import sys
 from pathlib import Path
 
 from ..errors import BoostError
-from . import config, frontmatter, gitutil, paths, registry, util
+from . import config, frontmatter, gitutil, output, paths, registry, util
 
 # Bumped whenever a scan starts recording something the previous scan did not,
 # so 460 caches on a real machine invalidate on read instead of needing a
@@ -250,14 +251,28 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
                         hint="run `boost update %s`" % tap.name)
     entries = scan_dir(tap.path, tap.name, tap.curated)
     paths.ensure_dirs()
-    tap.cache_file.write_text(json.dumps({
+    payload = json.dumps({
         "tap": tap.name,
         "url": tap.url,
         "format": CACHE_FORMAT,
         "generated": util.now_iso(),
         "commit": gitutil.head_commit(tap.path),
         "skills": entries,
-    }, indent=1), encoding="utf-8")
+    }, indent=1)
+    # Replaced, not rewritten in place: a cache file this process cannot
+    # write (what one `sudo boost` run leaves behind) turned the next
+    # CACHE_FORMAT bump into exit 70 on search, info, update and heal — and
+    # `update`, the remedy, crashed the same way. Anything else that stops
+    # the write (a read-only cache dir, a full disk) still serves the scan
+    # in hand: a cache is a speed-up, and failing to keep one is never an
+    # error (see load_tap).
+    try:
+        util.atomic_write_text(tap.cache_file, payload)
+    except OSError as e:
+        output.warn("could not save the catalog cache for %s (%s) — this "
+                    "command uses a fresh scan; make %s writable"
+                    % (tap.name, e.strerror or e, tap.cache_file.parent),
+                    stream=sys.stderr, wrap=True)
     # Drop the mtime-keyed cache so a rebuild is visible to an immediately
     # following load even when the filesystem mtime granularity is coarse.
     _ENTRY_CACHE.pop(str(tap.cache_file), None)
