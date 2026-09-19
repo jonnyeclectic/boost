@@ -240,8 +240,8 @@ def cmd_search(argv):
     # Against the *pane*: a pipe has none, and planning for `term_width()`'s
     # assumed 80 dropped the TAP column (it needs 84), so `boost search x |
     # grep owner/repo` found nothing the same search shows on a wide pane.
-    # Unpaned, nothing is fitted, as `boost --help` does for a pipe.
-    lay = out.search_layout(out.pane_width() or 10 ** 6,
+    # No pane (None) plans nothing to fit — see `search_layout`.
+    lay = out.search_layout(out.pane_width(),
                             [e["name"] for e, _ in shown],
                             [str(e.get("kind") or "skill") for e, _ in shown],
                             [str(e.get("tap") or "") for e, _ in shown])

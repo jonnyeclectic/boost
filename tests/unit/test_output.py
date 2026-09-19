@@ -1447,6 +1447,24 @@ class TestSearchLayout:
     KINDS = ("skill", "workflow", "rule")
     TAPS = ("anthropics/skills", "obra/superpowers", "sdi/agent-rules")
 
+    def test_no_pane_plans_nothing_to_fit(self):
+        # A pipe (pane_width() is None): the caps and drops exist to fit a
+        # pane, and there is none. The tap and name are grep/info targets.
+        tap = "sickn33/antigravity-awesome-skills"          # 34 cells
+        name = "n" * 40
+        lay = output.search_layout(None, [name, "x"], ["workflow", "skill"],
+                                   [tap, "a/b"])
+        assert (lay.name_w, lay.kind_w, lay.tap_w) == (40, 10, 34)
+        assert lay.desc_w >= 10 ** 6
+        row = output.format_search_row(name, "d" * 500, "skill", tap, 1.0,
+                                       curated=False, installed=False, lay=lay)
+        assert tap in row and name in row and "d" * 500 in row
+        assert "…" not in row
+
+    def test_no_pane_with_nothing_shown_keeps_the_empty_columns_empty(self):
+        lay = output.search_layout(None, [], [], [])
+        assert (lay.name_w, lay.kind_w, lay.tap_w) == (1, 0, 0)
+
     def test_name_column_fits_the_widest_shown_name(self):
         lay = output.search_layout(100, self.NAMES, self.KINDS, self.TAPS)
         assert lay.name_w == len("commit-messages")
