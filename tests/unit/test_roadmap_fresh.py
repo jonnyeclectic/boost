@@ -466,3 +466,42 @@ class TestLongCodeTokensCanBreak:
              "wow": 1, "note": "n", "_file": "y.md"})
         for html, cls in ((code, "rcard"), (design, "ritem")):
             assert re.search(r'class="[^"]*\b%s\b' % cls, html), html[:120]
+
+
+_LINKS_WF = _ROOT / ".github" / "workflows" / "links.yml"
+
+
+@pytest.mark.skipif(not (_SCRIPT.exists() and _LINKS_WF.exists()),
+                    reason="repo-root files not reachable (e.g. mutation sandbox)")
+class TestWriteUpLinksResolveOnTheirOwnPR:
+    """A settled card links to its item file on `main`, so a PR that files a
+    NEW card as shipped used to 404 in the `links` job until it merged (#845).
+    links.yml remaps that prefix to the PR's checkout; these pin the remap to
+    the URL the builder actually emits, so renaming ITEMS_URL cannot quietly
+    bring the 404 back."""
+
+    @staticmethod
+    def _remap():
+        wf = _LINKS_WF.read_text(encoding="utf-8")
+        m = re.search(r"--remap ''(\S+) file://\{0\}(/\S+?)''", wf)
+        assert m, "links.yml lost its --remap for roadmap write-ups"
+        return wf, m.group(1), m.group(2)
+
+    def test_the_remap_covers_every_write_up_link_the_builder_emits(self):
+        builder = _load_builder()
+        _wf, pattern, local = self._remap()
+        html = builder._body_html("shipped", "B", "some-new-card")
+        url = re.search(r'href="([^"]+)"', html).group(1)
+        # lychee substitutes the match with the replacement, then checks the
+        # resulting file:// path under the checkout ({0} = github.workspace).
+        assert re.sub(pattern, local, url) == "/docs/roadmap/items/some-new-card.md"
+        assert (_ROOT / local.strip("/")).resolve() == _ITEMS.resolve()
+
+    def test_only_pull_requests_are_remapped(self):
+        # Main and the weekly run must keep fetching the real GitHub URL —
+        # that is the check that the published link works.
+        wf, _pattern, _local = self._remap()
+        line = next(ln for ln in wf.splitlines() if "--remap" in ln)
+        assert "github.event_name == 'pull_request' &&" in line
+        # {0} must be the checkout itself, or the remap points nowhere.
+        assert re.search(r"''', github\.workspace\)", line), line
