@@ -2,14 +2,14 @@
 id: compact-answers-a-named-tap-with-a-global-all-clear
 board: code
 section: internals
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Medium
 wow: 2
 note: boost compact &lt;tap&gt; on an uncloned tap prints a green "no cloned taps to compact" and exits 0
 order: 311
-owner:
+owner: loop/compact-named-tap
 pr:
 title: "<code>compact &lt;tap&gt;</code> answers a question about one tap with a global all-clear"
 ---
