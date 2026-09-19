@@ -312,6 +312,11 @@ def _freight_bytes(tap_path: Path, keep_dirs: list[str]) -> int:
     return total
 
 
+# `boost doctor`'s wording for the same condition (quality.py), so the two
+# commands describe one missing clone in one sentence.
+_NOT_CLONED = "not cloned — run `boost update`"
+
+
 def cmd_compact(argv) -> int:
     """boost compact [--dry-run] [--reclone] [TAP ...]"""
     p = cliparse.parser(
@@ -329,12 +334,25 @@ def cmd_compact(argv) -> int:
     rows: list[dict] = []
 
     taps = [registry.get(n) for n in args.tap] if args.tap else registry.list_taps()
+    # A named tap is a request about that one tap (`registry.update`'s
+    # convention), so a missing clone is the answer to it. Filtering it out
+    # silently used to fall through to a green, global "no cloned taps to
+    # compact" that never named the tap — while `doctor` exited 1 on it.
+    if args.tap:
+        for tap in taps:
+            if not tap.is_cloned:
+                rows.append({"tap": tap.name, "error": _NOT_CLONED})
+                out.warn("tap %s %s" % (tap.name, _NOT_CLONED),
+                         stream=sys.stderr if args.json else None)
     taps = [t for t in taps if t.is_cloned]
     if not taps:
         if args.json:
-            print(json.dumps({"taps": [], "count": 0, "bytes": 0,
-                              "dry_run": args.dry_run, "ok": True}, indent=2))
-            return 0
+            print(json.dumps({"taps": rows, "count": 0, "bytes": 0,
+                              "dry_run": args.dry_run, "ok": not rows},
+                             indent=2))
+            return 1 if rows else 0
+        if rows:
+            return 1
         out.ok("no cloned taps to compact")
         return 0
 
@@ -348,6 +366,7 @@ def cmd_compact(argv) -> int:
 
     freed = 0
     changed = 0
+    broken = 0                  # cloned taps this run failed on
     for tap in taps:
         before = util.dir_size(tap.path)
         if args.dry_run:
@@ -399,6 +418,7 @@ def cmd_compact(argv) -> int:
             for rel in keep.get(tap.name, []):
                 gitutil.materialize(tap.path, rel)
         except BoostError as e:
+            broken += 1
             rows.append({"tap": tap.name, "error": str(e)})
             out.warn("could not compact %s: %s" % (tap.name, e),
                      stream=sys.stderr if args.json else None)
@@ -416,28 +436,37 @@ def cmd_compact(argv) -> int:
                 out.info("%s  %s → %s" % (tap.name, util.human_size(before),
                                           util.human_size(after)))
 
+    failed = any("error" in r for r in rows)
+    # Named: any failure is the answer (see above). Swept: fail only when no
+    # tap got through, as `boost update` does — a partial sweep did the job
+    # it could.
+    rc = 1 if failed and (args.tap or broken == len(taps)) else 0
     if args.dry_run:
         if args.json:
             print(json.dumps({"taps": rows, "count": changed, "bytes": freed,
-                              "dry_run": True, "ok": True}, indent=2))
-            return 0
+                              "dry_run": True, "ok": not failed}, indent=2))
+            return rc
         out.dim("  %d tap(s) · %s would be freed"
                 % (changed, util.human_size(freed)))
-        return 0
+        return rc
     journal.log("compact", "%d taps" % changed, freed=util.human_size(freed))
     if args.json:
         print(json.dumps({"taps": rows, "count": changed, "bytes": freed,
-                          "dry_run": False,
-                          "ok": not any("error" in r for r in rows)}, indent=2))
-        return 0
+                          "dry_run": False, "ok": not failed}, indent=2))
+        return rc
     if not changed:
-        out.ok("every tap is already compact")
-        return 0
+        # Not an all-clear over a tap that failed — the warning above it is
+        # the report for that one.
+        if not failed:
+            out.ok("every tap is already compact")
+        elif broken < len(taps):
+            out.ok("every other tap is already compact")
+        return rc
     out.ok("compacted %d tap(s) · %s freed" % (changed, util.human_size(freed)))
     if not args.reclone:
         out.dim("  `boost compact --reclone` also drops already-downloaded "
                 "git objects")
-    return 0
+    return rc
 
 
 # ---------------------------------------------------------------- create

@@ -246,7 +246,8 @@ class TestRecloneHonoursThePin:
 
         monkeypatch.setattr(gitutil, "checkout_commit", unreachable)
 
-        res = boost("compact", "--reclone")
+        # The only tap failed, so the sweep failed — `boost update`'s rule.
+        res = boost("compact", "--reclone", expect=1)
 
         assert not clone.exists()
         # The re-raise is what makes the diagnostic name the *pin*. Without it
@@ -268,3 +269,109 @@ def os_utime(pth):
     import os
     st = pth.stat()
     os.utime(pth, (st.st_atime + 10_000, st.st_mtime + 10_000))
+
+
+class TestANamedTapIsAnsweredAboutThatTap:
+    """`boost compact <tap>` is a question about one tap, so a tap with no
+    clone is the answer — not something filtered away into a green, global
+    "no cloned taps to compact" that never names it. The sweep form stays
+    quiet, as `boost update` does for a sweep."""
+
+    @staticmethod
+    def _uncloned(boost, tmp_path, name="src"):
+        from boost_cli.core import util
+        src = _repo(tmp_path / name)
+        boost("tap", str(src))
+        tap = next(t for t in registry.list_taps() if t.name == name)
+        util.rmtree(tap.path)
+        return tap
+
+    def test_named_uncloned_tap_is_named_and_fails(self, boost, sandbox,
+                                                   tmp_path):
+        tap = self._uncloned(boost, tmp_path)
+        res = boost("compact", tap.name, expect=1)
+        assert "no cloned taps" not in res.out
+        # doctor's sentence for the same condition, naming this tap.
+        assert "tap src not cloned — run `boost update`" in res.out
+
+    def test_named_uncloned_tap_in_json_is_a_failed_row(self, boost, sandbox,
+                                                        tmp_path):
+        import json
+        tap = self._uncloned(boost, tmp_path)
+        res = boost("compact", tap.name, "--json", expect=1)
+        d = json.loads(res.out)                  # the warning went to stderr
+        assert d["ok"] is False and d["count"] == 0
+        assert d["taps"] == [{"tap": "src",
+                              "error": "not cloned — run `boost update`"}]
+        assert "src not cloned" in res.err
+
+    def test_dry_run_answers_the_same_way(self, boost, sandbox, tmp_path):
+        tap = self._uncloned(boost, tmp_path)
+        res = boost("compact", tap.name, "--dry-run", expect=1)
+        assert "src not cloned" in res.out
+        assert "no cloned taps" not in res.out
+
+    def test_the_cloned_half_of_a_named_pair_is_still_compacted(
+            self, boost, sandbox, tmp_path):
+        import json
+        gone = self._uncloned(boost, tmp_path, "gone")
+        src = _repo(tmp_path / "src")
+        boost("tap", str(src))
+        clone = next(t for t in registry.list_taps() if t.name == "src").path
+        gitutil.run(["-C", str(clone), "sparse-checkout", "disable"])
+
+        res = boost("compact", "src", gone.name, "--json", expect=1)
+
+        d = json.loads(res.out)
+        assert d["ok"] is False and d["count"] == 1
+        assert {r["tap"] for r in d["taps"]} == {"src", "gone"}
+        assert not (clone / "node_modules" / "pkg.js").exists()
+
+    def test_named_cloned_dry_run_passes(self, boost, sandbox, tmp_path):
+        import json
+        src = _repo(tmp_path / "src")
+        boost("tap", str(src))
+        d = json.loads(boost("compact", "src", "--dry-run", "--json").out)
+        assert d["ok"] is True
+
+    def test_the_sweep_stays_quiet_about_a_missing_clone(self, boost, sandbox,
+                                                         tmp_path):
+        self._uncloned(boost, tmp_path)
+        res = boost("compact")                   # rc 0: nothing was asked of it
+        assert "no cloned taps to compact" in res.out
+        assert "not cloned" not in res.out
+
+    def test_a_failed_named_tap_gets_no_all_clear(self, boost, sandbox,
+                                                  tmp_path, monkeypatch):
+        from boost_cli.errors import BoostError
+        src = _repo(tmp_path / "src")
+        boost("tap", str(src))
+
+        def refuse(path):
+            raise BoostError("sparse-checkout failed")
+
+        monkeypatch.setattr(gitutil, "narrow", refuse)
+        res = boost("compact", "src", expect=1)
+        assert "could not compact src" in res.out
+        assert "already compact" not in res.out
+        # A sweep whose every tap failed fails too, as `boost update` does.
+        res = boost("compact", expect=1)
+        assert "already compact" not in res.out
+
+    def test_a_partial_sweep_passes_but_certifies_only_the_rest(
+            self, boost, sandbox, tmp_path, monkeypatch):
+        from boost_cli.errors import BoostError
+        for name in ("good", "bad"):
+            boost("tap", str(_repo(tmp_path / name)))
+        real = gitutil.narrow
+
+        def refuse_bad(path):
+            if path.name == "bad":
+                raise BoostError("sparse-checkout failed")
+            return real(path)
+
+        monkeypatch.setattr(gitutil, "narrow", refuse_bad)
+        res = boost("compact")                   # one tap got through: rc 0
+        assert "could not compact bad" in res.out
+        assert "every other tap is already compact" in res.out
+        assert "every tap is already compact" not in res.out
