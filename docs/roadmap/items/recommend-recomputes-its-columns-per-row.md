@@ -2,14 +2,14 @@
 id: recommend-recomputes-its-columns-per-row
 board: code
 section: planned
-status: planned
+status: inflight
 category: UX · Bug
 complexity: S
 impact: Low
 wow: 2
 note: cmd_recommend hand-rolls its rows and computes desc_w = max(cols - 2 - width - 2 - (l…
 order: 226
-owner:
+owner: loop/recommend-columns
 pr:
 title: <code>boost recommend</code> sizes the description cell per row from that row's <code>because:</code> text, so neither column lines up
 ---
