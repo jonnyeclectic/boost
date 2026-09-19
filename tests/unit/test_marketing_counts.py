@@ -108,15 +108,19 @@ class TestSuiteSizesAgree:
                 if "smoke" in line:
                     for n in re.findall(r"(\d+) (?:end-to-end )?checks", line):
                         sizes.setdefault(int(n), []).append(doc)
-        assert {d for docs in sizes.values() for d in docs} == set(self.DOCS)
+        # Every statement, not just every doc: the badge answer states it twice.
+        assert sorted(d for docs in sizes.values() for d in docs) == sorted(
+            ["README.md", "CONTRIBUTING.md"] + ["docs/openssf-badge.md"] * 2)
         assert len(sizes) == 1, "docs disagree on the smoke size: %s" % sizes
 
     def test_bdd_size_matches_the_feature_files(self):
         features = sorted((ROOT / "tests" / "bdd" / "features").glob("*.feature"))
         texts = [f.read_text(encoding="utf-8") for f in features]
-        # An outline expands to one scenario per Examples row; this count does
-        # not model that, so refuse rather than undercount.
-        assert not any("Scenario Outline:" in t for t in texts)
+        # An outline expands to one scenario per Examples row, and `Example:`
+        # is Gherkin's synonym for `Scenario:`; this count models neither, so
+        # refuse rather than undercount.
+        assert not any(re.search(r"^\s*(Scenario Outline|Example):", t, re.M)
+                       for t in texts)
         scenarios = sum(len(re.findall(r"^\s*Scenario:", t, re.M)) for t in texts)
         stated = [(int(f), int(s)) for doc in self.DOCS for f, s in
                   re.findall(r"(\d+) features, (\d+) scenarios", self._read(doc))]
