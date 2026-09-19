@@ -2,14 +2,14 @@
 id: info-deps-materialize-a-dir-they-then-reject
 board: code
 section: planned
-status: planned
+status: inflight
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: cmd_info (info.py:482-486) and _skill_dir_for_deps (info.py:1058-1066) call store.sou…
 order: 215
-owner:
+owner: loop/info-deps-no-widen
 pr:
 title: <code>boost info</code>/<code>deps</code> on a not-installed rule or workflow widens the tap's sparse cone for a directory <code>source_dir_for</code> immediately rejects
 ---
