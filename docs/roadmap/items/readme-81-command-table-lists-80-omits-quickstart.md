@@ -2,7 +2,7 @@
 id: readme-81-command-table-lists-80-omits-quickstart
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Quality · Docs
 complexity: S
 impact: Low
@@ -10,7 +10,7 @@ wow: 2
 note: README.md:389 heads a table "## 81 commands, organized into 8 groups", but the eight …
 order: 224
 owner: loop/readme-command-table
-pr:
+pr: 876
 title: README's "81 commands" table enumerates only 80 — the missing one is <code>quickstart</code>, the README's own first command
 ---
 <b>Measured.</b> Commit dd2fba07 (PR #594, "publish prebuilt vectors where a new user can reach them") added <code>("quickstart", "cfg", ...)</code> to cli.py's COMMANDS and changed README.md:389 from "## 80 commands" to "## 81 commands" — and left README.md:404's Configuration row at its 13 names, so the README has advertised 81 commands while listing 80 ever since, with the whole test suite green, because <code>test_marketing_counts.py</code> asserts the integer and <code>test_docsite_chrome.py:63-71</code> pins the enumeration only for <code>docs/index.html</code>.
