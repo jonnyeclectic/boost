@@ -660,7 +660,10 @@ def cmd_doctor(argv):
             % (dup.name, agents.display_name(dup.agent), _tilde(dup.path),
                _tilde(dup.target)), wrap=True)
 
-    for adir in enabled.values():
+    # Linking agents only: a native-store agent's skills dir (Gemini's) is
+    # never written, so its permissions are not boost's problem and `boost
+    # sync` could not act on them.
+    for adir in agents.linking_agents().values():
         if adir.is_dir() and not os.access(str(adir), os.W_OK):
             # A next action, like the log line below it: without one this was
             # the only issue doctor names that nothing can act on.
@@ -1170,7 +1173,7 @@ def cmd_heal(argv):
 
     # Permissions are the user's to change, not heal's; but a dir heal saw and
     # cannot fix must not sit under an all-clear.
-    stuck = [adir for adir in agents.enabled_agents().values()
+    stuck = [adir for adir in agents.linking_agents().values()
              if adir.is_dir() and not os.access(str(adir), os.W_OK)]
     for adir in stuck:
         out.warn("agent dir %s is not writable — heal does not change "

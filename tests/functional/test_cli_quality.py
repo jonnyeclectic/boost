@@ -113,6 +113,34 @@ class TestDoctor:
         boost("sync")                                # now it may
         assert (cursor / "brainstorming").is_symlink()
 
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_reinstall_names_the_link_it_could_not_make(self, boost, installed):
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.chmod(0o500)
+        try:
+            r = boost("reinstall", "brainstorming")
+        finally:
+            cursor.chmod(0o700)
+        assert "not linked: ~/.cursor/skills is not writable" in r.out.replace(
+            "\n    ", " ")
+
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_native_store_agents_dir_is_not_boosts_to_write(self, boost,
+                                                               installed):
+        # Gemini reads the canonical store; boost never links into its skills
+        # dir, so a locked one is not an issue `boost sync` could fix.
+        gemini = paths.home() / ".gemini" / "skills"
+        gemini.mkdir(parents=True, exist_ok=True)
+        gemini.chmod(0o500)
+        try:
+            doc = boost("doctor").out
+            boost("heal")                          # rc 0: nothing of boost's
+        finally:
+            gemini.chmod(0o700)
+        assert "agent dir" not in doc
+
     def test_an_untapped_machine_is_still_rc0(self, boost):
         # Reported, never fatal. The exit code turns on real issues only, so
         # scripts and CI on a fresh machine are unaffected — which is what
