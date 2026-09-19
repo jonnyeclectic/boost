@@ -32,7 +32,7 @@ thing boost does, and the code path treats it that way.
 | Boundary | Trusted side | Untrusted side |
 |---|---|---|
 | **Tap content** | boost's own code | every byte of a cloned registry: file names, paths, YAML frontmatter, body text |
-| **Catalogue bundle** | the importing machine | a `boost catalog export` tarball received from elsewhere |
+| **Catalogue bundle** | the importing machine | a `boost catalog --export` tarball received from elsewhere |
 | **The agent** | — | boost cannot police what an agent does with a file it has loaded |
 | **The toolchain** | the pinned hashes in `requirements/` | PyPI, and anything it resolves to |
 | **CI** | the workflow files in this repo | every third-party action, and anything a fork's PR can influence |

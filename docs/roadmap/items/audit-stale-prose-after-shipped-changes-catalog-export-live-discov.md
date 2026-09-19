@@ -2,15 +2,15 @@
 id: audit-stale-prose-after-shipped-changes-catalog-export-live-discov
 board: code
 section: dx
-status: planned
+status: shipped
 category: Docs · Drift
 complexity: S
 impact: Low
 wow: 1
 note: a documented command that exits 2, 463 vs 464 in eight places, a GPL rule over Apache files
 order: 244
-owner:
-pr:
+owner: loop/stale-prose
+pr: 883
 title: "Stale prose after shipped changes: <code>catalog --export</code>, live discover, 464 count, Apache-2.0"
 ---
 Four patches of prose describe the repo as it was before a shipped change, each verified against the current

@@ -61,12 +61,12 @@ two commands consume them:
 
 ```bash
 boost quickstart                 # tap the starter registries + import their vectors
-boost quickstart --catalog       # …or all 463 catalogued registries
+boost quickstart --catalog       # …or every catalogued registry
 boost reindex --fetch-shards     # already tapped: import whatever is published
 ```
 
-The published set is the whole catalogue, refreshed weekly. CI packs the 463
-registries into ~60 matrix jobs rather than one per registry, because GitHub
+The published set is the whole catalogue, refreshed weekly. CI packs the
+catalogue into ~60 matrix jobs rather than one per registry, because GitHub
 caps a matrix at 256 jobs and embedding cost is uneven enough that slicing
 would leave one job carrying several of the largest registries
 (`scripts/shard_plan.py`).

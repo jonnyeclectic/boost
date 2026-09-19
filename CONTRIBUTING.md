@@ -191,7 +191,7 @@ form linked there, never a public issue.
   tests that actually kill your mutants.
 - **Every source file opens with a two-line header** —
   `# Copyright the boost contributors.` then
-  `# SPDX-License-Identifier: GPL-3.0-only`, below any shebang.
+  `# SPDX-License-Identifier: Apache-2.0`, below any shebang.
   `python3 scripts/add_spdx_headers.py` stamps whatever is missing and is safe
   to re-run; `tests/unit/test_spdx_headers.py` fails the build for a new file
   without one.

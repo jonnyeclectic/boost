@@ -15,6 +15,7 @@ that lies about what it proves.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -82,6 +83,26 @@ class TestCommandCount:
 # breaks on an unrelated edit. The number in the README comes from running the
 # suite and reading its own summary line, which is the only honest source. A
 # test whose formula is a guess is worse than no test.
+
+
+class TestCatalogueSizeIsNotHardCoded:
+    def test_no_doc_states_a_catalogue_size_the_data_disagrees_with(self):
+        # `scripts/build_registries.py` moves this number; prose that states
+        # it went stale at 463 while registries.json held 464. Say "every
+        # catalogued registry" instead, or state the current figure.
+        data = json.loads((ROOT / "boost_cli" / "data" / "registries.json")
+                          .read_text(encoding="utf-8"))
+        size = sum(1 for r in data["registries"] if not r.get("list_only"))
+        docs = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+        for doc in docs:
+            text = doc.read_text(encoding="utf-8")
+            # `\s+`: README broke this very phrase across a line. The second
+            # form is "the N-registry catalogue"; a "~N" is an estimate.
+            for n in re.findall(r"all\s+(\d+)\s+catalogued\s+registr"
+                                r"|(?<![~\d])(\d+)-registry\s+catalogue", text):
+                n = next(g for g in n if g)
+                assert int(n) == size, "%s says all %s; the catalogue is %d" % (
+                    doc.name, n, size)
 
 
 class TestNoStaleCountsElsewhere:
