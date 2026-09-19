@@ -36,9 +36,9 @@ def _selection(catalog_scope: bool) -> list[dict]:
     """The registries quickstart will tap: the seven defaults, or all of them.
 
     `--catalog` exists because "search everything" is a real ask and the two
-    costs that used to make it unreasonable are gone: tapping 463 registries is
-    2 min 10 s now that clones run in parallel, and their vectors are a
-    download rather than an hour of CPU.
+    costs that used to make it unreasonable are gone: tapping the whole
+    catalogue measured 2 min 10 s (463 registries) once clones ran in
+    parallel, and their vectors are a download rather than an hour of CPU.
     """
     if not catalog_scope:
         return [d.copy() for d in config.DEFAULT_TAPS]
@@ -62,7 +62,7 @@ def _tap_defaults(selection: list[dict], pins: dict[str, dict],
     if dry_run:
         existing = {t.name for t in registry.list_taps()}
         pending = [n for n in names if n not in existing]
-        # Over 463 registries a line each is a wall of text, so past a handful
+        # Over the whole catalogue a line each is a wall of text, so past a handful
         # the dry run reports the shape instead of the list.
         if len(pending) > 12:
             out.info("would tap %d registries (%d pinned to a published "
