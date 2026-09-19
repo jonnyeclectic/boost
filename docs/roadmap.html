@@ -2121,7 +2121,7 @@ FIX SCOPE IS WIDER THAN THE FINDING SAYS: because <code>pkg.py:941</code> (<code
       </article>
 
       <article class="cap rcard" id="readme-81-command-table-lists-80-omits-quickstart">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Docs</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Docs</span></div>
         <h3>README's "81 commands" table enumerates only 80 — the missing one is <code>quickstart</code>, the README's own first command</h3>
         <p><b>Measured.</b> Commit dd2fba07 (PR #594, "publish prebuilt vectors where a new user can reach them") added <code>("quickstart", "cfg", ...)</code> to cli.py's COMMANDS and changed README.md:389 from "## 80 commands" to "## 81 commands" — and left README.md:404's Configuration row at its 13 names, so the README has advertised 81 commands while listing 80 ever since, with the whole test suite green, because <code>test_marketing_counts.py</code> asserts the integer and <code>test_docsite_chrome.py:63-71</code> pins the enumeration only for <code>docs/index.html</code>.
 

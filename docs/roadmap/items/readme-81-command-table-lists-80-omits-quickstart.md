@@ -2,14 +2,14 @@
 id: readme-81-command-table-lists-80-omits-quickstart
 board: code
 section: planned
-status: planned
+status: inflight
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: README.md:389 heads a table "## 81 commands, organized into 8 groups", but the eight …
 order: 224
-owner:
+owner: loop/readme-command-table
 pr:
 title: README's "81 commands" table enumerates only 80 — the missing one is <code>quickstart</code>, the README's own first command
 ---
