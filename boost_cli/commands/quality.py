@@ -26,6 +26,7 @@ from ..core import (
     ai,
     catalog,
     claude_settings,
+    config,
     complete,
     frontmatter,
     gitutil,
@@ -412,6 +413,20 @@ def cmd_doctor(argv):
         bad("git", "git not found on PATH — install git")
     paths.ensure_dirs()  # create silently; never a failure
 
+    # A corrupt config.json reads as DEFAULTS, so the tap list below comes
+    # back empty and the verdict used to be "ready to set up", exit 0, on a
+    # machine whose clones were all still on disk. Say what was lost instead.
+    cfg_err = config.check()
+    if cfg_err:
+        clones = config.unlisted_clones()
+        bad("config", "%s — boost is running on defaults, so %s. Repair the "
+            "file, or re-add your taps; the next write moves the bad file "
+            "to config.json.corrupt" % (cfg_err, (
+                "the %d tap clone%s on disk %s not listed" % (
+                    len(clones), _s(len(clones)),
+                    "is" if len(clones) == 1 else "are"))
+                if clones else "no taps or settings are read"), wrap=True)
+
     taps = registry.list_taps()
     tap_ok = 0
     for tap in taps:
@@ -424,7 +439,7 @@ def cmd_doctor(argv):
             tap_ok += 1
     if taps and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned & cached" % (len(taps), _s(len(taps))))
-    elif not taps:
+    elif not taps and not cfg_err:
         # `boost tap --defaults` leads, and it is the same command in the same
         # order that `boost search`'s error, `mcp.no_results` and the MCP
         # `boost_doctor` tool all name. A user who hits two of these surfaces
@@ -1164,15 +1179,23 @@ def cmd_heal(argv):
             out.ok("journal rotation scheduled (next write rotates)")
         actions.append("rotate")
 
-    if not actions:
+    # Not repairable from here — the tap list is the user's, not derivable —
+    # and never covered by an all-clear: with it unreadable, every check
+    # above ran against DEFAULTS.
+    cfg_err = config.check()
+    if cfg_err:
+        out.warn("%s — heal cannot repair it: boost is running on defaults "
+                 "until the file is fixed or your taps are re-added"
+                 % cfg_err, wrap=True)
+    elif not actions:
         # A duplicate this run declined to prune is something `heal` saw, can
         # fix, and deliberately left. A bare "nothing to heal" printed under
         # the line offering the flag contradicts it.
         out.ok("nothing to heal automatically"
                if declined_duplicates else "nothing to heal")
-    elif not dry:
+    if actions and not dry:
         journal.log("heal", "%d actions" % len(actions))
-    return 0
+    return 1 if cfg_err else 0
 
 
 def cmd_conflict(argv):

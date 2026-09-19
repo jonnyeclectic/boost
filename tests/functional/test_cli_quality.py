@@ -88,6 +88,26 @@ class TestDoctor:
         assert "● healthy" not in r.out
         assert "ready to set up" in r.out
 
+    def test_a_corrupt_config_is_an_issue_not_a_fresh_install(
+            self, boost, installed):
+        from boost_cli.core import paths
+        paths.config_path().write_text('{"taps": [', encoding="utf-8")
+        r = boost("doctor", expect=1)
+        assert "ready to set up" not in r.out
+        assert "boost tap --defaults" not in r.out     # not a new user
+        assert "invalid JSON" in r.out
+        assert "1 tap clone on disk is not listed" in r.out.replace("\n    ", " ")
+        d = json.loads(boost("doctor", "--json", expect=1).out)
+        assert d["ok"] is False
+        assert [c["name"] for c in d["checks"] if c["status"] == "issue"] == ["config"]
+
+    def test_heal_does_not_certify_a_corrupt_config(self, boost, installed):
+        from boost_cli.core import paths
+        paths.config_path().write_text('{"taps": [', encoding="utf-8")
+        r = boost("heal", expect=1)
+        assert "nothing to heal" not in r.out
+        assert "heal cannot repair it" in r.out.replace("\n    ", " ")
+
     def test_an_untapped_machine_is_still_rc0(self, boost):
         # Reported, never fatal. The exit code turns on real issues only, so
         # scripts and CI on a fresh machine are unaffected — which is what
