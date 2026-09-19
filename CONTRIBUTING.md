@@ -120,8 +120,8 @@ list, and neither should be added to it.
 |---|---|
 | `make test` | unit + functional suites, **≥90% coverage** (statements + branches) |
 | `make patch-coverage` | changed-line coverage vs `main`, **≥80% of the diff** (PRs) |
-| `bash tests/smoke.sh` | 170 end-to-end checks through the real `./boost` shim |
-| `make bdd` | the Gherkin suite — 11 features, 47 scenarios (needs the `[bdd]` extra) |
+| `bash tests/smoke.sh` | 183 end-to-end checks through the real `./boost` shim |
+| `make bdd` | the Gherkin suite — 11 features, 56 scenarios (needs the `[bdd]` extra) |
 | `make mutation` | mutmut over `boost_cli/core`, **≥80% mutants killed** |
 | `ruff check boost_cli tests` | lint, zero findings |
 | `mypy` | type check, zero errors |

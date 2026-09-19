@@ -928,7 +928,7 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip -q install -e '.[bdd]'
-      - name: behave (11 features, 47 scenarios)
+      - name: behave (tests/bdd)
         # Every scenario sandboxes its own $HOME in environment.py, so this
         # touches no real agent config. --no-capture-stderr keeps a failing
         # step's own diagnostics in the log next to the scenario that failed.
