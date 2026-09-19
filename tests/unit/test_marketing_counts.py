@@ -59,6 +59,21 @@ class TestCommandCount:
         assert counts == {_command_count()}, \
             "README states conflicting command counts: %s" % sorted(counts)
 
+    def test_readme_table_lists_exactly_the_registry(self):
+        # The integer above was guarded; the enumeration under it was not, so
+        # #594 moved the heading to 81 and the table stayed at 80 (quickstart,
+        # the README's own onboarding step, was the one missing). Pin the rows
+        # by group title and order, the way docs/index.html's list is pinned.
+        from boost_cli.cli import GROUPS
+        rows = {group: [c.strip() for c in cmds.split("·")]
+                for group, cmds in re.findall(
+                    r"^\| ([A-Z][^|]*?) \| (.+?) \|$", README, re.M)
+                if "·" in cmds}
+        want: dict[str, list[str]] = {}
+        for name, group, _module, _summary in COMMANDS:
+            want.setdefault(GROUPS[group][1], []).append(name)
+        assert rows == want
+
     def test_landing_page_counts_agree(self):
         counts = {int(n) for n in re.findall(r"(\d+)\s+commands", INDEX)}
         assert counts == {_command_count()}, \
