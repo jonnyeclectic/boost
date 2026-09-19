@@ -2,14 +2,14 @@
 id: audit-root-findings
 board: code
 section: dx
-status: planned
+status: inflight
 category: CLI · Bug
 complexity: S
 impact: Low
 wow: 1
 note: EPIPE exits 120 with stderr noise; `help version` suggests verify; launcher gates at 3.9
 order: 245
-owner:
+owner: loop/audit-root-closed
 pr:
 title: "boost ROOT: CLI audit findings (2026-08)"
 ---
