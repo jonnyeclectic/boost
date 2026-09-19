@@ -1733,7 +1733,7 @@ SCOPE LIMITS of my repro, all of which a card author must respect: - The 188/3/4
       </article>
 
       <article class="cap rcard" id="mcp-install-description-omits-antigravity">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Interop</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Interop</span></div>
         <h3>boost_install's description enumerates four of the five enabled agent targets, and gives Antigravity the one mechanism it does not use</h3>
         <p><b>Measured.</b> The enumeration is provably stale rather than deliberately partial: the string was written in PR #442 on 2026-08-03, when boost had four agent targets, and Antigravity CLI landed as a FIFTH -- and a LINKING -- target in PR #602 on 2026-08-30 (<code>git merge-base --is-ancestor</code> confirms #442 precedes #602), and the string has not been touched since; today <code>enabled_agents()</code> returns 5 and <code>linking_agents()</code> returns 4 while the description names 4 and 3 of them respectively, and <code>boost_install</code> is the only one of the seven MCP tool descriptions that names any agent at all -- so the fix is a single string.
 

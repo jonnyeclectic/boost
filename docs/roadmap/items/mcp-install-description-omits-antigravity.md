@@ -2,14 +2,14 @@
 id: mcp-install-description-omits-antigravity
 board: code
 section: planned
-status: planned
+status: inflight
 category: Interop
 complexity: S
 impact: Low
 wow: 2
 note: boost_install's description says installs are "wired into every agent you have enable…
 order: 216
-owner:
+owner: loop/mcp-install-agents
 pr:
 title: boost_install's description enumerates four of the five enabled agent targets, and gives Antigravity the one mechanism it does not use
 ---
