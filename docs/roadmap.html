@@ -2451,7 +2451,7 @@ NOT ALREADY CARDED — I re-checked independently. The PR 739 card (<code>audit-
       </article>
 
       <article class="cap rcard" id="stale-gate-sizes-in-readme-and-contributing">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Quality · Docs</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Quality · Docs</span></div>
         <h3>The contributor-onboarding gate tables state three wrong suite sizes, and README and CONTRIBUTING disagree with each other</h3>
         <p><b>Measured.</b> One command (<code>make smoke</code> is literally <code>bash tests/smoke.sh</code>, Makefile:48-49) is documented as three different sizes in three files — 176 in README.md:515, 170 in CONTRIBUTING.md:123 and 170 again in docs/openssf-badge.md:123 — while it actually runs 183 checks, a figure that is deterministic and statically derivable as 102 top-level <code>run</code> lines plus 81 <code>--help</code> entries in the CMDS heredoc.
 

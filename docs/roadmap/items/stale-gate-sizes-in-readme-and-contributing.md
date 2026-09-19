@@ -2,14 +2,14 @@
 id: stale-gate-sizes-in-readme-and-contributing
 board: code
 section: planned
-status: planned
+status: inflight
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: README.md:515 says make smoke is "176 checks" and CONTRIBUTING.md:123 says bash tests…
 order: 235
-owner:
+owner: loop/gate-sizes
 pr:
 title: The contributor-onboarding gate tables state three wrong suite sizes, and README and CONTRIBUTING disagree with each other
 ---
