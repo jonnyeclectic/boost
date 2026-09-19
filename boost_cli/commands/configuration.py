@@ -1590,7 +1590,16 @@ def _tool_doctor(args: dict):
     # Additive, deliberately: an untapped machine can ALSO have a broken
     # materialization, and folding the two into one branch would hide the
     # issue count behind the setup note.
-    if not taps:
+    # With config.json unreadable the tap list reads as DEFAULTS' empty one,
+    # and the note below would send the agent to re-tap the defaults over the
+    # user's real list — the fix CLI `boost doctor` now names instead.
+    cfg_err = config.check()
+    if cfg_err:
+        total += 1
+        lines.append("%s — boost is running on defaults, so the user's taps are "
+                     "not listed; ask the user to repair the file or re-add "
+                     "their taps (run `boost doctor` for details)" % cfg_err)
+    elif not taps:
         # Same command, same order, as mcp.no_results: an agent that calls
         # both tools in one session must not see the recommendation flipped
         # and read it as two different fixes. `boost tap --defaults` leads
@@ -1602,7 +1611,7 @@ def _tool_doctor(args: dict):
     if total == 0:
         if taps:
             lines.append("healthy — no issues found")
-    elif mat_issues:
+    elif mat_issues or cfg_err:
         lines.append("%d issue(s) — run `boost doctor` for details" % total)
     else:
         lines.append("%d issue(s) — run `boost sync` to fix" % issues)

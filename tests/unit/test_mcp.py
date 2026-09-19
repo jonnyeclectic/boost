@@ -1180,3 +1180,25 @@ class TestDoctorCountsWithoutBuildingTheList:
                             lambda: {"skill": 1, "rule": 1, "workflow": 1})
         text, _ = configuration._tool_doctor({})
         assert "3 items available" in text
+
+
+class TestDoctorToolOnACorruptConfig:
+    """The MCP twin of CLI doctor's `config` issue: with config.json
+    unreadable, "no registries tapped — run `boost tap --defaults`" would send
+    the agent to re-tap the defaults over the user's real list."""
+
+    def test_it_is_an_issue_with_the_repair_not_a_setup_note(self, sandbox):
+        from boost_cli.commands import configuration
+        from boost_cli.core import paths
+        paths.ensure_dirs()
+        paths.config_path().write_text('{"taps": [', encoding="utf-8")
+        text, is_error = configuration._tool_doctor({})
+        assert is_error is True
+        assert "invalid JSON" in text and "re-add their taps" in text
+        assert "boost tap --defaults" not in text
+        assert text.splitlines()[-1] == "1 issue(s) — run `boost doctor` for details"
+
+    def test_a_healthy_config_is_untouched(self, sandbox):
+        from boost_cli.commands import configuration
+        text, is_error = configuration._tool_doctor({})
+        assert is_error is False and "boost tap --defaults" in text
