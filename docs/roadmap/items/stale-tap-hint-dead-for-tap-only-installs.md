@@ -2,14 +2,14 @@
 id: stale-tap-hint-dead-for-tap-only-installs
 board: code
 section: planned
-status: planned
+status: inflight
 category: Tech-debt
 complexity: M
 impact: Med
 wow: 3
 note: CLAUDE.md's rule is that "search must never refresh taps in the background: _hint_sta…
 order: 244
-owner:
+owner: loop/stale-tap-hint
 pr:
 title: The "taps last refreshed N days ago" hint can never fire on a machine that tapped and never ran <code>boost update</code> — the only writer of the marker is <code>update</code> itself
 ---
