@@ -62,6 +62,11 @@ class TestChromeOnlyCommandsFitAnyPane:
         pane(cols)
         r = boost("search", "brainstorming", expect=None)
         assert _widest(r.out) <= cols
+        # One match made the footer 39 cells — one under the narrowest pane —
+        # so the gate passed on the singular noun. Two matches is 41.
+        r = boost("search", "workflow", expect=None)
+        assert "2 matches" in r.out.replace("\n  ", " ")
+        assert _widest(r.out) <= cols
 
     @pytest.mark.parametrize("cols", NARROW)
     def test_who(self, boost, tapped, pane, cols):

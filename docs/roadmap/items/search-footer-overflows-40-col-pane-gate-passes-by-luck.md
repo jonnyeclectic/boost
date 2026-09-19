@@ -2,15 +2,15 @@
 id: search-footer-overflows-40-col-pane-gate-passes-by-luck
 board: code
 section: planned
-status: planned
+status: shipped
 category: UX · Bug
 complexity: M
 impact: Med
 wow: 3
 note: tests/functional/test_cli_pane_width.py asserts _widest(r.out) &lt;= cols for boost sear…
 order: 232
-owner:
-pr:
+owner: loop/search-footer-fit
+pr: 884
 title: <code>boost search</code>'s footer overflows a 40-column pane by 2-15 cells, and the gate that swears it doesn't passes only because its fixture returns exactly one match
 ---
 <b>Measured.</b> On the gate's <b>own</b> 5-item fixture at COLUMNS=40, changing the query from <code>brainstorming</code> to <code>workflow</code> — nothing else — takes <code>_widest(r.out)</code> from 40 (passes) to 41 (fails), because the footer goes from <code>1 match · ranked by full-content BM25</code> (39 cells) to <code>2 matches · ranked by full-content BM25</code> (41 cells): the gate's green is a property of the singular noun, not of the code. On the 20-tap corpus the same footer measures 55 cells at COLUMNS=40 (over by 15) via the <code>hit_cap</code> branch.
