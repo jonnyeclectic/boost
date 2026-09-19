@@ -2221,7 +2221,7 @@ MITIGATIONS (why Med and not High): every failure path recovers in one command. 
       </article>
 
       <article class="cap rcard" id="search-footer-not-fitted-to-the-pane-its-rows-were-fitted-to">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">UX · Bug</span></div>
         <h3>The search footer is the one unfitted line on a screen <code>search_layout</code> just fitted: 55 columns in a 40-column pane</h3>
         <p><b>Measured.</b> The same command measures 55 columns in a 40-column pane in the field and 39 in the test that asserts it fits: <code>tests/functional/test_cli_pane_width.py::TestChromeOnlyCommandsFitAnyPane::test_search[40]</code> passes only because its fixture tap yields exactly one match, whose footer is <code>1 match · ranked by full-content BM25</code> = 39 — one column under the pane.
 

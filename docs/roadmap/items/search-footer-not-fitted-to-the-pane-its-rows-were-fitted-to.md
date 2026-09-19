@@ -2,14 +2,14 @@
 id: search-footer-not-fitted-to-the-pane-its-rows-were-fitted-to
 board: code
 section: planned
-status: planned
+status: inflight
 category: UX · Bug
 complexity: S
 impact: Low
 wow: 2
 note: search_layout's docstring guarantees every row measures within cols, and at COLUMNS=4…
 order: 231
-owner:
+owner: loop/search-footer-fit
 pr:
 title: The search footer is the one unfitted line on a screen <code>search_layout</code> just fitted: 55 columns in a 40-column pane
 ---
