@@ -2785,7 +2785,7 @@ Three things the finder did not report that a card author will want:
       </article>
 
       <article class="cap rcard" id="unreadable-tap-cache-healthy-doctor-crashing-heal">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Onboarding · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Onboarding · Bug</span></div>
         <h3>An unreadable tap cache is invisible to doctor ("✓ 1 tap cloned &amp; cached", exit 0) while search, browse and heal all exit 70 with a crash report</h3>
         <p><b>Measured.</b> A tap cache file that is fully READABLE but not writable (mode 400 — exactly what one <code>sudo boost</code> run leaves behind) turns the next routine <code>CACHE_FORMAT</code> bump into exit 70 on <code>search</code>, <code>browse</code>, <code>info</code>, <code>update</code> and <code>heal</code>, while <code>boost doctor</code> prints "✓ 1 tap cloned &amp; cached" and verdicts "● healthy" at exit 0 — and no boost command repairs it, because <code>boost update &lt;tap&gt;</code>, the remedy doctor would name, crashes with the same PermissionError at exit 70.
 

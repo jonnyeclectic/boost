@@ -2,14 +2,14 @@
 id: unreadable-tap-cache-healthy-doctor-crashing-heal
 board: code
 section: planned
-status: planned
+status: inflight
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: Doctor's tap check is elif not tap.cache_file.exists(): (quality.py:420) — existence …
 order: 239
-owner:
+owner: loop/tap-cache-write
 pr:
 title: An unreadable tap cache is invisible to doctor ("✓ 1 tap cloned &amp; cached", exit 0) while search, browse and heal all exit 70 with a crash report
 ---
