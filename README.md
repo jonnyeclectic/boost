@@ -411,7 +411,7 @@ the C4 diagrams in [`docs/architecture/`](docs/architecture/README.md).
 | Registry (Taps) | tap · untap · taps · outdated · catalog |
 | Intelligence | chat · distill · simulate · infer · absorb · evolve · context · focus · impact |
 | Quality & Health | doctor · lint · audit · verify · drift · test · fingerprint · quarantine · decay · heal · conflict · changelog · attest · health · trust |
-| Configuration | config · clean · compact · create · policy · onboard · completions · schedule · serve · mcp · hooks · bmad · self-update |
+| Configuration | quickstart · config · clean · compact · create · policy · onboard · completions · schedule · serve · mcp · hooks · bmad · self-update |
 | Team & Collaboration | cohort · profile · protocol · pulse · replay · who |
 
 The AI-assisted commands (`search --smart`, `explain`, `distill`, `infer`,
