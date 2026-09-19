@@ -1151,13 +1151,13 @@ def cmd_recommend(argv):
     if used_curated_fallback:
         out.info("no stack-specific matches — curated picks instead:")
     width = min(max(len(r["entry"]["name"]) for r in shown), 32)
-    becauses = ["because: %s" % ", ".join(sorted(r["because"])) for r in shown]
+    reasons = ["because: %s" % ", ".join(sorted(r["because"])) for r in shown]
     # One description width for every row, from the widest reason. Sized per
     # row from that row's own `because:` tag, the clip point swung 20 columns
     # between rows (34-54 at COLUMNS=100) and neither column lined up.
     desc_w = max(out.term_width() - 2 - width - 2
-                 - (max(map(len, becauses)) + 2), 8)
-    for r, because in zip(shown, becauses, strict=True):
+                 - (max(map(len, reasons)) + 2), 8)
+    for r, because in zip(shown, reasons, strict=True):
         e = r["entry"]
         name_cell = out.role(out.truncate(e["name"], width).ljust(width), "accent")
         desc = out.truncate(e["description"] or "", desc_w)
