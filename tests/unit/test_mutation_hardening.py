@@ -183,8 +183,10 @@ class TestForcedColorOutput:
             y + "a\033[0m\n" + y + "b\033[0m")
         assert out.role("a\nb", "muted") == (         # the sgr branch
             "\033[2ma\033[0m\n\033[2mb\033[0m")
-        assert out.role("a\nb", "warn", bold=True) == (
-            "\033[1m" + y + "a\033[0m\n\033[1m" + y + "b\033[0m")
+        # A space in the text: splitting the painted span on whitespace
+        # instead of "\n" would bold each word, not each line.
+        assert out.role("a b\nc", "warn", bold=True) == (
+            "\033[1m" + y + "a b\033[0m\n\033[1m" + y + "c\033[0m")
         # A single line is byte-identical to the old code + text + RESET.
         assert out.role("a", "warn", bold=True) == "\033[1m" + y + "a\033[0m"
         assert out.c("", out.DIM) == "\033[2m\033[0m"
