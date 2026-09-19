@@ -120,7 +120,7 @@ Package: [`boost-skill-cli`](https://pypi.org/project/boost-skill-cli/)
 
 | Criterion | Cat. | Answer | Evidence |
 |---|---|---|---|
-| `test` | MUST | **Met** | Four tiers: `tests/unit`, `tests/functional` (drive the real CLI in-process), `tests/smoke.sh` (170 end-to-end checks through the `./boost` shim) and a Gherkin BDD suite (11 features, 47 scenarios). |
+| `test` | MUST | **Met** | Four tiers: `tests/unit`, `tests/functional` (drive the real CLI in-process), `tests/smoke.sh` (183 end-to-end checks through the `./boost` shim) and a Gherkin BDD suite (11 features, 56 scenarios). |
 | `test_invocation` | SHOULD | **Met** | `make test` — or `nox`, which reproduces the exact CI gate in isolated venvs across every supported interpreter. |
 | `test_most` | SUGGESTED | **Met** | A **90% coverage** gate over statements and branches (`fail_under = 90`), an **80% changed-line** gate on pull requests, and an **80% mutation** gate over `boost_cli/core` — the last of which means coverage cannot be satisfied by tests that merely execute the code without asserting on it. |
 | `test_continuous_integration` | SUGGESTED | **Met** | GitHub Actions runs the full gate on every push and every pull request. |
@@ -204,7 +204,7 @@ of the security-design document for the full account.
 
 | Criterion | Cat. | Answer | Evidence |
 |---|---|---|---|
-| `dynamic_analysis` | SUGGESTED | **Met** | [`fuzz.yml`](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/fuzz.yml) runs `atheris` (libFuzzer for Python) against the parsers over a target matrix, uploading any crashing input as an artifact. Beyond fuzzing, `tests/smoke.sh` drives the real binary end to end through 170 checks, and the functional suite executes the CLI against a throwaway `$HOME`. |
+| `dynamic_analysis` | SUGGESTED | **Met** | [`fuzz.yml`](https://github.com/jonnyeclectic/boost/blob/main/.github/workflows/fuzz.yml) runs `atheris` (libFuzzer for Python) against the parsers over a target matrix, uploading any crashing input as an artifact. Beyond fuzzing, `tests/smoke.sh` drives the real binary end to end through 183 checks, and the functional suite executes the CLI against a throwaway `$HOME`. |
 | `dynamic_analysis_unsafe` | SUGGESTED | **N/A** | Python is memory-safe; there is no buffer overflow or use-after-free class for a tool like ASan or Valgrind to find. The runtime has no C extension (the optional `[rag]` extra is not on the install path). |
 | `dynamic_analysis_enable_assertions` | SUGGESTED | **Met** | The test suites are assertion-driven and run with assertions enabled (no `-O`), and `pytest` promotes `DeprecationWarning` raised inside `boost_cli` to a hard error, so a latent deprecation fails a run rather than scrolling past. |
 | `dynamic_analysis_fixed` | MUST | **Met** | No medium-or-higher exploitable vulnerability has been found by dynamic analysis. A crashing input found by the fuzzer is uploaded as a workflow artifact and fixed; none is outstanding. |
