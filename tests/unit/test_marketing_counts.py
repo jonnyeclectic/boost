@@ -73,6 +73,7 @@ class TestCommandCount:
         for name, group, _module, _summary in COMMANDS:
             want.setdefault(GROUPS[group][1], []).append(name)
         assert rows == want
+        assert list(rows) == list(want)       # the groups' order too
 
     def test_landing_page_counts_agree(self):
         counts = {int(n) for n in re.findall(r"(\d+)\s+commands", INDEX)}
