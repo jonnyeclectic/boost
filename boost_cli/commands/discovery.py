@@ -1974,6 +1974,9 @@ def cmd_browse(argv):
                      + ", ".join(agents.display_name(a) for a in res.linked))
         for conflict in res.conflicts:
             out.warn("conflict: %s exists and is not a symlink" % _tilde(conflict))
+        for adir in res.unwritable:
+            out.warn("not linked: %s is not writable — `chmod u+w %s`, then "
+                     "`boost sync`" % (_tilde(adir), _tilde(adir)))
     return 0
 
 

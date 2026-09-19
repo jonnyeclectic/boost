@@ -13,6 +13,8 @@ import shutil
 import subprocess
 from datetime import datetime
 
+import pytest
+
 from boost_cli.core import paths
 
 
@@ -87,6 +89,29 @@ class TestDoctor:
         r = boost("doctor")
         assert "● healthy" not in r.out
         assert "ready to set up" in r.out
+
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unwritable_agent_dir_names_its_remedy_everywhere(
+            self, boost, tapped):
+        # doctor named it with no next action, heal answered "nothing to
+        # heal", and the next install crashed at exit 70.
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            doc = boost("doctor", expect=1).out.replace("\n    ", " ")
+            heal = boost("heal", expect=1).out.replace("\n    ", " ")
+            inst = boost("install", "brainstorming").out.replace("\n    ", " ")
+        finally:
+            cursor.chmod(0o700)
+        remedy = "`chmod u+w ~/.cursor/skills`"
+        assert remedy in doc and "`boost sync`" in doc
+        assert remedy in heal and "nothing to heal" not in heal
+        assert "not linked: ~/.cursor/skills is not writable" in inst
+        assert remedy in inst
+        boost("sync")                                # now it may
+        assert (cursor / "brainstorming").is_symlink()
 
     def test_an_untapped_machine_is_still_rc0(self, boost):
         # Reported, never fatal. The exit code turns on real issues only, so

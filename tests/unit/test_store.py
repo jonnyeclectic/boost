@@ -3426,3 +3426,32 @@ class TestResolveLockEntry:
         assert bare == "team-conventions"
         assert kind == "rule"
         assert entry == lockfile.get_rule("team-conventions")
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="root ignores mode bits")
+class TestAnUnwritableAgentDirIsSkipped:
+    """One agent skills dir restored with the wrong owner used to abort the
+    whole install at exit 70 — after the store copy and the other agents'
+    links, none of which the lock then recorded
+    (unwritable-agent-dir-has-no-remedy)."""
+
+    def test_the_other_agents_are_linked_and_the_dir_is_reported(
+            self, tap, entry):
+        cursor = paths.home() / ".cursor" / "skills"
+        cursor.mkdir(parents=True, exist_ok=True)
+        cursor.chmod(0o500)
+        try:
+            res = store.install(entry)
+        finally:
+            cursor.chmod(0o700)
+        assert res.unwritable == [str(cursor)]
+        assert "cursor" not in res.linked
+        assert set(res.linked) == set(LINKED_AGENTS) - {"cursor"}
+        assert not (cursor / "brainstorming").exists()
+        # Recorded, so `boost sync` can add the missing link once it may.
+        assert lockfile.get_skill("brainstorming") is not None
+        assert ("brainstorming", "cursor") in store.sync_plan()["missing_links"]
+
+    def test_a_writable_dir_reports_nothing_unwritable(self, tap, entry):
+        assert store.install(entry).unwritable == []

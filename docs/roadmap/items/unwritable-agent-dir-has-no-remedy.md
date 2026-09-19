@@ -2,7 +2,7 @@
 id: unwritable-agent-dir-has-no-remedy
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Onboarding · Bug
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: Every other issue doctor raises names a command (boost heal, boost sync, boost update…
 order: 240
 owner: loop/agent-dir-writable
-pr:
+pr: 890
 title: "! agent dir ~/.cursor/skills is not writable" is the one doctor issue with no next action — heal has no path for it and the next install crashes at exit 70
 ---
 <b>Measured.</b> With <code>chmod 500 ~/.cursor/skills</code>, doctor prints the bare line <code>! agent dir ~/.cursor/skills is not writable</code> and exits 1, <code>boost heal</code> answers <code>✓ nothing to heal</code> and exits 0, and the very next <code>boost install tdd-workflow</code> exits 70 with a crash report from the unguarded <code>link.symlink_to(target)</code> at boost_cli/core/store.py:209 — leaving a store dir and two live agent links (claude-code, windsurf) that the lock file does not record, after which doctor's only prescription is <code>boost sync</code>, which deletes both links with no confirmation prompt.

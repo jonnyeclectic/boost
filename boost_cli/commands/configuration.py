@@ -1537,6 +1537,10 @@ def _tool_install(args: dict):
     lines.append("quality score: %d/100" % res.score)
     if res.conflicts:
         lines.append("conflicts (left in place): %s" % ", ".join(res.conflicts))
+    if res.unwritable:
+        lines.append("not linked, directory not writable: %s — ask the user to "
+                     "`chmod u+w` it, then `boost sync`"
+                     % ", ".join(res.unwritable))
     # The same prompt-injection and secret scan `boost install` runs. This path
     # needs it more, not less: nobody is watching a terminal here, and the skill
     # was chosen and installed by an agent acting on its own. The install still
