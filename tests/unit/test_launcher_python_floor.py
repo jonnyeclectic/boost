@@ -46,3 +46,33 @@ class TestLauncherPythonFloor:
         major, minor = _requires_python_floor()
         text = LAUNCHER.read_text(encoding="utf-8")
         assert "Python %d.%d+ is required" % (major, minor) in text
+
+
+class TestDocsPythonFloor:
+    """The docs' own install lines must name the same floor.
+
+    Nine of the eleven docs pages' footers moved to 3.12 with the floor; the
+    two roadmap boards' footers — hand-authored outside the regions
+    `build_roadmap.py` regenerates, so `--check` stayed green — kept saying
+    3.9, as did the design board's "targets Python ≥ 3.9". Stock macOS
+    `python3` is 3.9, so that is the reader the stale floor misleads.
+    """
+
+    def test_every_footer_names_requires_python(self):
+        major, minor = _requires_python_floor()
+        footers = {}
+        for page in sorted((ROOT / "docs").glob("*.html")):
+            for line in page.read_text(encoding="utf-8").splitlines():
+                if 'class="foot-note"' in line and "requires Python" in line:
+                    footers[page.name] = line
+        # Every page carries one; a regex that matched nothing must not pass.
+        assert len(footers) >= 10, sorted(footers)
+        stale = {name: line.strip() for name, line in footers.items()
+                 if "requires Python %d.%d+" % (major, minor) not in line}
+        assert not stale, stale
+
+    def test_design_board_targets_the_same_floor(self):
+        major, minor = _requires_python_floor()
+        text = (ROOT / "docs" / "design-roadmap.html").read_text(encoding="utf-8")
+        assert re.findall(r"targets <code>Python ≥ (\d+\.\d+)</code>", text) \
+            == ["%d.%d" % (major, minor)]
