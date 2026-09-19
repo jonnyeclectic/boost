@@ -240,6 +240,10 @@ def scan_dir(root: Path, tap_name: str = "local", curated: bool = False) -> list
     return entries
 
 
+#: Taps whose cache could not be saved this process — warned about once.
+_UNSAVED: set[str] = set()
+
+
 def rebuild_tap(tap: registry.Tap) -> list[dict]:
     """Rescan a cloned tap and rewrite its JSON cache file -> entries.
 
@@ -262,17 +266,25 @@ def rebuild_tap(tap: registry.Tap) -> list[dict]:
     # Replaced, not rewritten in place: a cache file this process cannot
     # write (what one `sudo boost` run leaves behind) turned the next
     # CACHE_FORMAT bump into exit 70 on search, info, update and heal — and
-    # `update`, the remedy, crashed the same way. Anything else that stops
-    # the write (a read-only cache dir, a full disk) still serves the scan
-    # in hand: a cache is a speed-up, and failing to keep one is never an
-    # error (see load_tap).
+    # `update`, the remedy, crashed the same way. A replace needs the
+    # directory writable, so a read-only dir holding a writable file falls
+    # back to the in-place write that always worked there. If neither lands
+    # (a full disk), the scan in hand is still the answer: a cache is a
+    # speed-up, and failing to keep one is never an error (see load_tap).
     try:
         util.atomic_write_text(tap.cache_file, payload)
-    except OSError as e:
-        output.warn("could not save the catalog cache for %s (%s) — this "
-                    "command uses a fresh scan; make %s writable"
-                    % (tap.name, e.strerror or e, tap.cache_file.parent),
-                    stream=sys.stderr, wrap=True)
+    except OSError:
+        try:
+            tap.cache_file.write_text(payload, encoding="utf-8")
+        except OSError as e:
+            # Once per tap per process: a command loads a tap more than once.
+            if tap.name not in _UNSAVED:
+                _UNSAVED.add(tap.name)
+                output.warn("could not save the catalog cache for %s (%s) — "
+                            "this command uses a fresh scan; make %s writable"
+                            % (tap.name, e.strerror or e,
+                               tap.cache_file.parent),
+                            stream=sys.stderr, wrap=True)
     # Drop the mtime-keyed cache so a rebuild is visible to an immediately
     # following load even when the filesystem mtime granularity is coarse.
     _ENTRY_CACHE.pop(str(tap.cache_file), None)

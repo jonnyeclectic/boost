@@ -421,6 +421,24 @@ class TestACacheBoostCannotWrite:
         fresh = json.loads(tap.cache_file.read_text(encoding="utf-8"))
         assert fresh["format"] == catalog.CACHE_FORMAT
 
+    def test_a_read_only_dir_falls_back_to_the_in_place_write(
+            self, sandbox, fixture_tap_src, monkeypatch, capsys):
+        # A replace needs the directory writable; the old in-place write did
+        # not, so a writable file in a read-only dir must still be kept.
+        tap = registry.add(str(fixture_tap_src))
+        catalog.rebuild_tap(tap)
+        tap.cache_file.write_text("{}", encoding="utf-8")
+        capsys.readouterr()
+
+        def refuse(path, text, encoding="utf-8"):
+            raise PermissionError(13, "Permission denied", str(path))
+
+        monkeypatch.setattr(catalog.util, "atomic_write_text", refuse)
+        catalog.rebuild_tap(tap)
+        cache = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert cache["format"] == catalog.CACHE_FORMAT
+        assert capsys.readouterr().err == ""
+
     def test_a_write_that_fails_still_serves_the_scan(
             self, sandbox, fixture_tap_src, monkeypatch, capsys):
         tap = registry.add(str(fixture_tap_src))
@@ -430,7 +448,11 @@ class TestACacheBoostCannotWrite:
             raise PermissionError(13, "Permission denied", str(path))
 
         monkeypatch.setattr(catalog.util, "atomic_write_text", refuse)
+        monkeypatch.setattr(catalog.Path, "write_text",
+                            lambda self, *a, **k: refuse(self, ""))
+        monkeypatch.setattr(catalog, "_UNSAVED", set())
         entries = catalog.rebuild_tap(tap)
+        catalog.rebuild_tap(tap)                 # a second load, same command
         assert [e["name"] for e in entries] == FIXTURE_NAMES
         cap = capsys.readouterr()
         assert cap.out == ""                     # stdout may be --json
@@ -438,6 +460,7 @@ class TestACacheBoostCannotWrite:
         assert "could not save the catalog cache for fixture-tap" in err
         assert "(Permission denied)" in err
         assert "make %s writable" % tap.cache_file.parent in err
+        assert err.count("could not save") == 1            # once, not per load
 
 
 class TestEntrySetCache:
