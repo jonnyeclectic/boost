@@ -1151,13 +1151,17 @@ def cmd_recommend(argv):
     if used_curated_fallback:
         out.info("no stack-specific matches — curated picks instead:")
     width = min(max(len(r["entry"]["name"]) for r in shown), 32)
-    cols = out.term_width()
-    for r in shown:
+    reasons = ["because: %s" % ", ".join(sorted(r["because"])) for r in shown]
+    # One description width for every row, from the widest reason. Sized per
+    # row from that row's own `because:` tag, the clip point swung 20 columns
+    # between rows (34-54 at COLUMNS=100) and neither column lined up.
+    desc_w = max(out.term_width() - 2 - width - 2
+                 - (max(map(len, reasons)) + 2), 8)
+    for r, because in zip(shown, reasons, strict=True):
         e = r["entry"]
-        because = "because: %s" % ", ".join(sorted(r["because"]))
-        desc_w = max(cols - 2 - width - 2 - (len(because) + 2), 8)
         name_cell = out.role(out.truncate(e["name"], width).ljust(width), "accent")
-        out.info(name_cell + "  " + out.truncate(e["description"] or "", desc_w)
+        desc = out.truncate(e["description"] or "", desc_w)
+        out.info(name_cell + "  " + desc + " " * (desc_w - out.visible_len(desc))
                  + "  " + out.role(because, "muted"))
     if ai.available():
         picks = _ai_picks(stack, [r["entry"] for r in ranked[:20]])
