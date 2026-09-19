@@ -384,23 +384,46 @@ class TestTaps:
         boost("tap", sandbox / "my-tap")
         assert "~/my-tap" in boost("taps").out
 
-    def test_updated_from_cache_then_unknown(self, boost, tapped):
+    def test_a_missing_clone_is_marked_not_dated(self, boost, tapped):
         util.rmtree(paths.repos_dir() / "fixture-tap")   # clone gone
         r = boost("taps")
-        # Same YYYY-MM-DD shape as a cloned tap's git-log date — not a
-        # relative "Xh ago", which used to be the cache-only format.
-        assert re.search(r"\d{4}-\d{2}-\d{2}", r.out)
-        assert "ago" not in r.out
-        assert "1 tap · 5 items" in r.out       # items still from the cache
-        # The table humanizes; the JSON `updated` field stays the raw ISO
-        # timestamp the cache actually recorded, not the same relative string.
+        # The row is served from the cached catalogue, so a date there would
+        # vouch for a clone `boost doctor` reports missing on the same machine.
+        row = next(ln for ln in r.out.splitlines() if "fixture-tap" in ln)
+        assert "not cloned" in row
+        assert not re.search(r"\d{4}-\d{2}-\d{2}", row)
+        # Items still count — they are searchable from the cache — but the
+        # footer says how many of the taps behind them have no clone.
+        assert "1 tap · 5 items · 1 not cloned" in r.out
+        assert "`boost update` clones it" in r.out
+        # JSON keeps the machine facts: the raw ISO timestamp the cache
+        # recorded, plus the clone state the table rendered.
         data = json.loads(boost("taps", "--json").out)
         assert re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$", data[0]["updated"])
+        assert data[0]["cloned"] is False
         (paths.cache_dir() / "fixture-tap.json").unlink()
         r = boost("taps")
-        assert "?" in r.out                      # no clone, no cache
-        assert "1 tap · 0 items" in r.out
+        assert "1 tap · 0 items · 1 not cloned" in r.out
         assert json.loads(boost("taps", "--json").out)[0]["updated"] is None
+
+    def test_a_cloned_tap_says_nothing_about_clones(self, boost, tapped):
+        r = boost("taps")
+        assert "not cloned" not in r.out
+        assert "1 tap · 5 items\n" in r.out
+        assert json.loads(boost("taps", "--json").out)[0]["cloned"] is True
+
+    def test_a_pinned_tap_with_no_clone_is_not_said_to_be_skipped(
+            self, boost, fixture_tap_src):
+        # `registry.update` clones a missing pinned tap at its pin rather
+        # than skipping it, so "@sha … skips it" would be false here.
+        from boost_cli.core import gitutil
+        head = gitutil.head_commit(fixture_tap_src)
+        boost("tap", str(fixture_tap_src), "--at", head)
+        util.rmtree(paths.repos_dir() / fixture_tap_src.name)
+        r = boost("taps")
+        assert "not cloned" in r.out
+        assert "@%s" % head[:7] not in r.out
+        assert "@sha = pinned" not in r.out
 
     def test_pinned_footer_hints_boost_update_skips_it(
             self, boost, fixture_tap_src):

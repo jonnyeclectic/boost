@@ -309,6 +309,11 @@ def _tap_updated_display(raw: str | None) -> str:
     return util.iso_date(raw) if raw else "?"
 
 
+# The UPDATED cell of a tap whose clone directory is gone. Same width as the
+# YYYY-MM-DD it replaces, so the column does not move.
+NOT_CLONED = "not cloned"
+
+
 def cmd_taps(argv) -> int:
     """boost taps [--json]"""
     p = cliparse.parser(
@@ -330,7 +335,8 @@ def cmd_taps(argv) -> int:
                      # deprecated alias so an existing JSON consumer of
                      # `boost taps --json` does not break.
                      "items": len(items), "skills": len(items),
-                     "updated": _tap_updated(tap), "pin": tap.pin or None})
+                     "updated": _tap_updated(tap), "pin": tap.pin or None,
+                     "cloned": tap.is_cloned})
     if args.json:
         print(json.dumps(taps, indent=2))
         return 0
@@ -341,9 +347,13 @@ def cmd_taps(argv) -> int:
     # A pinned tap reads as its commit rather than its date: the date of a
     # clone held still is not what the user needs to know about it, and a tap
     # that `boost update` deliberately skips should say why on the line the
-    # user is already reading.
+    # user is already reading. A tap with no clone at all outranks both: its
+    # row is served from the cached catalogue (`catalog.load_tap` keeps a
+    # stale cache on purpose), and a date there vouched for a clone that
+    # `boost doctor` was simultaneously reporting missing.
     rows = [(t["name"], str(t["items"]),
-             "@%s" % str(t["pin"])[:7] if t["pin"]
+             NOT_CLONED if not t["cloned"]
+             else "@%s" % str(t["pin"])[:7] if t["pin"]
              else _tap_updated_display(cast("str | None", t["updated"])),
              "★" if t["curated"] else "", out.role(_tilde(t["url"]), "muted"))
             for t in taps]
@@ -352,10 +362,15 @@ def cmd_taps(argv) -> int:
     out.table(rows, headers=("NAME", "ITEMS", "UPDATED", "", "URL"),
               keep=("NAME",))
     print()
-    out.dim("%d tap%s · %d item%s"
-            % (len(taps), _s(len(taps)), total, _s(total)))
-    if any(t["pin"] for t in taps):
+    uncloned = sum(1 for t in taps if not t["cloned"])
+    out.dim("%d tap%s · %d item%s%s"
+            % (len(taps), _s(len(taps)), total, _s(total),
+               " · %d %s" % (uncloned, NOT_CLONED) if uncloned else ""))
+    if any(t["pin"] and t["cloned"] for t in taps):
         out.dim("@sha = pinned; `boost update` skips it")
+    if uncloned:
+        out.dim("%s = listed from its cached catalogue; `boost update` "
+                "clones it" % NOT_CLONED)
     return 0
 
 
