@@ -586,6 +586,13 @@ class TestPanelFitsTerminal:
         assert all(output.visible_len(r) <= 24 for r in rows)
         assert len({output.visible_len(r) for r in rows}) == 1
 
+    def test_a_clipped_title_keeps_exactly_the_room_beside_the_rule(self,
+                                                                     monkeypatch):
+        # 24 columns: 20 of content room, and a titled rule spends one space
+        # each side, so the title gets 18 — 17 characters plus the ellipsis.
+        rows = self._rows(monkeypatch, 24, "a" * 50, title="t" * 40)
+        assert rows[0].startswith("╭─ " + "t" * 17 + "… ")
+
     def test_a_narrow_pane_still_yields_a_box(self, monkeypatch):
         rows = self._rows(monkeypatch, 8, "content that is far too long")
         assert len(rows) == 3
