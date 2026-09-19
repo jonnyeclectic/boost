@@ -216,6 +216,16 @@ class TestSearch:
                    if "commit-messages" in ln)
         assert "fixture-tap" not in top
 
+    def test_a_pipe_keeps_the_tap_column(self, boost, tapped, monkeypatch):
+        # No COLUMNS and no TTY is a pipe: there is no pane to fit, so the
+        # plan must not assume `term_width()`'s 80 and drop the tap (it needs
+        # 84) — `boost search x | grep owner/repo` has to find the row.
+        monkeypatch.delenv("COLUMNS", raising=False)
+        piped = boost("search", "commit", "messages")
+        top = next(ln for ln in piped.out.splitlines()
+                   if "commit-messages" in ln)
+        assert "fixture-tap" in top
+
     def test_curated_tap_gets_star(self, boost, fixture_tap_src):
         boost("tap", fixture_tap_src, "--curated")
         r = boost("search", "brainstorming")
