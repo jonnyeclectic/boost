@@ -163,6 +163,16 @@ class TestForcedColorOutput:
             "\033[31m\033[1mError: \033[0mboom\n"
             "\033[2m  hint: try x\033[0m\n")
 
+    def test_err_multiline_hint_is_coloured_per_line(self, capsys):
+        # One span over the joined body opened DIM on line 1 and closed it on
+        # the last, so `| head -2` ended inside an unterminated dim run.
+        out.err("boom", hint="one\ntwo\nthree")
+        assert capsys.readouterr().err == (
+            "\033[31m\033[1mError: \033[0mboom\n"
+            "\033[2m  hint: one\033[0m\n"
+            "\033[2m        two\033[0m\n"
+            "\033[2m        three\033[0m\n")
+
     def test_heading_exact_ansi(self, capsys):
         # Aurora cyan marker (truecolor under forced color) + bold title.
         out.heading("Section")
