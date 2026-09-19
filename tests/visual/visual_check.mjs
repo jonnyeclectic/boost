@@ -123,6 +123,11 @@ for (const rel of PAGES) {
     // reveal-on-scroll content sits at opacity 0 until it intersects; force
     // everything visible so the screenshot shows the real layout.
     await page.addStyleTag({ content: ".reveal{opacity:1!important;transform:none!important}" });
+    // The roadmap's cards are `content-visibility: auto`: off-screen ones are
+    // never laid out, and paint containment clips what does overflow. Either
+    // would hide a card's horizontal overflow from the sweep below, so lay
+    // every card out as the reader who scrolls to it will see it.
+    await page.addStyleTag({ content: ".rcard{content-visibility:visible!important}" });
 
     const r = await page.evaluate((okSel) => {
       const doc = document.documentElement;
