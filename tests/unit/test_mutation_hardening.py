@@ -173,6 +173,22 @@ class TestForcedColorOutput:
             "\033[2m        two\033[0m\n"
             "\033[2m        three\033[0m\n")
 
+    def test_every_painter_styles_each_line_on_its_own(self):
+        # The same one-span shape in any painter reopens the bug `err` had;
+        # they all route through `_span`, which these pin per path.
+        y = "\033[38;2;250;204;21m"               # warn -> aurora yellow
+        assert out.c("a\nb", out.DIM) == (
+            "\033[2ma\033[0m\n\033[2mb\033[0m")
+        assert out.aurora("a\nb", "yellow") == (
+            y + "a\033[0m\n" + y + "b\033[0m")
+        assert out.role("a\nb", "muted") == (         # the sgr branch
+            "\033[2ma\033[0m\n\033[2mb\033[0m")
+        assert out.role("a\nb", "warn", bold=True) == (
+            "\033[1m" + y + "a\033[0m\n\033[1m" + y + "b\033[0m")
+        # A single line is byte-identical to the old code + text + RESET.
+        assert out.role("a", "warn", bold=True) == "\033[1m" + y + "a\033[0m"
+        assert out.c("", out.DIM) == "\033[2m\033[0m"
+
     def test_heading_exact_ansi(self, capsys):
         # Aurora cyan marker (truecolor under forced color) + bold title.
         out.heading("Section")
