@@ -2,15 +2,15 @@
 id: roadmap-boards-advertise-python-39
 board: code
 section: planned
-status: planned
+status: shipped
 category: Quality · Docs
 complexity: S
 impact: Low
 wow: 2
 note: docs/roadmap.html:17141 and docs/design-roadmap.html:582 both close with Install with…
 order: 228
-owner:
-pr:
+owner: loop/boards-python-floor
+pr: 878
 title: The two roadmap boards' install footers still advertise Python 3.9+, four minor versions under the real floor
 ---
 <b>Measured.</b> On stock macOS <code>python3</code> (3.9.6), the exact command in both roadmap footers succeeds silently and installs the wrong software: <code>pip download --no-deps boost-skill-cli</code> exits 0 with no Requires-Python notice and selects boost_skill_cli-1.0.392, because 390 of 557 published releases still declare <code>requires_python: &gt;=3.9</code> — 167 releases behind the current 1.2.103.
