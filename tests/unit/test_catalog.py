@@ -361,6 +361,14 @@ class TestTapCaches:
         assert jira["rel_dir"] == "skills/jira-integration"
         assert jira["meta"]["requires"] == ["commit-messages"]
 
+    def test_rebuild_carries_the_taps_curated_flag(self, sandbox,
+                                                   fixture_tap_src):
+        # Backfilled: nothing pinned that a curated tap's rebuilt entries
+        # stay curated (search promotes them; the ★ reads it).
+        tap = registry.add(str(fixture_tap_src), curated=True)
+        entries = catalog.rebuild_tap(tap)
+        assert entries and all(e["curated"] is True for e in entries)
+
     def test_rebuild_uncloned_raises(self, sandbox):
         tap = registry.Tap(name="ghost/tap", url="x")
         with pytest.raises(BoostError) as ei:
@@ -437,12 +445,14 @@ class TestACacheBoostCannotWrite:
         catalog.rebuild_tap(tap)
         cache = json.loads(tap.cache_file.read_text(encoding="utf-8"))
         assert cache["format"] == catalog.CACHE_FORMAT
+        assert cache["generated"]          # `taps`' UPDATED reads this key
         assert capsys.readouterr().err == ""
 
     def test_a_write_that_fails_still_serves_the_scan(
             self, sandbox, fixture_tap_src, monkeypatch, capsys):
         tap = registry.add(str(fixture_tap_src))
         capsys.readouterr()
+        monkeypatch.setenv("COLUMNS", "60")
 
         def refuse(path, text, encoding="utf-8"):
             raise PermissionError(13, "Permission denied", str(path))
@@ -457,7 +467,10 @@ class TestACacheBoostCannotWrite:
         cap = capsys.readouterr()
         assert cap.out == ""                     # stdout may be --json
         err = " ".join(cap.err.split())
-        assert "could not save the catalog cache for fixture-tap" in err
+        assert "! could not save the catalog cache for fixture-tap" in err
+        assert "— this command uses a fresh scan; make" in err
+        # Folded to the pane, not one long line (wrap=True).
+        assert len(cap.err.strip().splitlines()) > 1
         assert "(Permission denied)" in err
         assert "make %s writable" % tap.cache_file.parent in err
         assert err.count("could not save") == 1            # once, not per load
