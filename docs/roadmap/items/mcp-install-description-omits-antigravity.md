@@ -11,7 +11,7 @@ note: boost_install's description says installs are "wired into every agent you 
 order: 216
 owner: loop/mcp-install-agents
 pr: 875
-title: boost_install's description enumerates four of the five enabled agent targets, and gives Antigravity the one mechanism it does not use
+title: boost_install's description enumerates four of the five enabled agent targets and omits Antigravity CLI, the fourth linking agent
 ---
 <b>Measured.</b> The enumeration is provably stale rather than deliberately partial: the string was written in PR #442 on 2026-08-03, when boost had four agent targets, and Antigravity CLI landed as a FIFTH -- and a LINKING -- target in PR #602 on 2026-08-30 (<code>git merge-base --is-ancestor</code> confirms #442 precedes #602), and the string has not been touched since; today <code>enabled_agents()</code> returns 5 and <code>linking_agents()</code> returns 4 while the description names 4 and 3 of them respectively, and <code>boost_install</code> is the only one of the seven MCP tool descriptions that names any agent at all -- so the fix is a single string.
 

@@ -453,8 +453,10 @@ class TestInstructionsCoverAllThreeKinds:
         for name, spec in config.DEFAULTS["agents"].items():
             if not spec.get("enabled", True):
                 continue
-            side = linked if spec.get("links_skills", True) else native
-            assert agents.display_name(name) in side, (name, side)
+            links = spec.get("links_skills", True)
+            side, other = (linked, native) if links else (native, linked)
+            label = agents.display_name(name)
+            assert label in side and label not in other, (name, desc)
 
 
 class TestInstructionsBoundIsATestNotAFeeling:
