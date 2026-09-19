@@ -2833,7 +2833,7 @@ SCOPE LIMITS OF MY REPRO — a card author must not overstate these:
       </article>
 
       <article class="cap rcard" id="unwritable-agent-dir-has-no-remedy">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">Onboarding · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">Onboarding · Bug</span></div>
         <h3>"! agent dir ~/.cursor/skills is not writable" is the one doctor issue with no next action — heal has no path for it and the next install crashes at exit 70</h3>
         <p><b>Measured.</b> With <code>chmod 500 ~/.cursor/skills</code>, doctor prints the bare line <code>! agent dir ~/.cursor/skills is not writable</code> and exits 1, <code>boost heal</code> answers <code>✓ nothing to heal</code> and exits 0, and the very next <code>boost install tdd-workflow</code> exits 70 with a crash report from the unguarded <code>link.symlink_to(target)</code> at boost_cli/core/store.py:209 — leaving a store dir and two live agent links (claude-code, windsurf) that the lock file does not record, after which doctor's only prescription is <code>boost sync</code>, which deletes both links with no confirmation prompt.
 

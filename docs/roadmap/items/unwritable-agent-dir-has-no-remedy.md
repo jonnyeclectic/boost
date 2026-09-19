@@ -2,14 +2,14 @@
 id: unwritable-agent-dir-has-no-remedy
 board: code
 section: planned
-status: planned
+status: inflight
 category: Onboarding · Bug
 complexity: M
 impact: Med
 wow: 3
 note: Every other issue doctor raises names a command (boost heal, boost sync, boost update…
 order: 240
-owner:
+owner: loop/agent-dir-writable
 pr:
 title: "! agent dir ~/.cursor/skills is not writable" is the one doctor issue with no next action — heal has no path for it and the next install crashes at exit 70
 ---
