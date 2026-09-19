@@ -2,7 +2,7 @@
 id: recommend-recomputes-its-columns-per-row
 board: code
 section: planned
-status: inflight
+status: shipped
 category: UX · Bug
 complexity: S
 impact: Low
@@ -10,7 +10,7 @@ wow: 2
 note: cmd_recommend hand-rolls its rows and computes desc_w = max(cols - 2 - width - 2 - (l…
 order: 226
 owner: loop/recommend-columns
-pr:
+pr: 881
 title: <code>boost recommend</code> sizes the description cell per row from that row's <code>because:</code> text, so neither column lines up
 ---
 <b>Measured.</b> At COLUMNS=100 the eight <code>boost recommend</code> rows truncate their descriptions at eight per-row widths spanning 34 to 54 columns — a 20-column swing, the widest cell 59% wider than the narrowest — because <code>desc_w</code> is recomputed inside the row loop from that row's own <code>because:</code> tag length (<code>boost_cli/commands/discovery.py:1062</code>); every rendered cell matched the predicted <code>desc_w</code> to the character and every description ended in an ellipsis, so this is column geometry, not natural description length.
