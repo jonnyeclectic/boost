@@ -422,6 +422,14 @@ def cmd_doctor(argv):
                 % (tap.name, tap.name))
         else:
             tap_ok += 1
+    # A cache dir boost cannot write leaves every command rescanning its taps
+    # and warning that it could not keep the result (catalog.rebuild_tap), so
+    # "cloned & cached" below would be the one line on the screen claiming
+    # otherwise.
+    if taps and not os.access(paths.cache_dir(), os.W_OK):
+        bad("cache", "%s is not writable — every command rescans its taps and "
+            "cannot keep the result; make it writable"
+            % _tilde(paths.cache_dir()), wrap=True)
     if taps and tap_ok == len(taps):
         rep.ok("taps", "%d tap%s cloned & cached" % (len(taps), _s(len(taps))))
     elif not taps:

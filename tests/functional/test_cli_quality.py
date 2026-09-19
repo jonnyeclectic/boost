@@ -13,6 +13,8 @@ import shutil
 import subprocess
 from datetime import datetime
 
+import pytest
+
 from boost_cli.core import paths
 
 
@@ -87,6 +89,16 @@ class TestDoctor:
         r = boost("doctor")
         assert "● healthy" not in r.out
         assert "ready to set up" in r.out
+
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_an_unwritable_cache_dir_is_an_issue(self, boost, tapped):
+        paths.cache_dir().chmod(0o500)
+        try:
+            r = boost("doctor", expect=1)
+        finally:
+            paths.cache_dir().chmod(0o700)
+        assert "is not writable" in r.out
 
     def test_an_untapped_machine_is_still_rc0(self, boost):
         # Reported, never fatal. The exit code turns on real issues only, so

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -360,6 +361,14 @@ class TestTapCaches:
         assert jira["rel_dir"] == "skills/jira-integration"
         assert jira["meta"]["requires"] == ["commit-messages"]
 
+    def test_rebuild_carries_the_taps_curated_flag(self, sandbox,
+                                                   fixture_tap_src):
+        # Backfilled: nothing pinned that a curated tap's rebuilt entries
+        # stay curated (search promotes them; the ★ reads it).
+        tap = registry.add(str(fixture_tap_src), curated=True)
+        entries = catalog.rebuild_tap(tap)
+        assert entries and all(e["curated"] is True for e in entries)
+
     def test_rebuild_uncloned_raises(self, sandbox):
         tap = registry.Tap(name="ghost/tap", url="x")
         with pytest.raises(BoostError) as ei:
@@ -394,6 +403,77 @@ class TestTapCaches:
 
     def test_load_tap_no_cache_uncloned_empty(self, sandbox):
         assert catalog.load_tap(registry.Tap(name="fake", url="")) == []
+
+
+class TestACacheBoostCannotWrite:
+    """One `sudo boost` run leaves a cache file the user cannot write, and the
+    next CACHE_FORMAT bump used to be exit 70 on search, info, update and heal
+    (unreadable-tap-cache-healthy-doctor-crashing-heal). A cache is a
+    speed-up: failing to keep one must never be an error."""
+
+    @pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                        reason="root ignores mode bits")
+    def test_a_read_only_stale_cache_file_is_replaced_not_refused(
+            self, sandbox, fixture_tap_src):
+        tap = registry.add(str(fixture_tap_src))
+        catalog.rebuild_tap(tap)
+        data = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        data["format"] = 0                                   # stale scanner
+        tap.cache_file.write_text(json.dumps(data), encoding="utf-8")
+        tap.cache_file.chmod(0o400)
+        try:
+            entries = catalog.load_tap(tap)
+        finally:
+            tap.cache_file.chmod(0o600)
+        assert [e["name"] for e in entries] == FIXTURE_NAMES
+        fresh = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert fresh["format"] == catalog.CACHE_FORMAT
+
+    def test_a_read_only_dir_falls_back_to_the_in_place_write(
+            self, sandbox, fixture_tap_src, monkeypatch, capsys):
+        # A replace needs the directory writable; the old in-place write did
+        # not, so a writable file in a read-only dir must still be kept.
+        tap = registry.add(str(fixture_tap_src))
+        catalog.rebuild_tap(tap)
+        tap.cache_file.write_text("{}", encoding="utf-8")
+        capsys.readouterr()
+
+        def refuse(path, text, encoding="utf-8"):
+            raise PermissionError(13, "Permission denied", str(path))
+
+        monkeypatch.setattr(catalog.util, "atomic_write_text", refuse)
+        catalog.rebuild_tap(tap)
+        cache = json.loads(tap.cache_file.read_text(encoding="utf-8"))
+        assert cache["format"] == catalog.CACHE_FORMAT
+        assert cache["generated"]          # `taps`' UPDATED reads this key
+        assert capsys.readouterr().err == ""
+
+    def test_a_write_that_fails_still_serves_the_scan(
+            self, sandbox, fixture_tap_src, monkeypatch, capsys):
+        tap = registry.add(str(fixture_tap_src))
+        capsys.readouterr()
+        monkeypatch.setenv("COLUMNS", "60")
+
+        def refuse(path, text, encoding="utf-8"):
+            raise PermissionError(13, "Permission denied", str(path))
+
+        monkeypatch.setattr(catalog.util, "atomic_write_text", refuse)
+        monkeypatch.setattr(catalog.Path, "write_text",
+                            lambda self, *a, **k: refuse(self, ""))
+        monkeypatch.setattr(catalog, "_UNSAVED", set())
+        entries = catalog.rebuild_tap(tap)
+        catalog.rebuild_tap(tap)                 # a second load, same command
+        assert [e["name"] for e in entries] == FIXTURE_NAMES
+        cap = capsys.readouterr()
+        assert cap.out == ""                     # stdout may be --json
+        err = " ".join(cap.err.split())
+        assert "! could not save the catalog cache for fixture-tap" in err
+        assert "— this command uses a fresh scan; make" in err
+        # Folded to the pane, not one long line (wrap=True).
+        assert len(cap.err.strip().splitlines()) > 1
+        assert "(Permission denied)" in err
+        assert "make %s writable" % tap.cache_file.parent in err
+        assert err.count("could not save") == 1            # once, not per load
 
 
 class TestEntrySetCache:
