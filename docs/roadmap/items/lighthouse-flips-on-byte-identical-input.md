@@ -2,7 +2,7 @@
 id: lighthouse-flips-on-byte-identical-input
 board: code
 section: docsite
-status: inflight
+status: shipped
 category: CI · Bug
 complexity: M
 impact: High
@@ -10,7 +10,7 @@ wow: 4
 note: the same roadmap.html scored 0.78 and passed, then 0.78 and failed — the gate now decides on runner noise
 order: 314
 owner: loop/lighthouse-headroom
-pr:
+pr: 886
 title: The performance gate flips on byte-identical input
 ---
 <code>lighthouse</code> asserts <code>categories.performance &ge; 0.80</code> on
