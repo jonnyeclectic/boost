@@ -296,7 +296,7 @@ line coverage. Target `boost_cli/core` behavior with assertions, not just import
   `# SPDX-License-Identifier: Apache-2.0`. Run
   `python3 scripts/add_spdx_headers.py` (idempotent) — the file list and the
   expression live there, so changing the licence expression is one edit rather
-  than 314. Separately, `prose-lint.yml` names the Markdown files vale checks
+  than hundreds. Separately, `prose-lint.yml` names the Markdown files vale checks
   **explicitly**: a new doc that is not added to that list is never linted, and
   `make lint` will not tell you.
 

@@ -96,7 +96,11 @@ class TestCatalogueSizeIsNotHardCoded:
         docs = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
         for doc in docs:
             text = doc.read_text(encoding="utf-8")
-            for n in re.findall(r"all (\d+) catalogued registr", text):
+            # `\s+`: README broke this very phrase across a line. The second
+            # form is "the N-registry catalogue"; a "~N" is an estimate.
+            for n in re.findall(r"all\s+(\d+)\s+catalogued\s+registr"
+                                r"|(?<![~\d])(\d+)-registry\s+catalogue", text):
+                n = next(g for g in n if g)
                 assert int(n) == size, "%s says all %s; the catalogue is %d" % (
                     doc.name, n, size)
 
