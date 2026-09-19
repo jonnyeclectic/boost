@@ -108,11 +108,13 @@ def test_no_two_package_files_are_byte_identical() -> None:
     assert not dupes, f"identical files ship twice in the wheel: {dupes}"
 
 
-@pytest.mark.skipif(not (ROOT / "CLAUDE.md").exists(),
-                    reason="CLAUDE.md not reachable (e.g. mutation sandbox)")
-def test_contributor_guide_names_the_expression_the_script_writes():
-    # CLAUDE.md told contributors to write GPL-3.0-only headers long after
+@pytest.mark.parametrize("guide", ["CLAUDE.md", "CONTRIBUTING.md"])
+def test_contributor_guide_names_the_expression_the_script_writes(guide):
+    # Both guides told contributors to write GPL-3.0-only headers long after
     # every file, LICENSE and this script had moved to Apache-2.0.
-    text = (ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    assert set(re.findall(r"SPDX-License-Identifier: (\S+?)`", text)) \
+    path = ROOT / guide
+    if not path.exists():
+        pytest.skip("%s not reachable (e.g. mutation sandbox)" % guide)
+    text = path.read_text(encoding="utf-8")
+    assert set(re.findall(r"SPDX-License-Identifier: ([\w.+-]+)", text)) \
         == {_SPDX.SPDX_ID}
