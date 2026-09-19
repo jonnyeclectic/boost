@@ -244,12 +244,18 @@ def err(msg: str, hint: str | None = None) -> None:
     passed through as-is — used to print continuation lines flush at column
     0, unindented and visually disconnected from the "hint:" label above
     them. Every line after the first is indented to align under it instead.
+
+    Each line is coloured on its own, as `empty_state` and `table` headers
+    already do. Colouring the joined body once opened DIM on line 1 and closed
+    it on the last, so `… 2>&1 | head -2` left the reader inside an
+    unterminated dim span and lines 2+ carried no style of their own.
     """
     print(c("Error: ", RED, BOLD) + msg, file=sys.stderr)
     if hint:
         lead = "  hint: "
-        body = ("\n" + " " * len(lead)).join(hint.splitlines())
-        print(c(lead + body, DIM), file=sys.stderr)
+        for i, line in enumerate(hint.splitlines()):
+            print(c((lead if i == 0 else " " * len(lead)) + line, DIM),
+                  file=sys.stderr)
 
 
 def info(msg: str = "", stream=None, wrap: bool = False) -> None:
