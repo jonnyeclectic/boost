@@ -2,7 +2,7 @@
 id: panel-fits-data-to-an-assumed-80-in-a-pipe
 board: code
 section: planned
-status: inflight
+status: shipped
 category: UX · Bug
 complexity: S
 impact: Low
@@ -10,7 +10,7 @@ wow: 2
 note: output.panel computes room = term_width() - 4 (output.py:527) and clips its content t…
 order: 219
 owner: loop/panel-pipe
-pr:
+pr: 885
 title: <code>out.panel</code> still fits its content to <code>term_width()</code>, so <code>boost count | …</code> clips the line to an assumed 80 columns
 ---
 <b>Measured.</b> On this machine <code>./boost count | cat</code> renders the 110-character inventory summary into an 80-column box, clipping the content to 76 columns and dropping the 34-character tail "0 taps) · discovery index not built", while <code>COLUMNS=300 ./boost count</code> prints all 110.

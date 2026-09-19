@@ -546,8 +546,19 @@ class TestPanelFitsTerminal:
 
     def _rows(self, monkeypatch, cols, lines, **kw):
         monkeypatch.setenv("NO_COLOR", "1")
-        monkeypatch.setattr(output, "term_width", lambda: cols)
+        monkeypatch.setattr(output, "pane_width", lambda stream=None: cols)
         return output.panel(lines, **kw).split("\n")
+
+    def test_a_pipe_has_no_pane_so_nothing_is_clipped(self, monkeypatch):
+        # term_width() answers 80 in a pipe; fitting to that clipped
+        # `boost count | cat`'s summary and dropped its tail.
+        monkeypatch.setenv("NO_COLOR", "1")
+        monkeypatch.setattr(output, "pane_width", lambda stream=None: None)
+        monkeypatch.setattr(output, "term_width", lambda: 40)
+        rows = output.panel("q" * 110, title="t" * 90).split("\n")
+        assert rows[1] == "│ " + "q" * 110 + " │"
+        assert "t" * 90 in rows[0]
+        assert len({output.visible_len(r) for r in rows}) == 1
 
     def test_untouched_when_it_already_fits(self, monkeypatch):
         rows = self._rows(monkeypatch, 40, "x" * 36)
