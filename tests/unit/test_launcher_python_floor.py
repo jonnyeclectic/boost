@@ -60,15 +60,17 @@ class TestDocsPythonFloor:
 
     def test_every_footer_names_requires_python(self):
         major, minor = _requires_python_floor()
-        footers = {}
-        for page in sorted((ROOT / "docs").glob("*.html")):
-            for line in page.read_text(encoding="utf-8").splitlines():
-                if 'class="foot-note"' in line and "requires Python" in line:
-                    footers[page.name] = line
-        # Every page carries one; a regex that matched nothing must not pass.
-        assert len(footers) >= 10, sorted(footers)
-        stale = {name: line.strip() for name, line in footers.items()
-                 if "requires Python %d.%d+" % (major, minor) not in line}
+        pages = sorted((ROOT / "docs").glob("*.html"))
+        footers = {page.name: [ln.strip() for ln in
+                               page.read_text(encoding="utf-8").splitlines()
+                               if 'class="foot-note"' in ln]
+                   for page in pages}
+        # One footer per page, found by its class alone — so a page that
+        # loses its footer, or rewords it away from "requires Python", fails
+        # here rather than dropping out of the scan.
+        assert pages and all(len(f) == 1 for f in footers.values()), footers
+        stale = {name: f[0] for name, f in footers.items()
+                 if "requires Python %d.%d+" % (major, minor) not in f[0]}
         assert not stale, stale
 
     def test_design_board_targets_the_same_floor(self):
