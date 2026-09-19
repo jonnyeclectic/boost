@@ -2,14 +2,14 @@
 id: err-multiline-hint-colours-across-the-newline
 board: code
 section: planned
-status: planned
+status: inflight
 category: UX · Bug
 complexity: S
 impact: Low
 wow: 2
 note: err() joins a multi-line hint's lines and then wraps the whole joined string in one c…
 order: 207
-owner:
+owner: loop/err-hint-per-line
 pr:
 title: <code>out.err</code>'s multi-line hint is coloured as one span, so line 1 ends with no RESET and lines 2+ carry no start code
 ---
