@@ -1688,7 +1688,7 @@ Nothing else in the finding is wrong. 0/91 vs 50/50, the 27 undecided rows / 62 
       </article>
 
       <article class="cap rcard" id="info-deps-materialize-a-dir-they-then-reject">
-        <div class="head"><span class="pill planned">Planned</span><span class="cat">UX · Bug</span></div>
+        <div class="head"><span class="pill inflight">In flight</span><span class="cat">UX · Bug</span></div>
         <h3><code>boost info</code>/<code>deps</code> on a not-installed rule or workflow widens the tap's sparse cone for a directory <code>source_dir_for</code> immediately rejects</h3>
         <p><b>Measured.</b> Across all 20 taps of the eval corpus, 0 of the 188 distinct (tap, rel_dir) directories that hold a rule or workflow contains a SKILL.md, and 0 of them have rel_dir == "." — so the existence check at store.py:179 rejects every single one of the 1,493 rule/workflow entries (14.71% of 10,152), and it does so only after store.py:178 has already written a new pattern into the tap's .git/info/sparse-checkout. Two read-only commands, <code>boost info</code> and <code>boost deps</code>, each provably widen a tap's sparse cone and then discard the directory they widened it for.
 
