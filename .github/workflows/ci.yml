@@ -395,7 +395,7 @@ jobs:
             | tee /tmp/pytest.out || rc=$?
           grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | sed 's/^/::error::/' || true
           exit "$rc"
-      - name: shell smoke suite (152 checks, sandboxed)
+      - name: shell smoke suite (sandboxed)
         run: bash tests/smoke.sh | tee /tmp/smoke.out
       - name: job summary (coverage + counts)
         if: always()
@@ -883,7 +883,7 @@ jobs:
           .venv/bin/pip -q install -e .
           .venv/bin/pytest tests/unit tests/functional -q
 
-  # The behave suite (tests/bdd — 11 features, 47 scenarios) ran nowhere in CI:
+  # The behave suite (tests/bdd) ran nowhere in CI:
   # `make bdd` only ever executed if a contributor remembered to run it. Unlike
   # the eval and mutation gates, which degrade cleanly but still execute, this
   # one was invisible — so a CLI change that broke the step glue (output-string
