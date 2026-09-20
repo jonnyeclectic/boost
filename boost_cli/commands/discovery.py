@@ -233,7 +233,10 @@ def cmd_search(argv):
     installed: set[str] = set()
     with contextlib.suppress(Exception):
         installed = set(store.installed())
-    top = max((s for _e, s in shown), default=0) or 1
+    # The meter reads across the whole shown page, so its fractions are one
+    # screen-wide decision rather than a per-row division — see
+    # out.relevance_fractions for why the top score alone cannot say it.
+    fracs = out.relevance_fractions([s for _e, s in shown])
     # One column plan for the whole screen (name, kind, tap, description with
     # a stated drop order), one assembler per row — both pure and unit-tested
     # in core.output, so this loop only feeds and prints.
@@ -241,10 +244,10 @@ def cmd_search(argv):
                             [e["name"] for e, _ in shown],
                             [str(e.get("kind") or "skill") for e, _ in shown],
                             [str(e.get("tap") or "") for e, _ in shown])
-    for e, sc in shown:
+    for (e, _sc), frac in zip(shown, fracs, strict=True):
         out.info(out.format_search_row(
             e["name"], e.get("description") or "",
-            str(e.get("kind") or "skill"), str(e.get("tap") or ""), sc / top,
+            str(e.get("kind") or "skill"), str(e.get("tap") or ""), frac,
             curated=bool(e.get("curated")),
             installed=e["name"] in installed, lay=lay))
     if hit_cap:

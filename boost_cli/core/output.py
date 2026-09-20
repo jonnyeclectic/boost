@@ -616,6 +616,41 @@ def meter_hue(frac: float) -> str:
     return "pink"
 
 
+#: The fraction the page's weakest row is held at. An empty ``▱▱▱▱`` on a row
+#: the ranker chose to show reads as "no match", which is a claim it never
+#: made; one lit cell says "last on this page" instead.
+METER_FLOOR = 0.25
+
+
+def relevance_fractions(scores: Sequence[float]) -> list[float]:
+    """Map one screen of scores onto meter fractions, in the order given.
+
+    The bar reads as *standing on this page*: the best row fills it, the
+    weakest keeps one lit cell at :data:`METER_FLOOR`, and the rest land in
+    between. So the same row can draw a different bar under a different
+    ``--limit`` — the honest reading, because nothing here knows what a "good"
+    BM25 or RRF score is in the absolute.
+
+    Dividing by the top score alone cannot say this. A retrieval engine's
+    top-k scores are compressed by construction, and ``round(frac * 4)`` needs
+    a 12.5% gap before one of four cells goes out, so a whole screen draws the
+    same bar in the same hue. Stretching the page's own span adapts to
+    whatever spread it has, rather than to a constant tuned to one engine on
+    one corpus.
+
+    Equal scores carry no ordering, so a page that is all ties — and a page of
+    one row — fills every bar rather than inventing a loser.
+    """
+    if not scores:
+        return []
+    lo, hi = min(scores), max(scores)
+    if hi <= lo:
+        return [1.0] * len(scores)
+    span = hi - lo
+    return [METER_FLOOR + (1.0 - METER_FLOOR) * ((s - lo) / span)
+            for s in scores]
+
+
 def kind_label(kind: str) -> str:
     """Bracketed display text for a catalog kind — ``[skill]`` / ``[rule]`` /
     ``[workflow]``, an unknown kind bracketed verbatim, a missing one shown as

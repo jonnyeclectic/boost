@@ -82,6 +82,37 @@ def _make_tap(root):
     return root
 
 
+def _make_crowded_tap(root):
+    """A tap whose three skills all answer one query at almost the same score.
+
+    The shape a real registry produces by the hundred — near-duplicate skills
+    on one topic — and the one BM25 cannot spread apart: the bodies differ
+    only in trailing filler, so the scores separate by length normalization
+    alone and land within ~1.2% of each other.
+    """
+    body = "Kubernetes deployment guidance for kubernetes clusters. " * 6
+    for i, name in enumerate(
+            ("kubernetes-alpha", "kubernetes-beta", "kubernetes-gamma")):
+        d = root / "skills" / name
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            "---\nname: %s\ndescription: Kubernetes deployment guidance\n"
+            "version: 1.0.0\n---\n\n# %s\n\n%s\n%s\n"
+            % (name, name, body, "filler word " * (i * 3)), encoding="utf-8")
+    _git(root, "init", "-q")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "skills")
+    return root
+
+
+@pytest.fixture()
+def crowded_tap(boost, tmp_path):
+    """Sandbox holding only the near-tied tap (see :func:`_make_crowded_tap`)."""
+    tap = _make_crowded_tap(tmp_path / "crowded-tap")
+    boost("tap", tap)
+    return tap
+
+
 def _make_mirror_tap(root, name, desc):
     """A tap shipping one skill — for a curated fallback with duplicate names."""
     d = root / "skills" / name
@@ -120,6 +151,32 @@ class TestSearch:
         assert "▰" in r.out
         top = next(l for l in r.out.splitlines() if "commit-messages" in l)
         assert "▰▰▰▰" in top
+
+    def test_meter_separates_a_page_whose_scores_barely_differ(
+            self, boost, crowded_tap):
+        # The defect end to end. These three hits land within 1.2% of each
+        # other, and score/top needs a 12.5% gap before one of four cells goes
+        # out — so all three used to draw an identical ▰▰▰▰.
+        data = json.loads(boost("search", "kubernetes", "--json").out)
+        assert [e["name"] for e in data] == [
+            "kubernetes-alpha", "kubernetes-beta", "kubernetes-gamma"]
+        assert data[-1]["score"] / data[0]["score"] > 0.875
+        rows = [ln for ln in boost("search", "kubernetes").out.splitlines()
+                if "kubernetes-" in ln]
+        bars = [ln.split()[0] for ln in rows]
+        # The endpoints are the contract; the middle row is only asserted to
+        # differ from both, because pinning its exact cell count would make
+        # this test hostage to BM25's length normalization.
+        assert bars[0] == "▰▰▰▰"
+        assert bars[-1] == "▰▱▱▱"
+        assert len(set(bars)) == 3
+
+    def test_single_result_fills_the_meter(self, boost, tapped):
+        # A page of one has no spread to show, so it is not drawn as the
+        # weakest row of anything.
+        r = boost("search", "brainstorming")
+        row = next(l for l in r.out.splitlines() if "brainstorming" in l)
+        assert "▰▰▰▰" in row
 
     def test_limit_caps_rows_but_footer_counts_all(self, boost, tapped):
         r = boost("search", "workflow", "--limit", "1")

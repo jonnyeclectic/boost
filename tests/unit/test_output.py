@@ -714,6 +714,73 @@ class TestMeter:
         assert output.meter(0.6, 5) == "▰▰▰▱▱"
 
 
+class TestRelevanceFractions:
+    """One screen of scores -> one screen of meter fractions.
+
+    The boundaries are the contract: the best row fills the bar, the weakest
+    holds exactly ``METER_FLOOR``, and the rest are linear in between. Every
+    value below is exact, because a drifted endpoint re-draws every search
+    row while still looking like a meter.
+    """
+
+    def test_spreads_a_page_the_top_score_alone_flattens(self):
+        # The measured defect: 15 BM25 hits within 2.1% of the top all render
+        # ▰▰▰▰ under score/top, because round(frac * 4) needs a 12.5% gap.
+        scores = [1.0 - 0.0015 * i for i in range(15)]
+        old = [output.meter(s / scores[0]) for s in scores]
+        assert set(old) == {"▰▰▰▰"}
+        new = [output.meter(f) for f in output.relevance_fractions(scores)]
+        assert new[0] == "▰▰▰▰"
+        assert new[-1] == "▰▱▱▱"
+        assert len(set(new)) == 4
+
+    def test_is_linear_between_the_floor_and_full(self):
+        assert output.relevance_fractions([4, 3, 2, 1]) == [1.0, 0.75, 0.5, 0.25]
+
+    def test_weakest_row_sits_exactly_on_the_floor(self):
+        assert output.METER_FLOOR == 0.25
+        last = output.relevance_fractions([9.0, 1.0])[-1]
+        assert last == output.METER_FLOOR
+        # One lit cell, not an empty bar: a row the ranker chose to show never
+        # reads as "no match".
+        assert output.meter(last) == "▰▱▱▱"
+        assert output.meter_hue(last) == "pink"
+
+    def test_best_row_fills_the_bar_and_takes_the_top_hue(self):
+        first = output.relevance_fractions([9.0, 1.0])[0]
+        assert first == 1.0
+        assert output.meter(first) == "▰▰▰▰"
+        assert output.meter_hue(first) == "cyan"
+
+    def test_keeps_the_caller_order_rather_than_sorting(self):
+        # Ranked order is the caller's; the row at index 1 is the best here.
+        assert output.relevance_fractions([2, 4, 1]) == [0.5, 1.0, 0.25]
+
+    def test_one_row_fills_the_bar(self):
+        assert output.relevance_fractions([7.0]) == [1.0]
+
+    def test_all_ties_fill_rather_than_inventing_a_loser(self):
+        assert output.relevance_fractions([3, 3, 3]) == [1.0, 1.0, 1.0]
+
+    def test_all_zero_scores_fill_rather_than_empty(self):
+        # score/top read this as 0 and drew ▱▱▱▱ on every row.
+        assert output.relevance_fractions([0.0, 0.0]) == [1.0, 1.0]
+
+    def test_empty_page_has_no_fractions(self):
+        assert output.relevance_fractions([]) == []
+
+    def test_negative_scores_still_span_the_bar(self):
+        # RRF and heuristic scores are not promised to be positive; the span
+        # is what matters, not the sign.
+        assert output.relevance_fractions([-1.0, -3.0]) == [1.0, 0.25]
+
+    def test_every_fraction_is_a_legal_meter_input(self):
+        for page in ([5, 4, 3, 2, 1], [1.0], [2, 2], [], [-4, 9, 0]):
+            for f in output.relevance_fractions(page):
+                assert 0.0 <= f <= 1.0
+                assert output.meter_hue(f) in output.TOKENS
+
+
 class TestHelpers:
     @pytest.fixture(autouse=True)
     def plain(self, monkeypatch):
