@@ -268,6 +268,7 @@ def add(spec: str, curated: bool = False, at: str | None = None) -> Tap:
         row["pin"] = at
     cfg.setdefault("taps", []).append(row)
     config.save(cfg)
+    start_refresh_clock()
     tap.pin = at or ""
     return tap
 
@@ -406,6 +407,7 @@ def add_many(specs: list[str], curated: bool = False,
                 r["tap"].pin = pin
             rows.append(row)
         config.save(cfg)
+        start_refresh_clock()
     # First occurrence, not last: a dict comprehension over `specs` keeps the
     # LAST index for a repeated spec, which pushed the duplicate — and so its
     # whole position — to the end and reordered everything in between.
@@ -430,6 +432,25 @@ def mark_refreshed() -> None:
     with suppress(OSError):
         paths.ensure_dirs()
         paths.tap_refresh_marker().write_text("", encoding="utf-8")
+
+
+def start_refresh_clock() -> None:
+    """Stamp the refresh marker at a first clone, if nothing has yet.
+
+    `boost update` was the marker's only writer, so a machine that tapped
+    (`tap --defaults`, `quickstart`) and never updated had no marker at all —
+    and the stale-tap hint on `search`, the one line that says a catalogue
+    has drifted (boost deliberately never refreshes in the background), could
+    never fire for exactly those users. Two real installs, one with 458 taps,
+    had no marker. A fresh clone *is* a refresh, so the first one starts the
+    clock. An existing marker is left alone: adding one tap does not refresh
+    the taps already here.
+    """
+    # ponytail: an install that predates this starts its clock at its next
+    # tap rather than at its oldest clone; derive it from clone mtimes if
+    # that gap ever matters.
+    if not paths.tap_refresh_marker().exists():
+        mark_refreshed()
 
 
 def refresh_age_days() -> float | None:
