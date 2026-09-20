@@ -2,7 +2,7 @@
 id: mcp-skip-list-absent-from-tool-descriptions
 board: code
 section: planned
-status: inflight
+status: shipped
 category: Interop
 complexity: M
 impact: Med
@@ -10,7 +10,7 @@ wow: 3
 note: boost's agent-facing surface duplicates six of its seven load-bearing elements from I…
 order: 218
 owner: loop/mcp-skip-list
-pr:
+pr: 900
 title: The skip list — the one bound on boost's triggers — ships in INSTRUCTIONS only, in zero of the seven tool descriptions
 ---
 <b>Measured.</b> Six of the seven load-bearing elements of mcp.INSTRUCTIONS are duplicated into boost_search's description and the seventh — the bound — appears in zero of the seven descriptions: verified both by substring probe and by reading all seven descriptions in full, where the only occurrence of the word "skip" in any description is the rerank-cache sentence ("repeating an identical search skips the LLM"), and "not for", "do not call", "trivial", "too small" and "overkill" return NONE across all seven.
