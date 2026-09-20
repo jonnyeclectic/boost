@@ -94,6 +94,24 @@ class TestSourceDirMaterializes:
             "a fetch failure must not be reported as a missing source")
 
 
+class TestASkillAtTheTapRoot:
+    """Backfilled while touching `source_dir_for`: a `rel_dir` of "." is the
+    tap root, and nothing pinned that the literal decides it."""
+
+    def test_the_root_is_the_clone_itself(self, entry, monkeypatch):
+        seen: list = []
+        monkeypatch.setattr(gitutil, "materialize",
+                            lambda repo, rel: seen.append((repo, rel)))
+        tap = registry.get(entry["tap"])
+        (tap.path / "SKILL.md").write_text("---\nname: root\n---\nb\n",
+                                           encoding="utf-8")
+
+        src = store.source_dir_for(dict(entry, name="root", rel_dir="."))
+
+        assert src == tap.path
+        assert seen == [(tap.path, ".")]
+
+
 class TestOnlyASkillHasASourceDir:
     """A rule or workflow is one file, so it has no skill dir to widen for.
 
